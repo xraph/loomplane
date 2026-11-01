@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,12 @@ func startInfrastructureBrowser(t *testing.T, appURL, statePath string) *infrast
 	b := &infrastructureBrowser{directory: filepath.Dir(statePath)}
 	b.setTarget(t, appURL)
 	b.proxy = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/capacity") {
+			if _, err := os.Stat(filepath.Join(b.directory, "fail-capacity")); err == nil {
+				http.Error(w, "acceptance capacity outage", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		if req.URL.Path == "/api/v1/realtime/ws" {
 			if _, err := os.Stat(filepath.Join(b.directory, "disable-ws")); err == nil {
 				http.Error(w, "acceptance websocket outage", http.StatusServiceUnavailable)

@@ -408,7 +408,7 @@ func TestManagedCleanupCloudSyncRollback(t *testing.T) {
 	if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_managed_workload_authority SET revision=revision+1 WHERE org_id='org'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.clouds.Accept(security.WithPrincipal(t.Context(), sync.Actor), preview, snapshot, sync, "accept"); !errors.Is(err, cloudprofiles.ErrInvalid) {
+	if _, err := f.clouds.Accept(security.WithPrincipal(t.Context(), sync.Actor), preview, snapshot, sync, "accept"); !errors.Is(err, cloudprofiles.ErrConflict) {
 		t.Fatalf("stale target acceptance: %v", err)
 	}
 	var current int64

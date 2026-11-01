@@ -55,20 +55,23 @@ type RuntimeHealth struct {
 
 // ServerInput mirrors the public infrastructure API contract.
 type ServerInput struct {
-	Kind            string `json:"kind"`
-	ServerID        string `json:"server_id,omitempty"`
-	ConnectionID    string `json:"connection_id,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Region          string `json:"region,omitempty"`
-	Size            string `json:"size,omitempty"`
-	Image           string `json:"image,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision"`
-	ServerRevision  int64  `json:"server_revision,omitempty"`
-	ConfirmAdoption bool   `json:"confirm_adoption,omitempty"`
+	AcknowledgeUnknownCosts bool   `json:"acknowledge_unknown_costs,omitempty"`
+	Kind                    string `json:"kind"`
+	ServerID                string `json:"server_id,omitempty"`
+	ConnectionID            string `json:"connection_id,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Region                  string `json:"region,omitempty"`
+	Size                    string `json:"size,omitempty"`
+	Image                   string `json:"image,omitempty"`
+	CloudRevision           int64  `json:"cloud_revision"`
+	ServerRevision          int64  `json:"server_revision,omitempty"`
+	ConfirmAdoption         bool   `json:"confirm_adoption,omitempty"`
 }
 
 // InfrastructureOperation mirrors the public infrastructure API contract.
 type InfrastructureOperation struct {
+	MoneyEstimate        *MoneyEstimate                  `json:"money_estimate,omitempty"`
+	BudgetReview         *BudgetReview                   `json:"budget_review,omitempty"`
 	EstimatedHourlyUSD   float64                         `json:"estimated_hourly_usd"`
 	HourlyPriceKnown     bool                            `json:"hourly_price_known,omitempty"`
 	Accelerator          *provider.Accelerator           `json:"accelerator,omitempty"`

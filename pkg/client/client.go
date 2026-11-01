@@ -48,8 +48,12 @@ func (c *Client) WithHTTPClient(h *http.Client) *Client {
 
 // Error is a response Loomplane refused, with its status and message.
 type Error struct {
-	Status  int
-	Message string
+	Code       string   `json:"code,omitempty"`
+	Retryable  bool     `json:"retryable,omitempty"`
+	Resource   string   `json:"resource,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	Status     int
+	Message    string
 }
 
 func (e *Error) Error() string {
@@ -102,7 +106,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return err
 	}
 	if res.StatusCode >= 300 {
-		return &Error{Status: res.StatusCode, Message: message(data)}
+		out := &Error{Status: res.StatusCode}
+		if decodeErr := json.Unmarshal(data, out); decodeErr != nil {
+			out = &Error{}
+		}
+		out.Status = res.StatusCode
+		out.Message = message(data)
+		return out
 	}
 	if out == nil || len(data) == 0 {
 		return nil
@@ -398,6 +408,7 @@ type Change struct {
 
 // Action is one thing a plan would do.
 type Action struct {
+	CleanupTargets []CleanupTarget `json:"cleanup_targets,omitempty"`
 	// Resource preserves the complete provider request for JSON plan review.
 	Resource json.RawMessage `json:"resource,omitempty"`
 	ID       string          `json:"id"`

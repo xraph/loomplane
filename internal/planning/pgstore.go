@@ -455,6 +455,9 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
  WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
 	if err != nil {
+		if cloudprofiles.IsStaleCleanupReview(err) {
+			return false, ErrStale
+		}
 		return false, fmt.Errorf("decide plan: %w", err)
 	}
 	changed, err = affected(tag)

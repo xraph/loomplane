@@ -27,13 +27,13 @@ func publicClusterOperation(o *infra.ClusterOperation) *client.CloudClusterOpera
 	if o == nil {
 		return nil
 	}
-	in := client.ClusterInput{RuntimeAccess: o.Input.RuntimeAccess, PolicyRevision: o.Input.PolicyRevision, ManagementReachable: o.Input.ManagementReachable, AcknowledgeUnknownCosts: o.Input.AcknowledgeUnknownCosts, AcknowledgeNodeCosts: o.Input.AcknowledgeNodeCosts, WorkerImage: o.Input.WorkerImage, Kind: o.Input.Kind, Provider: o.Input.Provider, ConnectionID: o.Input.ConnectionID, AccountID: o.Input.AccountID, ResourceID: o.Input.ResourceID, ResourceRevision: o.Input.ResourceRevision, ConnectionGeneration: o.Input.ConnectionGeneration, CloudRevision: o.Input.CloudRevision, OptionsDigest: o.Input.OptionsDigest, OptionsCheckedAt: o.Input.OptionsCheckedAt, Spec: o.Input.Spec, Ref: o.Input.Ref}
+	in := client.ClusterInput{Scaling: publicScalingInput(o.Input.Scaling), Maintenance: publicMaintenance(o.Input.Maintenance), Retirement: publicRetirement(o.Input.Retirement), RuntimeAccess: publicRuntimeAccess(o.Input.RuntimeAccess), PolicyRevision: o.Input.PolicyRevision, ManagementReachable: o.Input.ManagementReachable, AcknowledgeUnknownCosts: o.Input.AcknowledgeUnknownCosts, AcknowledgeNodeCosts: o.Input.AcknowledgeNodeCosts, WorkerImage: o.Input.WorkerImage, Kind: o.Input.Kind, Provider: o.Input.Provider, ConnectionID: o.Input.ConnectionID, AccountID: o.Input.AccountID, ResourceID: o.Input.ResourceID, ResourceRevision: o.Input.ResourceRevision, ConnectionGeneration: o.Input.ConnectionGeneration, CloudRevision: o.Input.CloudRevision, OptionsDigest: o.Input.OptionsDigest, OptionsCheckedAt: o.Input.OptionsCheckedAt, Spec: publicSpec(o.Input.Spec), Ref: o.Input.Ref}
 	if a := o.Input.Attachment; a != nil {
 		in.Attachment = &client.AttachmentInput{RuntimeAccess: a.RuntimeAccess, TargetSlug: a.TargetSlug, CloudRevision: a.CloudRevision, ResourceRevision: a.ResourceRevision, GrantRevision: a.GrantRevision, TrustFingerprint: a.TrustFingerprint, EndpointFingerprint: a.EndpointFingerprint, Prerequisites: client.AttachmentPrerequisites(a.Prerequisites), ProjectID: a.ProjectID, Namespace: a.Namespace, NamespaceUID: a.NamespaceUID, ServiceAccountName: a.ServiceAccountName, AdoptNamespace: a.AdoptNamespace}
 	}
-	out := &client.CloudClusterOperation{ID: o.ID, CloudID: o.CloudID, ResourceID: o.ResourceID, Kind: o.Kind, Input: in, Digest: o.Digest, Revision: o.Revision, Status: o.Status, Error: publicClusterError(o), Attempt: o.Attempt, CancelRequested: o.CancelRequested, EstimatedNodeHourlyMicroUSD: o.EstimatedNodeHourlyMicroUSD, UnknownCosts: o.UnknownCosts, Steps: []client.ClusterStep{}, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ExpiresAt: o.ExpiresAt}
+	out := &client.CloudClusterOperation{MoneyEstimate: publicMoney(o.MoneyEstimate), BudgetReview: publicBudget(o.Input.BudgetReview), EnvelopeReview: publicEnvelope(o.Input.EnvelopeReview), ID: o.ID, CloudID: o.CloudID, ResourceID: o.ResourceID, Kind: o.Kind, Input: in, Digest: o.Digest, Revision: o.Revision, Status: o.Status, Error: publicClusterError(o), Attempt: o.Attempt, CancelRequested: o.CancelRequested, EstimatedNodeHourlyMicroUSD: o.EstimatedNodeHourlyMicroUSD, UnknownCosts: o.UnknownCosts, Steps: []client.ClusterStep{}, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ExpiresAt: o.ExpiresAt}
 	for _, step := range o.Steps {
-		out.Steps = append(out.Steps, client.ClusterStep(step))
+		out.Steps = append(out.Steps, client.ClusterStep{Name: step.Name, State: step.State, AttemptedAt: step.AttemptedAt, CompletedAt: step.CompletedAt})
 	}
 	if a := o.Enrollment; a != nil {
 		out.Enrollment = &client.ClusterEnrollmentSummary{AttachmentID: a.AttachmentID, RuntimeConnectionID: a.RuntimeConnectionID, TargetID: a.TargetID, CredentialExpiry: a.CredentialExpiry, RuntimeVerified: o.Status == "succeeded" && a.RuntimeConnectionID != ""}
@@ -51,15 +51,18 @@ func publicCluster(r *infra.ManagedResource) *client.CloudCluster {
 	if r == nil {
 		return nil
 	}
-	return &client.CloudCluster{ID: r.ID, CloudID: r.CloudID, Provider: r.Provider, AccountID: r.AccountID, ConnectionID: r.ConnectionID, ExternalID: r.ExternalID, Ownership: r.Ownership, LifecycleAuthority: append([]string{}, r.LifecycleAuthority...), Revision: r.Revision, Status: r.Status, Observation: r.Observation, UpdatedAt: r.UpdatedAt}
+	return &client.CloudCluster{ScalingPolicies: publicScalingPolicies(r.ScalingPolicies), RetainedResources: publicRetained(r.RetainedResources), RetainedPriceCheckedAt: r.RetainedPriceCheckedAt, DesiredRevision: r.DesiredRevision, ObservedRevision: r.ObservedRevision, ID: r.ID, CloudID: r.CloudID, Provider: r.Provider, AccountID: r.AccountID, ConnectionID: r.ConnectionID, ExternalID: r.ExternalID, Ownership: r.Ownership, LifecycleAuthority: append([]string{}, r.LifecycleAuthority...), Revision: r.Revision, Status: r.Status, Observation: publicObservation(r.Observation), UpdatedAt: r.UpdatedAt}
 }
 func clusterResult(c forge.Context, status int, value any, err error) error {
 	if err == nil {
 		return c.JSON(status, value)
 	}
+	if handled, result := clusterBlockResult(c, err); handled {
+		return result
+	}
 	var admission *infra.CapacityAdmissionError
 	if errors.As(err, &admission) {
-		return forge.NewHTTPError(http.StatusUnprocessableEntity, "Cluster capacity requires a fresh policy, inventory and available quota")
+		return c.JSON(http.StatusUnprocessableEntity, ClusterProblem{Code: admission.Block.Reason, Message: admission.Block.Sentence(), Retryable: admission.Block.Retryable, Resource: admission.Block.Resource})
 	}
 	code := security.StatusFor(err)
 	message := "Cluster operation failed"
@@ -82,16 +85,32 @@ func clusterResult(c forge.Context, status int, value any, err error) error {
 	if code == http.StatusUnauthorized {
 		message = "Sign in to continue"
 	}
-	return forge.NewHTTPError(code, message)
+	reason := "cluster_operation_failed"
+	switch code {
+	case http.StatusConflict:
+		reason = "stale_review"
+	case http.StatusNotFound:
+		reason = "not_found"
+	case http.StatusForbidden:
+		reason = "forbidden"
+	case http.StatusUnauthorized:
+		reason = "unauthenticated"
+	case http.StatusUnprocessableEntity:
+		reason = "unsupported_input"
+	}
+	return c.JSON(code, ClusterProblem{Code: reason, Message: message, Retryable: code == http.StatusConflict})
 }
 func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 	discovery := r.Group("/api/v1/connections/:connectionId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud clusters"))
-	if err := discovery.GET("/clusters", e.discoverClusters, forge.WithName("connectionClusters.list"), forge.WithQuerySchema(ClusterQuery{}), forge.WithResponseSchema(http.StatusOK, "Clusters", provider.ClusterPage{})); err != nil {
+	if err := discovery.GET("/clusters", e.discoverClusters, forge.WithName("connectionClusters.list"), forge.WithQuerySchema(ClusterQuery{}), forge.WithResponseSchema(http.StatusOK, "Clusters", client.ClusterPage{})); err != nil {
 		return err
 	}
 	g := r.Group("/api/v1/clouds/:cloudId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud clusters"))
 	routes := []route{
 		{http.MethodGet, "/clusters", "cloudClusters.list", e.clusterList, nil, client.CloudClusterPage{}, http.StatusOK},
+		{http.MethodPost, "/clusters/:clusterId/retirement/preview", "cloudClusters.retirementPreview", e.clusterRetirementPreview, client.ClusterRetirementPreviewInput{}, client.ClusterRetirementReview{}, http.StatusOK},
+		{http.MethodGet, "/clusters/:clusterId/capacity", "cloudClusters.capacity", e.clusterCapacity, nil, client.ClusterCapacity{}, http.StatusOK},
+		{http.MethodPost, "/clusters/:clusterId/capacity/refresh", "cloudClusters.refreshCapacity", e.refreshClusterCapacity, nil, client.ClusterCapacity{}, http.StatusOK},
 		{http.MethodGet, "/clusters/:clusterId", "cloudClusters.get", e.clusterGet, nil, client.CloudCluster{}, http.StatusOK},
 		{http.MethodGet, "/cluster-options/:connectionId", "cloudClusters.options", e.clusterOptions, nil, provider.ClusterOptions{}, http.StatusOK},
 		{http.MethodPost, "/clusters/preview", "cloudClusters.preview", e.clusterPreview, client.ClusterInput{}, client.CloudClusterOperation{}, http.StatusOK},
@@ -102,7 +121,7 @@ func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/cluster-operations/:operationId/cancel", "clusterOperations.cancel", e.clusterCancel, nil, client.CloudClusterOperation{}, http.StatusOK},
 	}
 	for _, rt := range routes {
-		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name), forge.WithResponseSchema(rt.status, "Result", rt.response)}
+		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name), forge.WithResponseSchema(rt.status, "Result", rt.response), forge.WithResponseSchema(http.StatusConflict, "Review or inventory conflict", ClusterProblem{}), forge.WithResponseSchema(http.StatusUnprocessableEntity, "Blocked intent", ClusterProblem{})}
 		if rt.method == http.MethodGet {
 			opts = append(opts, forge.WithQuerySchema(ClusterQuery{}))
 		}
@@ -130,7 +149,11 @@ func (e *Extension) discoverClusters(c forge.Context) error {
 		return clusterResult(c, 0, nil, err)
 	}
 	v, err := e.svc.DiscoverClusters(c.Request().Context(), p, c.Param("connectionId"), c.Request().URL.Query().Get("cursor"))
-	return clusterResult(c, http.StatusOK, v, err)
+	out := client.ClusterPage{Items: []client.ClusterObservation{}, NextCursor: v.NextCursor}
+	for i := range v.Items {
+		out.Items = append(out.Items, *publicObservation(&v.Items[i]))
+	}
+	return clusterResult(c, http.StatusOK, out, err)
 }
 func (e *Extension) clusterOptions(c forge.Context) error {
 	p, err := caller(c)
@@ -211,12 +234,31 @@ func (e *Extension) clusterPreview(c forge.Context) error {
 	if decodeErr := dec.Decode(new(any)); !errors.Is(decodeErr, io.EOF) {
 		return clusterResult(c, 0, nil, infra.ErrInvalid)
 	}
-	in := infra.ClusterInput{RuntimeAccess: input.RuntimeAccess, PolicyRevision: input.PolicyRevision, ManagementReachable: input.ManagementReachable, AcknowledgeUnknownCosts: input.AcknowledgeUnknownCosts, AcknowledgeNodeCosts: input.AcknowledgeNodeCosts, WorkerImage: input.WorkerImage, Kind: input.Kind, Provider: input.Provider, ConnectionID: input.ConnectionID, AccountID: input.AccountID, ResourceID: input.ResourceID, ResourceRevision: input.ResourceRevision, ConnectionGeneration: input.ConnectionGeneration, CloudRevision: input.CloudRevision, OptionsDigest: input.OptionsDigest, OptionsCheckedAt: input.OptionsCheckedAt, Spec: input.Spec, Ref: input.Ref}
+	if input.RuntimeAccess != nil && *input.RuntimeAccess != (client.RuntimeAccessReview{AttachmentID: input.RuntimeAccess.AttachmentID, Profile: input.RuntimeAccess.Profile}) {
+		return clusterResult(c, 0, nil, infra.ErrInvalid)
+	}
+	in := infra.ClusterInput{Maintenance: privateMaintenance(input.Maintenance), RuntimeAccess: privateRuntimeAccess(input.RuntimeAccess), PolicyRevision: input.PolicyRevision, ManagementReachable: input.ManagementReachable, AcknowledgeUnknownCosts: input.AcknowledgeUnknownCosts, AcknowledgeNodeCosts: input.AcknowledgeNodeCosts, WorkerImage: input.WorkerImage, Kind: input.Kind, Provider: input.Provider, ConnectionID: input.ConnectionID, AccountID: input.AccountID, ResourceID: input.ResourceID, ResourceRevision: input.ResourceRevision, ConnectionGeneration: input.ConnectionGeneration, CloudRevision: input.CloudRevision, OptionsDigest: input.OptionsDigest, OptionsCheckedAt: input.OptionsCheckedAt, Spec: privateSpec(input.Spec), Ref: input.Ref}
 	if a := input.Attachment; a != nil {
 		in.Attachment = &infra.AttachmentInput{RuntimeAccess: a.RuntimeAccess, TargetSlug: a.TargetSlug, CloudRevision: a.CloudRevision, ResourceRevision: a.ResourceRevision, GrantRevision: a.GrantRevision, TrustFingerprint: a.TrustFingerprint, EndpointFingerprint: a.EndpointFingerprint, Prerequisites: infra.AttachmentPrerequisites(a.Prerequisites), ProjectID: a.ProjectID, Namespace: a.Namespace, NamespaceUID: a.NamespaceUID, ServiceAccountName: a.ServiceAccountName, AdoptNamespace: a.AdoptNamespace}
 	}
 	if in.Kind != "create" && len(in.Spec.NodePools) == 0 {
 		in.Spec.NodePools = nil
+	}
+	if input.Retirement != nil {
+		var resolveErr error
+		in.Retirement, resolveErr = e.svc.ResolveClusterRetirementInput(c.Request().Context(), p, c.Param("cloudId"), in.ResourceID, input.Retirement.ReviewDigest, input.Retirement.AttachmentID, input.Retirement.ExpectedAttachmentRevision)
+		if resolveErr != nil {
+			return clusterResult(c, 0, nil, resolveErr)
+		}
+	}
+	if input.Scaling != nil {
+		if input.Kind != "node-pool-scaling" {
+			return clusterResult(c, 0, nil, infra.ErrInvalid)
+		}
+		v := input.Scaling
+		policy := infra.ClusterScalingPolicy{ExpectedRevision: v.ExpectedRevision, PoolID: v.PoolID, Mode: v.Mode, MinNodes: v.MinNodes, MaxNodes: v.MaxNodes, CooldownSeconds: v.CooldownSeconds, ContinuityPoolID: v.ContinuityPoolID, ContinuityFloor: v.ContinuityFloor, ReviewInput: &in}
+		result, scalingErr := e.svc.PreviewClusterScaling(c.Request().Context(), p, c.Param("cloudId"), in.ResourceID, policy)
+		return clusterResult(c, http.StatusOK, publicClusterOperation(result), scalingErr)
 	}
 	v, err := e.svc.PreviewCluster(c.Request().Context(), p, c.Param("cloudId"), in)
 	return clusterResult(c, http.StatusOK, publicClusterOperation(v), err)

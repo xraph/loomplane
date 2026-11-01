@@ -22,6 +22,7 @@ type ResourceVector struct {
 // CapacityPolicy mirrors a Cloud's capacity policy. Revision 0 is a Cloud
 // that was never configured.
 type CapacityPolicy struct {
+	Budget                   *CapacityBudget       `json:"budget,omitempty"`
 	OrgID                    string                `json:"org_id"`
 	CloudID                  string                `json:"cloud_id"`
 	Revision                 int64                 `json:"revision"`

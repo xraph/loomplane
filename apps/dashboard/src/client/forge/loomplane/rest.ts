@@ -839,6 +839,36 @@ export class RESTClient extends Client {
 
   public readonly cloudClusters = {
     /**
+     * cloudClusters.capacity
+     */
+    capacity: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
      * cloudClusters.get
      */
     get: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudCluster> => {
@@ -944,6 +974,40 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * cloudClusters.refreshCapacity
+     */
+    refreshCapacity: async (cloudId: string, clusterId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
+     * cloudClusters.retirementPreview
+     */
+    retirementPreview: async (cloudId: string, clusterId: string, body: types.ClusterRetirementPreviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterRetirementReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/retirement/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterRetirementPreviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterRetirementReview"],
+      };
+
+      return this.request<types.ClusterRetirementReview>(config);
     },
 
   };
@@ -2137,6 +2201,23 @@ export class RESTClient extends Client {
         url: __path,
         body,
         bodyCodec: CODECS["FailedCleanupInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupCancel: async (id: string, body: types.FailedCleanupCancelInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupCancelInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["FailedCleanup"],

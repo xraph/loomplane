@@ -1303,6 +1303,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1365,6 +1385,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1410,6 +1450,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CloudClusterOperation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
                 }
               }
             }
@@ -1460,6 +1520,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         },
         "summary": "clusterOperations.cancel",
@@ -1504,6 +1584,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CloudClusterOperation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
                 }
               }
             }
@@ -1579,6 +1679,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1632,6 +1752,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1668,6 +1808,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CloudClusterOperation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
                 }
               }
             }
@@ -1743,8 +1903,255 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/capacity": {
+      "get": {
+        "tags": [
+          "Cloud clusters"
+        ],
+        "summary": "cloudClusters.capacity",
+        "operationId": "cloudClusters.capacity",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterCapacity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/capacity/refresh": {
+      "post": {
+        "operationId": "cloudClusters.refreshCapacity",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterCapacity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.refreshCapacity",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-invalidates": [
+          "CloudCluster",
+          "CloudClusterOperation",
+          "CloudClusterPage",
+          "CloudClusterOperationPage"
+        ]
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/retirement/preview": {
+      "post": {
+        "operationId": "cloudClusters.retirementPreview",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterRetirementPreviewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterRetirementReview"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.retirementPreview",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-invalidates": [
+          "CloudCluster",
+          "CloudClusterOperation",
+          "CloudClusterPage",
+          "CloudClusterOperationPage"
+        ]
       }
     },
     "/api/v1/clouds/{cloudId}/default-placement": {
@@ -3920,6 +4327,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -3962,6 +4379,68 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/cleanup/cancel": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanupCancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailedCleanupCancelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cleanup issuance fenced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -3993,6 +4472,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -4021,6 +4510,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
                 }
               }
             }
@@ -12744,7 +13243,7 @@
           "cleanup_targets": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ManagedCleanupTarget"
+              "$ref": "#/components/schemas/CleanupTarget"
             }
           },
           "cloud_adoption": {
@@ -13071,20 +13570,6 @@
             "type": "string"
           },
           "slug": {
-            "type": "string"
-          }
-        }
-      },
-      "AppliedInputs": {
-        "type": "object",
-        "properties": {
-          "artifact_key": {
-            "type": "string"
-          },
-          "source": {
-            "$ref": "#/components/schemas/PlanSource"
-          },
-          "variables": {
             "type": "string"
           }
         }
@@ -13654,18 +14139,11 @@
         "type": "object",
         "required": [
           "cloud_id",
-          "account_scope",
           "policy_revision",
           "estimate",
           "digest"
         ],
         "properties": {
-          "account_exposure": {
-            "$ref": "#/components/schemas/CapacityAccountSnapshot"
-          },
-          "account_scope": {
-            "type": "string"
-          },
           "cloud_id": {
             "type": "string"
           },
@@ -14023,10 +14501,10 @@
             "type": "integer"
           },
           "max_horizon_micro_usd": {
-            "type": "integer"
+            "type": "string"
           },
           "max_hourly_micro_usd": {
-            "type": "integer"
+            "type": "string"
           }
         }
       },
@@ -14097,7 +14575,6 @@
         "type": "object",
         "required": [
           "demand",
-          "provider_pin",
           "template",
           "template_hash",
           "commit_sha",
@@ -14122,9 +14599,6 @@
           },
           "grant_revision": {
             "type": "integer"
-          },
-          "provider_pin": {
-            "$ref": "#/components/schemas/CapacityTemplatePin"
           },
           "target_name": {
             "type": "string"
@@ -14352,7 +14826,7 @@
             }
           },
           "cluster_node": {
-            "$ref": "#/components/schemas/ClusterNodeCapacity"
+            "$ref": "#/components/schemas/CloudinfraClusterNodeCapacity"
           },
           "cluster_resource_id": {
             "type": "string"
@@ -14399,21 +14873,6 @@
             "type": "integer"
           },
           "storage_bytes": {
-            "type": "integer"
-          }
-        }
-      },
-      "CapacityTemplatePin": {
-        "type": "object",
-        "required": [
-          "connection_generation",
-          "account_id"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "connection_generation": {
             "type": "integer"
           }
         }
@@ -14840,6 +15299,44 @@
           }
         }
       },
+      "CleanupObject": {
+        "type": "object",
+        "required": [
+          "resource",
+          "name",
+          "namespace"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "CleanupProblem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "CleanupReview": {
         "type": "object",
         "required": [
@@ -14888,7 +15385,7 @@
           "targets": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ManagedCleanupTarget"
+              "$ref": "#/components/schemas/CleanupTarget"
             }
           },
           "variant": {
@@ -14896,20 +15393,126 @@
           }
         }
       },
+      "CleanupTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "service",
+          "plan_id",
+          "deployment_id",
+          "namespace",
+          "objects",
+          "unresolved_writes",
+          "identity_current"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "identity_current": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupObject"
+            }
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "unresolved_writes": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClientClusterNodeCapacity": {
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/ClientClusterResourceMetrics"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/ClientClusterResourceMetrics"
+          },
+          "taints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodePoolTaint"
+            }
+          },
+          "unschedulable": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool_id",
+          "zone",
+          "architecture",
+          "ready",
+          "unschedulable",
+          "allocatable",
+          "requests",
+          "taints"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/client.ClusterNodeCapacity"
+      },
+      "ClientClusterResourceMetrics": {
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "extended": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extended"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/client.ClusterResourceMetrics"
+      },
       "CloudAdoption": {
         "type": "object",
         "required": [
           "binding_id",
           "external_id",
           "revision",
-          "plan_id",
-          "config_digest"
+          "plan_id"
         ],
         "properties": {
           "binding_id": {
-            "type": "string"
-          },
-          "config_digest": {
             "type": "string"
           },
           "external_id": {
@@ -14926,6 +15529,9 @@
       "CloudCluster": {
         "type": "object",
         "required": [
+          "retained_price_checked_at",
+          "desired_revision",
+          "observed_revision",
           "id",
           "cloud_id",
           "provider",
@@ -14948,6 +15554,9 @@
           "connection_id": {
             "type": "string"
           },
+          "desired_revision": {
+            "type": "integer"
+          },
           "external_id": {
             "type": "string"
           },
@@ -14964,14 +15573,31 @@
           "observation": {
             "$ref": "#/components/schemas/ClusterObservation"
           },
+          "observed_revision": {
+            "type": "integer"
+          },
           "ownership": {
             "type": "string"
           },
           "provider": {
             "type": "string"
           },
+          "retained_price_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retained_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
           "revision": {
             "type": "integer"
+          },
+          "scaling_policies": {
+            "type": "object",
+            "additionalProperties": true
           },
           "status": {
             "type": "string"
@@ -15007,6 +15633,9 @@
           "attempt": {
             "type": "integer"
           },
+          "budget_review": {
+            "$ref": "#/components/schemas/BudgetReview"
+          },
           "cancel_requested": {
             "type": "boolean"
           },
@@ -15022,6 +15651,9 @@
           },
           "enrollment": {
             "$ref": "#/components/schemas/ClusterEnrollmentSummary"
+          },
+          "envelope_review": {
+            "$ref": "#/components/schemas/ClusterEnvelopeReview"
           },
           "error": {
             "type": "string"
@@ -15042,6 +15674,9 @@
           },
           "kind": {
             "type": "string"
+          },
+          "money_estimate": {
+            "$ref": "#/components/schemas/MoneyEstimate"
           },
           "resource_id": {
             "type": "string"
@@ -15109,8 +15744,6 @@
         "required": [
           "plan_id",
           "action_id",
-          "source",
-          "candidate",
           "retained",
           "server_attempt",
           "original_completed"
@@ -15118,9 +15751,6 @@
         "properties": {
           "action_id": {
             "type": "string"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/Binding"
           },
           "original_completed": {
             "type": "boolean"
@@ -15139,9 +15769,6 @@
           },
           "server_attempt": {
             "type": "boolean"
-          },
-          "source": {
-            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -15204,6 +15831,7 @@
       "CloudPlacement": {
         "type": "object",
         "required": [
+          "account_identity",
           "cloud_id",
           "cloud_revision",
           "assignment_revision",
@@ -15211,8 +15839,7 @@
           "target_revision",
           "target_name",
           "provider",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -15437,6 +16064,96 @@
         "type": "object",
         "x-forge-envelope": "targets"
       },
+      "CloudinfraClusterNodeCapacity": {
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/CloudinfraClusterResourceMetrics"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "external_vm_id": {
+            "type": "string"
+          },
+          "gpu_kinds": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "node_uid": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provisioned": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/CloudinfraClusterResourceMetrics"
+          },
+          "taints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodePoolTaint"
+            }
+          },
+          "unschedulable": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_vm_id",
+          "node_uid",
+          "pool_id",
+          "zone",
+          "architecture",
+          "taints",
+          "ready",
+          "unschedulable",
+          "provisioned",
+          "allocatable",
+          "requests",
+          "gpu_kinds",
+          "provenance"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterNodeCapacity"
+      },
+      "CloudinfraClusterResourceMetrics": {
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "extended": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extended"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterResourceMetrics"
+      },
       "CloudinfraMoveInputBody": {
         "properties": {
           "destination_server_id": {
@@ -15630,6 +16347,53 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudprofiles.UpdateInput"
       },
+      "ClusterCapacity": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "observation_revision",
+          "checked_at",
+          "complete",
+          "fresh",
+          "workloads_complete",
+          "nodes",
+          "conditions"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterCondition"
+            }
+          },
+          "fresh": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientClusterNodeCapacity"
+            }
+          },
+          "observation_revision": {
+            "type": "integer"
+          },
+          "resource_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "workloads_complete": {
+            "type": "boolean"
+          }
+        }
+      },
       "ClusterCondition": {
         "type": "object",
         "required": [
@@ -15645,6 +16409,24 @@
           },
           "type": {
             "type": "string"
+          }
+        }
+      },
+      "ClusterDemand": {
+        "type": "object",
+        "required": [
+          "mode",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ClusterSchedulingProfile"
           }
         }
       },
@@ -15673,6 +16455,53 @@
           },
           "target_id": {
             "type": "string"
+          }
+        }
+      },
+      "ClusterEnvelopeResources": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClusterEnvelopeReview": {
+        "type": "object",
+        "required": [
+          "automatic",
+          "pools"
+        ],
+        "properties": {
+          "automatic": {
+            "type": "boolean"
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterPoolEnvelopeReview"
+            }
           }
         }
       },
@@ -15721,6 +16550,9 @@
           "kind": {
             "type": "string"
           },
+          "maintenance": {
+            "$ref": "#/components/schemas/ClusterMaintenanceInput"
+          },
           "management_reachable": {
             "type": "boolean"
           },
@@ -15746,8 +16578,14 @@
           "resource_revision": {
             "type": "integer"
           },
+          "retirement": {
+            "$ref": "#/components/schemas/ClusterRetirementInput"
+          },
           "runtime_access": {
-            "$ref": "#/components/schemas/RuntimeAccessInput"
+            "$ref": "#/components/schemas/RuntimeAccessReview"
+          },
+          "scaling": {
+            "$ref": "#/components/schemas/ClusterScalingInput"
           },
           "spec": {
             "$ref": "#/components/schemas/ClusterSpec"
@@ -15856,6 +16694,39 @@
           "kind": {
             "type": "string"
           },
+          "maintenance": {
+            "type": "object",
+            "required": [
+              "observation_digest",
+              "observed_revision"
+            ],
+            "properties": {
+              "drain_digest": {
+                "type": "string"
+              },
+              "observation_digest": {
+                "type": "string"
+              },
+              "observed_revision": {
+                "type": "integer"
+              },
+              "pool": {
+                "$ref": "#/components/schemas/NodePoolSpec"
+              },
+              "pool_id": {
+                "type": "string"
+              },
+              "update": {
+                "$ref": "#/components/schemas/ClusterUpdate"
+              },
+              "version": {
+                "type": "string"
+              },
+              "window": {
+                "$ref": "#/components/schemas/ClusterMaintenanceWindow"
+              }
+            }
+          },
           "management_reachable": {
             "type": "boolean"
           },
@@ -15901,26 +16772,27 @@
           "resource_revision": {
             "type": "integer"
           },
+          "retirement": {
+            "type": "object",
+            "required": [
+              "review_digest"
+            ],
+            "properties": {
+              "attachment_id": {
+                "type": "string"
+              },
+              "expected_attachment_revision": {
+                "type": "integer"
+              },
+              "review_digest": {
+                "type": "string"
+              }
+            }
+          },
           "runtime_access": {
             "type": "object",
             "required": [
               "attachment_id",
-              "attachment_revision",
-              "capability_revision",
-              "project_id",
-              "grant_revision",
-              "namespace",
-              "namespace_uid",
-              "service_account_name",
-              "service_account_uid",
-              "role_name",
-              "role_uid",
-              "role_resource_version",
-              "role_rules_digest",
-              "role_binding_name",
-              "role_binding_uid",
-              "role_binding_resource_version",
-              "role_binding_subjects_ref_digest",
               "profile"
             ],
             "properties": {
@@ -15933,13 +16805,7 @@
               "capability_revision": {
                 "type": "integer"
               },
-              "grant_revision": {
-                "type": "integer"
-              },
               "namespace": {
-                "type": "string"
-              },
-              "namespace_uid": {
                 "type": "string"
               },
               "profile": {
@@ -15947,35 +16813,43 @@
               },
               "project_id": {
                 "type": "string"
+              }
+            }
+          },
+          "scaling": {
+            "type": "object",
+            "required": [
+              "expected_revision",
+              "pool_id",
+              "mode",
+              "min_nodes",
+              "max_nodes",
+              "cooldown_seconds",
+              "continuity_floor"
+            ],
+            "properties": {
+              "continuity_floor": {
+                "type": "integer"
               },
-              "role_binding_name": {
+              "continuity_pool_id": {
                 "type": "string"
               },
-              "role_binding_resource_version": {
+              "cooldown_seconds": {
+                "type": "integer"
+              },
+              "expected_revision": {
+                "type": "integer"
+              },
+              "max_nodes": {
+                "type": "integer"
+              },
+              "min_nodes": {
+                "type": "integer"
+              },
+              "mode": {
                 "type": "string"
               },
-              "role_binding_subjects_ref_digest": {
-                "type": "string"
-              },
-              "role_binding_uid": {
-                "type": "string"
-              },
-              "role_name": {
-                "type": "string"
-              },
-              "role_resource_version": {
-                "type": "string"
-              },
-              "role_rules_digest": {
-                "type": "string"
-              },
-              "role_uid": {
-                "type": "string"
-              },
-              "service_account_name": {
-                "type": "string"
-              },
-              "service_account_uid": {
+              "pool_id": {
                 "type": "string"
               }
             }
@@ -15983,7 +16857,6 @@
           "spec": {
             "type": "object",
             "required": [
-              "operation_id",
               "name",
               "region",
               "version",
@@ -16010,9 +16883,6 @@
                 "items": {
                   "$ref": "#/components/schemas/NodePoolSpec"
                 }
-              },
-              "operation_id": {
-                "type": "string"
               },
               "provider_options": {
                 "$ref": "#/components/schemas/ClusterProviderOptions"
@@ -16045,93 +16915,64 @@
           }
         }
       },
-      "ClusterNativeWorkload": {
+      "ClusterMaintenanceInput": {
         "type": "object",
         "required": [
-          "pool_id",
-          "policy_id",
-          "policy_revision",
-          "profile_digest",
-          "maximum_nodes"
+          "observation_digest",
+          "observed_revision"
         ],
         "properties": {
-          "maximum_nodes": {
-            "type": "integer"
-          },
-          "policy_id": {
+          "drain_digest": {
             "type": "string"
           },
-          "policy_revision": {
+          "observation_digest": {
+            "type": "string"
+          },
+          "observed_revision": {
             "type": "integer"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/NodePoolSpec"
           },
           "pool_id": {
             "type": "string"
           },
-          "profile_digest": {
+          "update": {
+            "$ref": "#/components/schemas/ClusterUpdate"
+          },
+          "version": {
             "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ClusterMaintenanceWindow"
           }
         }
       },
-      "ClusterNodeCapacity": {
+      "ClusterMaintenanceWindow": {
         "type": "object",
         "required": [
-          "external_vm_id",
-          "node_uid",
-          "pool_id",
-          "zone",
-          "architecture",
-          "taints",
-          "ready",
-          "unschedulable",
-          "provisioned",
-          "allocatable",
-          "requests",
-          "gpu_kinds",
-          "provenance"
+          "timezone",
+          "local_start",
+          "duration_seconds",
+          "start_utc",
+          "end_utc"
         ],
         "properties": {
-          "allocatable": {
-            "$ref": "#/components/schemas/ClusterResourceMetrics"
+          "duration_seconds": {
+            "type": "integer"
           },
-          "architecture": {
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "local_start": {
             "type": "string"
           },
-          "external_vm_id": {
-            "type": "string"
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
           },
-          "gpu_kinds": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "node_uid": {
-            "type": "string"
-          },
-          "pool_id": {
-            "type": "string"
-          },
-          "provenance": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "provisioned": {
-            "$ref": "#/components/schemas/CapacityResources"
-          },
-          "ready": {
-            "type": "boolean"
-          },
-          "requests": {
-            "$ref": "#/components/schemas/ClusterResourceMetrics"
-          },
-          "taints": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodePoolTaint"
-            }
-          },
-          "unschedulable": {
-            "type": "boolean"
-          },
-          "zone": {
+          "timezone": {
             "type": "string"
           }
         }
@@ -16307,6 +17148,61 @@
           }
         }
       },
+      "ClusterPoolEnvelopeReview": {
+        "type": "object",
+        "required": [
+          "pool_id",
+          "maximum",
+          "initial",
+          "baseline",
+          "money"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "initial": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "money": {
+            "$ref": "#/components/schemas/MoneyEstimate"
+          },
+          "pool_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterProblem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "ClusterProviderOptions": {
         "type": "object",
         "required": [
@@ -16349,27 +17245,121 @@
           }
         }
       },
-      "ClusterResourceMetrics": {
+      "ClusterRetirementInput": {
         "type": "object",
         "required": [
-          "extended"
+          "review_digest"
         ],
         "properties": {
-          "cpu_millis": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "expected_attachment_revision": {
             "type": "integer"
           },
-          "ephemeral_storage_bytes": {
+          "review_digest": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterRetirementPreviewInputBody": {
+        "type": "object",
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "expected_attachment_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClusterRetirementReview": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "blockers",
+          "deletion_candidates",
+          "retained_resources",
+          "estimated_remaining_hourly_micro_usd",
+          "unknown_costs",
+          "checked_at",
+          "digest"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletion_candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
+          "digest": {
+            "type": "string"
+          },
+          "estimated_remaining_hourly_micro_usd": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "retained_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
+          "unknown_costs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ClusterScalingInput": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "pool_id",
+          "mode",
+          "min_nodes",
+          "max_nodes",
+          "cooldown_seconds",
+          "continuity_floor"
+        ],
+        "properties": {
+          "continuity_floor": {
             "type": "integer"
           },
-          "extended": {
-            "type": "object",
-            "additionalProperties": true
+          "continuity_pool_id": {
+            "type": "string"
           },
-          "memory_bytes": {
+          "cooldown_seconds": {
             "type": "integer"
           },
-          "pods": {
+          "expected_revision": {
             "type": "integer"
+          },
+          "max_nodes": {
+            "type": "integer"
+          },
+          "min_nodes": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
           }
         }
       },
@@ -16415,7 +17405,6 @@
       "ClusterSpec": {
         "type": "object",
         "required": [
-          "operation_id",
           "name",
           "region",
           "version",
@@ -16443,9 +17432,6 @@
               "$ref": "#/components/schemas/NodePoolSpec"
             }
           },
-          "operation_id": {
-            "type": "string"
-          },
           "provider_options": {
             "$ref": "#/components/schemas/ClusterProviderOptions"
           },
@@ -16461,8 +17447,7 @@
         "type": "object",
         "required": [
           "name",
-          "state",
-          "request_digest"
+          "state"
         ],
         "properties": {
           "attempted_at": {
@@ -16474,129 +17459,33 @@
           "name": {
             "type": "string"
           },
-          "remote_operation_id": {
-            "type": "string"
-          },
-          "remote_resource_id": {
-            "type": "string"
-          },
-          "request_digest": {
-            "type": "string"
-          },
           "state": {
             "type": "string"
           }
         }
       },
-      "ClusterWorkloadDemand": {
+      "ClusterUpdate": {
         "type": "object",
         "required": [
-          "schema_version",
-          "mode",
-          "connection_generation",
-          "placement",
-          "input"
+          "field_mask",
+          "maintenance",
+          "ha"
         ],
         "properties": {
-          "connection_generation": {
-            "type": "integer"
+          "field_mask": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
-          "input": {
-            "$ref": "#/components/schemas/ClusterWorkloadInput"
+          "ha": {
+            "type": "boolean"
           },
-          "mode": {
-            "type": "string"
+          "maintenance": {
+            "$ref": "#/components/schemas/ClusterMaintenance"
           },
-          "placement": {
-            "$ref": "#/components/schemas/CloudPlacement"
-          },
-          "profile": {
-            "$ref": "#/components/schemas/ClusterSchedulingProfile"
-          },
-          "schema_version": {
-            "type": "integer"
-          }
-        }
-      },
-      "ClusterWorkloadInput": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "cloud_id",
-          "resource_id",
-          "target_id",
-          "attachment_id",
-          "project_id",
-          "environment_id",
-          "connection_id",
-          "plan_id",
-          "action_id",
-          "service",
-          "runtime_ref",
-          "runtime_revision",
-          "release_id",
-          "review_digest",
-          "trust_revision",
-          "maximum"
-        ],
-        "properties": {
-          "action_id": {
-            "type": "string"
-          },
-          "attachment_id": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "maximum": {
-            "$ref": "#/components/schemas/ClusterWorkloadVector"
-          },
-          "native": {
-            "$ref": "#/components/schemas/ClusterNativeWorkload"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "release_id": {
-            "type": "string"
-          },
-          "resource_id": {
-            "type": "string"
-          },
-          "review_digest": {
-            "type": "string"
-          },
-          "runtime_ref": {
-            "type": "string"
-          },
-          "runtime_revision": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "trust_revision": {
-            "type": "integer"
+          "provider_options": {
+            "$ref": "#/components/schemas/ClusterProviderOptions"
           }
         }
       },
@@ -19293,13 +20182,13 @@
       "ExistingResourceConfig": {
         "type": "object",
         "required": [
+          "incarnation",
+          "account_identity",
           "resource_id",
           "endpoint_id",
           "revision",
           "endpoint_revision",
-          "account_identity",
-          "external_id",
-          "incarnation"
+          "external_id"
         ],
         "properties": {
           "account_identity": {
@@ -19528,6 +20417,9 @@
           "error": {
             "type": "string"
           },
+          "error_code": {
+            "type": "string"
+          },
           "review_id": {
             "type": "string"
           },
@@ -19541,6 +20433,17 @@
             "type": "string"
           },
           "variant": {
+            "type": "string"
+          }
+        }
+      },
+      "FailedCleanupCancelInputBody": {
+        "type": "object",
+        "required": [
+          "expected_review_id"
+        ],
+        "properties": {
+          "expected_review_id": {
             "type": "string"
           }
         }
@@ -19695,65 +20598,6 @@
           },
           "status": {
             "type": "string"
-          }
-        }
-      },
-      "FrontendDemand": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "target_id",
-          "project_id",
-          "environment_id",
-          "service",
-          "plan_id",
-          "provider",
-          "connection_id",
-          "account_id",
-          "target_revision",
-          "connection_generation",
-          "grant_revision"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "connection_generation": {
-            "type": "integer"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "target_revision": {
-            "type": "integer"
           }
         }
       },
@@ -21123,167 +21967,12 @@
           }
         }
       },
-      "ManagedCleanupBinding": {
-        "type": "object",
-        "required": [
-          "id",
-          "external_id",
-          "plan_id",
-          "connection_id",
-          "revision",
-          "updated_at"
-        ],
-        "properties": {
-          "connection_id": {
-            "type": "string"
-          },
-          "external_id": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string"
-          }
-        }
-      },
-      "ManagedCleanupBindingRef": {
-        "type": "object",
-        "required": [
-          "origin",
-          "parent_binding_id",
-          "binding"
-        ],
-        "properties": {
-          "binding": {
-            "$ref": "#/components/schemas/ManagedCleanupBinding"
-          },
-          "origin": {
-            "type": "string"
-          },
-          "parent_binding_id": {
-            "type": "string"
-          }
-        }
-      },
-      "ManagedCleanupOutcome": {
-        "type": "object",
-        "required": [
-          "id",
-          "epoch",
-          "request",
-          "outcome"
-        ],
-        "properties": {
-          "epoch": {
-            "type": "integer"
-          },
-          "id": {
-            "type": "string"
-          },
-          "outcome": {
-            "$ref": "#/components/schemas/ManagedOutcome"
-          },
-          "request": {
-            "$ref": "#/components/schemas/ManagedRequest"
-          }
-        }
-      },
-      "ManagedCleanupTarget": {
-        "type": "object",
-        "required": [
-          "kind",
-          "origin",
-          "parent_binding_id",
-          "schema_version",
-          "binding",
-          "scope",
-          "authority_epoch",
-          "authority_revision",
-          "attachment_id",
-          "attachment_revision",
-          "trust_revision",
-          "connection_generation",
-          "accepted",
-          "unresolved",
-          "identity_current"
-        ],
-        "properties": {
-          "accepted": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ManagedCleanupOutcome"
-            }
-          },
-          "attachment_id": {
-            "type": "string"
-          },
-          "attachment_revision": {
-            "type": "integer"
-          },
-          "authority_epoch": {
-            "type": "integer"
-          },
-          "authority_revision": {
-            "type": "integer"
-          },
-          "binding": {
-            "$ref": "#/components/schemas/ManagedCleanupBinding"
-          },
-          "binding_refs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ManagedCleanupBindingRef"
-            }
-          },
-          "connection_generation": {
-            "type": "integer"
-          },
-          "identity_current": {
-            "type": "boolean"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "origin": {
-            "type": "string"
-          },
-          "parent_binding_id": {
-            "type": "string"
-          },
-          "revoked_at": {
-            "type": "string"
-          },
-          "schema_version": {
-            "type": "integer"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/ManagedScope"
-          },
-          "trust_revision": {
-            "type": "string"
-          },
-          "unresolved": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
       "ManagedDatabaseConfig": {
         "type": "object",
         "required": [
+          "account_identity",
           "profile",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -21371,33 +22060,6 @@
             "type": "string"
           },
           "version": {
-            "type": "string"
-          }
-        }
-      },
-      "ManagedOutcome": {
-        "type": "object",
-        "required": [
-          "State",
-          "UID",
-          "ResourceVersion",
-          "Generation",
-          "StatusCode"
-        ],
-        "properties": {
-          "Generation": {
-            "type": "integer"
-          },
-          "ResourceVersion": {
-            "type": "string"
-          },
-          "State": {
-            "type": "string"
-          },
-          "StatusCode": {
-            "type": "integer"
-          },
-          "UID": {
             "type": "string"
           }
         }
@@ -21507,121 +22169,6 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
-          }
-        }
-      },
-      "ManagedRequest": {
-        "type": "object",
-        "required": [
-          "Group",
-          "Version",
-          "Resource",
-          "Namespace",
-          "Name",
-          "Method",
-          "UID"
-        ],
-        "properties": {
-          "CleanupSource": {
-            "type": "string"
-          },
-          "Group": {
-            "type": "string"
-          },
-          "Method": {
-            "type": "string"
-          },
-          "Name": {
-            "type": "string"
-          },
-          "Namespace": {
-            "type": "string"
-          },
-          "PropagationPolicy": {
-            "type": "string"
-          },
-          "Resource": {
-            "type": "string"
-          },
-          "ResourceVersion": {
-            "type": "string"
-          },
-          "UID": {
-            "type": "string"
-          },
-          "Version": {
-            "type": "string"
-          }
-        }
-      },
-      "ManagedScope": {
-        "type": "object",
-        "required": [
-          "Org",
-          "Project",
-          "Environment",
-          "Service",
-          "Plan",
-          "Deployment",
-          "Action",
-          "Connection",
-          "Instance",
-          "RuntimeRef",
-          "RuntimeRevision",
-          "Release",
-          "Namespace",
-          "NamespaceUID",
-          "ClusterCA",
-          "Epoch"
-        ],
-        "properties": {
-          "Action": {
-            "type": "string"
-          },
-          "ClusterCA": {
-            "type": "string"
-          },
-          "Connection": {
-            "type": "string"
-          },
-          "Deployment": {
-            "type": "string"
-          },
-          "Environment": {
-            "type": "string"
-          },
-          "Epoch": {
-            "type": "integer"
-          },
-          "Instance": {
-            "type": "string"
-          },
-          "Namespace": {
-            "type": "string"
-          },
-          "NamespaceUID": {
-            "type": "string"
-          },
-          "Org": {
-            "type": "string"
-          },
-          "Plan": {
-            "type": "string"
-          },
-          "Project": {
-            "type": "string"
-          },
-          "Release": {
-            "type": "string"
-          },
-          "RuntimeRef": {
-            "type": "string"
-          },
-          "RuntimeRevision": {
-            "type": "string"
-          },
-          "Service": {
             "type": "string"
           }
         }
@@ -22038,8 +22585,8 @@
         "type": "object",
         "required": [
           "name",
+          "category",
           "source",
-          "identity",
           "quantity"
         ],
         "properties": {
@@ -22047,9 +22594,6 @@
             "type": "string"
           },
           "hourly_micro_usd": {
-            "type": "integer"
-          },
-          "identity": {
             "type": "string"
           },
           "name": {
@@ -22059,7 +22603,7 @@
             "type": "string"
           },
           "quantity": {
-            "type": "integer"
+            "type": "string"
           },
           "source": {
             "type": "string"
@@ -22070,8 +22614,8 @@
         "type": "object",
         "required": [
           "hourly_micro_usd",
-          "horizon_seconds",
           "horizon_micro_usd",
+          "horizon_seconds",
           "known",
           "missing_components",
           "price_digest",
@@ -22090,13 +22634,13 @@
             }
           },
           "horizon_micro_usd": {
-            "type": "integer"
+            "type": "string"
           },
           "horizon_seconds": {
             "type": "integer"
           },
           "hourly_micro_usd": {
-            "type": "integer"
+            "type": "string"
           },
           "known": {
             "type": "boolean"
@@ -22991,14 +23535,8 @@
           "name": {
             "type": "string"
           },
-          "operation_id": {
-            "type": "string"
-          },
           "provider_options": {
             "$ref": "#/components/schemas/ClusterProviderOptions"
-          },
-          "request_digest": {
-            "type": "string"
           },
           "size": {
             "type": "string"
@@ -23914,9 +24452,6 @@
           },
           "release": {
             "$ref": "#/components/schemas/Release"
-          },
-          "required_runtime_protocol": {
-            "type": "string"
           },
           "revision": {
             "type": "string"
@@ -26735,6 +27270,32 @@
           }
         }
       },
+      "RetainedResource": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "ownership",
+          "survives_cluster_deletion"
+        ],
+        "properties": {
+          "estimated_hourly_micro_usd": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "survives_cluster_deletion": {
+            "type": "boolean"
+          }
+        }
+      },
       "RetentionInput": {
         "type": "object",
         "required": [
@@ -27743,85 +28304,6 @@
           }
         }
       },
-      "RuntimeAccessInput": {
-        "type": "object",
-        "required": [
-          "attachment_id",
-          "attachment_revision",
-          "capability_revision",
-          "project_id",
-          "grant_revision",
-          "namespace",
-          "namespace_uid",
-          "service_account_name",
-          "service_account_uid",
-          "role_name",
-          "role_uid",
-          "role_resource_version",
-          "role_rules_digest",
-          "role_binding_name",
-          "role_binding_uid",
-          "role_binding_resource_version",
-          "role_binding_subjects_ref_digest",
-          "profile"
-        ],
-        "properties": {
-          "attachment_id": {
-            "type": "string"
-          },
-          "attachment_revision": {
-            "type": "integer"
-          },
-          "capability_revision": {
-            "type": "integer"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "namespace": {
-            "type": "string"
-          },
-          "namespace_uid": {
-            "type": "string"
-          },
-          "profile": {
-            "$ref": "#/components/schemas/RuntimeAccessProfile"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "role_binding_name": {
-            "type": "string"
-          },
-          "role_binding_resource_version": {
-            "type": "string"
-          },
-          "role_binding_subjects_ref_digest": {
-            "type": "string"
-          },
-          "role_binding_uid": {
-            "type": "string"
-          },
-          "role_name": {
-            "type": "string"
-          },
-          "role_resource_version": {
-            "type": "string"
-          },
-          "role_rules_digest": {
-            "type": "string"
-          },
-          "role_uid": {
-            "type": "string"
-          },
-          "service_account_name": {
-            "type": "string"
-          },
-          "service_account_uid": {
-            "type": "string"
-          }
-        }
-      },
       "RuntimeAccessProfile": {
         "type": "object",
         "required": [
@@ -27838,6 +28320,33 @@
           },
           "schema_version": {
             "type": "integer"
+          }
+        }
+      },
+      "RuntimeAccessReview": {
+        "type": "object",
+        "required": [
+          "attachment_id",
+          "profile"
+        ],
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "attachment_revision": {
+            "type": "integer"
+          },
+          "capability_revision": {
+            "type": "integer"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RuntimeAccessProfile"
+          },
+          "project_id": {
+            "type": "string"
           }
         }
       },
@@ -28649,9 +29158,6 @@
           "public"
         ],
         "properties": {
-          "applied_inputs": {
-            "$ref": "#/components/schemas/AppliedInputs"
-          },
           "artifact": {
             "$ref": "#/components/schemas/ReusedArtifact"
           },
@@ -28677,7 +29183,7 @@
             "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           },
           "cluster_demand": {
-            "$ref": "#/components/schemas/ClusterWorkloadDemand"
+            "$ref": "#/components/schemas/ClusterDemand"
           },
           "commit_sha": {
             "type": "string"
@@ -28711,9 +29217,6 @@
           },
           "framework": {
             "type": "string"
-          },
-          "frontend_demand": {
-            "$ref": "#/components/schemas/FrontendDemand"
           },
           "gateway": {
             "type": "array",

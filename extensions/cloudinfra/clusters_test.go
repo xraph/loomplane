@@ -114,7 +114,7 @@ func (publicOperationStore) CreateClusterPreview(_ context.Context, o *infra.Clu
 	return nil
 }
 func publicSentinelOperation() *infra.ClusterOperation {
-	return &infra.ClusterOperation{ID: "operation", CloudID: "cloud", OrgID: "org", Digest: "exact-review", Status: "accepted", Principal: security.Principal{OrgID: "org", UserID: "operator"}, Input: infra.ClusterInput{CloudRevision: 0, ConnectionID: "account", Provider: "digitalocean", AccountID: "provider-account", ConnectionGeneration: 1, ManagementEvidenceID: "private-evidence"}, Enrollment: &infra.ClusterEnrollment{VaultKey: "private-vault", RetiredVaultKeys: []string{"private-retired"}}, Error: "private-error", LeaseOwner: "private-lease"}
+	return &infra.ClusterOperation{ID: "operation", CloudID: "cloud", OrgID: "org", Digest: "exact-review", Status: "accepted", Principal: security.Principal{OrgID: "org", UserID: "operator"}, Steps: []infra.ClusterStep{{Name: "provider", State: "pending", RequestDigest: "private-request", RemoteOperationID: "private-remote"}}, Input: infra.ClusterInput{Spec: provider.ClusterSpec{OperationID: "private-operation", NodePools: []provider.NodePoolSpec{{OperationID: "private-pool-operation", RequestDigest: "private-pool-request"}}}, CloudRevision: 0, ConnectionID: "account", Provider: "digitalocean", AccountID: "provider-account", ConnectionGeneration: 1, ManagementEvidenceID: "private-evidence"}, Enrollment: &infra.ClusterEnrollment{VaultKey: "private-vault", RetiredVaultKeys: []string{"private-retired"}}, Error: "private-error", LeaseOwner: "private-lease"}
 }
 func TestClusterAllOperationResponsesUsePublicProjection(t *testing.T) {
 	adapters := infra.NewAdapters()
@@ -171,7 +171,7 @@ func TestRuntimeAccessPublicReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "reviewed-role") || strings.Contains(string(raw), "private-network-history") {
+	if strings.Contains(string(raw), "reviewed-role") || !strings.Contains(string(raw), "cleanup_dependents") || strings.Contains(string(raw), "private-network-history") {
 		t.Fatalf("public access review: %s", raw)
 	}
 }

@@ -146,3 +146,20 @@ class QualificationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LifecycleEvidenceTests(unittest.TestCase):
+    def test_unavailable_upgrade_stays_unqualified(self):
+        self.assertFalse(runner.validate_lifecycle_evidence("upgrade", {"status": "unavailable", "reason_code": "provider_upgrade_unsupported"}, config()))
+
+    def test_generic_pass_does_not_qualify_lifecycle(self):
+        for step in runner.LIFECYCLE_STEPS:
+            with self.subTest(step=step), self.assertRaises(ValueError):
+                runner.validate_lifecycle_evidence(step, {"passed": True}, config())
+
+    def test_drain_cannot_hide_a_write(self):
+        evidence = {"status": "observed", "observed_at": "2026-10-31T00:00:00Z", "maximum_nodes": 1, "reason_code": "pdb_blocked", "provider_writes": 1}
+        with self.assertRaises(ValueError):
+            runner.validate_lifecycle_evidence("blocked_drain", evidence, config())
+        evidence["provider_writes"] = 0
+        self.assertTrue(runner.validate_lifecycle_evidence("blocked_drain", evidence, config()))

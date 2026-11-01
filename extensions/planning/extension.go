@@ -116,7 +116,7 @@ type Extension struct {
 	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
 	features            map[string]bool   // server features that are on; nil has all off
-	failedCleanups      *deployments.FailedCleanups
+	failedCleanups      failedCleanupService
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -555,8 +555,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
-	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments).WithManagedCleanup(cleanupExecution.Store, cleanupExecution)
-	e.deployments.BindFailedCleanups(e.failedCleanups)
+	failedCleanups := deployments.NewFailedCleanups(runner, deployStore, e.deployments).WithManagedCleanup(cleanupExecution.Store, cleanupExecution)
+	e.failedCleanups = failedCleanups
+	e.deployments.BindFailedCleanups(failedCleanups)
 	e.plans.BindManagedRuntime(cleanupExecution)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{

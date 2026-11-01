@@ -26,26 +26,29 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
-	RuntimeAccess  *provider.RuntimeAccessInput `json:"runtime_access,omitempty"`
-	PolicyRevision int64                        `json:"policy_revision"`
+	Scaling        *ClusterScalingInput     `json:"scaling,omitempty"`
+	Maintenance    *ClusterMaintenanceInput `json:"maintenance,omitempty"`
+	Retirement     *ClusterRetirementInput  `json:"retirement,omitempty"`
+	RuntimeAccess  *RuntimeAccessReview     `json:"runtime_access,omitempty"`
+	PolicyRevision int64                    `json:"policy_revision"`
 	// ManagementReachable is caller acknowledgement, never path evidence.
-	ManagementReachable     bool                 `json:"management_reachable"`
-	AcknowledgeUnknownCosts bool                 `json:"acknowledge_unknown_costs"`
-	AcknowledgeNodeCosts    bool                 `json:"acknowledge_node_costs"`
-	WorkerImage             string               `json:"worker_image"`
-	Kind                    string               `json:"kind"`
-	Provider                string               `json:"provider"`
-	ConnectionID            string               `json:"connection_id"`
-	AccountID               string               `json:"account_id"`
-	ResourceID              string               `json:"resource_id,omitempty"`
-	ResourceRevision        int64                `json:"resource_revision"`
-	ConnectionGeneration    int64                `json:"connection_generation"`
-	CloudRevision           int64                `json:"cloud_revision"`
-	OptionsDigest           string               `json:"options_digest"`
-	OptionsCheckedAt        time.Time            `json:"options_checked_at"`
-	Spec                    provider.ClusterSpec `json:"spec"`
-	Ref                     provider.ClusterRef  `json:"ref"`
-	Attachment              *AttachmentInput     `json:"attachment,omitempty"`
+	ManagementReachable     bool                `json:"management_reachable"`
+	AcknowledgeUnknownCosts bool                `json:"acknowledge_unknown_costs"`
+	AcknowledgeNodeCosts    bool                `json:"acknowledge_node_costs"`
+	WorkerImage             string              `json:"worker_image"`
+	Kind                    string              `json:"kind"`
+	Provider                string              `json:"provider"`
+	ConnectionID            string              `json:"connection_id"`
+	AccountID               string              `json:"account_id"`
+	ResourceID              string              `json:"resource_id,omitempty"`
+	ResourceRevision        int64               `json:"resource_revision"`
+	ConnectionGeneration    int64               `json:"connection_generation"`
+	CloudRevision           int64               `json:"cloud_revision"`
+	OptionsDigest           string              `json:"options_digest"`
+	OptionsCheckedAt        time.Time           `json:"options_checked_at"`
+	Spec                    ClusterSpec         `json:"spec"`
+	Ref                     provider.ClusterRef `json:"ref"`
+	Attachment              *AttachmentInput    `json:"attachment,omitempty"`
 }
 
 type AttachmentPrerequisites struct {
@@ -59,13 +62,10 @@ type AttachmentPrerequisites struct {
 }
 
 type ClusterStep struct {
-	Name              string     `json:"name"`
-	State             string     `json:"state"`
-	RequestDigest     string     `json:"request_digest"`
-	RemoteOperationID string     `json:"remote_operation_id,omitempty"`
-	RemoteResourceID  string     `json:"remote_resource_id,omitempty"`
-	AttemptedAt       *time.Time `json:"attempted_at,omitempty"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	Name        string     `json:"name"`
+	State       string     `json:"state"`
+	AttemptedAt *time.Time `json:"attempted_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 type ClusterEnrollmentSummary struct {
@@ -77,6 +77,9 @@ type ClusterEnrollmentSummary struct {
 }
 
 type CloudClusterOperation struct {
+	MoneyEstimate               *MoneyEstimate            `json:"money_estimate,omitempty"`
+	BudgetReview                *BudgetReview             `json:"budget_review,omitempty"`
+	EnvelopeReview              *ClusterEnvelopeReview    `json:"envelope_review,omitempty"`
 	ID                          string                    `json:"id" forge:"id"`
 	CloudID                     string                    `json:"cloud_id"`
 	ResourceID                  string                    `json:"resource_id"`
@@ -98,18 +101,23 @@ type CloudClusterOperation struct {
 }
 
 type CloudCluster struct {
-	ID                 string                       `json:"id" forge:"id"`
-	CloudID            string                       `json:"cloud_id"`
-	Provider           string                       `json:"provider"`
-	AccountID          string                       `json:"account_id"`
-	ConnectionID       string                       `json:"connection_id"`
-	ExternalID         string                       `json:"external_id"`
-	Ownership          string                       `json:"ownership"`
-	LifecycleAuthority []string                     `json:"lifecycle_authority"`
-	Revision           int64                        `json:"revision"`
-	Status             string                       `json:"status"`
-	Observation        *provider.ClusterObservation `json:"observation,omitempty"`
-	UpdatedAt          time.Time                    `json:"updated_at"`
+	ScalingPolicies        map[string]ClusterScalingPolicy `json:"scaling_policies,omitempty"`
+	RetainedResources      []RetainedResource              `json:"retained_resources,omitempty"`
+	RetainedPriceCheckedAt time.Time                       `json:"retained_price_checked_at,omitzero"`
+	DesiredRevision        int64                           `json:"desired_revision"`
+	ObservedRevision       int64                           `json:"observed_revision"`
+	ID                     string                          `json:"id" forge:"id"`
+	CloudID                string                          `json:"cloud_id"`
+	Provider               string                          `json:"provider"`
+	AccountID              string                          `json:"account_id"`
+	ConnectionID           string                          `json:"connection_id"`
+	ExternalID             string                          `json:"external_id"`
+	Ownership              string                          `json:"ownership"`
+	LifecycleAuthority     []string                        `json:"lifecycle_authority"`
+	Revision               int64                           `json:"revision"`
+	Status                 string                          `json:"status"`
+	Observation            *ClusterObservation             `json:"observation,omitempty"`
+	UpdatedAt              time.Time                       `json:"updated_at"`
 }
 
 type CloudClusterPage struct {
@@ -137,8 +145,8 @@ func (c *Client) CloudClusterOptions(ctx context.Context, cloud, connection, reg
 	err := c.do(ctx, http.MethodGet, infrastructurePath(cloud)+"/cluster-options/"+esc(connection)+"?region="+url.QueryEscape(region), nil, &out)
 	return &out, err
 }
-func (c *Client) DiscoverClusters(ctx context.Context, connection, cursor string) (*provider.ClusterPage, error) {
-	var out provider.ClusterPage
+func (c *Client) DiscoverClusters(ctx context.Context, connection, cursor string) (*ClusterPage, error) {
+	var out ClusterPage
 	err := c.do(ctx, http.MethodGet, "/api/v1/connections/"+esc(connection)+"/clusters?cursor="+url.QueryEscape(cursor), nil, &out)
 	return &out, err
 }

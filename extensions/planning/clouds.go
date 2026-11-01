@@ -174,6 +174,9 @@ func cloudBody[T any](c forge.Context) (T, error) {
 }
 func cloudResult(c forge.Context, status int, value any, err error) error {
 	if err != nil {
+		if handled, result := cleanupProblem(c, err); handled {
+			return result
+		}
 		return fail(err)
 	}
 	return c.JSON(status, value)

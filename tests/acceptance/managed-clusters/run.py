@@ -19,6 +19,50 @@ STEPS = (
 )
 
 
+LIFECYCLE_STEPS = ("scale_up", "native_bounds", "blocked_drain", "maintenance",
+                   "runtime_renewal", "teardown", "retained_inventory", "upgrade")
+
+
+def qualification_steps(config):
+    return STEPS[:-1] + LIFECYCLE_STEPS + STEPS[-1:] if config.get("lifecycle") is True else STEPS
+
+
+def validate_lifecycle_evidence(step, evidence, config):
+    if evidence.get("status") == "unavailable":
+        if step not in ("native_bounds", "maintenance", "upgrade") or not evidence.get("reason_code"):
+            raise ValueError(step + " needs an observed result or an explicit supported-path limitation")
+        return False
+    if evidence.get("status") != "observed" or not evidence.get("observed_at"):
+        raise ValueError(step + " requires timestamped lifecycle evidence")
+    if evidence.get("maximum_nodes", config["max_nodes"] + 1) > config["max_nodes"]:
+        raise ValueError(step + " exceeded the reviewed node bound")
+    required = {
+        "scale_up": ("review_digest", "operation_revision", "observed_nodes", "desired_nodes"),
+        "native_bounds": ("review_digest", "policy_revision", "controller_mode", "minimum_nodes", "maximum_nodes"),
+        "blocked_drain": ("reason_code", "provider_writes"),
+        "maintenance": ("review_digest", "operation_revision", "supported_operation"),
+        "runtime_renewal": ("previous_expiry", "current_expiry", "verified_after_previous_expiry"),
+        "teardown": ("review_digest", "operation_revision", "absence_observed"),
+        "retained_inventory": ("resources", "complete"),
+        "upgrade": ("review_digest", "from_version", "to_version", "supported_path"),
+    }
+    if any(key not in evidence for key in required[step]):
+        raise ValueError(step + " has incomplete lifecycle evidence")
+    if step == "blocked_drain" and (not evidence["reason_code"] or evidence["provider_writes"] != 0):
+        raise ValueError("Blocked drain must establish zero provider writes")
+    if step == "native_bounds" and evidence["controller_mode"] != "native":
+        raise ValueError("Native bounds need the provider-owned controller")
+    if step == "runtime_renewal" and evidence["verified_after_previous_expiry"] is not True:
+        raise ValueError("Renewal must be verified after the previous credential expires")
+    if step == "teardown" and evidence["absence_observed"] is not True:
+        raise ValueError("Teardown requires an absence observation")
+    if step == "retained_inventory" and (evidence["complete"] is not True or not isinstance(evidence["resources"], list)):
+        raise ValueError("Retained inventory must be complete, including retained storage")
+    if step == "upgrade" and (evidence["supported_path"] is not True or evidence["from_version"] == evidence["to_version"]):
+        raise ValueError("Upgrade needs an actual supported version transition")
+    return True
+
+
 def validate(config):
     required = ("api_url", "cloud_id", "account_id", "project_id", "region", "input", "commands")
     if any(not config.get(key) for key in required):
@@ -46,7 +90,7 @@ def validate(config):
         raise ValueError("Node count exceeds the disposable bound")
     if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", source.get("worker_image", "")):
         raise ValueError("Pin the worker image by digest")
-    for step in STEPS:
+    for step in qualification_steps(config):
         command = config["commands"].get(step)
         if not isinstance(command, list) or not command or not all(isinstance(v, str) and v for v in command):
             raise ValueError("Supply an argv command for " + step)
@@ -57,8 +101,11 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 def scope_fingerprint(config):
-    return fingerprint({key: config[key] for key in ("api_url", "cloud_id", "account_id", "project_id",
-                                                    "region", "input", "max_nodes", "max_node_hourly_micro_usd")})
+    scope = {key: config[key] for key in ("api_url", "cloud_id", "account_id", "project_id",
+                                         "region", "input", "max_nodes", "max_node_hourly_micro_usd")}
+    if config.get("lifecycle"):
+        scope["lifecycle"] = True
+    return fingerprint(scope)
 
 def matches_input(expected, actual):
     if isinstance(expected, dict):
@@ -130,6 +177,12 @@ class Runner:
             raise ValueError(step + " did not establish the required outcome")
         if step == "cleanup_inventory" and evidence.get("remaining_resources") != []:
             raise ValueError("Disposable resources remain in the cleanup inventory")
+        if step in LIFECYCLE_STEPS:
+            qualified = validate_lifecycle_evidence(step, evidence, self.config)
+            self.state.setdefault("lifecycle_results", {})[step] = {
+                "qualified": qualified, "status": evidence["status"],
+                "reason_code": evidence.get("reason_code", ""),
+            }
         self.state["completed"].append(step)
         self.save()
 
@@ -156,7 +209,7 @@ class Runner:
         self.save()
 
     def run(self):
-        if self.state["completed"] == list(STEPS):
+        if self.state["completed"] == list(qualification_steps(self.config)):
             return self.state
         if "operation_id" not in self.state:
             review = self.request("POST", "/clusters/preview", self.config["input"])
@@ -186,10 +239,14 @@ class Runner:
             if time.monotonic() >= deadline:
                 raise TimeoutError("Resume the saved operation after checking provider progress")
             time.sleep(2)
-        for step in STEPS[1:]:
+        for step in qualification_steps(self.config)[1:]:
             self.run_step(step)
         # Manual cleanup evidence does not replace Plan 02 lifecycle qualification.
         self.state["live_qualified"] = True
+        self.state["lifecycle_qualified"] = self.config.get("lifecycle") is True and all(
+            self.state.get("lifecycle_results", {}).get(step, {}).get("qualified") is True
+            for step in LIFECYCLE_STEPS
+        )
         self.save()
         return self.state
 

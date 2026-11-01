@@ -19,6 +19,26 @@ func OwnedCloud(cloud string) bool {
 // ReviewedConnectionSettings copies only placement settings. Credential and
 // permission-check metadata can change without changing a destination.
 func ReviewedConnectionSettings(cloud string, details map[string]string) map[string]string {
+	keys := reviewedPlacementKeys(cloud, details)
+	if cloud == "firecracker" {
+		keys = append(keys, "runtime_identity")
+	}
+	if details["managed_attachment_id"] != "" {
+		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
+	}
+	var out map[string]string
+	for _, k := range keys {
+		if v := details[k]; v != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func reviewedPlacementKeys(cloud string, details map[string]string) []string {
 	var keys []string
 	switch cloud {
 	case "azure":
@@ -33,20 +53,30 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "kubernetes":
 		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
 	case "firecracker":
-		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "runtime_identity", "ingress_address"}
+		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "ingress_address"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
-	if details["managed_attachment_id"] != "" {
-		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
+	return keys
+}
+
+// PublicReviewedSettings retains reviewed placement without execution selectors
+// or runtime qualification identities. It shares the planner's placement keys.
+func PublicReviewedSettings(details map[string]string) map[string]string {
+	if details == nil {
+		return nil
 	}
-	var out map[string]string
-	for _, k := range keys {
-		if v := details[k]; v != "" {
-			if out == nil {
-				out = map[string]string{}
+	out := map[string]string{}
+	for _, cloud := range []string{"azure", "digitalocean", "server", "kubernetes", "firecracker", "registry"} {
+		for _, key := range reviewedPlacementKeys(cloud, details) {
+			if value, ok := details[key]; ok {
+				out[key] = value
 			}
-			out[k] = v
+		}
+	}
+	for _, key := range []string{"build_workers", "build_runtime_class", "runtime_class", "region", "zone"} {
+		if value, ok := details[key]; ok {
+			out[key] = value
 		}
 	}
 	return out

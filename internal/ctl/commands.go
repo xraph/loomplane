@@ -85,6 +85,7 @@ func (a *App) commands() []cli.Command {
 			cli.WithFlag(cli.NewStringFlag("note", "", "Why, for the record", ""))),
 		cli.NewCommand("deployments", "List a project's deployments", a.deployments,
 			cli.WithUsage("deployments <project>"), cli.WithFlag(jsonFlag)),
+		a.failedCleanupCommand(),
 		cli.NewCommand("deployment", "Show a deployment, step by step", a.deployment,
 			cli.WithUsage("deployment <deployment-id> [--watch]"),
 			cli.WithFlags(cli.NewBoolFlag("watch", "w", "Follow it until it finishes", false), jsonFlag)),
