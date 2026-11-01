@@ -61,7 +61,8 @@ func (s *Service) decorate(r *ProviderResource) {
 	if r.EndpointID != "" {
 		r.ConnectionState = "verification_needed"
 	}
-	if r.Incarnation == "" {
+	s.decorateBucket(r)
+	if !AttachableIdentity(r) {
 		r.ConnectionState = "identity_verification_needed"
 	}
 	if r.ObservationState == "missing" {
@@ -295,9 +296,9 @@ func (s *Service) reconcile(state *AccountState, run *ProviderResourceSync, inv 
 		if r == nil {
 			r = &ProviderResource{ID: id, OrgID: run.OrgID, Provider: run.Provider, AccountIdentity: run.AccountIdentity, ExternalID: o.ID, Incarnation: o.Incarnation, Ownership: "external", Revision: 1}
 			state.Resources = append(state.Resources, r)
-		} else if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || r.Version != o.Version || r.Status == "missing" || (r.ConnectionID == run.ConnectionID && r.ConnectionGeneration != run.ConnectionGeneration) {
+		} else if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || r.Version != o.Version || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" || (r.ConnectionID == run.ConnectionID && r.ConnectionGeneration != run.ConnectionGeneration) {
 			r.Revision++
-			if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || r.Status == "missing" {
+			if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" {
 				r.EndpointID = ""
 				r.EndpointRevision = 0
 			}
@@ -392,10 +393,10 @@ func (s *Service) Verified(ctx context.Context, p security.Principal, id string)
 	if err != nil {
 		return nil, err
 	}
-	if current.Status == "missing" || current.Incarnation == "" || current.ObservationState == "stale" {
+	if current.Status == "missing" || !AttachableIdentity(current) || current.ObservationState == "stale" {
 		return nil, ErrUnverified
 	}
-	if run.FinishedAt == nil || !current.ObservedAt.Equal(*run.FinishedAt) {
+	if run.Status != "complete" || run.FinishedAt == nil || !current.ObservedAt.Equal(*run.FinishedAt) {
 		return nil, ErrUnverified
 	}
 	if current.EndpointProofRequired {
@@ -415,6 +416,10 @@ func engine(kind string) string {
 	return ""
 }
 func matchesDSN(r *ProviderResource, dsn string) bool {
+	if r.Kind == "object-storage" {
+		a, err := catalogconnect.ParseBucketAccess(dsn)
+		return err == nil && bucketAccessMatches(r, a)
+	}
 	u, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil || u.Opaque != "" || !strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), strings.TrimSuffix(r.Host, ".")) {
 		return false
@@ -469,7 +474,18 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
-	if r.Host == "" {
+	if r.Kind == "object-storage" {
+		if in.BucketAccess == nil || in.DSN != "" {
+			return nil, ErrInvalid
+		}
+		in.DSN, err = normalizeBucketAccess(r, *in.BucketAccess)
+		if err != nil {
+			return nil, err
+		}
+	} else if in.BucketAccess != nil || strings.TrimSpace(in.DSN) == "" {
+		return nil, ErrInvalid
+	}
+	if r.Host == "" && r.Kind != "object-storage" {
 		u, parseErr := url.Parse(strings.TrimSpace(in.DSN))
 		if parseErr != nil || u.Hostname() == "" {
 			return nil, ErrInvalid
@@ -496,10 +512,10 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 			return nil, err
 		}
 	}
-	if s.deps.Endpoints == nil || r.Host == "" || !matchesDSN(r, in.DSN) {
+	if s.deps.Endpoints == nil || (r.Host == "" && r.Kind != "object-storage") || !matchesDSN(r, in.DSN) {
 		return nil, ErrInvalid
 	}
-	e, err := s.deps.Endpoints.Create(ctx, p, catalogconnect.CreateInput{Name: fmt.Sprintf("resource-%s-%d", strings.TrimPrefix(r.ID, "providerresource_"), r.Revision+1), Engine: engine(r.Kind), DSN: in.DSN})
+	e, err := s.deps.Endpoints.Create(ctx, p, catalogconnect.CreateInput{Name: fmt.Sprintf("resource-%s-%d", strings.TrimPrefix(r.ID, "providerresource_"), r.Revision+1), Engine: resourceEngine(r), DSN: in.DSN})
 	if err != nil {
 		return nil, ErrInvalid
 	}
@@ -527,6 +543,9 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 	return s.Get(ctx, p, id)
 }
 func endpointMatches(r *ProviderResource, e *catalogconnect.Endpoint) bool {
+	if r.Kind == "object-storage" {
+		return bucketEndpointMatches(r, e)
+	}
 	return e != nil && e.OrgID == r.OrgID && engine(r.Kind) == e.Engine && strings.EqualFold(strings.TrimSuffix(e.Host, "."), strings.TrimSuffix(r.Host, ".")) && (r.Port == 0 || e.Port == r.Port) && (r.Database == "" || e.Database == r.Database)
 }
 

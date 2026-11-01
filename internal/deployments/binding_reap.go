@@ -10,8 +10,9 @@ import (
 
 // resourceCredentialFields are the fields a deployed action may keep in
 // Vault under its own name: a resource's address, its application password,
-// and the administrator's password of a database Loomplane runs itself.
-var resourceCredentialFields = []string{ResourceURL, passwordField, adminPasswordField}
+// the administrator's password of a database Loomplane runs itself, and
+// the explicit SDK output fields of an attached bucket.
+var resourceCredentialFields = append([]string{ResourceURL, passwordField, adminPasswordField}, bucketCredentialFields()...)
 
 // BindingReaper cleans up after the services and resources deployed in a
 // project or environment being deleted. The deletion takes every binding
@@ -89,7 +90,7 @@ func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 				}
 			}
 		}
-		if databaseGatewayOf(b) != nil {
+		if databaseGatewayOf(b) != nil || planning.ExistingResourceBinding(b) {
 			continue
 		}
 		for _, left := range append([]planning.Binding{*b}, b.Replaced...) {

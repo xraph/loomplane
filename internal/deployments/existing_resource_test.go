@@ -101,9 +101,15 @@ func TestExistingResourceCannotAcquirePendingNativeCleanup(t *testing.T) {
 	}
 }
 
-type revokedExistingProject struct{ existingAccess }
+type revokedExistingProject struct {
+	existingAccess
+	checks *int
+}
 
-func (revokedExistingProject) VerifyProject(context.Context, security.Principal, string, string, string, int64) (*providerresources.ProviderResource, *catalogconnect.Endpoint, error) {
+func (r revokedExistingProject) VerifyProject(context.Context, security.Principal, string, string, string, int64) (*providerresources.ProviderResource, *catalogconnect.Endpoint, error) {
+	if r.checks != nil {
+		*r.checks++
+	}
 	return nil, nil, security.ErrForbidden
 }
 func (revokedExistingProject) ResolveProject(context.Context, security.Principal, string, string, string, int64) (*providerresources.ProviderResource, *catalogconnect.Endpoint, string, error) {
@@ -111,14 +117,16 @@ func (revokedExistingProject) ResolveProject(context.Context, security.Principal
 }
 
 func TestExistingResourceKeptBindingRechecksProjectGrant(t *testing.T) {
-	cfg := &planning.ResourceConfig{ExistingResource: &planning.ExistingResourceConfig{ResourceID: "inventory", EndpointID: "endpoint", Revision: 1, EndpointRevision: 1}}
+	cfg := &planning.ResourceConfig{Provider: "digitalocean", Kind: "postgres", AccountIdentity: "account", ExistingResource: &planning.ExistingResourceConfig{ResourceID: "inventory", EndpointID: "endpoint", Revision: 1, EndpointRevision: 1, AccountIdentity: "account", ExternalID: "native", Incarnation: "physical"}}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewRunner(RunnerDeps{ExistingResources: revokedExistingProject{}})
-	job := &Job{Deployment: &Deployment{OrgID: "org", ProjectID: "project", EnvironmentID: "env"}, Plan: &planning.Plan{CreatedBy: "developer"}, Action: planning.Action{Name: "api", Service: &planning.ServiceConfig{Env: []planning.EnvLink{{From: "db", Subject: planning.ResourceSubject}}}}}
-	if err := r.verifyExistingServiceAccess(t.Context(), job, map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Config: raw}}); err == nil {
-		t.Fatal("a kept resource bypassed the current project grant")
+	calls := 0
+	r := NewRunner(RunnerDeps{ExistingResources: revokedExistingProject{checks: &calls}})
+	approved := planning.Action{Name: "db", Subject: planning.ResourceSubject, Provider: "digitalocean", ConnectionID: "connection", Op: planning.Keep, Resource: cfg}
+	job := &Job{Deployment: &Deployment{OrgID: "org", ProjectID: "project", EnvironmentID: "env"}, Plan: &planning.Plan{CreatedBy: "developer", Actions: []planning.Action{approved}}, Action: planning.Action{Name: "api", Service: &planning.ServiceConfig{Env: []planning.EnvLink{{From: "db", Subject: planning.ResourceSubject}}}}}
+	if err = r.verifyExistingServiceAccess(t.Context(), job, map[string]*planning.Binding{"db": {Name: "db", Subject: planning.ResourceSubject, Provider: "digitalocean", ConnectionID: "connection", Config: raw}}); err == nil || calls != 1 {
+		t.Fatalf("the current project grant was not checked exactly once: err=%v calls=%d", err, calls)
 	}
 }

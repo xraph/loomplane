@@ -521,6 +521,8 @@ func appPlatformRollback(a Action, img ReleasedImage, from string) (ArtifactChoi
 	}
 	const recorded = "App Platform can only roll back to a deployment Loomplane recorded; "
 	switch {
+	case a.Service != nil && a.Service.TargetAccountIdentity != "":
+		return refuse("App Platform's historical rollback restores its old app spec, including external resource credentials. Use a reviewed source deployment with the current external attachments instead.")
 	// The runner moves a replaced service onto a new app, which has no
 	// deployment of the restored release to go back to.
 	case a.Op == Replace:

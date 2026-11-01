@@ -768,6 +768,7 @@ func (p *planner) readdress() {
 			continue
 		}
 		var moved []string
+		accessChanged := false
 		for _, e := range a.Service.Env {
 			for _, dep := range p.linkTargets(e) {
 				if slices.Contains(moved, dep.Name) {
@@ -775,8 +776,13 @@ func (p *planner) readdress() {
 				}
 				if _, ok := p.readdressed(dep, e, a.Provider); ok {
 					moved = append(moved, dep.Name)
+					accessChanged = accessChanged || (dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil)
 				}
 			}
+		}
+		if len(moved) > 0 && accessChanged {
+			a.Op, a.Reason = Update, fmt.Sprintf("%s gets newly reviewed resource access from %s.", name, strings.Join(moved, ", "))
+			continue
 		}
 		switch len(moved) {
 		case 0:
@@ -797,6 +803,8 @@ func (p *planner) readdress() {
 func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bool) {
 	var how string
 	switch {
+	case dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil:
+		how = "updates the approved access to " + dep.Name
 	case dep.Op == Replace:
 		how = "replaces " + dep.Name
 	case dep.Op == Create && p.bindings[dep.ID] != nil:

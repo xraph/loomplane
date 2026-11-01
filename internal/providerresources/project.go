@@ -42,7 +42,7 @@ func projectPinMatches(b *ResourceBinding, r *ProviderResource) bool {
 	if r.Provider == connections.Azure {
 		externalIDMatches = strings.EqualFold(b.ExternalID, r.ExternalID)
 	}
-	return b.Provider == r.Provider && b.AccountIdentity != "" && b.AccountIdentity == r.AccountIdentity && externalIDMatches && b.Incarnation != "" && b.Incarnation == r.Incarnation && b.Revision == r.Revision && b.EndpointID == r.EndpointID && b.EndpointRevision == r.EndpointRevision
+	return b.Provider == r.Provider && b.AccountIdentity != "" && b.AccountIdentity == r.AccountIdentity && externalIDMatches && AttachableIdentity(r) && b.Incarnation == r.Incarnation && b.Revision == r.Revision && b.EndpointID == r.EndpointID && b.EndpointRevision == r.EndpointRevision
 }
 
 // VerifyProject verifies an already approved external binding under its
@@ -72,7 +72,7 @@ func (s *Service) VerifyProject(ctx context.Context, p security.Principal, proje
 		return nil, nil, ErrChanged
 	}
 	s.decorate(r)
-	if r.Status == "missing" || r.Incarnation == "" || r.ObservationState == "stale" || run.FinishedAt == nil || !r.ObservedAt.Equal(*run.FinishedAt) {
+	if r.Status == "missing" || !AttachableIdentity(r) || r.ObservationState == "stale" || run.Status != "complete" || run.FinishedAt == nil || !r.ObservedAt.Equal(*run.FinishedAt) {
 		return nil, nil, ErrUnverified
 	}
 	if r.EndpointProofRequired {

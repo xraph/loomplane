@@ -335,6 +335,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
 		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
 		catalogconnect.EngineMySQL: catalogconnect.MySQLProber{},
+		catalogconnect.EngineS3:    catalogconnect.BucketProber{}, catalogconnect.EngineGCS: catalogconnect.BucketProber{},
 	}}
 	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
@@ -367,7 +368,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	executors[connections.Firecracker] = firecrackerTarget
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
-	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
+	dialer := ownedDialer{credentials: clouds, guard: dialGuard, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
 	e.endpointDialer = dialer
 	// A kind's own API reaches its running components and generated
 	// secrets through CatalogAccess, which it resolves from the container.
@@ -694,9 +695,10 @@ func (e *Extension) Stop(ctx context.Context) error {
 	return nil
 }
 
-// ownedDialer dials from the server or cluster a connection belongs to.
+// ownedDialer checks external access through SSH or the guarded control-plane network.
 type ownedDialer struct {
 	credentials deployments.Credentials
+	guard       *deployments.DialGuard
 	targets     map[string]*deployments.OwnedTarget
 }
 
@@ -709,8 +711,7 @@ type endpointDialer interface {
 
 var _ endpointDialer = ownedDialer{}
 
-// TargetCloud is the cloud of a target connection: "server" or
-// "kubernetes".
+// TargetCloud identifies the selected connection for verification scope notes.
 func (d ownedDialer) TargetCloud(ctx context.Context, orgID, connectionID string) (string, error) {
 	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
 	if err != nil {
@@ -723,6 +724,14 @@ func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string)
 	c, _, err := d.credentials.Credential(ctx, orgID, connectionID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if c == nil || c.ID != connectionID || c.OrgID != orgID || c.Status != connections.StatusReady {
+		return nil, nil, errors.New("the resource check's deployment target is not ready")
+	}
+	if c.Cloud == connections.DigitalOcean || c.Cloud == connections.Azure {
+		// Native platforms expose no TCP forwarding API. This check runs
+		// from Loomplane and the review says so; it does not prove app egress.
+		return d.guard.Dial, nil, nil
 	}
 	target, ok := d.targets[c.Cloud]
 	if !ok {

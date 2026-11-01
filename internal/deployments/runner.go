@@ -925,6 +925,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil && !unreachable {
 		return err
 	}
+	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
+		return targetErr
+	}
 	if checkErr := checkAdmittedDaemon(ctx, a, conn); checkErr != nil {
 		return checkErr
 	}
@@ -941,6 +944,11 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
+	}
+	if !deleting {
+		if accessErr := r.verifyExistingServiceAccess(ctx, &Job{Deployment: d, Plan: plan, Action: a, Connection: conn}, resources); accessErr != nil {
+			return accessErr
+		}
 	}
 	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, resources); captureErr != nil {
 		return captureErr
@@ -1248,6 +1256,9 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 		return nil
 	}
 	if err := r.verifyExistingServiceAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
+	if err := r.verifyExistingSnapshotAccess(ctx, job, around.resources); err != nil {
 		return err
 	}
 	if !a.Service.Generated() {

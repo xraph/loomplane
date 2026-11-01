@@ -21,6 +21,13 @@ func OwnedCloud(cloud string) bool {
 func ReviewedConnectionSettings(cloud string, details map[string]string) map[string]string {
 	var keys []string
 	switch cloud {
+	case "azure":
+		keys = []string{"tenant_id", "subscription_id", "resource_group", "registry_pull"}
+	case "digitalocean":
+		keys = []string{"team_uuid"}
+		if strings.TrimSpace(details["team_uuid"]) == "" {
+			keys = []string{"account_uuid"}
+		}
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":

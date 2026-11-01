@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/providerresources"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *planning.Plan, a planning.Action, current *planning.Binding, step *Step, progress func(string, string)) error {
@@ -69,7 +70,7 @@ func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *p
 	if err != nil {
 		return errors.New("the external resource or its access changed; sync and review the deployment again")
 	}
-	if record == nil || endpoint == nil || record.OrgID != d.OrgID || record.ID != pin.ResourceID || record.Revision != pin.Revision || record.AccountIdentity != pin.AccountIdentity || record.ExternalID != pin.ExternalID || record.Incarnation != pin.Incarnation || record.EndpointID != pin.EndpointID || endpoint.ID != pin.EndpointID || endpoint.Revision != pin.EndpointRevision || record.EndpointRevision != pin.EndpointRevision || dsn == "" {
+	if record == nil || !providerresources.AttachableIdentity(record) || endpoint == nil || record.OrgID != d.OrgID || record.ID != pin.ResourceID || record.Revision != pin.Revision || record.AccountIdentity != pin.AccountIdentity || record.ExternalID != pin.ExternalID || record.Incarnation != pin.Incarnation || record.EndpointID != pin.EndpointID || endpoint.ID != pin.EndpointID || endpoint.Revision != pin.EndpointRevision || record.EndpointRevision != pin.EndpointRevision || dsn == "" {
 		return errors.New("the external resource identity or credential revision changed; review the deployment again")
 	}
 	for _, consumer := range plan.Actions {
@@ -85,6 +86,9 @@ func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *p
 		}
 		if !uses {
 			continue
+		}
+		if consumer.Service.Workload == provider.StaticSite || consumer.Service.Execution == provider.Static {
+			return errors.New("external resource credentials cannot be sent to a static site's build")
 		}
 		if r.existingEndpoints == nil || r.existingDialer == nil {
 			return errors.New("the external resource network verifier is unavailable")
@@ -113,7 +117,7 @@ func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *p
 		}
 	}
 	progress(StepDeploying, "Connecting "+a.Name+" without changing its cloud resource")
-	if err := r.resources.Put(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, ResourceURL), []byte(dsn)); err != nil {
+	if err := r.storeExistingAccess(ctx, d, a, dsn); err != nil {
 		return err
 	}
 	out := &Outcome{ExternalID: record.ExternalID, PhysicalID: record.Incarnation, Revision: existingRevision(pin.Revision, pin.EndpointRevision)}

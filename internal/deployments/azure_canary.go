@@ -532,7 +532,8 @@ func azureReleaseTemplate(job *Job, image, suffix string) azure.Template {
 // read and deactivate revisions and list secrets, picks the baseline,
 // builds the image as Apply does, then starts the candidate as a revision
 // beside the baseline, reading secrets of its own.
-func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, error) {
+func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (_ *CanaryTarget, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	cfg := job.Action.Service
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
@@ -620,7 +621,8 @@ func (a *Azure) canaryPermissions(ctx context.Context, s *azure.Session, job *Jo
 }
 
 // SetWeights implements Weighted.
-func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candidatePercent int) error {
+func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candidatePercent int) (err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
 	if err != nil {
 		return err
@@ -634,7 +636,8 @@ func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candid
 
 // Promote implements Weighted. The candidate becomes what the app runs,
 // with all of the traffic, in single revision mode again.
-func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome, error) {
+func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (_ *Outcome, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	if job.Action.Service == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
 	}
@@ -665,7 +668,8 @@ func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome
 // agree again. The app stays in multiple revisions mode with its traffic
 // pinned to the baseline until the next deploy, which goes back to single
 // revision mode.
-func (a *Azure) Revert(ctx context.Context, job *Job, t CanaryTarget) error {
+func (a *Azure) Revert(ctx context.Context, job *Job, t CanaryTarget) (err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
 	if err != nil {
 		return err

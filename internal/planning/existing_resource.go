@@ -55,11 +55,19 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 		problem("existing-resource-unverified", check.Error)
 		return
 	}
-	if record == nil || record.ID != r.ExistingResource || record.Status == "missing" || record.Incarnation == "" || record.AccountIdentity == "" || record.ConnectionID == "" {
+	if record == nil || record.ID != r.ExistingResource || record.Status == "missing" || !providerresources.AttachableIdentity(record) || record.AccountIdentity == "" || record.ConnectionID == "" {
 		problem("existing-resource-unverified", "Sync this resource and verify its physical identity before using it.")
 		return
 	}
 	engine := record.Kind
+	if record.Kind == "object-storage" {
+		switch record.Provider {
+		case "aws":
+			engine = catalogconnect.EngineS3
+		case "gcp":
+			engine = catalogconnect.EngineGCS
+		}
+	}
 	if engine == "valkey" {
 		engine = "redis"
 	}
@@ -68,7 +76,11 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 		requested = "redis"
 	}
 	endpoint := check.Endpoint
-	if requested != engine || endpoint == nil || endpoint.ID != record.EndpointID || endpoint.Revision != record.EndpointRevision || endpoint.Engine != engine {
+	expectedKind := record.Kind
+	if expectedKind == "valkey" {
+		expectedKind = "redis"
+	}
+	if requested != expectedKind || endpoint == nil || endpoint.ID != record.EndpointID || endpoint.Revision != record.EndpointRevision || endpoint.Engine != engine {
 		problem("existing-resource-connection", "Add matching application credentials to this resource before using it.")
 		return
 	}
@@ -77,7 +89,7 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 		if candidate.Cloud != record.Provider || !candidate.Available {
 			continue
 		}
-		if _, ok := candidate.Provisioning(engine); ok {
+		if _, ok := candidate.Provisioning(expectedKind); ok {
 			target = candidate
 			break
 		}
@@ -109,11 +121,22 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 			a.Reason = "The external resource attachment is unchanged."
 		}
 	}
+	if record.Kind == "object-storage" && record.Provider == "aws" {
+		p.warn(Finding{Code: "external-bucket-logical-identity", Subject: ResourceSubject, Name: name, Path: base + ".existing_resource", Message: "This S3 attachment follows the verified account and bucket name. Recreating that name in the same account preserves its logical identity; no physical bucket incarnation is available."})
+	}
 	p.resources[name] = a
 	p.actions = append(p.actions, a)
 }
 
 func (p *planner) linkExistingResource(name string, a *Action, need, key, path string, dep *Action) {
+	if a.Service.Workload == provider.StaticSite || a.Service.Execution == provider.Static {
+		p.problem(Finding{Code: "external-resource-runtime-required", Subject: ServiceSubject, Name: name, Path: path, Message: "External resource credentials are available only to a running application, not a static site's build."})
+		return
+	}
+	p.pinExternalResourceTarget(name, a, path)
+	if note := ResourceCheckNote(p.cloud(a.Provider)); note != "" {
+		p.warn(Finding{Code: "external-resource-check-scope", Subject: ServiceSubject, Name: name, Path: path, Message: note})
+	}
 	check, ok := p.in.ExistingResourceChecks[name+":"+need]
 	if !ok || check.Err != "" || check.Report == nil || len(check.Report.Problems) > 0 || len(check.Report.Missing) > 0 {
 		message := "Verify this external resource's credentials and network access from the deployment target."
@@ -126,6 +149,10 @@ func (p *planner) linkExistingResource(name string, a *Action, need, key, path s
 		p.problem(Finding{Code: "existing-resource-network", Subject: ServiceSubject, Name: name, Path: path, Message: message})
 		return
 	}
-	p.linkResource(name, a, need, key, path)
+	if dep.Resource.Kind == "object-storage" {
+		p.linkExistingBucket(name, a, need, key)
+	} else {
+		p.linkResource(name, a, need, key, path)
+	}
 	a.DependsOn = append(a.DependsOn, dep.ID)
 }

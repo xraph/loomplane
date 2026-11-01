@@ -136,6 +136,7 @@ func planRelease(in Input, r *Result) {
 			}
 		}
 	}
+	checkExistingResourceCanaries(r)
 }
 
 // WouldRamp reports whether a canary release would ramp an op of a service
