@@ -110,7 +110,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
-	managedRuntime interface {
+	instanceRuntime InstanceRuntimeQualifier
+	instances       InstanceVerifier
+	managedRuntime  interface {
 		QualifyClusterWorkload(context.Context, *Plan, Action) error
 	}
 	capacityTemplates CapacityTemplateValidator
@@ -147,6 +149,8 @@ type Service struct {
 
 // Deps are what a Service needs.
 type Deps struct {
+	InstanceRuntime   InstanceRuntimeQualifier
+	Instances         InstanceVerifier
 	CapacityTemplates CapacityTemplateValidator
 	Capacity          CapacityProvisioner
 	CapacityPrincipal CapacityPrincipalVerifier
@@ -210,7 +214,8 @@ func NewService(d Deps) *Service {
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{
+	return &Service{instanceRuntime: d.InstanceRuntime,
+		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, history: d.History, manifests: d.Manifests,
@@ -274,6 +279,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
+	}
 	if from := strings.TrimSpace(in.From); from != "" {
 		return s.createFrom(ctx, p, projectID, env, from, in)
 	}
@@ -313,6 +321,9 @@ func (s *Service) createFrom(ctx context.Context, p security.Principal, projectI
 	source, err := s.environment(ctx, p.OrgID, projectID, from)
 	if err != nil {
 		return nil, err
+	}
+	if source.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
 	}
 	pinned, deployed, err := s.pinFrom(ctx, p, projectID, env, source, in.Scope)
 	if err != nil {
@@ -530,6 +541,9 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	if err != nil {
 		return nil, err
 	}
+	if plan.ManagedInstanceID != "" || plan.Kind == KindInstance {
+		return nil, projects.ErrFleetManaged
+	}
 	switch {
 	case plan.Status == StatusSuperseded:
 		return nil, ErrSuperseded
@@ -698,38 +712,11 @@ func (s *Service) excluded(ctx context.Context, plan *Plan, g *graph.Graph) (kee
 }
 
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
-	// An older plan the backfill couldn't pin would plan from an empty
-	// graph, so it fails instead of proposing to tear down what's deployed.
-	if len(plan.Sources) == 0 && !plan.Catalog {
-		return nil, "", fmt.Errorf("%w: this plan pins no repositories; plan again", ErrInvalid)
-	}
-	parts := make([]graph.Part, 0, len(plan.Sources))
-	held := map[string]bool{}
-	for _, ps := range plan.Sources {
-		g, err := s.analyses.Graph(ctx, plan.OrgID, ps.AnalysisID)
-		if err != nil {
-			return nil, "", fmt.Errorf("load the analysis of %s: %w", ps.Alias, err)
-		}
-		parts = append(parts, graph.Part{
-			Source: graph.SourceRef{Alias: ps.Alias, Repository: ps.Repository, Root: ps.Root, CommitSHA: ps.CommitSHA, AnalysisID: ps.AnalysisID},
-			Graph:  g,
-		})
-		if !ps.InScope {
-			held[ps.Alias] = true
-		}
-	}
-	g := graph.Compose(parts)
-	excluded, exclusions, err := s.excluded(ctx, plan, g)
+	loaded, err := s.loadPlanInputs(ctx, plan)
 	if err != nil {
 		return nil, "", err
 	}
-	rev, err := s.manifests.Get(ctx, plan.OrgID, plan.ManifestID)
-	if err != nil {
-		return nil, "", fmt.Errorf("load the manifest: %w", err)
-	}
-	if rev.Manifest == nil {
-		return nil, "", fmt.Errorf("%w: manifest revision %d no longer parses", ErrInvalid, rev.Revision)
-	}
+	g, held, excluded, exclusions, rev := loaded.graph, loaded.held, loaded.excluded, loaded.exclusions, loaded.revision
 	bindings, err := s.store.ListBindings(ctx, plan.OrgID, plan.EnvironmentID)
 	if err != nil {
 		return nil, "", err
@@ -860,8 +847,8 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
 		}
 		result = Compute(Input{
+			appliedMoves: moves, appliedMoveProblems: moveProblems,
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
-			appliedMoves:      moves, appliedMoveProblems: moveProblems,
 			ProjectID:         plan.ProjectID,
 			ExistingResources: existing, ExistingResourceChecks: existingChecks,
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
@@ -880,6 +867,15 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	// below reserves capacity or checks permissions for the rest.
 	if plan.Kind == KindRollback {
 		result.Leftovers = rollbackFilter(result, bindings)
+	}
+	if runtimeErr := s.qualifyInstanceRuntime(ctx, plan); runtimeErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "instance-isolation", Message: runtimeErr.Error()})
+		result.Executable = false
+		revision, hashErr := Digest(struct {
+			Snapshot string
+			Result   *Result
+		}{rev.Digest, result})
+		return result, revision, hashErr
 	}
 	// Asked before anything is reserved, so a store that can't tell fails
 	// the plan with nothing to undo.
@@ -1095,7 +1091,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 // permanent reports whether planning can never succeed, so retrying is
 // pointless: what it was made from is gone or unreadable.
 func permanent(err error) bool {
-	return errors.Is(err, discovery.ErrNotFound) || errors.Is(err, discovery.ErrNoGraph) ||
+	return instancePlanningPermanent(err) || errors.Is(err, discovery.ErrNotFound) || errors.Is(err, discovery.ErrNoGraph) ||
 		errors.Is(err, manifests.ErrNotFound) || errors.Is(err, ErrInvalid) || failsPlanning(err)
 }
 
@@ -1338,6 +1334,9 @@ func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, pr
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
 	if err != nil {
 		return nil, err
+	}
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
 	}
 	id := strings.TrimSpace(in.ConnectionID)
 	if id != "" {

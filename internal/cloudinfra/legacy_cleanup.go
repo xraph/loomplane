@@ -4,11 +4,16 @@ import (
 	"context"
 
 	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // GuardLegacyCleanup stops new work on only the service slot or physical
 // instance reached by an unresolved pre-upgrade cleanup.
 func GuardLegacyCleanup(ctx context.Context, tx driver.Tx, org, project, environment, service, instance string) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, org, environment); err != nil {
+		return err
+	}
 	var blocked bool
 	if err := tx.QueryRow(ctx, `SELECT loomplane_legacy_cleanup_blocked($1,$2,$3,$4,$5)`, org, project, environment, service, instance).Scan(&blocked); err != nil {
 		return err

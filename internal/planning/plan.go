@@ -43,6 +43,7 @@ const (
 // Plan kinds. A release deploys the manifest; a promotion deploys what
 // another environment runs; a rollback restores an earlier release.
 const (
+	KindInstance  = "instance"
 	KindRelease   = "release"
 	KindPromotion = "promotion" // made with CreatePlanInput.From
 	KindRollback  = "rollback"
@@ -681,6 +682,11 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
+	// FleetInput is internal: ordinary APIs and realtime events never serialize it.
+	FleetInput *InstancePlanInput `json:"-"`
+	// ManagedInstanceID is derived from the environment ownership table on every read.
+	ManagedInstanceID string `json:"-"`
+
 	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
 	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
 	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`

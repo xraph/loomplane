@@ -39,9 +39,10 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
-	manifest_id, manifest_revision, result, executable, error,
+	coalesce(manifest_id,''), manifest_revision, result, executable, error,
 	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog,
-	kind, from_environment, from_environment_id, rollback`
+	kind, from_environment, from_environment_id, rollback,
+ coalesce((SELECT i.id FROM loomplane_fleet_instances i WHERE i.org_id=loomplane_plans.org_id AND i.environment_id=loomplane_plans.environment_id),'')`
 
 // open lists the statuses of a plan that hasn't been settled.
 const open = `('planning', 'ready')`
@@ -52,7 +53,7 @@ func scanPlan(row pgx.Row) (*Plan, error) {
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
 		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog,
-		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec); err != nil {
+		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec, &p.ManagedInstanceID); err != nil {
 		return nil, err
 	}
 	if len(rollbackSpec) > 0 {
@@ -91,6 +92,10 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	fleetInput, ownershipErr := checkPlanOwnership(ctx, tx, p)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	superseded, err = supersede(ctx, tx, p)
 	if err != nil {
 		return nil, err
@@ -106,7 +111,7 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
 		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
 		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec)
 	var pgErr *pgconn.PgError
@@ -115,6 +120,11 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	}
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
+	}
+	if len(fleetInput) > 0 {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_plan_inputs(plan_id,org_id,fleet_id,instance_id,snapshot) VALUES($1,$2,$3,$4,$5)`, p.ID, p.OrgID, p.FleetInput.Authority.Scope.FleetID, p.ManagedInstanceID, string(fleetInput)); err != nil {
+			return nil, err
+		}
 	}
 	for _, ps := range p.Sources {
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
@@ -162,6 +172,9 @@ func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
+	}
+	if err := s.withFleetInput(ctx, p); err != nil {
+		return nil, err
 	}
 	if err := s.withSources(ctx, p); err != nil {
 		return nil, err

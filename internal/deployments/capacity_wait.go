@@ -137,6 +137,9 @@ func (s *Service) transitionCapacity(ctx context.Context, p security.Principal, 
 	if authErr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); authErr != nil {
 		return nil, authErr
 	}
+	if err := s.requireUnmanagedDeployment(ctx, d); err != nil {
+		return nil, err
+	}
 	st, ok := s.store.(CapacityStore)
 	if !ok {
 		return nil, errors.New("capacity wait store is unavailable")

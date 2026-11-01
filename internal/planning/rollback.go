@@ -304,6 +304,9 @@ func (s *Service) CreateAutomaticRollback(ctx context.Context, orgID, deployment
 // restored release's plan pinned, every repository moving, with that
 // plan's manifest revision.
 func (s *Service) rollbackPlan(ctx context.Context, orgID, projectID string, env *projects.Environment, deploymentID string, rb Rollback) (*Plan, error) {
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
+	}
 	target, err := s.rollbackTarget(ctx, orgID, env, deploymentID)
 	if err != nil {
 		return nil, err

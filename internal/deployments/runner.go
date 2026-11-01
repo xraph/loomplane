@@ -219,6 +219,7 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	instances         planning.InstanceVerifier
 	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
 	existingEndpoints planning.EndpointChecker
@@ -257,6 +258,7 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	Instances         planning.InstanceVerifier
 	ManagedCleanup    *ManagedCleanupExecution
 	ExistingResources planning.ExistingResourceResolver
 	ExistingEndpoints planning.EndpointChecker
@@ -342,7 +344,7 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{managedCleanup: d.ManagedCleanup,
+	return &Runner{instances: d.Instances, managedCleanup: d.ManagedCleanup,
 		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
@@ -1714,7 +1716,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if secret == nil {
 			secret = map[string]bool{}
 		}
-	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
+	} else if env, secret, err = r.deploymentVariables(ctx, d, a.Service.Service); err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {
@@ -2022,7 +2024,7 @@ func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" || plan.Catalog {
+	if plan.CloudSyncID != "" || plan.Catalog || plan.Kind == planning.KindInstance {
 		return nil
 	}
 	release := &planning.DeployedRelease{

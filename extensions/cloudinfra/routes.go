@@ -12,6 +12,7 @@ import (
 	infra "github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -130,7 +131,7 @@ func result(c forge.Context, status int, value any, err error) error {
 		code = http.StatusUnprocessableEntity
 	case errors.Is(err, infra.ErrNotFound), errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, connections.ErrNotFound):
 		code = http.StatusNotFound
-	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift):
+	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift), errors.Is(err, projects.ErrFleetManaged):
 		code = http.StatusConflict
 	// A key whose saved authority can't act for capacity is refused, not a server error.
 	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected):

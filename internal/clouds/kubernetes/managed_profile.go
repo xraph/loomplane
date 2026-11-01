@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 var (
@@ -90,6 +92,9 @@ func (s *ControllerStore) ManagedProfileFor(ctx context.Context, i ManagedRuntim
 }
 
 func (s *ControllerStore) checkLegacyManagedWrite(ctx context.Context, tx driver.Tx, i ManagedRuntimeIdentity) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, i.Org, i.Environment); err != nil {
+		return err
+	}
 	if s.capacityEnabled {
 		return ErrManagedReviewRequired
 	}

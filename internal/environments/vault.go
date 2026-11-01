@@ -60,6 +60,21 @@ func (v *VaultSecrets) Reveal(ctx context.Context, orgID, variableID string) ([]
 	return sec.Value, nil
 }
 
+// RevealVersion returns the reviewed version, without falling back to the latest.
+func (v *VaultSecrets) RevealVersion(ctx context.Context, orgID, variableID string, version int64) ([]byte, error) {
+	if version < 1 {
+		return nil, ErrNotFound
+	}
+	sec, err := v.svc.GetVersion(ctx, vaultKey(orgID, variableID), VaultAppID, version)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read secret version: %w", err)
+	}
+	return sec.Value, nil
+}
+
 // Delete removes the variable's secret and its earlier versions. One
 // that's already gone is not an error.
 func (v *VaultSecrets) Delete(ctx context.Context, orgID, variableID string) error {

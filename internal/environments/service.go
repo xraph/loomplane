@@ -159,6 +159,9 @@ func (s *Service) CreateProject(ctx context.Context, p security.Principal, proje
 		if err != nil {
 			return nil, err
 		}
+		if env.InstanceID != "" {
+			return nil, projects.ErrFleetManaged
+		}
 		v.environmentID = env.ID
 	}
 	return s.create(ctx, p, v, in.Value)
@@ -226,7 +229,19 @@ func (s *Service) manage(ctx context.Context, p security.Principal, v *Variable)
 	if v.Scope == ScopeOrganization {
 		return s.authz.Require(ctx, p, security.OrganizationVariableManage, "")
 	}
-	return s.authz.Require(ctx, p, security.VariableManage, v.ProjectID)
+	if err := s.authz.Require(ctx, p, security.VariableManage, v.ProjectID); err != nil {
+		return err
+	}
+	if v.Environment != "" {
+		env, err := s.environment(ctx, p.OrgID, v.ProjectID, v.Environment)
+		if err != nil {
+			return err
+		}
+		if env.InstanceID != "" {
+			return projects.ErrFleetManaged
+		}
+	}
+	return nil
 }
 
 // Update changes a variable's value, and whether it's secret.

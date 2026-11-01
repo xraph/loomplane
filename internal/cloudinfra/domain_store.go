@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -659,7 +660,20 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 	return tx.Commit()
 }
 
+// GuardRouteOwnership rechecks the authoritative mapping for saved route work.
+func (s *PgStore) GuardRouteOwnership(ctx context.Context, route Route) error {
+	return projects.GuardUnmanagedEnvironment(ctx, s.db, route.OrgID, route.Input.EnvironmentID)
+}
+
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
+	if err := s.GuardRouteOwnership(ctx, op.Route); err != nil {
+		return nil, err
+	}
+	if op.Source != nil {
+		if err := s.GuardRouteOwnership(ctx, *op.Source); err != nil {
+			return nil, err
+		}
+	}
 	if noServerIngress(op.Route) {
 		if err := s.SaveRouteOperation(ctx, op); err != nil {
 			return nil, err

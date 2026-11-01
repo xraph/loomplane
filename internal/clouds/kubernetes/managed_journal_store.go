@@ -10,6 +10,8 @@ import (
 
 	"github.com/xraph/grove/driver"
 	"go.jetify.com/typeid/v2"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 func managedScopeValid(s ManagedScope) bool {
@@ -61,6 +63,9 @@ func checkManagedUpdateRelease(ctx context.Context, tx driver.Tx, org, instance,
 // guardManagedScope runs under the organization lock, which orders grant and
 // Cloud scope changes. Row locks also serialize attempt takeover and revocation.
 func guardManagedScope(ctx context.Context, tx driver.Tx, s ManagedScope) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, s.Org, s.Environment); err != nil {
+		return err
+	}
 	if !managedScopeValid(s) {
 		return ErrManagedAuthority
 	}

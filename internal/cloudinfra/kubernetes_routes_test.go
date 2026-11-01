@@ -719,3 +719,5 @@ func TestKubernetesWildcardRefusesAZoneInsideAnother(t *testing.T) {
 		t.Fatalf("status=%s tokens=%v writes=%d %s", st.op.Status, kube.dnsTokens, dns.writes, st.op.Message)
 	}
 }
+
+func (*kubeRouteStore) GuardRouteOwnership(context.Context, Route) error { return nil }

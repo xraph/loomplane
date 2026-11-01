@@ -66,6 +66,11 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
 	}
+	if in.EnvironmentID != "" {
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, in.EnvironmentID); guardErr != nil {
+			return nil, guardErr
+		}
+	}
 	st, err := s.syncStore()
 	if err != nil {
 		return nil, err
@@ -190,6 +195,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			continue
 		}
 		found = true
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, env.ID); guardErr != nil {
+			if errors.Is(guardErr, projects.ErrFleetManaged) {
+				preview.Blockers = append(preview.Blockers, "Manage instance placement through its fleet.")
+				continue
+			}
+			return nil, guardErr
+		}
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env.ID)
 		if e != nil {
 			return nil, e
@@ -585,6 +597,9 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
+	}
+	if ownershipErr := s.requireUnmanagedSnapshot(ctx, p.OrgID, project, snapshot); ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	if preview.Revision != revision {
 		return nil, cloudprofiles.ErrConflict

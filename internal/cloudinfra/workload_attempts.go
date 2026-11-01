@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // WorkloadAttempt survives a lost locking session. Only its current generation
@@ -136,6 +137,9 @@ func (s *PgStore) FinishWorkloadAttempt(ctx context.Context, a WorkloadAttempt, 
 }
 
 func guardRouteAttachment(ctx context.Context, tx driver.Tx, route *Route, kind string) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, route.OrgID, route.Input.EnvironmentID); err != nil {
+		return err
+	}
 	if err := LockRouteWorkload(ctx, tx, route.OrgID, route.Input.EnvironmentID, route.Input.Service); err != nil {
 		return err
 	}

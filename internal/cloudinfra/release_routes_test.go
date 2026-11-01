@@ -217,3 +217,5 @@ func TestRouteWorkerRechecksLegacyAndRetryActor(t *testing.T) {
 func (s *ttlReleaseStore) RouteHandoffReceipts(ctx context.Context, org, project, route, _ string) ([]*RouteOperation, error) {
 	return s.RouteOperations(ctx, org, project, route)
 }
+
+func (*releaseOperationStore) GuardRouteOwnership(context.Context, Route) error { return nil }
