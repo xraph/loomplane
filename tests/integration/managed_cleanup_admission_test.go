@@ -49,15 +49,19 @@ func TestManagedCleanupDriftAdmission(t *testing.T) {
 				t.Fatal(err)
 			}
 			saveManagedDemandPlan(t, f.poolFixture, plan, &result)
+			svc.BindManagedRuntime(ledgerRuntimeFixture{})
 			resolve := func(want string) {
 				t.Helper()
 				got := svc.ResolveCapacityIntents(ctx, "org", plan.ID)
+				if want == "" && got == nil {
+					return
+				}
 				var block *cloudinfra.CapacityAdmissionError
 				if !errors.As(got, &block) || block.Block.Reason != want {
 					t.Fatalf("expected %s, got %v", want, got)
 				}
 			}
-			resolve("managed_workload_execution_unqualified")
+			resolve("")
 			if _, err = f.sql.Exec(ctx, `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('positive-supply-deployment','org','proj','env','production',$1,'workload','running','usr',now())`, plan.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -137,7 +141,7 @@ func TestManagedCleanupDriftAdmission(t *testing.T) {
 					t.Fatalf("first guaranteed effect: %v", err)
 				}
 			} else {
-				resolve("managed_workload_execution_unqualified")
+				resolve("")
 				best, writeErr := journal.Issue(ctx, scope, req)
 				if writeErr != nil {
 					t.Fatal("best effort blocked by guarantee drift", writeErr)
@@ -154,7 +158,7 @@ func TestManagedCleanupDriftAdmission(t *testing.T) {
 			if err = journal.Resolve(ctx, write, scope, kube.ManagedOutcome{State: "rejected", StatusCode: 409}); err != nil {
 				t.Fatal(err)
 			}
-			resolve("managed_workload_execution_unqualified")
+			resolve("")
 			var count int
 			if err = f.sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_cluster_workload_holds WHERE plan_id=$1`, plan.ID).Scan(&count); err != nil || (mode == "guaranteed" && count != 1) || (mode == "best_effort" && count != 0) {
 				t.Fatal("reservation duplication", count, err)

@@ -29,12 +29,12 @@ func TestManagedCleanupProtocolPersistence(t *testing.T) {
 		t.Fatal("cleanup without new demand has no protocol")
 	}
 	saveCleanupReview(t, f, plan, result)
-	for _, build := range []string{"deployment-v2", "deployment-v3", "deployment-v4", "deployment-v5"} {
+	for _, build := range []string{"deployment-v2", "deployment-v3", "deployment-v4", "deployment-v5", "deployment-v6"} {
 		if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,$2,jsonb_build_object('build_id',$2::text))`, plan.ID, build); err == nil {
 			t.Fatal("accepted old build", build)
 		}
 	}
-	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,'cleanup-route','{"build_id":"deployment-v6"}')`, plan.ID); err != nil {
+	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,'cleanup-route','{"build_id":"deployment-v7"}')`, plan.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_participants(org_id,plan_id,workflow_id) VALUES('org',$1,'cleanup-route')`, plan.ID); err != nil {

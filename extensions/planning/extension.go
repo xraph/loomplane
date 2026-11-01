@@ -499,7 +499,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: releasewatch.NewPgStore(pg), Rollbacks: e.plans, Plans: planStore, Deployments: deployStore, History: history,
 		Health: health, Manifests: e.manifests, Projects: prj, Routes: cloudinfra.NewPgStore(pg), Authz: authz, Audit: auditor,
 	})
+	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal), Credentials: clouds, Target: clusterTarget, Routes: routeService}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		ManagedCleanup:    cleanupExecution,
 		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
@@ -547,8 +549,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
-	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments).WithManagedCleanup(planning.NewManagedCleanupStore(pg, authz, principal), nil)
+	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments).WithManagedCleanup(cleanupExecution.Store, cleanupExecution)
 	e.deployments.BindFailedCleanups(e.failedCleanups)
+	e.plans.BindManagedRuntime(cleanupExecution)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
 		ExistingResources: e.providerResources,

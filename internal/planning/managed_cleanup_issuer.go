@@ -9,12 +9,16 @@ import (
 	"github.com/xraph/grove/driver"
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	kube "github.com/xraph/loomplane/internal/clouds/kubernetes"
 )
 
 func (s *ManagedCleanupStore) guard(ctx context.Context, tx driver.Tx, target ManagedCleanupTarget, revision int64) error {
 	scope := target.Scope
+	if legacyErr := cloudinfra.GuardLegacyCleanup(ctx, tx, scope.Org, scope.Project, scope.Environment, scope.Service, scope.Instance); legacyErr != nil {
+		return legacyErr
+	}
 	raw, err := json.Marshal(scope)
 	if err != nil {
 		return err

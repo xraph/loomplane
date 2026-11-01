@@ -58,10 +58,9 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 				t.Fatal(err)
 			}
 			saveManagedDemandPlan(t, f, plan, result)
-			err = svc.ResolveCapacityIntents(ctx, "org", plan.ID)
-			var blocked *cloudinfra.CapacityAdmissionError
-			if !errors.As(err, &blocked) || blocked.Block.Reason != "managed_workload_execution_unqualified" {
-				t.Fatalf("activation gate changed: %v", err)
+			svc.BindManagedRuntime(ledgerRuntimeFixture{})
+			if err = svc.ResolveCapacityIntents(ctx, "org", plan.ID); err != nil {
+				t.Fatal(err)
 			}
 			if _, err = f.sql.Exec(ctx, `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('journal-deployment','org','proj','env','production',$1,'reviewed','running','usr',now())`, plan.ID); err != nil {
 				t.Fatal(err)

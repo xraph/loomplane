@@ -25,6 +25,9 @@ func TestManagedCleanupIntentsMigration(t *testing.T) {
 	if err := migration(t, "managed_cleanup_observations").Down(t.Context(), executor); err != nil {
 		t.Fatal(err)
 	}
+	if err := migration(t, "managed_cleanup_mixed_parent").Down(t.Context(), executor); err != nil {
+		t.Fatal(err)
+	}
 	if err := migration(t, "managed_cleanup_target_closure").Down(t.Context(), executor); err != nil {
 		t.Fatal(err)
 	}

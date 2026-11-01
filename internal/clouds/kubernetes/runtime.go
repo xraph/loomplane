@@ -27,11 +27,12 @@ var ErrOwned = errors.New("the matching Kubernetes resource is not owned by this
 
 type Session func(context.Context, map[string]string) (*Client, error)
 type Runtime struct {
-	Session          Session
-	Values           owned.Values
-	WaitReady        func(context.Context, *Client, string) error
-	RecordController func(context.Context, ControllerReceipt) error
-	Wait             time.Duration
+	Session            Session
+	Values             owned.Values
+	WaitReady          func(context.Context, *Client, string) error
+	RecordController   func(context.Context, ControllerReceipt) error
+	CompleteRetirement func(context.Context, id.ID, map[string]string) (bool, error)
+	Wait               time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -230,6 +231,15 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls, account)
 	if err != nil {
 		return nil, err
+	}
+	if arch := labels[owned.LabelSchedulingArchitecture]; arch != "" {
+		if !c.Config.journalRequired() || arch != "amd64" && arch != "arm64" || labels[owned.LabelArchitecture] != "" && labels[owned.LabelArchitecture] != arch {
+			return nil, ErrManagedAuthority
+		}
+		if template.Spec.NodeSelector == nil {
+			template.Spec.NodeSelector = map[string]string{}
+		}
+		template.Spec.NodeSelector[corev1.LabelArchStable] = arch
 	}
 	template.Labels = maps.Clone(identity)
 	if c.Config.journalRequired() {
@@ -469,9 +479,17 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 }
 
 func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
+	if r.CompleteRetirement != nil {
+		if handled, err := r.CompleteRetirement(ctx, iid, labels); handled || err != nil {
+			return err
+		}
+	}
 	c, err := r.session(ctx, iid, owned.ForOperation(labels, "remove"))
 	if err != nil {
 		return err
+	}
+	if c.Config.journalRequired() {
+		return ErrManagedAuthority
 	}
 	objects, err := r.objects(ctx, c, iid, labels)
 	if err != nil {

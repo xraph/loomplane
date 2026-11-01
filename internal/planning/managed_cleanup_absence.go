@@ -30,6 +30,16 @@ type cleanupObservation struct {
 // SettleManagedCleanup only settles capacity after current authorized namespace
 // reads prove release-scoped absence. Recovery of unknown sends stays separate.
 func (s *ManagedCleanupStore) SettleManagedCleanup(ctx context.Context, selection ManagedCleanupSelection, creds *connections.Service) error {
+	return s.settleManagedCleanup(ctx, selection, creds, false)
+}
+
+// FinalizeManagedCleanup also retires the tenant's exact instance ID for a
+// whole removal. A shared controller stays available to its current release.
+func (s *ManagedCleanupStore) FinalizeManagedCleanup(ctx context.Context, selection ManagedCleanupSelection, creds *connections.Service) error {
+	return s.settleManagedCleanup(ctx, selection, creds, true)
+}
+
+func (s *ManagedCleanupStore) settleManagedCleanup(ctx context.Context, selection ManagedCleanupSelection, creds *connections.Service, finalize bool) error {
 	sessions, err := s.cleanupSessions(ctx, selection, creds)
 	if err != nil {
 		return err
@@ -47,7 +57,7 @@ func (s *ManagedCleanupStore) SettleManagedCleanup(ctx context.Context, selectio
 		observation.tombstone.ObservationStartedAt = started
 		observations = append(observations, *observation)
 	}
-	return s.commitCleanupObservations(ctx, observations)
+	return s.commitCleanupObservations(ctx, observations, finalize)
 }
 
 func (s *ManagedCleanupStore) startCleanupObservation(ctx context.Context, sessions []*cleanupSession) (_ time.Time, err error) {
@@ -249,7 +259,7 @@ func (s *cleanupSession) observeAbsence(ctx context.Context) (*cleanupObservatio
 	return &cleanupObservation{session: s, identities: in, tombstone: t}, nil
 }
 
-func (s *ManagedCleanupStore) commitCleanupObservations(ctx context.Context, observations []cleanupObservation) (err error) {
+func (s *ManagedCleanupStore) commitCleanupObservations(ctx context.Context, observations []cleanupObservation, finalize bool) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -333,6 +343,11 @@ func (s *ManagedCleanupStore) commitCleanupObservations(ctx context.Context, obs
 		}
 		if mode != "guaranteed" && mode != "best_effort" {
 			return ErrCleanupObservationIncomplete
+		}
+	}
+	if finalize && !pending {
+		if retireErr := retireObservedInstances(ctx, tx, observations); retireErr != nil {
+			return retireErr
 		}
 	}
 	if commitErr := tx.Commit(); commitErr != nil {

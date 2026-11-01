@@ -78,6 +78,9 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 	if checkErr := guard(ctx, tx, in); checkErr != nil {
 		return nil, checkErr
 	}
+	if legacyErr := GuardLegacyCleanup(ctx, tx, in.OrgID, in.ProjectID, in.EnvironmentID, in.Service, ""); legacyErr != nil {
+		return nil, legacyErr
+	}
 	if checkErr := checkCleanupAdmission(ctx, tx, in); checkErr != nil {
 		return nil, checkErr
 	}
@@ -350,6 +353,12 @@ func clusterWorkloadReceiptCurrent(ctx context.Context, tx driver.Tx, h ClusterW
 		return false, nil
 	}
 	a, r, in := h.Attempt, h.Receipt, h.Input
+	if checkErr := r.CheckServingUpdate(ctx, tx); checkErr != nil {
+		if errors.Is(checkErr, kubernetes.ErrManagedAuthority) {
+			return false, nil
+		}
+		return false, checkErr
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return false, err

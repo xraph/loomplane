@@ -110,6 +110,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	managedRuntime interface {
+		QualifyClusterWorkload(context.Context, *Plan, Action) error
+	}
 	capacityTemplates CapacityTemplateValidator
 	capacity          CapacityProvisioner
 	capacityPrincipal CapacityPrincipalVerifier

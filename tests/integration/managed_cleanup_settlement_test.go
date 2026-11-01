@@ -60,6 +60,13 @@ func checkReleaseSettlement(ctx context.Context, t *testing.T, e *enrollmentServ
 		t.Fatalf("receipt or hold settlement: %v/%d %v", released, rev, err)
 	}
 	if shared {
+		if err := store.FinalizeManagedCleanup(ctx, sel, creds); err != nil {
+			t.Fatal(err)
+		}
+		var retired bool
+		if err := e.sql.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_retired_instances WHERE org_id=$1 AND instance_id=$2)`, scope.Org, scope.Instance).Scan(&retired); err != nil || retired {
+			t.Fatal("shared instance retired", err)
+		}
 		return
 	}
 	if err := store.SettleManagedCleanup(ctx, sel, creds); err != nil {
@@ -104,14 +111,13 @@ func checkReleaseSettlement(ctx context.Context, t *testing.T, e *enrollmentServ
 	if _, err = e.sql.Exec(ctx, `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('after-closure','org','proj','env','production',$1,'after-closure','running','reviewer',now())`, freshReview.ID); err != nil {
 		t.Fatal(err)
 	}
-	freshGrant, err := store.Open(ctx, planning.ManagedCleanupSelection{Org: scope.Org, Plan: freshReview.ID, Action: scope.Action, Deployment: "after-closure"})
+	freshSelection := planning.ManagedCleanupSelection{Org: scope.Org, Plan: freshReview.ID, Action: scope.Action, Deployment: "after-closure"}
+	freshGrant, err := store.Open(ctx, freshSelection)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The durable cleanup receipt must survive losing the service binding.
-	if _, err = e.sql.Exec(ctx, `DELETE FROM loomplane_bindings WHERE org_id=$1 AND connection_id=$2 AND external_id=$3`, scope.Org, scope.Connection, scope.Instance); err != nil {
-		t.Fatal(err)
-	}
+	historicalCleanupBindingLoss(ctx, t, e.sql, scope.Org, "closure-binding")
 	adapters := cloudinfra.NewAdapters()
 	if err = adapters.RegisterCluster("digitalocean", clusterCapacityKindReader{e.provider}, provider.ClusterDiscovery, provider.ClusterBootstrapAccess, provider.ClusterCapacityObservation); err != nil {
 		t.Fatal(err)
@@ -221,6 +227,7 @@ func checkReleaseSettlement(ctx context.Context, t *testing.T, e *enrollmentServ
 	if err = e.sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_managed_cleanup_tombstones WHERE org_id=$1 AND release_id=$2`, scope.Org, scope.Release).Scan(&tombstones); err != nil || tombstones != 1 {
 		t.Fatal("tombstone lost or multiplied", tombstones, err)
 	}
+	checkWholeInstanceRetirement(ctx, t, e, store, creds, scope, freshSelection)
 	for _, m := range migrations.Group().Migrations() {
 		if m.Name == "managed_cleanup_observations" {
 			if err = m.Down(ctx, pgmigrate.New(e.pg)); err == nil || !strings.Contains(err.Error(), "must be retained") {

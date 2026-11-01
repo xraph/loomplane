@@ -156,8 +156,20 @@ func recoverCleanupAfterRestart(ctx context.Context, t *testing.T, e *enrollment
 	if err = resume(); err != nil {
 		t.Fatal("late resolution", err)
 	}
+	// The migration framework removes the newer compatibility record after
+	// its no-op Down. Exercise the DDL owner's subsequent Down with retained
+	// evidence, restoring the original record in this disposable fixture.
+	var renamed []byte
+	if err = e.sql.QueryRow(ctx, `DELETE FROM grove_migrations g WHERE "group"='loomplane' AND version='20261207000100' RETURNING to_jsonb(g)`).Scan(&renamed); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, restoreErr := e.sql.Exec(ctx, `INSERT INTO grove_migrations SELECT * FROM jsonb_populate_record(NULL::grove_migrations,$1::jsonb)`, renamed); restoreErr != nil {
+			t.Fatal(restoreErr)
+		}
+	}()
 	for _, m := range migrations.Group().Migrations() {
-		if m.Name == "managed_cleanup_orphan_source" {
+		if m.Version == "20261206000500" {
 			if err = m.Down(ctx, pgmigrate.New(e.pg)); err == nil {
 				t.Fatal("downgrade discarded child recovery evidence")
 			}

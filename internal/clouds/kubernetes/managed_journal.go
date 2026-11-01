@@ -18,6 +18,7 @@ type ManagedScope struct {
 }
 
 type ManagedRequest struct {
+	SchedulingArchitecture                            string `json:",omitempty"`
 	Group, Version, Resource, Namespace, Name, Method string
 	UID                                               string
 	ResourceVersion                                   string `json:",omitempty"`

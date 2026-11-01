@@ -172,9 +172,7 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 	if err = f.sql.QueryRow(t.Context(), `SELECT cleanup_grant_id,cleanup_grant_revision FROM loomplane_managed_workload_issuances WHERE id=$1`, unknown).Scan(&link, &revision); err != nil || link != g.ID || revision != g.Revision {
 		t.Fatalf("link: %s %d %v", link, revision, err)
 	}
-	if _, err = f.sql.Exec(t.Context(), `DELETE FROM loomplane_bindings WHERE id='cleanup-binding'`); err != nil {
-		t.Fatal(err)
-	}
+	historicalCleanupBindingLoss(t.Context(), t, f.sql, "org", "cleanup-binding")
 	again, err := f.store.Open(f.ctx, f.selection)
 	if err != nil || again.ID != g.ID {
 		t.Fatalf("reopen after binding removal: %+v %v", again, err)
@@ -246,9 +244,7 @@ func TestManagedCleanupIssuerCurrentAuthorization(t *testing.T) {
 				if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_cloud_assignments WHERE org_id='org'`); checkErr != nil {
 					t.Fatal(checkErr)
 				}
-				if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_bindings WHERE id='cleanup-binding'`); checkErr != nil {
-					t.Fatal(checkErr)
-				}
+				historicalCleanupBindingLoss(t.Context(), t, f.sql, "org", "cleanup-binding")
 			}
 			if query := queries[change]; query != "" {
 				if _, checkErr := f.sql.Exec(t.Context(), query); checkErr != nil {

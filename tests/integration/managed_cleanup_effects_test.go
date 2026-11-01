@@ -29,7 +29,7 @@ func TestManagedCleanupEffectsRealAPI(t *testing.T) {
 	t.Run("whole", func(t *testing.T) { managedCleanupEffectsRealAPI(t, false) })
 	t.Run("shared", func(t *testing.T) { managedCleanupEffectsRealAPI(t, true) })
 }
-func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
+func managedCleanupEffectsRealAPI(t *testing.T, shared bool, modes ...string) {
 	t.Helper()
 	e := newEnrollmentServiceFixture(t)
 	infra, creds := e.service(e.store, e.vault())
@@ -55,7 +55,23 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, svc, plan, result, _ := setupDemandForAttachment(t, f, resource, target, attachment.RuntimeConnectionID, attachment.ID)
+	if len(modes) == 1 && modes[0] == "legacy" {
+		installedLegacyApplication(t, e, f, creds)
+		return
+	}
+	var fixtureArchitectures []string
+	if len(modes) > 1 && modes[0] == "application" {
+		nodes, readErr := e.bootstrap.Kube.CoreV1().Nodes().List(t.Context(), metav1.ListOptions{})
+		if readErr != nil || len(nodes.Items) != 1 {
+			t.Fatal("dedicated kind node", readErr)
+		}
+		fixtureArchitectures = []string{nodes.Items[0].Status.NodeInfo.Architecture}
+	}
+	_, svc, plan, result, _ := setupDemandForAttachment(t, f, resource, target, attachment.RuntimeConnectionID, attachment.ID, fixtureArchitectures...)
+	if len(modes) > 1 && modes[0] == "application" {
+		installedApplication(t.Context(), t, e, f, creds, infra, svc, plan, result, modes[1])
+		return
+	}
 	if err = svc.PrepareClusterWorkloadDemands(t.Context(), plan, result); err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +81,9 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 		t.Fatal(err)
 	}
 	saveManagedDemandPlan(t, f, plan, result)
-	var blocked *cloudinfra.CapacityAdmissionError
-	if err = svc.ResolveCapacityIntents(t.Context(), "org", plan.ID); !errors.As(err, &blocked) || blocked.Block.Reason != "managed_workload_execution_unqualified" {
-		t.Fatalf("admission: %v", err)
+	svc.BindManagedRuntime(ledgerRuntimeFixture{})
+	if err = svc.ResolveCapacityIntents(t.Context(), "org", plan.ID); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('closure-runtime','org','proj','env','production',$1,'old','running','usr',now())`, plan.ID); err != nil {
 		t.Fatal(err)
@@ -166,17 +182,7 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 			t.Fatal(err)
 		}
 	}
-	roles := memory.New()
-	engine, err := warden.NewEngine(warden.WithStore(roles))
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth := security.NewAuthorizer(engine, roles, func(_ context.Context, org, user string) (string, bool, error) {
-		return security.MemberOwner, org == "org" && user == "reviewer", nil
-	})
-	if err = auth.Assign(t.Context(), "org", "reviewer", security.RoleOwner, "test"); err != nil {
-		t.Fatal(err)
-	}
+	auth := managedCleanupReviewer(t)
 	cleanup := planning.NewManagedCleanupStore(f.db, auth, nil)
 
 	selection := planning.ManagedCleanupSelection{Org: "org", Plan: removal.ID, Action: "service:api", Deployment: "closure-removal"}
@@ -206,6 +212,10 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 	owner, err := e.bootstrap.Kube.AppsV1().Deployments(scope.Namespace).Get(ctx, kube.WorkloadName(iid), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(modes) > 0 {
+		runReviewedCleanup(ctx, t, e, creds, cleanup, scope, selection, modes[0])
+		return
 	}
 	attachmentOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: owner.Name, UID: owner.UID}
 	if shared {
@@ -309,4 +319,20 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 		t.Fatalf("effects released hold: %v", err)
 	}
 	checkReleaseSettlement(ctx, t, e, creds, infra, scope, input, selection, auth, shared)
+}
+
+func managedCleanupReviewer(t *testing.T) *security.Authorizer {
+	t.Helper()
+	roles := memory.New()
+	engine, err := warden.NewEngine(warden.WithStore(roles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := security.NewAuthorizer(engine, roles, func(_ context.Context, org, user string) (string, bool, error) {
+		return security.MemberOwner, org == "org" && user == "reviewer", nil
+	})
+	if err = auth.Assign(t.Context(), "org", "reviewer", security.RoleOwner, "test"); err != nil {
+		t.Fatal(err)
+	}
+	return auth
 }

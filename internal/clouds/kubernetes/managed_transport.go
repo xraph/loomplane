@@ -122,9 +122,19 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 	case http.MethodPost, http.MethodPut:
 		var object struct {
 			Metadata metav1.ObjectMeta `json:"metadata"`
+			Spec     struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
 		}
 		if json.Unmarshal(body, &object) != nil {
 			return out, ErrManagedAuthority
+		}
+		if out.Resource == "deployments" {
+			out.SchedulingArchitecture = object.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"]
 		}
 		m := object.Metadata
 		if m.Namespace != out.Namespace || m.Name == "" || out.Name != "" && out.Name != m.Name || m.Labels[owned.LabelOrg] != t.scope.Org || m.Labels[owned.LabelProject] != t.scope.Project || m.Labels[owned.LabelEnvironment] != t.scope.Environment || m.Labels[owned.LabelInstance] != t.scope.Instance {

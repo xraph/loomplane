@@ -33,6 +33,9 @@ func managedCleanupPreview(r *planning.ManagedFailedCleanup) *CleanupReview {
 }
 
 func (s *FailedCleanups) deliverManaged(ctx context.Context, r *planning.ManagedFailedCleanup) error {
+	if r.RequiredProtocol != orchestration.ManagedCleanupProtocol {
+		return errors.Join(ErrManagedCleanupReviewRequired, planning.ErrHistoricalFailedCleanup)
+	}
 	starter, ok := s.start.(managedCleanupStarter)
 	if !ok {
 		return planning.ErrManagedFailedCleanupUnavailable
@@ -73,6 +76,9 @@ func (s *FailedCleanups) RunManagedFailedCleanup(ctx context.Context, org, deplo
 	ctx, heartbeat, stop := keepHeartbeat(ctx, nil, heartbeat, 30*time.Second)
 	defer stop()
 	r, runErr := s.managed.ValidateFailedCleanupRun(ctx, org, review, attempt)
+	if runErr == nil && r.RequiredProtocol != orchestration.ManagedCleanupProtocol {
+		return planning.ErrHistoricalFailedCleanup
+	}
 	if runErr == nil && r.Deployment != deployment {
 		return planning.ErrManagedFailedCleanupConflict
 	}

@@ -176,6 +176,12 @@ func qualifiedCleanupServing(ctx context.Context, tx driver.Tx, t *ClusterCleanu
 	if json.Unmarshal(raw, &r) != nil || !r.Valid() || r.OrgID != t.OrgID || r.ProjectID != t.ProjectID || r.EnvironmentID != t.EnvironmentID || r.ServiceID != t.Service || r.ConnectionID != t.ConnectionID || r.InstanceID != t.InstanceID || r.Namespace != t.Namespace || r.NamespaceUID != t.NamespaceUID || r.ClusterCA != t.ClusterCA {
 		return false, nil
 	}
+	if checkErr := r.CheckServingUpdate(ctx, tx); checkErr != nil {
+		if errors.Is(checkErr, kubernetes.ErrManagedAuthority) {
+			return false, nil
+		}
+		return false, checkErr
+	}
 	for _, h := range m.servingHPAs {
 		if h.Deleting || h.DeploymentName != t.DeploymentName {
 			return false, nil

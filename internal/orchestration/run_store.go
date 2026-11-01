@@ -379,3 +379,20 @@ func (d *Deployments) recoverStarts(ctx context.Context) error {
 	}
 	return errors.Join(failures...)
 }
+
+// NeedsCleanupExecutor selects worker capability before asynchronous planning.
+// Only the later signed actions can authorize removal. A late change on v6
+// is refused when the computed result is compared to its immutable route.
+func (s *PgRunStore) NeedsCleanupExecutor(ctx context.Context, org, plan string) (bool, error) {
+	var needed bool
+	err := s.db.QueryRow(ctx, `SELECT CASE WHEN p.required_runtime_protocol<>'' THEN p.required_runtime_protocol=$3 ELSE EXISTS(
+ SELECT 1 FROM loomplane_bindings b WHERE b.org_id=p.org_id AND b.project_id=p.project_id AND b.environment_id=p.environment_id AND b.subject='service'
+ AND EXISTS(SELECT 1 FROM loomplane_managed_workload_authority a WHERE a.org_id=b.org_id AND a.body->>'Project'=b.project_id AND a.body->>'Environment'=b.environment_id AND a.body->>'Service'=b.name
+ AND ((a.body->>'Connection'=b.connection_id AND a.body->>'Instance'=b.external_id)
+ OR EXISTS(SELECT 1 FROM jsonb_array_elements(b.replaced) old WHERE old->>'external_id'=a.body->>'Instance' AND old->>'connection_id'=a.body->>'Connection')))) END
+ FROM loomplane_plans p WHERE p.org_id=$1 AND p.id=$2`, org, plan, ManagedCleanupProtocol).Scan(&needed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return needed, err
+}

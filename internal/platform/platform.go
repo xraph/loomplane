@@ -128,6 +128,8 @@ func Extensions(cfg config.Config) []forge.Extension {
 
 	jobs.WithBuild(withPoll(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
 
+	jobs.WithBuild(withPoll(deployments.LegacyCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.LegacyCleanupBuild, w) })
+
 	jobs.WithBuild(withPoll(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
 
 	jobs.WithBuild(withPoll(deployments.RuntimeAccessOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.RuntimeAccessBuild, w) })

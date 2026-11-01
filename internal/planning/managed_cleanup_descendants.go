@@ -86,6 +86,9 @@ func guardDescendant(ctx context.Context, tx driver.Tx, target ManagedCleanupTar
 		return kube.ErrManagedAuthority
 	}
 	receipt := evidence.NewerController
+	if checkErr := receipt.CheckServingUpdate(ctx, tx); checkErr != nil {
+		return checkErr
+	}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		return err

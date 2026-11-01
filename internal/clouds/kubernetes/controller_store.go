@@ -19,6 +19,10 @@ type ControllerStore struct {
 
 func NewControllerStore(db *pgdriver.PgDB) *ControllerStore { return &ControllerStore{db: db} }
 
+func (s *ControllerStore) ManagedWritesEnabled() bool {
+	return s != nil && s.db != nil && s.capacityEnabled
+}
+
 // RecordController accepts evidence only from the successful runtime mutation.
 // Retries retain one receipt per runtime attempt. A replaced UID needs a fresh
 // attempt; older generations and same-generation changes never replace evidence.

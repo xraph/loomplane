@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
+	"time"
 
 	"github.com/xraph/grove/driver"
 	"go.jetify.com/typeid/v2"
@@ -17,6 +19,7 @@ import (
 // ClusterWorkloadDemand is part of the immutable approved action. It grants no
 // runtime writes until the managed execution fence is qualified.
 type ClusterWorkloadDemand struct {
+	ProfileArchitecture  bool                                 `json:"profile_architecture,omitempty"`
 	SchemaVersion        int                                  `json:"schema_version"`
 	Mode                 string                               `json:"mode"`
 	ConnectionGeneration int64                                `json:"connection_generation"`
@@ -61,6 +64,12 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			}
 			continue
 		}
+		if len(a.Routes) > 0 || cfg.Catalog != nil || cfg.Component != nil {
+			return workloadBlock("managed_deployment_profile_unsupported")
+		}
+		if finalizerErr := cfg.CheckManagedServiceFinalizers(); finalizerErr != nil {
+			return finalizerErr
+		}
 		if cfg.CloudPlacement == nil || cfg.CloudPlacement.TargetID == "" {
 			return workloadBlock("managed_target_required")
 		}
@@ -98,7 +107,14 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			}
 			architecture := cfg.TargetSettings["architecture"]
 			if architecture == "" {
-				return workloadBlock("native_template_unqualified")
+				var archErr error
+				architecture, archErr = qualifiedProfileArchitecture(snapshot, cfg)
+				if archErr != nil {
+					return archErr
+				}
+				d.ProfileArchitecture = true
+			} else if !compatibleWorkloadArchitecture(cfg, architecture) {
+				return workloadBlock("workload_constraints_unsupported")
 			}
 			for _, node := range snapshot.Nodes {
 				if !node.WorkloadCompatible(architecture) {
@@ -197,6 +213,12 @@ func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan 
 			return ErrConflict
 		}
 	}
+	if s.managedRuntime == nil {
+		return workloadBlock("managed_workload_execution_unqualified")
+	}
+	if checkErr := s.managedRuntime.QualifyClusterWorkload(ctx, plan, a); checkErr != nil {
+		return checkErr
+	}
 	tx, err := st.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -259,9 +281,67 @@ func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan 
 	default:
 		return ErrInvalid
 	}
-	if checkErr := tx.Commit(); checkErr != nil {
-		return checkErr
+	return tx.Commit()
+}
+
+// BindManagedRuntime connects first-effect admission to the installed journal
+// runtime and exact cleanup executor after both workflow paths are available.
+func (s *Service) BindManagedRuntime(runtime interface {
+	QualifyClusterWorkload(context.Context, *Plan, Action) error
+}) {
+	s.managedRuntime = runtime
+}
+
+// A restricted runtime credential need not advertise cluster-wide architecture.
+// Only a single current eligible architecture can supply this scheduling pin.
+func qualifiedProfileArchitecture(snapshot cloudinfra.ClusterCapacitySnapshot, cfg *ServiceConfig) (string, error) {
+	if !snapshot.Fresh(time.Now()) || !snapshot.WorkloadsComplete || len(snapshot.Nodes) == 0 || len(snapshot.SchedulingProfiles) == 0 {
+		return "", workloadBlock("native_template_unqualified")
 	}
-	// Managed runtime issuance must be qualified before this reservation can execute.
-	return workloadBlock("managed_workload_execution_unqualified")
+	arch := snapshot.SchedulingProfiles[0].Architecture
+	if arch != "arm64" && arch != "amd64" {
+		return "", workloadBlock("native_template_unqualified")
+	}
+	for _, p := range snapshot.SchedulingProfiles {
+		if p.Architecture != arch || p.Digest == "" || p.TemplateDigest == "" {
+			return "", workloadBlock("native_template_unqualified")
+		}
+	}
+	for _, n := range snapshot.Nodes {
+		if !n.Ready || n.Unschedulable || !n.WorkloadCompatible(arch) {
+			return "", workloadBlock("native_template_unqualified")
+		}
+	}
+	if !compatibleWorkloadArchitecture(cfg, arch) {
+		return "", workloadBlock("workload_constraints_unsupported")
+	}
+	if cfg.BuildTarget != nil && cfg.BuildTarget.Image == "" && cfg.Artifact == nil && cfg.ManagedKubernetesBuild() {
+		return "", workloadBlock("native_template_unqualified")
+	}
+	return arch, nil
+}
+
+func compatibleWorkloadArchitecture(cfg *ServiceConfig, arch string) bool {
+	if cfg.Artifact != nil {
+		return cfg.Artifact.Architecture == "" || cfg.Artifact.Architecture == arch
+	}
+	if cfg.BuildTarget == nil || cfg.BuildTarget.Image != "" {
+		return true
+	}
+	builder := cfg.BuildTarget.BuilderSettings["architecture"]
+	return builder == "" || builder == arch
+}
+
+// CheckManagedServiceFinalizers rejects credentials whose owner can change
+// when another release starts serving under the same service name.
+func (cfg *ServiceConfig) CheckManagedServiceFinalizers() error {
+	if cfg.DatabaseGateway != nil {
+		return workloadBlock("managed_gateway_cleanup_unqualified")
+	}
+	for _, link := range cfg.Env {
+		if link.Subject == ResourceSubject && strings.HasPrefix(link.Field, "consumer:") && len(link.Field) > len("consumer:") {
+			return workloadBlock("managed_consumer_cleanup_unqualified")
+		}
+	}
+	return nil
 }

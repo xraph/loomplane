@@ -218,6 +218,7 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
 	existingEndpoints planning.EndpointChecker
 	existingDialer    planning.TargetDialer
@@ -255,6 +256,7 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	ManagedCleanup    *ManagedCleanupExecution
 	ExistingResources planning.ExistingResourceResolver
 	ExistingEndpoints planning.EndpointChecker
 	ExistingDialer    planning.TargetDialer
@@ -339,7 +341,7 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{
+	return &Runner{managedCleanup: d.ManagedCleanup,
 		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
@@ -685,10 +687,10 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return guardErr
+	}
 	if deferredPlan(plan) {
-		if checkErr := legacyCapacityGuard(ctx, plan); checkErr != nil {
-			return checkErr
-		}
 		wait, checkErr := r.AssessCapacity(ctx, orgID, deploymentID)
 		if checkErr != nil {
 			return checkErr
@@ -885,6 +887,18 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return err
 	}
 	current, resources := around.current, around.resources
+	if a.Op == planning.Delete && len(a.CleanupTargets) > 0 {
+		var handled bool
+		ctx, handled, err = r.managedDelete(ctx, d, plan, a, current, step, resume, heartbeat)
+		if handled || err != nil {
+			return err
+		}
+	}
+	if a.Op == planning.Delete && len(a.CleanupTargets) == 0 && current != nil {
+		if checkErr := r.guardUnreviewedRemoval(ctx, current); checkErr != nil {
+			return checkErr
+		}
+	}
 	if (a.Resource != nil && a.Resource.ExistingResource != nil) || planning.ExistingResourceBinding(current) {
 		return r.runExistingResource(ctx, d, plan, a, current, step, progress)
 	}
@@ -1433,7 +1447,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	if err := r.removeDatabaseGateway(ctx, job.Deployment, bound); err != nil {
 		return err
 	}
-	if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
+	if state, ok := ctx.Value(managedActionCleanupKey{}).(*managedActionCleanup); ok {
+		if _, removeErr := r.managedCleanup.Store.GuardManagedDeleteBinding(ctx, state.selection, bound, true); removeErr != nil {
+			return removeErr
+		}
+	} else if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
 		return err
 	}
 	step.Warnings = append(step.Warnings, warnings...)
@@ -1459,18 +1477,27 @@ type unreachableRemover interface {
 func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *planning.Binding, warn func(error),
 	rc *replaceCheckpoint, heartbeat func([]byte) error,
 ) error {
+	ctx, managed, cleanupErr := r.ensureManagedActionCleanup(ctx, job.Deployment, job.Plan, job.Action, job.Resume, heartbeat)
+	if cleanupErr != nil {
+		return cleanupErr
+	}
 	left := slices.Clone(bound.Replaced)
 	var errs []error
 	for _, old := range bound.Replaced {
 		if c := job.Action.Compensation; c != nil && c.Retained && (old.PlanID != c.Candidate.PlanID || bindingIdentity(&old) != bindingIdentity(&c.Candidate)) {
 			continue
 		}
+		if managed == nil || !managed.reviewed(&old) {
+			if checkErr := r.guardUnreviewedRemoval(ctx, &old); checkErr != nil {
+				return checkErr
+			}
+		}
 		done := true
 		same, identityErr := r.sameBindingResource(ctx, job.Deployment.OrgID, &old, bound)
 		if identityErr != nil {
 			return identityErr
 		}
-		if !same {
+		if !same && (managed == nil || !managed.removed(&old)) {
 			var err error
 			done, err = r.removeOne(ctx, job, &old, rc, heartbeat)
 			mine := own != nil && bindingIdentity(own) == bindingIdentity(&old)
@@ -1488,7 +1515,16 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 		left = slices.DeleteFunc(left, func(b planning.Binding) bool {
 			return bindingIdentity(&b) == bindingIdentity(&old)
 		})
-		if err := r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left); err != nil {
+		var err error
+		if managed != nil {
+			err = r.managedCleanup.Store.SetReviewedReplaced(ctx, managed.selection, bound, left)
+			if err == nil {
+				bound.Replaced = slices.Clone(left)
+			}
+		} else {
+			err = r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left)
+		}
+		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
 	}

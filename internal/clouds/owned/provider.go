@@ -18,33 +18,35 @@ import (
 )
 
 const (
-	LabelOrg                  = "loomplane.org"
-	LabelPlan                 = "loomplane.plan"
-	LabelProject              = "loomplane.project"
-	LabelEnvironment          = "loomplane.environment"
-	LabelAction               = "loomplane.action"
-	LabelService              = "loomplane.service"
-	LabelOperation            = "loomplane.operation"
-	LabelConnection           = "loomplane.connection"
-	LabelSettings             = "loomplane.target.settings"
-	LabelRuntime              = "loomplane.runtime.ref"
-	LabelImage                = "loomplane.image.ref"
-	LabelPublic               = "loomplane.public"
-	LabelHostPort             = "loomplane.host.port"
-	LabelHealth               = "loomplane.health.path"
-	LabelHostname             = "loomplane.hostname"
-	LabelIngressClass         = "loomplane.ingress.class"
-	LabelTLSSecret            = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
-	LabelReplicas             = "loomplane.replicas"
-	LabelScaleMin             = "loomplane.scale.min"
-	LabelScaleMax             = "loomplane.scale.max"
-	LabelArchitecture         = "loomplane.architecture"
-	LabelRevision             = "loomplane.revision"
-	LabelReceiptRelease       = "loomplane.runtime.receipt.release"
-	LabelReceiptServicePrefix = "loomplane.runtime.receipt.service."
-	LabelInstance             = "loomplane.instance"
-	LabelManageIngress        = "loomplane.manage.ingress"
-	LabelManageHPA            = "loomplane.manage.hpa"
+	LabelSchedulingArchitecture = "loomplane.scheduling.architecture"
+	LabelOrg                    = "loomplane.org"
+	LabelPlan                   = "loomplane.plan"
+	LabelProject                = "loomplane.project"
+	LabelEnvironment            = "loomplane.environment"
+	LabelAction                 = "loomplane.action"
+	LabelService                = "loomplane.service"
+	LabelOperation              = "loomplane.operation"
+	LabelConnection             = "loomplane.connection"
+	LabelSettings               = "loomplane.target.settings"
+	LabelRuntime                = "loomplane.runtime.ref"
+	LabelImage                  = "loomplane.image.ref"
+	LabelPublic                 = "loomplane.public"
+	LabelHostPort               = "loomplane.host.port"
+	LabelHealth                 = "loomplane.health.path"
+	LabelHostname               = "loomplane.hostname"
+	LabelIngressClass           = "loomplane.ingress.class"
+	LabelTLSSecret              = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
+	LabelReplicas               = "loomplane.replicas"
+	LabelScaleMin               = "loomplane.scale.min"
+	LabelScaleMax               = "loomplane.scale.max"
+	LabelArchitecture           = "loomplane.architecture"
+	LabelManagedRevisionBase    = "loomplane.managed-revision-base"
+	LabelRevision               = "loomplane.revision"
+	LabelReceiptRelease         = "loomplane.runtime.receipt.release"
+	LabelReceiptServicePrefix   = "loomplane.runtime.receipt.service."
+	LabelInstance               = "loomplane.instance"
+	LabelManageIngress          = "loomplane.manage.ingress"
+	LabelManageHPA              = "loomplane.manage.hpa"
 )
 
 // A composed catalog resource's component carries its kind, its resource's
@@ -229,6 +231,9 @@ func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpp
 		labels = map[string]string{}
 	}
 	labels[LabelRevision] = r.ReleaseID.String()
+	if base := labels[LabelManagedRevisionBase]; base != "" && inst.ProviderName == p.Key && p.Key == "kubernetes."+labels[LabelConnection] {
+		labels[LabelRevision] = base + "/" + r.ReleaseID.String()
+	}
 	result, err := p.Backend.Apply(ctx, r.InstanceID, spec, labels)
 	if err != nil {
 		return nil, err
