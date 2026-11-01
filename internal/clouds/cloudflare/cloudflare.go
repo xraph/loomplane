@@ -24,7 +24,7 @@ const DefaultEndpoint = "https://api.cloudflare.com/client/v4"
 const (
 	requestTimeout = 60 * time.Second
 	maxResponse    = 4 << 20
-	maxToken       = 512
+	maxToken       = 16 << 10
 )
 
 // Errors.
@@ -76,7 +76,7 @@ func (c *Client) registrarPath(accountID string) string {
 	return "/accounts/" + url.PathEscape(accountID) + "/" + segment
 }
 
-// CheckToken tells whether s could be a token, without asking Cloudflare.
+// CheckToken bounds an API or OAuth bearer before asking Cloudflare.
 func CheckToken(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" || len(s) > maxToken || strings.ContainsAny(s, " \t\r\n") {

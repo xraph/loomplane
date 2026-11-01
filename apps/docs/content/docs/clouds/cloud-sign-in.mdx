@@ -63,11 +63,13 @@ The Application (client) ID on the app's overview is the client ID you paste int
 
 In Cloudflare, open **Manage Account**, then **OAuth clients**, and create a client. Register the callback shown in Loomplane. Choose **Authorization Code** and **Refresh Token**, response type **code**, and token authentication **client_secret_basic**. Loomplane also sends S256 PKCE.
 
-Enable these scopes on the client: `account-settings.read`, `zone.read`, `dns.write` and `offline_access`. Account Settings Read lets Loomplane verify the account you selected. Enable `offline_access` on the client itself, since a grant without a refresh token cannot keep your connection working. Check the current scope IDs in Cloudflare's scope picker or its authenticated `GET /client/v4/oauth/scopes` API.
+Enable `account-settings.read` and `offline_access` on the client. For DNS, also enable `zone.read` and `dns.write`. For R2 storage, enable `workers-r2.write`. If you offer both, register all five scopes. Loomplane requests the scopes for the services you choose when connecting. Account Settings Read lets Loomplane verify the selected account. Enable `offline_access` on the client itself, since a grant without a refresh token cannot keep your connection working. Check the current scope IDs in Cloudflare's scope picker or its authenticated `GET /client/v4/oauth/scopes` API.
 
 Copy the client ID and secret into Loomplane's **Cloud sign-in** settings. A private client works only for members of the Cloudflare account that owns it. To serve other accounts, complete Cloudflare's domain verification and public-client requirements. Making a client public is permanent. See [Cloudflare's registration guide](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/).
 
-When connecting, enter the **Account ID** before signing in. Loomplane verifies that the grant reaches that account, checks DNS permissions and keeps the account fixed when you reconnect. Existing API-token connections continue to work. Extra registrar or cache permissions are needed only for the operations that use them.
+When connecting, enter the **Account ID**, then choose **DNS**, **R2 storage** or **DNS and R2**. Loomplane verifies account access and checks only the selected services. A storage-only connection does not need DNS permissions. Existing connections default to DNS. Replace the credential to add R2 access to one; its account stays fixed. Existing API-token connections continue to work. Extra registrar or cache permissions are needed only for the operations that use them.
+
+R2 API-token connections also need Account Settings Read so resource sync can verify the account. R2 permission checks only list bucket metadata. A successful check does not prove bucket creation permission, and OAuth credentials are never passed to an application's S3 client. For application access, supply bucket-scoped R2 S3 credentials in Resources and complete its access check. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
 
 ## Sign in to your cloud
 

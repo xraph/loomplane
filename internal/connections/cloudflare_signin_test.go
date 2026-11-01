@@ -88,6 +88,14 @@ func TestCloudflareCallbackAndCredentialRenewal(t *testing.T) {
 	if stored.RefreshToken != "rotated-refresh" {
 		t.Fatal("rotated refresh token was not stored")
 	}
+	expanded, err := r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: Cloudflare, ConnectionID: connected.ID, Settings: map[string]string{"account_id": strings.Repeat("d", 32), "services": "dns,r2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := r.apps.signIns[expanded.State]
+	if pending.Settings["account_id"] != f.account || pending.Settings["services"] != "dns,r2" {
+		t.Fatalf("reconnect changed account or lost R2: %v", pending.Settings)
+	}
 	lapsed := 0
 	r.s.Lapsed = func(_ context.Context, _ *Connection) { lapsed++ }
 	f.accountCode = http.StatusUnauthorized

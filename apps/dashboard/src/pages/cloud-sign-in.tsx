@@ -286,8 +286,9 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
               </a>
               <p>
                 Choose Authorization Code and Refresh Token, with
-                client_secret_basic authentication. Enable Account Settings
-                Read, Zone Read, DNS Write and offline_access.
+                client_secret_basic authentication. Enable Account Settings Read
+                and offline_access, then Zone Read and DNS Write for DNS, or
+                Workers R2 Storage Write for R2 storage.
               </p>
               <p>
                 Private apps work for members of their Cloudflare account.

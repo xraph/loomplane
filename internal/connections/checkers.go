@@ -237,7 +237,11 @@ func (CloudflareChecker) Parse(credential []byte, settings map[string]string) (C
 	if grant != nil && grant.Account["account_id"] != account {
 		return Check{}, fmt.Errorf("%w: the Cloudflare sign-in is for another account", ErrInvalid)
 	}
-	return Check{Details: map[string]string{"account_id": account}}, nil
+	services, err := cloudflare.NormalizeServices(settings["services"])
+	if err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return Check{Details: map[string]string{"account_id": account, "services": services}}, nil
 }
 
 // Check implements Checker: it verifies the token, reads the account, and
@@ -268,12 +272,29 @@ func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settin
 	switch {
 	case grant == nil && errors.As(err, &ae) && ae.Status == http.StatusForbidden:
 		acct = cloudflare.Account{ID: account}
+		if c.Details["services"] != "dns" {
+			c.Missing = append(c.Missing, "Account Settings Read")
+		}
 	case err != nil:
 		return Check{}, err
 	}
-	perms, err := cf.Client.Permissions(ctx, token, account)
-	if err != nil {
-		return Check{}, err
+	services := c.Details["services"]
+	perms := cloudflare.Permissions{ZoneRead: cloudflare.Unchecked, DNSWrite: cloudflare.Unchecked, RegistrarRead: cloudflare.Unchecked, RegistrarWrite: cloudflare.Unchecked}
+	if services != "r2" {
+		perms, err = cf.Client.Permissions(ctx, token, account)
+		if err != nil {
+			return Check{}, err
+		}
+	}
+	if services != "dns" {
+		read, readErr := cf.Client.R2ReadPermission(ctx, token, account)
+		if readErr != nil {
+			return Check{}, readErr
+		}
+		c.Details["r2_read"] = string(read)
+		if read == cloudflare.Missing {
+			c.Missing = append(c.Missing, "R2 Storage Read")
+		}
 	}
 	c.Account = acct.Name
 	if c.Account == "" {

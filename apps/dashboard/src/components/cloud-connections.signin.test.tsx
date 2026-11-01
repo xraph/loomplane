@@ -67,11 +67,17 @@ function stub(
           clouds: [
             {
               cloud: stubCloud,
-              title: stubCloud === "vercel" ? "Vercel" : "DigitalOcean",
+              title:
+                stubCloud === "cloudflare"
+                  ? "Cloudflare"
+                  : stubCloud === "vercel"
+                    ? "Vercel"
+                    : "DigitalOcean",
               builtin: false,
               credential: "API token",
               methods,
               sign_in_settings: signInSettings,
+              settings: stubCloud === "cloudflare" ? signInSettings : [],
             },
           ],
         })
@@ -114,6 +120,58 @@ it("offers sign-in first when the cloud supports it", async () => {
   expect(screen.getByLabelText(/^Name$/i)).toBeTruthy()
   expect(screen.queryByLabelText(/API token/i)).toBeNull()
   expect(screen.queryByRole("button", { name: "Check and connect" })).toBeNull()
+})
+
+it("requests R2 access without DNS permissions when you choose storage", async () => {
+  stubCloud = "cloudflare"
+  signInSettings = [
+    { key: "account_id", label: "Account ID", required: true },
+    { key: "services", label: "What to connect" },
+  ]
+  const posted: Posted[] = []
+  stub(["oauth", "token"], posted)
+  dialog("cloudflare")
+  const user = userEvent.setup()
+  await user.type(await screen.findByLabelText(/^Name$/i), "Storage")
+  await user.type(
+    screen.getByLabelText("Account ID"),
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  )
+  await user.click(screen.getByRole("button", { name: "R2 storage" }))
+  await user.click(
+    screen.getByRole("button", { name: "Sign in with Cloudflare" })
+  )
+  await waitFor(() => expect(posted).toHaveLength(1))
+  expect(posted[0]!.body).toEqual({
+    cloud: "cloudflare",
+    name: "Storage",
+    settings: {
+      account_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      services: "r2",
+    },
+  })
+})
+
+it("offers the same R2 access choice for API-token connections", async () => {
+  stubCloud = "cloudflare"
+  signInSettings = [
+    { key: "account_id", label: "Account ID", required: true },
+    { key: "services", label: "What to connect" },
+  ]
+  stub(["oauth", "token"])
+  dialog("cloudflare")
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("button", { name: "Use a token instead" })
+  )
+  await user.click(screen.getByRole("button", { name: "R2 storage" }))
+  expect(
+    screen
+      .getByRole("button", { name: "R2 storage" })
+      .getAttribute("aria-pressed")
+  ).toBe("true")
+  expect(screen.getByLabelText(/Account ID/)).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Check and connect" })).toBeTruthy()
 })
 
 it("keeps the token form one click away", async () => {

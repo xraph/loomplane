@@ -313,7 +313,7 @@ func TestErrorsKeepBodiesAndTokensOut(t *testing.T) {
 }
 
 func TestCheckToken(t *testing.T) {
-	for _, bad := range []string{"", "has space", strings.Repeat("x", 600)} {
+	for _, bad := range []string{"", "has space", strings.Repeat("x", (16<<10)+1)} {
 		if cloudflare.CheckToken(bad) == nil {
 			t.Errorf("%q accepted", bad)
 		}

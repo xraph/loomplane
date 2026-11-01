@@ -15,7 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
 
-// OAuthScopes are the permissions the Cloudflare sign-in app must allow.
+// OAuthScopes lists the default DNS permissions for existing connections.
 const OAuthScopes = "account-settings.read zone.read dns.write offline_access"
 
 func (c *Client) oauthEndpoint() string {
@@ -29,7 +29,7 @@ func (c *Client) oauthEndpoint() string {
 func (c *Client) AuthorizeURL(app oauth.App, r oauth.AuthorizeRequest) string {
 	q := url.Values{
 		"client_id": {app.ClientID}, "redirect_uri": {r.Redirect}, "response_type": {"code"},
-		"state": {r.State}, "scope": {OAuthScopes}, "code_challenge": {r.Challenge}, "code_challenge_method": {"S256"},
+		"state": {r.State}, "scope": {oauthScopesFor(r.Settings["services"])}, "code_challenge": {r.Challenge}, "code_challenge_method": {"S256"},
 	}
 	return c.oauthEndpoint() + "/oauth2/auth?" + q.Encode()
 }
@@ -124,10 +124,10 @@ func (c *Client) oauthToken(ctx context.Context, app oauth.App, form url.Values)
 }
 
 func validOAuthToken(token string) bool {
-	return token != "" && len(token) <= 16<<10 && !strings.ContainsAny(token, " \t\r\n")
+	return token != "" && len(token) <= maxToken && !strings.ContainsAny(token, " \t\r\n")
 }
 
-// GrantToken validates a stored OAuth bearer, which can be larger than API tokens.
+// GrantToken validates a stored OAuth bearer without trimming its value.
 func GrantToken(token string) error {
 	if !validOAuthToken(token) {
 		return errors.New("the Cloudflare sign-in has no usable access token")

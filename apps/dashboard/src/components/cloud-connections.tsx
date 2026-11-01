@@ -39,6 +39,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { CloudflareServicesField } from "@/components/cloudflare-services-field"
 import { RegistryOperations } from "@/components/registry-operations"
 import {
   ClusterBuildSetup,
@@ -520,33 +521,43 @@ const awsRegions = [
 
 /** SettingFields are the inputs for the settings a cloud's form lists. */
 function SettingFields({
+  cloud,
   fields,
   values,
   onChange,
 }: {
+  cloud: string
   fields: Setting[]
   values: Record<string, string>
   onChange: (
     next: (current: Record<string, string>) => Record<string, string>
   ) => void
 }) {
-  return fields.map((st) => (
-    <Field key={st.key}>
-      <FieldLabel htmlFor={`connection-setting-${st.key}`}>
-        {st.label}
-        {/* Some labels already say so. */}
-        {!st.required && !st.label.endsWith("(optional)") && " (optional)"}
-      </FieldLabel>
-      <Input
-        id={`connection-setting-${st.key}`}
+  return fields.map((st) =>
+    cloud === "cloudflare" && st.key === "services" ? (
+      <CloudflareServicesField
+        key={st.key}
         value={values[st.key] ?? ""}
-        onChange={(e) =>
-          onChange((cur) => ({ ...cur, [st.key]: e.target.value }))
-        }
-        required={st.required}
+        onChange={(value) => onChange((cur) => ({ ...cur, [st.key]: value }))}
       />
-    </Field>
-  ))
+    ) : (
+      <Field key={st.key}>
+        <FieldLabel htmlFor={`connection-setting-${st.key}`}>
+          {st.label}
+          {/* Some labels already say so. */}
+          {!st.required && !st.label.endsWith("(optional)") && " (optional)"}
+        </FieldLabel>
+        <Input
+          id={`connection-setting-${st.key}`}
+          value={values[st.key] ?? ""}
+          onChange={(e) =>
+            onChange((cur) => ({ ...cur, [st.key]: e.target.value }))
+          }
+          required={st.required}
+        />
+      </Field>
+    )
+  )
 }
 
 function ConnectForm({
@@ -846,26 +857,36 @@ function ConnectForm({
           </>
         )}
         {signIn &&
-          (entry?.signInSettings ?? []).map((f) => (
-            <Field key={f.key}>
-              <FieldLabel htmlFor={`sign-in-${f.key}`}>{f.label}</FieldLabel>
-              {/* The server keeps a replaced connection's own
-                      placement, so it can't be changed here. */}
-              <Input
-                id={`sign-in-${f.key}`}
+          (entry?.signInSettings ?? []).map((f) =>
+            cloud === "cloudflare" && f.key === "services" ? (
+              <CloudflareServicesField
+                key={f.key}
                 value={signInValue(f.key)}
-                onChange={(e) =>
-                  setSignInValues({
-                    ...signInValues,
-                    [f.key]: e.target.value,
-                  })
+                onChange={(value) =>
+                  setSignInValues({ ...signInValues, [f.key]: value })
                 }
-                readOnly={!!replacing}
-                autoComplete="off"
-                required={f.required}
               />
-            </Field>
-          ))}
+            ) : (
+              <Field key={f.key}>
+                <FieldLabel htmlFor={`sign-in-${f.key}`}>{f.label}</FieldLabel>
+                {/* The server keeps a replaced connection's own
+                      placement, so it can't be changed here. */}
+                <Input
+                  id={`sign-in-${f.key}`}
+                  value={signInValue(f.key)}
+                  onChange={(e) =>
+                    setSignInValues({
+                      ...signInValues,
+                      [f.key]: e.target.value,
+                    })
+                  }
+                  readOnly={!!replacing}
+                  autoComplete="off"
+                  required={f.required}
+                />
+              </Field>
+            )
+          )}
         {signIn && replacing && (entry?.signInSettings ?? []).length > 0 && (
           <FieldDescription>
             A new sign-in keeps this connection where it is. To deploy somewhere
@@ -940,6 +961,7 @@ function ConnectForm({
               Loomplane runs in.
             </FieldDescription>
             <SettingFields
+              cloud={cloud}
               fields={entry?.inClusterSettings ?? []}
               values={extraSettings}
               onChange={setExtraSettings}
@@ -1127,6 +1149,7 @@ function ConnectForm({
               )}
             </Field>
             <SettingFields
+              cloud={cloud}
               fields={extra.settings ?? []}
               values={extraSettings}
               onChange={setExtraSettings}
