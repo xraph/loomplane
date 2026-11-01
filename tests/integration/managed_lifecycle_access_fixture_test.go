@@ -99,6 +99,25 @@ func lifecycleAccessFixture(t *testing.T, a *capacityAPI) string {
 	}
 	var current apiclient.CloudCluster
 	a.c.must(http.StatusOK, http.MethodGet, a.path("/clusters/"+r.ID), nil, &current)
+	var attachments cloudinfra.RuntimeAttachmentPage
+	a.c.must(http.StatusOK, http.MethodGet, a.path("/clusters/"+r.ID+"/attachments"), nil, &attachments)
+	if len(attachments.Items) != 1 || attachments.Items[0].ID != operation.Enrollment.AttachmentID || attachments.Items[0].Revision < 1 {
+		t.Fatal("current attachment missing")
+	}
+	attachment, err := a.store.GetRuntimeAttachment(t.Context(), a.org, operation.Enrollment.AttachmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := attachment.Revision
+	attachment.Revision++
+	if err = a.store.SaveRuntimeAttachment(t.Context(), attachment, previous); err != nil {
+		t.Fatal(err)
+	}
+	a.c.must(http.StatusOK, http.MethodGet, a.path("/clusters/"+r.ID+"/attachments"), nil, &attachments)
+	if attachments.Items[0].Revision != attachment.Revision {
+		t.Fatal("attachment list retained old revision")
+	}
+	a.c.must(http.StatusNotFound, http.MethodGet, a.path("/clusters/not-this-cluster/attachments"), nil, nil)
 	upgrade := apiclient.ClusterInput{Kind: cloudinfra.RuntimeAccessUpgrade, Provider: "digitalocean", ConnectionID: "capacity-do", AccountID: "account", ConnectionGeneration: 1, CloudRevision: 1, ResourceID: r.ID, ResourceRevision: current.Revision, Ref: observed.Ref, RuntimeAccess: &apiclient.RuntimeAccessReview{AttachmentID: operation.Enrollment.AttachmentID, Profile: provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true, HPA: true}}}
 	var review apiclient.CloudClusterOperation
 	a.c.must(http.StatusOK, http.MethodPost, a.path("/clusters/preview"), upgrade, &review)

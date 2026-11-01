@@ -7,6 +7,6 @@ export const op_cloudClusters_refreshCapacity = {
   entity: 'ClusterCapacity',
   rootType: 'ClusterCapacity',
   provides: ['ClusterCapacity:{resourceId}'],
-  invalidates: ['CloudCluster', 'CloudClusterOperation', 'CloudClusterOperationPage', 'CloudClusterPage', 'ClusterCapacity[]'],
+  invalidates: ['CloudCluster', 'CloudClusterOperation', 'CloudClusterOperationPage', 'CloudClusterPage', 'ClusterCapacity[]', 'RuntimeAttachmentPage'],
   responseCodec: codec_ClusterCapacity,
 } as const satisfies OperationMeta;

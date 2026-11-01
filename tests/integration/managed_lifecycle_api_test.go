@@ -17,7 +17,6 @@ import (
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/config"
 	apiclient "github.com/xraph/loomplane/pkg/client"
-	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // TestManagedLifecyclePublicAPI keeps rollout off while exercising persisted public views.
@@ -33,12 +32,9 @@ func TestManagedLifecyclePublicAPI(t *testing.T) {
 	manualCluster := lifecycleManualFixture(t, a)
 	accessAttachment := lifecycleAccessFixture(t, a)
 	cleanupDeployment := lifecycleCleanupFixture(t, a, accessAttachment)
+	lifecycleCombinedAcceptance(t, a, manualCluster)
 	now := time.Now().UTC()
-	id := uuid.NewString()
-	r := &cloudinfra.ManagedResource{ID: id, OrgID: a.org, CloudID: a.cloud, Kind: "cluster", Provider: "digitalocean", AccountID: "fixture-account", ConnectionID: "capacity-do", ExternalID: "fixture-cluster", Incarnation: "fixture-incarnation", Ownership: "managed", Revision: 1, SchemaVersion: 1, CreatedAt: now, UpdatedAt: now, Status: "running", Observation: &provider.ClusterObservation{Ref: provider.ClusterRef{ID: "fixture-cluster", AccountID: "fixture-account", Incarnation: "fixture-incarnation"}, State: "running", ObservedAt: now}}
-	if _, err := a.store.ClaimManagedResource(t.Context(), r, 0); err != nil {
-		t.Fatal(err)
-	}
+	id := manualCluster
 	op := &cloudinfra.ClusterOperation{ID: uuid.NewString(), OrgID: a.org, CloudID: a.cloud, ResourceID: id, Kind: "node-pool-update", SchemaVersion: 1, Revision: 1, Status: "preview", Digest: "fixture-original-review", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour), MoneyEstimate: &cloudinfra.MoneyEstimate{HourlyMicroUSD: 9007199254740993, HorizonMicroUSD: 9007199254740993, Known: false, Components: []cloudinfra.MoneyComponent{{Name: "network", Category: "network_egress", Identity: "private-capture", Source: "provider", Quantity: 1}}}}
 	if err := a.store.CreateClusterPreview(t.Context(), op); err != nil {
 		t.Fatal(err)
@@ -64,6 +60,7 @@ func TestManagedLifecyclePublicAPI(t *testing.T) {
 	}
 	viewer.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": a.org}, nil)
 	viewer.must(http.StatusForbidden, http.MethodGet, a.path("/clusters/"+id+"/capacity"), nil, nil)
+	viewer.must(http.StatusForbidden, http.MethodGet, a.path("/clusters/"+id+"/attachments"), nil, nil)
 	viewer.must(http.StatusForbidden, http.MethodPost, a.path("/clusters/"+id+"/capacity/refresh"), nil, nil)
 	viewer.must(http.StatusForbidden, http.MethodPost, a.path("/clusters/"+id+"/retirement/preview"), nil, nil)
 	if cleanupDeployment != "" {
@@ -85,11 +82,12 @@ func TestManagedLifecyclePublicAPI(t *testing.T) {
 		if err = os.MkdirAll(filepath.Dir(state), 0700); err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(map[string]string{"api_url": a.r.srv.URL, "manual_cluster_id": manualCluster, "access_attachment_id": accessAttachment, "cleanup_deployment_id": cleanupDeployment, "org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID, "owner_email": "clouds@example.test", "viewer_email": "lifecycle-viewer@example.test"})
+		raw, _ := json.Marshal(map[string]string{"api_url": a.r.srv.URL, "manual_cluster_id": manualCluster, "access_attachment_id": accessAttachment, "cleanup_deployment_id": cleanupDeployment, "cleanup_plan_id": "fixture-cleanup-plan", "org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID, "owner_email": "clouds@example.test", "viewer_email": "lifecycle-viewer@example.test"})
 		if err = os.WriteFile(state, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
 		browser := startInfrastructureBrowser(t, a.r.srv.URL, state)
+		browser.onTick = lifecycleCapacityRefresh(t, a, filepath.Dir(state), manualCluster)
 		browser.checkpoint(t, "lifecycle", map[string]string{"org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID})
 	}
 }

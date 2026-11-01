@@ -152,7 +152,7 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_reservations(org_id,cloud_id,id,policy_revision,intent_hash,servers,cpu_millis,memory_bytes,storage_bytes,status,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`, o.OrgID, o.CloudID, o.ID, p.Revision, o.Digest, v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes, raw)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_reservations(org_id,cloud_id,id,policy_revision,intent_hash,servers,cpu_millis,memory_bytes,storage_bytes,status,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`, o.OrgID, o.CloudID, o.ID, p.Revision, o.ID, v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes, raw)
 	if err != nil {
 		return storeError(err)
 	}

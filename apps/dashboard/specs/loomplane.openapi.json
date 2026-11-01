@@ -1483,7 +1483,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1550,7 +1551,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1617,7 +1619,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1841,7 +1844,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1924,6 +1928,92 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/attachments": {
+      "get": {
+        "operationId": "cloudClusters.attachments",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeAttachmentPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.attachments",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-entity": {
+          "idField": "cluster_id",
+          "type": "RuntimeAttachmentPage"
         }
       }
     },
@@ -2072,7 +2162,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -2150,7 +2241,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -28346,6 +28438,61 @@
             "$ref": "#/components/schemas/RuntimeAccessProfile"
           },
           "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RuntimeAttachmentPage": {
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "items"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeAttachmentSummary"
+            }
+          }
+        }
+      },
+      "RuntimeAttachmentSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "namespace",
+          "project_id",
+          "capability_revision",
+          "state"
+        ],
+        "properties": {
+          "capability_revision": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RuntimeAccessProfile"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target_id": {
             "type": "string"
           }
         }

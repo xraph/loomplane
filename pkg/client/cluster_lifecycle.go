@@ -135,3 +135,24 @@ func (c *Client) PreviewCloudClusterDetach(ctx context.Context, cloud, id, attac
 	err := c.do(ctx, http.MethodPost, infrastructurePath(cloud)+"/clusters/"+esc(id)+"/retirement/preview", ClusterRetirementPreviewInput{AttachmentID: attachment, ExpectedAttachmentRevision: revision}, &out)
 	return &out, err
 }
+
+type RuntimeAttachmentSummary struct {
+	ID                 string                         `json:"id"`
+	Revision           int64                          `json:"revision"`
+	Namespace          string                         `json:"namespace"`
+	ProjectID          string                         `json:"project_id"`
+	TargetID           string                         `json:"target_id,omitempty"`
+	CapabilityRevision int64                          `json:"capability_revision"`
+	Profile            *provider.RuntimeAccessProfile `json:"profile,omitempty"`
+	State              string                         `json:"state"`
+}
+type RuntimeAttachmentPage struct {
+	ClusterID string                     `json:"cluster_id"`
+	Items     []RuntimeAttachmentSummary `json:"items"`
+}
+
+func (c *Client) CloudClusterAttachments(ctx context.Context, cloud, id string) (*RuntimeAttachmentPage, error) {
+	var out RuntimeAttachmentPage
+	err := c.do(ctx, http.MethodGet, infrastructurePath(cloud)+"/clusters/"+esc(id)+"/attachments", nil, &out)
+	return &out, err
+}

@@ -126,10 +126,10 @@ func clusterNodeMoney(in ClusterInput, options provider.ClusterOptions, horizon 
 	components := []MoneyComponent{}
 	identity := in.Provider + "/" + in.AccountID + "/" + options.Digest
 	for _, name := range []string{"control_plane", "network_egress", "load_balancers", "persistent_storage"} {
-		components = append(components, MoneyComponent{Name: name, Source: "provider_options", Identity: identity, Quantity: 1})
+		components = append(components, MoneyComponent{Category: name, PriceCheckedAt: &options.CheckedAt, Name: name, Source: "provider_options", Identity: identity, Quantity: 1})
 	}
 	for _, pool := range in.Spec.NodePools {
-		component := MoneyComponent{Name: "nodes:" + pool.Name, Source: "provider_options", Identity: identity + "/" + pool.Size, Quantity: int64(pool.Count)}
+		component := MoneyComponent{Category: "nodes", PriceCheckedAt: &options.CheckedAt, Name: "nodes:" + pool.Name, Source: "provider_options", Identity: identity + "/" + pool.Size, Quantity: int64(pool.Count)}
 		found := false
 		for _, size := range options.NodeSizeFacts {
 			if size.ID != pool.Size {
@@ -175,7 +175,7 @@ func (s *Service) clusterMoney(ctx context.Context, in ClusterInput, options pro
 		estimate.Components = append(estimate.Components, MoneyComponent{Category: costCategory(item.Kind, ""), Name: "associated:" + item.Kind + ":" + item.ID, Source: "associated_inventory", Identity: in.Provider + "/" + in.AccountID + "/" + item.Incarnation + "/" + item.ID, Quantity: 1, HourlyMicroUSD: item.EstimatedHourlyMicroUSD})
 	}
 	if !inventory.Complete {
-		estimate.Components = append(estimate.Components, MoneyComponent{Name: "associated_inventory", Source: "associated_inventory", Identity: in.Ref.ID, Quantity: 1})
+		estimate.Components = append(estimate.Components, MoneyComponent{Category: "associated_inventory", Name: "associated_inventory", Source: "associated_inventory", Identity: in.Ref.ID, Quantity: 1})
 	}
 	checked := estimate.CheckedAt
 	if inventory.ObservedAt.Before(checked) {

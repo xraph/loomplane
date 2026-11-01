@@ -31,6 +31,11 @@ func TestClusterClientWireContract(t *testing.T) {
 func TestLifecycleClientExactMoneyAndCleanupSelector(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/v1/clouds/cloud/clusters/cluster/attachments":
+			if r.Method != "GET" {
+				t.Error("attachment read used mutation")
+			}
+			_, _ = w.Write([]byte(`{"cluster_id":"cluster","items":[{"id":"attachment","revision":9,"namespace":"workers","capability_revision":2,"profile":{"schema_version":1,"cleanup_dependents":true}}]}`))
 		case "/api/v1/clouds/cloud/clusters/cluster/capacity":
 			if r.Method != "GET" {
 				t.Error("read used mutation")
@@ -58,6 +63,9 @@ func TestLifecycleClientExactMoneyAndCleanupSelector(t *testing.T) {
 	}))
 	defer server.Close()
 	c := New(server.URL, "key")
+	if v, e := c.CloudClusterAttachments(t.Context(), "cloud", "cluster"); e != nil || len(v.Items) != 1 || v.Items[0].Revision != 9 || !v.Items[0].Profile.CleanupDependents {
+		t.Fatalf("attachments %+v %v", v, e)
+	}
 	if v, e := c.CloudClusterCapacity(t.Context(), "cloud", "cluster"); e != nil || v.ObservationRevision != 2 {
 		t.Fatalf("capacity %+v %v", v, e)
 	}

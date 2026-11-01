@@ -4384,6 +4384,22 @@ export interface RuntimeAccessReview {
   projectId?: string;
 }
 
+export interface RuntimeAttachmentPage {
+  clusterId: string;
+  items: RuntimeAttachmentSummary[];
+}
+
+export interface RuntimeAttachmentSummary {
+  capabilityRevision: number;
+  id: string;
+  namespace: string;
+  profile?: RuntimeAccessProfile;
+  projectId: string;
+  revision: number;
+  state: string;
+  targetId?: string;
+}
+
 export interface RuntimeHealth {
   architecture: string;
   checkedAt: string;

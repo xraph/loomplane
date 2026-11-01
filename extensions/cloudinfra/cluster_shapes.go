@@ -13,9 +13,7 @@ func publicPool(v *provider.NodePoolSpec) *client.NodePoolSpec {
 }
 func publicSpec(v provider.ClusterSpec) client.ClusterSpec {
 	out := client.ClusterSpec{Name: v.Name, Region: v.Region, Version: v.Version, NetworkID: v.NetworkID, HA: v.HA, Maintenance: v.Maintenance, ProviderOptions: v.ProviderOptions}
-	if v.NodePools != nil {
-		out.NodePools = make([]client.NodePoolSpec, 0, len(v.NodePools))
-	}
+	out.NodePools = make([]client.NodePoolSpec, 0, len(v.NodePools))
 	for _, pool := range v.NodePools {
 		out.NodePools = append(out.NodePools, *publicPool(&pool))
 	}
@@ -41,10 +39,8 @@ func publicObservation(v *provider.ClusterObservation) *client.ClusterObservatio
 	if v == nil {
 		return nil
 	}
-	out := &client.ClusterObservation{Maintenance: v.Maintenance, HA: v.HA, Name: v.Name, Ref: v.Ref, Endpoint: v.Endpoint, CAHash: v.CAHash, Version: v.Version, State: v.State, Conditions: v.Conditions, ObservedAt: v.ObservedAt}
-	if v.Pools != nil {
-		out.Pools = make([]client.NodePoolSpec, 0, len(v.Pools))
-	}
+	out := &client.ClusterObservation{Maintenance: v.Maintenance, HA: v.HA, Name: v.Name, Ref: v.Ref, Endpoint: v.Endpoint, CAHash: v.CAHash, Version: v.Version, State: v.State, Conditions: append([]provider.ClusterCondition{}, v.Conditions...), ObservedAt: v.ObservedAt}
+	out.Pools = make([]client.NodePoolSpec, 0, len(v.Pools))
 	for _, p := range v.Pools {
 		out.Pools = append(out.Pools, *publicPool(&p))
 	}

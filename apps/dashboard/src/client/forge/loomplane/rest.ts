@@ -839,6 +839,36 @@ export class RESTClient extends Client {
 
   public readonly cloudClusters = {
     /**
+     * cloudClusters.attachments
+     */
+    attachments: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RuntimeAttachmentPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/attachments`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RuntimeAttachmentPage"],
+      };
+
+      return this.request<types.RuntimeAttachmentPage>(config);
+    },
+
+    /**
      * cloudClusters.capacity
      */
     capacity: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {

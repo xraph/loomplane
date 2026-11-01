@@ -8,13 +8,14 @@ import (
 
 	infra "github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/pkg/client"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func publicClusterCapacity(v *infra.ClusterCapacitySnapshot) *client.ClusterCapacity {
 	if v == nil {
 		return nil
 	}
-	out := &client.ClusterCapacity{ResourceID: v.ResourceID, ObservationRevision: v.ObservationRevision, CheckedAt: v.CheckedAt, Complete: v.Complete, Fresh: v.Fresh(time.Now()), WorkloadsComplete: v.WorkloadsComplete, Nodes: []client.ClusterNodeCapacity{}, Conditions: v.Conditions}
+	out := &client.ClusterCapacity{ResourceID: v.ResourceID, ObservationRevision: v.ObservationRevision, CheckedAt: v.CheckedAt, Complete: v.Complete, Fresh: v.Fresh(time.Now()), WorkloadsComplete: v.WorkloadsComplete, Nodes: []client.ClusterNodeCapacity{}, Conditions: append([]provider.ClusterCondition{}, v.Conditions...)}
 	for _, n := range v.Nodes {
 		out.Nodes = append(out.Nodes, client.ClusterNodeCapacity{PoolID: n.PoolID, Zone: n.Zone, Architecture: n.Architecture, Ready: n.Ready, Unschedulable: n.Unschedulable, Allocatable: client.ClusterResourceMetrics(n.Allocatable), Requests: client.ClusterResourceMetrics(n.Requests), Taints: n.Taints})
 	}

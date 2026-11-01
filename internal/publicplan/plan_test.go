@@ -50,3 +50,10 @@ func TestProjectionRetainsReviewedPlacement(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicPlanRequiredCollections(t *testing.T) {
+	got := Project(&planning.Plan{})
+	if got.Leftovers == nil || got.Artifacts == nil || got.Actions == nil || got.Sources == nil || got.Problems == nil || got.Warnings == nil {
+		t.Fatal("required public collections must encode as arrays")
+	}
+}

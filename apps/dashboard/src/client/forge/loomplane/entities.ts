@@ -109,6 +109,7 @@ export const entities = {
   'RevisionList': { fields: { 'revisions': 'Revision' } },
   'RouteOperation': { idField: 'id', fields: { 'route': 'CloudinfraRoute', 'source': 'CloudinfraRoute' } },
   'RouteSummary': { idField: 'id' },
+  'RuntimeAttachmentPage': { idField: 'clusterId' },
   'ScalingPool': { fields: { 'pool': 'Pool' } },
   'Server': { idField: 'id' },
   'Source': { idField: 'id' },

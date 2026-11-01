@@ -111,6 +111,7 @@ func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/clusters/:clusterId/retirement/preview", "cloudClusters.retirementPreview", e.clusterRetirementPreview, client.ClusterRetirementPreviewInput{}, client.ClusterRetirementReview{}, http.StatusOK},
 		{http.MethodGet, "/clusters/:clusterId/capacity", "cloudClusters.capacity", e.clusterCapacity, nil, client.ClusterCapacity{}, http.StatusOK},
 		{http.MethodPost, "/clusters/:clusterId/capacity/refresh", "cloudClusters.refreshCapacity", e.refreshClusterCapacity, nil, client.ClusterCapacity{}, http.StatusOK},
+		{http.MethodGet, "/clusters/:clusterId/attachments", "cloudClusters.attachments", e.clusterAttachments, nil, infra.RuntimeAttachmentPage{}, http.StatusOK},
 		{http.MethodGet, "/clusters/:clusterId", "cloudClusters.get", e.clusterGet, nil, client.CloudCluster{}, http.StatusOK},
 		{http.MethodGet, "/cluster-options/:connectionId", "cloudClusters.options", e.clusterOptions, nil, provider.ClusterOptions{}, http.StatusOK},
 		{http.MethodPost, "/clusters/preview", "cloudClusters.preview", e.clusterPreview, client.ClusterInput{}, client.CloudClusterOperation{}, http.StatusOK},
@@ -122,6 +123,9 @@ func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 	}
 	for _, rt := range routes {
 		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name), forge.WithResponseSchema(rt.status, "Result", rt.response), forge.WithResponseSchema(http.StatusConflict, "Review or inventory conflict", ClusterProblem{}), forge.WithResponseSchema(http.StatusUnprocessableEntity, "Blocked intent", ClusterProblem{})}
+		if rt.name == "cloudClusters.attachments" {
+			opts = append(opts, forge.WithEntity(forge.EntityDef{Type: "RuntimeAttachmentPage", IDField: "cluster_id"}))
+		}
 		if rt.method == http.MethodGet {
 			opts = append(opts, forge.WithQuerySchema(ClusterQuery{}))
 		}
@@ -129,7 +133,7 @@ func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 			opts = append(opts, forge.WithRequestSchema(rt.request))
 		}
 		if rt.method == http.MethodPost {
-			opts = append(opts, forge.WithInvalidates("CloudCluster", "CloudClusterOperation", "CloudClusterPage", "CloudClusterOperationPage"))
+			opts = append(opts, forge.WithInvalidates("CloudCluster", "CloudClusterOperation", "CloudClusterPage", "CloudClusterOperationPage", "RuntimeAttachmentPage"))
 		}
 		var err error
 		if rt.method == http.MethodGet {
@@ -290,4 +294,13 @@ func (e *Extension) clusterCancel(c forge.Context) error {
 	}
 	v, err := e.svc.CancelCluster(c.Request().Context(), p, c.Param("cloudId"), c.Param("operationId"))
 	return clusterResult(c, http.StatusOK, publicClusterOperation(v), err)
+}
+
+func (e *Extension) clusterAttachments(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return clusterResult(c, 0, nil, err)
+	}
+	v, err := e.svc.ListClusterAttachments(c.Request().Context(), p, c.Param("cloudId"), c.Param("clusterId"))
+	return clusterResult(c, http.StatusOK, v, err)
 }

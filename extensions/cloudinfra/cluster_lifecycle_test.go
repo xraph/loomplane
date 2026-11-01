@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/client"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestClusterLifecycleRoutesDenyProjectMember(t *testing.T) {
@@ -95,5 +96,12 @@ func TestClusterAccessUpgradeProblem(t *testing.T) {
 	r.ServeHTTP(out, httptest.NewRequestWithContext(t.Context(), "GET", "/problem", nil))
 	if out.Code != 422 || !strings.Contains(out.Body.String(), "runtime_access_upgrade_required") || strings.Contains(out.Body.String(), "private-") {
 		t.Fatalf("problem: %d %s", out.Code, out.Body)
+	}
+}
+
+func TestPublicClusterEmptyCollections(t *testing.T) {
+	observation := publicObservation(&provider.ClusterObservation{})
+	if observation.Pools == nil || observation.Conditions == nil || publicSpec(provider.ClusterSpec{}).NodePools == nil {
+		t.Fatal("public cluster collections must encode as arrays")
 	}
 }

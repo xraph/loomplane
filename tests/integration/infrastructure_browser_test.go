@@ -28,6 +28,7 @@ type infrastructureBrowser struct {
 	directory string
 	stop      sync.Once
 	shutdown  func()
+	onTick    func() error
 }
 
 func startInfrastructureBrowser(t *testing.T, appURL, statePath string) *infrastructureBrowser {
@@ -109,6 +110,11 @@ func (b *infrastructureBrowser) checkpoint(t *testing.T, stage string, metadata 
 	t.Logf("browser acceptance checkpoint %s: localhost:5190; create %s to continue", stage, filepath.Join(b.directory, "continue-"+stage))
 	deadline := time.Now().Add(30 * time.Minute)
 	for time.Now().Before(deadline) {
+		if b.onTick != nil {
+			if tickErr := b.onTick(); tickErr != nil {
+				t.Fatal(tickErr)
+			}
+		}
 		if _, err = os.Stat(filepath.Join(b.directory, "continue-"+stage)); err == nil {
 			return
 		}

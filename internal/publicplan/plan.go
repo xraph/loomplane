@@ -253,7 +253,7 @@ func projectPlan(v *planning.Plan) *Plan {
 	if v == nil {
 		return nil
 	}
-	return &Plan{CloudSyncID: v.CloudSyncID, Catalog: v.Catalog, Kind: v.Kind, From: v.From, FromEnvironmentID: v.FromEnvironmentID, Rollback: v.Rollback, Leftovers: v.Leftovers, Artifacts: v.Artifacts, ID: v.ID, OrgID: v.OrgID, ProjectID: v.ProjectID, EnvironmentID: v.EnvironmentID, Environment: v.Environment, Status: v.Status, Revision: v.Revision, Sources: v.Sources, ManifestID: v.ManifestID, ManifestRevision: v.ManifestRevision, Actions: actions(v.Actions), Problems: v.Problems, Warnings: v.Warnings, Summary: v.Summary, Executable: v.Executable, Connections: v.Connections, Release: v.Release, Error: v.Error, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, PlannedAt: v.PlannedAt, ExpiresAt: v.ExpiresAt, DecidedBy: v.DecidedBy, DecidedAt: v.DecidedAt, DecisionNote: v.DecisionNote}
+	return &Plan{CloudSyncID: v.CloudSyncID, Catalog: v.Catalog, Kind: v.Kind, From: v.From, FromEnvironmentID: v.FromEnvironmentID, Rollback: v.Rollback, Leftovers: append([]planning.Leftover{}, v.Leftovers...), Artifacts: append([]planning.ArtifactChoice{}, v.Artifacts...), ID: v.ID, OrgID: v.OrgID, ProjectID: v.ProjectID, EnvironmentID: v.EnvironmentID, Environment: v.Environment, Status: v.Status, Revision: v.Revision, Sources: append([]planning.PlanSource{}, v.Sources...), ManifestID: v.ManifestID, ManifestRevision: v.ManifestRevision, Actions: actions(v.Actions), Problems: append([]planning.Finding{}, v.Problems...), Warnings: append([]planning.Finding{}, v.Warnings...), Summary: v.Summary, Executable: v.Executable, Connections: v.Connections, Release: v.Release, Error: v.Error, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, PlannedAt: v.PlannedAt, ExpiresAt: v.ExpiresAt, DecidedBy: v.DecidedBy, DecidedAt: v.DecidedAt, DecisionNote: v.DecisionNote}
 }
 
 func projectAction(v *planning.Action) *Action {
@@ -343,9 +343,6 @@ func projectComponentConfig(v *planning.ComponentConfig) *ComponentConfig {
 // Project preserves the original opaque revision. Only the stored plan can execute.
 func Project(v *planning.Plan) *Plan { return projectPlan(v) }
 func actions(in []planning.Action) []Action {
-	if in == nil {
-		return nil
-	}
 	out := make([]Action, len(in))
 	for i := range in {
 		out[i] = *projectAction(&in[i])
