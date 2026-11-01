@@ -151,6 +151,7 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			cpu, memory := OwnedWorkloadResources(cfg)
 			var scratch int64
 			if cfg.PodGroup != nil {
+				scratch += cfg.PodGroup.RuntimeStorageMiB * int64(1+len(cfg.PodGroup.Sidecars))
 				for _, volume := range cfg.PodGroup.Scratch {
 					scratch += volume.SizeMiB
 				}

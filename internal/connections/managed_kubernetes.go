@@ -11,6 +11,7 @@ const MethodManagedKubernetes = "managed_kubernetes"
 
 // ManagedCredential carries runtime material only inside the process.
 type ManagedCredential struct {
+	LifecycleJobs      bool      `json:"-"`
 	Kubeconfig         []byte    `json:"-"`
 	ExpiresAt          time.Time `json:"-"`
 	TrustRevision      int64     `json:"-"`
@@ -48,6 +49,9 @@ func (s *Service) managedCredential(ctx context.Context, c *Connection) ([]byte,
 
 // ManagedProjectAllowed keeps a managed namespace inside its approved project.
 func ManagedProjectAllowed(c *Connection, project string) bool {
+	if c != nil && (c.Details["managed_instance_id"] != "" || c.Details["managed_environment_id"] != "") {
+		return false
+	}
 	return c != nil && (c.Method != MethodManagedKubernetes && c.Details["managed_attachment_id"] == "" || project != "" && c.Details["managed_project_id"] == project)
 }
 

@@ -66,6 +66,17 @@ func NewVaultResourceSecrets(svc *secret.Service) *VaultResourceSecrets {
 
 var _ ResourceSecrets = (*VaultResourceSecrets)(nil)
 
+func (v *VaultResourceSecrets) SnapshotMetadata(ctx context.Context, key string) (identity string, version int64, err error) {
+	meta, err := v.svc.GetMeta(ctx, key, ResourceVaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return "", 0, ErrNoCredential
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return meta.ID.String(), meta.Version, nil
+}
+
 // Put implements ResourceSecrets.
 func (v *VaultResourceSecrets) Put(ctx context.Context, key string, value []byte) error {
 	_, err := v.PutVersion(ctx, key, value)

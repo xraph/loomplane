@@ -109,3 +109,15 @@ func TestRuntimeModeFailureReturnsBeforeMainExits(t *testing.T) {
 		t.Fatal("invalid runtime mode accepted")
 	}
 }
+
+func TestReadonlyServerUsesDatabaseLevelEnforcement(t *testing.T) {
+	for _, readonly := range []bool{false, true} {
+		args := strings.Join(serveCommand(t.Context(), readonly).Args, " ")
+		if strings.Contains(args, "-readonly") != readonly {
+			t.Fatalf("wrong mode: %s", args)
+		}
+		if !strings.HasSuffix(args, "/data/analytics.db") {
+			t.Fatal("database path changed")
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
 // managedTransport surrounds the shared client-go transport, so each REST retry
@@ -91,6 +92,9 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		return out, ErrManagedAuthority
 	}
 	out.Namespace, out.Resource = parts[1], parts[2]
+	if t.scope.GroupID != "" && (t.scope.GroupOperation == "prepare" && out.Resource == "ingresses" || t.scope.GroupOperation == "promote" && out.Resource != "ingresses" || req.Method == http.MethodDelete) {
+		return out, ErrManagedAuthority
+	}
 	if len(parts) == 4 {
 		out.Name = parts[3]
 	}
@@ -149,8 +153,16 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 			out.SchedulingArchitecture = object.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"]
 		}
 		m := object.Metadata
-		if m.Namespace != out.Namespace || m.Name == "" || out.Name != "" && out.Name != m.Name || m.Labels[owned.LabelOrg] != t.scope.Org || m.Labels[owned.LabelProject] != t.scope.Project || m.Labels[owned.LabelEnvironment] != t.scope.Environment || m.Labels[owned.LabelInstance] != t.scope.Instance {
+		groupIngress := t.scope.GroupID != "" && out.Resource == "ingresses"
+		if m.Namespace != out.Namespace || m.Name == "" || out.Name != "" && out.Name != m.Name || m.Labels[owned.LabelOrg] != t.scope.Org || m.Labels[owned.LabelProject] != t.scope.Project || m.Labels[owned.LabelEnvironment] != t.scope.Environment || !groupIngress && m.Labels[owned.LabelInstance] != t.scope.Instance {
 			return out, ErrManagedAuthority
+		}
+		if groupIngress {
+			var receipt domain.ServingMemberReceipt
+			if m.Labels[groupIngressLabel] != t.scope.GroupID || m.Labels[groupMemberLabel] != t.scope.MemberID || json.Unmarshal([]byte(m.Annotations[groupSwitchAnnotation]), &receipt) != nil || receipt.Scope != (domain.Scope{OrgID: t.scope.Org, ProjectID: t.scope.Project, EnvironmentID: t.scope.Environment}) || receipt.GroupID != t.scope.GroupID || receipt.MemberID != t.scope.MemberID || receipt.Generation != t.scope.GroupGeneration || receipt.Namespace != t.scope.Namespace || receipt.NamespaceUID != t.scope.NamespaceUID {
+				return out, ErrManagedAuthority
+			}
+			out.GroupSwitch = &receipt
 		}
 		out.Name, out.UID = m.Name, string(m.UID)
 		out.ResourceVersion = m.ResourceVersion
@@ -207,6 +219,9 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		return out, ErrManagedAuthority
 	}
 	name := WorkloadName(iid)
+	if t.scope.GroupID != "" && out.Resource == "ingresses" {
+		name = GroupIngressName(domain.Scope{OrgID: t.scope.Org, ProjectID: t.scope.Project, EnvironmentID: t.scope.Environment}, t.scope.GroupID, t.scope.MemberID)
+	}
 	validName := out.Name == name || out.Resource == "secrets" && (out.Name == name+"-runtime" || out.Name == name+"-pull")
 	if !validName {
 		return out, ErrManagedAuthority

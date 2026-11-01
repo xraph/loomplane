@@ -46,17 +46,24 @@ func (s *MemberPrerequisiteService) PreviewPlacementGroups(ctx context.Context, 
 	for _, name := range federationKeys(m.Federation.PlacementGroups) {
 		group := m.Federation.PlacementGroups[name]
 		svc := m.Services[group.Service]
-		var variables bool
-		err := s.Store.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_variables WHERE org_id=$1 AND (project_id IS NULL OR project_id=$2) AND (environment='' OR environment=$3))`, p.OrgID, p.ProjectID, p.Environment).Scan(&variables)
-		if err != nil {
-			return nil, err
-		}
-		if variables {
-			return nil, ErrGroupVariableSnapshotsUnavailable
-		}
-		config, err := GroupConfigurationRevision(m, p.Environment, group.Service)
-		if err != nil {
-			return nil, err
+		privateConfig, configErr := s.groupConfiguration(ctx, p, m, g, group.Service)
+		config := privateConfig.Revision
+		if configErr != nil {
+			if s.Variables != nil {
+				return nil, configErr
+			}
+			var variables bool
+			if err := s.Store.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_variables WHERE org_id=$1 AND (project_id IS NULL OR project_id=$2) AND (environment='' OR environment=$3))`, p.OrgID, p.ProjectID, p.Environment).Scan(&variables); err != nil {
+				return nil, err
+			}
+			if variables {
+				return nil, ErrGroupVariableSnapshotsUnavailable
+			}
+			var err error
+			config, err = GroupConfigurationRevision(m, p.Environment, group.Service)
+			if err != nil {
+				return nil, err
+			}
 		}
 		id, generation, err := s.Store.PlacementGroupIdentity(ctx, p, name)
 		if err != nil {
@@ -93,6 +100,11 @@ func (s *MemberPrerequisiteService) PreviewPlacementGroups(ctx context.Context, 
 		if p.Status == StatusPlanning {
 			if saveErr := s.Store.SavePlacementGroupReview(ctx, p, qualified); saveErr != nil {
 				return nil, saveErr
+			}
+			if s.Variables != nil {
+				if saveErr := s.Store.SavePlacementGroupConfiguration(ctx, qualified, privateConfig); saveErr != nil {
+					return nil, saveErr
+				}
 			}
 		}
 		out = append(out, qualified)

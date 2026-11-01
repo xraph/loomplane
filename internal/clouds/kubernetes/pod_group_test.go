@@ -138,3 +138,33 @@ func TestPodGroupStrategyReservesExactSurge(t *testing.T) {
 		t.Fatal("zero surge cannot make progress")
 	}
 }
+
+func TestInstancePodStorageRender(t *testing.T) {
+	spec, labels := podGroupFixture(t)
+	group, err := reviewedPodGroup(labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.RuntimeStorageMiB = 64
+	raw, err := json.Marshal(group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels[owned.LabelPodGroup] = string(raw)
+	pod, _, err := runtimePod(spec, labels, owned.RuntimeValues{}, &corev1.Secret{}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, container := range pod.Spec.Containers {
+		request := container.Resources.Requests.StorageEphemeral().Value()
+		limit := container.Resources.Limits.StorageEphemeral().Value()
+		if request != limit || request < 64<<20 {
+			t.Fatal("container storage not bounded", container.Name)
+		}
+		total += request
+	}
+	if total != 192<<20 {
+		t.Fatal("storage was omitted or charged twice", total)
+	}
+}

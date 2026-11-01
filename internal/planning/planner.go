@@ -24,10 +24,10 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	ResourceEndpoints map[string]EndpointPin
 	// Server-derived applied actions for explicit unconstrained pool moves.
 	appliedMoves           map[string]Action
 	appliedMoveProblems    []Finding
+	ResourceEndpoints      map[string]EndpointPin
 	ExistingResources      map[string]ExistingResourceCheck
 	ExistingResourceChecks map[string]EndpointCheck
 	ProjectID              string

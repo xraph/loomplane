@@ -7,6 +7,7 @@ import {
   useEnvironmentCloudsGet,
   useEnvironmentConnectionsGet,
   useManifestsEdit,
+  useManifestsSave,
   useManifestsCurrent,
   useProvidersList,
   useProjectsGraph,
@@ -20,6 +21,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudSQLApplicationFields } from "@/components/cloudsql-application-fields"
+import { adoptServiceTarget } from "@/lib/cloud-targets"
 import { cloudSQLApplicationNetworkValid } from "@/lib/cloudsql-network"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -167,6 +169,7 @@ export function DeploymentTargets({
                 environmentId={environmentId}
                 catalog={providers.data!.providers}
                 cloudTargets={cloudTargets}
+                environments={environments}
                 onPendingChange={onPendingChange}
               />
             ))
@@ -206,6 +209,7 @@ function TargetRow({
   environmentId,
   catalog,
   cloudTargets,
+  environments,
   onPendingChange,
 }: {
   projectId: string
@@ -215,10 +219,13 @@ function TargetRow({
   environmentId?: string
   catalog: Provider[]
   cloudTargets: Target[]
+  environments: Environment[]
   onPendingChange?: (pending: boolean) => void
 }) {
   const { can, session } = useOrganization()
   const save = useMutation(useManifestsEdit)
+  const saveManifest = useMutation(useManifestsSave)
+  const current = useQuery(useManifestsCurrent, { path: { id: projectId } })
   const connections = useQuery(useConnectionsList)
   const invalidate = useInvalidate()
   const settings = placementSettings(manifest, row, environment)
@@ -287,17 +294,55 @@ function TargetRow({
     setError(undefined)
     onPendingChange?.(true)
     try {
-      await save.mutateAsync({
-        path: { id: projectId },
-        body: {
-          placement: {
-            section: row.section,
-            name: row.name,
-            environment,
-            ...changes,
+      let rest = changes
+      const choice = changes.cloudTarget
+        ? changes.cloudTarget
+        : changes.cloudTags?.length
+          ? { tags: changes.cloudTags }
+          : undefined
+      if (choice) {
+        // A default or service-level provider also applies to a Cloud target,
+        // so adopting one rewrites the manifest instead of editing one field.
+        const revision = current.data?.revision
+        if (revision === undefined)
+          throw new Error("The manifest is still loading. Try again.")
+        await saveManifest.mutateAsync({
+          path: { id: projectId },
+          body: {
+            manifest: adoptServiceTarget(
+              manifest,
+              environments,
+              environment,
+              row.name,
+              choice
+            ),
+            baseRevision: revision,
           },
-        },
-      })
+        })
+        rest = { ...changes }
+        for (const key of [
+          "cloudTarget",
+          "cloudTags",
+          "provider",
+          "region",
+          "target",
+          "endpoint",
+          "cloudSqlNetwork",
+        ] as const)
+          delete rest[key]
+      }
+      if (Object.keys(rest).length)
+        await save.mutateAsync({
+          path: { id: projectId },
+          body: {
+            placement: {
+              section: row.section,
+              name: row.name,
+              environment,
+              ...rest,
+            },
+          },
+        })
       setSaved(true)
       setChanges({})
       toast.success(`Saved ${row.name} placement for ${environment}`)

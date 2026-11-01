@@ -161,6 +161,8 @@ type Runtime interface {
 }
 
 type Deps struct {
+	InstanceAuthority       InstanceNamespaceAuthority
+	InstanceIsolation       InstanceNamespaceQualifier
 	ReplicaVerifier         *kubernetes.ControllerStore
 	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig

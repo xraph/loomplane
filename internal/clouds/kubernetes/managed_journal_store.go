@@ -15,6 +15,9 @@ import (
 )
 
 func managedScopeValid(s ManagedScope) bool {
+	if hasGroupScope(s) {
+		return groupManagedScopeValid(s)
+	}
 	if hasLifecycleScope(s) {
 		return lifecycleManagedScopeValid(s)
 	}

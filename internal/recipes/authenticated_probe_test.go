@@ -31,7 +31,7 @@ func TestStandaloneEnginesKeepPrivateAuthenticatedContracts(t *testing.T) {
 		if err := registry.Register(kind); err != nil {
 			t.Fatal(err)
 		}
-		if kind.Placement != PlacementDependency || kind.Components[0].Volume == nil || kind.Components[0].Readiness.Checker != name+"-v1" {
+		if kind.Placement != PlacementServiceProject || kind.Components[0].Volume == nil || kind.Components[0].Readiness.Checker != name+"-v1" {
 			t.Fatalf("%s lost private persistent/authenticated contract", name)
 		}
 		for _, field := range []string{FieldURL, FieldHost, FieldHostPort, FieldPort, FieldPassword} {
@@ -58,6 +58,22 @@ func TestStructuredTrustCannotBecomeArbitraryRuntimeFilesOrPrivateOutputs(t *tes
 		change(&kind)
 		if err := NewRegistry().Register(kind); err == nil {
 			t.Fatal("accepted invalid structured trust contract")
+		}
+	}
+}
+
+func TestNativeComponentProtectionRequiresQualifiedServiceContract(t *testing.T) {
+	original, _ := Default().Kind("falkordb")
+	for _, edit := range []func(*Kind){
+		func(k *Kind) { k.Service = nil },
+		func(k *Kind) { k.Service.Recovery = "postgres" },
+		func(k *Kind) { k.Service.BackupFormat = "invented" },
+		func(k *Kind) { k.Components = append(k.Components, k.Components[0]) },
+	} {
+		k := original.clone()
+		edit(&k)
+		if err := NewRegistry().Register(k); err == nil {
+			t.Fatal("unqualified native component admitted")
 		}
 	}
 }

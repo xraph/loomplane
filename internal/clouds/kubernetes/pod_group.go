@@ -70,6 +70,7 @@ func addPodGroup(template *corev1.PodTemplateSpec, labels map[string]string) err
 	for _, volume := range group.Scratch {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: volume.Name, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resource.NewQuantity(volume.SizeMiB<<20, resource.BinarySI)}}})
 	}
+	scratch -= group.RuntimeStorageMiB * int64(len(group.Sidecars))
 	if scratch > 0 {
 		amount := *resource.NewQuantity(scratch<<20, resource.BinarySI)
 		main.Resources.Requests[corev1.ResourceEphemeralStorage] = amount
@@ -84,6 +85,9 @@ func addPodGroup(template *corev1.PodTemplateSpec, labels map[string]string) err
 			return provider.ErrWorkloadSpec
 		}
 		limits := corev1.ResourceList{corev1.ResourceCPU: *resource.NewMilliQuantity(sidecar.CPUMillis, resource.DecimalSI), corev1.ResourceMemory: *resource.NewQuantity(sidecar.MemoryMiB<<20, resource.BinarySI)}
+		if group.RuntimeStorageMiB > 0 {
+			limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(group.RuntimeStorageMiB<<20, resource.BinarySI)
+		}
 		container := corev1.Container{Name: sidecar.Name, Image: sidecar.Image, ImagePullPolicy: corev1.PullIfNotPresent, Command: sidecar.Command, Args: sidecar.Args, Resources: corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}, ReadinessProbe: &corev1.Probe{PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 10}}
 		if sidecar.Readiness.Path != "" {
 			container.ReadinessProbe.HTTPGet = &corev1.HTTPGetAction{Path: sidecar.Readiness.Path, Port: intstr.FromInt(sidecar.Readiness.Port)}
@@ -101,6 +105,9 @@ func addPodGroup(template *corev1.PodTemplateSpec, labels map[string]string) err
 			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: mount.Volume, MountPath: mount.Path, ReadOnly: mount.ReadOnly})
 		}
 		template.Spec.Containers = append(template.Spec.Containers, container)
+	}
+	if group.IsolationRevision != "" {
+		restrictInstancePod(&template.Spec)
 	}
 	automount := false
 	template.Spec.AutomountServiceAccountToken = &automount

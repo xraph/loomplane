@@ -624,6 +624,8 @@
             "$ref": "#/$defs/scratchMount"
           }
         },
+        "isolation_revision": {"type":"string","enum":["kubernetes-instance-isolation-v1"]},
+        "runtime_storage_mib": {"type":"integer","minimum":0,"maximum":4096},
         "surge_replicas": {
           "type": "integer",
           "minimum": 0,

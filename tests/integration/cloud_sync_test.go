@@ -31,11 +31,20 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-func cloudSyncDatabase(t *testing.T) (*cloudprofiles.PgStore, *pgx.Conn, *pgdriver.PgDB) {
+func cloudSyncDatabase(t *testing.T, through ...string) (*cloudprofiles.PgStore, *pgx.Conn, *pgdriver.PgDB) {
 	t.Helper()
 	ctx := t.Context()
 	dsn := freshDatabase(t)
-	if err := ops.Migrate(ctx, dsn, []*migrate.Group{migrations.Group()}); err != nil {
+	group := migrations.Group()
+	if len(through) > 0 {
+		group = migrate.NewGroup(migrations.GroupName)
+		for _, step := range migrations.Group().Migrations() {
+			if step.Version <= through[0] {
+				group.MustRegister(step)
+			}
+		}
+	}
+	if err := ops.Migrate(ctx, dsn, []*migrate.Group{group}); err != nil {
 		t.Fatal(err)
 	}
 	db := pgdriver.New()

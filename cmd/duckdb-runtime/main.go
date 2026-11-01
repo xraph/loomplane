@@ -30,8 +30,10 @@ func run() error {
 	switch {
 	case len(os.Args) == 2 && os.Args[1] == "check":
 		return check(ctx)
+	case len(os.Args) == 2 && os.Args[1] == "serve-readonly":
+		return serve(ctx, true)
 	case len(os.Args) == 1:
-		return serve(ctx)
+		return serve(ctx, false)
 	default:
 		return errors.New("invalid mode")
 	}
@@ -71,13 +73,28 @@ func check(ctx context.Context) error {
 	}
 	return nil
 }
-func serve(ctx context.Context) error {
+func serve(ctx context.Context, readonly bool) error {
 	secret, err := token()
 	if err != nil {
 		return err
 	}
+	if readonly {
+		// Initialize an empty copy before any listener starts. Imported copies
+		// already have a database and never enter this path.
+		if _, statErr := os.Stat("/data/analytics.db"); errors.Is(statErr, os.ErrNotExist) {
+			initialize, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(initialize, "/duckdb", "-batch", "-bail", "/data/analytics.db")
+			cmd.Stdin = strings.NewReader("CHECKPOINT;\n.quit\n")
+			if initErr := cmd.Run(); initErr != nil {
+				return errors.New("initialize recovery database")
+			}
+		} else if statErr != nil {
+			return statErr
+		}
+	}
 	// The supervisor delivers .quit before enforcing its own bounded shutdown.
-	child := exec.CommandContext(context.WithoutCancel(ctx), "/duckdb", "-batch", "-bail", "/data/analytics.db")
+	child := serveCommand(context.WithoutCancel(ctx), readonly)
 	return serveProcess(ctx, child, bootstrap+"CALL quack_serve('quack:0.0.0.0:9494', allow_other_hostname := true, token := '"+secret+"', disable_ssl := false, ssl_cert_file := '/etc/loomplane/node.pem', ssl_key_file := '/etc/loomplane/node-key.pem');\n", 20*time.Second)
 }
 
@@ -113,4 +130,11 @@ func serveProcess(ctx context.Context, child *exec.Cmd, startup string, grace ti
 		waitErr := <-done
 		return errors.Join(errors.New("shutdown timed out"), quitErr, killErr, waitErr)
 	}
+}
+
+func serveCommand(ctx context.Context, readonly bool) *exec.Cmd {
+	if readonly {
+		return exec.CommandContext(ctx, "/duckdb", "-batch", "-bail", "-readonly", "/data/analytics.db")
+	}
+	return exec.CommandContext(ctx, "/duckdb", "-batch", "-bail", "/data/analytics.db")
 }

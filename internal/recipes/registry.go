@@ -660,7 +660,9 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 
 	switch {
 	case c.Protection == ProtectionNative:
-		f.add("%s has native protection, which is reserved for engines", what)
+		if k.Service == nil || !k.DirectService() || c.Role != RoleProcess || c.Volume == nil || !qualifiedServiceRecovery(k) {
+			f.add("%s native protection requires a reusable persistent service and recovery contract", what)
+		}
 	case c.Protection == ProtectionExternal:
 		f.add("%s has external protection, which is for dependencies", what)
 	case c.Volume != nil && c.Protection != ProtectionRebuildable:
@@ -1371,4 +1373,12 @@ func validateEngine(e Engine) []error {
 		}
 	}
 	return f.errs
+}
+
+func qualifiedServiceRecovery(k Kind) bool {
+	if k.Service == nil || k.Service.Recovery != k.Name {
+		return false
+	}
+	formats := map[string]string{"falkordb": "falkordb-rdb-v1", "elasticsearch": "elasticsearch-snapshot-v1", "opensearch": "opensearch-snapshot-v1", "duckdb": "duckdb-checkpoint-v1"}
+	return formats[k.Name] != "" && formats[k.Name] == k.Service.BackupFormat
 }

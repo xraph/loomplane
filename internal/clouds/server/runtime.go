@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
@@ -312,7 +313,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
 	// The declared readiness stays on the container, as it does on a
 	// Kubernetes workload's readiness probe.
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
+	for _, key := range []string{enginebackup.LabelEngine, enginebackup.LabelRevision, enginebackup.LabelSource, owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}

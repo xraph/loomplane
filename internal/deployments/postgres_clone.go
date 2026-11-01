@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -40,8 +41,12 @@ func (e *OwnedTarget) RestoreDatabase(ctx context.Context, p security.Principal,
 	if err := e.checkDatabaseBinding(b, &cfg); err != nil {
 		return "", err
 	}
-	if _, err := databaseService(&cfg); err != nil {
+	descriptor, err := recovery.Describe(&cfg, e.kinds())
+	if err != nil {
 		return "", err
+	}
+	if descriptor.Component != nil {
+		return e.restoreComponent(ctx, p, b, &cfg, descriptor, files, object, operation)
 	}
 	name, ref, err := recoveryIdentity(b, operation)
 	if err != nil {
@@ -118,7 +123,7 @@ func (e *OwnedTarget) DeleteRecovery(ctx context.Context, p security.Principal, 
 	}
 	inst, err := e.Ctrl.Instances.GetBySlug(ctx, name)
 	if errors.Is(err, ctrlplane.ErrNotFound) {
-		return e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, name, ref)
+		return errors.Join(e.Secrets.Delete(ctx, ref+runtimeFilesSuffix), e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, name, ref))
 	}
 	if err != nil {
 		return err
@@ -142,5 +147,5 @@ func (e *OwnedTarget) DeleteRecovery(ctx context.Context, p security.Principal, 
 	if checkErr := e.Ctrl.Instances.Delete(ctx, inst.ID); checkErr != nil {
 		return checkErr
 	}
-	return e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, name, ref)
+	return errors.Join(e.Secrets.Delete(ctx, ref+runtimeFilesSuffix), e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, name, ref))
 }

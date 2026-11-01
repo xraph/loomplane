@@ -113,7 +113,7 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 	if err != nil {
 		o.pull = nil
 	}
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		o.ingress, err = c.Kube.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
 		if checkErr := accept(o.ingress, err); checkErr != nil {
 			return nil, checkErr
@@ -320,7 +320,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, recordErr
 		}
 	}
-	if labels[owned.LabelPublic] == "true" {
+	if ordinaryIngress(c) && labels[owned.LabelPublic] == "true" {
 		if len(servicePorts) == 0 || labels[owned.LabelHostname] == "" {
 			return nil, errors.New("a public Kubernetes service needs a hostname and port")
 		}
@@ -387,7 +387,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
-		public := labels[owned.LabelPublic] == "true"
+		public := ordinaryIngress(c) && labels[owned.LabelPublic] == "true"
 		address := "http://" + name + "." + ns + ".svc:" + strconv.Itoa(int(port.Port))
 		if public {
 			scheme := "http"
@@ -774,7 +774,7 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 			return c.Kube.AppsV1().Deployments(ns).Delete(ctx, name, deleteOwnedOptions(o))
 		},
 	}))
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		original = nil
 		if old.ingress != nil {
 			original = old.ingress

@@ -16,6 +16,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -29,8 +30,9 @@ var ErrConflict = errors.New("another plan for this environment was just started
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	frontendWake cloudinfra.CapacityCloudWakeup
-	db           *pgdriver.PgDB
+	groupAcceptance GroupAcceptanceAuthority
+	frontendWake    cloudinfra.CapacityCloudWakeup
+	db              *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
@@ -453,6 +455,16 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 		return false, err
 	}
 	defer func() { err = rollback(tx, err) }()
+	if status == StatusApproved {
+		if sourceErr := environments.LockRuntimeSourcesTx(ctx, tx); sourceErr != nil {
+			return false, sourceErr
+		}
+		if s.groupAcceptance != nil {
+			if authorityErr := s.groupAcceptance.LockGroupAuthorityTx(ctx, tx); authorityErr != nil {
+				return false, authorityErr
+			}
+		}
+	}
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, orgID); checkErr != nil {
 		return false, checkErr
 	}
@@ -479,6 +491,11 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 		}
 		if _, err = tx.Exec(ctx, `SELECT set_config('loomplane.capacity_actor',$1,true)`, string(raw)); err != nil {
 			return false, err
+		}
+	}
+	if status == StatusApproved {
+		if groupErr := s.acceptPlacementGroupsTx(ctx, tx, orgID, id, now); groupErr != nil {
+			return false, groupErr
 		}
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6

@@ -48,6 +48,8 @@ func (NoHooks) Removed(context.Context, ComposedResource) error { return nil }
 
 // ComponentRun is one component of a composed resource as it's applied.
 type ComponentRun struct {
+	// Recovery renders a private inspection copy with independently generated credentials.
+	Recovery                                                           bool
 	OrgID, ProjectID, EnvironmentID, Environment, PlanID, DeploymentID string
 	// Resource is the composed resource's manifest name.
 	Resource string

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
 var ErrManagedAuthority = errors.New("managed workload mutation requires current journal authority")
@@ -11,10 +13,11 @@ var ErrManagedAuthority = errors.New("managed workload mutation requires current
 // ManagedScope contains server-owned identity only. Epoch is the current durable
 // workload attempt generation. Revocation applies to the whole release.
 type ManagedScope struct {
-	GroupID, MemberID                                                                             string `json:",omitempty"`
-	GroupGeneration, BackendGeneration                                                            int64  `json:",omitempty"`
-	GroupOperation                                                                                string `json:",omitempty"`
 	LifecycleRunID, LifecycleJobName, LifecycleDigest, LifecycleSpecDigest, LifecycleSecretDigest string `json:",omitempty"`
+	BackendGeneration                                                                             int64  `json:",omitempty"`
+	GroupOperation                                                                                string `json:",omitempty"`
+	GroupID, MemberID                                                                             string `json:",omitempty"`
+	GroupGeneration                                                                               int64  `json:",omitempty"`
 	Org, Project, Environment, Service, Plan, Deployment, Action                                  string
 	Connection, Instance, RuntimeRef, RuntimeRevision, Release                                    string
 	Namespace, NamespaceUID, ClusterCA                                                            string
@@ -22,7 +25,8 @@ type ManagedScope struct {
 }
 
 type ManagedRequest struct {
-	SchedulingArchitecture                            string `json:",omitempty"`
+	GroupSwitch                                       *domain.ServingMemberReceipt `json:",omitempty"`
+	SchedulingArchitecture                            string                       `json:",omitempty"`
 	Group, Version, Resource, Namespace, Name, Method string
 	UID                                               string
 	ResourceVersion                                   string `json:",omitempty"`

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const LifecycleCapabilityRevision = "kubernetes-lifecycle-job-v1"
@@ -24,6 +25,7 @@ var lifecycleName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 // LifecycleJobRun contains the sealed release step and destination identity.
 // Runtime values are resolved separately and never persisted in a receipt.
 type LifecycleJobRun struct {
+	IsolationRevision                                                       string `json:",omitempty"`
 	OrgID, ProjectID, FleetID, InstanceID, EnvironmentID, OperationID, Name string
 	Generation, OwnershipEpoch                                              int64
 	Namespace, NamespaceUID, ConnectionID, ClusterCA, Architecture          string
@@ -44,6 +46,9 @@ func (r LifecycleJobRun) Digest() string {
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(raw))
 }
 func (r LifecycleJobRun) Validate() error {
+	if r.IsolationRevision != "" && r.IsolationRevision != provider.InstanceIsolationRevision {
+		return ErrLifecycleAuthority
+	}
 	for _, value := range []string{r.OrgID, r.ProjectID, r.FleetID, r.InstanceID, r.EnvironmentID, r.OperationID, r.Namespace, r.NamespaceUID, r.ConnectionID} {
 		if value == "" || len(value) > 256 || strings.ContainsAny(value, "\x00\r\n") {
 			return ErrLifecycleAuthority

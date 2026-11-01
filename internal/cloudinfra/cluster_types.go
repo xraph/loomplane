@@ -9,19 +9,21 @@ import (
 )
 
 type AttachmentInput struct {
-	RuntimeAccess       *provider.RuntimeAccessProfile `json:"runtime_access,omitempty"`
-	TargetSlug          string                         `json:"target_slug"`
-	CloudRevision       int64                          `json:"cloud_revision"`
-	ResourceRevision    int64                          `json:"resource_revision"`
-	GrantRevision       int64                          `json:"grant_revision"`
-	TrustFingerprint    string                         `json:"trust_fingerprint"`
-	EndpointFingerprint string                         `json:"endpoint_fingerprint"`
-	Prerequisites       AttachmentPrerequisites        `json:"prerequisites"`
-	ProjectID           string                         `json:"project_id"`
-	Namespace           string                         `json:"namespace"`
-	NamespaceUID        string                         `json:"namespace_uid,omitempty"`
-	ServiceAccountName  string                         `json:"service_account_name"`
-	AdoptNamespace      bool                           `json:"adopt_namespace"`
+	Instance            *InstanceNamespacePins            `json:"instance,omitempty"`
+	InstancePolicy      *provider.InstanceIsolationPolicy `json:"instance_policy,omitempty"`
+	RuntimeAccess       *provider.RuntimeAccessProfile    `json:"runtime_access,omitempty"`
+	TargetSlug          string                            `json:"target_slug"`
+	CloudRevision       int64                             `json:"cloud_revision"`
+	ResourceRevision    int64                             `json:"resource_revision"`
+	GrantRevision       int64                             `json:"grant_revision"`
+	TrustFingerprint    string                            `json:"trust_fingerprint"`
+	EndpointFingerprint string                            `json:"endpoint_fingerprint"`
+	Prerequisites       AttachmentPrerequisites           `json:"prerequisites"`
+	ProjectID           string                            `json:"project_id"`
+	Namespace           string                            `json:"namespace"`
+	NamespaceUID        string                            `json:"namespace_uid,omitempty"`
+	ServiceAccountName  string                            `json:"service_account_name"`
+	AdoptNamespace      bool                              `json:"adopt_namespace"`
 }
 
 type ClusterInput struct {

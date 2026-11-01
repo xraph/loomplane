@@ -64,7 +64,7 @@ func ValidatePlacementGroupProfile(in GroupProfileInput) (domain.QualifiedGroupP
 	}
 	svc := in.Manifest.Services[g.Service]
 	set := svc.For(in.Environment, in.Manifest.Defaults)
-	if svc.Kind != "http-service" || set.Worker != nil || !manifest.On(set.Enabled) || set.Port < 1 || set.Build == nil || !domain.ValidPinnedImage(set.Build.Image) || in.WritableVolumes || in.UnverifiedDependencies {
+	if svc.Kind != "http-service" || set.Worker != nil || set.PodGroup != nil || !manifest.On(set.Enabled) || set.Port < 1 || set.Build == nil || !domain.ValidPinnedImage(set.Build.Image) || in.WritableVolumes || in.UnverifiedDependencies {
 		return fail("requires a stateless HTTP image with verified dependencies")
 	}
 	// These selectors have single-target semantics. Group members own placement.

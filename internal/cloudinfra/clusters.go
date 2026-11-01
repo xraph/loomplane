@@ -43,6 +43,9 @@ func (s *Service) clusterEnabled() error {
 }
 func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (provider.ClusterReader, provider.AccountAccess, error) {
 	var access provider.AccountAccess
+	if in.Kind == InstanceNamespaceKind || in.Attachment != nil && (in.Attachment.Instance != nil || in.Attachment.InstancePolicy != nil) {
+		return nil, access, security.ErrForbidden
+	}
 	if p.ReadOnly {
 		return nil, access, security.ErrForbidden
 	}
@@ -514,6 +517,9 @@ func (s *Service) controlCluster(ctx context.Context, p security.Principal, clou
 	o, err := s.Clusters.GetClusterOperation(ctx, p.OrgID, cloud, id)
 	if err != nil {
 		return nil, err
+	}
+	if o.Kind == InstanceNamespaceKind {
+		return nil, security.ErrForbidden
 	}
 	if _, _, err = s.clusterAuthority(ctx, p, cloud, o.Input); err != nil {
 		return nil, err

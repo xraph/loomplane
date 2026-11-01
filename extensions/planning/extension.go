@@ -472,7 +472,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		CatalogInputs:     catalogInputs,
 	})
 
-	e.memberPrerequisites = &planning.MemberPrerequisiteService{Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
+	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
 	e.plans.BindPlacementGroupPrerequisites(e.memberPrerequisites)
 	routeService.CapacityDemandAuthority = e.plans
 	nativeDatabases := &deployments.NativeDatabases{

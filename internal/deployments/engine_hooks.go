@@ -7,6 +7,10 @@ import (
 	"maps"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/xraph/loomplane/internal/recipes"
+
 	"github.com/xraph/loomplane/internal/enginetls"
 )
 
@@ -72,10 +76,22 @@ func (h engineHooks) Files(ctx context.Context, run ComponentRun) (map[string][]
 			return nil, checkErr
 		}
 		files := openSearchSecurityFiles(bundle.PasswordHash)
+		if run.Recovery {
+			readerHash, hashErr := bcrypt.GenerateFromPassword(run.Secrets["recovery-reader"], bcrypt.DefaultCost)
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			files["/usr/share/opensearch/config/opensearch-security/internal_users.yml"] = append(files["/usr/share/opensearch/config/opensearch-security/internal_users.yml"], []byte(fmt.Sprintf("loomplane_recovery:\n  hash: %q\n  reserved: true\n", string(readerHash)))...)
+			files["/usr/share/opensearch/config/opensearch-security/roles.yml"] = append(files["/usr/share/opensearch/config/opensearch-security/roles.yml"], []byte("loomplane_reader:\n  cluster_permissions: []\n  index_permissions:\n    - index_patterns: [\"*\"]\n      allowed_actions: [\"read\"]\n")...)
+			files["/usr/share/opensearch/config/opensearch-security/roles_mapping.yml"] = append(files["/usr/share/opensearch/config/opensearch-security/roles_mapping.yml"], []byte("loomplane_reader:\n  reserved: true\n  users: [\"loomplane_recovery\"]\n")...)
+		}
 		files["/usr/share/opensearch/config/ca.pem"] = bundle.CACert
 		files["/usr/share/opensearch/config/node-key.pem"] = bundle.NodeKey
 		files["/usr/share/opensearch/config/loomplane-probe.conf"] = probeConfig("https", "loomplane", password, "/usr/share/opensearch/config/ca.pem")
 		files["/usr/share/opensearch/config/opensearch.yml"] = []byte(fmt.Sprintf(openSearchConfig, bundle.NodeName()))
+		if run.Component.Protection == recipes.ProtectionNative {
+			files["/usr/share/opensearch/config/opensearch.yml"] = append(files["/usr/share/opensearch/config/opensearch.yml"], []byte("path.repo: [\"/usr/share/opensearch/data/loomplane-snapshots\"]\n")...)
+		}
 		return files, nil
 	}
 	return nil, errors.New("unsupported engine runtime hook")

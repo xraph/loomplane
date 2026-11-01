@@ -41,6 +41,11 @@ func TestPlacementGroupRejectsStatefulAndWorker(t *testing.T) {
 			in.Manifest.Services["api"] = s
 		}},
 		{"volume", func(in *GroupProfileInput) { in.WritableVolumes = true }},
+		{"pod-group", func(in *GroupProfileInput) {
+			s := in.Manifest.Services["api"]
+			s.PodGroup = &manifest.PodGroup{}
+			in.Manifest.Services["api"] = s
+		}},
 		{"dependency", func(in *GroupProfileInput) { in.UnverifiedDependencies = true }},
 		{"mutable-image", func(in *GroupProfileInput) { in.Manifest.Services["api"].Build.Image = "registry.example/api:latest" }},
 		{"gate", func(in *GroupProfileInput) { in.Enabled = false }},

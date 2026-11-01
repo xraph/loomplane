@@ -145,25 +145,26 @@ type GroupRoutingReview struct {
 }
 
 type GroupMemberPlan struct {
-	LocationIdentity         string           `json:"location_identity"`
-	MappingRevision          int64            `json:"mapping_revision"`
-	Identity                 MemberIdentity   `json:"identity"`
-	Replicas                 int              `json:"replicas"`
-	DestinationID            string           `json:"destination_id"`
-	DestinationGeneration    int64            `json:"destination_generation"`
-	PhysicalIdentity         PhysicalIdentity `json:"physical_identity"`
-	CapabilityRevision       string           `json:"capability_revision"`
-	CloudID                  string           `json:"cloud_id"`
-	TargetID                 string           `json:"target_id"`
-	TargetRevision           int64            `json:"target_revision"`
-	AttachmentRevision       int64            `json:"attachment_revision"`
-	ConnectionID             string           `json:"connection_id"`
-	ConnectionGeneration     int64            `json:"connection_generation"`
-	LocationID               string           `json:"location_id"`
-	LocationRevision         int64            `json:"location_revision"`
-	LocationEvidenceRevision int64            `json:"location_evidence_revision"`
-	GrantRevision            int64            `json:"grant_revision"`
-	Prerequisite             PrerequisitePin  `json:"prerequisite"`
+	RetainedBackend          *RetainedMemberBackend `json:"retained_backend,omitempty"`
+	LocationIdentity         string                 `json:"location_identity"`
+	MappingRevision          int64                  `json:"mapping_revision"`
+	Identity                 MemberIdentity         `json:"identity"`
+	Replicas                 int                    `json:"replicas"`
+	DestinationID            string                 `json:"destination_id"`
+	DestinationGeneration    int64                  `json:"destination_generation"`
+	PhysicalIdentity         PhysicalIdentity       `json:"physical_identity"`
+	CapabilityRevision       string                 `json:"capability_revision"`
+	CloudID                  string                 `json:"cloud_id"`
+	TargetID                 string                 `json:"target_id"`
+	TargetRevision           int64                  `json:"target_revision"`
+	AttachmentRevision       int64                  `json:"attachment_revision"`
+	ConnectionID             string                 `json:"connection_id"`
+	ConnectionGeneration     int64                  `json:"connection_generation"`
+	LocationID               string                 `json:"location_id"`
+	LocationRevision         int64                  `json:"location_revision"`
+	LocationEvidenceRevision int64                  `json:"location_evidence_revision"`
+	GrantRevision            int64                  `json:"grant_revision"`
+	Prerequisite             PrerequisitePin        `json:"prerequisite"`
 }
 
 // QualifiedGroupPlan is a review snapshot. It grants no runtime authority.
@@ -180,4 +181,97 @@ type QualifiedGroupPlan struct {
 	Members        []GroupMemberPlan  `json:"members"`
 	Routing        GroupRoutingReview `json:"routing"`
 	MinReady       int                `json:"min_ready"`
+}
+
+// RuntimeObject pins an observed Kubernetes object. A name alone cannot prove
+// that an object survived deletion and recreation.
+type RuntimeObject struct {
+	Kind            string `json:"kind"`
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resource_version"`
+	Generation      int64  `json:"generation,omitempty"`
+}
+
+// MemberReceipt retains the prepared generation independently of serving state.
+// SnapshotID is opaque. Vault paths and resolved values stay in private storage.
+type MemberReceipt struct {
+	Scope
+	ID                  string          `json:"id"`
+	Revision            int64           `json:"revision"`
+	SchemaVersion       int             `json:"schema_version"`
+	Identity            MemberIdentity  `json:"identity"`
+	ConnectionID        string          `json:"connection_id"`
+	Namespace           string          `json:"namespace"`
+	NamespaceUID        string          `json:"namespace_uid"`
+	ClusterCA           string          `json:"cluster_ca"`
+	Objects             []RuntimeObject `json:"objects"`
+	PrivateService      RuntimeObject   `json:"private_service"`
+	ServicePort         int32           `json:"service_port"`
+	IngressClass        string          `json:"ingress_class"`
+	Image               string          `json:"image"`
+	ConfigRevision      string          `json:"config_revision"`
+	SnapshotID          string          `json:"snapshot_id"`
+	CapacityReservation string          `json:"capacity_reservation"`
+	AttemptEpoch        int64           `json:"attempt_epoch"`
+	PreparedAt          time.Time       `json:"prepared_at"`
+}
+
+// ServingMemberReceipt records one accepted switch of the stable member ingress.
+// OldService remains retained until separate routing and local drain reviews pass.
+type ServingMemberReceipt struct {
+	Scope
+	SchemaVersion           int            `json:"schema_version"`
+	GroupID                 string         `json:"group_id"`
+	MemberID                string         `json:"member_id"`
+	Generation              int64          `json:"generation"`
+	BackendIdentity         MemberIdentity `json:"backend_identity"`
+	BackendReceiptID        string         `json:"backend_receipt_id"`
+	BackendReceiptRevision  int64          `json:"backend_receipt_revision"`
+	Namespace               string         `json:"namespace"`
+	NamespaceUID            string         `json:"namespace_uid"`
+	Ingress                 RuntimeObject  `json:"ingress"`
+	PreviousResourceVersion string         `json:"previous_resource_version,omitempty"`
+	OldService              RuntimeObject  `json:"old_service"`
+	NewService              RuntimeObject  `json:"new_service"`
+	SwitchedAt              time.Time      `json:"switched_at"`
+}
+
+// RetainedMemberBackend is resolved from an immutable prepared receipt during a
+// new rollback review. Its existing capacity hold remains reserved.
+type RetainedMemberBackend struct {
+	ReceiptID       string         `json:"receipt_id"`
+	ReceiptRevision int64          `json:"receipt_revision"`
+	Identity        MemberIdentity `json:"identity"`
+	SnapshotID      string         `json:"snapshot_id"`
+	ConfigRevision  string         `json:"config_revision"`
+}
+
+// MemberHealth requires private endpoint and TLS observations in addition to
+// controller readiness. Provisioning success does not establish these facts.
+type MemberHealth struct {
+	Ready            bool      `json:"ready"`
+	CheckedAt        time.Time `json:"checked_at"`
+	DeploymentUID    string    `json:"deployment_uid"`
+	ServiceUID       string    `json:"service_uid"`
+	EndpointReady    bool      `json:"endpoint_ready"`
+	EndpointEvidence string    `json:"endpoint_evidence"`
+	TLSReady         bool      `json:"tls_ready"`
+	TLSSecretUID     string    `json:"tls_secret_uid"`
+	TLSFingerprint   string    `json:"tls_fingerprint"`
+	TLSExpiresAt     time.Time `json:"tls_expires_at"`
+}
+
+// RetirementPin binds independent local and routing drain evidence to the exact
+// retired generation. An elapsed rollout timer cannot substitute for either pin.
+type RetirementPin struct {
+	Scope
+	SchemaVersion       int       `json:"schema_version"`
+	GroupID             string    `json:"group_id"`
+	MemberID            string    `json:"member_id"`
+	Generation          int64     `json:"generation"`
+	Revision            string    `json:"revision"`
+	LocalDrainReceipt   string    `json:"local_drain_receipt"`
+	RoutingDrainReceipt string    `json:"routing_drain_receipt"`
+	ReviewedAt          time.Time `json:"reviewed_at"`
 }

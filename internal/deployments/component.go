@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -147,6 +148,10 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 	labels[owned.LabelCatalogKind] = cfg.Kind
 	labels[owned.LabelCatalogResource] = cfg.Resource
 	labels[owned.LabelCatalogComponent] = c.Name
+	if c.Protection == recipes.ProtectionNative && enginebackup.Format(cfg.Kind) != "" {
+		labels[enginebackup.LabelEngine] = cfg.Kind
+		labels[enginebackup.LabelRevision] = cfg.Revision
+	}
 	if c.Readiness != nil {
 		if c.Readiness.Checker != "" {
 			labels[owned.LabelHealthChecker] = c.Readiness.Checker

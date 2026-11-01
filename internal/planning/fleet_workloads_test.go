@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestPodGroupInstanceDefaultHasNoUnreservedSurge(t *testing.T) {
@@ -15,6 +16,9 @@ func TestPodGroupInstanceDefaultHasNoUnreservedSurge(t *testing.T) {
 	group := effective.Services["api"].PodGroup
 	if group == nil || group.SurgeReplicas != 0 {
 		t.Fatal("instance inherited Kubernetes default surge")
+	}
+	if group.IsolationRevision != provider.InstanceIsolationRevision || group.RuntimeStorageMiB != provider.DefaultInstanceContainerStorageMiB {
+		t.Fatal("instance execution omitted restricted security or container storage")
 	}
 	if input.Services["api"].PodGroup != nil {
 		t.Fatal("sealed snapshot was mutated")

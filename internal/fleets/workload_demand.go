@@ -16,7 +16,17 @@ func templateWorkloadDemand(template fleet.Template, profile fleet.Profile) (Ope
 		if !ok || size.MaxReplicas < 1 || size.MaxReplicas > manifest.MaxInstances {
 			return demand, ErrInvalid
 		}
-		cpu, memory, disk, err := provider.PodGroupResources(size.CPUMillis, size.MemoryMiB, service.PodGroup)
+		group := provider.ClonePodGroup(service.PodGroup)
+		if group == nil {
+			group = &provider.PodGroup{}
+		}
+		if group.RuntimeStorageMiB == 0 {
+			group.RuntimeStorageMiB = provider.DefaultInstanceContainerStorageMiB
+		}
+		if group.RuntimeStorageMiB < provider.DefaultInstanceContainerStorageMiB {
+			return demand, ErrInvalid
+		}
+		cpu, memory, disk, err := provider.PodGroupResources(size.CPUMillis, size.MemoryMiB, group)
 		if err != nil {
 			return demand, err
 		}
@@ -32,6 +42,7 @@ func templateWorkloadDemand(template fleet.Template, profile fleet.Profile) (Ope
 		cpu, memory := job.EffectiveResources()
 		demand.CPUMillis += cpu
 		demand.MemoryMiB += memory
+		scratch += provider.DefaultInstanceContainerStorageMiB
 	}
 	demand.StorageGiB = (scratch + 1023) / 1024
 	return demand, nil

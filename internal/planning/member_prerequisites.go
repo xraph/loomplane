@@ -55,6 +55,7 @@ type GroupAttachmentScope struct {
 // MemberPrerequisiteService owns manager declarations and trusted live reads.
 // Neither a declaration nor a saved review authorizes workload effects.
 type MemberPrerequisiteService struct {
+	Variables GroupVariableSelection
 	Store     *PgStore
 	Authz     Authorizer
 	Projects  Projects

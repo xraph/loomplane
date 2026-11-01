@@ -2,7 +2,18 @@ package recipes
 
 import "github.com/xraph/loomplane/internal/enginetls"
 
-func init() { MustRegister(openSearch()) }
+func init() {
+	old := openSearch()
+	current := old.clone()
+	current.Releases[0].Revision = "2"
+	current.Placement = PlacementServiceProject
+	current.Components[0].Protection = ProtectionNative
+	current.Description = "Private search with verified TLS and native snapshots of user indices, mappings and aliases. Global settings and security state are excluded. Recovery access is read-only."
+	MustRegister(current)
+	if err := Default().RegisterHistorical(old); err != nil {
+		panic(err)
+	}
+}
 
 func openSearch() Kind {
 	files := make([]File, 0, 14)

@@ -16,7 +16,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const lifecycleRunLabel = "loomplane.lifecycle-run"
@@ -77,6 +80,13 @@ func lifecycleObjects(run owned.LifecycleJobRun, attempt int, values map[string]
 	resources := lifecycleResources(cpu, memory)
 	automount, backoff, deadline := false, int32(0), int64(run.Job.TimeoutSeconds)
 	job := &batchv1.Job{ObjectMeta: meta(name), Spec: batchv1.JobSpec{BackoffLimit: &backoff, ActiveDeadlineSeconds: &deadline, Template: corev1.PodTemplateSpec{ObjectMeta: meta(""), Spec: corev1.PodSpec{AutomountServiceAccountToken: &automount, RestartPolicy: corev1.RestartPolicyNever, NodeSelector: map[string]string{corev1.LabelArchStable: run.Architecture}, Containers: []corev1.Container{{Name: "main", Image: run.Job.Image, ImagePullPolicy: corev1.PullIfNotPresent, Command: slices.Clone(run.Job.Command), Args: slices.Clone(run.Job.Args), Env: env, Resources: resources}}}}}}
+	if run.IsolationRevision != "" {
+		restrictInstancePod(&job.Spec.Template.Spec)
+		amount := *resource.NewQuantity(provider.DefaultInstanceContainerStorageMiB<<20, resource.BinarySI)
+		container := &job.Spec.Template.Spec.Containers[0]
+		container.Resources.Requests[corev1.ResourceEphemeralStorage] = amount
+		container.Resources.Limits[corev1.ResourceEphemeralStorage] = amount.DeepCopy()
+	}
 	job.Spec.Template.Namespace = ""
 	if run.ImagePullSecret != "" {
 		job.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: run.ImagePullSecret}}

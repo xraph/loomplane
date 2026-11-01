@@ -62,6 +62,9 @@ func EnrollmentRoleRules(in EnrollmentRequest) ([]rbacv1.PolicyRule, error) {
 			return nil, ErrInvalid
 		}
 		rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{"apps"}, Resources: []string{"replicasets"}, Verbs: []string{"get", "list", "watch", "delete"}}, rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"delete"}})
+		if in.RuntimeAccess.LifecycleJobs {
+			rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"get", "create", "delete"}})
+		}
 		if in.RuntimeAccess.HPA {
 			rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: []string{"get", "list", "create", "update", "delete"}})
 		}
@@ -177,6 +180,14 @@ func (c *Client) CheckRuntimeAccess(ctx context.Context, p provider.RuntimeAcces
 	} {
 		for _, verb := range rule.verbs {
 			allowed, err := c.allowedIn(ctx, c.Config.Namespace, rule.group, rule.resource, verb)
+			if err != nil || !allowed {
+				return errors.Join(ErrCleanupPermissionsUnavailable, err)
+			}
+		}
+	}
+	if p.LifecycleJobs {
+		for _, verb := range []string{"get", "create", "delete"} {
+			allowed, err := c.allowedIn(ctx, c.Config.Namespace, "batch", "jobs", verb)
 			if err != nil || !allowed {
 				return errors.Join(ErrCleanupPermissionsUnavailable, err)
 			}

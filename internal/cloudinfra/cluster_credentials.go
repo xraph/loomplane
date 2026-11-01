@@ -41,6 +41,14 @@ func (s *Service) resolveManagedCredential(ctx context.Context, c connections.Co
 	if o.Status != "succeeded" || o.Enrollment == nil || o.Enrollment.AttachmentID != a.ID {
 		return empty, ErrConflict
 	}
+	if o.Input.Attachment != nil && o.Input.Attachment.Instance != nil {
+		pins := o.Input.Attachment.Instance
+		if o.Kind != InstanceNamespaceKind || c.Details["managed_instance_id"] != pins.InstanceID || c.Details["managed_environment_id"] != pins.EnvironmentID {
+			return empty, connections.ErrChanged
+		}
+	} else if c.Details["managed_instance_id"] != "" || c.Details["managed_environment_id"] != "" {
+		return empty, connections.ErrChanged
+	}
 	reader, access, err := s.enrollmentAuthority(ctx, o)
 	if err != nil {
 		return empty, errors.Join(ErrRuntimeCredentialDelegationUnavailable, err)
@@ -120,6 +128,7 @@ func (s *Service) resolveManagedCredential(ctx context.Context, c connections.Co
 	if record != nil {
 		credential.AccessRevision = record.Revision
 		credential.HPA = record.Input.Profile.HPA
+		credential.LifecycleJobs = record.Input.Profile.LifecycleJobs
 	}
 	return credential, nil
 }

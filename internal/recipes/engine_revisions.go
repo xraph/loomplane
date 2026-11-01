@@ -13,7 +13,15 @@ func init() {
 	current.Service = engineService("falkordb", "falkordb-rdb-v1", false)
 	current.Outputs = append(current.Outputs, engineConnectionOutputs("falkordb", "FALKORDB", "redis", "6379", "default")...)
 	current.Outputs = append(current.Outputs, Output{Name: "connection-url", EnvKey: "FALKORDB_CONNECTION_URL", Secret: true, Template: "redis://default:${secret:password}@${component:falkordb:address:redis}"})
+	authenticatedGraph := current.clone()
+	current.Releases[0].Revision = "3"
+	current.Placement = PlacementServiceProject
+	current.Components[0].Protection = ProtectionNative
+	current.Description = "Private graph database with retained storage and native RDB backups. Recovery copies allow read-only graph queries. Keep backups outside the host."
 	MustRegister(current)
+	if err := Default().RegisterHistorical(authenticatedGraph); err != nil {
+		panic(err)
+	}
 	if err := Default().RegisterHistorical(graph); err != nil {
 		panic(err)
 	}
@@ -27,7 +35,16 @@ func init() {
 	})
 	current.Service = engineService("elasticsearch", "elasticsearch-snapshot-v1", false)
 	current.Outputs = append(current.Outputs, engineConnectionOutputs("elasticsearch", "ELASTICSEARCH", "http", "9200", "elastic")...)
+	authenticatedSearch := current.clone()
+	current.Releases[0].Revision = "4"
+	current.Placement = PlacementServiceProject
+	current.Components[0].Protection = ProtectionNative
+	current.Components[0].Env = append(current.Components[0].Env, EnvVar{Name: "path.repo", Value: "/usr/share/elasticsearch/data/loomplane-snapshots"})
+	current.Description = "Private authenticated search with native snapshots of user indices, mappings and aliases. Global settings and security state are excluded. Recovery access is read-only."
 	MustRegister(current)
+	if err := Default().RegisterHistorical(authenticatedSearch); err != nil {
+		panic(err)
+	}
 	if err := Default().RegisterHistorical(search); err != nil {
 		panic(err)
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/xraph/grove/driver"
+
 	"github.com/xraph/loomplane/internal/connections"
 )
 
@@ -41,11 +43,45 @@ func (s *PgStore) ReserveClusterEnrollment(ctx context.Context, o *ClusterOperat
 	return tx.Commit()
 }
 func (s *PgStore) PublishClusterEnrollment(ctx context.Context, o *ClusterOperation, a *RuntimeAttachment, c *connections.Connection) error {
+	if o == nil || o.Kind == InstanceNamespaceKind || o.Input.Attachment != nil && (o.Input.Attachment.Instance != nil || o.Input.Attachment.InstancePolicy != nil) {
+		return ErrInvalid
+	}
+	return s.publishClusterEnrollment(ctx, o, a, c, nil, nil)
+}
+
+func (s *PgStore) PublishInstanceClusterEnrollment(ctx context.Context, o *ClusterOperation, a *RuntimeAttachment, c *connections.Connection, record InstanceNamespaceRecord, verify func(context.Context, driver.Tx) error) error {
+	if o == nil || o.Kind != InstanceNamespaceKind || verify == nil || o.Input.Attachment == nil || o.Input.Attachment.Instance == nil || o.Input.Attachment.InstancePolicy == nil || *o.Input.Attachment.Instance != record.Pins || record.OperationID != o.ID || record.OrgID != o.OrgID || c == nil || a == nil || c.Details["managed_instance_id"] != record.Pins.InstanceID || c.Details["managed_environment_id"] != record.Pins.EnvironmentID {
+		return ErrInvalid
+	}
+	if _, err := instanceNamespaceReceipt(o); err != nil {
+		return err
+	}
+	return s.publishClusterEnrollment(ctx, o, a, c, &record, verify)
+}
+
+func (s *PgStore) publishClusterEnrollment(ctx context.Context, o *ClusterOperation, a *RuntimeAttachment, c *connections.Connection, record *InstanceNamespaceRecord, verify func(context.Context, driver.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollback(tx)
+	if record != nil {
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+			return err
+		}
+		if verify == nil {
+			return ErrInvalid
+		}
+		if checkErr := verify(ctx, tx); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := lockInstanceNamespaceScope(ctx, tx, *record); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := instanceNamespaceRecordTx(ctx, tx, *record); checkErr != nil {
+			return checkErr
+		}
+	}
 	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
 		return protocolErr
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // instanceExecutionManifest makes the runtime policy explicit without rewriting
@@ -21,6 +22,13 @@ func instanceExecutionManifest(input manifest.Manifest) (*manifest.Manifest, err
 		if service.PodGroup == nil {
 			service.PodGroup = &manifest.PodGroup{SurgeReplicas: 0}
 		}
+		if service.PodGroup.RuntimeStorageMiB == 0 {
+			service.PodGroup.RuntimeStorageMiB = provider.DefaultInstanceContainerStorageMiB
+		}
+		if service.PodGroup.RuntimeStorageMiB < provider.DefaultInstanceContainerStorageMiB {
+			return nil, provider.ErrWorkloadSpec
+		}
+		service.PodGroup.IsolationRevision = provider.InstanceIsolationRevision
 		result.Services[name] = service
 	}
 	return &result, nil

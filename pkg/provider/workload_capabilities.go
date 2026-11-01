@@ -24,10 +24,12 @@ type WorkloadCapabilities struct {
 // PodGroup shares only its declared scratch volumes and selected environment
 // keys. Every sidecar is required for readiness and scales with the main process.
 type PodGroup struct {
-	Sidecars      []Sidecar       `json:"sidecars,omitempty" yaml:"sidecars,omitempty"`
-	Scratch       []ScratchVolume `json:"scratch,omitempty" yaml:"scratch,omitempty"`
-	Mounts        []ScratchMount  `json:"mounts,omitempty" yaml:"mounts,omitempty"`
-	SurgeReplicas int             `json:"surge_replicas" yaml:"surge_replicas"`
+	IsolationRevision string          `json:"isolation_revision,omitempty" yaml:"isolation_revision,omitempty"`
+	RuntimeStorageMiB int64           `json:"runtime_storage_mib,omitempty" yaml:"runtime_storage_mib,omitempty"`
+	Sidecars          []Sidecar       `json:"sidecars,omitempty" yaml:"sidecars,omitempty"`
+	Scratch           []ScratchVolume `json:"scratch,omitempty" yaml:"scratch,omitempty"`
+	Mounts            []ScratchMount  `json:"mounts,omitempty" yaml:"mounts,omitempty"`
+	SurgeReplicas     int             `json:"surge_replicas" yaml:"surge_replicas"`
 }
 type Sidecar struct {
 	Name         string             `json:"name" yaml:"name"`
@@ -64,7 +66,10 @@ func ValidatePodGroup(group *PodGroup) error {
 	if group == nil {
 		return nil
 	}
-	if len(group.Sidecars) > 8 || len(group.Scratch) > 8 || group.SurgeReplicas < 0 || group.SurgeReplicas > 10 {
+	if group.IsolationRevision != "" && (group.IsolationRevision != InstanceIsolationRevision || group.RuntimeStorageMiB < DefaultInstanceContainerStorageMiB) {
+		return ErrWorkloadSpec
+	}
+	if group.RuntimeStorageMiB < 0 || group.RuntimeStorageMiB > 4096 || len(group.Sidecars) > 8 || len(group.Scratch) > 8 || group.SurgeReplicas < 0 || group.SurgeReplicas > 10 {
 		return ErrWorkloadSpec
 	}
 	volumes := map[string]bool{}
@@ -155,6 +160,7 @@ func PodGroupResources(mainCPU, mainMemory int64, group *PodGroup) (cpu, memory,
 	for _, volume := range group.Scratch {
 		scratch += volume.SizeMiB
 	}
+	scratch += group.RuntimeStorageMiB * int64(1+len(group.Sidecars))
 	return cpu, memory, scratch, nil
 }
 func CheckPodGroupArchitecture(group *PodGroup, architecture string) error {

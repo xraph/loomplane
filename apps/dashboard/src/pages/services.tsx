@@ -55,6 +55,30 @@ const cacheFeatures = ["AOF every second", "RDB snapshots", "Up to 128 MiB"]
 // title, version and storage profile.
 export const catalog: Entry[] = [
   {
+    kind: "falkordb",
+    group: "data",
+    runsOn: "Docker or Kubernetes",
+    blurb:
+      "Private graph data with native RDB backups on Docker. Review the deployment plan before it runs.",
+    features: ["Retained volume", "Graph snapshots", "Read-only recovery"],
+  },
+  {
+    kind: "opensearch",
+    group: "data",
+    runsOn: "Docker or Kubernetes",
+    blurb:
+      "Search with verified TLS. Docker snapshots preserve user indices, mappings and aliases, including hidden user indices.",
+    features: ["Verified TLS", "Native snapshots", "Read-only recovery"],
+  },
+  {
+    kind: "elasticsearch",
+    group: "data",
+    runsOn: "Docker or Kubernetes",
+    blurb:
+      "Authenticated search with native user-index snapshots on Docker. Global settings and security state stay outside backups.",
+    features: ["Private endpoint", "Native snapshots", "Read-only recovery"],
+  },
+  {
     kind: "postgres",
     product: "postgresql",
     group: "database",

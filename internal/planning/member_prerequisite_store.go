@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/security"
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
@@ -25,6 +26,9 @@ func (s *PgStore) groupTx(ctx context.Context, org string, fn func(driver.Tx) er
 		return err
 	}
 	defer rollbackLocationAdoption(tx)
+	if sourceErr := environments.LockRuntimeSourcesTx(ctx, tx); sourceErr != nil {
+		return sourceErr
+	}
 	if lockErr := cloudprofiles.LockOrganization(ctx, tx, org); lockErr != nil {
 		return lockErr
 	}
