@@ -50,6 +50,11 @@ func NewManagedCleanupStore(db *pgdriver.PgDB, authz *security.Authorizer, princ
 	return &ManagedCleanupStore{db: db, authz: authz, principals: principals, journal: kube.NewControllerStore(db)}
 }
 
+func (s *ManagedCleanupStore) WithReplicaProof(key []byte) *ManagedCleanupStore {
+	s.journal = s.journal.WithReplicaProof(key)
+	return s
+}
+
 func (s *ManagedCleanupStore) actor(ctx context.Context, p security.Principal, org, project string) error {
 	if s.authz == nil || p.OrgID != org || p.UserID == "" || p.ReadOnly {
 		return kube.ErrManagedAuthority

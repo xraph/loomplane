@@ -15,6 +15,7 @@ var ErrControllerMissing = errors.New("no trusted Kubernetes controller receipt"
 type ControllerStore struct {
 	db              *pgdriver.PgDB
 	capacityEnabled bool
+	replicaProofKey []byte
 }
 
 func NewControllerStore(db *pgdriver.PgDB) *ControllerStore { return &ControllerStore{db: db} }

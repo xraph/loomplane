@@ -360,7 +360,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
 	}
 	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
+	proofKey, err := kubernetes.ReplicaProofKey(e.cfg.SecretKey)
+	if err != nil {
+		return err
+	}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
@@ -499,7 +503,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: releasewatch.NewPgStore(pg), Rollbacks: e.plans, Plans: planStore, Deployments: deployStore, History: history,
 		Health: health, Manifests: e.manifests, Projects: prj, Routes: cloudinfra.NewPgStore(pg), Authz: authz, Audit: auditor,
 	})
-	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal), Credentials: clouds, Target: clusterTarget, Routes: routeService}
+	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal).WithReplicaProof(proofKey), Credentials: clouds, Target: clusterTarget, Routes: routeService}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		ManagedCleanup:    cleanupExecution,
 		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,

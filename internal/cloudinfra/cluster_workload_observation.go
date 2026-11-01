@@ -13,13 +13,15 @@ import (
 // ClusterObservedWorkload retains request and owner identities, never a template.
 // Unmatched pods still consume requests. Only a complete owner chain earns credit.
 type ClusterObservedWorkload struct {
-	PodUID               string                `json:"pod_uid"`
-	NamespaceUID         string                `json:"namespace_uid,omitempty"`
-	DeploymentUID        string                `json:"deployment_uid,omitempty"`
-	DeploymentGeneration int64                 `json:"deployment_generation,omitempty"`
-	ReplicaSetUID        string                `json:"replica_set_uid,omitempty"`
-	ReleaseID            string                `json:"release_id,omitempty"`
-	Requests             ClusterWorkloadVector `json:"requests"`
+	Running                bool                  `json:"running,omitempty"`
+	PodUID                 string                `json:"pod_uid"`
+	NamespaceUID           string                `json:"namespace_uid,omitempty"`
+	DeploymentUID          string                `json:"deployment_uid,omitempty"`
+	ReplicaProofGeneration int64                 `json:"replica_proof_generation,omitempty"`
+	DeploymentGeneration   int64                 `json:"deployment_generation,omitempty"`
+	ReplicaSetUID          string                `json:"replica_set_uid,omitempty"`
+	ReleaseID              string                `json:"release_id,omitempty"`
+	Requests               ClusterWorkloadVector `json:"requests"`
 }
 
 func clusterWorkloadObservations(in kubernetes.CapacityInventory) ([]ClusterObservedWorkload, bool, error) {
@@ -39,10 +41,8 @@ func clusterWorkloadObservations(in kubernetes.CapacityInventory) ([]ClusterObse
 		if pod.Spec.Resources != nil {
 			complete = false
 		}
-		for _, status := range pod.Status.ContainerStatuses {
-			if status.AllocatedResources != nil {
-				complete = false
-			}
+		if !podAllocationsCurrent(&pod) {
+			complete = false
 		}
 		for _, c := range pod.Spec.Containers {
 			addClusterRequests(requests, c.Resources.Requests)
@@ -76,7 +76,7 @@ func clusterWorkloadObservations(in kubernetes.CapacityInventory) ([]ClusterObse
 		if len(metrics.Extended) > 0 {
 			complete = false
 		}
-		w := ClusterObservedWorkload{PodUID: string(pod.UID), Requests: v}
+		w := ClusterObservedWorkload{PodUID: string(pod.UID), Requests: v, Running: pod.Status.Phase == corev1.PodRunning && pod.Spec.NodeName != ""}
 		for _, ns := range in.Namespaces {
 			if ns.Name == pod.Namespace && ns.DeletionTimestamp == nil {
 				w.NamespaceUID = string(ns.UID)

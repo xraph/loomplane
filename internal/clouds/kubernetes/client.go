@@ -132,7 +132,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		{"autoscaling", "horizontalpodautoscalers", "hpa"},
 	} {
 		ready := true
-		for _, verb := range []string{"get", "create", "update", "patch", "delete"} {
+		verbs := []string{"get", "create", "update", "patch", "delete"}
+		if optional.detail == "hpa" {
+			verbs = []string{"get", "create", "update", "delete"}
+		}
+		for _, verb := range verbs {
 			allowed, checkErr := c.allowed(ctx, optional.group, optional.resource, verb)
 			if checkErr != nil {
 				return nil, checkErr

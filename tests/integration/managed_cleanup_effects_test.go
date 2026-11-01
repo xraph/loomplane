@@ -23,6 +23,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 func TestManagedCleanupEffectsRealAPI(t *testing.T) {
@@ -31,7 +32,12 @@ func TestManagedCleanupEffectsRealAPI(t *testing.T) {
 }
 func managedCleanupEffectsRealAPI(t *testing.T, shared bool, modes ...string) {
 	t.Helper()
-	e := newEnrollmentServiceFixture(t)
+	var e *enrollmentServiceFixture
+	if len(modes) > 1 && (modes[1] == "hpa" || modes[1] == "hpa-missing") {
+		e = newEnrollmentServiceFixtureWithProfile(t, &provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true, HPA: true})
+	} else {
+		e = newEnrollmentServiceFixture(t)
+	}
 	infra, creds := e.service(e.store, e.vault())
 	if err := infra.ReconcileClusterOperation(t.Context(), "org", e.op.ID, nil); err != nil {
 		t.Fatal(err)

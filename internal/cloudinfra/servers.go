@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
@@ -160,6 +161,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	ReplicaVerifier         *kubernetes.ControllerStore
 	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig
 	ClusterCapacity         config.ClusterCapacityConfig

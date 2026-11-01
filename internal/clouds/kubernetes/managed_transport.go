@@ -62,7 +62,13 @@ func (t *managedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 15*time.Second)
 	defer cancel()
-	if checkErr := t.journal.Resolve(ctx, issuance, t.scope, outcome); checkErr != nil {
+	var checkErr error
+	if store, ok := t.journal.(*ControllerStore); ok {
+		checkErr = store.resolveApplicationResponse(ctx, issuance, t.scope, mutation, outcome, data)
+	} else {
+		checkErr = t.journal.Resolve(ctx, issuance, t.scope, outcome)
+	}
+	if checkErr != nil {
 		return nil, checkErr
 	}
 	return response, nil

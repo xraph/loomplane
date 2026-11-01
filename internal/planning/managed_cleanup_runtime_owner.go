@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xraph/ctrlplane/id"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kube "github.com/xraph/loomplane/internal/clouds/kubernetes"
@@ -103,11 +104,25 @@ func (s *cleanupSession) ReadCleanupDescendant(ctx context.Context, target Manag
 		return e, err
 	}
 	var receipt kube.ControllerReceipt
-	if json.Unmarshal(raw, &receipt) != nil || receipt.DeploymentGeneration != d.Generation || receipt.RuntimeRevision != d.Spec.Template.Annotations[owned.LabelRevision] {
+	if json.Unmarshal(raw, &receipt) != nil || receipt.RuntimeRevision != d.Spec.Template.Annotations[owned.LabelRevision] {
 		return e, kube.ErrManagedAuthority
+	}
+	if receipt.DeploymentGeneration != d.Generation {
+		gen, err := s.replicaGeneration(ctx, scope, d)
+		if err != nil || gen != receipt.DeploymentGeneration {
+			return e, kube.ErrManagedAuthority
+		}
 	}
 	e.Scope, e.Release, e.Request, e.ObservedAt = scope, scope.Release, r, time.Now().UTC()
 	e.ResourceVersion, e.ReplicaSetResourceVersion = r.ResourceVersion, set.ResourceVersion
 	e.DeploymentUID, e.ReplicaSetUID, e.NewerController = string(d.UID), string(set.UID), &receipt
 	return e, nil
+}
+
+func (s *cleanupSession) replicaGeneration(ctx context.Context, scope kube.ManagedScope, d *appsv1.Deployment) (int64, error) {
+	h, err := s.client.Kube.AutoscalingV2().HorizontalPodAutoscalers(scope.Namespace).Get(ctx, d.Name, metav1.GetOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return s.store.journal.ReplicaProgression(ctx, s.client.Kube, scope.Org, scope.NamespaceUID, scope.ClusterCA, d, h)
 }

@@ -217,15 +217,19 @@ func clusterWorkloadAdmission(ctx context.Context, tx driver.Tx, snapshot Cluste
 			return observed, supply, err
 		}
 	}
+	used, err = chargedClusterWorkloads(ctx, tx, snapshot, holds)
+	return used, supply, err
+}
+func chargedClusterWorkloads(ctx context.Context, tx driver.Tx, snapshot ClusterCapacitySnapshot, holds []ClusterWorkloadHold) (observed ClusterWorkloadVector, err error) {
 	seen := map[string]bool{}
 	for _, w := range snapshot.Workloads {
 		if w.PodUID == "" || seen[w.PodUID] {
-			return observed, supply, ErrInvalid
+			return observed, ErrInvalid
 		}
 		seen[w.PodUID] = true
 		observed, err = clusterWorkloadUsage(observed, []clusterWorkloadCoverage{{Maximum: w.Requests}})
 		if err != nil {
-			return observed, supply, err
+			return observed, err
 		}
 	}
 	coverage := make([]clusterWorkloadCoverage, 0, len(holds))
@@ -234,25 +238,24 @@ func clusterWorkloadAdmission(ctx context.Context, tx driver.Tx, snapshot Cluste
 		c := clusterWorkloadCoverage{Maximum: hold.Input.Maximum}
 		trusted, checkErr := clusterWorkloadReceiptCurrent(ctx, tx, hold)
 		if checkErr != nil {
-			return observed, supply, checkErr
+			return observed, checkErr
 		}
 		if trusted {
 			for _, w := range snapshot.Workloads {
 				r := hold.Receipt
-				if credited[w.PodUID] || w.NamespaceUID != r.NamespaceUID || w.DeploymentUID != r.DeploymentUID || w.DeploymentGeneration != r.DeploymentGeneration || w.ReplicaSetUID == "" || w.ReleaseID != r.ReleaseID {
+				if credited[w.PodUID] || w.NamespaceUID != r.NamespaceUID || w.DeploymentUID != r.DeploymentUID || (w.DeploymentGeneration != r.DeploymentGeneration && (w.DeploymentGeneration <= r.DeploymentGeneration || w.ReplicaProofGeneration != r.DeploymentGeneration)) || w.ReplicaSetUID == "" || w.ReleaseID != r.ReleaseID {
 					continue
 				}
 				credited[w.PodUID] = true
 				c.Observed, err = clusterWorkloadUsage(c.Observed, []clusterWorkloadCoverage{{Maximum: w.Requests}})
 				if err != nil {
-					return observed, supply, err
+					return observed, err
 				}
 			}
 		}
 		coverage = append(coverage, c)
 	}
-	used, err = clusterWorkloadUsage(observed, coverage)
-	return used, supply, err
+	return clusterWorkloadUsage(observed, coverage)
 }
 
 func (s *PgStore) AttachClusterWorkloadAttempt(ctx context.Context, tx driver.Tx, in ClusterWorkloadInput, attempt WorkloadAttempt) error {

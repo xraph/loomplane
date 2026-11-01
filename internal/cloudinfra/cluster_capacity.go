@@ -418,12 +418,8 @@ func MergeClusterCapacity(p provider.ProviderClusterCapacity, k KubernetesCluste
 				missing("pod_level_accounting_unknown")
 			}
 			// Resizing and restartable init containers need scheduler accounting we do not infer.
-			if len(pod.Status.ContainerStatuses) > 0 {
-				for _, status := range pod.Status.ContainerStatuses {
-					if status.AllocatedResources != nil {
-						missing("pod_resize_accounting_unknown")
-					}
-				}
+			if !podAllocationsCurrent(&pod) {
+				missing("pod_resize_accounting_unknown")
 			}
 			requests := corev1.ResourceList{}
 			for _, container := range pod.Spec.Containers {

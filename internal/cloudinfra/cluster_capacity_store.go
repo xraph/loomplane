@@ -73,6 +73,7 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 			return nil, err
 		}
 	}
+	var progress map[string]int64
 	var inventory kubernetes.CapacityInventory
 	var projection *ClusterCleanupInventory
 	var supplyReadErr, managementErr error
@@ -80,6 +81,9 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 		_, managementErr = s.observeClusterManagementWith(ctx, p, cloud, in, r, reader, access, func(readCtx context.Context, client kubeclient.Interface) (ClusterManagementFacts, error) {
 			if providerErr == nil {
 				inventory, supplyReadErr = kubernetes.ReadCapacityInventory(readCtx, client)
+				if supplyReadErr == nil && inventory.Complete && s.ReplicaVerifier != nil {
+					progress = s.replicaProgressions(readCtx, p.OrgID, r.Observation.CAHash, client, inventory)
+				}
 			}
 			if len(scopes) > 0 {
 				obs := observeCleanupScopes(readCtx, client, scopes, inventory)
@@ -106,6 +110,12 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 		return nil, err
 	}
 	snapshot.SchedulingProfiles = BuildClusterSchedulingProfiles(snapshot, *r.Observation, inventory, s.now())
+	qualifiedWorkloads := s.ReplicaVerifier != nil && managementErr == nil && supplyReadErr == nil && inventory.Complete && inventory.WorkloadListsVersioned && snapshot.WorkloadsComplete
+	if qualifiedWorkloads {
+		for i, w := range snapshot.Workloads {
+			snapshot.Workloads[i].ReplicaProofGeneration = progress[w.DeploymentUID]
+		}
+	}
 	snapshot.CleanupInventory = projection
 	snapshot.ResourceID = r.ID
 	snapshot.ObservationRevision = revision
@@ -123,6 +133,9 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	}
 	if projection != nil {
 		ctx = context.WithValue(ctx, cleanupObserverKey{}, cleanupObserver{org: p.OrgID, cloud: cloud, resource: r.ID, ca: r.Observation.CAHash, revision: revision, ref: r.Observation.Ref})
+	}
+	if qualifiedWorkloads {
+		ctx = context.WithValue(ctx, replicaObservationKey{}, replicaObservation{org: p.OrgID, resource: r.ID, revision: revision, proved: progress})
 	}
 	if checkErr := st.SaveClusterCapacity(ctx, r, snapshot); checkErr != nil {
 		return nil, checkErr
@@ -151,8 +164,12 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	if snapshot.CheckedAt.IsZero() || snapshot.CheckedAt.After(time.Now()) {
 		return ErrInvalid
 	}
+	proof, hasProof := ctx.Value(replicaObservationKey{}).(replicaObservation)
 	workloads := map[string]bool{}
 	for _, w := range snapshot.Workloads {
+		if w.ReplicaProofGeneration != 0 && (!hasProof || r == nil || proof.org != r.OrgID || proof.resource != r.ID || proof.revision != snapshot.ObservationRevision || proof.proved[w.DeploymentUID] != w.ReplicaProofGeneration || w.ReplicaProofGeneration <= 0 || w.DeploymentGeneration <= w.ReplicaProofGeneration) {
+			return ErrConflict
+		}
 		if w.PodUID == "" || workloads[w.PodUID] {
 			return ErrInvalid
 		}
@@ -217,6 +234,11 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	}
 	if count != 1 {
 		return ErrConflict
+	}
+	if proof.revision == snapshot.ObservationRevision && proof.org == r.OrgID && proof.resource == r.ID && freshClusterEnvelopeEvidence(snapshot.StorageProvenance.CheckedAt, time.Now()) {
+		if accountingErr := saveObservedWorkloadAccounting(ctx, tx, r, snapshot); accountingErr != nil {
+			return accountingErr
+		}
 	}
 	if driftErr := saveCleanupDrift(ctx, tx, current, snapshot, snapshot.CleanupInventory); driftErr != nil {
 		return driftErr

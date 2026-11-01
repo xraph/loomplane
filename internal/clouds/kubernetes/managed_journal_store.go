@@ -202,8 +202,12 @@ func (s *ControllerStore) Resolve(ctx context.Context, id string, scope ManagedS
 	if err != nil {
 		return err
 	}
+	var sig []byte
+	if mac, ok := ctx.Value(replicaMACKey{}).([]byte); ok {
+		sig = mac
+	}
 	var resolved string
-	err = s.db.QueryRow(ctx, `UPDATE loomplane_managed_workload_issuances SET outcome=$4,revision=revision+1,updated_at=clock_timestamp(),resolved_at=coalesce(resolved_at,clock_timestamp()) WHERE id=$1 AND org_id=$2 AND scope=$3 AND (outcome IS NULL OR outcome=$4) AND ($5='' OR request->>'UID'='' OR request->>'UID'=$5) RETURNING id`, id, scope.Org, raw, result, outcome.UID).Scan(&resolved)
+	err = s.db.QueryRow(ctx, `UPDATE loomplane_managed_workload_issuances SET replica_spec_mac=CASE WHEN outcome IS NULL THEN $6::bytea ELSE replica_spec_mac END,outcome=$4,revision=revision+1,updated_at=clock_timestamp(),resolved_at=coalesce(resolved_at,clock_timestamp()) WHERE id=$1 AND org_id=$2 AND scope=$3 AND (outcome IS NULL OR outcome=$4) AND ($5='' OR request->>'UID'='' OR request->>'UID'=$5) RETURNING id`, id, scope.Org, raw, result, outcome.UID, sig).Scan(&resolved)
 	return err
 }
 

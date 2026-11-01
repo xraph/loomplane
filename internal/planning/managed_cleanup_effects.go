@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -156,7 +158,12 @@ func (s *cleanupSession) remove(ctx context.Context) error {
 		return s.retire(ctx, true)
 	}
 	seen := map[kube.ManagedRequest]bool{}
-	for _, a := range t.Accepted {
+	// Check and remove the Deployment while its accepted autoscaler is still observable.
+	ordered := slices.Clone(t.Accepted)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Request.Resource == "deployments" && ordered[j].Request.Resource != "deployments"
+	})
+	for _, a := range ordered {
 		r := a.Request
 		if a.Outcome.State != "accepted" || (r.Method != http.MethodPost && r.Method != http.MethodPut) {
 			continue
@@ -251,14 +258,31 @@ func (s *cleanupSession) checkWhole(ctx context.Context, r kube.ManagedRequest) 
 	if err != nil {
 		return err
 	}
+	var proved int64
 	for _, peer := range s.peers {
 		target := peer.grant.Target
 		if marker != target.Scope.Release || !sameCleanupPhysicalScope(scope, target.Scope) {
 			continue
 		}
 		for _, a := range target.Accepted {
-			if a.Request.Resource == r.Resource && a.Request.Name == r.Name && a.Outcome.State == "accepted" && a.Outcome.UID == r.UID && a.Outcome.Generation == obj.GetGeneration() && (a.Request.Method == http.MethodPut || a.Request.Method == http.MethodPost) {
-				return nil
+			if a.Request.Resource == r.Resource && a.Request.Name == r.Name && a.Outcome.State == "accepted" && a.Outcome.UID == r.UID && (a.Request.Method == http.MethodPut || a.Request.Method == http.MethodPost) {
+				if a.Outcome.Generation == obj.GetGeneration() {
+					return nil
+				}
+				if proved == 0 && obj.GetGeneration() > a.Outcome.Generation {
+					d, readErr := s.client.Kube.AppsV1().Deployments(scope.Namespace).Get(ctx, r.Name, metav1.GetOptions{})
+					if readErr != nil || d.UID != obj.GetUID() || d.ResourceVersion != obj.GetResourceVersion() {
+						return kube.ErrManagedAuthority
+					}
+					gen, checkErr := s.replicaGeneration(ctx, target.Scope, d)
+					if checkErr != nil {
+						return checkErr
+					}
+					proved = gen
+				}
+				if proved > 0 && proved == a.Outcome.Generation {
+					return nil
+				}
 			}
 		}
 	}

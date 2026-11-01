@@ -31,6 +31,7 @@ func CapacityObserverRules() []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "persistentvolumes", "namespaces"}, Verbs: []string{"get", "list"}},
 		{APIGroups: []string{"apps"}, Resources: []string{"replicasets", "deployments", "daemonsets"}, Verbs: []string{"get", "list"}},
+		{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: []string{"get"}},
 		{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: []string{"get", "list"}},
 	}
 }

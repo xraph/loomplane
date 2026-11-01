@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -56,8 +57,10 @@ func reserveKindCPU(ctx context.Context, t *testing.T, client kubeclient.Interfa
 		t.Fatal(err)
 	}
 	remove := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
 		uid := pod.UID
-		if delErr := fixture.Delete(ctx, pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero, Preconditions: &metav1.Preconditions{UID: &uid}}); delErr != nil {
+		if delErr := fixture.Delete(cleanupCtx, pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero, Preconditions: &metav1.Preconditions{UID: &uid}}); delErr != nil && !apierrors.IsNotFound(delErr) {
 			t.Error(delErr)
 		}
 	}

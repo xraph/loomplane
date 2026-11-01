@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +55,11 @@ func TestManagedInstalledApplicationPending(t *testing.T) {
 // Kubernetes execution and readiness path independently of provider node supply.
 func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServiceFixture, f *poolFixture, creds *connections.Service, infra *cloudinfra.Service, svc *planning.Service, p *planning.Plan, res *planning.Result, mode string) {
 	t.Helper()
+	missingMetrics := mode == "hpa-missing"
+	testHPA := mode == "hpa" || missingMetrics
+	if testHPA {
+		mode = "guaranteed"
+	}
 	a := &res.Actions[0]
 	cfg := a.Service
 	c, _, err := creds.Credential(ctx, p.OrgID, cfg.Target)
@@ -78,6 +85,9 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	cfg.Workload = provider.Worker
 	cfg.CapacityMode = mode
 	cfg.Scale = &manifest.Scale{Min: 1, Max: 1}
+	if testHPA {
+		cfg.Scale = &manifest.Scale{Min: 2, Max: 3}
+	}
 	cfg.BuildTarget = &planning.BuildTarget{Image: "registry.k8s.io/pause@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a"}
 	cfg.Env = []planning.EnvLink{{Subject: planning.ResourceSubject, Field: "consumer:url", From: "db"}}
 	var blocked *cloudinfra.CapacityAdmissionError
@@ -98,9 +108,15 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}, Credentials: creds, Secrets: syncSecrets{}, Controllers: kube.NewControllerStore(e.pg).WithClusterCapacity(true)}
+	proofKey := make([]byte, 32)
+	if _, keyErr := rand.Read(proofKey); keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	verifier := kube.NewControllerStore(e.pg).WithReplicaProof(proofKey)
+	infra.ReplicaVerifier = verifier
+	target := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}, Credentials: creds, Secrets: syncSecrets{}, Controllers: verifier.WithClusterCapacity(true)}
 	reviewer := managedCleanupReviewer(t)
-	store := planning.NewManagedCleanupStore(e.pg, reviewer, nil)
+	store := planning.NewManagedCleanupStore(e.pg, reviewer, nil).WithReplicaProof(proofKey)
 	ce := &deployments.ManagedCleanupExecution{Store: store, Credentials: creds, Target: target, Routes: cloudinfra.NewService(cloudinfra.Deps{Store: e.store})}
 	svc.BindManagedRuntime(ce)
 	deps := deployments.RunnerDeps{Store: ds, Plans: f.plans, ManagedCleanup: ce, Capacity: svc, Credentials: creds, Variables: poolVars{}, Providers: providers.Registry(), CloudProfiles: e.clouds, Executors: map[string]deployments.Executor{"kubernetes": target}}
@@ -153,6 +169,21 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		}
 	}
 	ns := e.attachment().Namespace
+	if missingMetrics {
+		_, discoveryErr := e.bootstrap.Kube.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1")
+		if discoveryErr == nil {
+			t.Skip("this case requires absent metrics")
+		}
+		runErr := runner.Run(orchestration.ManagedWorkloadContext(ctx), p.OrgID, dep.ID, a.ID, nil, func([]byte) error { return nil })
+		if runErr == nil || !strings.Contains(runErr.Error(), "HPA permissions and the metrics API") {
+			t.Fatal("missing metrics permitted elastic workload", runErr)
+		}
+		var issued bool
+		if checkErr := e.sql.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances WHERE scope->>'Plan'=$1)`, p.ID).Scan(&issued); checkErr != nil || issued {
+			t.Fatal("issued writes without metrics", issued, checkErr)
+		}
+		return
+	}
 	var releasePressure func()
 	if mode == "guaranteed" {
 		if cfg.ClusterDemand.Input.Native == nil || cfg.ClusterDemand.Input.Native.MaximumNodes <= 1 {
@@ -254,6 +285,32 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		}
 		if err = runner.Finish(call, p.OrgID, dep.ID, ""); err != nil {
 			t.Fatal("finish original release", err)
+		}
+		if testHPA {
+			checkInstalledHPA(ctx, t, e, infra, f, receipt, live, cfg, kube.NewControllerStore(e.pg).WithReplicaProof(proofKey))
+			deletePlan := &planning.Plan{ID: "installed-hpa-remove", OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, CreatedBy: "reviewer"}
+			removal := &planning.Result{Executable: true, Connections: res.Connections, Actions: []planning.Action{{ID: a.ID, Name: a.Name, Subject: planning.ServiceSubject, Op: planning.Delete, Provider: "kubernetes"}}}
+			if checkErr := svc.PrepareManagedCleanupTargets(ctx, deletePlan, removal); checkErr != nil || len(removal.Actions[0].CleanupTargets) != 1 {
+				t.Fatal("review progressed controller", checkErr)
+			}
+			saveCleanupReview(t, f, deletePlan, removal)
+			actor := security.WithPrincipal(ctx, security.Principal{OrgID: p.OrgID, UserID: "reviewer"})
+			if ok, checkErr := f.plans.Decide(actor, p.OrgID, deletePlan.ID, "approved", "reviewer", "", time.Now()); checkErr != nil || !ok {
+				t.Fatal("approve progressed HPA cleanup", checkErr)
+			}
+			saveInstalledDeploymentRoute(t, rs, deletePlan, orchestration.ManagedCleanupBuild)
+			removing := &deployments.Deployment{ID: "hpa-remove", OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, Environment: "production", PlanID: deletePlan.ID, StartedBy: "reviewer", Status: deployments.StatusRunning, StartedAt: time.Now(), Steps: []deployments.Step{{ActionID: a.ID, Status: deployments.StepPending}}}
+			if _, checkErr := ds.CreateDeployment(ctx, removing); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			if checkErr := runner.Run(orchestration.ManagedCleanupContext(actor), p.OrgID, removing.ID, a.ID, nil, func([]byte) error { return nil }); checkErr != nil {
+				t.Fatal("remove progressed HPA deployment", checkErr)
+			}
+			var released bool
+			if checkErr := e.sql.QueryRow(ctx, `SELECT released FROM loomplane_cluster_workload_holds WHERE org_id=$1 AND plan_id=$2`, p.OrgID, p.ID).Scan(&released); checkErr != nil || !released {
+				t.Fatal("unreleased HPA maximum", released, checkErr)
+			}
+			return
 		}
 		at := e.attachment()
 		op, upgradeErr := infra.PreviewCluster(ctx, e.principal, "cloud", accessInput(e, at))
