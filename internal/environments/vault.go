@@ -38,6 +38,58 @@ func NewVaultSecrets(svc *secret.Service) *VaultSecrets { return &VaultSecrets{s
 
 var _ Secrets = (*VaultSecrets)(nil)
 
+func (v *VaultSecrets) PutPinned(ctx context.Context, orgID, variableID string, value []byte) (SecretVersion, error) {
+	meta, err := v.svc.Set(ctx, vaultKey(orgID, variableID), value, VaultAppID)
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	// Set returns a candidate ID on updates. Read the persisted incarnation
+	// under the caller's source lock and compare the actual returned version.
+	persisted, err := v.Metadata(ctx, orgID, variableID)
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	if persisted.Version != meta.Version {
+		return SecretVersion{}, ErrInvalid
+	}
+	return persisted, nil
+}
+
+func (v *VaultSecrets) Metadata(ctx context.Context, orgID, variableID string) (SecretVersion, error) {
+	meta, err := v.svc.GetMeta(ctx, vaultKey(orgID, variableID), VaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return SecretVersion{}, ErrNotFound
+	}
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	return SecretVersion{Identity: meta.ID.String(), Version: meta.Version}, nil
+}
+
+func (v *VaultSecrets) RevealPinned(ctx context.Context, orgID, variableID string, pin SecretVersion) ([]byte, error) {
+	if pin.Identity == "" || pin.Version < 1 {
+		return nil, ErrNotFound
+	}
+	meta, err := v.Metadata(ctx, orgID, variableID)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Identity != pin.Identity || meta.Version < pin.Version {
+		return nil, ErrNotFound
+	}
+	sec, err := v.svc.GetVersion(ctx, vaultKey(orgID, variableID), VaultAppID, pin.Version)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sec.ID.String() != pin.Identity {
+		return nil, ErrNotFound
+	}
+	return sec.Value, nil
+}
+
 func vaultKey(orgID, variableID string) string { return orgID + "/" + variableID }
 
 // Put stores value as the variable's secret, archiving any earlier one.

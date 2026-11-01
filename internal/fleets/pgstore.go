@@ -64,6 +64,10 @@ func (s *PgStore) CreateFleet(ctx context.Context, f *fleet.Fleet) (err error) {
 		return err
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Order the global source gate before parent and quota row locks.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return err
+	}
 	var project string
 	if err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2 FOR UPDATE`, f.OrgID, f.ProjectID).Scan(&project); err != nil {
 		return storeError(err)
@@ -175,6 +179,10 @@ func (s *PgStore) ReserveInstance(ctx context.Context, scope FleetScope, in flee
 		return nil, err
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Order the global source gate before parent and quota row locks.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return nil, err
+	}
 	var status string
 	if err = tx.QueryRow(ctx, `SELECT status FROM loomplane_fleets WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, scope.OrgID, scope.ProjectID, scope.FleetID).Scan(&status); err != nil {
 		return nil, storeError(err)

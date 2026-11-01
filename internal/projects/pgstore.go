@@ -151,6 +151,10 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Order the global source gate before parent and quota row locks.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return nil, err
+	}
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT exclusions FROM loomplane_projects WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -246,6 +250,10 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Take the source gate before parent row locks used by variable cascades.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return err
+	}
 	var locked string
 	err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, projectID).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
