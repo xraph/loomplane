@@ -296,6 +296,7 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 		if err = f.sql.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances w WHERE w.release_id=$1 AND w.outcome->>'State'='accepted' AND w.request->>'Resource'='deployments' AND EXISTS(SELECT 1 FROM jsonb_array_elements(w.cleanup_children) rs,jsonb_array_elements(w.cleanup_children) pod WHERE rs->>'resource'='replicasets' AND pod->>'resource'='pods' AND rs->>'owner_uid'=w.request->>'UID' AND pod->>'owner_uid'=rs->>'uid' AND pod->>'release'=$1 AND rs->>'release'=$1))`, scope.Release).Scan(&captured); err != nil || !captured {
 			t.Fatalf("native ownership was not captured: %v", err)
 		}
+		recoverCleanupAfterRestart(ctx, t, e, creds, scope, selection, auth, foreignConfig)
 	}
 	var held bool
 	if err = f.sql.QueryRow(ctx, `SELECT NOT released FROM loomplane_cluster_workload_holds WHERE id=$1`, input.ID).Scan(&held); err != nil || !held {

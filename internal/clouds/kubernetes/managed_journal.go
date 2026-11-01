@@ -22,6 +22,7 @@ type ManagedRequest struct {
 	UID                                               string
 	ResourceVersion                                   string `json:",omitempty"`
 	PropagationPolicy                                 string `json:",omitempty"`
+	CleanupSource                                     string `json:",omitempty"`
 }
 
 type ManagedOutcome struct {

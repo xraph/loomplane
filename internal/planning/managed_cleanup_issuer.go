@@ -70,22 +70,30 @@ func (j *managedCleanupJournal) ManagedCleanupScope() kube.ManagedScope {
 	return j.session.grant.Target.Scope
 }
 func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedScope, request kube.ManagedRequest) (id string, err error) {
-	if scope.Org != j.org {
+	if scope.Org != j.org || request.CleanupSource != "" {
 		return "", kube.ErrManagedAuthority
 	}
 	var children []byte
 	var evidence *ManagedCleanupDescendantEvidence
+	var recovered *recoveredChild
 	if j.session != nil {
 		if checkErr := j.session.check(ctx, request); checkErr != nil {
 			return "", checkErr
 		}
-		if request.Resource == "pods" || request.Resource == "replicasets" {
+		descendant := request.Resource == "pods" || request.Resource == "replicasets"
+		switch {
+		case descendant && j.session.grant.Target.Kind != ManagedCleanupRetireDependents:
+			recovered, err = j.session.recoveryProof(ctx, request)
+			if err != nil {
+				return "", err
+			}
+		case descendant:
 			e, readErr := j.session.ReadCleanupDescendant(ctx, j.session.grant.Target, request)
 			if readErr != nil {
 				return "", readErr
 			}
 			evidence = &e
-		} else {
+		default:
 			if checkErr := j.session.checkWhole(ctx, request); checkErr != nil {
 				return "", checkErr
 			}
@@ -132,7 +140,12 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 			return "", errors.Join(ErrCleanupReviewStale, err)
 		}
 	}
-	if evidence != nil {
+	if recovered != nil {
+		if checkErr := j.session.guardRecovery(ctx, tx, grant.Target, request, coowners, *recovered); checkErr != nil {
+			return "", checkErr
+		}
+		request.CleanupSource = recovered.Source
+	} else if evidence != nil {
 		if grant.Target.Kind != ManagedCleanupRetireDependents {
 			return "", kube.ErrManagedAuthority
 		}
@@ -158,8 +171,11 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	// to a different object. Every retry remains independently unresolved.
 	var retryOnly bool
 	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances WHERE org_id=$1 AND release_id IN (SELECT value->'scope'->>'Release' FROM jsonb_array_elements($2::jsonb)) AND outcome IS NULL AND (cleanup_grant_id IS NULL OR request<>$3::jsonb))`, scope.Org, coowners, req).Scan(&retryOnly)
-	if err != nil || !retryOnly {
-		return "", errors.Join(kube.ErrManagedAuthority, err)
+	if err != nil {
+		return "", err
+	}
+	if !retryOnly {
+		return "", errors.Join(kube.ErrManagedAuthority, ErrCleanupWritesUnresolved)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_managed_workload_issuances(id,org_id,release_id,epoch,scope,request,cleanup_grant_id,cleanup_grant_revision,cleanup_children) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, issuance.String(), scope.Org, scope.Release, scope.Epoch, raw, req, grant.ID, grant.Revision, children)
 	if err != nil {

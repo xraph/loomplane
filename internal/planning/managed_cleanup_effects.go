@@ -15,6 +15,8 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 )
 
+var ErrCleanupWritesUnresolved = errors.New("managed cleanup has unresolved application or cleanup requests")
+
 var ErrCleanupReviewStale = errors.New("the managed namespace changed after review, review cleanup again")
 
 type cleanupSession struct {
@@ -29,26 +31,9 @@ type cleanupSession struct {
 
 // ExecuteCleanupEffects sends reviewed deletes. It returns before capacity settlement.
 func (s *ManagedCleanupStore) ExecuteCleanupEffects(ctx context.Context, selection ManagedCleanupSelection, credentials *connections.Service) error {
-	if credentials == nil || selection.TargetIndex != 0 {
-		return kube.ErrManagedAuthority
-	}
-	selections, err := s.effectSelections(ctx, selection)
+	sessions, err := s.cleanupSessions(ctx, selection, credentials)
 	if err != nil {
 		return err
-	}
-	sessions := make([]*cleanupSession, 0, len(selections))
-	for _, sel := range selections {
-		grant, err := s.Open(ctx, sel)
-		if err != nil {
-			return err
-		}
-		sessions = append(sessions, &cleanupSession{store: s, grant: grant, credentials: credentials})
-	}
-	for _, session := range sessions {
-		session.peers = sessions
-		if err := session.open(ctx); err != nil {
-			return err
-		}
 	}
 	for _, session := range sessions {
 		if err := session.preflight(ctx); err != nil {
@@ -61,6 +46,31 @@ func (s *ManagedCleanupStore) ExecuteCleanupEffects(ctx context.Context, selecti
 		}
 	}
 	return nil
+}
+
+func (s *ManagedCleanupStore) cleanupSessions(ctx context.Context, selection ManagedCleanupSelection, credentials *connections.Service) ([]*cleanupSession, error) {
+	if credentials == nil || selection.TargetIndex != 0 {
+		return nil, kube.ErrManagedAuthority
+	}
+	selections, err := s.effectSelections(ctx, selection)
+	if err != nil {
+		return nil, err
+	}
+	sessions := make([]*cleanupSession, 0, len(selections))
+	for _, sel := range selections {
+		grant, err := s.Open(ctx, sel)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, &cleanupSession{store: s, grant: grant, credentials: credentials})
+	}
+	for _, session := range sessions {
+		session.peers = sessions
+		if err := session.open(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return sessions, nil
 }
 
 // Every grant comes from the same accepted action or versioned failed review.
@@ -201,7 +211,7 @@ func (s *cleanupSession) drained(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		if row.Outcome == nil {
-			return kube.ErrManagedAuthority
+			return errors.Join(kube.ErrManagedAuthority, ErrCleanupWritesUnresolved)
 		}
 	}
 	return nil
