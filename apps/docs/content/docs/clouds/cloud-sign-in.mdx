@@ -1,11 +1,11 @@
 ---
 title: Connect a cloud by signing in
-description: Register an OAuth app once, then connect DigitalOcean, Vercel, Google Cloud or Azure with a sign-in instead of a pasted token or key.
+description: Register an OAuth app, then connect DigitalOcean, Vercel, Google Cloud, Azure or Cloudflare by signing in.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant the cloud hands to Loomplane after you approve it, and Loomplane renews the grant on its own. DigitalOcean, Vercel, Google Cloud and Azure all connect this way. On AWS, Google Cloud and Azure you can also [connect keylessly](/docs/clouds/keyless), where Loomplane holds no grant at all.
+A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant the cloud hands to Loomplane after you approve it, and Loomplane renews the grant on its own. DigitalOcean, Vercel, Google Cloud, Azure and Cloudflare all connect this way. On AWS, Google Cloud and Azure you can also [connect keylessly](/docs/clouds/keyless), where Loomplane holds no grant at all.
 
 ## Register the OAuth app
 
@@ -59,7 +59,17 @@ Under **Certificates & secrets**, add a client secret and copy its value, since 
 
 The Application (client) ID on the app's overview is the client ID you paste into Loomplane.
 
-## Sign in
+### Cloudflare
+
+In Cloudflare, open **Manage Account**, then **OAuth clients**, and create a client. Register the callback shown in Loomplane. Choose **Authorization Code** and **Refresh Token**, response type **code**, and token authentication **client_secret_basic**. Loomplane also sends S256 PKCE.
+
+Enable these scopes on the client: `account-settings.read`, `zone.read`, `dns.write` and `offline_access`. Account Settings Read lets Loomplane verify the account you selected. Enable `offline_access` on the client itself, since a grant without a refresh token cannot keep your connection working. Check the current scope IDs in Cloudflare's scope picker or its authenticated `GET /client/v4/oauth/scopes` API.
+
+Copy the client ID and secret into Loomplane's **Cloud sign-in** settings. A private client works only for members of the Cloudflare account that owns it. To serve other accounts, complete Cloudflare's domain verification and public-client requirements. Making a client public is permanent. See [Cloudflare's registration guide](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/).
+
+When connecting, enter the **Account ID** before signing in. Loomplane verifies that the grant reaches that account, checks DNS permissions and keeps the account fixed when you reconnect. Existing API-token connections continue to work. Extra registrar or cache permissions are needed only for the operations that use them.
+
+## Sign in to your cloud
 
 Open **Integrations**, choose the cloud and pick **Sign in with** followed by the cloud's name, or **Use a token instead** underneath if you'd rather paste a token or key. You finish on the cloud's page and land back in Loomplane with the connection ready. Be quick. The sign-in Loomplane starts expires after ten minutes.
 
@@ -98,6 +108,9 @@ clouds:
     azure:
       client_id: your-application-client-id
       client_secret: your-client-secret
+    cloudflare:
+      client_id: your-client-id
+      client_secret: your-client-secret
 ```
 
 You only need the clouds you use. Each value also reads from the environment:
@@ -108,6 +121,7 @@ You only need the clouds you use. Each value also reads from the environment:
 | Vercel | `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID`, `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET`, `LOOMPLANE_VERCEL_OAUTH_SLUG` |
 | Google Cloud | `LOOMPLANE_GCP_OAUTH_CLIENT_ID`, `LOOMPLANE_GCP_OAUTH_CLIENT_SECRET` |
 | Azure | `LOOMPLANE_AZURE_OAUTH_CLIENT_ID`, `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` |
+| Cloudflare | `LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID`, `LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_SECRET` |
 
 Set a cloud's ID and secret together or not at all, because one without the other stops startup. Vercel's slug is required once its ID and secret are set.
 

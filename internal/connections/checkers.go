@@ -205,14 +205,37 @@ var cloudflareAccountRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // DNS and domains are made in one.
 type CloudflareChecker struct{ Client *cloudflare.Client }
 
+// IsGrant prevents a stored OAuth grant from being pasted as an API token.
+func (CloudflareChecker) IsGrant(raw []byte) bool {
+	return bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) || keylessJSON(raw)
+}
+
+func cloudflareToken(raw []byte) (string, *oauth.Grant, error) {
+	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
+		return strings.TrimSpace(string(raw)), nil, cloudflare.CheckToken(string(raw))
+	}
+	var g oauth.Grant
+	if json.Unmarshal(raw, &g) != nil {
+		return "", nil, errors.New("the Cloudflare sign-in grant isn't valid JSON")
+	}
+	if err := cloudflare.GrantToken(g.AccessToken); err != nil {
+		return "", nil, err
+	}
+	return g.AccessToken, &g, nil
+}
+
 // Parse implements Checker.
 func (CloudflareChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
-	if err := cloudflare.CheckToken(string(credential)); err != nil {
+	_, grant, err := cloudflareToken(credential)
+	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	account := strings.TrimSpace(settings["account_id"])
 	if !cloudflareAccountRE.MatchString(account) {
 		return Check{}, fmt.Errorf("%w: %q isn't a Cloudflare account ID; they are 32 lowercase letters and digits", ErrInvalid, account)
+	}
+	if grant != nil && grant.Account["account_id"] != account {
+		return Check{}, fmt.Errorf("%w: the Cloudflare sign-in is for another account", ErrInvalid)
 	}
 	return Check{Details: map[string]string{"account_id": account}}, nil
 }
@@ -226,17 +249,24 @@ func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settin
 	if err != nil {
 		return Check{}, err
 	}
-	token, account := strings.TrimSpace(string(credential)), c.Details["account_id"]
-	info, err := cf.Client.VerifyToken(ctx, token, account)
+	token, grant, err := cloudflareToken(credential)
 	if err != nil {
 		return Check{}, err
+	}
+	account := c.Details["account_id"]
+	var info cloudflare.TokenInfo
+	if grant == nil {
+		info, err = cf.Client.VerifyToken(ctx, token, account)
+		if err != nil {
+			return Check{}, err
+		}
 	}
 	// Account details need Account Settings Read, which the form doesn't
 	// ask for; without it the account ID names the connection.
 	acct, err := cf.Client.Account(ctx, token, account)
 	var ae *cloudflare.APIError
 	switch {
-	case errors.As(err, &ae) && ae.Status == http.StatusForbidden:
+	case grant == nil && errors.As(err, &ae) && ae.Status == http.StatusForbidden:
 		acct = cloudflare.Account{ID: account}
 	case err != nil:
 		return Check{}, err
@@ -249,7 +279,9 @@ func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settin
 	if c.Account == "" {
 		c.Account = acct.ID
 	}
-	c.Details["token_id"] = info.ID
+	if info.ID != "" {
+		c.Details["token_id"] = info.ID
+	}
 	c.Details["zone_read"], c.Details["dns_write"] = string(perms.ZoneRead), string(perms.DNSWrite)
 	c.Details["registrar_mode"] = cf.Client.RegistrarMode()
 	switch {
@@ -535,10 +567,12 @@ func refusedSignIn(err error) bool {
 	var ge *gcp.APIError
 	var ae *azure.APIError
 	var de *digitalocean.APIError
+	var ce *cloudflare.APIError
 	return errors.Is(err, oauth.ErrRefused) || vercel.Revoked(err) ||
 		(errors.As(err, &ge) && ge.Status == http.StatusUnauthorized) ||
 		(errors.As(err, &ae) && ae.Status == http.StatusUnauthorized) ||
-		(errors.As(err, &de) && de.Status == http.StatusUnauthorized)
+		(errors.As(err, &de) && de.Status == http.StatusUnauthorized) ||
+		(errors.As(err, &ce) && ce.Status == http.StatusUnauthorized)
 }
 
 // AWSChecker checks AWS access keys in a required region, and keyless

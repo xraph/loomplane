@@ -22,7 +22,7 @@ const signInTTL = 10 * time.Minute
 
 // pkceClouds sign in with PKCE: the verifier stays with Loomplane and only
 // its challenge goes to the cloud.
-var pkceClouds = map[string]bool{GCP: true, Azure: true}
+var pkceClouds = map[string]bool{GCP: true, Azure: true, Cloudflare: true}
 
 // SignInInput starts signing in to a cloud: for a new connection with
 // Name, or for an existing one with ConnectionID. Settings are the
@@ -124,12 +124,17 @@ func signInSettings(cloud string, in map[string]string) (map[string]string, erro
 		keys = []string{"project_id"}
 	case Azure:
 		keys = []string{"tenant_id", "subscription_id", "resource_group"}
+	case Cloudflare:
+		keys = []string{"account_id"}
 	}
 	out := map[string]string{}
 	for _, k := range keys {
 		if v := strings.TrimSpace(in[k]); v != "" {
 			out[k] = v
 		}
+	}
+	if cloud == Cloudflare && !cloudflareAccountRE.MatchString(out["account_id"]) {
+		return nil, fmt.Errorf("%w: give the Cloudflare account ID, 32 lowercase hex digits", ErrInvalid)
 	}
 	if cloud == GCP {
 		if out["project_id"] == "" {

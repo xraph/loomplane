@@ -313,7 +313,7 @@ type OAuthApp struct {
 }
 
 // oauthClouds are the clouds that can connect by signing in.
-var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure"}
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure", "cloudflare"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.

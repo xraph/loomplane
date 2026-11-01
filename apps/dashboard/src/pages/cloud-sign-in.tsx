@@ -274,6 +274,27 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
               encrypted and never shown again, so enter it each time you save.
             </DialogDescription>
           </DialogHeader>
+          {app.cloud === "cloudflare" && (
+            <div className="grid gap-1 text-sm text-muted-foreground">
+              <a
+                href="https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/"
+                target="_blank"
+                rel="noreferrer"
+                className="w-fit underline underline-offset-4"
+              >
+                Register a Cloudflare OAuth client
+              </a>
+              <p>
+                Choose Authorization Code and Refresh Token, with
+                client_secret_basic authentication. Enable Account Settings
+                Read, Zone Read, DNS Write and offline_access.
+              </p>
+              <p>
+                Private apps work for members of their Cloudflare account.
+                Public apps need domain verification.
+              </p>
+            </div>
+          )}
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="app-client-id">Client ID</FieldLabel>
