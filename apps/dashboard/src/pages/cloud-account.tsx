@@ -202,6 +202,21 @@ export function CloudAccount({ id }: { id: string }) {
                     {check.isPending && <Spinner />}
                     Check again
                   </Button>
+                  {can("infrastructure:read") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="self-start"
+                      nativeButton={false}
+                      render={
+                        <Link to="/resources" search={{ connection: id }} />
+                      }
+                    >
+                      <DatabaseIcon />
+                      Provider resources
+                    </Button>
+                  )}
+
                   {c.method !== "managed_kubernetes" && (
                     <Button
                       variant="outline"

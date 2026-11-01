@@ -1717,10 +1717,12 @@ export interface EditInputBody {
   baseRevision?: number;
   addResource?: {
   enabledIn?: string;
+  existingResource?: string;
   gpu?: ManifestGPU;
   kind: string;
   name: string;
   provider?: string;
+  region?: string;
   settings?: Record<string, any>;
   target?: string;
   uses?: Record<string, any>;
@@ -1948,6 +1950,16 @@ export interface Exclusion {
 export interface ExclusionRule {
   kind: string;
   match: string;
+}
+
+export interface ExistingResourceConfig {
+  accountIdentity: string;
+  endpointId: string;
+  endpointRevision: number;
+  externalId: string;
+  incarnation: string;
+  resourceId: string;
+  revision: number;
 }
 
 export interface Expansion {
@@ -2569,10 +2581,12 @@ export interface ManagedRegistryView {
 }
 
 export interface ManagedRequest {
+  cleanupSource?: string;
   group: string;
   method: string;
   name: string;
   namespace: string;
+  propagationPolicy?: string;
   resource: string;
   resourceVersion?: string;
   uid: string;
@@ -3525,6 +3539,75 @@ export interface ProviderList {
   providers: Provider[];
 }
 
+export interface ProviderResource {
+  accountIdentity: string;
+  connectionGeneration: number;
+  connectionId: string;
+  connectionIdentity: string;
+  connectionState: string;
+  consumers: ProviderResourceConsumer[];
+  credentialMethods: string[];
+  database: string;
+  endpointId: string;
+  endpointProofRequired: boolean;
+  endpointRevision: number;
+  externalId: string;
+  host: string;
+  id: string;
+  incarnation: string;
+  kind: string;
+  name: string;
+  observationState: string;
+  observedAt: string;
+  orgId: string;
+  ownership: string;
+  ownershipState: string;
+  port: number;
+  provider: string;
+  region: string;
+  revision: number;
+  scope: string;
+  status: string;
+  version: string;
+}
+
+export interface ProviderResourceConnectInputBody {
+  dsn: string;
+}
+
+export interface ProviderResourceConsumer {
+  bindingId: string;
+  environmentId: string;
+  id: string;
+  name: string;
+  projectId: string;
+}
+
+export interface ProviderResourceList {
+  resources: (ProviderResource | null)[];
+  supportedProviders: string[];
+  syncs: (ProviderResourceSync | null)[];
+}
+
+export interface ProviderResourceSync {
+  accountIdentity: string;
+  connectionGeneration: number;
+  connectionId: string;
+  connectionIdentity: string;
+  error: string;
+  finishedAt?: string;
+  id: string;
+  orgId: string;
+  provider: string;
+  refreshOptIn: boolean;
+  requestedBy: string;
+  requestedKeyId?: string;
+  scope: string;
+  sequence: number;
+  startedAt: string;
+  status: string;
+}
+
 export interface ProviderStatus {
   capabilities: string[];
   name: string;
@@ -3878,10 +3961,12 @@ export interface Resource {
 }
 
 export interface ResourceConfig {
+  accountIdentity?: string;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   component?: ComponentConfig;
   composition?: CompositionConfig;
+  existingResource?: ExistingResourceConfig;
   kind: string;
   managed?: ManagedDatabaseConfig;
   provider: string;

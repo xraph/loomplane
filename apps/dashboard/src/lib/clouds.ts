@@ -27,6 +27,11 @@ export const clouds = {
     credential: "Access token",
     account: "Account",
   },
+  azure: {
+    label: "Azure",
+    credential: "Service principal",
+    account: "Subscription",
+  },
   aws: {
     label: "AWS",
     credential: "Access key",

@@ -88,6 +88,8 @@ export const entities = {
   'ProjectView': { idField: 'projectId', fields: { 'sources': 'SourceState' } },
   'ProjectZone': { idField: 'id' },
   'ProjectZoneList': { fields: { 'zones': 'ProjectZone' } },
+  'ProviderResource': { idField: 'id' },
+  'ProviderResourceSync': { idField: 'id' },
   'ProviderZoneList': { fields: { 'zones': 'DNSZone' } },
   'PushDevice': { idField: 'id' },
   'Rebuild': { idField: 'id' },

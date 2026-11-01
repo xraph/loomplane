@@ -1,7 +1,7 @@
-// Product marks from Simple Icons (https://simpleicons.org, v13.21.0),
+// Most product marks come from Simple Icons (https://simpleicons.org, v13.21.0),
 // whose SVG data is CC0. The marks themselves are their owners' trademarks,
-// shown only to name the product. Each is one path on a 24px grid, drawn
-// in the product's own color (dark marks lighten in dark mode).
+// shown only to name the product. Single-path marks use a 24px grid and the
+// product's own color. Azure keeps Microsoft's official SVG artwork below.
 
 export type ProductKey =
   | "postgresql"
@@ -14,6 +14,7 @@ export type ProductKey =
   | "cloudflare"
   | "render"
   | "gcp"
+  | "azure"
   | "aws"
   | "docker"
   | "kubernetes"
@@ -22,8 +23,16 @@ export type ProductKey =
 
 export const productLogos: Record<
   ProductKey,
-  { title: string; color: string; path: string }
+  { title: string; color: string; path: string; asset?: string }
 > = {
+  // MicrosoftDocs preserves the official Azure gradient mark.
+  // https://github.com/MicrosoftDocs/entra-docs/blob/main/docs/identity-platform/media/common/logo_azure.svg
+  azure: {
+    title: "Azure",
+    color: "#0078D4",
+    path: "",
+    asset: "/logos/azure.svg",
+  },
   postgresql: {
     title: "PostgreSQL",
     color: "#4169E1",

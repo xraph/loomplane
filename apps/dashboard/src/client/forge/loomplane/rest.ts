@@ -5039,6 +5039,75 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly providerResources = {
+    /**
+     * Store an application DSN for a verified provider resource
+     */
+    connect: async (resourceId: string, body: types.ProviderResourceConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}/connection`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderResourceConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * Read a provider resource without its credentials
+     */
+    get: async (resourceId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * List your provider resource inventory and sync attempts
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceList> => {
+      let __path = `/api/v1/provider-resources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceList"],
+      };
+
+      return this.request<types.ProviderResourceList>(config);
+    },
+
+    /**
+     * Refresh a connected account's resource inventory
+     */
+    sync: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceSync> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/resource-syncs`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceSync"],
+      };
+
+      return this.request<types.ProviderResourceSync>(config);
+    },
+
+  };
+
   public readonly providers = {
     /**
      * The deployment targets a manifest can name, and what each runs and provisions

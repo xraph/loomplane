@@ -3440,6 +3440,38 @@
         ]
       }
     },
+    "/api/v1/connections/{connectionId}/resource-syncs": {
+      "post": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Refresh a connected account's resource inventory",
+        "operationId": "providerResources.sync",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed resource sync attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResourceSync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}": {
       "get": {
         "tags": [
@@ -11403,6 +11435,102 @@
         }
       }
     },
+    "/api/v1/provider-resources": {
+      "get": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "List your provider resource inventory and sync attempts",
+        "operationId": "providerResources.list",
+        "responses": {
+          "200": {
+            "description": "Provider resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResourceList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider-resources/{resourceId}": {
+      "get": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Read a provider resource without its credentials",
+        "operationId": "providerResources.get",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "description": "Path parameter: resourceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider-resources/{resourceId}/connection": {
+      "put": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Store an application DSN for a verified provider resource",
+        "operationId": "providerResources.connect",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "description": "Path parameter: resourceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderResourceConnectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Provider resource connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/providers": {
       "get": {
         "tags": [
@@ -18355,6 +18483,9 @@
               "enabled_in": {
                 "type": "string"
               },
+              "existing_resource": {
+                "type": "string"
+              },
               "gpu": {
                 "$ref": "#/components/schemas/ManifestGPU"
               },
@@ -18365,6 +18496,9 @@
                 "type": "string"
               },
               "provider": {
+                "type": "string"
+              },
+              "region": {
                 "type": "string"
               },
               "settings": {
@@ -19153,6 +19287,41 @@
           },
           "match": {
             "type": "string"
+          }
+        }
+      },
+      "ExistingResourceConfig": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "endpoint_id",
+          "revision",
+          "endpoint_revision",
+          "account_identity",
+          "external_id",
+          "incarnation"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_revision": {
+            "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -21354,6 +21523,9 @@
           "UID"
         ],
         "properties": {
+          "CleanupSource": {
+            "type": "string"
+          },
           "Group": {
             "type": "string"
           },
@@ -21364,6 +21536,9 @@
             "type": "string"
           },
           "Namespace": {
+            "type": "string"
+          },
+          "PropagationPolicy": {
             "type": "string"
           },
           "Resource": {
@@ -24818,6 +24993,294 @@
           }
         }
       },
+      "ProviderResource": {
+        "type": "object",
+        "required": [
+          "ownership_state",
+          "consumers",
+          "credential_methods",
+          "endpoint_proof_required",
+          "id",
+          "org_id",
+          "provider",
+          "connection_identity",
+          "account_identity",
+          "connection_id",
+          "connection_generation",
+          "external_id",
+          "incarnation",
+          "scope",
+          "name",
+          "kind",
+          "version",
+          "region",
+          "status",
+          "host",
+          "database",
+          "port",
+          "ownership",
+          "endpoint_id",
+          "endpoint_revision",
+          "revision",
+          "observed_at",
+          "observation_state",
+          "connection_state"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "connection_identity": {
+            "type": "string"
+          },
+          "connection_state": {
+            "type": "string"
+          },
+          "consumers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderResourceConsumer"
+            }
+          },
+          "credential_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "database": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_proof_required": {
+            "type": "boolean"
+          },
+          "endpoint_revision": {
+            "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observation_state": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "ownership_state": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceConnectInputBody": {
+        "type": "object",
+        "required": [
+          "dsn"
+        ],
+        "properties": {
+          "dsn": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceConsumer": {
+        "type": "object",
+        "required": [
+          "id",
+          "binding_id",
+          "project_id",
+          "environment_id",
+          "name"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceList": {
+        "type": "object",
+        "required": [
+          "resources",
+          "syncs",
+          "supported_providers"
+        ],
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProviderResource"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          },
+          "supported_providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "syncs": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProviderResourceSync"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ProviderResourceSync": {
+        "type": "object",
+        "required": [
+          "refresh_opt_in",
+          "connection_identity",
+          "requested_by",
+          "id",
+          "org_id",
+          "connection_id",
+          "provider",
+          "account_identity",
+          "connection_generation",
+          "sequence",
+          "scope",
+          "status",
+          "error",
+          "started_at"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "connection_identity": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "refresh_opt_in": {
+            "type": "boolean"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "requested_key_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "ProviderStatus": {
         "type": "object",
         "required": [
@@ -25964,6 +26427,9 @@
           "kind"
         ],
         "properties": {
+          "account_identity": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
@@ -25975,6 +26441,9 @@
           },
           "composition": {
             "$ref": "#/components/schemas/CompositionConfig"
+          },
+          "existing_resource": {
+            "$ref": "#/components/schemas/ExistingResourceConfig"
           },
           "kind": {
             "type": "string"
