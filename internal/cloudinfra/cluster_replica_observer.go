@@ -78,6 +78,6 @@ func saveObservedWorkloadAccounting(ctx context.Context, tx driver.Tx, r *Manage
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cluster_workload_observed_accounting(org_id,cloud_id,resource_id,revision,checked_at,totals) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(org_id,resource_id) DO UPDATE SET revision=excluded.revision,checked_at=excluded.checked_at,totals=excluded.totals WHERE loomplane_cluster_workload_observed_accounting.revision<excluded.revision`, r.OrgID, r.CloudID, r.ID, snapshot.ObservationRevision, snapshot.StorageProvenance.CheckedAt, totals)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cluster_workload_observed_accounting(org_id,cloud_id,resource_id,revision,checked_at,totals,schema_version) VALUES($1,$2,$3,$4,$5,$6,1) ON CONFLICT(org_id,resource_id) DO UPDATE SET revision=excluded.revision,checked_at=excluded.checked_at,totals=excluded.totals WHERE loomplane_cluster_control_supported(loomplane_cluster_workload_observed_accounting.schema_version) AND loomplane_cluster_workload_observed_accounting.revision<excluded.revision`, r.OrgID, r.CloudID, r.ID, snapshot.ObservationRevision, snapshot.StorageProvenance.CheckedAt, totals)
 	return err
 }

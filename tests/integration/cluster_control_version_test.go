@@ -8,7 +8,7 @@ import (
 )
 
 func TestClusterControlUnsupportedVersion(t *testing.T) {
-	for _, kind := range []string{"cohort", "growth", "advice", "inventory"} {
+	for _, kind := range []string{"cohort", "growth", "advice", "inventory", "observed_accounting"} {
 		t.Run(kind, func(t *testing.T) {
 			f, svc, p, result, _ := managedDemandFixture(t)
 			svc.BindManagedRuntime(ledgerRuntimeFixture{})
@@ -27,6 +27,8 @@ func TestClusterControlUnsupportedVersion(t *testing.T) {
 					t.Fatal(err)
 				}
 				query = `INSERT INTO loomplane_cluster_pool_advice(org_id,cloud_id,resource_id,pool_id,policy_revision,observed_at,schema_version) VALUES('org','cloud','cluster','pool',1,now(),2)`
+			case "observed_accounting":
+				query = `INSERT INTO loomplane_cluster_workload_observed_accounting(org_id,cloud_id,resource_id,revision,checked_at,totals,schema_version) VALUES('org','cloud','cluster',7,now(),'{"future_representation":true}',2)`
 			case "inventory":
 				query = `WITH old AS (DELETE FROM loomplane_cluster_capacity_inventory WHERE resource_id='cluster' RETURNING *) INSERT INTO loomplane_cluster_capacity_inventory(org_id,cloud_id,resource_id,issued_revision,saved_revision,checked_at,complete,body,schema_version) SELECT org_id,cloud_id,resource_id,issued_revision,saved_revision,checked_at,complete,body,2 FROM old`
 			}
@@ -47,6 +49,20 @@ func TestClusterControlUnsupportedVersion(t *testing.T) {
 			}
 			if _, err := f.sql.Exec(t.Context(), `SELECT loomplane_claim_pool_growth('org','cloud','cluster','pool','new',600)`); err == nil {
 				t.Fatal("old growth writer accepted future control")
+			}
+			if kind == "observed_accounting" {
+				for _, query := range []string{
+					`UPDATE loomplane_cluster_workload_observed_accounting SET revision=8,totals='{}'`,
+					`INSERT INTO loomplane_cluster_workload_observed_accounting(org_id,cloud_id,resource_id,revision,checked_at,totals) VALUES('org','cloud','cluster',8,now(),'{}') ON CONFLICT(org_id,resource_id) DO UPDATE SET revision=excluded.revision,checked_at=excluded.checked_at,totals=excluded.totals WHERE loomplane_cluster_workload_observed_accounting.revision<excluded.revision`,
+				} {
+					if _, err := f.sql.Exec(t.Context(), query); err == nil {
+						t.Fatal("legacy writer overwrote future observed accounting")
+					}
+				}
+				var unchanged bool
+				if err := f.sql.QueryRow(t.Context(), `SELECT schema_version=2 AND revision=7 AND totals='{"future_representation":true}'::jsonb FROM loomplane_cluster_workload_observed_accounting WHERE org_id='org' AND resource_id='cluster'`).Scan(&unchanged); err != nil || !unchanged {
+					t.Fatal("future totals changed", err)
+				}
 			}
 			var held int
 			if err := f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cluster_workload_holds`).Scan(&held); err != nil || held != 0 {

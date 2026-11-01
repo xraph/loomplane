@@ -209,6 +209,7 @@ func TestClusterCapacityInventoryAuthorizedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.Adapters = adapters
+	svc.ReplicaVerifier = kubernetes.NewControllerStore(f.pg)
 	snapshot, err := svc.ObserveClusterCapacity(t.Context(), f.principal, "cloud", "cluster")
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +221,33 @@ func TestClusterCapacityInventoryAuthorizedObservation(t *testing.T) {
 	var attempts int
 	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cluster_operations WHERE body->>'kind'='management-observation' AND body->'steps'->0->>'state'='completed'`).Scan(&attempts); err != nil || attempts != 1 {
 		t.Fatal("missing durable management issuance", attempts, err)
+	}
+	var version int
+	var revision int64
+	var created, updated time.Time
+	if err = f.sql.QueryRow(t.Context(), `SELECT schema_version,revision,created_at,updated_at FROM loomplane_cluster_workload_observed_accounting WHERE org_id='org' AND resource_id='cluster'`).Scan(&version, &revision, &created, &updated); err != nil || version != 1 || revision != snapshot.ObservationRevision {
+		t.Fatal("observed accounting metadata", err)
+	}
+	next, readErr := svc.ObserveClusterCapacity(t.Context(), f.principal, "cloud", "cluster")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var advanced bool
+	if err = f.sql.QueryRow(t.Context(), `SELECT schema_version=1 AND revision=$1 AND created_at=$2 AND updated_at>$3 AND totals ?& ARRAY['charged','actual','running','maximum'] FROM loomplane_cluster_workload_observed_accounting WHERE org_id='org' AND resource_id='cluster'`, next.ObservationRevision, created, updated).Scan(&advanced); err != nil || !advanced || next.ObservationRevision <= revision {
+		t.Fatal("observer failed to preserve ordered accounting", err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `WITH old AS (DELETE FROM loomplane_cluster_workload_observed_accounting WHERE org_id='org' AND resource_id='cluster' RETURNING *) INSERT INTO loomplane_cluster_workload_observed_accounting(org_id,cloud_id,resource_id,revision,checked_at,totals,schema_version,created_at,updated_at) SELECT org_id,cloud_id,resource_id,revision,checked_at,'{"future":true}',2,created_at,updated_at FROM old`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ObserveClusterCapacity(t.Context(), f.principal, "cloud", "cluster"); err == nil {
+		t.Fatal("observer used future accounting")
+	}
+	if _, err = f.store.GetCapacityUsage(t.Context(), "org", "cloud"); err == nil {
+		t.Fatal("ledger used future accounting")
+	}
+	var retained bool
+	if err = f.sql.QueryRow(t.Context(), `SELECT revision=$1 AND schema_version=2 AND totals='{"future":true}'::jsonb FROM loomplane_cluster_workload_observed_accounting WHERE org_id='org' AND resource_id='cluster'`, next.ObservationRevision).Scan(&retained); err != nil || !retained {
+		t.Fatal("observer overwrote future accounting", err)
 	}
 }
 
