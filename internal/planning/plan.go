@@ -156,25 +156,27 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	Worker                *provider.WorkerSettings       `json:"worker,omitempty"`
-	Placement             *manifest.PlacementConstraints `json:"placement,omitempty"`
-	CapacityMode          string                         `json:"capacity_mode,omitempty"`
-	ClusterDemand         *ClusterWorkloadDemand         `json:"cluster_demand,omitempty"`
-	FrontendDemand        *cloudinfra.FrontendDemand     `json:"frontend_demand,omitempty"`
-	CapacityIntent        *CapacityIntent                `json:"capacity_intent,omitempty"`
-	AppliedInputs         *AppliedInputs                 `json:"applied_inputs,omitempty"`
-	CloudPlacement        *CloudPlacement                `json:"cloud_placement,omitempty"`
-	Catalog               *recipes.Recipe                `json:"catalog,omitempty"`
-	Provider              string                         `json:"provider"`
-	Region                string                         `json:"region,omitempty"`
-	Target                string                         `json:"target,omitempty"`
-	TargetSettings        map[string]string              `json:"target_settings,omitempty"`
-	TargetAccountIdentity string                         `json:"target_account_identity,omitempty"`
-	Endpoint              *manifest.Endpoint             `json:"endpoint,omitempty"`
-	HealthPath            string                         `json:"health_path,omitempty"`
-	BuildTarget           *BuildTarget                   `json:"build_target,omitempty"`
-	Workload              provider.Workload              `json:"workload"`
-	Execution             provider.Execution             `json:"execution"`
+	PodGroup                   *manifest.PodGroup             `json:"pod_group,omitempty"`
+	WorkloadCapabilityRevision string                         `json:"workload_capability_revision,omitempty"`
+	Worker                     *provider.WorkerSettings       `json:"worker,omitempty"`
+	Placement                  *manifest.PlacementConstraints `json:"placement,omitempty"`
+	CapacityMode               string                         `json:"capacity_mode,omitempty"`
+	ClusterDemand              *ClusterWorkloadDemand         `json:"cluster_demand,omitempty"`
+	FrontendDemand             *cloudinfra.FrontendDemand     `json:"frontend_demand,omitempty"`
+	CapacityIntent             *CapacityIntent                `json:"capacity_intent,omitempty"`
+	AppliedInputs              *AppliedInputs                 `json:"applied_inputs,omitempty"`
+	CloudPlacement             *CloudPlacement                `json:"cloud_placement,omitempty"`
+	Catalog                    *recipes.Recipe                `json:"catalog,omitempty"`
+	Provider                   string                         `json:"provider"`
+	Region                     string                         `json:"region,omitempty"`
+	Target                     string                         `json:"target,omitempty"`
+	TargetSettings             map[string]string              `json:"target_settings,omitempty"`
+	TargetAccountIdentity      string                         `json:"target_account_identity,omitempty"`
+	Endpoint                   *manifest.Endpoint             `json:"endpoint,omitempty"`
+	HealthPath                 string                         `json:"health_path,omitempty"`
+	BuildTarget                *BuildTarget                   `json:"build_target,omitempty"`
+	Workload                   provider.Workload              `json:"workload"`
+	Execution                  provider.Execution             `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`

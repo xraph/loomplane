@@ -149,7 +149,13 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 				selected = &snapshot.SchedulingProfiles[0]
 			}
 			cpu, memory := OwnedWorkloadResources(cfg)
-			if selected.Architecture != architecture || int64(cpu) > selected.Available.CPUMillis || int64(memory)*(1<<20) > selected.Available.MemoryBytes || selected.Available.Pods < 1 {
+			var scratch int64
+			if cfg.PodGroup != nil {
+				for _, volume := range cfg.PodGroup.Scratch {
+					scratch += volume.SizeMiB
+				}
+			}
+			if selected.Architecture != architecture || int64(cpu) > selected.Available.CPUMillis || int64(memory)*(1<<20) > selected.Available.MemoryBytes || selected.Available.Pods < 1 || scratch*(1<<20) > selected.Available.EphemeralStorageBytes {
 				return workloadBlock("native_template_unqualified")
 			}
 			d.Profile = selected

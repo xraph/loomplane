@@ -139,6 +139,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
+	if len(spec.Volumes) > 0 && labels[owned.LabelPodGroup] != "" {
+		return nil, ErrInvalid
+	}
 	if len(spec.Volumes) > 0 {
 		return r.applyPersistent(ctx, iid, spec, labels, start)
 	}
@@ -196,6 +199,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
 	if err != nil {
 		return nil, err
+	}
+	if checkErr := preflightPodGroup(spec, labels, values); checkErr != nil {
+		return nil, checkErr
 	}
 	// The account comes first so a refused rule changes nothing else.
 	account, err := r.applyAccess(ctx, c, iid, labels)
@@ -262,6 +268,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		replicas = int32(n)
 	}
 	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: *template}}
+	if strategyErr := podGroupStrategy(deployment, labels); strategyErr != nil {
+		return nil, strategyErr
+	}
 	if labels[owned.LabelGPU] != "" {
 		// A surge pod would wait for a GPU the old pod still holds.
 		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}

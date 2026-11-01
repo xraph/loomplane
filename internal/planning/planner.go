@@ -1608,6 +1608,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		HealthPath: set.HealthPath,
 		Worker:     p.workerSettings(name, base, set, prov),
 	}
+	p.podGroupSettings(name, base, set, prov, cfg)
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
 	}

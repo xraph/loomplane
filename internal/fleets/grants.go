@@ -232,14 +232,14 @@ func (s *Service) AuthorizeOperation(ctx context.Context, p security.Principal, 
 	if !ok {
 		return nil, ErrInvalid
 	}
-	var cpu, memory int64
-	for _, service := range profile.Services {
-		cpu += service.CPUMillis * int64(service.MaxReplicas)
-		memory += service.MemoryMiB * int64(service.MaxReplicas)
+	minimum, err := templateWorkloadDemand(release.Template, profile)
+	if err != nil {
+		return nil, err
 	}
-	if request.Demand.CPUMillis < cpu || request.Demand.MemoryMiB < memory {
+	if request.Demand.CPUMillis < minimum.CPUMillis || request.Demand.MemoryMiB < minimum.MemoryMiB || request.Demand.StorageGiB < minimum.StorageGiB {
 		return nil, ErrApprovalRequired
 	}
+
 	authority := &OperationAuthority{ID: uuid.NewString(), Scope: scope, Principal: p, GrantRevision: grant.Revision, Request: request, ExpiresAt: grant.Input.ExpiresAt}
 	return store.ReserveAuthority(ctx, authority)
 }

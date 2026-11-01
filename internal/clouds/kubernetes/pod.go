@@ -142,6 +142,9 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		policy := corev1.FSGroupChangeOnRootMismatch
 		template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy}
 	}
+	if err := addPodGroup(template, labels); err != nil {
+		return nil, nil, err
+	}
 	return template, servicePorts, nil
 }
 

@@ -173,6 +173,7 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	PodGroup  *PodGroup                        `json:"pod_group,omitempty" yaml:"pod_group,omitempty"`
 	Worker    *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
 	Placement *PlacementConstraints            `json:"placement,omitempty" yaml:"placement,omitempty"`
 	// CapacityMode chooses managed workload reservation semantics.
@@ -814,6 +815,9 @@ func checkFarp(add func(string, string, ...any), path string, f *Farp) {
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if err := providercontract.ValidatePodGroup(s.PodGroup); err != nil {
+		add(path+".pod_group", "%s", err.Error())
+	}
 	if s.Placement != nil {
 		if err := s.Placement.Validate(); err != nil {
 			add(path+".placement", "%s", err)
@@ -1138,6 +1142,7 @@ func (m *Manifest) Ignored(kind string) bool { return slices.Contains(m.Ignore.R
 // doesn't take its region along.
 func (s Service) For(env string, d Defaults) Settings {
 	out := s.Settings
+	out.PodGroup = providercontract.ClonePodGroup(s.PodGroup)
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
 	if o.Placement != nil {
@@ -1177,6 +1182,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Build != nil {
 		out.Build = o.Build
+	}
+	if o.PodGroup != nil {
+		out.PodGroup = providercontract.ClonePodGroup(o.PodGroup)
 	}
 	if o.Worker != nil {
 		out.Worker = o.Worker

@@ -64,16 +64,8 @@ type ServiceProfile struct {
 }
 
 // LifecycleJob commands come from the operator's immutable release only.
-type LifecycleJob struct {
-	Phase          string   `json:"phase" yaml:"phase"`
-	Image          string   `json:"image" yaml:"image"`
-	Command        []string `json:"command,omitempty" yaml:"command,omitempty"`
-	Args           []string `json:"args,omitempty" yaml:"args,omitempty"`
-	TimeoutSeconds int      `json:"timeout_seconds" yaml:"timeout_seconds"`
-	MaxAttempts    int      `json:"max_attempts" yaml:"max_attempts"`
-	Required       bool     `json:"required,omitempty" yaml:"required,omitempty"`
-	SchemaLock     string   `json:"schema_lock,omitempty" yaml:"schema_lock,omitempty"`
-}
+type LifecycleJob = manifest.LifecycleJob
+
 type ResourcePolicy struct {
 	Ownership    string `json:"ownership" yaml:"ownership"`
 	AttachmentID string `json:"attachment_id,omitempty" yaml:"attachment_id,omitempty"`
@@ -238,15 +230,16 @@ func (t *Template) Validate() error {
 		}
 	}
 	for name, j := range t.Jobs {
-		if !templateName.MatchString(name) || !validImage(j.Image) || !slices.Contains([]string{"pre-deploy", "bootstrap", "verify"}, j.Phase) || j.TimeoutSeconds < 1 || j.TimeoutSeconds > 3600 || j.MaxAttempts < 1 || j.MaxAttempts > 5 || len(j.Command) > 32 || len(j.Args) > 64 || len(j.SchemaLock) > 128 {
+		if !templateName.MatchString(name) || j.Validate() != nil {
 			return ErrTemplate
 		}
-		for _, v := range append(slices.Clone(j.Command), j.Args...) {
-			if len(v) > 4096 || strings.ContainsRune(v, 0) {
+		for _, dependency := range j.Dependencies {
+			if _, exists := t.Resources[dependency]; !exists {
 				return ErrTemplate
 			}
 		}
 	}
+
 	if len(t.Resources) != len(t.Manifest.Resources) {
 		return fmt.Errorf("%w: every data resource needs an ownership policy", ErrTemplate)
 	}

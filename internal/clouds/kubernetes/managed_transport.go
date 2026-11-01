@@ -95,9 +95,15 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		out.Name = parts[3]
 	}
 	allowed := map[string]string{"secrets": "", "services": "", "serviceaccounts": "", "deployments": "apps", "horizontalpodautoscalers": "autoscaling", "ingresses": "networking.k8s.io", "roles": "rbac.authorization.k8s.io", "rolebindings": "rbac.authorization.k8s.io"}
+	if hasLifecycleScope(t.scope) {
+		allowed = map[string]string{"jobs": "batch", "secrets": ""}
+	}
 	descendant := t.cleanup && (out.Resource == "pods" || out.Resource == "replicasets")
 	query := req.URL.Query()
 	delete(query, "timeout")
+	if hasLifecycleScope(t.scope) && len(query) > 0 {
+		return out, ErrManagedAuthority
+	}
 	if t.cleanup && (req.Method != http.MethodDelete || len(query) > 0) {
 		return out, ErrManagedAuthority
 	}
@@ -155,13 +161,16 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 			PropagationPolicy *metav1.DeletionPropagation `json:"propagationPolicy,omitempty"`
 		}
 		decoder := json.NewDecoder(bytes.NewReader(body))
-		if t.cleanup {
+		if t.cleanup || hasLifecycleScope(t.scope) {
 			decoder.DisallowUnknownFields()
 		}
 		if out.Name == "" || decoder.Decode(&options) != nil || !errors.Is(decoder.Decode(&struct{}{}), io.EOF) || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
 			return out, ErrManagedAuthority
 		}
 		out.UID = string(*options.Preconditions.UID)
+		if hasLifecycleScope(t.scope) && options.PropagationPolicy != nil {
+			out.PropagationPolicy = string(*options.PropagationPolicy)
+		}
 		if t.cleanup {
 			if options.PropagationPolicy != nil {
 				out.PropagationPolicy = string(*options.PropagationPolicy)
@@ -180,6 +189,12 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		// No current application path uses PATCH or subresources. Refuse unknown
 		// mutations until their ownership and outcome semantics are implemented.
 		return out, ErrManagedAuthority
+	}
+	if hasLifecycleScope(t.scope) {
+		if validationErr := validateLifecycleRequest(t.scope, out, body); validationErr != nil {
+			return out, validationErr
+		}
+		return out, nil
 	}
 	if t.cleanup && out.ResourceVersion == "" {
 		return out, ErrManagedAuthority

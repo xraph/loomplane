@@ -481,6 +481,14 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if err != nil {
 		return nil, err
 	}
+	if verifyErr := builder.verifyPodGroup(ctx, job, &state.Image); verifyErr != nil {
+		return nil, verifyErr
+	}
+	if job.Action.Service.PodGroup != nil {
+		if saveErr := save(); saveErr != nil {
+			return nil, saveErr
+		}
+	}
 	if state.RuntimeRef == "" {
 		ref, refErr := typeid.Generate("runtime")
 		if refErr != nil {
@@ -696,7 +704,12 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		}
 	}
 	if job.Action.Provider == "kubernetes" {
-		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedWorkloadResources(cfg)
+		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedMainResources(cfg)
+	}
+	if cfg.PodGroup != nil {
+		raw, _ := json.Marshal(cfg.PodGroup) //nolint:errcheck // the contract contains only strings, integers and slices
+		labels[owned.LabelPodGroup] = string(raw)
+		labels[owned.LabelWorkloadCapability] = cfg.WorkloadCapabilityRevision
 	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
 	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {

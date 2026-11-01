@@ -74,7 +74,11 @@ func (s *Service) instancePlanInputs(ctx context.Context, plan *Plan) (*planInpu
 	if err != nil {
 		return nil, err
 	}
-	return &planInputs{graph: artifact.Graph, held: map[string]bool{}, excluded: map[string]bool{}, revision: &manifests.Revision{OrgID: plan.OrgID, ProjectID: plan.ProjectID, Manifest: &snapshot.Manifest, Digest: snapshot.Digest}}, nil
+	executionManifest, err := instanceExecutionManifest(snapshot.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	return &planInputs{graph: artifact.Graph, held: map[string]bool{}, excluded: map[string]bool{}, revision: &manifests.Revision{OrgID: plan.OrgID, ProjectID: plan.ProjectID, Manifest: executionManifest, Digest: snapshot.Digest}}, nil
 }
 
 // InstanceRuntimeQualifier verifies namespace and resource receipts before a

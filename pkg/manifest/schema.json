@@ -473,9 +473,168 @@
         "availability": { "enum": ["single", "independent-zone", "independent-datacenter"] }
       }
     },
+    "scratchMount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "volume",
+        "path"
+      ],
+      "properties": {
+        "volume": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 256,
+          "pattern": "^/"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "podSidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "image",
+        "architecture",
+        "cpu_millis",
+        "memory_mib",
+        "readiness"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,47}$"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.:/_-]*@sha256:[a-f0-9]{64}$"
+        },
+        "architecture": {
+          "enum": [
+            "arm64",
+            "amd64"
+          ]
+        },
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8000
+        },
+        "memory_mib": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 32768
+        },
+        "command": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "environment": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "port"
+          ],
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/scratchMount"
+          }
+        }
+      }
+    },
+    "podGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidecars": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/podSidecar"
+          }
+        },
+        "scratch": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "size_mib"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,47}$"
+              },
+              "size_mib": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              }
+            }
+          }
+        },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/scratchMount"
+          }
+        },
+        "surge_replicas": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
     "settings": {
       "type": "object",
       "properties": {
+        "pod_group": { "$ref": "#/$defs/podGroup" },
         "worker": { "$ref": "#/$defs/workerSettings" },
         "placement": { "$ref": "#/$defs/placementConstraints" },
         "capacity_mode": {

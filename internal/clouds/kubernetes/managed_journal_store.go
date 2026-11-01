@@ -14,7 +14,12 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 )
 
-func managedScopeValid(s ManagedScope) bool { return legacyManagedScopeValid(s) }
+func managedScopeValid(s ManagedScope) bool {
+	if hasLifecycleScope(s) {
+		return lifecycleManagedScopeValid(s)
+	}
+	return legacyManagedScopeValid(s)
+}
 
 // CheckServingUpdate verifies the exact ctrlplane release after its provider
 // callback. During the callback only the running deployment may issue writes.

@@ -99,6 +99,7 @@ type Provisions struct {
 
 // Provider describes one deployment target.
 type Provider struct {
+	Workloads *WorkloadCapabilities `json:"workloads,omitempty"`
 	// Name is how a manifest names it, such as "cloud-run".
 	Name  string `json:"name"`
 	Title string `json:"title"`
