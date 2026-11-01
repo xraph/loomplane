@@ -369,11 +369,12 @@ func validateKind(k Kind) []error {
 	if k.Placement != PlacementServiceProject && k.Placement != PlacementAppProject && k.Placement != PlacementDependency {
 		f.add("placement %q is not %s, %s or %s", k.Placement, PlacementServiceProject, PlacementAppProject, PlacementDependency)
 	}
+	f.errs = append(f.errs, serviceFindings(k)...)
 	validateTargets(f, k.Targets)
 	if !featurePattern.MatchString(k.Feature) {
 		f.add("feature %q must be at most 16 lowercase letters", k.Feature)
 	}
-	if k.Placement == PlacementDependency {
+	if k.Placement == PlacementDependency && k.Service == nil {
 		validateDependencyOnly(f, k)
 	}
 
@@ -814,6 +815,44 @@ func count(set ...bool) int {
 	return n
 }
 
+// serviceFindings checks the contract used for a directly bound service.
+func serviceFindings(k Kind) []error {
+	if k.Service == nil {
+		return nil
+	}
+	f := &findings{where: k.Name}
+	if len(k.Components) != 1 || k.Components[0].Role != RoleProcess {
+		f.add("a reusable service runs exactly one process and no other components")
+	}
+	if len(k.Dependencies) > 0 {
+		f.add("a reusable service has no dependencies of its own")
+	}
+	if k.Service.Connection[FieldURL] == "" {
+		f.add("a reusable service connection must map url to a declared output")
+	}
+	for field, name := range k.Service.Connection {
+		if !slices.Contains(dependencyFields, field) {
+			f.add("service connection field %q is not a standard field", field)
+		}
+		i := slices.IndexFunc(k.Outputs, func(o Output) bool { return o.Name == name })
+		if i < 0 {
+			f.add("service connection field %q names undeclared output %q", field, name)
+		}
+	}
+	for _, o := range k.Outputs {
+		if o.PerConsumer {
+			f.add("a reusable service output %q cannot be per consumer", o.Name)
+		}
+	}
+	if len(k.ConsumerOptions) > 0 {
+		f.add("a reusable service takes no consumer options")
+	}
+	if (k.Service.Recovery == "") != (k.Service.BackupFormat == "") {
+		f.add("service recovery and backup format must be declared together")
+	}
+	return f.errs
+}
+
 // validateDependencyOnly checks what a dependency-only kind can't have.
 func validateDependencyOnly(f *findings, k Kind) {
 	// The planner runs that one component as the dependency, so a job
@@ -992,10 +1031,15 @@ func crossFindings(k Kind, kinds map[string]Kind, engines map[string]Engine) []e
 	reads := dependencyReads(k)
 	for _, d := range k.Dependencies {
 		var only *Kind
+		var services []Kind
 		for _, name := range d.Kinds {
-			if dk, ok := kinds[name]; ok && dk.Placement == PlacementDependency {
-				only = &dk
-				break
+			if dk, ok := kinds[name]; ok {
+				if dk.Placement == PlacementDependency && dk.Service == nil {
+					only = &dk
+				}
+				if dk.Service != nil {
+					services = append(services, dk)
+				}
 			}
 		}
 		if only != nil {
@@ -1007,8 +1051,23 @@ func crossFindings(k Kind, kinds map[string]Kind, engines map[string]Engine) []e
 			}
 		}
 		for _, use := range reads[d.Name] {
+			if _, _, private := cutAny(use.field, "output:", "secret:"); private && d.External != nil {
+				f.add("%s reads private field %q from dependency %q, which accepts external endpoints without published outputs or secrets", use.what, use.field, d.Name)
+			}
 			if only != nil {
 				validateDependencyOnlyField(f, use.what, use.field, d.Name, *only)
+				continue
+			}
+			for _, service := range services {
+				if slices.Contains(dependencyFields, use.field) {
+					if use.field == FieldAdminURL && service.Service.Connection[FieldAdminURL] == "" {
+						f.add("%s reads admin-url from dependency %q, but %s declares no admin connection", use.what, d.Name, service.Name)
+					}
+				} else {
+					validateDependencyOnlyField(f, use.what, use.field, d.Name, service)
+				}
+			}
+			if len(services) == len(d.Kinds) {
 				continue
 			}
 			if _, _, ok := cutAny(use.field, "output:", "secret:"); ok && known(d.Kinds, kinds, engines) {
@@ -1050,8 +1109,8 @@ func dependencyReads(k Kind) map[string][]fieldUse {
 	return out
 }
 
-// validateDependencyOnlyField checks a field read from a dependency-only
-// kind: url (its primary output), output:<name> or secret:<name>.
+// validateDependencyOnlyField checks a published field read from a direct
+// service: url (its primary output), output:<name> or secret:<name>.
 func validateDependencyOnlyField(f *findings, what, field, dependency string, dk Kind) {
 	prefix, name, _ := cutAny(field, "output:", "secret:")
 	switch {

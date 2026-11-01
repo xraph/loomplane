@@ -194,3 +194,9 @@ func (w WeightCache) SizeMB(settings map[string]string) int {
 	}
 	return max(w.KubernetesSizeMB, mb)
 }
+
+// DirectService reports whether the kind runs as one directly bound process.
+// Legacy dependency-only kinds retain their existing binding identity.
+func (k Kind) DirectService() bool {
+	return k.Placement == PlacementDependency || (k.Service != nil && len(serviceFindings(k)) == 0)
+}

@@ -308,6 +308,21 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 
 	choices, uses := p.dependencies(name, base, r, kind, prov, set, connection, region)
 
+	if kind.DirectService() {
+		c := composition.Components[0]
+		cfg := resource()
+		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name], Settings: maps.Clone(values)}
+		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
+		cfg.Component.Component.Resources = ComponentResources(c.Resources, cfg.Component.GPU)
+		a := &Action{ID: actionID(ResourceSubject, name), Subject: ResourceSubject, Name: name, Provider: prov.Name, ConnectionID: connection.ID, Region: region, Engine: provider.ResourceEngine, Creates: componentCreates(kind.Title, c.Component), Resource: cfg, Step: 1}
+		p.diff(a, cfg, cfg.Provider, cfg.Region)
+		p.namedChanges(a)
+		p.cacheResize(name, base, kind, a, prov.Cloud)
+		p.resources[name] = a
+		p.actions = append(p.actions, a)
+		return
+	}
+
 	// Components start after the deepest action they use: step 2 after a
 	// database, later after a composed resource's parent, which publishes
 	// its outputs only once its own components are up.
@@ -657,10 +672,10 @@ func (p *planner) sameTarget(name string, connected *Action) bool {
 
 // provision plans a dependency a composed resource gets one of its own of:
 // an ordinary database of the dependency's first kind, named for it, or
-// the one component of a dependency-only kind.
+// the directly bound process of a reusable service or dependency-only kind.
 func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.Dependency, action string, prov *provider.Provider, set manifest.ResourceSettings, connection *ConnectionOption, region string) *Action {
 	kind := firstKind(dep)
-	if only, ok := p.kinds().Kind(kind); ok && only.Placement == recipes.PlacementDependency {
+	if only, ok := p.kinds().Kind(kind); ok && only.DirectService() {
 		return p.provisionComponent(name, base, dep, only, action, prov, connection, region, set.GPU)
 	}
 	engine, ok := p.kinds().Engine(kind)
@@ -727,7 +742,7 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 	return a
 }
 
-// provisionComponent plans the one process of a dependency-only kind as
+// provisionComponent plans the directly bound process of a kind as
 // a component action of its own, named for the dependency. It publishes
 // its own outputs and secrets, so it's its own resource; no composition
 // action is planned for it.
@@ -758,7 +773,7 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
 		return nil
 	}
-	// The registry gives a dependency-only kind exactly one component, a
+	// The registry gives a direct service exactly one component, a
 	// process; never run anything else as the dependency.
 	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Role == recipes.RoleProcess })
 	if i < 0 {
@@ -770,6 +785,9 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 		Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: ReviewedConnectionSettings(connection.Cloud, connection.Details),
 		Kind: kind.Name, Version: composition.Version,
 		Component: &ComponentConfig{Kind: kind.Name, Resource: action, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component)},
+	}
+	if len(kind.Settings) > 0 {
+		cfg.Component.Settings = p.resourceSettings(name, path, manifest.Resource{}, kind)
 	}
 	cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, gpu, connection)
 	a := &Action{

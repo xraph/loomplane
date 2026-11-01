@@ -43,16 +43,17 @@ const (
 // connect to and the secrets Loomplane generates for them. A kind lives in
 // its own file and registers itself with MustRegister from init.
 type Kind struct {
-	Name         string            `json:"name"` // manifest kind
-	Title        string            `json:"title"`
-	Description  string            `json:"description,omitempty"`
-	Placement    Placement         `json:"placement"`
-	Targets      []string          `json:"targets"`  // subset of "server", "kubernetes"
-	Releases     []Release         `json:"releases"` // newest first; Releases[0].Version is the default
-	Dependencies []Dependency      `json:"dependencies,omitempty"`
-	Secrets      []GeneratedSecret `json:"secrets,omitempty"`
-	Components   []Component       `json:"components"`
-	Outputs      []Output          `json:"outputs,omitempty"` // Outputs[0] is the primary, kept under the resource's "url"
+	Name         string             `json:"name"` // manifest kind
+	Title        string             `json:"title"`
+	Description  string             `json:"description,omitempty"`
+	Placement    Placement          `json:"placement"`
+	Service      *ServiceDefinition `json:"service,omitempty"`
+	Targets      []string           `json:"targets"`  // subset of "server", "kubernetes"
+	Releases     []Release          `json:"releases"` // newest first; Releases[0].Version is the default
+	Dependencies []Dependency       `json:"dependencies,omitempty"`
+	Secrets      []GeneratedSecret  `json:"secrets,omitempty"`
+	Components   []Component        `json:"components"`
+	Outputs      []Output           `json:"outputs,omitempty"` // Outputs[0] is the primary, kept under the resource's "url"
 	// ConsumerOptions are the values a consuming service chooses when it
 	// links, such as a tenant, passed to the kind's ConsumerBinder.
 	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
@@ -73,6 +74,14 @@ type Kind struct {
 	// one sentence, with {resource} and {environment} for the names. The
 	// planner falls back to naming the enabled setting without it.
 	OptInAdvice string `json:"-"`
+}
+
+// ServiceDefinition describes a reusable process's published connection fields.
+// Recovery and BackupFormat identify a native adapter when both are set.
+type ServiceDefinition struct {
+	Connection   map[string]string `json:"connection"`
+	Recovery     string            `json:"recovery,omitempty"`
+	BackupFormat string            `json:"backup_format,omitempty"`
 }
 
 // Setting is a value a resource of the kind sets under
@@ -259,8 +268,8 @@ type EnvVar struct {
 type Ref struct {
 	Dependency string `json:"dependency,omitempty"` // a Dependency.Name
 	Component  string `json:"component,omitempty"`  // a sibling Component.Name
-	// Field is, for dependencies, a Field constant, or on a dependency-only
-	// kind "url", "output:<name>" or "secret:<name>"; for components
+	// Field is, for dependencies, a Field constant, or on a direct service
+	// "url", "output:<name>" or "secret:<name>"; for components
 	// "url:<port name>" or "address:<port name>".
 	Field string `json:"field"`
 }
@@ -435,6 +444,11 @@ type OutputInfo struct {
 // clone copies every slice, map and pointer so a registered kind never
 // shares memory with its caller.
 func (k Kind) clone() Kind {
+	if k.Service != nil {
+		service := *k.Service
+		service.Connection = maps.Clone(service.Connection)
+		k.Service = &service
+	}
 	k.Targets = slices.Clone(k.Targets)
 	k.Releases = slices.Clone(k.Releases)
 	for i := range k.Releases {

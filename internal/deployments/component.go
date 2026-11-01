@@ -274,7 +274,7 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 		return nil, errors.New("the component's target differs from the reviewed connection")
 	}
 	component := cfg.Component.Component
-	if dependencyOnly(kind) && cfg.Component.Resource != job.Action.Name {
+	if kind.DirectService() && cfg.Component.Resource != job.Action.Name {
 		return nil, errRecipeChanged
 	}
 	if component.Role == recipes.RoleJob {
@@ -313,7 +313,7 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	if keepErr := job.Keep(ctx, componentAddressField, address); keepErr != nil {
 		return nil, keepErr
 	}
-	if dependencyOnly(kind) {
+	if kind.DirectService() {
 		// It's its own composed resource, so it publishes what the kind
 		// it's part of reads, under its own name, as a parent does.
 		reads := e.reads(job, kind, cfg.Component.Resource, nil)
@@ -706,7 +706,7 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		GPU:            cloneGPUPlacement(cfg.Component.GPU),
 	}
 	reads := e.reads(job, kind, cfg.Component.Resource, cfg.Component.Dependencies)
-	if dependencyOnly(kind) {
+	if kind.DirectService() {
 		reads.self = run.Component.Name
 	}
 	secret := map[string]bool{}
@@ -774,11 +774,6 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 	return run, secret, nil
 }
 
-// dependencyOnly reports whether a kind is only ever another kind's
-// dependency. Its one component runs as its own composed resource, under
-// its action's name.
-func dependencyOnly(kind recipes.Kind) bool { return kind.Placement == recipes.PlacementDependency }
-
 // compositionReads resolves what a composed resource's variables and
 // outputs read: its dependencies, its components' addresses and its
 // generated secrets.
@@ -790,7 +785,7 @@ type compositionReads struct {
 	// name and whose components run as "<resource>--<component>".
 	resource     string
 	dependencies map[string]planning.DependencyChoice
-	// self is a dependency-only kind's component, which runs under the
+	// self is a direct service's component, which runs under the
 	// action's own name; "" for any other kind.
 	self string
 	// external is each external endpoint's DSN, once it's checked again.
@@ -836,7 +831,7 @@ const adminUser = "postgres"
 
 // dependency reads one field of a dependency: a field of the address of
 // what it connects to, with the superuser's credentials for admin-url,
-// or what a dependency-only kind published, for output:<name> and
+// or what a direct service published, for output:<name> and
 // secret:<name>. on is false for an optional dependency that's off.
 // Nothing it returns as an error quotes an address or a secret.
 func (r *compositionReads) dependency(ctx context.Context, dependency, field string) (value string, on bool, err error) {
@@ -862,11 +857,21 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 			return address, true, nil
 		}
 	case planning.DependencyNew, planning.DependencyResource:
+		connectionURLField := ResourceURL
+		if !published {
+			if kind, found := r.e.kinds().Kind(choice.Kind); found && kind.Service != nil {
+				connectionURLField = cmp.Or(serviceConnectionField(kind, recipes.FieldURL), ResourceURL)
+				if key := serviceConnectionField(kind, field); key != "" {
+					value, err = r.kept(ctx, choice.Resource, key)
+					return value, err == nil, err
+				}
+			}
+		}
 		if published {
 			value, err = r.kept(ctx, choice.Resource, field)
 			return value, err == nil, err
 		}
-		if address, err = r.kept(ctx, choice.Resource, ResourceURL); err != nil {
+		if address, err = r.kept(ctx, choice.Resource, connectionURLField); err != nil {
 			return "", false, err
 		}
 		if field == recipes.FieldAdminURL {
@@ -888,6 +893,21 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 		return "", false, fmt.Errorf("%s's %s dependency: %w", r.resource, dependency, err)
 	}
 	return value, true, nil
+}
+
+// serviceConnectionField is the Vault field for a declared connection output.
+func serviceConnectionField(kind recipes.Kind, field string) string {
+	if kind.Service == nil {
+		return ""
+	}
+	output := kind.Service.Connection[field]
+	if output == "" {
+		return ""
+	}
+	if len(kind.Outputs) > 0 && kind.Outputs[0].Name == output {
+		return ResourceURL
+	}
+	return "output:" + output
 }
 
 // kept reads a field a dependency's action kept.
@@ -1444,7 +1464,7 @@ func (e *OwnedTarget) forgetComposition(ctx context.Context, b *planning.Binding
 }
 
 // forgetComponent forgets a component's address and, for a
-// dependency-only kind's, what it published under its own name.
+// direct service's, what it published under its own name.
 func (e *OwnedTarget) forgetComponent(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
 	if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
 		return err
@@ -1507,12 +1527,12 @@ func forgetsKept(job *Job) bool {
 	return job.Action.Op == planning.Delete && !job.replacing
 }
 
-// forgetPublished forgets what a dependency-only kind's component
+// forgetPublished forgets what a direct service's component
 // published under its own name once it's gone: its outputs and generated
 // secrets. Any other component published nothing.
 func (e *OwnedTarget) forgetPublished(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
 	kind, ok := e.kinds().Kind(c.Kind)
-	if !ok || !dependencyOnly(kind) || c.Resource != b.Name {
+	if !ok || !kind.DirectService() || c.Resource != b.Name {
 		return nil
 	}
 	fields := []string{ResourceURL}
