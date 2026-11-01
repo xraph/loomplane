@@ -443,6 +443,22 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, orgID); checkErr != nil {
 		return false, checkErr
 	}
+	if status == StatusApproved {
+		var raw []byte
+		var project string
+		if readErr := tx.QueryRow(ctx, `SELECT project_id,result FROM loomplane_plans WHERE org_id=$1 AND id=$2 FOR UPDATE`, orgID, id).Scan(&project, &raw); readErr != nil {
+			return false, readErr
+		}
+		var result Result
+		if len(raw) > 0 {
+			if decodeErr := json.Unmarshal(raw, &result); decodeErr != nil {
+				return false, decodeErr
+			}
+		}
+		if checkErr := validateLocationActionsTx(ctx, tx, orgID, project, result.Actions, now); checkErr != nil {
+			return false, ErrStale
+		}
+	}
 	if actor, ok := security.PrincipalFrom(ctx); ok {
 		raw, marshalErr := json.Marshal(actor)
 		if marshalErr != nil {

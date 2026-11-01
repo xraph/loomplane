@@ -123,6 +123,7 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 }
 
 func (p *planner) configureTarget(name, base string, prov *provider.Provider, set manifest.Settings, cfg *ServiceConfig) {
+	cfg.Placement = set.Placement
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		c := p.targetConnection(name, base+".cloud_target", "target", prov.Cloud, placement.ConnectionID)
 		if c != nil {

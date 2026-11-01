@@ -154,24 +154,25 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	Worker                *provider.WorkerSettings   `json:"worker,omitempty"`
-	CapacityMode          string                     `json:"capacity_mode,omitempty"`
-	ClusterDemand         *ClusterWorkloadDemand     `json:"cluster_demand,omitempty"`
-	FrontendDemand        *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
-	CapacityIntent        *CapacityIntent            `json:"capacity_intent,omitempty"`
-	AppliedInputs         *AppliedInputs             `json:"applied_inputs,omitempty"`
-	CloudPlacement        *CloudPlacement            `json:"cloud_placement,omitempty"`
-	Catalog               *recipes.Recipe            `json:"catalog,omitempty"`
-	Provider              string                     `json:"provider"`
-	Region                string                     `json:"region,omitempty"`
-	Target                string                     `json:"target,omitempty"`
-	TargetSettings        map[string]string          `json:"target_settings,omitempty"`
-	TargetAccountIdentity string                     `json:"target_account_identity,omitempty"`
-	Endpoint              *manifest.Endpoint         `json:"endpoint,omitempty"`
-	HealthPath            string                     `json:"health_path,omitempty"`
-	BuildTarget           *BuildTarget               `json:"build_target,omitempty"`
-	Workload              provider.Workload          `json:"workload"`
-	Execution             provider.Execution         `json:"execution"`
+	Worker                *provider.WorkerSettings       `json:"worker,omitempty"`
+	Placement             *manifest.PlacementConstraints `json:"placement,omitempty"`
+	CapacityMode          string                         `json:"capacity_mode,omitempty"`
+	ClusterDemand         *ClusterWorkloadDemand         `json:"cluster_demand,omitempty"`
+	FrontendDemand        *cloudinfra.FrontendDemand     `json:"frontend_demand,omitempty"`
+	CapacityIntent        *CapacityIntent                `json:"capacity_intent,omitempty"`
+	AppliedInputs         *AppliedInputs                 `json:"applied_inputs,omitempty"`
+	CloudPlacement        *CloudPlacement                `json:"cloud_placement,omitempty"`
+	Catalog               *recipes.Recipe                `json:"catalog,omitempty"`
+	Provider              string                         `json:"provider"`
+	Region                string                         `json:"region,omitempty"`
+	Target                string                         `json:"target,omitempty"`
+	TargetSettings        map[string]string              `json:"target_settings,omitempty"`
+	TargetAccountIdentity string                         `json:"target_account_identity,omitempty"`
+	Endpoint              *manifest.Endpoint             `json:"endpoint,omitempty"`
+	HealthPath            string                         `json:"health_path,omitempty"`
+	BuildTarget           *BuildTarget                   `json:"build_target,omitempty"`
+	Workload              provider.Workload              `json:"workload"`
+	Execution             provider.Execution             `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -507,12 +508,13 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	RequiredRuntimeProtocol string    `json:"required_runtime_protocol,omitempty"`
-	CloudSyncID             string    `json:"cloud_sync_id,omitempty"`
-	Actions                 []Action  `json:"actions"`
-	Problems                []Finding `json:"problems"`
-	Warnings                []Finding `json:"warnings"`
-	Summary                 Summary   `json:"summary"`
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Actions                 []Action                             `json:"actions"`
+	Problems                []Finding                            `json:"problems"`
+	Warnings                []Finding                            `json:"warnings"`
+	Summary                 Summary                              `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -679,9 +681,10 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	RequiredRuntimeProtocol string `json:"required_runtime_protocol,omitempty"`
-	CloudSyncID             string `json:"cloud_sync_id,omitempty"`
-	Catalog                 bool   `json:"catalog"`
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Catalog                 bool                                 `json:"catalog"`
 	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
 	// fields below equal their column names: the realtime trigger
 	// serialises rows with to_jsonb.
@@ -733,6 +736,7 @@ type Plan struct {
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
 func (p *Plan) setResult(r *Result) {
+	p.LocationPlacements = r.LocationPlacements
 	p.CloudSyncID = r.CloudSyncID
 	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
@@ -743,6 +747,7 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
+		LocationPlacements:      p.LocationPlacements,
 		CloudSyncID:             p.CloudSyncID,
 		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,
 		Actions:                 p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,

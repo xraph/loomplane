@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // AppliedInputReader verifies access to encrypted variables and source artifacts.
@@ -359,6 +360,47 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			selector = defaultPlacementSelector
 		}
 		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
+		locationReviews := []*cloudprofiles.LocationReview{}
+		priorLocations := map[string]locationSelection{}
+		for i := range result.Actions {
+			action := &result.Actions[i]
+			if action.Service == nil || action.Service.Placement == nil {
+				continue
+			}
+			cfg := action.Service
+			pin := cfg.CloudPlacement
+			if cfg.CapacityIntent != nil {
+				pin = &CloudPlacement{TargetID: cfg.CapacityIntent.Demand.TargetID, TargetName: cfg.CapacityIntent.TargetName}
+			}
+			if pin == nil || !selectsPlacement(selector, pin) {
+				continue
+			}
+			set := manifest.Settings{Placement: cfg.Placement, CloudTarget: pin.TargetName, Size: cfg.Size, Scale: cfg.Scale}
+			_, selection, placementErr := s.selectLocation(ctx, plan, after, set, action.Name, planningBindings, options, nil, cfg.Repo, priorLocations, &locationCapacityReview{Intent: cfg.CapacityIntent, Placement: cfg.CloudPlacement, Before: preview.Before}, locationRequirements{Workload: cfg.Workload})
+			if result.LocationPlacements == nil {
+				result.LocationPlacements = map[string]LocationPlacementDecision{}
+			}
+			result.LocationPlacements[action.Name] = selection.Decision
+			if placementErr != nil {
+				result.Problems = append(result.Problems, Finding{Code: "location-placement", Subject: ServiceSubject, Name: action.Name, Message: placementErr.Error()})
+				result.Executable = false
+				continue
+			}
+			if cfg.CapacityIntent != nil {
+				cfg.CapacityIntent.Demand.LocationReview = selection.Review
+				cfg.CapacityIntent.Demand.IntentHash = ""
+				hash, hashErr := Digest(cfg.CapacityIntent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				cfg.CapacityIntent.Demand.IntentHash = hash
+			} else {
+				cfg.CloudPlacement.LocationReview = selection.Review
+			}
+			priorLocations[action.Name] = selection
+			locationReviews = append(locationReviews, selection.Review)
+		}
+
 		for i := range result.Actions {
 			a := &result.Actions[i]
 			c := compensations[a.ID]
@@ -461,7 +503,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if string(routeSnapshot) == "null" {
 			routeSnapshot = []byte("[]")
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {

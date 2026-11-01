@@ -109,6 +109,9 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	if err := lockCapacityCloud(ctx, tx, d.OrgID, d.CloudID); err != nil {
 		return nil, err
 	}
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, d.OrgID, d.ProjectID, d.LocationReview, time.Now()); checkErr != nil {
+		return nil, checkErr
+	}
 	p, err := capacityPolicyTx(ctx, tx, d.OrgID, d.CloudID)
 	if err != nil {
 		return nil, err

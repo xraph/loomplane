@@ -89,7 +89,7 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			return err
 		}
 		pin := *cfg.CloudPlacement
-		in := cloudinfra.ClusterWorkloadInput{ID: id.String(), OrgID: plan.OrgID, CloudID: pin.CloudID, TargetID: pin.TargetID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, ActionID: a.ID, Service: a.Name}
+		in := cloudinfra.ClusterWorkloadInput{LocationReview: pin.LocationReview, ID: id.String(), OrgID: plan.OrgID, CloudID: pin.CloudID, TargetID: pin.TargetID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, ActionID: a.ID, Service: a.Name}
 		in, snapshot, err := cloudinfra.NewPgStore(st.db).ClusterWorkloadReview(ctx, in)
 		if err != nil {
 			return err
@@ -229,6 +229,9 @@ func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan 
 		return checkErr
 	}
 	guard := func(ctx context.Context, tx driver.Tx, in cloudinfra.ClusterWorkloadInput) error {
+		if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, plan.OrgID, plan.ProjectID, in.LocationReview, s.now()); checkErr != nil {
+			return checkErr
+		}
 		var current bool
 		if e := tx.QueryRow(ctx, `SELECT p.status='approved' AND p.revision=$3 AND i.body=$5::jsonb AND loomplane_cluster_workload_scope_current(p,i.body) AND NOT EXISTS(SELECT 1 FROM loomplane_deployments x WHERE x.org_id=p.org_id AND x.plan_id=p.id AND x.status='cancelled') FROM loomplane_plans p JOIN loomplane_cluster_workload_intents i ON i.org_id=p.org_id AND i.plan_id=p.id WHERE p.org_id=$1 AND p.id=$2 AND i.service=$4 FOR UPDATE OF p,i`, plan.OrgID, plan.ID, plan.Revision, a.Name, raw).Scan(&current); e != nil {
 			return e

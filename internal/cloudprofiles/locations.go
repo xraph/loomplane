@@ -12,6 +12,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // FailureDomain records a fact and its provenance. A name alone proves no isolation.
@@ -286,7 +287,7 @@ func attestLocation(location CloudLocation, in LocationVerificationInput, actor 
 		}
 	}
 	for _, domain := range in.FailureDomains {
-		if domain.Kind == "" || domain.ID == "" || domain.ID == "unknown" || len(domain.DependencyIDs) > 64 {
+		if domain.Kind == "" || domain.ID == "" || domain.ID == "unknown" || len(domain.DependencyIDs) > 64 || domain.Kind == "residency" && !manifest.ResidencyCode(domain.ID) {
 			return nil, ErrInvalid
 		}
 		facts = append(facts, FailureDomain{Kind: domain.Kind, ID: domain.ID, Source: "operator-attested", Verified: true, DependencyIDs: append([]string{}, domain.DependencyIDs...)})

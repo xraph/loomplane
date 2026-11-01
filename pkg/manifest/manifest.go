@@ -173,7 +173,8 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
-	Worker *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
+	Worker    *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
+	Placement *PlacementConstraints            `json:"placement,omitempty" yaml:"placement,omitempty"`
 	// CapacityMode chooses managed workload reservation semantics.
 	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
 	// CloudSQLNetwork is the explicit application route for PSC attachments.
@@ -813,6 +814,11 @@ func checkFarp(add func(string, string, ...any), path string, f *Farp) {
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if s.Placement != nil {
+		if err := s.Placement.Validate(); err != nil {
+			add(path+".placement", "%s", err)
+		}
+	}
 	if n := s.CloudSQLNetwork; n != nil {
 		region := s.Region
 		if parts := strings.Split(n.Subnetwork, "/"); region == "" && len(parts) == 6 {
@@ -1134,6 +1140,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	out := s.Settings
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
+	if o.Placement != nil {
+		out.Placement = o.Placement
+	}
 	if !ok {
 		return cloudTagDefaults(out, d)
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -20,6 +21,8 @@ type DrainReview struct {
 	Usage          *ServerUsage `json:"usage"`
 }
 type MoveInput struct {
+	// Architecture is an explicit destination requirement; absent keeps the serving architecture.
+	Architecture        string `json:"architecture,omitempty"`
 	ProjectID           string `json:"project_id"`
 	EnvironmentID       string `json:"environment_id"`
 	Service             string `json:"service"`
@@ -133,6 +136,9 @@ func (s *Service) PreviewMove(ctx context.Context, p security.Principal, cloud s
 	return st.previewMove(ctx, p.OrgID, cloud, in)
 }
 func (s *PgStore) previewMove(ctx context.Context, org, cloud string, in MoveInput) (*MoveReview, error) {
+	if in.Architecture != "" && in.Architecture != "amd64" && in.Architecture != "arm64" {
+		return nil, ErrInvalid
+	}
 	var cfg []byte
 	var bindingID, revision string
 	err := s.db.QueryRow(ctx, `SELECT id,revision,config FROM loomplane_bindings WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND subject='service' AND name=$4`, org, in.ProjectID, in.EnvironmentID, in.Service).Scan(&bindingID, &revision, &cfg)
@@ -182,7 +188,11 @@ func (s *PgStore) previewMove(ctx context.Context, org, cloud string, in MoveInp
 	if pin.CloudID != cloud || pin.PoolID != in.PoolID || in.DestinationServerID == "" || pin.ServerID == in.DestinationServerID {
 		return nil, ErrInvalid
 	}
-	placement, err := s.PreviewPlacement(ctx, PlacementRequest{OrgID: org, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, CloudID: cloud, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: in.PoolID, Service: in.Service, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, Architecture: old.TargetSettings["architecture"], StickyServerID: pin.ServerID, DestinationServerID: in.DestinationServerID})
+	architecture := in.Architecture
+	if architecture == "" {
+		architecture = old.TargetSettings["architecture"]
+	}
+	placement, err := s.PreviewPlacement(ctx, PlacementRequest{OrgID: org, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, CloudID: cloud, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: in.PoolID, Service: in.Service, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, Architecture: architecture, StickyServerID: pin.ServerID, DestinationServerID: in.DestinationServerID})
 	if err != nil {
 		return nil, err
 	}
@@ -196,17 +206,45 @@ func (s *Service) AcceptMove(ctx context.Context, p security.Principal, cloud st
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	out, err := s.PreviewMove(ctx, p, cloud, in)
+	if _, err := s.authorize(ctx, p, cloud); err != nil {
+		return nil, err
+	}
+	st, ok := s.Store.(*PgStore)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, p.OrgID); lockErr != nil {
+		return nil, lockErr
+	}
+	var source string
+	if err = tx.QueryRow(ctx, `SELECT config->'cloud_placement'->>'server_id' FROM loomplane_bindings WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND subject='service' AND name=$4 FOR UPDATE`, p.OrgID, in.ProjectID, in.EnvironmentID, in.Service).Scan(&source); err != nil {
+		return nil, storeError(err)
+	}
+	// Freeze both inventory records and their runtime identities while replaying the review.
+	if _, err = tx.Exec(ctx, `SELECT id FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND id=ANY($3) ORDER BY id FOR SHARE`, p.OrgID, cloud, []string{source, in.DestinationServerID}); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT id FROM loomplane_cloud_connections WHERE org_id=$1 AND id IN (SELECT runtime_connection_id FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND id=ANY($3)) ORDER BY id FOR SHARE`, p.OrgID, cloud, []string{source, in.DestinationServerID}); err != nil {
+		return nil, err
+	}
+	out, err := st.previewMove(ctx, p.OrgID, cloud, in)
 	if err != nil {
 		return nil, err
 	}
 	if in.Review == "" || in.Review != out.Review {
 		return nil, ErrConflict
 	}
-	st, ok := s.Store.(*PgStore)
-	if !ok {
-		return nil, ErrInvalid
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_placement_moves(org_id,project_id,environment_id,service,cloud_id,pool_id,source_server_id,destination_server_id,review,expires_at,source_config) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(org_id,environment_id,service) DO UPDATE SET source_server_id=excluded.source_server_id,destination_server_id=excluded.destination_server_id,review=excluded.review,expires_at=excluded.expires_at,source_config=excluded.source_config WHERE loomplane_placement_moves.project_id=excluded.project_id AND loomplane_placement_moves.cloud_id=excluded.cloud_id AND loomplane_placement_moves.pool_id=excluded.pool_id`, p.OrgID, in.ProjectID, in.EnvironmentID, in.Service, cloud, in.PoolID, out.SourceServerID, in.DestinationServerID, out.Review, s.now().Add(15*time.Minute), out.SourceConfig)
+	if err != nil {
+		return nil, err
 	}
-	_, err = st.db.Exec(ctx, `INSERT INTO loomplane_placement_moves(org_id,project_id,environment_id,service,cloud_id,pool_id,source_server_id,destination_server_id,review,expires_at,source_config) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(org_id,environment_id,service) DO UPDATE SET source_server_id=excluded.source_server_id,destination_server_id=excluded.destination_server_id,review=excluded.review,expires_at=excluded.expires_at,source_config=excluded.source_config WHERE loomplane_placement_moves.project_id=excluded.project_id AND loomplane_placement_moves.cloud_id=excluded.cloud_id AND loomplane_placement_moves.pool_id=excluded.pool_id`, p.OrgID, in.ProjectID, in.EnvironmentID, in.Service, cloud, in.PoolID, out.SourceServerID, in.DestinationServerID, out.Review, s.now().Add(15*time.Minute), out.SourceConfig)
-	return out, err
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, commitErr
+	}
+	return out, nil
 }

@@ -245,3 +245,17 @@ func TestPlanEgressRedactsHistoricalAuthorityWithoutChangingCursor(t *testing.T)
 		e.authz = permissionFixture{}
 	}
 }
+
+func TestPlanEgressExcludesPrivateLocationReview(t *testing.T) {
+	raw := json.RawMessage(`{"id":"p","project_id":"restricted","actions":[{"id":"service:api","service":{"capacity_intent":{"demand":{"target_id":"granted-target","location_review":{"policy":{"preferred_locations":["private-ungranted-location"]},"candidates":[{"runtime_connection_id":"private-runtime-pin"}]}}}}}]}`)
+	e := &Extension{authz: permissionFixture{}}
+	for _, kind := range []string{"plan.created", "plan.updated", "plan.deleted"} {
+		got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, []store.Event{{ID: "cursor", OrgID: "org", ProjectID: "restricted", Type: kind, Data: raw}})
+		if err != nil || len(got) != 1 {
+			t.Fatalf("event: %+v %v", got, err)
+		}
+		if strings.Contains(string(got[0].Data), "private-") || strings.Contains(string(got[0].Data), "location_review") || got[0].ID != "cursor" {
+			t.Fatalf("unsafe public event: %+v", got)
+		}
+	}
+}

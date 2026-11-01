@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -23,7 +24,10 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	ResourceEndpoints      map[string]EndpointPin
+	ResourceEndpoints map[string]EndpointPin
+	// Server-derived applied actions for explicit unconstrained pool moves.
+	appliedMoves           map[string]Action
+	appliedMoveProblems    []Finding
 	ExistingResources      map[string]ExistingResourceCheck
 	ExistingResourceChecks map[string]EndpointCheck
 	ProjectID              string
@@ -184,6 +188,7 @@ func Compute(in Input) *Result {
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
 	}
+	p.problems = append(p.problems, in.appliedMoveProblems...)
 	p.planResources()
 	p.planLinks()
 	p.planServices()
@@ -607,6 +612,14 @@ func (p *planner) planServices() {
 			held = append(held, name)
 			continue
 		}
+		if move, ok := p.in.appliedMoves[name]; ok {
+			if prov, err := p.in.Providers.Get(move.Provider); err == nil {
+				p.use(prov)
+			}
+			p.services[name] = &move
+			p.actions = append(p.actions, &move)
+			continue
+		}
 		repo, ok := p.repoOf(name, base, s)
 		if !ok {
 			continue
@@ -668,6 +681,8 @@ func (p *planner) planServices() {
 		case a == nil:
 		case isHeld:
 			p.linkHeld(a)
+		case p.in.appliedMoves[name].Service != nil:
+			p.linkAppliedMove(a)
 		default:
 			p.link(name, a)
 		}
@@ -2037,7 +2052,7 @@ func (p *planner) order() {
 // needs, or for a held service, what it was deployed against. Those can
 // form a cycle validation never saw, which order cuts at step 2.
 func (p *planner) needs(name string, a *Action) []string {
-	if _, held := p.held[name]; !held {
+	if _, held := p.held[name]; !held && p.in.appliedMoves[name].Service == nil {
 		return p.in.Manifest.Services[name].Needs
 	}
 	var out []string
@@ -2112,7 +2127,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Service != nil && a.Service.CloudPlacement != nil {
 			var previous ServiceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Service.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Service.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2123,7 +2138,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Resource != nil && a.Resource.CloudPlacement != nil {
 			var previous ResourceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Resource.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Resource.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2283,7 +2298,7 @@ func (p *planner) checkFindings() {
 	for _, name := range m.ServiceNames() {
 		// A held service's manifest entry waits, so what it says about
 		// its needs isn't worth a warning in this plan.
-		if _, held := p.held[name]; p.services[name] == nil || held {
+		if _, held := p.held[name]; p.services[name] == nil || held || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		gs := p.graphServices[name]

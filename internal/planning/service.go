@@ -778,14 +778,40 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 	}
 	intents := map[string]*CapacityIntent{}
+	locationSelections := map[string]locationSelection{}
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
+		var pools map[string]*cloudinfra.Placement
+		var poolErr error
+		constrained := false
+		for _, svc := range resolutionManifest.Services {
+			constrained = constrained || svc.For(plan.Environment, resolutionManifest.Defaults).Placement != nil
+		}
+		if constrained {
+			pools, poolErr = s.resolvePoolsWithLocationInput(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, locationSelections, Input{Graph: g, Chosen: chosen}, intents)
+		} else {
+			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
+		}
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
 			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
+		}
+	}
+	for name, selection := range locationSelections {
+		if pin, ok := placements[name]; ok {
+			pin.LocationReview = selection.Review
+			placements[name] = pin
+		}
+		if intent := intents[name]; intent != nil {
+			intent.Demand.LocationReview = selection.Review
+			intent.Demand.IntentHash = ""
+			hash, hashErr := Digest(intent)
+			if hashErr != nil {
+				return nil, "", hashErr
+			}
+			intent.Demand.IntentHash = hash
 		}
 	}
 	routes, routeErr := s.releaseRoutes(ctx, plan)
@@ -828,8 +854,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			endpointChecks = map[string]EndpointCheck{}
 		}
 		maps.Copy(endpointChecks, existingChecks)
+		var moves map[string]Action
+		var moveProblems []Finding
+		if len(locationSelections) > 0 {
+			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
+		}
 		result = Compute(Input{
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
+			appliedMoves:      moves, appliedMoveProblems: moveProblems,
 			ProjectID:         plan.ProjectID,
 			ExistingResources: existing, ExistingResourceChecks: existingChecks,
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
@@ -840,7 +872,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
 		})
 	}
-	if resolutionErr == nil && poolRelocation(bindings, placements) {
+	if resolutionErr == nil && len(locationSelections) == 0 && poolRelocation(bindings, placements) {
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
 		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
 	}
@@ -861,6 +893,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if frontendErr := s.pinFrontendDemands(ctx, plan, result); frontendErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "frontend-governance", Message: frontendErr.Error()})
 		result.Executable = false
+	}
+	for name, selection := range locationSelections {
+		if result.LocationPlacements == nil {
+			result.LocationPlacements = map[string]LocationPlacementDecision{}
+		}
+		result.LocationPlacements[name] = selection.Decision
 	}
 	if workloadErr := s.PrepareClusterWorkloadDemands(ctx, plan, result); workloadErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "cluster-capacity", Message: workloadErr.Error()})

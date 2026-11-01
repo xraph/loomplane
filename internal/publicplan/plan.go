@@ -219,8 +219,27 @@ type BuildTarget struct {
 	RegistrySettings map[string]string `json:"registry_settings,omitempty"`
 }
 
+// CapacityDemand is the project-visible capacity request. Server-owned location
+// policy and runtime authority stay in the stored planning demand.
+type CapacityDemand struct {
+	OrgID          string                    `json:"org_id"`
+	CloudID        string                    `json:"cloud_id"`
+	PoolID         string                    `json:"pool_id"`
+	TargetID       string                    `json:"target_id"`
+	ProjectID      string                    `json:"project_id"`
+	EnvironmentID  string                    `json:"environment_id"`
+	PlanID         string                    `json:"plan_id"`
+	Service        string                    `json:"service"`
+	Architecture   string                    `json:"architecture"`
+	StickyServerID string                    `json:"sticky_server_id"`
+	Resources      cloudinfra.ResourceVector `json:"resources"`
+	LocalData      bool                      `json:"local_data"`
+	PolicyRevision int64                     `json:"policy_revision"`
+	IntentHash     string                    `json:"intent_hash"`
+}
+
 type CapacityIntent struct {
-	Demand             cloudinfra.CapacityDemand      `json:"demand"`
+	Demand             CapacityDemand                 `json:"demand"`
 	Template           cloudinfra.PoolExpansionPolicy `json:"template"`
 	TemplateHash       string                         `json:"template_hash"`
 	CommitSHA          string                         `json:"commit_sha"`
@@ -326,7 +345,9 @@ func projectCapacityIntent(v *planning.CapacityIntent) *CapacityIntent {
 	if v == nil {
 		return nil
 	}
-	return &CapacityIntent{Demand: v.Demand, Template: v.Template, TemplateHash: v.TemplateHash, CommitSHA: v.CommitSHA, AssignmentRevision: v.AssignmentRevision, CloudRevision: v.CloudRevision, TargetRevision: v.TargetRevision, GrantRevision: v.GrantRevision, TargetName: v.TargetName}
+	d := v.Demand
+	demand := CapacityDemand{OrgID: d.OrgID, CloudID: d.CloudID, PoolID: d.PoolID, TargetID: d.TargetID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, Service: d.Service, Architecture: d.Architecture, StickyServerID: d.StickyServerID, Resources: d.Resources, LocalData: d.LocalData, PolicyRevision: d.PolicyRevision, IntentHash: d.IntentHash}
+	return &CapacityIntent{Demand: demand, Template: v.Template, TemplateHash: v.TemplateHash, CommitSHA: v.CommitSHA, AssignmentRevision: v.AssignmentRevision, CloudRevision: v.CloudRevision, TargetRevision: v.TargetRevision, GrantRevision: v.GrantRevision, TargetName: v.TargetName}
 }
 
 func projectCloudCompensation(v *planning.CloudCompensation) *CloudCompensation {

@@ -21,6 +21,8 @@ func (CloudLocationList) ForgeEnvelope() forge.EnvelopeDef {
 
 func (e *Extension) cloudLocationRoutes() []cloudRoute {
 	return []cloudRoute{
+		{http.MethodGet, "/clouds/:cloudId/location-policy", "cloudLocationPolicy.get", e.getCloudLocationPolicy, nil, cloudprofiles.LocationPolicy{}, http.StatusOK},
+		{http.MethodPut, "/clouds/:cloudId/location-policy", "cloudLocationPolicy.save", e.saveCloudLocationPolicy, cloudprofiles.LocationPolicy{}, cloudprofiles.LocationPolicy{}, http.StatusOK},
 		{http.MethodDelete, "/clouds/:cloudId/locations/:locationId", "cloudLocations.delete", e.deleteCloudLocation, CloudLocationDeleteInput{}, nil, http.StatusNoContent},
 		{http.MethodPost, "/clouds/:cloudId/locations/:locationId/verification", "cloudLocations.verify", e.verifyCloudLocation, cloudprofiles.LocationVerificationInput{}, cloudprofiles.CloudLocation{}, http.StatusOK},
 		{http.MethodGet, "/clouds/:cloudId/locations", "cloudLocations.list", e.listCloudLocations, nil, CloudLocationList{}, http.StatusOK},
@@ -89,4 +91,19 @@ func (e *Extension) deleteCloudLocation(c forge.Context) error {
 		return fail(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (e *Extension) getCloudLocationPolicy(c forge.Context) error {
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.GetLocationPolicy(ctx, p, c.Param("cloudId"))
+	})
+}
+func (e *Extension) saveCloudLocationPolicy(c forge.Context) error {
+	in, err := cloudBody[cloudprofiles.LocationPolicy](c)
+	if err != nil {
+		return err
+	}
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.SaveLocationPolicy(ctx, p, c.Param("cloudId"), in)
+	})
 }

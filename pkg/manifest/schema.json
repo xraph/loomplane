@@ -376,10 +376,26 @@
         }
       }
     },
+    "placementConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional checked location requirements. Environment overrides replace this block. Residency requires saved operator attestation.",
+      "properties": {
+        "allowed_locations": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "residency": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "runtime": { "enum": ["server", "kubernetes", "managed"] },
+        "architecture": { "enum": ["amd64", "arm64"] },
+        "gpu": { "$ref": "#/$defs/gpu" },
+        "network": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "storage": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "availability": { "enum": ["single", "independent-zone", "independent-datacenter"] }
+      }
+    },
     "settings": {
       "type": "object",
       "properties": {
         "worker": { "$ref": "#/$defs/workerSettings" },
+        "placement": { "$ref": "#/$defs/placementConstraints" },
         "capacity_mode": {
           "description": "Managed workload reservation mode. Guaranteed reserves your reviewed replica maximum; best effort grants no fleet expansion.",
           "enum": ["guaranteed", "best_effort"]

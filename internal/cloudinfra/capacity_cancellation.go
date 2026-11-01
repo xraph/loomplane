@@ -3,6 +3,9 @@ package cloudinfra
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 
 	"github.com/xraph/grove/driver"
 )
@@ -30,7 +33,7 @@ func guardDeploymentEffects(ctx context.Context, tx driver.Tx, org, plan string,
 	case "cancelled":
 		return ErrWorkloadCancelled
 	}
-	return nil
+	return cloudprofiles.ValidatePlanLocationReviewsTx(ctx, tx, org, plan, time.Now())
 }
 
 // CancelUnstartedCapacity runs inside the cancellation transaction, after its

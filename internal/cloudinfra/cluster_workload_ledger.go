@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
@@ -19,25 +20,26 @@ import (
 // ClusterWorkloadInput pins a reviewed maximum, including every guaranteed HPA
 // replica. Runtime release proof is bound after execution creates its receipt.
 type ClusterWorkloadInput struct {
-	Native          *ClusterNativeWorkload `json:"native,omitempty"`
-	ID              string                 `json:"id"`
-	OrgID           string                 `json:"org_id"`
-	CloudID         string                 `json:"cloud_id"`
-	ResourceID      string                 `json:"resource_id"`
-	TargetID        string                 `json:"target_id"`
-	AttachmentID    string                 `json:"attachment_id"`
-	ProjectID       string                 `json:"project_id"`
-	EnvironmentID   string                 `json:"environment_id"`
-	ConnectionID    string                 `json:"connection_id"`
-	PlanID          string                 `json:"plan_id"`
-	ActionID        string                 `json:"action_id"`
-	Service         string                 `json:"service"`
-	RuntimeRef      string                 `json:"runtime_ref"`
-	RuntimeRevision string                 `json:"runtime_revision"`
-	ReleaseID       string                 `json:"release_id"`
-	ReviewDigest    string                 `json:"review_digest"`
-	TrustRevision   int64                  `json:"trust_revision"`
-	Maximum         ClusterWorkloadVector  `json:"maximum"`
+	LocationReview  *cloudprofiles.LocationReview `json:"location_review,omitempty"`
+	Native          *ClusterNativeWorkload        `json:"native,omitempty"`
+	ID              string                        `json:"id"`
+	OrgID           string                        `json:"org_id"`
+	CloudID         string                        `json:"cloud_id"`
+	ResourceID      string                        `json:"resource_id"`
+	TargetID        string                        `json:"target_id"`
+	AttachmentID    string                        `json:"attachment_id"`
+	ProjectID       string                        `json:"project_id"`
+	EnvironmentID   string                        `json:"environment_id"`
+	ConnectionID    string                        `json:"connection_id"`
+	PlanID          string                        `json:"plan_id"`
+	ActionID        string                        `json:"action_id"`
+	Service         string                        `json:"service"`
+	RuntimeRef      string                        `json:"runtime_ref"`
+	RuntimeRevision string                        `json:"runtime_revision"`
+	ReleaseID       string                        `json:"release_id"`
+	ReviewDigest    string                        `json:"review_digest"`
+	TrustRevision   int64                         `json:"trust_revision"`
+	Maximum         ClusterWorkloadVector         `json:"maximum"`
 }
 
 type ClusterWorkloadHold struct {
@@ -70,6 +72,9 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 	}
 	if err := lockCapacityCloud(ctx, tx, in.OrgID, in.CloudID); err != nil {
 		return nil, err
+	}
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, in.OrgID, in.ProjectID, in.LocationReview, time.Now()); checkErr != nil {
+		return nil, checkErr
 	}
 	snapshot, err := clusterWorkloadScope(ctx, tx, in)
 	if err != nil {

@@ -57,3 +57,26 @@ func TestPublicPlanRequiredCollections(t *testing.T) {
 		t.Fatal("required public collections must encode as arrays")
 	}
 }
+
+func TestCapacityProjectionExcludesUnrelatedLocationPolicy(t *testing.T) {
+	var p planning.Plan
+	raw := `{"id":"p","project_id":"restricted","actions":[{"id":"service:api","service":{"capacity_intent":{"demand":{"project_id":"restricted","target_id":"granted-target","resources":{"cpu_millis":1000},"location_review":{"cloud_id":"cloud","policy":{"preferred_locations":["private-ungranted-location"]},"candidates":[{"target_id":"granted-target","runtime_connection_id":"private-runtime-pin","connection_generation":9}]}}}}}]}`
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(&p)
+	out, err := json.Marshal(Project(&p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "private-") || strings.Contains(string(out), "location_review") {
+		t.Fatalf("restricted project saw private authority: %s", out)
+	}
+	if !strings.Contains(string(out), "granted-target") || !strings.Contains(string(out), `"cpu_millis":1000`) {
+		t.Fatalf("lost safe capacity review: %s", out)
+	}
+	after, _ := json.Marshal(&p)
+	if string(before) != string(after) {
+		t.Fatal("projection modified persisted authority")
+	}
+}

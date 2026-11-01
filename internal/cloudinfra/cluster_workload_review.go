@@ -3,11 +3,17 @@ package cloudinfra
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"math"
 	"reflect"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
 func nativeTemplateBlock() error {
@@ -99,6 +105,9 @@ func (s *PgStore) nativeWorkloadSupply(ctx context.Context, tx driver.Tx, in Clu
 
 // ValidateClusterWorkloadProfile checks reviewed scheduler facts under admission locks.
 func (s *PgStore) ValidateClusterWorkloadProfile(ctx context.Context, tx driver.Tx, in ClusterWorkloadInput, profile ClusterSchedulingProfile) error {
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, in.OrgID, in.ProjectID, in.LocationReview, time.Now()); checkErr != nil {
+		return checkErr
+	}
 	snapshot, err := clusterWorkloadScope(ctx, tx, in)
 	if err != nil {
 		return err
@@ -150,4 +159,44 @@ func (s *PgStore) ValidateClusterWorkloadEffect(ctx context.Context, tx driver.T
 		return err
 	}
 	return nil
+}
+
+// PreviewLocationWorkload reuses ledger accounting without reserving capacity.
+// The immutable review must still pass normal admission before execution.
+func (s *PgStore) PreviewLocationWorkload(ctx context.Context, in ClusterWorkloadInput, planned ClusterWorkloadVector) (ClusterCapacitySnapshot, bool, error) {
+	checked, snapshot, err := s.ClusterWorkloadReview(ctx, in)
+	if err != nil {
+		return snapshot, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return snapshot, false, err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Error("rollback location capacity preview", "error", rollbackErr)
+		}
+	}()
+	if lockErr := lockCapacityCloud(ctx, tx, in.OrgID, in.CloudID); lockErr != nil {
+		return snapshot, false, lockErr
+	}
+	holds, err := clusterWorkloadHolds(ctx, tx, in.OrgID, checked.ResourceID)
+	if err != nil {
+		return snapshot, false, err
+	}
+	usage, supply, err := clusterWorkloadAdmission(ctx, tx, snapshot, holds)
+	if err != nil {
+		return snapshot, false, err
+	}
+	usage, err = clusterWorkloadUsage(usage, []clusterWorkloadCoverage{{Maximum: planned}, {Maximum: in.Maximum}})
+	if err != nil {
+		return snapshot, false, err
+	}
+	requested, available := workloadDimensions(usage), workloadDimensions(supply)
+	for i := range requested {
+		if requested[i] > available[i] {
+			return snapshot, false, nil
+		}
+	}
+	return snapshot, true, nil
 }
