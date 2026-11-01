@@ -99,6 +99,7 @@ type Extension struct {
 	plugins             *plugins.Set
 	manifests           *manifests.Service
 	plans               *planning.Service
+	memberPrerequisites *planning.MemberPrerequisiteService
 	deploys             *deployments.Service
 	activity            *activity.Service
 	artifacts           *artifacts.Store
@@ -132,7 +133,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 		plugins:       plugs,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Manifests and deployment plans"),
 		cfg:           cfg,
-		features:      map[string]bool{recipes.FeatureAI: cfg.AI.Enabled},
+		features:      map[string]bool{recipes.FeatureAI: cfg.AI.Enabled, planning.FeatureMultiLocationDelivery: cfg.Clouds.MultiLocationDelivery},
 		engineOf:      engineOf,
 		ctrlplane:     ctrlplane,
 		deployments:   workflow,
@@ -471,6 +472,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		CatalogInputs:     catalogInputs,
 	})
 
+	e.memberPrerequisites = &planning.MemberPrerequisiteService{Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
+	e.plans.BindPlacementGroupPrerequisites(e.memberPrerequisites)
 	routeService.CapacityDemandAuthority = e.plans
 	nativeDatabases := &deployments.NativeDatabases{
 		AWS: awsClient(), Google: google, Credentials: clouds, Secrets: resourceSecrets,

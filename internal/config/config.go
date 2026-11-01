@@ -265,8 +265,9 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
-	ManagedClusters ManagedClustersConfig
-	ClusterCapacity ClusterCapacityConfig
+	MultiLocationDelivery bool
+	ManagedClusters       ManagedClustersConfig
+	ClusterCapacity       ClusterCapacityConfig
 
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
@@ -466,6 +467,7 @@ func FromSource(src Getter) (Config, error) {
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
 	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.boolean(&c.Clouds.MultiLocationDelivery, "clouds.multi_location_delivery")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")

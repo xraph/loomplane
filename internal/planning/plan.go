@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
+	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -509,6 +510,7 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
+	PlacementGroups         []domain.QualifiedGroupPlan          `json:"placement_groups,omitempty"`
 	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
 	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
 	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
@@ -682,6 +684,7 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
+	PlacementGroups []domain.QualifiedGroupPlan `json:"placement_groups,omitempty"`
 	// FleetInput is internal: ordinary APIs and realtime events never serialize it.
 	FleetInput *InstancePlanInput `json:"-"`
 	// ManagedInstanceID is derived from the environment ownership table on every read.
@@ -742,6 +745,7 @@ type Plan struct {
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
 func (p *Plan) setResult(r *Result) {
+	p.PlacementGroups = r.PlacementGroups
 	p.LocationPlacements = r.LocationPlacements
 	p.CloudSyncID = r.CloudSyncID
 	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
@@ -753,6 +757,7 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
+		PlacementGroups:         p.PlacementGroups,
 		LocationPlacements:      p.LocationPlacements,
 		CloudSyncID:             p.CloudSyncID,
 		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,

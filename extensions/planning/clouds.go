@@ -135,6 +135,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, syncs + "/revert/apply", "cloudSyncs.applyRevert", e.applyCloudRevert, ApplyCloudInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
 		{http.MethodPost, sync + "/routing", "cloudSyncs.completeRouting", e.completeCloudRouting, CompleteCloudRoutingInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
 	}...)
+	routes = append(routes, e.placementGroupRoutes()...)
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Clouds"))
 	for _, rt := range routes {
 		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name)}

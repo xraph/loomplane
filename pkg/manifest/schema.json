@@ -173,6 +173,88 @@
     }
   },
   "$defs": {
+    "placementGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "members",
+        "min_ready",
+        "routing"
+      ],
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "members": {
+          "type": "object",
+          "minProperties": 2,
+          "maxProperties": 20,
+          "additionalProperties": {
+            "$ref": "#/$defs/placementMember"
+          }
+        },
+        "min_ready": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 20
+        },
+        "routing": {
+          "$ref": "#/$defs/groupRouting"
+        }
+      }
+    },
+    "placementMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "destination",
+        "replicas",
+        "prerequisite_id",
+        "prerequisite_revision"
+      ],
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prerequisite_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prerequisite_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "groupRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "hostname"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "dns-equal",
+            "external"
+          ]
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "zone_connection_id": {
+          "type": "string"
+        }
+      }
+    },
     "workerSettings": {
       "type": "object",
       "additionalProperties": false,
@@ -899,6 +981,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "placement_groups": {
+          "type": "object",
+          "maxProperties": 100,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/placementGroup"
+          }
+        },
         "destinations": {
           "type": "object",
           "maxProperties": 100,

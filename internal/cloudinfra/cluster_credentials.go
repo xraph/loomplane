@@ -13,6 +13,16 @@ import (
 )
 
 func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Connection) (connections.ManagedCredential, error) {
+	return s.resolveManagedCredential(ctx, c, false)
+}
+
+// ResolveManagedCredentialForObservation checks existing runtime material without
+// rotating tokens, upgrading runtime access or deleting retired credentials.
+func (s *Service) ResolveManagedCredentialForObservation(ctx context.Context, c connections.Connection) (connections.ManagedCredential, error) {
+	return s.resolveManagedCredential(ctx, c, true)
+}
+
+func (s *Service) resolveManagedCredential(ctx context.Context, c connections.Connection, observing bool) (connections.ManagedCredential, error) {
 	empty := connections.ManagedCredential{}
 	if c.Method != connections.MethodManagedKubernetes || c.Cloud != connections.Kubernetes || s.Clusters == nil || s.Secrets == nil {
 		return empty, connections.ErrNotReady
@@ -21,7 +31,7 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if err != nil {
 		return empty, err
 	}
-	if a.DeletedAt != nil || a.RuntimeConnectionID != c.ID || a.ProjectID != c.Details["managed_project_id"] || a.TrustRevision != c.Generation || a.NamespaceUID != c.Details["namespace_uid"] || a.TrustFingerprint != c.Details["cluster_ca"] || a.EndpointFingerprint != endpointFingerprint(c.Details["endpoint"]) {
+	if a.DeletedAt != nil || a.RetirementOperationID != "" || a.RuntimeConnectionID != c.ID || a.ProjectID != c.Details["managed_project_id"] || a.TrustRevision != c.Generation || a.NamespaceUID != c.Details["namespace_uid"] || a.TrustFingerprint != c.Details["cluster_ca"] || a.EndpointFingerprint != endpointFingerprint(c.Details["endpoint"]) {
 		return empty, connections.ErrChanged
 	}
 	o, err := s.Clusters.GetClusterOperation(ctx, a.OrgID, a.CloudID, a.OperationID)
@@ -39,6 +49,9 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if err != nil {
 		return empty, err
 	}
+	if r.Observation == nil {
+		return empty, connections.ErrChanged
+	}
 	observed, err := reader.GetCluster(ctx, access, r.Observation.Ref)
 	if err != nil {
 		return empty, err
@@ -46,11 +59,17 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if observed.Ref != r.Observation.Ref || observed.State != "running" || observed.Endpoint != c.Details["endpoint"] || (observed.CAHash != "" && observed.CAHash != a.TrustFingerprint) {
 		return empty, connections.ErrChanged
 	}
+	if observing && !a.CredentialExpiry.After(s.now().Add(time.Minute)) {
+		return empty, connections.ErrCredentialRefreshNeeded
+	}
 	raw, err := s.revealManagedCredential(ctx, a.OrgID, a.VaultKey, a.CredentialExpiry)
 	if err != nil {
+		if observing {
+			return empty, connections.ErrCredentialRefreshNeeded
+		}
 		return empty, err
 	}
-	if !a.CredentialExpiry.After(s.now().Add(kubernetes.RuntimeTokenRenewalLead)) {
+	if !observing && !a.CredentialExpiry.After(s.now().Add(kubernetes.RuntimeTokenRenewalLead)) {
 		raw, err = s.refreshManagedCredential(ctx, o, r, a)
 		if err != nil {
 			return empty, err
@@ -63,6 +82,10 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if cfg.Details["cluster_ca"] != a.TrustFingerprint || endpointFingerprint(cfg.REST.Host) != a.EndpointFingerprint {
 		return empty, connections.ErrChanged
 	}
+	if observing {
+		cfg.ManagedWorkload = true
+		cfg.ManagedProfile = kubernetes.ManagedProfileJournal
+	}
 	runtimeClient, err := kubernetes.New(cfg)
 	if err != nil {
 		return empty, err
@@ -73,7 +96,9 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if checkErr := kubernetes.VerifyRuntimeIdentity(ctx, runtimeClient.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); checkErr != nil {
 		return empty, checkErr
 	}
-	s.cleanupManagedCredentialOrphans(ctx, a, o)
+	if !observing {
+		s.cleanupManagedCredentialOrphans(ctx, a, o)
+	}
 	if _, _, checkErr := s.enrollmentAuthority(ctx, o); checkErr != nil {
 		return empty, errors.Join(ErrRuntimeCredentialDelegationUnavailable, checkErr)
 	}
@@ -84,11 +109,14 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if current.DeletedAt != nil || current.Revision != a.Revision || current.TrustRevision != a.TrustRevision || current.CredentialVersion != a.CredentialVersion {
 		return empty, connections.ErrChanged
 	}
+	credential := connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion, AttachmentRevision: a.Revision}
+	if observing {
+		return credential, nil
+	}
 	record, err := s.verifyRuntimeAccessCredential(ctx, a, o, r, runtimeClient)
 	if err != nil {
 		return empty, err
 	}
-	credential := connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion, AttachmentRevision: a.Revision}
 	if record != nil {
 		credential.AccessRevision = record.Revision
 		credential.HPA = record.Input.Profile.HPA

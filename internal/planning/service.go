@@ -110,9 +110,10 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
-	instanceRuntime InstanceRuntimeQualifier
-	instances       InstanceVerifier
-	managedRuntime  interface {
+	memberPrerequisites *MemberPrerequisiteService
+	instanceRuntime     InstanceRuntimeQualifier
+	instances           InstanceVerifier
+	managedRuntime      interface {
 		QualifyClusterWorkload(context.Context, *Plan, Action) error
 	}
 	capacityTemplates CapacityTemplateValidator
@@ -739,7 +740,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	federation, err := s.federationInput(ctx, plan, rev.Manifest)
+	federation, err := s.federationInput(ctx, plan, rev.Manifest, g, bindings)
 	if err != nil {
 		return nil, "", err
 	}
