@@ -245,7 +245,13 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 			t.Fatal(err)
 		}
 	}
-	if err = cleanup.ExecuteCleanupEffects(ctx, selection, creds); err != nil {
+	if err = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 60*time.Second, true, func(call context.Context) (bool, error) {
+		effectsErr := cleanup.ExecuteCleanupEffects(call, selection, creds)
+		if errors.Is(effectsErr, planning.ErrCleanupConverging) {
+			return false, nil
+		}
+		return effectsErr == nil, effectsErr
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err = wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 15*time.Second, true, func(call context.Context) (bool, error) {
@@ -302,4 +308,5 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool) {
 	if err = f.sql.QueryRow(ctx, `SELECT NOT released FROM loomplane_cluster_workload_holds WHERE id=$1`, input.ID).Scan(&held); err != nil || !held {
 		t.Fatalf("effects released hold: %v", err)
 	}
+	checkReleaseSettlement(ctx, t, e, creds, infra, scope, input, selection, auth, shared)
 }

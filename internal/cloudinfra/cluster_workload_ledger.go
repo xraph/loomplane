@@ -78,6 +78,9 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 	if checkErr := guard(ctx, tx, in); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := checkCleanupAdmission(ctx, tx, in); checkErr != nil {
+		return nil, checkErr
+	}
 	var additional ClusterWorkloadVector
 	if in.Native != nil {
 		additional, err = s.nativeWorkloadSupply(ctx, tx, in, snapshot, additional)

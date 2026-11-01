@@ -193,6 +193,9 @@ func cleanupObjectOwned(obj metav1.Object, scope kube.ManagedScope) bool {
 }
 
 func (s *cleanupSession) delete(ctx context.Context, r kube.ManagedRequest, obj metav1.Object) error {
+	if obj.GetDeletionTimestamp() != nil {
+		return ErrCleanupConverging
+	}
 	uid, rv := obj.GetUID(), obj.GetResourceVersion()
 	if uid == "" || rv == "" {
 		return kube.ErrManagedAuthority

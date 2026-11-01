@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/xraph/grove/driver"
@@ -62,15 +63,37 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	if authority, ok := ctx.Value(clusterScalingObservationKey{}).(ClusterScalingObservation); ok {
 		in.ScalingObservation = &authority
 	}
+	var scopes []CleanupCapacityScope
+	if source, ok := st.(interface {
+		CleanupCapacityScopes(context.Context, string, string, string) ([]CleanupCapacityScope, error)
+	}); ok {
+		scopes, err = source.CleanupCapacityScopes(ctx, p.OrgID, cloud, r.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var inventory kubernetes.CapacityInventory
-	readErr := providerErr
-	if providerErr == nil {
-		_, readErr = s.observeClusterManagementWith(ctx, p, cloud, in, r, reader, access, func(readCtx context.Context, client kubeclient.Interface) (ClusterManagementFacts, error) {
-			var e error
-			inventory, e = kubernetes.ReadCapacityInventory(readCtx, client)
-			return ClusterManagementFacts{Complete: inventory.Complete, ObservedAt: inventory.CheckedAt}, e
+	var projection *ClusterCleanupInventory
+	var supplyReadErr, managementErr error
+	if providerErr == nil || len(scopes) > 0 {
+		_, managementErr = s.observeClusterManagementWith(ctx, p, cloud, in, r, reader, access, func(readCtx context.Context, client kubeclient.Interface) (ClusterManagementFacts, error) {
+			if providerErr == nil {
+				inventory, supplyReadErr = kubernetes.ReadCapacityInventory(readCtx, client)
+			}
+			if len(scopes) > 0 {
+				obs := observeCleanupScopes(readCtx, client, scopes, inventory)
+				projection = &obs
+			}
+			if supplyReadErr != nil && (projection == nil || len(projection.NamespaceUIDs) == 0) {
+				return ClusterManagementFacts{}, supplyReadErr
+			}
+			return ClusterManagementFacts{Complete: inventory.Complete, ObservedAt: inventory.CheckedAt}, nil
 		}, provider.ClusterCapacityObservation)
 	}
+	if managementErr != nil {
+		projection = nil
+	}
+	readErr := errors.Join(providerErr, supplyReadErr, managementErr)
 	if readErr != nil {
 		inventory.Complete = false
 		if inventory.CheckedAt.IsZero() {
@@ -82,6 +105,7 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 		return nil, err
 	}
 	snapshot.SchedulingProfiles = BuildClusterSchedulingProfiles(snapshot, *r.Observation, inventory, s.now())
+	snapshot.CleanupInventory = projection
 	snapshot.ResourceID = r.ID
 	snapshot.ObservationRevision = revision
 	if readErr != nil {
@@ -95,6 +119,9 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	}
 	if checkErr := s.Authz.Require(ctx, p, security.ClusterManage, ""); checkErr != nil {
 		return nil, checkErr
+	}
+	if projection != nil {
+		ctx = context.WithValue(ctx, cleanupObserverKey{}, cleanupObserver{org: p.OrgID, cloud: cloud, resource: r.ID, ca: r.Observation.CAHash, revision: revision, ref: r.Observation.Ref})
 	}
 	if checkErr := st.SaveClusterCapacity(ctx, r, snapshot); checkErr != nil {
 		return nil, checkErr
@@ -188,6 +215,9 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	}
 	if count != 1 {
 		return ErrConflict
+	}
+	if driftErr := saveCleanupDrift(ctx, tx, current, snapshot, snapshot.CleanupInventory); driftErr != nil {
+		return driftErr
 	}
 	if err := settleClusterEnvelopes(ctx, tx, current, snapshot, ""); err != nil {
 		return err

@@ -21,6 +21,10 @@ func TestManagedCleanupIntentsMigration(t *testing.T) {
 	if err := conn.QueryRow(t.Context(), `SELECT loomplane_managed_cleanup_targets('missing','missing','missing','missing','delete')::text`).Scan(&targets); err != nil || targets != "[]" {
 		t.Fatalf("empty targets: %s %v", targets, err)
 	}
+	// Remove the empty release observation tables before their grant parent.
+	if err := migration(t, "managed_cleanup_observations").Down(t.Context(), executor); err != nil {
+		t.Fatal(err)
+	}
 	if err := migration(t, "managed_cleanup_target_closure").Down(t.Context(), executor); err != nil {
 		t.Fatal(err)
 	}

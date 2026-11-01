@@ -14,16 +14,17 @@ import (
 
 // CapacityInventory uses management credentials. Namespace runtime roles do not grant these reads.
 type CapacityInventory struct {
-	DaemonSets     []appsv1.DaemonSet
-	Namespaces     []corev1.Namespace
-	ReplicaSets    []appsv1.ReplicaSet
-	Deployments    []appsv1.Deployment
-	Nodes          []corev1.Node
-	Pods           []corev1.Pod
-	Volumes        []corev1.PersistentVolume
-	StorageClasses []storagev1.StorageClass
-	CheckedAt      time.Time
-	Complete       bool
+	DaemonSets             []appsv1.DaemonSet
+	Namespaces             []corev1.Namespace
+	ReplicaSets            []appsv1.ReplicaSet
+	Deployments            []appsv1.Deployment
+	Nodes                  []corev1.Node
+	Pods                   []corev1.Pod
+	Volumes                []corev1.PersistentVolume
+	StorageClasses         []storagev1.StorageClass
+	CheckedAt              time.Time
+	Complete               bool
+	WorkloadListsVersioned bool
 }
 
 func CapacityObserverRules() []rbacv1.PolicyRule {
@@ -75,6 +76,7 @@ func ReadCapacityInventory(ctx context.Context, client kubeclient.Interface) (Ca
 		return out, err
 	}
 	out.Deployments = deployments.Items
+	out.WorkloadListsVersioned = namespaces.ResourceVersion != "" && pods.ResourceVersion != "" && replicas.ResourceVersion != "" && deployments.ResourceVersion != ""
 	daemons, err := client.AppsV1().DaemonSets("").List(ctx, opts)
 	if err != nil {
 		return out, err

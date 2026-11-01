@@ -293,6 +293,7 @@ type ClusterNodeCapacity struct {
 }
 
 type ClusterCapacitySnapshot struct {
+	CleanupInventory    *ClusterCleanupInventory    `json:"cleanup_inventory,omitempty"`
 	SchedulingProfiles  []ClusterSchedulingProfile  `json:"scheduling_profiles,omitempty"`
 	Workloads           []ClusterObservedWorkload   `json:"workloads,omitempty"`
 	WorkloadsComplete   bool                        `json:"workloads_complete,omitempty"`

@@ -140,6 +140,9 @@ func recoverCleanupAfterRestart(ctx context.Context, t *testing.T, e *enrollment
 	if err = clone("unresolved-recovered-child", "{}"); err != nil {
 		t.Fatal(err)
 	}
+	if err = planning.NewManagedCleanupStore(e.pg, auth, nil).SettleManagedCleanup(ctx, selection, creds); !errors.Is(err, planning.ErrCleanupWritesUnresolved) {
+		t.Fatalf("unknown send settled an empty namespace: %v", err)
+	}
 	if err = resume(); !errors.Is(err, planning.ErrCleanupWritesUnresolved) {
 		t.Fatalf("unknown child send: %v", err)
 	}
