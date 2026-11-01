@@ -11,10 +11,14 @@ var ErrManagedAuthority = errors.New("managed workload mutation requires current
 // ManagedScope contains server-owned identity only. Epoch is the current durable
 // workload attempt generation. Revocation applies to the whole release.
 type ManagedScope struct {
-	Org, Project, Environment, Service, Plan, Deployment, Action string
-	Connection, Instance, RuntimeRef, RuntimeRevision, Release   string
-	Namespace, NamespaceUID, ClusterCA                           string
-	Epoch                                                        int64
+	GroupID, MemberID                                                                             string `json:",omitempty"`
+	GroupGeneration, BackendGeneration                                                            int64  `json:",omitempty"`
+	GroupOperation                                                                                string `json:",omitempty"`
+	LifecycleRunID, LifecycleJobName, LifecycleDigest, LifecycleSpecDigest, LifecycleSecretDigest string `json:",omitempty"`
+	Org, Project, Environment, Service, Plan, Deployment, Action                                  string
+	Connection, Instance, RuntimeRef, RuntimeRevision, Release                                    string
+	Namespace, NamespaceUID, ClusterCA                                                            string
+	Epoch                                                                                         int64
 }
 
 type ManagedRequest struct {

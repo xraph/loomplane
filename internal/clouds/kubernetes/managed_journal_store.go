@@ -14,12 +14,7 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 )
 
-func managedScopeValid(s ManagedScope) bool {
-	return s.Epoch > 0 && s.Release != "" && s.Release == WorkloadReleaseID(s.RuntimeRef, s.RuntimeRevision) &&
-		s.Org != "" && s.Project != "" && s.Environment != "" && s.Service != "" && s.Plan != "" && s.Deployment != "" && s.Action != "" && s.Connection != "" && s.Instance != "" && s.Namespace != "" && s.NamespaceUID != "" && len(s.ClusterCA) == 64 &&
-		strings.HasPrefix(s.RuntimeRef, s.Org+"/"+s.Environment+"/"+s.Service+"/runtime_") &&
-		(s.RuntimeRevision == s.Deployment+"/"+s.Action || strings.HasPrefix(s.RuntimeRevision, s.Deployment+"/"+s.Action+"/"))
-}
+func managedScopeValid(s ManagedScope) bool { return legacyManagedScopeValid(s) }
 
 // CheckServingUpdate verifies the exact ctrlplane release after its provider
 // callback. During the callback only the running deployment may issue writes.
