@@ -364,7 +364,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
+	managedControllers := kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled)
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
@@ -503,6 +504,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: releasewatch.NewPgStore(pg), Rollbacks: e.plans, Plans: planStore, Deployments: deployStore, History: history,
 		Health: health, Manifests: e.manifests, Projects: prj, Routes: cloudinfra.NewPgStore(pg), Authz: authz, Audit: auditor,
 	})
+	clusterTarget.Controllers = managedControllers.WithManagedDemandGuard(e.plans.GuardManagedDemandEffect)
 	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal).WithReplicaProof(proofKey), Credentials: clouds, Target: clusterTarget, Routes: routeService}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		ManagedCleanup:    cleanupExecution,

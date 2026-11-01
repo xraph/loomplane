@@ -86,7 +86,7 @@ func TestManagedCleanupProtocolApplicationProfile(t *testing.T) {
 	}
 	scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: "fresh-instance", RuntimeRef: "org/env/api/runtime_cleanup_protocol", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: "apps", NamespaceUID: "namespace-uid", ClusterCA: strings.Repeat("a", 64), Epoch: attempt.Generation}
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	identity := kube.ManagedRuntimeIdentity{Org: scope.Org, Project: scope.Project, Environment: scope.Environment, Service: scope.Service, Plan: scope.Plan, Connection: scope.Connection, Instance: scope.Instance, RuntimeRef: scope.RuntimeRef, RuntimeRevision: scope.RuntimeRevision, Namespace: scope.Namespace, NamespaceUID: scope.NamespaceUID, ClusterCA: scope.ClusterCA}
 	profile, err := journal.WithClusterCapacity(false).ManagedProfileFor(t.Context(), identity)
 	if err != nil || profile != kube.ManagedProfileJournal {

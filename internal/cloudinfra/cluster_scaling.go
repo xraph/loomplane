@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -342,6 +343,18 @@ func (s *Service) ObserveClusterScaling(ctx context.Context, org, cloud, resourc
 // CurrentClusterScalingPolicy is the admission seam for durable demand cohorts.
 // Call it again before effects; a returned review is not a reusable credential.
 func (s *Service) CurrentClusterScalingPolicy(ctx context.Context, org, cloud, resource, pool string) (*ClusterScalingPolicy, error) {
+	return s.currentClusterScalingPolicy(ctx, nil, org, cloud, resource, pool)
+}
+func (s *Service) CurrentClusterScalingPolicyTx(ctx context.Context, tx driver.Tx, org, cloud, resource, pool string) (*ClusterScalingPolicy, error) {
+	if tx == nil {
+		return nil, ErrInvalid
+	}
+	if err := lockCapacityCloud(ctx, tx, org, cloud); err != nil {
+		return nil, err
+	}
+	return s.currentClusterScalingPolicy(ctx, tx, org, cloud, resource, pool)
+}
+func (s *Service) currentClusterScalingPolicy(ctx context.Context, tx driver.Tx, org, cloud, resource, pool string) (*ClusterScalingPolicy, error) {
 	if err := s.clusterScalingEnabled(); err != nil {
 		return nil, err
 	}
@@ -385,6 +398,12 @@ func (s *Service) CurrentClusterScalingPolicy(ctx context.Context, org, cloud, r
 	}
 	if budget.Revision != operation.Input.PolicyRevision {
 		return nil, ErrConflict
+	}
+	if tx != nil {
+		if checkErr := scalingObserverTx(ctx, tx, org, cloud, resource, pool, policy.Revision); checkErr != nil {
+			return nil, checkErr
+		}
+		return &policy, nil
 	}
 	store, ok := s.Clusters.(interface {
 		ValidateClusterScalingObserver(context.Context, string, string, string, string, int64) error

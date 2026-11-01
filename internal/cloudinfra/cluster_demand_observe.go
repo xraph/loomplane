@@ -164,6 +164,9 @@ func poolCouldShrink(s ClusterCapacitySnapshot, used ClusterWorkloadVector, poli
 // CurrentClusterPoolAdvice only reports a sustained window from a still-current
 // inventory and policy. It does not authorize a drain or a smaller pool.
 func (s *PgStore) CurrentClusterPoolAdvice(ctx context.Context, org, cloud, resource, pool string) (bool, error) {
+	if _, err := s.db.Exec(ctx, `SELECT loomplane_cluster_controls_current($1,$2)`, org, resource); err != nil {
+		return false, err
+	}
 	var eligible bool
 	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cluster_pool_advice a
  JOIN loomplane_managed_resources r ON r.org_id=a.org_id AND r.cloud_id=a.cloud_id AND r.id=a.resource_id AND r.deleted_at IS NULL

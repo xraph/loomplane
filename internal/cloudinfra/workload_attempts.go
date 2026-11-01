@@ -127,6 +127,11 @@ func (s *PgStore) FinishWorkloadAttempt(ctx context.Context, a WorkloadAttempt, 
 	if err != nil {
 		return errors.Join(ErrConflict, err)
 	}
+	if !settled {
+		if _, checkErr := tx.Exec(ctx, `SELECT loomplane_settle_unissued_demand($1,$2,$3)`, a.Org, a.Plan, a.Service); checkErr != nil {
+			return checkErr
+		}
+	}
 	return tx.Commit()
 }
 

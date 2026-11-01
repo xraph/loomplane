@@ -48,6 +48,10 @@ func TestClusterScalingCancelledDemand(t *testing.T) {
 	if open != 1 || members != 1 || held != 0 {
 		t.Fatal(open, members, held)
 	}
+	var beforeRevision int64
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cluster_demand_cohorts WHERE id=$1`, cohort).Scan(&beforeRevision); err != nil {
+		t.Fatal(err)
+	}
 	// Hold membership open as an uncoupled running-deployment cancellation
 	// arrives. Waiting on an actual PostgreSQL lock keeps the race deterministic.
 	tx, e := f.db.BeginTx(t.Context(), nil)
@@ -88,6 +92,10 @@ func TestClusterScalingCancelledDemand(t *testing.T) {
 		t.Fatal(e)
 	}
 	read()
+	var closedRevision int64
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cluster_demand_cohorts WHERE id=$1 AND closed_at IS NOT NULL`, cohort).Scan(&closedRevision); err != nil || closedRevision <= beforeRevision {
+		t.Fatal("cancellation did not revise closed cohort", err)
+	}
 	if open != 0 || members != 0 || held != 0 {
 		t.Fatal("cancelled cohort still active", open, members, held)
 	}

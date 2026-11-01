@@ -93,6 +93,23 @@ func (s *PgStore) SaveClusterScalingObservation(ctx context.Context, r *ManagedR
 	if r.Observation == nil || observation.Ref != r.Observation.Ref || observation.Endpoint != r.Observation.Endpoint || observation.CAHash != "" && observation.CAHash != r.Observation.CAHash || !freshClusterEnvelopeEvidence(observation.ObservedAt, time.Now()) {
 		return ErrConflict
 	}
+	current, readErr := scanManagedResource(tx.QueryRow(ctx, `SELECT `+managedResourceColumns+` FROM loomplane_managed_resources WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND deleted_at IS NULL FOR UPDATE`, r.OrgID, r.CloudID, r.ID))
+	if readErr != nil {
+		return readErr
+	}
+	if current.Revision != r.Revision || current.Observation == nil || observation.ObservedAt.Before(current.Observation.ObservedAt) {
+		return ErrConflict
+	}
+	// Freshness does not change reviewed authority. Always start from the locked
+	// current row so a delayed identical reader cannot restore older metadata.
+	*r = *current
+	previous := *r.Observation
+	previous.ObservedAt = time.Time{}
+	next := observation
+	next.ObservedAt = time.Time{}
+	next.CAHash = previous.CAHash
+	materialChanged := maintenanceHash(previous) != maintenanceHash(next)
+
 	for pool, policy := range r.ScalingPolicies {
 		if policy.Revoked {
 			continue
@@ -100,17 +117,29 @@ func (s *PgStore) SaveClusterScalingObservation(ctx context.Context, r *ManagedR
 		if err := scalingObserverTx(ctx, tx, r.OrgID, r.CloudID, r.ID, pool, policy.Revision); err != nil {
 			return err
 		}
-		if reason := scalingBreach(policy, observation); reason != "" {
+		if reason := scalingBreach(policy, observation); reason != "" && policy.PauseReason != reason {
+			materialChanged = true
 			policy.PauseReason = reason
 			policy.UpdatedAt = time.Now().UTC()
 			r.ScalingPolicies[pool] = policy
 		}
 	}
+	if materialChanged {
+		var active bool
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cluster_operations WHERE org_id=$1 AND resource_id=$2 AND status IN ('accepted','running','waiting_provider','needs_attention'))`, r.OrgID, r.ID).Scan(&active); checkErr != nil {
+			return checkErr
+		}
+		if active {
+			return ErrBusy
+		}
+	}
 	observation.CAHash = r.Observation.CAHash
 	r.Observation = &observation
 	old := r.Revision
-	r.Revision++
-	r.ObservedRevision = r.Revision
+	if materialChanged {
+		r.Revision++
+		r.ObservedRevision = r.Revision
+	}
 	r.ObservedAt = observation.ObservedAt
 	r.UpdatedAt = time.Now().UTC()
 	if _, err := claimManagedResourceTx(ctx, tx, r, old); err != nil {
@@ -120,7 +149,7 @@ func (s *PgStore) SaveClusterScalingObservation(ctx context.Context, r *ManagedR
 }
 
 func (s *PgStore) ListClusterScalingObservers(ctx context.Context) ([]ClusterScalingObserverScope, error) {
-	rows, err := s.db.Query(ctx, `SELECT r.org_id,r.cloud_id,r.id,p.key FROM loomplane_managed_resources r CROSS JOIN LATERAL (SELECT key FROM jsonb_each(coalesce(r.body->'scaling_policies','{}'::jsonb)) WHERE value->>'revoked'='false' AND value->>'mode'='native' ORDER BY key LIMIT 1) p WHERE r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM loomplane_cluster_pool_advice d WHERE d.org_id=r.org_id AND d.resource_id=r.id AND d.pool_id=p.key AND d.retry_observation_at>clock_timestamp()) ORDER BY r.body->>'observed_at',r.id LIMIT 100`)
+	rows, err := s.db.Query(ctx, `SELECT r.org_id,r.cloud_id,r.id,p.key FROM loomplane_managed_resources r CROSS JOIN LATERAL (SELECT key FROM jsonb_each(coalesce(r.body->'scaling_policies','{}'::jsonb)) WHERE value->>'revoked'='false' AND value->>'mode'='native' ORDER BY key LIMIT 1) p WHERE loomplane_cluster_controls_current(r.org_id,r.id) AND r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM loomplane_cluster_pool_advice d WHERE d.org_id=r.org_id AND d.resource_id=r.id AND d.pool_id=p.key AND d.retry_observation_at>clock_timestamp()) ORDER BY r.body->>'observed_at',r.id LIMIT 100`)
 	if err != nil {
 		return nil, err
 	}

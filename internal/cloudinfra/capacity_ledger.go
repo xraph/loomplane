@@ -43,6 +43,9 @@ func lockCapacityCloud(ctx context.Context, tx driver.Tx, org, cloud string) err
 	if err := cloudprofiles.LockOrganization(ctx, tx, org); err != nil {
 		return err
 	}
+	if _, checkErr := tx.Exec(ctx, `SELECT loomplane_cluster_controls_current($1,'')`, org); checkErr != nil {
+		return checkErr
+	}
 	var id string
 	return storeError(tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id))
 }

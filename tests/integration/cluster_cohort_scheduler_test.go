@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +75,11 @@ func TestClusterScalingCohortDedup(t *testing.T) {
 	if err := f.sql.QueryRow(t.Context(), `SELECT created_at FROM loomplane_cluster_demand_cohorts WHERE id=$1`, group).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
+	var revision int64
+	var updated time.Time
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision,updated_at FROM loomplane_cluster_demand_cohorts WHERE id=$1 AND schema_version=1`, group).Scan(&revision, &updated); err != nil || !strings.HasPrefix(group, "cohort_") || revision < 2 {
+		t.Fatal("cohort metadata", revision, err)
+	}
 	for _, id := range ids {
 		d, err := svc.ReconcileClusterDemand(t.Context(), "org", "cloud", id)
 		if err != nil || d.ClusterCohortID != group {
@@ -82,6 +88,11 @@ func TestClusterScalingCohortDedup(t *testing.T) {
 	}
 	if err := svc.ResolveCapacityIntents(t.Context(), p.OrgID, p.ID); err == nil {
 		t.Fatal("installed demand resolver bypassed review")
+	}
+	var sameRevision int64
+	var sameUpdated time.Time
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision,updated_at FROM loomplane_cluster_demand_cohorts WHERE id=$1`, group).Scan(&sameRevision, &sameUpdated); err != nil || sameRevision != revision || !sameUpdated.Equal(updated) {
+		t.Fatal("retry changed aggregate", sameRevision, err)
 	}
 	var members, ops int
 	var after time.Time

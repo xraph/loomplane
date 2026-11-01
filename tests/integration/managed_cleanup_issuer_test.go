@@ -41,7 +41,7 @@ func newCleanupIssuerFixture(t *testing.T, retire bool, keyIDs ...string) *clean
 func prepareCleanupIssuerFixture(t *testing.T, retire bool, prepare func(*poolFixture, *planning.Service, *planning.Plan, *planning.Result, kube.ManagedScope), keyIDs ...string) *cleanupIssuerFixture {
 	t.Helper()
 	f, svc, plan, result, scope := cleanupTargetFixture(t)
-	application := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	application := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	serviceWrite, err := application.Issue(t.Context(), scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: scope.Namespace, Name: scope.Instance, Method: "POST"})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 	if g.SchemaVersion != 1 || g.Revision != 1 || g.CreatedAt.IsZero() {
 		t.Fatalf("grant metadata: %+v", g)
 	}
-	application := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	application := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if _, checkErr := application.Issue(t.Context(), f.scope, f.request); checkErr == nil {
 		t.Fatal("application scope reopened")
 	}

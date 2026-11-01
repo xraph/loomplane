@@ -216,11 +216,18 @@ func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, 
 	if key := orchestration.FinalizationKey(ctx); key != "" {
 		return s.finishActivity(ctx, orgID, id, key, status, reason, at)
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE loomplane_deployments SET status = $3, error = $4, finished_at = $5
-		WHERE org_id = $1 AND id = $2 AND status = 'running'`, orgID, id, status, reason, at); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, orgID); lockErr != nil {
+		return lockErr
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET status=$3,error=$4,finished_at=$5 WHERE org_id=$1 AND id=$2 AND status='running'`, orgID, id, status, reason, at); err != nil {
 		return fmt.Errorf("finish deployment: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Reopen implements Store, in one transaction, so of two retries at once

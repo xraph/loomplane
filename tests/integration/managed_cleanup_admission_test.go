@@ -84,7 +84,7 @@ func TestManagedCleanupDriftAdmission(t *testing.T) {
 			scope.RuntimeRef = "org/env/api/runtime_positive_supply"
 			scope.RuntimeRevision = scope.Deployment + "/" + scope.Action
 			scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-			journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+			journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 			if err = journal.OpenManagedScope(ctx, scope); err != nil {
 				t.Fatal(err)
 			}

@@ -1073,8 +1073,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
-	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
-		return effectErr
+	if a.Service == nil || a.Service.ClusterDemand == nil {
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
 	}
 	if _, fenced := server.EffectFenceFrom(ctx); fenced {
 		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {

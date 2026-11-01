@@ -107,7 +107,7 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool, modes ...string) {
 	iid := id.New(id.PrefixInstance)
 	scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: attachment.RuntimeConnectionID, Instance: iid.String(), RuntimeRef: "org/env/api/runtime_closure", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: attachment.Namespace, NamespaceUID: attachment.NamespaceUID, ClusterCA: attachment.TrustFingerprint, Epoch: attempt.Generation}
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err = journal.OpenManagedScope(t.Context(), scope); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +177,7 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool, modes ...string) {
 		next.Epoch = run.Generation
 		next.RuntimeRevision = next.Deployment + "/" + next.Action
 		next.Release = kube.WorkloadReleaseID(next.RuntimeRef, next.RuntimeRevision)
+		journal = journal.WithManagedDemandGuard(managedFixtureDemandGuard(f.db, managedCleanupReviewer(t)))
 		if err = journal.OpenManagedScope(t.Context(), next); err != nil {
 			t.Fatal(err)
 		}

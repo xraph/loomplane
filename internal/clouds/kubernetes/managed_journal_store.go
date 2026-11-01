@@ -102,6 +102,12 @@ func (s *ControllerStore) OpenManagedScope(ctx context.Context, scope ManagedSco
 	if checkErr := lockManagedOrganization(ctx, tx, scope.Org); checkErr != nil {
 		return checkErr
 	}
+	if s.demandGuard == nil {
+		return ErrManagedAuthority
+	}
+	if checkErr := s.demandGuard(ctx, tx, scope); checkErr != nil {
+		return checkErr
+	}
 	if checkErr := guardManagedScope(ctx, tx, scope); checkErr != nil {
 		return checkErr
 	}
@@ -141,6 +147,12 @@ func (s *ControllerStore) Issue(ctx context.Context, scope ManagedScope, request
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
 	if checkErr := lockManagedOrganization(ctx, tx, scope.Org); checkErr != nil {
+		return "", checkErr
+	}
+	if s.demandGuard == nil {
+		return "", ErrManagedAuthority
+	}
+	if checkErr := s.demandGuard(ctx, tx, scope); checkErr != nil {
 		return "", checkErr
 	}
 	if checkErr := guardManagedScope(ctx, tx, scope); checkErr != nil {

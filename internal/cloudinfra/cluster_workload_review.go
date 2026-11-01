@@ -18,7 +18,7 @@ func nativeTemplateBlock() error {
 // The caller still needs an approved-demand guard before reserving anything.
 func (s *PgStore) ClusterWorkloadReview(ctx context.Context, in ClusterWorkloadInput) (ClusterWorkloadInput, ClusterCapacitySnapshot, error) {
 	var raw []byte
-	err := s.db.QueryRow(ctx, `SELECT a.id,a.cluster_id,a.runtime_connection_id,(a.body->>'trust_revision')::bigint,i.body FROM loomplane_cloud_targets t JOIN loomplane_runtime_attachments a ON a.org_id=t.org_id AND a.cloud_id=t.cloud_id AND a.cluster_id=t.managed_resource_id AND a.project_id=t.project_id AND a.runtime_connection_id=t.connection_id AND a.deleted_at IS NULL JOIN loomplane_cluster_capacity_inventory i ON i.org_id=a.org_id AND i.resource_id=a.cluster_id AND i.saved_revision=i.issued_revision WHERE t.org_id=$1 AND t.cloud_id=$2 AND t.id=$3 AND t.project_id=$4`, in.OrgID, in.CloudID, in.TargetID, in.ProjectID).Scan(&in.AttachmentID, &in.ResourceID, &in.ConnectionID, &in.TrustRevision, &raw)
+	err := s.db.QueryRow(ctx, `SELECT a.id,a.cluster_id,a.runtime_connection_id,(a.body->>'trust_revision')::bigint,i.body FROM loomplane_cloud_targets t JOIN loomplane_runtime_attachments a ON a.org_id=t.org_id AND a.cloud_id=t.cloud_id AND a.cluster_id=t.managed_resource_id AND a.project_id=t.project_id AND a.runtime_connection_id=t.connection_id AND a.deleted_at IS NULL JOIN loomplane_cluster_capacity_inventory i ON i.org_id=a.org_id AND i.resource_id=a.cluster_id AND i.saved_revision=i.issued_revision WHERE loomplane_cluster_controls_current($1,a.cluster_id) AND t.org_id=$1 AND t.cloud_id=$2 AND t.id=$3 AND t.project_id=$4`, in.OrgID, in.CloudID, in.TargetID, in.ProjectID).Scan(&in.AttachmentID, &in.ResourceID, &in.ConnectionID, &in.TrustRevision, &raw)
 	var snapshot ClusterCapacitySnapshot
 	if err != nil {
 		return in, snapshot, storeError(err)
@@ -130,4 +130,24 @@ func (s *PgStore) ValidateClusterWorkloadProfile(ctx context.Context, tx driver.
 		}
 	}
 	return nativeTemplateBlock()
+}
+
+// ValidateClusterWorkloadEffect rechecks the fresh physical/profile evidence
+// inside the application's issuance transaction, under the Cloud gate.
+func (s *PgStore) ValidateClusterWorkloadEffect(ctx context.Context, tx driver.Tx, in ClusterWorkloadInput, profile ClusterSchedulingProfile) error {
+	if err := lockCapacityCloud(ctx, tx, in.OrgID, in.CloudID); err != nil {
+		return err
+	}
+	if err := s.ValidateClusterWorkloadProfile(ctx, tx, in, profile); err != nil {
+		return err
+	}
+	if in.Native != nil {
+		snapshot, err := clusterWorkloadScope(ctx, tx, in)
+		if err != nil {
+			return err
+		}
+		_, err = s.nativeWorkloadSupply(ctx, tx, in, snapshot, ClusterWorkloadVector{})
+		return err
+	}
+	return nil
 }

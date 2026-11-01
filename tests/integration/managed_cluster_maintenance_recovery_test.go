@@ -150,7 +150,7 @@ func maintenanceRecoveryCase(t *testing.T, revoke bool) {
 		if e := adapters.RegisterCluster("digitalocean", adapter, provider.NodePoolUpdate, provider.NodePoolAutoscaling, provider.ClusterMutationObservation); e != nil {
 			t.Fatal(e)
 		}
-		return cloudinfra.NewService(cloudinfra.Deps{Clusters: cloudinfra.NewPgStore(pg), Clouds: clouds, Connections: maintenanceRecoveryCredentials{connections.NewPgStore(pg)}, Authz: enrollmentServiceAuth{}, Adapters: adapters, ClusterCapacity: config.ClusterCapacityConfig{Enabled: true}, ManagedClusters: config.ManagedClustersConfig{Enabled: true, QualificationOrgID: "org", QualificationOperatorID: "manager", QualificationAccountID: "account", QualificationRegion: "nyc1", MaxNodes: 3, MaxNodeHourlyMicroUSD: 1000000}})
+		return cloudinfra.NewService(cloudinfra.Deps{Clusters: cloudinfra.NewPgStore(pg), Clouds: clouds, Connections: maintenanceRecoveryCredentials{connections.NewPgStore(pg)}, Authz: enrollmentServiceAuth{}, CapacityPrincipal: &firstSendAuthority{}, Adapters: adapters, ClusterCapacity: config.ClusterCapacityConfig{Enabled: true}, ManagedClusters: config.ManagedClustersConfig{Enabled: true, QualificationOrgID: "org", QualificationOperatorID: "manager", QualificationAccountID: "account", QualificationRegion: "nyc1", MaxNodes: 3, MaxNodeHourlyMicroUSD: 1000000}})
 	}
 	svc := makeService()
 	principal := security.Principal{OrgID: "org", UserID: "manager"}
@@ -162,6 +162,7 @@ func maintenanceRecoveryCase(t *testing.T, revoke bool) {
 		prior.Status = "preview"
 		prior.Kind = "node-pool-scaling"
 		prior.Principal = principal
+		prior.Principal.KeyID = "test-approval-key"
 		prior.Receipts = nil
 		prior.Input = in
 		prior.Input.Kind = prior.Kind
@@ -175,6 +176,8 @@ func maintenanceRecoveryCase(t *testing.T, revoke bool) {
 		if err = store.SaveClusterCheckpoint(t.Context(), &prior, 1); err != nil {
 			t.Fatal(err)
 		}
+		checkNativeFirstSendAuthority(t, pg, svc)
+		svc.CapacityPrincipal = &firstSendAuthority{}
 		adapter.readError = &provider.InfrastructureAPIError{Status: 429, RetryAfter: 7 * time.Minute}
 		if _, e := svc.ObserveClusterScaling(t.Context(), "org", "cloud", "cluster", "pool"); e == nil {
 			t.Fatal("missing provider throttle")
@@ -237,9 +240,11 @@ func maintenanceRecoveryCase(t *testing.T, revoke bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	benignClusterObservation(t, store, "cluster")
 	if _, err = svc.ApplyCluster(t.Context(), principal, "cloud", op.ID, cloudinfra.ApplyInput{Review: op.Digest}); err != nil {
 		t.Fatal(err)
 	}
+	benignClusterObservation(t, store, "cluster")
 	if err = svc.ReconcileClusterOperation(t.Context(), "org", op.ID, nil); err != nil {
 		t.Fatal(err)
 	}

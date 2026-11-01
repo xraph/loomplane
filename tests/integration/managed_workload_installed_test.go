@@ -55,6 +55,25 @@ func TestManagedInstalledApplicationPending(t *testing.T) {
 // Kubernetes execution and readiness path independently of provider node supply.
 func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServiceFixture, f *poolFixture, creds *connections.Service, infra *cloudinfra.Service, svc *planning.Service, p *planning.Plan, res *planning.Result, mode string) {
 	t.Helper()
+	fixCase := strings.TrimPrefix(mode, "fix1:")
+	isFix := fixCase != mode
+	if isFix {
+		mode = "guaranteed"
+	}
+	var fixGuard *firstSendAuthority
+	if isFix {
+		r, readErr := f.store.GetManagedResource(ctx, "org", "cluster")
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		fixGuard = &firstSendAuthority{}
+		svc = planning.NewService(planning.Deps{Store: f.plans, Authz: fixGuard, CapacityPrincipal: fixGuard, Capacity: managedDemandAuthority{policy: r.ScalingPolicies["pool"]}})
+		if strings.HasPrefix(fixCase, "explicit/") {
+			if _, writeErr := f.sql.Exec(ctx, `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{architecture}',to_jsonb($2::text)) WHERE id=$1`, res.Actions[0].Service.Target, res.Actions[0].Service.TargetSettings["architecture"]); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		}
+	}
 	wake := mode == "cohort-wake"
 	if wake {
 		mode = "guaranteed"
@@ -100,6 +119,9 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		cfg.Scale = &manifest.Scale{Min: 2, Max: 3}
 	}
 	cfg.BuildTarget = &planning.BuildTarget{Image: "registry.k8s.io/pause@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a"}
+	if isFix && strings.HasSuffix(fixCase, "build_failure") {
+		cfg.BuildTarget.Image = "registry.k8s.io/pause:fixture-invalid-digest"
+	}
 	cfg.Env = []planning.EnvLink{{Subject: planning.ResourceSubject, Field: "consumer:url", From: "db"}}
 	var blocked *cloudinfra.CapacityAdmissionError
 	if checkErr := svc.PrepareClusterWorkloadDemands(ctx, p, res); !errors.As(checkErr, &blocked) || blocked.Block.Reason != "managed_consumer_cleanup_unqualified" {
@@ -109,7 +131,11 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	if err = svc.PrepareClusterWorkloadDemands(ctx, p, res); err != nil {
 		t.Fatal(err)
 	}
-	saveManagedDemandPlan(t, f, p, res)
+	if isFix {
+		saveManagedDemandPlan(t, f, p, res, security.Principal{OrgID: p.OrgID, UserID: "usr", KeyID: "test-approval-key"})
+	} else {
+		saveManagedDemandPlan(t, f, p, res)
+	}
 	ds := deployments.NewPgStore(e.pg)
 	db, err := grove.Open(e.pg)
 	if err != nil {
@@ -123,9 +149,10 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	if _, keyErr := rand.Read(proofKey); keyErr != nil {
 		t.Fatal(keyErr)
 	}
-	verifier := kube.NewControllerStore(e.pg).WithReplicaProof(proofKey)
+	verifier := kube.NewControllerStore(e.pg).WithReplicaProof(proofKey).WithManagedDemandGuard(svc.GuardManagedDemandEffect)
 	infra.ReplicaVerifier = verifier
-	target := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}, Credentials: creds, Secrets: syncSecrets{}, Controllers: verifier.WithClusterCapacity(true)}
+	applicationJournal := verifier.WithClusterCapacity(true)
+	target := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}, Credentials: creds, Secrets: syncSecrets{}, Controllers: applicationJournal}
 	reviewer := managedCleanupReviewer(t)
 	store := planning.NewManagedCleanupStore(e.pg, reviewer, nil).WithReplicaProof(proofKey)
 	ce := &deployments.ManagedCleanupExecution{Store: store, Credentials: creds, Target: target, Routes: cloudinfra.NewService(cloudinfra.Deps{Store: e.store})}
@@ -184,6 +211,10 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		}
 	}
 	ns := e.attachment().Namespace
+	if isFix {
+		checkInstalledFirstSend(ctx, t, e, f, svc, p, cfg, dep, runner, fixGuard, fixCase)
+		return
+	}
 	if missingMetrics {
 		_, discoveryErr := e.bootstrap.Kube.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1")
 		if discoveryErr == nil {
@@ -350,6 +381,7 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 			t.Fatal(upgradeErr)
 		}
 		svc = planning.NewService(planning.Deps{Store: f.plans, Authz: reviewer, Capacity: managedDemandAuthority{}})
+		target.Controllers = applicationJournal.WithManagedDemandGuard(svc.GuardManagedDemandEffect)
 		svc.BindManagedRuntime(ce)
 		deps.Capacity = svc
 		runner = deployments.NewRunner(deps)

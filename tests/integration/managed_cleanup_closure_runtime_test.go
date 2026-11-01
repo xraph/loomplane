@@ -66,7 +66,7 @@ func TestManagedCleanupClosureSharedRuntimeFailure(t *testing.T) {
 	iid := id.New(id.PrefixInstance)
 	scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: iid.String(), RuntimeRef: "org/env/api/runtime_closure", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: namespace, NamespaceUID: string(ns.UID), ClusterCA: ca, Epoch: attempt.Generation}
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err = journal.OpenManagedScope(t.Context(), scope); err != nil {
 		t.Fatal(err)
 	}

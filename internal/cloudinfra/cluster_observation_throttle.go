@@ -14,6 +14,9 @@ type clusterObservationDelay interface {
 }
 
 func (s *PgStore) ScalingObservationDeadline(ctx context.Context, org, cloud, resource, pool string) (time.Time, error) {
+	if _, err := s.db.Exec(ctx, `SELECT loomplane_cluster_controls_current($1,$2)`, org, resource); err != nil {
+		return time.Time{}, err
+	}
 	var due *time.Time
 	err := s.db.QueryRow(ctx, `SELECT (SELECT retry_observation_at FROM loomplane_cluster_pool_advice WHERE org_id=$1 AND cloud_id=$2 AND resource_id=$3 AND pool_id=$4)`, org, cloud, resource, pool).Scan(&due)
 	if due == nil {

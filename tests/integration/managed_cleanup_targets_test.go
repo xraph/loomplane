@@ -35,7 +35,7 @@ func cleanupTargetFixture(t *testing.T) (*poolFixture, *planning.Service, *plann
 	}
 	scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: old.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: "old-instance", RuntimeRef: "org/env/api/runtime_cleanup", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: "apps", NamespaceUID: "namespace-uid", ClusterCA: strings.Repeat("a", 64), Epoch: attempt.Generation}
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	store := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	store := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err = store.OpenManagedScope(t.Context(), scope); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestManagedCleanupTargetsStaleApproval(t *testing.T) {
 
 func TestManagedCleanupTargetsUnknownWrite(t *testing.T) {
 	f, svc, plan, result, scope := cleanupTargetFixture(t)
-	store := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	store := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if _, err := store.Issue(t.Context(), scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: scope.Namespace, Name: scope.Instance, Method: "POST"}); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestManagedCleanupTargetsPreserveRevokedHistory(t *testing.T) {
 	if err := f.sql.QueryRow(t.Context(), `SELECT result FROM loomplane_plans WHERE id=$1`, scope.Plan).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	store := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	store := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err := store.RevokeManagedScope(t.Context(), scope); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestManagedCleanupRetainedTargets(t *testing.T) {
 	next.Instance = "new-instance"
 	next.RuntimeRevision += "/next"
 	next.Release = kube.WorkloadReleaseID(next.RuntimeRef, next.RuntimeRevision)
-	store := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	store := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err = store.OpenManagedScope(t.Context(), next); err != nil {
 		t.Fatal(err)
 	}

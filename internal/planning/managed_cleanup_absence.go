@@ -284,7 +284,7 @@ func (s *ManagedCleanupStore) commitCleanupObservations(ctx context.Context, obs
 		var raw []byte
 		err = tx.QueryRow(ctx, `SELECT a.cloud_id,a.cluster_id,r.body,coalesce((SELECT issued_revision FROM loomplane_cluster_capacity_inventory WHERE org_id=r.org_id AND resource_id=r.id),0)
  FROM loomplane_runtime_attachments a JOIN loomplane_managed_resources r ON r.org_id=a.org_id AND r.id=a.cluster_id AND r.cloud_id=a.cloud_id
- WHERE a.org_id=$1 AND a.id=$2 AND a.revision=$3 AND a.deleted_at IS NULL AND r.deleted_at IS NULL FOR SHARE OF a,r`, t.OrgID, o.session.grant.Target.AttachmentID, o.session.grant.Target.AttachmentRevision).Scan(&t.CloudID, &t.ResourceID, &raw, &t.InventoryBarrier)
+ WHERE loomplane_cluster_controls_current(a.org_id,a.cluster_id) AND a.org_id=$1 AND a.id=$2 AND a.revision=$3 AND a.deleted_at IS NULL AND r.deleted_at IS NULL FOR SHARE OF a,r`, t.OrgID, o.session.grant.Target.AttachmentID, o.session.grant.Target.AttachmentRevision).Scan(&t.CloudID, &t.ResourceID, &raw, &t.InventoryBarrier)
 		if err != nil {
 			return err
 		}

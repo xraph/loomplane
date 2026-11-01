@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/google/uuid"
 	"github.com/xraph/grove/driver"
+	"go.jetify.com/typeid/v2"
 )
 
 // JoinReviewedClusterDemand records an immutable request that did not fit.
@@ -25,8 +25,7 @@ func joinClusterDemandCohort(ctx context.Context, tx driver.Tx, in ClusterWorklo
 	if err != nil {
 		return "", err
 	}
-	// Finish may cancel a running deployment without taking the cloud gate.
-	// Its trigger shares this plan lock so it cannot miss an uncommitted member.
+	// Cancellation shares this plan lock so it cannot miss an uncommitted member.
 	if _, checkErr := tx.Exec(ctx, `SELECT loomplane_lock_cluster_demand($1,$2)`, in.OrgID, in.PlanID); checkErr != nil {
 		return "", checkErr
 	}
@@ -36,6 +35,9 @@ func joinClusterDemandCohort(ctx context.Context, tx driver.Tx, in ClusterWorklo
 	}
 	if !valid {
 		return "", ErrConflict
+	}
+	if _, checkErr := tx.Exec(ctx, `SELECT loomplane_cluster_control_supported(schema_version) FROM loomplane_cluster_demand_cohorts WHERE org_id=$1 AND cloud_id=$2 AND resource_id=$3 AND pool_id=$4 AND closed_at IS NULL`, in.OrgID, in.CloudID, in.ResourceID, pool); checkErr != nil {
+		return "", checkErr
 	}
 	var policyRevision, budgetRevision int64
 	var native bool
@@ -51,9 +53,13 @@ func joinClusterDemandCohort(ctx context.Context, tx driver.Tx, in ClusterWorklo
 	if _, checkErr := tx.Exec(ctx, `DELETE FROM loomplane_cluster_demand_members m USING loomplane_cluster_demand_cohorts c WHERE m.cohort_id=c.id AND c.org_id=$1 AND c.cloud_id=$2 AND c.resource_id=$3 AND c.pool_id=$4 AND c.closed_at IS NULL AND (c.profile<>$5 OR c.policy_revision<>$6 OR c.budget_revision<>$7 OR c.native<>$8)`, in.OrgID, in.CloudID, in.ResourceID, pool, profile, policyRevision, budgetRevision, native); checkErr != nil {
 		return "", checkErr
 	}
+	generated, generateErr := typeid.Generate("cohort")
+	if generateErr != nil {
+		return "", generateErr
+	}
 	var id string
 	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cluster_demand_cohorts(id,org_id,cloud_id,resource_id,pool_id,profile,policy_revision,budget_revision,native)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(org_id,cloud_id,resource_id,pool_id) WHERE closed_at IS NULL DO UPDATE SET pool_id=excluded.pool_id WHERE loomplane_cluster_demand_cohorts.profile=excluded.profile AND loomplane_cluster_demand_cohorts.policy_revision=excluded.policy_revision AND loomplane_cluster_demand_cohorts.budget_revision=excluded.budget_revision AND loomplane_cluster_demand_cohorts.native=excluded.native RETURNING id`, uuid.NewString(), in.OrgID, in.CloudID, in.ResourceID, pool, profile, policyRevision, budgetRevision, native).Scan(&id)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(org_id,cloud_id,resource_id,pool_id) WHERE closed_at IS NULL DO UPDATE SET pool_id=excluded.pool_id WHERE loomplane_cluster_demand_cohorts.profile=excluded.profile AND loomplane_cluster_demand_cohorts.policy_revision=excluded.policy_revision AND loomplane_cluster_demand_cohorts.budget_revision=excluded.budget_revision AND loomplane_cluster_demand_cohorts.native=excluded.native RETURNING id`, generated.String(), in.OrgID, in.CloudID, in.ResourceID, pool, profile, policyRevision, budgetRevision, native).Scan(&id)
 	if err != nil {
 		return "", err
 	}

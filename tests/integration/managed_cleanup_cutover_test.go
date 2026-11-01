@@ -56,7 +56,7 @@ func TestManagedCleanupHistoricalCutover(t *testing.T) {
 	if ok, err := f.plans.Decide(security.WithPrincipal(ctx, p), "org", plan.ID, "approved", "reviewer", "", time.Now()); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	app := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	app := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	id, err := app.Issue(ctx, scope, kube.ManagedRequest{Method: "PUT", Version: "v1", Resource: "services", Name: "old", Namespace: scope.Namespace})
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,7 @@ func (s *Service) ReconcileClusterDemand(ctx context.Context, org, cloud, demand
 	}
 	var planID, service string
 	var cancelled bool
-	if err := st.db.QueryRow(ctx, `SELECT i.plan_id,i.service,EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=i.org_id AND d.plan_id=i.plan_id AND d.status='cancelled') FROM loomplane_cluster_workload_intents i WHERE i.org_id=$1 AND i.body->'input'->>'cloud_id'=$2 AND i.body->'input'->>'id'=$3`, org, cloud, demandID).Scan(&planID, &service, &cancelled); err != nil {
+	if err := st.db.QueryRow(ctx, `SELECT i.plan_id,i.service,EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=i.org_id AND d.plan_id=i.plan_id AND d.status='cancelled') FROM loomplane_cluster_workload_intents i WHERE loomplane_cluster_controls_current($1,i.body->'input'->>'resource_id') AND i.org_id=$1 AND i.body->'input'->>'cloud_id'=$2 AND i.body->'input'->>'id'=$3`, org, cloud, demandID).Scan(&planID, &service, &cancelled); err != nil {
 		return decision, err
 	}
 	if cancelled {

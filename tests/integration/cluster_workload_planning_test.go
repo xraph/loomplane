@@ -12,9 +12,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/xraph/grove/driver"
+	"github.com/xraph/grove/drivers/pgdriver"
+
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	kube "github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -85,7 +89,7 @@ func setupDemandForAttachment(t *testing.T, f *poolFixture, r *cloudinfra.Manage
 	return f, svc, plan, result, auth
 }
 
-func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, result *planning.Result) {
+func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, result *planning.Result, actors ...security.Principal) {
 	t.Helper()
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -97,7 +101,14 @@ func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, re
 	if ok, err := f.plans.Decide(t.Context(), "org", plan.ID, "approved", "usr", "", time.Now()); err == nil || ok {
 		t.Fatal("approval without authenticated actor succeeded")
 	}
-	acceptFuture(t, f, plan.ID)
+	if len(actors) > 0 {
+		ok, approveErr := f.plans.Decide(security.WithPrincipal(t.Context(), actors[0]), "org", plan.ID, "approved", "usr", "", time.Now())
+		if approveErr != nil || !ok {
+			t.Fatal(approveErr)
+		}
+	} else {
+		acceptFuture(t, f, plan.ID)
+	}
 }
 
 // ledgerRuntimeFixture isolates reservation math from the installed worker,
@@ -201,5 +212,31 @@ func TestClusterScalingDemandCurrentAuthority(t *testing.T) {
 				t.Fatalf("denied/best-effort demand reserved guaranteed fleet capacity: %d", count)
 			}
 		})
+	}
+}
+
+func (a managedDemandAuthority) CurrentClusterScalingPolicyTx(ctx context.Context, _ driver.Tx, org, cloud, resource, pool string) (*cloudinfra.ClusterScalingPolicy, error) {
+	return a.CurrentClusterScalingPolicy(ctx, org, cloud, resource, pool)
+}
+
+// Fixture policies replace only the provider's standing approval. The real
+// planner guard still verifies the persisted actor, scope and fresh envelope.
+func managedFixtureDemandGuard(db *pgdriver.PgDB, authorizers ...planning.Authorizer) func(context.Context, driver.Tx, kube.ManagedScope) error {
+	return func(ctx context.Context, tx driver.Tx, scope kube.ManagedScope) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT r.body FROM loomplane_managed_resources r JOIN loomplane_cluster_workload_intents i ON i.org_id=r.org_id AND i.body->'input'->>'resource_id'=r.id WHERE i.org_id=$1 AND i.plan_id=$2 AND i.service=$3`, scope.Org, scope.Plan, scope.Service).Scan(&raw); err != nil {
+			return err
+		}
+		var r cloudinfra.ManagedResource
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return err
+		}
+		policy := r.ScalingPolicies["pool"]
+		var auth planning.Authorizer = &capacityPlanAuth{}
+		if len(authorizers) > 0 {
+			auth = authorizers[0]
+		}
+		svc := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Authz: auth, Capacity: managedDemandAuthority{policy: policy}})
+		return svc.GuardManagedDemandEffect(ctx, tx, scope)
 	}
 }
