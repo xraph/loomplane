@@ -97,6 +97,54 @@ If you log in before the first boot finishes, the login message says Loomplane i
 
 Upgrades and the `.env` file work as they do for a plain Droplet.
 
+## Optional push gateway
+
+Droplets and Marketplace installs use the production Docker bundle, so you
+can run the gateway beside Loomplane and its workers on the same host.
+After the initial setup, follow [the Docker gateway setup](https://loomplane.dev/docs/operations/production-on-docker#optional-push-gateway)
+from `/srv/loomplane`. Set `COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`
+in `.env`, provide the gateway image, hostname and key files, then run
+`docker compose up -d --wait --wait-timeout 240`.
+
+Point the gateway's separate hostname at the Droplet too. Caddy serves both
+hostnames through ports 80 and 443, so you don't open another port in the
+Droplet firewall. Keep gateway credentials in the mounted key files, outside
+cloud-init user data. Back up those files alongside `.env`.
+
+An installer upgrade keeps the gateway opt-in, hostname and existing keys.
+It updates the Loomplane image from the new bundle. Pin the gateway image
+separately in `PUSH_GATEWAY_IMAGE`, and choose a published gateway version
+when you upgrade it. After starting an upgraded bundle, restart Caddy to
+reload its configuration: `docker compose restart caddy`.
+
+On DigitalOcean Kubernetes (DOKS), use the Helm option with
+`push.gateway.enabled=true`. Set `push.gatewayUrl` to the gateway's public
+HTTPS hostname, create its Secret in the release namespace, and configure
+its Ingress or HTTPRoute as shown in the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane).
+Your ingress controller provides the public entry point; provision its load
+balancer, DNS and TLS certificate through your usual cluster setup. The
+same chart option works with other Kubernetes providers that support those
+standard resources.
+
+| Where you host Loomplane | Gateway option |
+|---|---|
+| DigitalOcean Droplet with cloud-init | Production Compose overlay in `/srv/loomplane` |
+| DigitalOcean Marketplace Droplet | The same overlay after the first-login setup |
+| DOKS or another Kubernetes cluster | Helm Deployment and Service, with an Ingress or HTTPRoute |
+| Other Linux Docker hosts | The production Compose overlay |
+| App Platform and Miget templates | Continue to use the hosted gateway |
+
+You need push credentials for the mobile app you ship. The store app uses
+XRaph's gateway.
+
+To exercise these paths locally, run `make test-digitalocean` for the Ubuntu
+installer, upgrade and installed Compose bundle, or `make test-push-kubernetes`
+for the Helm chart. Both build images and use disposable local resources.
+The Kubernetes test sends an encrypted notification to a local provider
+fixture and checks HTTPS routing, restarts and key rotation. It does not
+create DigitalOcean resources or send a notification to a real phone.
+
 ## Backups
 
 On App Platform the dev database has no managed backups. A Managed PostgreSQL cluster does, and DigitalOcean takes them daily. Artifacts and recovery objects live in Spaces.

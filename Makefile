@@ -1,5 +1,5 @@
 .PHONY: help up down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
-	image image-push-gateway test-push-gateway helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
 
@@ -99,6 +99,12 @@ image-push-gateway: ## Build the push gateway image, tagged with the git version
 
 test-push-gateway: image-push-gateway ## Run the push gateway stack in Docker with throwaway secrets and check it
 	bash scripts/test-push-gateway.sh loomplane-push-gateway:$(VERSION)
+
+test-push-kubernetes: image image-push-gateway ## Check Helm push delivery, HTTPS routes and key rotation in a disposable kind cluster
+	python3 tests/kubernetes/push_gateway.py loomplane:$(VERSION) loomplane-push-gateway:$(VERSION)
+
+test-digitalocean: image image-push-gateway ## Check the Droplet installer, upgrade and bundled gateway locally
+	bash deployments/digitalocean/test-install.sh loomplane:$(VERSION) loomplane-push-gateway:$(VERSION)
 
 helm-lint: ## Lint the Helm chart and validate what it renders (needs helm and kubeconform)
 	bash scripts/check-helm.sh

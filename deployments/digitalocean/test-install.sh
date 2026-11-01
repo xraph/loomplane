@@ -16,10 +16,25 @@ if [ -z "${LOOMPLANE_TEST_IN_CONTAINER:-}" ]; then
   out=$(mktemp -d)
   trap 'rm -rf "$out"' EXIT
   docker run --rm -e LOOMPLANE_TEST_IN_CONTAINER=1 \
+    -e LOOMPLANE_TEST_HOST_UID="$(id -u)" -e LOOMPLANE_TEST_HOST_GID="$(id -g)" \
     -v "$repo:/repo:ro" -v "$out:/out" ubuntu:24.04 bash /repo/deployments/digitalocean/test-install.sh
   echo "test-install: docker compose config on the installed bundle"
-  docker compose --project-directory "$out/install" config --quiet
+  (
+    cd "$out/install"
+    env -u COMPOSE_FILE -u COMPOSE_PROFILES -u PUSH_GATEWAY_DOMAIN docker compose config --format json | jq -e '
+      .services.loomplane.environment.LOOMPLANE_PUSH_GATEWAY_URL == "https://push.loomplane.test.invalid" and
+      .services["loomplane-worker"].environment.LOOMPLANE_PUSH_GATEWAY_URL == "https://push.loomplane.test.invalid" and
+      .services.caddy.depends_on["push-gateway"].condition == "service_healthy"
+    ' >/dev/null
+  )
   echo "test-install: PASS (host compose config ok)"
+  if [ "$#" -eq 2 ]; then
+    echo "test-install: smoke test of the installed gateway bundle"
+    bash "$repo/scripts/test-push-gateway.sh" "$2" "$1" "$out/install"
+  elif [ "$#" -ne 0 ]; then
+    echo "Usage: test-install.sh [LOOMPLANE_IMAGE GATEWAY_IMAGE]" >&2
+    exit 2
+  fi
   exit 0
 fi
 
@@ -158,12 +173,15 @@ printf 'fixture-custom-key' >"$install_dir/gateway-keys/sealing-key"
 chown 10001:10001 "$install_dir/gateway-keys/sealing-key"
 chmod 0400 "$install_dir/gateway-keys/sealing-key"
 printf '\nPUSH_GATEWAY_SECRETS_DIR=./gateway-keys\n' >>"$install_dir/.env"
+printf 'COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml\nPUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid\n' >>"$install_dir/.env"
 build_bundle v9.9.7 sha256:1111
 if LOOMPLANE_VERSION=v9.9.7 bash "$installer" prepare >"$work/upgrade.log" 2>&1 \
   && grep -q '^LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@sha256:1111$' "$install_dir/.env" \
   && [ "$(grep '^LOOMPLANE_SECRET_KEY=' "$install_dir/.env")" = "$key1" ] \
   && [ "$(grep '^POSTGRES_PASSWORD=' "$install_dir/.env")" = "$pw1" ] \
   && grep -q '^LOOMPLANE_DOMAIN=x.loomplane.test.invalid$' "$install_dir/.env" \
+  && grep -q '^COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml$' "$install_dir/.env" \
+  && grep -q '^PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid$' "$install_dir/.env" \
   && [ "$(stat -c %a "$install_dir/.env")" = 600 ] \
   && [ -z "$(find "$install_dir" -maxdepth 1 -name '.env.??????' | head -n 1)" ]; then
   pass "prepare on an upgrade syncs LOOMPLANE_IMAGE and keeps secrets"
@@ -184,7 +202,17 @@ fi
 
 # Keep the finished install for the host's `docker compose config` check.
 rm -rf /out/install
-cp -a "$install_dir" /out/install
+cp -R --no-preserve=ownership "$install_dir" /out/install
+# The preservation checks above run against the root-owned install. Hand
+# only this disposable copy to the host so Linux CI can read .env and
+# remove the mode-0700 fixture directories after the test.
+chown -R "${LOOMPLANE_TEST_HOST_UID:-0}:${LOOMPLANE_TEST_HOST_GID:-0}" /out/install
+if setpriv --reuid="${LOOMPLANE_TEST_HOST_UID:-0}" --regid="${LOOMPLANE_TEST_HOST_GID:-0}" --clear-groups \
+  sh -c 'test -r /out/install/.env && test -r /out/install/gateway-keys/sealing-key'; then
+  pass "exported bundle is readable by the Linux host user"
+else
+  bad "exported bundle is readable by the Linux host user"
+fi
 
 # 5. An unreachable release API fails clearly and creates nothing.
 fresh=$work/never-created

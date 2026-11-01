@@ -129,6 +129,14 @@ options off and forward only `/v1/registrations` and `/v1/send` to the
 `<release>-push-gateway` Service on port 8790. Keep `/_/health` private and
 configure a 64 KB request limit at your proxy.
 
+For Traefik, enable TLS on the HTTPS entry point (or set the ingress
+`traefik.ingress.kubernetes.io/router.tls` annotation to `"true"`). When you
+also use the chart's dashboard ingress with `blockInternalPaths=true`, set
+Traefik's `providers.kubernetesIngress.allowEmptyServices=true`. That keeps
+the blocked health and metrics routes active even though their target
+Service has no endpoints. The gateway itself uses exact route matches for
+its two public paths.
+
 The gateway mounts only its own Secret. API and worker pods do not mount
 it, and the gateway does not receive their database or encryption settings.
 For iOS, add `apns-key.p8` to the Secret, enable `push.gateway.apns.enabled`
@@ -189,3 +197,20 @@ Every device handle is sealed under a key the gateway holds. To rotate it:
 If you rotate again inside the 90 days, the older key drops out early, because only one previous key is kept. Devices sealed under it get `410` and register again.
 
 Keep the previous key for 90 days. That gives apps time to register again. After that, empty it with `sudo truncate -s 0 secrets/previous-sealing-key` (keep the file, Compose wants it), clear its ID, and run `docker compose up -d` again. Phones that registered during the window carry on. A phone whose handle was sealed under a key the gateway no longer holds gets `410`, its server drops the device, and the app registers again on its next launch.
+
+## Local deployment checks
+
+Run `make test-push-kubernetes` to build both images and install the chart
+in a disposable kind cluster. The test covers API and worker startup,
+HTTPS through both Ingress and Gateway API, registration and an encrypted
+notification sent from Loomplane to a local provider fixture. It also
+checks key mounts, gateway pod replacement, sealing-key rotation and
+turning the bundled gateway off. It creates its own kubeconfig and deletes
+its cluster when it finishes.
+
+`make test-digitalocean` exercises the Ubuntu installer and upgrade with
+the gateway enabled, checks that key permissions and configuration survive,
+and runs the installed release bundle locally. You need Docker, Python 3,
+OpenSSL, curl and jq; the Kubernetes check also needs kind, kubectl and Helm.
+These checks use generated test keys. Verify actual phone delivery after
+you configure your own DNS, TLS and Apple or Firebase credentials.

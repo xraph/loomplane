@@ -30,3 +30,13 @@ Ubuntu 24.04 LTS, Docker Engine with the Compose plugin, `ufw` allowing ports 22
 ## Support
 
 Report problems and ask questions at https://github.com/xraph/loomplane/issues.
+
+## Optional push gateway
+
+You can enable the gateway in `/srv/loomplane/.env` using
+`COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`. Supply a separate
+hostname and the gateway key files, then start the stack again. Caddy serves
+both hostnames on ports 80 and 443. The
+[Docker gateway guide](https://loomplane.dev/docs/operations/production-on-docker#optional-push-gateway)
+covers credentials, DNS and upgrades. You need push credentials for the app
+you ship; the store app uses XRaph's hosted gateway.

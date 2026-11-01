@@ -5,7 +5,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d)
 project="loomplane-push-smoke-$(date +%s)-$$"
-export PUSH_GATEWAY_IMAGE=${1:?Usage: scripts/test-push-gateway.sh GATEWAY_IMAGE [LOOMPLANE_IMAGE]}
+export PUSH_GATEWAY_IMAGE=${1:?Usage: scripts/test-push-gateway.sh GATEWAY_IMAGE [LOOMPLANE_IMAGE [BUNDLE_DIR]]}
 export PUSH_GATEWAY_DOMAIN=localhost ACME_EMAIL=smoke@example.com
 export PUSH_GATEWAY_SECRETS_DIR=$scratch
 export PUSH_GATEWAY_SEALING_KEY_ID=smoke
@@ -49,8 +49,9 @@ if [ -n "${2:-}" ]; then
   export LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME='' LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD=''
   export LOOMPLANE_NOTIFICATIONS_FROM='' LOOMPLANE_BACKUP_URL='' LOOMPLANE_PAUSED_PROVIDERS=''
   export LOOMPLANE_GITHUB_API_URL=https://api.github.com LOOMPLANE_GITHUB_WEB_URL=https://github.com
-  compose+=(-f "$root/deployments/production/compose.yaml"
-    -f "$root/deployments/production/compose.push-gateway.yaml")
+  production_dir=${3:-$root/deployments/production}
+  compose+=(-f "$production_dir/compose.yaml"
+    -f "$production_dir/compose.push-gateway.yaml")
 else
   compose+=(-f "$root/deployments/push-gateway/compose.yaml")
 fi
