@@ -144,10 +144,6 @@ class QualificationTests(unittest.TestCase):
                 item.run_step("cleanup_inventory")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class LifecycleEvidenceTests(unittest.TestCase):
     def test_unavailable_upgrade_stays_unqualified(self):
         self.assertFalse(runner.validate_lifecycle_evidence("upgrade", {"status": "unavailable", "reason_code": "provider_upgrade_unsupported"}, config()))
@@ -158,8 +154,43 @@ class LifecycleEvidenceTests(unittest.TestCase):
                 runner.validate_lifecycle_evidence(step, {"passed": True}, config())
 
     def test_drain_cannot_hide_a_write(self):
-        evidence = {"status": "observed", "observed_at": "2026-10-31T00:00:00Z", "maximum_nodes": 1, "reason_code": "pdb_blocked", "provider_writes": 1}
+        evidence = {"status": "observed", "observed_at": runner.datetime.now(runner.timezone.utc).isoformat(), "maximum_nodes": 1, "reason_code": "pdb_blocked", "provider_writes": 1}
         with self.assertRaises(ValueError):
             runner.validate_lifecycle_evidence("blocked_drain", evidence, config())
         evidence["provider_writes"] = 0
         self.assertTrue(runner.validate_lifecycle_evidence("blocked_drain", evidence, config()))
+
+    def test_contradictory_and_untyped_node_outcomes_are_rejected(self):
+        base = {"status": "observed", "observed_at": runner.datetime.now(runner.timezone.utc).isoformat(), "maximum_nodes": 2, "review_digest": "review", "operation_revision": 1, "policy_revision": 1}
+        for desired, observed in [(2, 1), (2, True), ("2", 2), (0, 0), (3, 3)]:
+            with self.subTest(desired=desired, observed=observed), self.assertRaises(ValueError):
+                runner.validate_lifecycle_evidence("scale_up", dict(base, desired_nodes=desired, observed_nodes=observed), dict(config(), max_nodes=2))
+        self.assertTrue(runner.validate_lifecycle_evidence("scale_up", dict(base, desired_nodes=2, observed_nodes=2), dict(config(), max_nodes=2)))
+        for minimum, maximum in [(3, 2), (-1, 2), (True, 2), (1, "2"), (1, 0)]:
+            with self.subTest(minimum=minimum, maximum=maximum), self.assertRaises(ValueError):
+                runner.validate_lifecycle_evidence("native_bounds", dict(base, minimum_nodes=minimum, maximum_nodes=maximum, controller_mode="native"), dict(config(), max_nodes=2))
+        self.assertTrue(runner.validate_lifecycle_evidence("native_bounds", dict(base, minimum_nodes=0, controller_mode="native"), dict(config(), max_nodes=2)))
+
+    def test_renewal_proves_expiry_transition_and_current_observation(self):
+        now = runner.time.time()
+        iso = lambda value: runner.datetime.fromtimestamp(value, runner.timezone.utc).isoformat()
+        base = {"status":"observed", "observed_at":iso(now - 1), "maximum_nodes":1, "previous_expiry":iso(now - 10), "current_expiry":iso(now + 100), "verified_after_previous_expiry":True}
+        self.assertTrue(runner.validate_lifecycle_evidence("runtime_renewal", base, config()))
+        for patch in [{"previous_expiry":iso(now + 10)}, {"current_expiry":iso(now - 5)}, {"observed_at":iso(now + 10)}, {"observed_at":iso(now - config()["timeout_seconds"] - 1)}, {"current_expiry":"not a date"}, {"previous_expiry":"2026-11-01T12:00:00"}, {"verified_after_previous_expiry":False}]:
+            with self.subTest(patch=patch), self.assertRaises(ValueError):
+                runner.validate_lifecycle_evidence("runtime_renewal", dict(base, **patch), config())
+
+    def test_legacy_completed_lifecycle_cannot_skip_new_validation(self):
+        sample=config()
+        sample["lifecycle"]=True
+        sample["commands"]={step:["fixture-only"] for step in runner.qualification_steps(sample)}
+        with tempfile.TemporaryDirectory() as directory:
+            item=runner.Runner(sample, Path(directory)/"state.json", "unused", request=lambda *_: self.fail("must not repeat provider actions"))
+            item.state["completed"]=list(runner.qualification_steps(sample))
+            item.state["lifecycle_results"]={step:{"qualified":True} for step in runner.LIFECYCLE_STEPS}
+            with self.assertRaisesRegex(ValueError,"revalidation"):
+                item.run()
+
+
+if __name__ == "__main__":
+    unittest.main()

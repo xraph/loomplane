@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise a reviewed, bounded disposable cluster qualification run."""
 
+from datetime import datetime, timezone
 import argparse
 import hashlib
 import json
@@ -27,15 +28,38 @@ def qualification_steps(config):
     return STEPS[:-1] + LIFECYCLE_STEPS + STEPS[-1:] if config.get("lifecycle") is True else STEPS
 
 
+def lifecycle_time(value):
+    if not isinstance(value, str):
+        raise ValueError("Lifecycle timestamps must be timezone-aware ISO strings")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("missing timezone")
+        return parsed.timestamp()
+    except (ValueError, OverflowError) as error:
+        raise ValueError("Invalid lifecycle timestamp") from error
+
+
+def lifecycle_integer(value, minimum=1):
+    return type(value) is int and value >= minimum
+
+
 def validate_lifecycle_evidence(step, evidence, config):
+    if not isinstance(evidence, dict):
+        raise ValueError("Lifecycle evidence must be an object")
     if evidence.get("status") == "unavailable":
-        if step not in ("native_bounds", "maintenance", "upgrade") or not evidence.get("reason_code"):
+        if step not in ("native_bounds", "maintenance", "upgrade") or not isinstance(evidence.get("reason_code"), str) or not evidence["reason_code"].strip():
             raise ValueError(step + " needs an observed result or an explicit supported-path limitation")
         return False
     if evidence.get("status") != "observed" or not evidence.get("observed_at"):
         raise ValueError(step + " requires timestamped lifecycle evidence")
-    if evidence.get("maximum_nodes", config["max_nodes"] + 1) > config["max_nodes"]:
-        raise ValueError(step + " exceeded the reviewed node bound")
+    observed_at = lifecycle_time(evidence["observed_at"])
+    now = time.time()
+    if not 0 <= now - observed_at <= config["timeout_seconds"]:
+        raise ValueError(step + " requires a current observation")
+    maximum = evidence.get("maximum_nodes")
+    if not lifecycle_integer(maximum) or maximum > config["max_nodes"]:
+        raise ValueError(step + " exceeded or omitted the reviewed node bound")
     required = {
         "scale_up": ("review_digest", "operation_revision", "observed_nodes", "desired_nodes"),
         "native_bounds": ("review_digest", "policy_revision", "controller_mode", "minimum_nodes", "maximum_nodes"),
@@ -48,12 +72,25 @@ def validate_lifecycle_evidence(step, evidence, config):
     }
     if any(key not in evidence for key in required[step]):
         raise ValueError(step + " has incomplete lifecycle evidence")
-    if step == "blocked_drain" and (not evidence["reason_code"] or evidence["provider_writes"] != 0):
+    for field in ("review_digest", "reason_code", "supported_operation", "from_version", "to_version"):
+        if field in required[step] and (not isinstance(evidence[field], str) or not evidence[field].strip()):
+            raise ValueError(step + " requires a nonempty " + field)
+    for field in ("operation_revision", "policy_revision"):
+        if field in required[step] and not lifecycle_integer(evidence[field]):
+            raise ValueError(step + " requires a positive " + field)
+    if step == "scale_up" and (not lifecycle_integer(evidence["desired_nodes"]) or not lifecycle_integer(evidence["observed_nodes"]) or evidence["observed_nodes"] != evidence["desired_nodes"] or evidence["desired_nodes"] > maximum):
+        raise ValueError("Scale-up requires observed convergence within reviewed bounds")
+    if step == "native_bounds" and (not lifecycle_integer(evidence["minimum_nodes"], 0) or evidence["minimum_nodes"] > maximum):
+        raise ValueError("Native bounds must be ordered nonnegative integers")
+    if step == "blocked_drain" and (not lifecycle_integer(evidence["provider_writes"], 0) or evidence["provider_writes"] != 0):
         raise ValueError("Blocked drain must establish zero provider writes")
     if step == "native_bounds" and evidence["controller_mode"] != "native":
         raise ValueError("Native bounds need the provider-owned controller")
-    if step == "runtime_renewal" and evidence["verified_after_previous_expiry"] is not True:
-        raise ValueError("Renewal must be verified after the previous credential expires")
+    if step == "runtime_renewal":
+        previous = lifecycle_time(evidence["previous_expiry"])
+        current = lifecycle_time(evidence["current_expiry"])
+        if evidence["verified_after_previous_expiry"] is not True or not previous < observed_at < current:
+            raise ValueError("Renewal must be observed after previous expiry and before the renewed credential expires")
     if step == "teardown" and evidence["absence_observed"] is not True:
         raise ValueError("Teardown requires an absence observation")
     if step == "retained_inventory" and (evidence["complete"] is not True or not isinstance(evidence["resources"], list)):
@@ -180,7 +217,7 @@ class Runner:
         if step in LIFECYCLE_STEPS:
             qualified = validate_lifecycle_evidence(step, evidence, self.config)
             self.state.setdefault("lifecycle_results", {})[step] = {
-                "qualified": qualified, "status": evidence["status"],
+                "qualified": qualified, "status": evidence["status"], "validation_version": 2,
                 "reason_code": evidence.get("reason_code", ""),
             }
         self.state["completed"].append(step)
@@ -209,6 +246,10 @@ class Runner:
         self.save()
 
     def run(self):
+        if self.config.get("lifecycle") is True:
+            results = self.state.get("lifecycle_results", {})
+            if any(results.get(step, {}).get("validation_version") != 2 for step in self.state["completed"] if step in LIFECYCLE_STEPS):
+                raise ValueError("Saved lifecycle results need evidence revalidation; do not repeat provider actions")
         if self.state["completed"] == list(qualification_steps(self.config)):
             return self.state
         if "operation_id" not in self.state:
