@@ -24996,6 +24996,7 @@
       "ProviderResource": {
         "type": "object",
         "required": [
+          "identity_scope",
           "ownership_state",
           "consumers",
           "credential_methods",
@@ -25028,6 +25029,9 @@
         ],
         "properties": {
           "account_identity": {
+            "type": "string"
+          },
+          "bucket_owner": {
             "type": "string"
           },
           "connection_generation": {
@@ -25073,6 +25077,9 @@
             "type": "string"
           },
           "id": {
+            "type": "string"
+          },
+          "identity_scope": {
             "type": "string"
           },
           "incarnation": {
@@ -25125,10 +25132,36 @@
       },
       "ProviderResourceConnectInputBody": {
         "type": "object",
-        "required": [
-          "dsn"
-        ],
         "properties": {
+          "bucket_access": {
+            "type": "object",
+            "properties": {
+              "access_key_id": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string"
+              },
+              "expected_owner": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "secret_access_key": {
+                "type": "string"
+              },
+              "service_account_json": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              }
+            }
+          },
           "dsn": {
             "type": "string"
           }
@@ -28734,6 +28767,9 @@
             "type": "string"
           },
           "target": {
+            "type": "string"
+          },
+          "target_account_identity": {
             "type": "string"
           },
           "target_settings": {

@@ -508,11 +508,24 @@ function ResourceReviewForm({
         </div>
       )}
       {resource && (
-        <p className="text-xs text-muted-foreground">
-          This reference is enabled in {environment} only. The service need is
-          saved in your manifest; other environments must opt in before using
-          it.
-        </p>
+        <div className="grid gap-2 text-xs text-muted-foreground">
+          <p>
+            This reference is enabled in {environment} only. The service need is
+            saved in your manifest; other environments must opt in before using
+            it.
+          </p>
+          <p>
+            For DigitalOcean and Azure, credentials and connectivity are checked
+            from Loomplane. Configure your application's outbound network and
+            the resource's firewall or trusted sources separately.
+          </p>
+          {resource.kind === "object-storage" && (
+            <p>
+              Bucket checks verify listing access without writing objects.
+              Multiple bucket attachments receive separate variable prefixes.
+            </p>
+          )}
+        </div>
       )}
       {error && (
         <Alert variant="destructive">

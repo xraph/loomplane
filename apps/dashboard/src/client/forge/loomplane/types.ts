@@ -3541,6 +3541,7 @@ export interface ProviderList {
 
 export interface ProviderResource {
   accountIdentity: string;
+  bucketOwner?: string;
   connectionGeneration: number;
   connectionId: string;
   connectionIdentity: string;
@@ -3554,6 +3555,7 @@ export interface ProviderResource {
   externalId: string;
   host: string;
   id: string;
+  identityScope: string;
   incarnation: string;
   kind: string;
   name: string;
@@ -3572,7 +3574,17 @@ export interface ProviderResource {
 }
 
 export interface ProviderResourceConnectInputBody {
-  dsn: string;
+  bucketAccess?: {
+  accessKeyId?: string;
+  bucket?: string;
+  expectedOwner?: string;
+  provider?: string;
+  region?: string;
+  secretAccessKey?: string;
+  serviceAccountJson?: string;
+  sessionToken?: string;
+};
+  dsn?: string;
 }
 
 export interface ProviderResourceConsumer {
@@ -4618,6 +4630,7 @@ export interface ServiceConfig {
   source: string;
   start?: string;
   target?: string;
+  targetAccountIdentity?: string;
   targetSettings?: Record<string, any>;
   workload: string;
 }

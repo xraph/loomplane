@@ -38,6 +38,8 @@ export type InventoryResource = {
   consumers?: InventoryConsumer[]
   ownershipState?: string
   endpointProofRequired?: boolean
+  identityScope?: string
+  bucketOwner?: string
 }
 export type ResourceFilters = {
   search?: string

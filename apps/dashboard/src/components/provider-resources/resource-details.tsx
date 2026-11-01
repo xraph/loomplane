@@ -3,6 +3,7 @@ import * as api from "@/client/forge/loomplane/hooks"
 import { messageOf } from "@/client/errors"
 import { useMutation, useQuery } from "@/client/hooks"
 import { QueryError } from "@/components/query-error"
+import { BucketCredentials } from "@/components/provider-resources/bucket-credentials"
 import { StatusPill } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -24,15 +25,7 @@ import {
 import { Link } from "@/lib/router"
 import { useNow } from "@/lib/use-runs"
 
-export function ResourceDetails({
-  id,
-  open,
-  onOpenChange,
-  canConnect,
-  canReview,
-  onAttach,
-  onSaved,
-}: {
+type ResourceDetailsProps = {
   id: string
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -40,7 +33,21 @@ export function ResourceDetails({
   canReview: boolean
   onAttach: (resource: InventoryResource) => void
   onSaved: () => Promise<unknown>
-}) {
+}
+
+export function ResourceDetails(props: ResourceDetailsProps) {
+  return <ResourceDetailsContent key={`${props.id}:${props.open}`} {...props} />
+}
+
+function ResourceDetailsContent({
+  id,
+  open,
+  onOpenChange,
+  canConnect,
+  canReview,
+  onAttach,
+  onSaved,
+}: ResourceDetailsProps) {
   const query = useQuery(api.useProviderResourcesGet, {
     path: { resourceId: id },
   })
@@ -95,7 +102,7 @@ export function ResourceDetails({
                 {[
                   ["Engine", `${resource.kind} ${resource.version ?? ""}`],
                   ["Provider", resource.provider],
-                  ["Account", resource.accountIdentity],
+                  ["Account", resource.bucketOwner || resource.accountIdentity],
                   ["Region", resource.region || "Unspecified"],
                   ["Provider health", resource.status],
                   [
@@ -115,12 +122,24 @@ export function ResourceDetails({
                       : "Not observed",
                   ],
                   ["Scope", resource.scope || "Unspecified"],
-                ].map(([label, value]) => (
-                  <div key={label} className="contents">
-                    <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="min-w-0 break-words">{value}</dd>
-                  </div>
-                ))}
+                ]
+                  .filter(
+                    ([label]) =>
+                      resource.kind !== "object-storage" ||
+                      ![
+                        "Engine",
+                        "Provider health",
+                        "Network",
+                        "Endpoint",
+                        "Scope",
+                      ].includes(label)
+                  )
+                  .map(([label, value]) => (
+                    <div key={label} className="contents">
+                      <dt className="text-muted-foreground">{label}</dt>
+                      <dd className="min-w-0 break-words">{value}</dd>
+                    </div>
+                  ))}
               </dl>
               {resource.ownershipState === "unverified" && (
                 <Alert>
@@ -138,6 +157,25 @@ export function ResourceDetails({
                   </AlertDescription>
                 </Alert>
               )}
+              {resource.identityScope === "account-name" && (
+                <Alert>
+                  <AlertDescription>
+                    This attachment follows the bucket name in the verified AWS
+                    account. If the same account recreates this bucket, the
+                    attachment follows that name.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {canConnect &&
+                resource.credentialMethods?.includes("bucket_access") && (
+                  <BucketCredentials
+                    resource={resource}
+                    observed={readiness.discovery === "Observed"}
+                    onSaved={async () => {
+                      await Promise.all([query.refetch(), onSaved()])
+                    }}
+                  />
+                )}
               {canConnect && resource.credentialMethods?.includes("dsn") && (
                 <form
                   onSubmit={(event) => {
@@ -227,8 +265,8 @@ export function ResourceDetails({
               {!resource.endpointId && (
                 <p className="text-xs text-muted-foreground">
                   Save supported application credentials before reviewing an
-                  attachment. Each deployment verifies access from its own
-                  target network.
+                  attachment. The deployment review shows where connection
+                  checks run and which network access you need to configure.
                 </p>
               )}
             </>
