@@ -81,7 +81,15 @@ export function CapacityUsage({ cloudId }: { cloudId: string }) {
         title="Capacity usage"
         description="What this Cloud's servers and reservations count against its limits. Used is what's provisioned plus what's reserved; starting is the part of reserved a provider is already creating."
       />
-      {!u.fresh && <StaleUsage cloudId={cloudId} checkedAt={u.checkedAt} />}
+      {!u.fresh && (
+        <StaleUsage
+          cloudId={cloudId}
+          checkedAt={u.checkedAt}
+          incomplete={dimensions.some(
+            (d) => u.provisioned?.[d.key] == null || u.headroom?.[d.key] == null
+          )}
+        />
+      )}
       <Rows>
         {dimensions.map((d) => (
           <ResourceRow
@@ -107,9 +115,11 @@ export function CapacityUsage({ cloudId }: { cloudId: string }) {
 function StaleUsage({
   cloudId,
   checkedAt,
+  incomplete,
 }: {
   cloudId: string
   checkedAt: string
+  incomplete: boolean
 }) {
   const now = useNow(30_000)
   const refresh = useMutation(useCloudCapacityRefresh)
@@ -123,7 +133,11 @@ function StaleUsage({
   return (
     <Alert>
       <AlertDescription className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <span>{`Usage is out of date (${checked}).`}</span>
+        <span>
+          {incomplete
+            ? `Usage is incomplete (${checked}). Unknown amounts need a fresh observation.`
+            : `Usage is out of date (${checked}).`}
+        </span>
         <Button
           size="sm"
           variant="outline"

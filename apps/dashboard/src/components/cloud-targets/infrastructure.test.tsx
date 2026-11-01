@@ -24,7 +24,7 @@ afterEach(() => {
 })
 const cloud = { id: "c", revision: 4, name: "Shared" }
 const writes: { path: string; body: Record<string, unknown> }[] = []
-function fixture(stale = false) {
+function fixture(stale = false, unknownCost = false) {
   writes.length = 0
   vi.stubGlobal(
     "fetch",
@@ -41,6 +41,21 @@ function fixture(stale = false) {
             input: body,
             actions: [],
             connection_generation: 7,
+            ...(unknownCost
+              ? {
+                  budget_review: {
+                    estimate: {
+                      known: false,
+                      hourly_micro_usd: "9007199254740993",
+                      horizon_micro_usd: "9007199254740993",
+                      horizon_seconds: 3600,
+                      components: [
+                        { category: "network_egress", quantity: "1" },
+                      ],
+                    },
+                  },
+                }
+              : {}),
           })
         if (path.endsWith("/apply") && stale)
           return Response.json(
@@ -1104,4 +1119,42 @@ it("keeps a GPU budget between one and the server's GPUs", async () => {
   await user.type(budget, "2")
   expect(budget).not.toHaveAttribute("aria-invalid", "true")
   expect(save).toBeEnabled()
+})
+
+it("requires scoped unknown server costs to be acknowledged in a fresh review", async () => {
+  fixture(false, true)
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(
+    await screen.findByRole("button", { name: "Connect existing server" })
+  )
+  await user.type(
+    screen.getByRole("textbox", { name: "Server name" }),
+    "shared-host"
+  )
+  await user.click(screen.getByRole("combobox", { name: "Server account" }))
+  await user.click(await screen.findByRole("option", { name: /Pinned SSH/ }))
+  await user.click(screen.getByRole("checkbox", { name: /Confirm pinned SSH/ }))
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(await screen.findByText("Network traffic")).toBeInTheDocument()
+  expect(screen.getByText(/9007199254.740993/)).toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Apply reviewed server" })
+  ).toBeDisabled()
+  await user.click(
+    screen.getByRole("checkbox", {
+      name: /Acknowledge the displayed unknown cost categories/,
+    })
+  )
+  expect(
+    screen.queryByRole("button", { name: "Apply reviewed server" })
+  ).toBeNull()
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(
+    await screen.findByRole("button", { name: "Apply reviewed server" })
+  ).toBeEnabled()
+  expect(
+    writes.filter((w) => w.path.endsWith("/preview"))[1].body
+      .acknowledge_unknown_costs
+  ).toBe(true)
 })

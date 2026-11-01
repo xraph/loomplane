@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
-import type { CloudCluster, Profile } from "@/client/forge/loomplane/types"
+import type { Profile } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { statusOf } from "@/client/errors"
 import {
@@ -32,7 +32,8 @@ export function saveClusterOperation(id: string) {
 
 export function CloudInfrastructure({ cloud }: { cloud: Profile }) {
   const [filter, setFilter] = useState(
-    new URLSearchParams(window.location.search).has("clusterOperation")
+    new URLSearchParams(window.location.search).has("clusterOperation") ||
+      new URLSearchParams(window.location.search).has("cluster")
       ? "clusters"
       : "servers"
   )
@@ -66,10 +67,11 @@ export function Clusters({ cloud }: { cloud: Profile }) {
   const { can } = useOrganization()
   if (!can("organization_cloud:manage"))
     return (
-      <CloudEmpty kind="compact" title="Cluster management is restricted">
+      <div role="status" className="text-sm">
+        <p className="font-medium">Cluster management is restricted</p>
         You can use granted project targets. An organization manager reviews
         cluster setup and provider accounts.
-      </CloudEmpty>
+      </div>
     )
   return <ClusterInventory cloud={cloud} />
 }
@@ -77,7 +79,9 @@ function ClusterInventory({ cloud }: { cloud: Profile }) {
   const [cursor, setCursor] = useState("")
   const [search, setSearch] = useState("")
   const [creating, setCreating] = useState(false)
-  const [selected, setSelected] = useState<CloudCluster | null>(null)
+  const [selected, setSelected] = useState(
+    () => new URLSearchParams(window.location.search).get("cluster") ?? ""
+  )
   const [operation, setOperation] = useState(
     () =>
       new URLSearchParams(window.location.search).get("clusterOperation") ?? ""
@@ -107,8 +111,10 @@ function ClusterInventory({ cloud }: { cloud: Profile }) {
   if (operation)
     return (
       <ClusterOperationDetail
+        key={operation}
         cloud={cloud}
         id={operation}
+        onSaved={openOperation}
         onBack={() => openOperation("")}
         onRefreshReview={() => {
           openOperation("")
@@ -117,7 +123,19 @@ function ClusterInventory({ cloud }: { cloud: Profile }) {
       />
     )
   if (selected)
-    return <ClusterDetail cluster={selected} onBack={() => setSelected(null)} />
+    return (
+      <ClusterDetail
+        cloud={cloud}
+        id={selected}
+        onSaved={openOperation}
+        onBack={() => {
+          setSelected("")
+          const url = new URL(window.location.href)
+          url.searchParams.delete("cluster")
+          window.history.replaceState(window.history.state, "", url)
+        }}
+      />
+    )
   return (
     <section className="grid gap-3" aria-label="Clusters">
       <CloudSectionHead
@@ -138,9 +156,10 @@ function ClusterInventory({ cloud }: { cloud: Profile }) {
       />
       {clusters.status === "error" ? (
         statusOf(clusters.error) === 403 ? (
-          <CloudEmpty kind="compact" title="Cluster access is restricted">
+          <div role="status" className="text-sm">
+            <p>Cluster access is restricted</p>
             Ask an organization manager to review your permissions.
-          </CloudEmpty>
+          </div>
         ) : (
           <QueryError
             error={clusters.error}
@@ -174,7 +193,13 @@ function ClusterInventory({ cloud }: { cloud: Profile }) {
             <Row key={cluster.id}>
               <button
                 className="min-w-0 flex-1 text-left text-sm font-medium hover:underline"
-                onClick={() => setSelected(cluster)}
+                onClick={() => {
+                  setSelected(cluster.id)
+                  const url = new URL(window.location.href)
+                  url.searchParams.set("cluster", cluster.id)
+                  url.searchParams.set("tab", "servers")
+                  window.history.replaceState(window.history.state, "", url)
+                }}
               >
                 <span className="block break-words">
                   {cluster.observation?.name || cluster.externalId}

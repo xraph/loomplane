@@ -110,6 +110,7 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import {
   isLive,
+  normalizePlan,
   type Run,
   runKindLabel,
   runLog,
@@ -122,7 +123,8 @@ import { cn } from "@/lib/utils"
 
 export function DeploymentPage({ id }: { id: string }) {
   const plan = useQuery(usePlansGet, { path: { id } })
-  if (plan.data) return <Loaded plan={plan.data} refetch={plan.refetch} />
+  if (plan.data)
+    return <Loaded plan={normalizePlan(plan.data)} refetch={plan.refetch} />
   const missing = plan.status === "error" && statusOf(plan.error) === 404
   return (
     <>
@@ -195,10 +197,14 @@ function Loaded({
       />
       <Page>
         <Heading run={run} now={now} />
-        {plan.catalog &&
+        {((plan.catalog &&
           plan.actions.length === 1 &&
           plan.actions[0].provider === "cloud-sql" &&
-          plan.actions[0].op === "create" &&
+          plan.actions[0].op === "create") ||
+          plan.actions.some(
+            (action) =>
+              !!action.service?.clusterDemand || !!action.cleanupTargets?.length
+          )) &&
           run.deployment &&
           ["failed", "cancelled"].includes(run.deployment.status) && (
             <FailedDeploymentCleanup

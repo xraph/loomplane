@@ -1,3 +1,4 @@
+import { ClusterMoney } from "@/components/cloud-detail/cluster-money"
 import {
   ActivityIcon as ActivityPulseIcon,
   InfrastructureIcon,
@@ -584,6 +585,36 @@ function ServerEditor({
                 </FieldLabel>
               </FormField>
             )}
+            {operation &&
+              (operation.budgetReview?.estimate || operation.moneyEstimate) && (
+                <ClusterMoney
+                  estimate={
+                    operation.budgetReview?.estimate ?? operation.moneyEstimate
+                  }
+                />
+              )}
+            {operation &&
+              !(operation.budgetReview?.estimate ?? operation.moneyEstimate)
+                ?.known &&
+              (operation.budgetReview || operation.moneyEstimate) && (
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox
+                    aria-label="Acknowledge the displayed unknown cost categories"
+                    checked={input.acknowledgeUnknownCosts ?? false}
+                    onCheckedChange={(v) => {
+                      setInput({
+                        ...input,
+                        acknowledgeUnknownCosts: v === true,
+                      })
+                      setOperation(null)
+                    }}
+                  />
+                  <span>
+                    Acknowledge the displayed unknown cost categories for this
+                    manual review, then review again.
+                  </span>
+                </label>
+              )}
             {operation && (
               <div className="grid gap-1 rounded-lg bg-muted p-3 text-[13px]">
                 <p>Review: {operation.status}</p>
@@ -626,7 +657,13 @@ function ServerEditor({
           {!accepted &&
             (operation ? (
               <Button
-                disabled={busy || operation.status !== "preview"}
+                disabled={
+                  busy ||
+                  operation.status !== "preview" ||
+                  (!!operation.budgetReview &&
+                    !operation.budgetReview.estimate.known &&
+                    !operation.input.acknowledgeUnknownCosts)
+                }
                 onClick={() => void execute()}
               >
                 Apply reviewed server

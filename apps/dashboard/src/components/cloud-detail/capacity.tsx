@@ -19,6 +19,7 @@ import { useMutation, useQuery } from "@/client/hooks"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
   CloudError,
+  CloudEmpty,
   CloudSectionHead,
   Row,
   Rows,
@@ -354,6 +355,49 @@ function PolicyEditor({
                 while pools don&apos;t grow.
               </span>
             </span>
+            <div className="col-span-full grid gap-2">
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={!!draft.budget}
+                  onCheckedChange={(v) =>
+                    set({
+                      budget: v
+                        ? { hourly: "", horizon: "", hours: "24" }
+                        : undefined,
+                    })
+                  }
+                />
+                Limit provider costs
+              </label>
+              {draft.budget && (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {(
+                    [
+                      ["hourly", "Maximum USD / hour"],
+                      ["horizon", "Maximum USD over horizon"],
+                      ["hours", "Horizon hours"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <FormField key={key}>
+                      <FieldLabel>{label}</FieldLabel>
+                      <Input
+                        inputMode="decimal"
+                        value={draft.budget![key]}
+                        onChange={(e) =>
+                          set({
+                            budget: { ...draft.budget!, [key]: e.target.value },
+                          })
+                        }
+                      />
+                    </FormField>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Your exact amounts set the budget limits. Unknown charges need a
+                separate manual review and block automatic growth.
+              </p>
+            </div>
             {ceilings.map((c) => (
               <TextAmount
                 key={c.key}
@@ -423,11 +467,22 @@ function PolicyEditor({
           </Button>
         </CloudSectionHead>
         {pools.length === 0 ? (
-          <p className="rounded-xl px-4 py-3 text-[13px] text-muted-foreground ring-1 ring-border">
-            This Cloud has no pools yet. Start one with no servers using New
-            scaling pool, or add one from servers you have on the Servers tab
-            and give it a rule here.
-          </p>
+          <CloudEmpty
+            kind="compact"
+            title="No server pools"
+            action={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setScaling(true)}
+              >
+                Create scaling pool
+              </Button>
+            }
+          >
+            Start an empty pool, or add existing servers on the Servers tab and
+            set a growth rule here.
+          </CloudEmpty>
         ) : (
           <Rows>
             {pools.map((pool) => (
@@ -803,11 +858,11 @@ function Expansions({
       ) : !query.data ? (
         <Skeleton className="h-16 rounded-xl" />
       ) : waiting.length === 0 ? (
-        <p className="rounded-xl border border-dashed px-4 py-3 text-[12.5px] leading-relaxed text-muted-foreground">
+        <CloudEmpty kind="compact" title="No pending server approvals">
           {automatic
             ? "Nothing is waiting."
             : "Nothing is waiting. While automatic expansion is off, Loomplane doesn't propose servers, so nothing will appear here until it's turned on."}
-        </p>
+        </CloudEmpty>
       ) : (
         <Rows>
           {waiting.map((e) => (

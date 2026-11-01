@@ -4,12 +4,34 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { publishLiveState } from "@/lib/realtime-state"
 import { forgeClient } from "@/client/runtime"
-import type { CloudCluster, Profile } from "@/client/forge/loomplane/types"
+import type { Profile } from "@/client/forge/loomplane/types"
 import { Clusters } from "./clusters"
 import { ClusterDetail, ClusterOperationDetail } from "./cluster-detail"
-const permissions = vi.hoisted(() => ({ allowed: true }))
+vi.mock("@/lib/router", () => ({
+  Link: ({
+    params,
+    search,
+    children,
+    ...props
+  }: {
+    params: { id: string }
+    search: { tab: string }
+    children: React.ReactNode
+  }) => (
+    <a {...props} href={`/clouds/${params.id}?tab=${search.tab}`}>
+      {children}
+    </a>
+  ),
+}))
+const permissions = vi.hoisted(() => ({
+  allowed: true,
+  denied: [] as string[],
+}))
 vi.mock("@/lib/organization", () => ({
-  useOrganization: () => ({ can: () => permissions.allowed }),
+  useOrganization: () => ({
+    can: (permission: string) =>
+      permissions.allowed && !permissions.denied.includes(permission),
+  }),
 }))
 afterEach(() => {
   cleanup()
@@ -22,6 +44,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   permissions.allowed = true
+  permissions.denied = []
   window.history.replaceState(null, "", "/")
 })
 const cloud = { id: "cloud", name: "Production", revision: 1 } as Profile
@@ -113,7 +136,7 @@ it("blocks duplicate apply and preserves a stale-review recovery path", async ()
   )
   const user = userEvent.setup()
   const button = await screen.findByRole("button", {
-    name: "Apply reviewed setup",
+    name: "Apply reviewed change",
   })
   await user.dblClick(button)
   expect(apply).toBe(1)
@@ -202,53 +225,143 @@ it("shows saved fixed node pool scope before applying after reload", async () =>
     )
   )
   mount(<Clusters cloud={cloud} />)
-  await screen.findByRole("button", { name: "Apply reviewed setup" })
+  await screen.findByRole("button", { name: "Apply reviewed change" })
   expect(screen.getByText(/workers: 3 × s-2vcpu-4gb/)).toHaveTextContent(
     "Fixed capacity"
   )
 })
 
-it("shows observed pools and navigable setup and Cloud targets", async () => {
+it("loads current cluster by ID and exposes permission-specific controls", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue(
-      Response.json({
-        items: [
-          {
-            ...operation,
-            resource_id: "cluster",
-            input: {
-              ...operation.input,
-              attachment: { project_id: "project" },
-            },
-          },
-        ],
-      })
+    vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        Response.json(
+          String(input).endsWith("/attachments")
+            ? { items: [] }
+            : String(input).endsWith("/capacity")
+              ? { nodes: null, conditions: null, complete: false }
+              : {
+                  id: "cluster",
+                  cloud_id: "cloud",
+                  ownership: "managed",
+                  status: "running",
+                  external_id: "provider-cluster",
+                  provider: "digitalocean",
+                  observation: {
+                    ref: { region: "nyc1" },
+                    pools: [
+                      {
+                        id: "pool",
+                        name: "workers",
+                        size: "s-2vcpu-4gb",
+                        count: 3,
+                      },
+                    ],
+                  },
+                }
+        )
+      )
     )
   )
   mount(
     <ClusterDetail
-      cluster={
-        {
-          id: "cluster",
-          cloudId: "cloud",
-          status: "running",
-          externalId: "provider-cluster",
-          provider: "digitalocean",
-          observation: {
-            ref: { region: "nyc1" },
-            pools: [{ name: "workers", size: "s-2vcpu-4gb", count: 3 }],
-          },
-        } as CloudCluster
-      }
+      cloud={cloud}
+      id="cluster"
+      onSaved={() => {}}
       onBack={() => {}}
     />
   )
-  expect(screen.getByText("3 × s-2vcpu-4gb")).toBeInTheDocument()
+  expect(await screen.findByText("Observed 3 nodes")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "Runtime targets" })).toHaveAttribute(
+    "href",
+    "/clouds/cloud?tab=targets"
+  )
   expect(
-    await screen.findByRole("link", { name: "View setup operation" })
-  ).toHaveAttribute("href", "/clouds/cloud?tab=servers&clusterOperation=op")
-  expect(
-    screen.getByRole("link", { name: "View Cloud targets" })
-  ).toHaveAttribute("href", "/clouds/cloud?tab=targets")
+    screen.getByText(/History grants no standing permission/)
+  ).toBeInTheDocument()
 })
+
+it("keeps inventory visible while specific lifecycle permissions are denied", async () => {
+  permissions.denied = ["cluster:manage", "cluster:delete"]
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        Response.json(
+          String(input).endsWith("/attachments")
+            ? {
+                items: [
+                  {
+                    id: "attachment",
+                    namespace: "workers",
+                    revision: 8,
+                    state: "active",
+                  },
+                ],
+              }
+            : String(input).endsWith("/capacity")
+              ? { nodes: null, conditions: null, complete: false }
+              : {
+                  id: "cluster",
+                  cloud_id: "cloud",
+                  ownership: "managed",
+                  status: "running",
+                  external_id: "provider-cluster",
+                  provider: "digitalocean",
+                  observation: { ref: { region: "nyc1" }, pools: [] },
+                }
+        )
+      )
+    )
+  )
+  mount(
+    <ClusterDetail
+      cloud={cloud}
+      id="cluster"
+      onSaved={() => {}}
+      onBack={() => {}}
+    />
+  )
+  await screen.findByText("provider-cluster")
+  await screen.findByText("workers")
+  expect(screen.queryByRole("button", { name: "Change nodes" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Review retirement" })).toBeNull()
+  expect(
+    screen.queryByRole("button", { name: "Review access upgrade" })
+  ).toBeNull()
+})
+it.each([
+  "pdb_blocked",
+  "unknown_price",
+  "unknown_quota",
+  "observation_drift",
+  "runtime_access_upgrade_required",
+])(
+  "shows saved %s blockers after reload without a raw bypass",
+  async (reason) => {
+    vi.stubGlobal("fetch", async () =>
+      Response.json({
+        ...operation,
+        kind: "node-pool-update",
+        status: "needs_attention",
+        error: reason,
+      })
+    )
+    mount(
+      <ClusterOperationDetail
+        cloud={cloud}
+        id="op"
+        onBack={() => {}}
+        onRefreshReview={() => {}}
+      />
+    )
+    await screen.findByRole("button", { name: "Retry saved operation" })
+    expect(screen.queryByRole("button", { name: /force|bypass/i })).toBeNull()
+    expect(screen.getByRole("status")).toHaveTextContent(
+      reason === "runtime_access_upgrade_required"
+        ? "separately reviewed access upgrade"
+        : reason.replaceAll("_", " ")
+    )
+  }
+)
