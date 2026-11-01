@@ -40,6 +40,8 @@ export type InventoryResource = {
   endpointProofRequired?: boolean
   identityScope?: string
   bucketOwner?: string
+  apiAccountId?: string
+  attachmentNote?: string
 }
 export type ResourceFilters = {
   search?: string
@@ -92,10 +94,16 @@ export function providerResourceReadiness(
             age > 30 * 60_000
           ? "Stale"
           : "Observed",
-    credentials: resource.endpointId
-      ? "Credentials saved"
-      : "Credentials needed",
-    network: "Verify in deployment",
+    credentials:
+      resource.connectionState === "native_binding_required"
+        ? "Native binding required"
+        : resource.endpointId
+          ? "Credentials saved"
+          : "Credentials needed",
+    network:
+      resource.connectionState === "native_binding_required"
+        ? "Native binding required"
+        : "Verify in deployment",
   }
 }
 export function resourceOfferings(
@@ -106,13 +114,15 @@ export function resourceOfferings(
     !provider.available
       ? []
       : (provider.provisions ?? []).flatMap((offer) =>
-          connections
-            .filter(
-              (connection) =>
-                connection.status === "ready" &&
-                connection.cloud === provider.cloud
-            )
-            .map((connection) => ({ provider, offer, connection }))
+          offer.importOnly
+            ? []
+            : connections
+                .filter(
+                  (connection) =>
+                    connection.status === "ready" &&
+                    connection.cloud === provider.cloud
+                )
+                .map((connection) => ({ provider, offer, connection }))
         )
   )
 }
@@ -180,4 +190,39 @@ export async function reviewProviderResource(
       { cause }
     )
   }
+}
+
+export function providerResourceAttachmentNote(resource: InventoryResource) {
+  if (resource.attachmentNote) return resource.attachmentNote
+  if (resource.connectionState === "native_binding_required")
+    return "This resource requires a native Cloudflare Workers binding in the same verified account. Save its native binding before reviewing a deployment."
+  return ""
+}
+
+export function providerResourceOutputs(resource: InventoryResource) {
+  const outputs: Record<string, string[]> = {
+    "cloudflare-d1": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_D1_DATABASE_ID",
+      "CLOUDFLARE_API_TOKEN",
+    ],
+    "cloudflare-kv": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_KV_NAMESPACE_ID",
+      "CLOUDFLARE_API_TOKEN",
+    ],
+    "cloudflare-queue": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_QUEUE_ID",
+      "CLOUDFLARE_API_TOKEN",
+    ],
+    "cloudflare-vectorize": [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_VECTORIZE_INDEX",
+      "CLOUDFLARE_API_TOKEN",
+    ],
+    "vercel-blob": ["BLOB_READ_WRITE_TOKEN"],
+    "vercel-global-config": ["GLOBAL_CONFIG"],
+  }
+  return outputs[resource.kind] ?? []
 }

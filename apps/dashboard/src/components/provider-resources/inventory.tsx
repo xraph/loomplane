@@ -186,7 +186,7 @@ export function ResourceInventory({
                   Provider health
                 </TableHead>
                 <TableHead>Connection</TableHead>
-                <TableHead className="hidden xl:table-cell">
+                <TableHead className="hidden 2xl:table-cell">
                   Ownership
                 </TableHead>
                 <TableHead className="hidden lg:table-cell">Usage</TableHead>
@@ -270,7 +270,7 @@ export function ResourceInventory({
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="hidden xl:table-cell">
+                    <TableCell className="hidden 2xl:table-cell">
                       {r.ownershipState === "unverified"
                         ? "Unverified"
                         : r.ownership === "external"

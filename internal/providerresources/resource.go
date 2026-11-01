@@ -24,6 +24,8 @@ var (
 // ProviderResource contains public observations. Its endpoint ID references a
 // Vault-backed catalog endpoint and never carries its access secret.
 type ProviderResource struct {
+	APIAccountID          string                     `json:"api_account_id,omitempty"`
+	AttachmentNote        string                     `json:"attachment_note,omitempty"`
 	IdentityScope         string                     `json:"identity_scope"`
 	BucketOwner           string                     `json:"bucket_owner,omitempty"`
 	OwnershipState        string                     `json:"ownership_state"`
@@ -85,8 +87,11 @@ type ProviderResourceList struct {
 
 // ProviderResourceConnectInput carries the write-only application connection.
 type ProviderResourceConnectInput struct {
-	DSN          string                       `json:"dsn,omitempty"`
-	BucketAccess *catalogconnect.BucketAccess `json:"bucket_access,omitempty"`
+	ProviderProjectID   string                       `json:"provider_project_id,omitempty"`
+	ProviderEnvironment string                       `json:"provider_environment,omitempty"`
+	APIAccess           *catalogconnect.APIAccess    `json:"api_access,omitempty"`
+	DSN                 string                       `json:"dsn,omitempty"`
+	BucketAccess        *catalogconnect.BucketAccess `json:"bucket_access,omitempty"`
 }
 
 // ConnectInput keeps the service call contract short.

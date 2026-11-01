@@ -829,6 +829,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 		maps.Copy(endpointChecks, existingChecks)
 		result = Compute(Input{
+			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
 			ProjectID:         plan.ProjectID,
 			ExistingResources: existing, ExistingResourceChecks: existingChecks,
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,

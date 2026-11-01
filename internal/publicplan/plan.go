@@ -89,6 +89,7 @@ type Action struct {
 }
 
 type ServiceConfig struct {
+	Worker                *provider.WorkerSettings             `json:"worker,omitempty"`
 	TargetAccountIdentity string                               `json:"target_account_identity,omitempty"`
 	CapacityMode          string                               `json:"capacity_mode,omitempty"`
 	CapacityIntent        *CapacityIntent                      `json:"capacity_intent,omitempty"`
@@ -131,20 +132,22 @@ type ServiceConfig struct {
 }
 
 type ResourceConfig struct {
-	AccountIdentity  string                  `json:"account_identity,omitempty"`
-	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
-	Target           string                  `json:"target,omitempty"`
-	TargetSettings   map[string]string       `json:"target_settings,omitempty"`
-	Catalog          *recipes.Recipe         `json:"catalog,omitempty"`
-	Managed          *ManagedDatabaseConfig  `json:"managed,omitempty"`
-	Provider         string                  `json:"provider"`
-	Region           string                  `json:"region,omitempty"`
-	Kind             string                  `json:"kind"`
-	Version          string                  `json:"version,omitempty"`
-	Composition      *CompositionConfig      `json:"composition,omitempty"`
-	Component        *ComponentConfig        `json:"component,omitempty"`
-	RoutablePorts    []int                   `json:"routable_ports,omitempty"`
-	CloudPlacement   *CloudPlacement         `json:"cloud_placement,omitempty"`
+	Settings         map[string]string               `json:"settings,omitempty"`
+	EndpointPins     map[string]planning.EndpointPin `json:"endpoint_pins,omitempty"`
+	AccountIdentity  string                          `json:"account_identity,omitempty"`
+	ExistingResource *ExistingResourceConfig         `json:"existing_resource,omitempty"`
+	Target           string                          `json:"target,omitempty"`
+	TargetSettings   map[string]string               `json:"target_settings,omitempty"`
+	Catalog          *recipes.Recipe                 `json:"catalog,omitempty"`
+	Managed          *ManagedDatabaseConfig          `json:"managed,omitempty"`
+	Provider         string                          `json:"provider"`
+	Region           string                          `json:"region,omitempty"`
+	Kind             string                          `json:"kind"`
+	Version          string                          `json:"version,omitempty"`
+	Composition      *CompositionConfig              `json:"composition,omitempty"`
+	Component        *ComponentConfig                `json:"component,omitempty"`
+	RoutablePorts    []int                           `json:"routable_ports,omitempty"`
+	CloudPlacement   *CloudPlacement                 `json:"cloud_placement,omitempty"`
 }
 
 type CloudPlacement struct {
@@ -267,14 +270,14 @@ func projectServiceConfig(v *planning.ServiceConfig) *ServiceConfig {
 	if v == nil {
 		return nil
 	}
-	return &ServiceConfig{TargetAccountIdentity: v.TargetAccountIdentity, CapacityMode: v.CapacityMode, CapacityIntent: projectCapacityIntent(v.CapacityIntent), CloudPlacement: projectCloudPlacement(v.CloudPlacement), Catalog: v.Catalog, Provider: v.Provider, Region: v.Region, Target: v.Target, TargetSettings: settings(v.TargetSettings), Endpoint: v.Endpoint, HealthPath: v.HealthPath, BuildTarget: projectBuildTarget(v.BuildTarget), Workload: v.Workload, Execution: v.Execution, Service: v.Service, Source: v.Source, Repo: v.Repo, CommitSHA: v.CommitSHA, Ecosystem: v.Ecosystem, Framework: v.Framework, Image: v.Image, Context: v.Context, Build: v.Build, Start: v.Start, Port: v.Port, Scale: v.Scale, Size: v.Size, Public: v.Public, Internal: v.Internal, PrivateEgress: v.PrivateEgress, CloudSQLNetwork: v.CloudSQLNetwork, Env: v.Env, Gateway: v.Gateway, DatabaseGateway: v.DatabaseGateway, Component: projectComponentConfig(v.Component), Farp: v.Farp, GPU: v.GPU, Artifact: v.Artifact, ClusterDemand: clusterDemand(v.ClusterDemand)}
+	return &ServiceConfig{Worker: projectWorkerSettings(v.Worker), TargetAccountIdentity: v.TargetAccountIdentity, CapacityMode: v.CapacityMode, CapacityIntent: projectCapacityIntent(v.CapacityIntent), CloudPlacement: projectCloudPlacement(v.CloudPlacement), Catalog: v.Catalog, Provider: v.Provider, Region: v.Region, Target: v.Target, TargetSettings: settings(v.TargetSettings), Endpoint: v.Endpoint, HealthPath: v.HealthPath, BuildTarget: projectBuildTarget(v.BuildTarget), Workload: v.Workload, Execution: v.Execution, Service: v.Service, Source: v.Source, Repo: v.Repo, CommitSHA: v.CommitSHA, Ecosystem: v.Ecosystem, Framework: v.Framework, Image: v.Image, Context: v.Context, Build: v.Build, Start: v.Start, Port: v.Port, Scale: v.Scale, Size: v.Size, Public: v.Public, Internal: v.Internal, PrivateEgress: v.PrivateEgress, CloudSQLNetwork: v.CloudSQLNetwork, Env: v.Env, Gateway: v.Gateway, DatabaseGateway: v.DatabaseGateway, Component: projectComponentConfig(v.Component), Farp: v.Farp, GPU: v.GPU, Artifact: v.Artifact, ClusterDemand: clusterDemand(v.ClusterDemand)}
 }
 
 func projectResourceConfig(v *planning.ResourceConfig) *ResourceConfig {
 	if v == nil {
 		return nil
 	}
-	return &ResourceConfig{AccountIdentity: v.AccountIdentity, ExistingResource: projectExistingResourceConfig(v.ExistingResource), Target: v.Target, TargetSettings: settings(v.TargetSettings), Catalog: v.Catalog, Managed: projectManagedDatabaseConfig(v.Managed), Provider: v.Provider, Region: v.Region, Kind: v.Kind, Version: v.Version, Composition: projectCompositionConfig(v.Composition), Component: projectComponentConfig(v.Component), RoutablePorts: v.RoutablePorts, CloudPlacement: projectCloudPlacement(v.CloudPlacement)}
+	return &ResourceConfig{Settings: edgeResourceSettings(v.Settings), EndpointPins: edgeEndpointPins(v.EndpointPins), AccountIdentity: v.AccountIdentity, ExistingResource: projectExistingResourceConfig(v.ExistingResource), Target: v.Target, TargetSettings: settings(v.TargetSettings), Catalog: v.Catalog, Managed: projectManagedDatabaseConfig(v.Managed), Provider: v.Provider, Region: v.Region, Kind: v.Kind, Version: v.Version, Composition: projectCompositionConfig(v.Composition), Component: projectComponentConfig(v.Component), RoutablePorts: v.RoutablePorts, CloudPlacement: projectCloudPlacement(v.CloudPlacement)}
 }
 
 func projectCloudPlacement(v *planning.CloudPlacement) *CloudPlacement {

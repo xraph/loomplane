@@ -25,6 +25,10 @@ func checkExternalResourceTarget(org string, a planning.Action, c *connections.C
 	}
 	cloud := ""
 	switch a.Provider {
+	case "cloudflare-workers":
+		cloud = connections.Cloudflare
+	case "vercel":
+		cloud = connections.Vercel
 	case "digitalocean":
 		cloud = connections.DigitalOcean
 	case "azure-container-apps":

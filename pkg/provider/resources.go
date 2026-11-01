@@ -2,6 +2,7 @@ package provider
 
 // ResourceObservation contains provider metadata only. Access credentials never belong here.
 type ResourceObservation struct {
+	Scope       string `json:"scope,omitempty"`
 	ID          string `json:"id"`
 	Incarnation string `json:"incarnation"`
 	Name        string `json:"name"`

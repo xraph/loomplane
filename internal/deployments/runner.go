@@ -65,6 +65,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	nativeOutputs    *nativeOutputInventory
 	cleanupCheck     func(context.Context) error
 	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
@@ -1113,6 +1114,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
+	if outputErr := job.finishNativeOutputs(ctx); outputErr != nil {
+		return outputErr
+	}
 	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
 	step.Warnings = append(step.Warnings, applyWarnings...)
 	if out.URL != "" && a.Service != nil && a.Service.Public {
@@ -1240,6 +1244,9 @@ func (r *Runner) newJob(ctx context.Context, d *Deployment, plan *planning.Plan,
 			return nil, 0, errors.New("only a service is built from a repository")
 		},
 		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
+	}
+	if outputErr := r.trackNativeOutputs(ctx, job); outputErr != nil {
+		return nil, outputErr
 	}
 	// A gateway is built from the source Loomplane generates for its
 	// routes, and the database gateway from the program Loomplane ships,
@@ -1441,6 +1448,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	if !unreachable {
 		if err := r.confirmFrontendRemoval(ctx, exec, job, bound); err != nil {
 			return err
+		}
+		if job.nativeOutputs != nil {
+			if forgetErr := job.Forget(ctx); forgetErr != nil {
+				return forgetErr
+			}
 		}
 	}
 	// The database gateway's cloud service is gone, or out of reach for

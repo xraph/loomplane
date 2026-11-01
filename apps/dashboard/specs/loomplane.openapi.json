@@ -25754,6 +25754,12 @@
           },
           "version": {
             "type": "string"
+          },
+          "api_account_id": {
+            "type": "string"
+          },
+          "attachment_note": {
+            "type": "string"
           }
         }
       },
@@ -25786,10 +25792,70 @@
               },
               "session_token": {
                 "type": "string"
+              },
+              "account_id": {
+                "type": "string"
+              },
+              "jurisdiction": {
+                "type": "string"
               }
             }
           },
           "dsn": {
+            "type": "string"
+          },
+          "api_access": {
+            "type": "object",
+            "properties": {
+              "account_id": {
+                "type": "string"
+              },
+              "class_name": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "incarnation": {
+                "type": "string"
+              },
+              "jurisdiction": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "native": {
+                "type": "boolean"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "script_name": {
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              },
+              "values": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "provider_project_id": {
+            "type": "string"
+          },
+          "provider_environment": {
             "type": "string"
           }
         }
@@ -26005,6 +26071,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceSetting"
+            }
+          },
+          "import_only": {
+            "type": "boolean"
           }
         }
       },
@@ -27132,6 +27207,14 @@
           },
           "version": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "endpoint_pins": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -29428,6 +29511,9 @@
           },
           "workload": {
             "type": "string"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerSettings"
           }
         }
       },
@@ -31455,6 +31541,73 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "ResourceSetting": {
+        "type": "object",
+        "required": [
+          "name",
+          "title",
+          "pattern"
+        ],
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkerSettings": {
+        "type": "object",
+        "required": [
+          "main",
+          "compatibility_date"
+        ],
+        "properties": {
+          "compatibility_date": {
+            "type": "string"
+          },
+          "compatibility_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "durable_objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DurableObjectClass"
+            }
+          },
+          "main": {
+            "type": "string"
+          }
+        }
+      },
+      "DurableObjectClass": {
+        "type": "object",
+        "required": [
+          "name",
+          "class_name"
+        ],
+        "properties": {
+          "class_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       }

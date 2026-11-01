@@ -62,6 +62,7 @@ func (s *Service) decorate(r *ProviderResource) {
 		r.ConnectionState = "verification_needed"
 	}
 	s.decorateBucket(r)
+	s.decorateAPI(r)
 	if !AttachableIdentity(r) {
 		r.ConnectionState = "identity_verification_needed"
 	}
@@ -281,6 +282,10 @@ func (s *Service) finish(ctx context.Context, run *ProviderResourceSync, inv pro
 func (s *Service) reconcile(state *AccountState, run *ProviderResourceSync, inv provider.ResourceInventory, at time.Time) error {
 	seen := map[string]bool{}
 	for _, o := range inv.Resources {
+		scope := inv.Scope
+		if o.Scope != "" {
+			scope = o.Scope
+		}
 		id := resourceID(run.OrgID, run.Provider, run.AccountIdentity, o.ID, o.Incarnation)
 		seen[id] = true
 		var r *ProviderResource
@@ -296,9 +301,9 @@ func (s *Service) reconcile(state *AccountState, run *ProviderResourceSync, inv 
 		if r == nil {
 			r = &ProviderResource{ID: id, OrgID: run.OrgID, Provider: run.Provider, AccountIdentity: run.AccountIdentity, ExternalID: o.ID, Incarnation: o.Incarnation, Ownership: "external", Revision: 1}
 			state.Resources = append(state.Resources, r)
-		} else if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || r.Version != o.Version || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" || (r.ConnectionID == run.ConnectionID && r.ConnectionGeneration != run.ConnectionGeneration) {
+		} else if r.Scope != scope || r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || r.Version != o.Version || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" || (r.ConnectionID == run.ConnectionID && r.ConnectionGeneration != run.ConnectionGeneration) {
 			r.Revision++
-			if r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" {
+			if r.Scope != scope || r.Host != o.Host || r.Port != o.Port || r.Database != o.Database || r.Kind != o.Kind || (r.Kind == "object-storage" && r.Region != o.Region) || r.Status == "missing" {
 				r.EndpointID = ""
 				r.EndpointRevision = 0
 			}
@@ -306,6 +311,9 @@ func (s *Service) reconcile(state *AccountState, run *ProviderResourceSync, inv 
 		r.ConnectionID, r.ConnectionGeneration = run.ConnectionID, run.ConnectionGeneration
 		r.ConnectionIdentity = run.ConnectionIdentity
 		r.Scope, r.Name, r.Kind, r.Version, r.Region, r.Status = inv.Scope, o.Name, o.Kind, o.Version, o.Region, o.Status
+		if o.Scope != "" {
+			r.Scope = o.Scope
+		}
 		r.Host, r.Port, r.Database, r.ObservedAt = o.Host, o.Port, o.Database, at
 		r.ObservationState = "observed"
 		// A direct observation of a different creation marker proves replacement
@@ -321,14 +329,14 @@ func (s *Service) reconcile(state *AccountState, run *ProviderResourceSync, inv 
 	}
 	if !inv.Complete {
 		for _, r := range state.Resources {
-			if r.Scope == inv.Scope && !seen[r.ID] && r.Status != "missing" {
+			if (r.Scope == inv.Scope || strings.HasPrefix(r.Scope, strings.TrimSuffix(inv.Scope, "/")+"/")) && !seen[r.ID] && r.Status != "missing" {
 				r.ObservationState = "stale"
 			}
 		}
 	}
 	if inv.Complete {
 		for _, r := range state.Resources {
-			if r.Scope == inv.Scope && !seen[r.ID] && r.Status != "missing" {
+			if (r.Scope == inv.Scope || strings.HasPrefix(r.Scope, strings.TrimSuffix(inv.Scope, "/")+"/")) && !seen[r.ID] && r.Status != "missing" {
 				r.Status = "missing"
 				r.Revision++
 				r.EndpointID = ""
@@ -365,7 +373,10 @@ func validInventory(inv provider.ResourceInventory) bool {
 			return false
 		}
 		seen[r.ID] = true
-		for _, v := range []string{r.ID, r.Incarnation, r.Name, r.Kind, r.Version, r.Region, r.Status, r.Host, r.Database} {
+		if r.Scope != "" && !strings.HasPrefix(r.Scope, strings.TrimSuffix(inv.Scope, "/")+"/") {
+			return false
+		}
+		for _, v := range []string{r.ID, r.Incarnation, r.Name, r.Kind, r.Version, r.Region, r.Status, r.Host, r.Database, r.Scope} {
 			if !safeText(v) {
 				return false
 			}
@@ -393,18 +404,95 @@ func (s *Service) Verified(ctx context.Context, p security.Principal, id string)
 	if err != nil {
 		return nil, err
 	}
-	if current.Status == "missing" || !AttachableIdentity(current) || current.ObservationState == "stale" {
-		return nil, ErrUnverified
-	}
-	if run.Status != "complete" || run.FinishedAt == nil || !current.ObservedAt.Equal(*run.FinishedAt) {
-		return nil, ErrUnverified
+	if proofErr := s.verifySelectedObservation(ctx, current, run); proofErr != nil {
+		return nil, proofErr
 	}
 	if current.EndpointProofRequired {
 		return s.verifyEndpoint(ctx, p, current, current.Host, current.Port)
 	}
 	return current, nil
 }
+
+// verifySelectedObservation accepts complete coverage or a directly observed
+// selected resource from partial coverage. Absence from an incomplete read is
+// never evidence that a resource is available. The existing account transaction
+// fences newer sync attempts and connection generations without a secret read.
+func (s *Service) verifySelectedObservation(ctx context.Context, r *ProviderResource, run *ProviderResourceSync) error {
+	if r == nil || run == nil || (run.Status != "complete" && run.Status != "partial") || run.Error != "" || run.FinishedAt == nil || run.Sequence <= 0 {
+		return ErrUnverified
+	}
+	if !selectedObservationMatches(r, run) || s.now().UTC().Sub(r.ObservedAt) > staleAfter {
+		return ErrUnverified
+	}
+	return s.deps.Store.Update(ctx, run.OrgID, run.Provider, run.AccountIdentity, run.ConnectionID, run.ConnectionGeneration, func(state *AccountState) error {
+		if state.Sequence != run.Sequence {
+			return ErrChanged
+		}
+		persisted := false
+		for _, attempt := range state.Syncs {
+			if attempt.ID == run.ID && attempt.Sequence == run.Sequence && attempt.Status == run.Status && attempt.Error == "" && attempt.Scope == run.Scope && attempt.ConnectionID == run.ConnectionID && attempt.ConnectionGeneration == run.ConnectionGeneration && attempt.ConnectionIdentity == run.ConnectionIdentity && attempt.OrgID == run.OrgID && attempt.Provider == run.Provider && attempt.AccountIdentity == run.AccountIdentity && attempt.FinishedAt != nil && attempt.FinishedAt.Equal(*run.FinishedAt) {
+				persisted = true
+				break
+			}
+		}
+		if !persisted {
+			return ErrChanged
+		}
+		for _, current := range state.Resources {
+			if current.ID == r.ID {
+				if current.Revision != r.Revision || !selectedObservationMatches(current, run) || s.now().UTC().Sub(current.ObservedAt) > staleAfter {
+					return ErrChanged
+				}
+				return nil
+			}
+		}
+		return ErrChanged
+	})
+}
+
+// latestSelectedObservation rechecks the current observation after a private
+// endpoint read. A newer attempt must directly observe the same access pins.
+func (s *Service) latestSelectedObservation(ctx context.Context, r *ProviderResource) (*ProviderResource, error) {
+	var latest *ProviderResource
+	err := s.deps.Store.Update(ctx, r.OrgID, r.Provider, r.AccountIdentity, r.ConnectionID, r.ConnectionGeneration, func(state *AccountState) error {
+		var run *ProviderResourceSync
+		for _, attempt := range state.Syncs {
+			if attempt.Sequence == state.Sequence {
+				run = attempt
+				break
+			}
+		}
+		if run == nil || (run.Status != "complete" && run.Status != "partial") || run.Error != "" || run.FinishedAt == nil {
+			return ErrUnverified
+		}
+		for _, current := range state.Resources {
+			if current.ID != r.ID {
+				continue
+			}
+			if current.Revision != r.Revision || current.EndpointID != r.EndpointID || current.EndpointRevision != r.EndpointRevision || current.ConnectionID != r.ConnectionID || current.ConnectionGeneration != r.ConnectionGeneration {
+				return ErrChanged
+			}
+			if !selectedObservationMatches(current, run) || s.now().UTC().Sub(current.ObservedAt) > staleAfter {
+				return ErrUnverified
+			}
+			snapshot := *current
+			latest = &snapshot
+			return nil
+		}
+		return ErrChanged
+	})
+	return latest, err
+}
+
+func selectedObservationMatches(r *ProviderResource, run *ProviderResourceSync) bool {
+	scopeCovered := r.Scope == run.Scope || strings.HasPrefix(r.Scope, strings.TrimSuffix(run.Scope, "/")+"/")
+	return run.Scope != "" && scopeCovered && r.OrgID == run.OrgID && r.Provider == run.Provider && r.AccountIdentity == run.AccountIdentity && r.ConnectionID == run.ConnectionID && r.ConnectionGeneration == run.ConnectionGeneration && r.ConnectionIdentity == run.ConnectionIdentity && r.ObservationState == "observed" && r.Status != "missing" && r.Status != "failed" && r.Status != "unavailable" && AttachableIdentity(r) && run.FinishedAt != nil && r.ObservedAt.Equal(*run.FinishedAt)
+}
+
 func engine(kind string) string {
+	if catalogconnect.IsAPIEngine(kind) {
+		return kind
+	}
 	switch kind {
 	case "postgres", "postgresql":
 		return "postgres"
@@ -416,6 +504,14 @@ func engine(kind string) string {
 	return ""
 }
 func matchesDSN(r *ProviderResource, dsn string) bool {
+	if apiResourceKind(r) != "" {
+		if a, err := catalogconnect.ParseAPIAccess(dsn); err == nil {
+			return apiAccessMatches(r, a)
+		}
+		if r.Kind != "object-storage" {
+			return false
+		}
+	}
 	if r.Kind == "object-storage" {
 		a, err := catalogconnect.ParseBucketAccess(dsn)
 		return err == nil && bucketAccessMatches(r, a)
@@ -474,7 +570,31 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
-	if r.Kind == "object-storage" {
+	if r.Kind == "vercel-integration" {
+		if in.APIAccess != nil || in.DSN != "" || in.BucketAccess != nil {
+			return nil, ErrInvalid
+		}
+		access, accessErr := s.providerResourceAccess(ctx, p, r, in.ProviderProjectID, in.ProviderEnvironment)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		in.APIAccess = &access
+	} else if in.ProviderProjectID != "" || in.ProviderEnvironment != "" {
+		return nil, ErrInvalid
+	}
+	apiAccess := in.APIAccess != nil
+	endpointEngine := resourceEngine(r)
+	switch {
+	case apiAccess:
+		if in.BucketAccess != nil || in.DSN != "" {
+			return nil, ErrInvalid
+		}
+		in.DSN, err = normalizeAPIAccess(r, *in.APIAccess)
+		if err != nil {
+			return nil, err
+		}
+		endpointEngine = apiResourceKind(r)
+	case r.Kind == "object-storage":
 		if in.BucketAccess == nil || in.DSN != "" {
 			return nil, ErrInvalid
 		}
@@ -482,10 +602,10 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 		if err != nil {
 			return nil, err
 		}
-	} else if in.BucketAccess != nil || strings.TrimSpace(in.DSN) == "" {
+	case in.BucketAccess != nil || strings.TrimSpace(in.DSN) == "":
 		return nil, ErrInvalid
 	}
-	if r.Host == "" && r.Kind != "object-storage" {
+	if r.Host == "" && r.Kind != "object-storage" && !apiAccess {
 		u, parseErr := url.Parse(strings.TrimSpace(in.DSN))
 		if parseErr != nil || u.Hostname() == "" {
 			return nil, ErrInvalid
@@ -512,10 +632,10 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 			return nil, err
 		}
 	}
-	if s.deps.Endpoints == nil || (r.Host == "" && r.Kind != "object-storage") || !matchesDSN(r, in.DSN) {
+	if s.deps.Endpoints == nil || (r.Host == "" && r.Kind != "object-storage" && !apiAccess) || !matchesDSN(r, in.DSN) {
 		return nil, ErrInvalid
 	}
-	e, err := s.deps.Endpoints.Create(ctx, p, catalogconnect.CreateInput{Name: fmt.Sprintf("resource-%s-%d", strings.TrimPrefix(r.ID, "providerresource_"), r.Revision+1), Engine: resourceEngine(r), DSN: in.DSN})
+	e, err := s.deps.Endpoints.Create(ctx, p, catalogconnect.CreateInput{Name: fmt.Sprintf("resource-%s-%d", strings.TrimPrefix(r.ID, "providerresource_"), r.Revision+1), Engine: endpointEngine, DSN: in.DSN})
 	if err != nil {
 		return nil, ErrInvalid
 	}
@@ -543,10 +663,27 @@ func (s *Service) Connect(ctx context.Context, p security.Principal, id string, 
 	return s.Get(ctx, p, id)
 }
 func endpointMatches(r *ProviderResource, e *catalogconnect.Endpoint) bool {
+	if e != nil && catalogconnect.IsAPIEngine(e.Engine) {
+		return apiEndpointMatches(r, e)
+	}
 	if r.Kind == "object-storage" {
 		return bucketEndpointMatches(r, e)
 	}
 	return e != nil && e.OrgID == r.OrgID && engine(r.Kind) == e.Engine && strings.EqualFold(strings.TrimSuffix(e.Host, "."), strings.TrimSuffix(r.Host, ".")) && (r.Port == 0 || e.Port == r.Port) && (r.Database == "" || e.Database == r.Database)
+}
+
+func (s *Service) preflightEndpoint(ctx context.Context, r *ProviderResource) error {
+	if s.deps.Endpoints == nil {
+		return ErrUnverified
+	}
+	endpoint, err := s.deps.Endpoints.Get(ctx, r.OrgID, r.EndpointID)
+	if err != nil {
+		return ErrUnverified
+	}
+	if !endpointMatches(r, endpoint) || endpoint.Revision != r.EndpointRevision {
+		return ErrChanged
+	}
+	return nil
 }
 
 // Resolve is a secret-bearing boundary. Callers must also authorize the target
@@ -568,6 +705,9 @@ func (s *Service) Resolve(ctx context.Context, p security.Principal, id string, 
 	if accessErr := s.require(ctx, p, security.SecretManage); accessErr != nil {
 		return nil, nil, "", accessErr
 	}
+	if pinErr := s.preflightEndpoint(ctx, r); pinErr != nil {
+		return nil, nil, "", pinErr
+	}
 	e, dsn, err := s.deps.Endpoints.Resolve(ctx, p.OrgID, r.EndpointID)
 	if err != nil {
 		return nil, nil, "", ErrUnverified
@@ -576,10 +716,22 @@ func (s *Service) Resolve(ctx context.Context, p security.Principal, id string, 
 		return nil, nil, "", ErrChanged
 	}
 	current, err := s.Get(ctx, p, id)
-	if err != nil || current.Revision != r.Revision || current.EndpointID != e.ID {
+	if err != nil || current.Revision != r.Revision || current.EndpointID != e.ID || current.EndpointRevision != e.Revision {
 		return nil, nil, "", ErrChanged
 	}
-	return r, e, dsn, nil
+	if accessErr := s.require(ctx, p, security.SecretManage); accessErr != nil {
+		return nil, nil, "", accessErr
+	}
+	latest, proofErr := s.latestSelectedObservation(ctx, current)
+	if proofErr != nil {
+		return nil, nil, "", proofErr
+	}
+	if !endpointMatches(latest, e) || e.Revision != latest.EndpointRevision || !matchesDSN(latest, dsn) {
+		return nil, nil, "", ErrChanged
+	}
+	s.decorate(latest)
+	latest.Ownership, latest.OwnershipState, latest.Consumers = current.Ownership, current.OwnershipState, current.Consumers
+	return latest, e, dsn, nil
 }
 
 // RefreshAll refreshes accounts whose latest sync was explicitly authorized.

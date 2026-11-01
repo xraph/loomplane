@@ -83,7 +83,9 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 // move left running.
 func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 	for _, b := range r.bindings {
-		if br.Secrets != nil {
+		if br.Secrets != nil && b.Subject == planning.ResourceSubject {
+			br.reapResourceAccess(ctx, r, b.Name)
+		} else if br.Secrets != nil {
 			for _, field := range resourceCredentialFields {
 				if err := br.Secrets.Delete(ctx, resourceKey(r.org, r.id, b.Name, field)); err != nil {
 					br.warn(fmt.Sprintf("delete the credentials of %s, whose environment %s was deleted", b.Name, r.name), err)

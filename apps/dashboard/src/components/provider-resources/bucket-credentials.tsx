@@ -26,8 +26,12 @@ export function BucketCredentials({
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
   const aws = resource.provider === "aws"
-  const ready = aws
-    ? !!accessKeyId.trim() && !!secretAccessKey
+  const r2 = resource.provider === "cloudflare"
+  const s3 = aws || r2
+  const ready = s3
+    ? !!accessKeyId.trim() &&
+      !!secretAccessKey &&
+      (!r2 || !!resource.apiAccountId)
     : !!serviceAccountJson.trim()
   const save = async () => {
     if (!ready || !observed || connect.isPending) return
@@ -41,12 +45,22 @@ export function BucketCredentials({
             provider: resource.provider,
             bucket: resource.name,
             region: resource.region,
-            ...(aws
+            ...(s3
               ? {
-                  expectedOwner: resource.bucketOwner ?? "",
+                  ...(aws
+                    ? {
+                        expectedOwner: resource.bucketOwner ?? "",
+                        sessionToken,
+                      }
+                    : {
+                        accountId: resource.apiAccountId ?? "",
+                        jurisdiction:
+                          resource.scope?.split("/").at(-2) === "r2"
+                            ? (resource.scope.split("/").at(-1) ?? "")
+                            : "",
+                      }),
                   accessKeyId: accessKeyId.trim(),
                   secretAccessKey,
-                  sessionToken,
                 }
               : { serviceAccountJson }),
           },
@@ -63,6 +77,10 @@ export function BucketCredentials({
         )
       })
     } catch (cause) {
+      setAccessKeyId("")
+      setSecretAccessKey("")
+      setSessionToken("")
+      setServiceAccountJson("")
       setError(
         messageOf(
           cause,
@@ -80,7 +98,7 @@ export function BucketCredentials({
       className="grid gap-2 border-t pt-3"
     >
       <h3 className="font-medium">Application bucket credentials</h3>
-      {aws ? (
+      {s3 ? (
         <>
           <div className="grid gap-1.5">
             <Label htmlFor="bucket-access-key">Access key ID</Label>
@@ -105,23 +123,26 @@ export function BucketCredentials({
               disabled={connect.isPending}
             />
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="bucket-session-token">
-              Session token (optional)
-            </Label>
-            <Input
-              id="bucket-session-token"
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              value={sessionToken}
-              onChange={(event) => setSessionToken(event.target.value)}
-              disabled={connect.isPending}
-            />
-          </div>
+          {aws && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="bucket-session-token">
+                Session token (optional)
+              </Label>
+              <Input
+                id="bucket-session-token"
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                value={sessionToken}
+                onChange={(event) => setSessionToken(event.target.value)}
+                disabled={connect.isPending}
+              />
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
-            Use application keys scoped to this bucket. Your workload receives
-            the bucket settings and AWS SDK credential variables.
+            {r2
+              ? "Use R2 S3 application keys scoped to this bucket. Your workload receives S3_ENDPOINT, bucket settings and AWS SDK credential variables."
+              : "Use application keys scoped to this bucket. Your workload receives the bucket settings and AWS SDK credential variables."}
           </p>
         </>
       ) : (

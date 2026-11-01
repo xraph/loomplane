@@ -262,6 +262,27 @@ function ResourceReviewForm({
       candidate.version === version &&
       candidate.access !== "cloud-sql-psc-connector"
   )
+  const [settingValues, setSettingValues] = useState<Record<string, string>>({})
+  const settingKey = `${provider?.name}:${kind}:${account?.connection.id}`
+  const settingFields = account?.offer.settings ?? []
+  const settings = Object.fromEntries(
+    settingFields.map((field) => [
+      field.name,
+      settingValues[`${settingKey}:${field.name}`] ?? field.default ?? "",
+    ])
+  )
+  const settingsValid =
+    !!resource ||
+    settingFields.every((field) => {
+      const value = settings[field.name].trim()
+      if (!value) return !field.required
+      if (!field.pattern) return true
+      try {
+        return new RegExp(field.pattern).test(value)
+      } catch {
+        return false
+      }
+    })
   const [name, setName] = useState(() =>
     freeName(
       resource?.name
@@ -282,7 +303,14 @@ function ResourceReviewForm({
     !taken.has(name)
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (pending || !validName || !kind || (!resource && !account)) return
+    if (
+      pending ||
+      !validName ||
+      !settingsValid ||
+      !kind ||
+      (!resource && !account)
+    )
+      return
     setPending(true)
     setError("")
     const input: ResourceReviewInput = {
@@ -297,6 +325,7 @@ function ResourceReviewForm({
             target: account?.connection.id,
             region,
             version,
+            ...(settingFields.length ? { settings } : {}),
           }),
       ...(service ? { service } : {}),
     }
@@ -456,13 +485,41 @@ function ResourceReviewForm({
             <p className="text-xs text-muted-foreground">
               {account.offer.creates}
             </p>
+            {settingFields.length > 0 && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {settingFields.map((field) => (
+                  <div
+                    key={`${settingKey}:${field.name}`}
+                    className="grid gap-1.5"
+                  >
+                    <Label htmlFor={`resource-setting-${field.name}`}>
+                      {field.title}
+                      {!field.required ? " (optional)" : ""}
+                    </Label>
+                    <Input
+                      id={`resource-setting-${field.name}`}
+                      value={settings[field.name]}
+                      disabled={pending}
+                      required={field.required}
+                      pattern={field.pattern || undefined}
+                      onChange={(event) =>
+                        setSettingValues((previous) => ({
+                          ...previous,
+                          [`${settingKey}:${field.name}`]: event.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
             {profile ? (
               <ManagedDatabaseSettings profile={profile} />
             ) : (
               <p className="text-xs text-muted-foreground">
-                Uses the adapter's provider defaults for capacity, access and
-                retention. Check the requested settings and costs in your plan
-                before approving.
+                Review your requested settings and provider costs in the plan
+                before approving. The adapter uses provider defaults for
+                settings you have not selected.
               </p>
             )}
           </>
@@ -540,7 +597,13 @@ function ResourceReviewForm({
       <Button
         type="submit"
         size="sm"
-        disabled={pending || !validName || !kind || (!resource && !account)}
+        disabled={
+          pending ||
+          !validName ||
+          !settingsValid ||
+          !kind ||
+          (!resource && !account)
+        }
       >
         Review deployment plan
       </Button>

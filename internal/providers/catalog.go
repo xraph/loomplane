@@ -295,7 +295,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, features, all[i].Cloud)...)
 		}
 	}
-	return all
+	return edgeResourceProviders(all)
 }
 
 // registeredProvisions describes the registered kinds, other than the five

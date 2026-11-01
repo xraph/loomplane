@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providerresources"
 	"github.com/xraph/loomplane/internal/security"
@@ -68,17 +67,12 @@ func (r *Runner) verifyExistingSnapshotAccess(ctx context.Context, job *Job, bin
 			if e != nil || record == nil || !providerresources.AttachableIdentity(record) || endpoint == nil || record.ID != pin.ResourceID || record.OrgID != job.Deployment.OrgID || record.Revision != pin.Revision || record.AccountIdentity != pin.AccountIdentity || record.ExternalID != pin.ExternalID || record.Incarnation != pin.Incarnation || record.EndpointID != pin.EndpointID || record.EndpointRevision != pin.EndpointRevision || endpoint.ID != pin.EndpointID || endpoint.OrgID != job.Deployment.OrgID || endpoint.Revision != pin.EndpointRevision || access == "" {
 				return refusal
 			}
-			outputs = map[string]string{"": access, ResourceURL: access}
-			if endpoint.Engine == catalogconnect.EngineS3 || endpoint.Engine == catalogconnect.EngineGCS {
-				values, e := catalogconnect.BucketOutputs(access)
-				if e != nil {
-					return refusal
-				}
-				outputs = map[string]string{"": values["STORAGE_URL"], ResourceURL: values["STORAGE_URL"]}
-				for key, value := range values {
-					outputs["output:"+key] = value
-				}
+			fields, outputErr := existingAccessOutputs(record, endpoint, access)
+			if outputErr != nil {
+				return refusal
 			}
+			outputs = fields
+			outputs[""] = fields[ResourceURL]
 			expected[link.From] = outputs
 		}
 		want, known := outputs[link.Field]

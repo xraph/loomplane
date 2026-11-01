@@ -10,15 +10,19 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // Clients shares the same authentication and transport configuration as deployments.
 type Clients struct {
+	Cloudflare   *cloudflare.Client
+	Vercel       *vercel.Client
 	DigitalOcean *digitalocean.Client
 	Azure        *azure.Client
 	AWS          *aws.Client
@@ -29,7 +33,7 @@ type Clients struct {
 // Supports reports native inventory capability; Inventory also requires the installed client.
 func (*Clients) Supports(cloud string) bool {
 	switch cloud {
-	case connections.DigitalOcean, connections.Azure, connections.AWS, connections.GCP, connections.Render:
+	case connections.DigitalOcean, connections.Azure, connections.AWS, connections.GCP, connections.Render, connections.Cloudflare, connections.Vercel:
 		return true
 	}
 	return false
@@ -50,6 +54,10 @@ func (c *Clients) Inventory(ctx context.Context, conn *connections.Connection, c
 	var out provider.ResourceInventory
 	var err error
 	switch conn.Cloud {
+	case connections.Cloudflare:
+		out, err = c.cloudflareResources(ctx, conn, credential)
+	case connections.Vercel:
+		out, err = c.vercelResources(ctx, conn, credential)
 	case connections.DigitalOcean:
 		if c.DigitalOcean == nil {
 			return fail()
@@ -159,6 +167,12 @@ func (c *Clients) SupportedProviders() []string {
 	out := []string{}
 	if c == nil {
 		return out
+	}
+	if c.Cloudflare != nil {
+		out = append(out, connections.Cloudflare)
+	}
+	if c.Vercel != nil {
+		out = append(out, connections.Vercel)
 	}
 	if c.DigitalOcean != nil {
 		out = append(out, connections.DigitalOcean)

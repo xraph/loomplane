@@ -23,6 +23,7 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	ResourceEndpoints      map[string]EndpointPin
 	ExistingResources      map[string]ExistingResourceCheck
 	ExistingResourceChecks map[string]EndpointCheck
 	ProjectID              string
@@ -524,14 +525,6 @@ func (p *planner) planResources() {
 			composed = append(composed, name)
 			continue
 		}
-		// Only composed catalog kinds take settings, so every one here is
-		// unknown, as on a catalog kind without settings.
-		for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
-			p.problem(Finding{
-				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: overridePath(r, name, p.in.Environment, "settings."+key),
-				Message: fmt.Sprintf("%s has no setting %s.", name, key),
-			})
-		}
 		if set.GPU != nil {
 			title := r.Kind
 			if engine, ok := p.kinds().Engine(r.Kind); ok {
@@ -578,12 +571,14 @@ func (p *planner) planResources() {
 		cfg := &ResourceConfig{
 			Provider: prov.Name, Region: p.place(ResourceSubject, name, base+".region", prov, set.Region),
 			Kind: r.Kind, Version: version,
+			Settings: p.providerResourceSettings(name, base, r, offer),
 		}
 		a := &Action{
 			ID: actionID(ResourceSubject, name), Subject: ResourceSubject, Name: name,
 			Provider: prov.Name, Region: cfg.Region, Engine: provider.ResourceEngine, Creates: offer.Creates,
 			Resource: cfg, Step: 1,
 		}
+		p.configureEdgeResource(name, base, r, cfg, a, prov)
 		p.configureCatalog(name, base, r, cfg, a)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
 		p.resources[name] = a
@@ -717,6 +712,13 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
+	if prov.Name == "cloudflare-workers" {
+		cfg.Source = gs.Path
+		if cfg.Source == "" {
+			cfg.Source = "."
+		}
+		cfg.Build, cfg.Image, cfg.Context = "", "", ""
+	}
 	cfg.CapacityIntent = p.in.CapacityIntents[name]
 	p.configureTarget(name, base, prov, set, cfg)
 	if placement, ok := p.in.CloudPlacements[name]; ok {
@@ -1589,6 +1591,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
 		Public:     runs.Workload != provider.Worker,
 		HealthPath: set.HealthPath,
+		Worker:     p.workerSettings(name, base, set, prov),
 	}
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
@@ -1802,6 +1805,9 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if p.linkEdgeResource(name, a, need, base, dep) {
+				continue
 			}
 			if dep.Resource != nil && dep.Resource.ExistingResource != nil {
 				p.linkExistingResource(name, a, need, key, base, dep)

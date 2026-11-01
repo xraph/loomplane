@@ -19,11 +19,14 @@ import (
 const (
 	EngineS3  = "s3"
 	EngineGCS = "gcs"
+	EngineR2  = "r2"
 )
 
 // BucketAccess holds explicitly supplied application credentials. Store it only in Vault.
 type BucketAccess struct {
 	Provider           string `json:"provider,omitempty"`
+	AccountID          string `json:"account_id,omitempty"`
+	Jurisdiction       string `json:"jurisdiction,omitempty"`
 	Bucket             string `json:"bucket,omitempty"`
 	Region             string `json:"region,omitempty"`
 	ExpectedOwner      string `json:"expected_owner,omitempty"`
@@ -72,7 +75,7 @@ func ParseBucketAccess(raw string) (BucketAccess, error) {
 
 // ValidBucketName checks the standard bucket name rules for the selected provider.
 func ValidBucketName(provider, name string) bool {
-	if provider != "aws" && provider != "gcp" || net.ParseIP(name) != nil {
+	if provider != "aws" && provider != "gcp" && provider != "cloudflare" || net.ParseIP(name) != nil {
 		return false
 	}
 	if provider == "aws" && (strings.HasSuffix(name, "--x-s3") || strings.HasSuffix(name, "--table-s3")) {
@@ -102,6 +105,9 @@ func validateBucketAccess(a BucketAccess) error {
 	}
 	switch a.Provider {
 	case "aws":
+		if a.AccountID != "" || a.Jurisdiction != "" {
+			return invalidBucketAccess()
+		}
 		if !bucketRegionPattern.MatchString(a.Region) || strings.HasPrefix(a.Region, "cn-") || !bucketOwnerPattern.MatchString(a.ExpectedOwner) || !bucketAccessKeyPattern.MatchString(a.AccessKeyID) || len(a.SecretAccessKey) < 16 || len(a.SecretAccessKey) > 1024 || len(a.SessionToken) > 16384 || a.ServiceAccountJSON != "" {
 			return invalidBucketAccess()
 		}
@@ -110,7 +116,14 @@ func validateBucketAccess(a BucketAccess) error {
 				return invalidBucketAccess()
 			}
 		}
+	case "cloudflare":
+		if !cloudflareAccountPattern.MatchString(a.AccountID) || !slices.Contains([]string{"", "default", "eu", "us", "fedramp", "fedramp-high"}, a.Jurisdiction) || a.Region != "auto" || !bucketAccessKeyPattern.MatchString(a.AccessKeyID) || len(a.SecretAccessKey) < 16 || len(a.SecretAccessKey) > 1024 || strings.ContainsAny(a.SecretAccessKey, "\r\n\x00") || a.ExpectedOwner != "" || a.SessionToken != "" || a.ServiceAccountJSON != "" {
+			return invalidBucketAccess()
+		}
 	case "gcp":
+		if a.AccountID != "" || a.Jurisdiction != "" {
+			return invalidBucketAccess()
+		}
 		if a.AccessKeyID != "" || a.SecretAccessKey != "" || a.SessionToken != "" || a.ExpectedOwner != "" {
 			return invalidBucketAccess()
 		}
@@ -227,13 +240,20 @@ func parseBucketEndpoint(endpoint *Endpoint, raw string) error {
 	if err != nil {
 		return err
 	}
-	if endpoint.Engine == EngineS3 && access.Provider != "aws" || endpoint.Engine == EngineGCS && access.Provider != "gcp" {
+	if endpoint.Engine == EngineS3 && access.Provider != "aws" || endpoint.Engine == EngineGCS && access.Provider != "gcp" || endpoint.Engine == EngineR2 && access.Provider != "cloudflare" {
 		return invalidBucketAccess()
 	}
 	endpoint.Host, endpoint.Port, endpoint.Database, endpoint.TLS = bucketHost(access), 443, access.Bucket, TLSVerifyFull
 	return nil
 }
 func bucketHost(a BucketAccess) string {
+	if a.Provider == "cloudflare" {
+		jurisdiction := ""
+		if a.Jurisdiction != "" && a.Jurisdiction != "default" {
+			jurisdiction = "." + a.Jurisdiction
+		}
+		return a.AccountID + jurisdiction + ".r2.cloudflarestorage.com"
+	}
 	if a.Provider == "aws" {
 		return "s3." + a.Region + ".amazonaws.com"
 	}
@@ -244,6 +264,8 @@ func bucketHost(a BucketAccess) string {
 func BucketEnvironment(engine string) []string {
 	out := []string{"STORAGE_URL", "STORAGE_BUCKET", "STORAGE_REGION", "STORAGE_ENDPOINT"}
 	switch engine {
+	case EngineR2:
+		return append(out, "S3_ENDPOINT", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
 	case EngineS3:
 		return append(out, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_S3_EXPECTED_BUCKET_OWNER")
 	case EngineGCS:
@@ -264,6 +286,9 @@ func BucketOutputs(raw string) (map[string]string, error) {
 	case "aws":
 		out["STORAGE_URL"] = "s3://" + a.Bucket + "?region=" + url.QueryEscape(a.Region)
 		out["AWS_ACCESS_KEY_ID"], out["AWS_SECRET_ACCESS_KEY"], out["AWS_SESSION_TOKEN"], out["AWS_REGION"], out["AWS_S3_EXPECTED_BUCKET_OWNER"] = a.AccessKeyID, a.SecretAccessKey, a.SessionToken, a.Region, a.ExpectedOwner
+	case "cloudflare":
+		out["STORAGE_URL"] = "s3://" + a.Bucket + "?region=auto"
+		out["S3_ENDPOINT"], out["AWS_ACCESS_KEY_ID"], out["AWS_SECRET_ACCESS_KEY"], out["AWS_REGION"] = "https://"+bucketHost(a), a.AccessKeyID, a.SecretAccessKey, a.Region
 	case "gcp":
 		out["STORAGE_URL"], out["GOOGLE_SERVICE_ACCOUNT_JSON"] = "gs://"+a.Bucket, a.ServiceAccountJSON
 	}

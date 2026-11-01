@@ -173,6 +173,7 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	Worker *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
 	// CapacityMode chooses managed workload reservation semantics.
 	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
 	// CloudSQLNetwork is the explicit application route for PSC attachments.
@@ -1167,6 +1168,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Build != nil {
 		out.Build = o.Build
+	}
+	if o.Worker != nil {
+		out.Worker = o.Worker
 	}
 	if o.Port != 0 {
 		out.Port = o.Port

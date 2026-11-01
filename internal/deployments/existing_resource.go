@@ -42,12 +42,8 @@ func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *p
 			return nil
 		}
 		progress(StepDeploying, "Disconnecting "+a.Name+"; the cloud resource remains unchanged")
-		if r.resources != nil {
-			for _, field := range resourceCredentialFields {
-				if err := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); err != nil {
-					return err
-				}
-			}
+		if clearErr := r.clearExistingAccess(ctx, d, a.Name); clearErr != nil {
+			return clearErr
 		}
 		return r.plans.DeleteBinding(ctx, d.OrgID, current.ID)
 	}
@@ -117,8 +113,14 @@ func (r *Runner) runExistingResource(ctx context.Context, d *Deployment, plan *p
 		}
 	}
 	progress(StepDeploying, "Connecting "+a.Name+" without changing its cloud resource")
-	if err := r.storeExistingAccess(ctx, d, a, dsn); err != nil {
-		return err
+	var storeErr error
+	if catalogconnect.IsAPIEngine(endpoint.Engine) || endpoint.Engine == catalogconnect.EngineR2 {
+		storeErr = r.storeAPIExistingAccess(ctx, d, a, record, endpoint, dsn)
+	} else {
+		storeErr = r.storeExistingAccess(ctx, d, a, dsn)
+	}
+	if storeErr != nil {
+		return storeErr
 	}
 	out := &Outcome{ExternalID: record.ExternalID, PhysicalID: record.Incarnation, Revision: existingRevision(pin.Revision, pin.EndpointRevision)}
 	if _, err := r.bind(ctx, d, a, current, out, record.ConnectionID, nil); err != nil {

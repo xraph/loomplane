@@ -3,6 +3,8 @@ import * as api from "@/client/forge/loomplane/hooks"
 import { messageOf } from "@/client/errors"
 import { useMutation, useQuery } from "@/client/hooks"
 import { QueryError } from "@/components/query-error"
+import { ProviderCredentials } from "@/components/provider-resources/provider-credentials"
+import { APICredentials } from "@/components/provider-resources/api-credentials"
 import { BucketCredentials } from "@/components/provider-resources/bucket-credentials"
 import { StatusPill } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -20,6 +22,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { formatDate } from "@/lib/format"
 import {
   providerResourceReadiness,
+  providerResourceAttachmentNote,
+  providerResourceOutputs,
   type InventoryResource,
 } from "@/lib/provider-resources"
 import { Link } from "@/lib/router"
@@ -58,6 +62,10 @@ function ResourceDetailsContent({
   const [saved, setSaved] = useState(false)
   const resource = query.data
   const consumers = resource?.consumers ?? []
+  const outputs = resource ? providerResourceOutputs(resource) : []
+  const attachmentNote = resource
+    ? providerResourceAttachmentNote(resource)
+    : ""
   const readiness = resource
     ? providerResourceReadiness(resource, now)
     : undefined
@@ -70,6 +78,7 @@ function ResourceDetailsContent({
       setSaved(true)
       await Promise.all([query.refetch(), onSaved()])
     } catch (cause) {
+      setDSN("")
       setError(
         messageOf(
           cause,
@@ -102,7 +111,12 @@ function ResourceDetailsContent({
                 {[
                   ["Engine", `${resource.kind} ${resource.version ?? ""}`],
                   ["Provider", resource.provider],
-                  ["Account", resource.bucketOwner || resource.accountIdentity],
+                  [
+                    "Account",
+                    resource.apiAccountId ||
+                      resource.bucketOwner ||
+                      resource.accountIdentity,
+                  ],
                   ["Region", resource.region || "Unspecified"],
                   ["Provider health", resource.status],
                   [
@@ -166,6 +180,54 @@ function ResourceDetailsContent({
                   </AlertDescription>
                 </Alert>
               )}
+              {outputs.length > 0 && (
+                <p className="text-xs break-words text-muted-foreground">
+                  Deployment variables: {outputs.join(", ")}. Multiple
+                  attachments receive separate variable prefixes. The deployment
+                  review verifies API access without writing application data.
+                </p>
+              )}
+              {attachmentNote && (
+                <Alert>
+                  <AlertDescription>{attachmentNote}</AlertDescription>
+                </Alert>
+              )}
+              {canConnect &&
+                resource.credentialMethods?.includes("native_binding") && (
+                  <ProviderCredentials
+                    resource={resource}
+                    observed={readiness.discovery === "Observed"}
+                    native
+                    onSaved={async () => {
+                      await Promise.all([query.refetch(), onSaved()])
+                    }}
+                  />
+                )}
+              {canConnect &&
+                resource.credentialMethods?.includes(
+                  "provider_credentials"
+                ) && (
+                  <ProviderCredentials
+                    resource={resource}
+                    observed={readiness.discovery === "Observed"}
+                    onSaved={async () => {
+                      await Promise.all([query.refetch(), onSaved()])
+                    }}
+                  />
+                )}
+              {canConnect &&
+                resource.credentialMethods?.includes("api_access") && (
+                  <APICredentials
+                    resource={resource}
+                    observed={
+                      readiness.discovery === "Observed" &&
+                      resource.connectionState !== "native_binding_required"
+                    }
+                    onSaved={async () => {
+                      await Promise.all([query.refetch(), onSaved()])
+                    }}
+                  />
+                )}
               {canConnect &&
                 resource.credentialMethods?.includes("bucket_access") && (
                   <BucketCredentials
@@ -254,6 +316,7 @@ function ResourceDetailsContent({
                 size="sm"
                 disabled={
                   !canReview ||
+                  resource.connectionState === "native_binding_required" ||
                   !resource.endpointId ||
                   readiness.discovery !== "Observed" ||
                   resource.connectionState === "identity_verification_needed"
@@ -262,7 +325,7 @@ function ResourceDetailsContent({
               >
                 Use in deployment
               </Button>
-              {!resource.endpointId && (
+              {!resource.endpointId && !attachmentNote && (
                 <p className="text-xs text-muted-foreground">
                   Save supported application credentials before reviewing an
                   attachment. The deployment review shows where connection

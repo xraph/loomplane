@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manageddb"
 	plan "github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providerresources"
@@ -36,7 +37,7 @@ func providerResourceUsage(db *pgdriver.PgDB, conns resourceUsageConnections) fu
 				accounts[c.ID] = c
 			}
 		}
-		rows, err := db.Query(ctx, `SELECT id,org_id,project_id,environment_id,subject,name,provider,region,external_id,physical_id,connection_id,plan_id,config FROM loomplane_bindings WHERE org_id=$1 AND subject='resource' ORDER BY id`, org)
+		rows, err := db.Query(ctx, `SELECT id,org_id,project_id,environment_id,subject,name,provider,region,external_id,physical_id,connection_id,plan_id,config,owned_resources FROM loomplane_bindings WHERE org_id=$1 AND (subject='resource' OR (subject='service' AND provider='cloudflare-workers')) ORDER BY id`, org)
 		if err != nil {
 			return nil, errors.New("resource deployment usage could not be read")
 		}
@@ -44,10 +45,18 @@ func providerResourceUsage(db *pgdriver.PgDB, conns resourceUsageConnections) fu
 		result := []providerresources.ResourceBinding{}
 		for rows.Next() {
 			var b plan.Binding
-			if err := rows.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region, &b.ExternalID, &b.PhysicalID, &b.ConnectionID, &b.PlanID, &b.Config); err != nil {
+			var owned []byte
+			if err := rows.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region, &b.ExternalID, &b.PhysicalID, &b.ConnectionID, &b.PlanID, &b.Config, &owned); err != nil {
 				return nil, errors.New("resource deployment usage could not be read")
 			}
 			if b.OrgID != org {
+				continue
+			}
+			if len(owned) > 0 && json.Unmarshal(owned, &b.OwnedResources) != nil {
+				return nil, errors.New("resource ownership receipts could not be read")
+			}
+			if native := deployments.NativeProviderResourceBindings(&b, accounts[b.ConnectionID]); len(native) > 0 {
+				result = append(result, native...)
 				continue
 			}
 			if binding, ok := providerResourceBinding(&b, accounts[b.ConnectionID]); ok {
@@ -107,6 +116,8 @@ func providerResourceBinding(b *plan.Binding, c *connections.Connection) (provid
 			return out, false
 		}
 		out.ExternalID = id
+	case "cloudflare-workers":
+		return out, false
 	case "azure-database", "azure-managed-redis":
 		group := c.Details["resource_group"]
 		if group == "" {
@@ -184,8 +195,10 @@ func providerResourceBinding(b *plan.Binding, c *connections.Connection) (provid
 
 func resourceBindingCloud(provider string) string {
 	switch provider {
-	case "digitalocean", "render":
+	case "digitalocean", "render", "vercel":
 		return provider
+	case "cloudflare-workers":
+		return connections.Cloudflare
 	case "azure-database", "azure-managed-redis":
 		return connections.Azure
 	case "rds", "elasticache", "s3":

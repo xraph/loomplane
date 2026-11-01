@@ -8,7 +8,7 @@ func ResourceCheckNote(cloud string) string {
 	switch cloud {
 	case "kubernetes":
 		return "Checked from Loomplane, not from inside the cluster."
-	case "digitalocean", "azure":
+	case "digitalocean", "azure", "vercel":
 		return "Credentials and connectivity are checked from Loomplane. This does not verify the application's outbound network. Configure the provider's trusted sources, firewall and private network access before deployment."
 	}
 	return ""
@@ -17,7 +17,7 @@ func ResourceCheckNote(cloud string) string {
 // pinExternalResourceTarget ties secret delivery to the reviewed native account.
 func (p *planner) pinExternalResourceTarget(name string, a *Action, path string) {
 	cloud := p.cloud(a.Provider)
-	if a.Service == nil || (cloud != connections.DigitalOcean && cloud != connections.Azure) {
+	if a.Service == nil || (cloud != connections.DigitalOcean && cloud != connections.Azure && cloud != connections.Vercel && cloud != connections.Cloudflare) {
 		return
 	}
 	id := a.ConnectionID

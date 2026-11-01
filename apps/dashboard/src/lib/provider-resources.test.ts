@@ -73,7 +73,14 @@ test("offers registry provisions only on available providers with ready matching
       name: "new-provider",
       cloud: "new-cloud",
       available: true,
-      provisions: [{ kind: "new-kind", creates: "Managed thing" }],
+      provisions: [
+        { kind: "new-kind", creates: "Managed thing" },
+        {
+          kind: "native-import",
+          creates: "Imported namespace",
+          importOnly: true,
+        },
+      ],
     },
     {
       name: "paused",

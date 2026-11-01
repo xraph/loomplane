@@ -48,6 +48,7 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
@@ -244,13 +245,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	// Hostname changes take the same lock on an app's spec as its deploys.
 	appPlatform := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)
 	appPlatform.Lock = pglock.For(pg)
+	vercelResourcesClient := vercel.New(e.cfg.Clouds.VercelEndpoint)
+	cloudflareResourcesClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, false)
+	cloudflareExecutor := &deployments.Cloudflare{Client: cloudflareResourcesClient}
 	executors := map[string]deployments.Executor{
+		"cloudflare-workers": cloudflareExecutor,
 		"cloud-run": &deployments.CloudRun{
 			Google:      google,
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":               &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		"vercel":               &deployments.Vercel{Client: vercelResourcesClient},
 		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		"digitalocean":         &deployments.DigitalOcean{Client: appPlatform},
 		"azure-container-apps": &deployments.Azure{Client: azureClient()},
@@ -313,7 +318,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
-	inventoryClients := &providerinventory.Clients{DigitalOcean: appPlatform, Azure: azureClient(), AWS: awsClient(), Google: google, Render: render.New(e.cfg.Clouds.RenderEndpoint)}
+	cloudflareExecutor.Endpoints = e.endpoints
+	cloudflareExecutor.Authorizer = authz
+	inventoryClients := &providerinventory.Clients{Cloudflare: cloudflareResourcesClient, Vercel: vercelResourcesClient, DigitalOcean: appPlatform, Azure: azureClient(), AWS: awsClient(), Google: google, Render: render.New(e.cfg.Clouds.RenderEndpoint)}
 	e.providerResources = providerresources.NewService(providerresources.Deps{
 		Store: providerresources.NewPgStore(pg), Connections: clouds,
 		Reader:    inventoryClients,
@@ -337,6 +344,10 @@ func (e *Extension) Register(fapp forge.App) error {
 		catalogconnect.EngineMySQL: catalogconnect.MySQLProber{},
 		catalogconnect.EngineS3:    catalogconnect.BucketProber{}, catalogconnect.EngineGCS: catalogconnect.BucketProber{},
 	}}
+	checker.Probers[catalogconnect.EngineR2] = catalogconnect.BucketProber{}
+	for _, engine := range []string{"cloudflare-d1", "cloudflare-kv", "cloudflare-r2", "cloudflare-queue", "cloudflare-vectorize", "cloudflare-hyperdrive", "cloudflare-durable-object", "vercel-blob", "vercel-global-config", "vercel-integration"} {
+		checker.Probers[engine] = catalogconnect.APIProber{}
+	}
 	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
 	// recipes, by kind. A kind registers its own here, or, from another
@@ -738,7 +749,7 @@ func (d ownedDialer) TargetDial(ctx context.Context, orgID, connectionID string)
 	if c == nil || c.ID != connectionID || c.OrgID != orgID || c.Status != connections.StatusReady {
 		return nil, nil, errors.New("the resource check's deployment target is not ready")
 	}
-	if c.Cloud == connections.DigitalOcean || c.Cloud == connections.Azure {
+	if c.Cloud == connections.DigitalOcean || c.Cloud == connections.Azure || c.Cloud == connections.Vercel || c.Cloud == connections.Cloudflare {
 		// Native platforms expose no TCP forwarding API. This check runs
 		// from Loomplane and the review says so; it does not prove app egress.
 		return d.guard.Dial, nil, nil

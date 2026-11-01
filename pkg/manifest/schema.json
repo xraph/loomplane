@@ -173,6 +173,51 @@
     }
   },
   "$defs": {
+    "workerSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "main": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.m?js$"
+        },
+        "compatibility_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "compatibility_flags": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,127}$"
+          }
+        },
+        "durable_objects": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "class_name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,127}$"
+              },
+              "class_name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,127}$"
+              }
+            }
+          }
+        }
+      }
+    },
     "environment": {
       "type": "object",
       "additionalProperties": false,
@@ -334,6 +379,7 @@
     "settings": {
       "type": "object",
       "properties": {
+        "worker": { "$ref": "#/$defs/workerSettings" },
         "capacity_mode": {
           "description": "Managed workload reservation mode. Guaranteed reserves your reviewed replica maximum; best effort grants no fleet expansion.",
           "enum": ["guaranteed", "best_effort"]

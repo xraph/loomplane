@@ -87,7 +87,7 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 	if dial == nil {
 		return nil, errors.New("check a DSN: no dialer")
 	}
-	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS {
+	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) {
 		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis and bucket endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
@@ -288,7 +288,7 @@ func redact(msg, dsn string) string {
 			msg = strings.ReplaceAll(msg, pw, "[redacted]")
 		}
 	}
-	return redactBucketAccess(msg, dsn)
+	return redactAPIAccess(redactBucketAccess(msg, dsn), dsn)
 }
 
 var leadingVersion = regexp.MustCompile(`^\d+(\.\d+)*`)

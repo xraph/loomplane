@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/providerresources"
@@ -66,6 +67,11 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 			engine = catalogconnect.EngineS3
 		case "gcp":
 			engine = catalogconnect.EngineGCS
+		case "cloudflare":
+			engine = catalogconnect.EngineR2
+			if check.Endpoint != nil && check.Endpoint.Engine == "cloudflare-r2" {
+				engine = check.Endpoint.Engine
+			}
 		}
 	}
 	if engine == "valkey" {
@@ -112,6 +118,9 @@ func (p *planner) planExistingResource(name, base string, r manifest.Resource) {
 	}
 	pin := &ExistingResourceConfig{ResourceID: record.ID, EndpointID: endpoint.ID, Revision: record.Revision, EndpointRevision: endpoint.Revision, AccountIdentity: record.AccountIdentity, ExternalID: record.ExternalID, Incarnation: record.Incarnation}
 	cfg := &ResourceConfig{Provider: target.Name, Region: record.Region, Kind: r.Kind, Version: record.Version, AccountIdentity: record.AccountIdentity, ExistingResource: pin}
+	if bridge := catalogconnect.APIEndpointBridge(endpoint); bridge != "" {
+		cfg.Settings = map[string]string{"project_id": bridge, "output_keys": strings.Join(catalogconnect.APIEndpointOutputs(endpoint), ",")}
+	}
 	a := &Action{ID: id, Op: Create, Subject: ResourceSubject, Name: name, Provider: target.Name, Region: record.Region, ConnectionID: record.ConnectionID, Engine: provider.ResourceEngine, Creates: "External resource attachment", Resource: cfg, Step: 1, Reason: fmt.Sprintf("Connect %s. Its provider resource remains externally managed.", name)}
 	if old != nil {
 		a.Changes = changes(old.Config, cfg)
@@ -149,10 +158,15 @@ func (p *planner) linkExistingResource(name string, a *Action, need, key, path s
 		p.problem(Finding{Code: "existing-resource-network", Subject: ServiceSubject, Name: name, Path: path, Message: message})
 		return
 	}
-	if dep.Resource.Kind == "object-storage" {
-		p.linkExistingBucket(name, a, need, key)
+	if catalogconnect.IsAPIEngine(p.in.ExistingResources[p.in.Manifest.Resources[need].ExistingResource].Endpoint.Engine) || a.Provider == "cloudflare-workers" && p.cloud(dep.Provider) == "cloudflare" {
+		p.linkEdgeOutputs(name, a, need, path, dep, edgeResourceKind(dep.Resource), p.in.ExistingResources[p.in.Manifest.Resources[need].ExistingResource].Endpoint)
 	} else {
-		p.linkResource(name, a, need, key, path)
+		switch dep.Resource.Kind {
+		case "object-storage":
+			p.linkExistingBucket(name, a, need, key)
+		default:
+			p.linkResource(name, a, need, key, path)
+		}
 	}
 	a.DependsOn = append(a.DependsOn, dep.ID)
 }

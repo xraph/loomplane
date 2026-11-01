@@ -21,7 +21,7 @@ func AttachableIdentity(r *ProviderResource) bool {
 		if _, ok := s3BucketIdentity(r); ok {
 			return true
 		}
-		return gcsBucketIdentity(r) && r.Incarnation != ""
+		return (gcsBucketIdentity(r) || r.Provider == connections.Cloudflare && apiAccountID(r) != "") && r.Incarnation != ""
 	}
 	return r.Incarnation != ""
 }
@@ -45,6 +45,8 @@ func resourceEngine(r *ProviderResource) string {
 			return catalogconnect.EngineS3
 		case connections.GCP:
 			return catalogconnect.EngineGCS
+		case connections.Cloudflare:
+			return catalogconnect.EngineR2
 		}
 	}
 	return engine(r.Kind)
@@ -84,6 +86,10 @@ func bucketAccessMatches(r *ProviderResource, a catalogconnect.BucketAccess) boo
 		owner, ok := s3BucketIdentity(r)
 		return ok && a.ExpectedOwner == owner
 	}
+	if r.Provider == connections.Cloudflare {
+		parts := strings.Split(r.Scope, "/")
+		return len(parts) == 4 && parts[2] == "r2" && a.AccountID == apiAccountID(r) && a.Jurisdiction == parts[3] && a.ExpectedOwner == ""
+	}
 	return a.ExpectedOwner == "" && gcsBucketIdentity(r)
 }
 func normalizeBucketAccess(r *ProviderResource, a catalogconnect.BucketAccess) (string, error) {
@@ -98,6 +104,18 @@ func normalizeBucketAccess(r *ProviderResource, a catalogconnect.BucketAccess) (
 	}
 	if a.ExpectedOwner == "" && r.Provider == connections.AWS {
 		a.ExpectedOwner, _ = s3BucketIdentity(r)
+	}
+	if r.Provider == connections.Cloudflare {
+		parts := strings.Split(r.Scope, "/")
+		if len(parts) != 4 {
+			return "", ErrInvalid
+		}
+		if a.AccountID == "" {
+			a.AccountID = apiAccountID(r)
+		}
+		if a.Jurisdiction == "" {
+			a.Jurisdiction = parts[3]
+		}
 	}
 	if !bucketAccessMatches(r, a) {
 		return "", ErrInvalid
@@ -115,6 +133,17 @@ func bucketEndpointMatches(r *ProviderResource, e *catalogconnect.Endpoint) bool
 	host := "storage.googleapis.com"
 	if r.Provider == connections.AWS {
 		host = "s3." + r.Region + ".amazonaws.com"
+	}
+	if r.Provider == connections.Cloudflare {
+		parts := strings.Split(r.Scope, "/")
+		if len(parts) != 4 {
+			return false
+		}
+		jurisdiction := ""
+		if parts[3] != "default" && parts[3] != "" {
+			jurisdiction = "." + parts[3]
+		}
+		host = apiAccountID(r) + jurisdiction + ".r2.cloudflarestorage.com"
 	}
 	return e.Host == host && e.Username == ""
 }

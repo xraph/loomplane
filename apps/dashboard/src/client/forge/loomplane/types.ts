@@ -1770,6 +1770,11 @@ export interface DriftCounts {
   missing: number;
 }
 
+export interface DurableObjectClass {
+  className: string;
+  name: string;
+}
+
 export interface Edge {
   confidence: string;
   evidence: Evidence[];
@@ -3555,6 +3560,8 @@ export interface ProviderList {
 
 export interface ProviderResource {
   accountIdentity: string;
+  apiAccountId?: string;
+  attachmentNote?: string;
   bucketOwner?: string;
   connectionGeneration: number;
   connectionId: string;
@@ -3588,10 +3595,28 @@ export interface ProviderResource {
 }
 
 export interface ProviderResourceConnectInputBody {
+  apiAccess?: {
+  accountId?: string;
+  className?: string;
+  environment?: string;
+  incarnation?: string;
+  jurisdiction?: string;
+  kind?: string;
+  name?: string;
+  native?: boolean;
+  projectId?: string;
+  provider?: string;
+  resourceId?: string;
+  scriptName?: string;
+  token?: string;
+  values?: Record<string, any>;
+};
   bucketAccess?: {
   accessKeyId?: string;
+  accountId?: string;
   bucket?: string;
   expectedOwner?: string;
+  jurisdiction?: string;
   provider?: string;
   region?: string;
   secretAccessKey?: string;
@@ -3599,6 +3624,8 @@ export interface ProviderResourceConnectInputBody {
   sessionToken?: string;
 };
   dsn?: string;
+  providerEnvironment?: string;
+  providerProjectId?: string;
 }
 
 export interface ProviderResourceConsumer {
@@ -3647,8 +3674,10 @@ export interface ProviderZoneList {
 
 export interface Provisions {
   creates: string;
+  importOnly?: boolean;
   kind: string;
   managedProfiles?: ManagedDatabaseProfile[];
+  settings?: ResourceSetting[];
   versions?: string[];
 }
 
@@ -3992,15 +4021,25 @@ export interface ResourceConfig {
   cloudPlacement?: CloudPlacement;
   component?: ComponentConfig;
   composition?: CompositionConfig;
+  endpointPins?: Record<string, any>;
   existingResource?: ExistingResourceConfig;
   kind: string;
   managed?: ManagedDatabaseConfig;
   provider: string;
   region?: string;
   routablePorts?: number[];
+  settings?: Record<string, any>;
   target?: string;
   targetSettings?: Record<string, any>;
   version?: string;
+}
+
+export interface ResourceSetting {
+  default?: string;
+  name: string;
+  pattern: string;
+  required?: boolean;
+  title: string;
 }
 
 export interface ResourceStep {
@@ -4656,6 +4695,7 @@ export interface ServiceConfig {
   target?: string;
   targetAccountIdentity?: string;
   targetSettings?: Record<string, any>;
+  worker?: WorkerSettings;
   workload: string;
 }
 
@@ -5181,6 +5221,13 @@ export interface WeightCache {
   kubernetesSizeMb: number;
   mountPath: string;
   sizeSetting?: string;
+}
+
+export interface WorkerSettings {
+  compatibilityDate: string;
+  compatibilityFlags?: string[];
+  durableObjects?: DurableObjectClass[];
+  main: string;
 }
 
 export interface Workspace {

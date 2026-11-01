@@ -72,8 +72,8 @@ func (s *Service) VerifyProject(ctx context.Context, p security.Principal, proje
 		return nil, nil, ErrChanged
 	}
 	s.decorate(r)
-	if r.Status == "missing" || !AttachableIdentity(r) || r.ObservationState == "stale" || run.Status != "complete" || run.FinishedAt == nil || !r.ObservedAt.Equal(*run.FinishedAt) {
-		return nil, nil, ErrUnverified
+	if proofErr := s.verifySelectedObservation(ctx, r, run); proofErr != nil {
+		return nil, nil, proofErr
 	}
 	if r.EndpointProofRequired {
 		r, err = s.verifyEndpointAccess(ctx, p, r, r.Host, r.Port, false)
@@ -110,6 +110,9 @@ func (s *Service) ResolveProject(ctx context.Context, p security.Principal, proj
 	if !projectPinMatches(binding, r) {
 		return nil, nil, "", ErrChanged
 	}
+	if pinErr := s.preflightEndpoint(ctx, r); pinErr != nil {
+		return nil, nil, "", pinErr
+	}
 	e, dsn, err := s.deps.Endpoints.Resolve(ctx, p.OrgID, r.EndpointID)
 	if err != nil {
 		return nil, nil, "", ErrUnverified
@@ -125,8 +128,14 @@ func (s *Service) ResolveProject(ctx context.Context, p security.Principal, proj
 	if err != nil {
 		return nil, nil, "", err
 	}
-	if !projectPinMatches(finalBinding, current) {
+	latest, proofErr := s.latestSelectedObservation(ctx, current)
+	if proofErr != nil {
+		return nil, nil, "", proofErr
+	}
+	if !projectPinMatches(finalBinding, latest) || !endpointMatches(latest, e) || e.Revision != latest.EndpointRevision || !matchesDSN(latest, dsn) {
 		return nil, nil, "", ErrChanged
 	}
-	return r, e, dsn, nil
+	s.decorate(latest)
+	latest.Consumers = []ProviderResourceConsumer{{ID: finalBinding.ID, BindingID: finalBinding.ID, ProjectID: finalBinding.ProjectID, EnvironmentID: finalBinding.EnvironmentID, Name: finalBinding.Name}}
+	return latest, e, dsn, nil
 }

@@ -113,7 +113,7 @@ func TestBucketCredentialsRejectSubstitutionBeforeVault(t *testing.T) {
 		})
 	}
 }
-func TestBucketScopedGrantAndPartialInventoryCannotBypassVerification(t *testing.T) {
+func TestBucketScopedGrantAndUnseenPartialInventoryCannotBypassVerification(t *testing.T) {
 	s, c, reader := bucketFixture(t)
 	secrets := endpointSecrets{}
 	s.deps.Endpoints = catalogconnect.NewService(&endpointRows{rows: map[string]*catalogconnect.Endpoint{}}, secrets, &testAuth{})
@@ -138,10 +138,11 @@ func TestBucketScopedGrantAndPartialInventoryCannotBypassVerification(t *testing
 	reader.fn = func(conn *connections.Connection) (provider.ResourceInventory, error) {
 		inv, e := original(conn)
 		inv.Complete = false
+		inv.Resources = nil
 		return inv, e
 	}
 	if _, _, _, err = s.ResolveProject(t.Context(), developer, "project", "production", got.ID, got.Revision); !errors.Is(err, ErrUnverified) {
-		t.Fatalf("partial inventory authorized attachment: %v", err)
+		t.Fatalf("an unseen bucket in partial inventory authorized attachment: %v", err)
 	}
 }
 

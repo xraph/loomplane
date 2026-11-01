@@ -63,8 +63,8 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
-		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes", "cloudflare-workers"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes", "cloudflare-workers"}},
 		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
 		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
@@ -72,6 +72,7 @@ func TestRegistry_capabilities(t *testing.T) {
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
 		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "azure-managed-redis", "server"}},
 		{"valkey", names(r.Provisioning("valkey")), []string{"server"}},
+		{"object storage", names(r.Provisioning("object-storage")), []string{"cloud-storage", "s3", "cloudflare-workers"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}
 	for _, tt := range tests {
@@ -95,6 +96,7 @@ func TestProvider_engine(t *testing.T) {
 		// Vercel and Render build from the source themselves, so
 		// Loomplane's adapters manage what they run.
 		{"vercel", provider.WebApp, provider.Loomplane},
+		{"cloudflare-workers", provider.WebApp, provider.Loomplane},
 		{"render", provider.Worker, provider.Loomplane},
 		{"render", provider.StaticSite, provider.Loomplane},
 		// Loomplane builds and runs Container Apps itself, without Ctrl Plane.

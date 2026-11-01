@@ -82,7 +82,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, in CreateInp
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return nil, fmt.Errorf("%w: an endpoint needs a name of at most %d characters", ErrInvalid, maxName)
 	}
-	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL && in.Engine != EngineS3 && in.Engine != EngineGCS {
+	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL && in.Engine != EngineS3 && in.Engine != EngineGCS && in.Engine != EngineR2 && !IsAPIEngine(in.Engine) {
 		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql, redis and bucket endpoints, not %q", ErrInvalid, in.Engine)
 	}
 	e := &Endpoint{OrgID: p.OrgID, Name: name, Engine: in.Engine, CreatedBy: p.UserID, CreatedAt: s.now().UTC(), Revision: 1}
@@ -167,6 +167,16 @@ func (s *Service) Resolve(ctx context.Context, orgID, id string) (*Endpoint, str
 	dsn, err := s.secrets.Get(ctx, DSNKey(orgID, id))
 	if err != nil {
 		return nil, "", fmt.Errorf("read the DSN of endpoint %s: %w", e.Name, err)
+	}
+	if IsAPIEngine(e.Engine) {
+		expected := &Endpoint{Engine: e.Engine}
+		if err := parseAPIEndpoint(expected, string(dsn)); err != nil {
+			return nil, "", ErrInvalid
+		}
+		hostMatches := e.Host == expected.Host || e.Engine == "vercel-global-config" && e.Host == "edge-config.vercel.com"
+		if !hostMatches || e.Port != expected.Port || e.TLS != expected.TLS || e.Database != expected.Database || e.Username != expected.Username {
+			return nil, "", ErrInvalid
+		}
 	}
 	return e, string(dsn), nil
 }

@@ -154,6 +154,7 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
+	Worker                *provider.WorkerSettings   `json:"worker,omitempty"`
 	CapacityMode          string                     `json:"capacity_mode,omitempty"`
 	ClusterDemand         *ClusterWorkloadDemand     `json:"cluster_demand,omitempty"`
 	FrontendDemand        *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
@@ -279,7 +280,7 @@ func DataBearing(a Action) bool {
 	case ResourceSubject:
 		return a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Protection != recipes.ProtectionNone
 	case ServiceSubject:
-		return a.Service != nil && (a.Service.Catalog != nil ||
+		return a.Service != nil && ((a.Service.Worker != nil && len(a.Service.Worker.DurableObjects) > 0) || a.Service.Catalog != nil ||
 			(a.Service.Component != nil && a.Service.Component.Protection != recipes.ProtectionNone))
 	}
 	return false
@@ -386,6 +387,8 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
+	EndpointPins     map[string]EndpointPin  `json:"endpoint_pins,omitempty"`
+	Settings         map[string]string       `json:"settings,omitempty"`
 	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
 	AccountIdentity  string                  `json:"account_identity,omitempty"`
 	Target           string                  `json:"target,omitempty"`

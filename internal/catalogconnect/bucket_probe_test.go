@@ -33,7 +33,7 @@ func bucketFixture(t *testing.T, handler http.HandlerFunc) (BucketProber, DialFu
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert := &x509.Certificate{SerialNumber: big.NewInt(3), DNSNames: []string{"s3.us-east-1.amazonaws.com", "storage.googleapis.com", "oauth2.googleapis.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(3), DNSNames: []string{"s3.us-east-1.amazonaws.com", "storage.googleapis.com", "oauth2.googleapis.com", "api.cloudflare.com", "vercel.com", "edge-config.vercel.com", "global-config.vercel.com", "application.upstash.io", strings.Repeat("a", 32) + ".eu.r2.cloudflarestorage.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

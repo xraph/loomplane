@@ -33,6 +33,9 @@ func (p BucketProber) Probe(ctx context.Context, dial DialFunc, raw string, req 
 		return nil, err
 	}
 	engine := EngineS3
+	if a.Provider == "cloudflare" {
+		engine = EngineR2
+	}
 	if a.Provider == "gcp" {
 		engine = EngineGCS
 	}
@@ -50,7 +53,7 @@ func (p BucketProber) Probe(ctx context.Context, dial DialFunc, raw string, req 
 	transport := &http.Transport{Proxy: nil, DialContext: dial, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.RootCAs}, DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: probeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	if a.Provider == "aws" {
+	if a.Provider == "aws" || a.Provider == "cloudflare" {
 		err = probeS3Bucket(ctx, client, a)
 	} else {
 		err = probeGoogleBucket(ctx, client, a)
@@ -75,7 +78,9 @@ func probeS3Bucket(ctx context.Context, client *http.Client, a BucketAccess) err
 		if err != nil {
 			return err
 		}
-		request.Header.Set("X-Amz-Expected-Bucket-Owner", a.ExpectedOwner)
+		if a.Provider == "aws" {
+			request.Header.Set("X-Amz-Expected-Bucket-Owner", a.ExpectedOwner)
+		}
 		credentials := aws.Credentials{AccessKeyID: a.AccessKeyID, SecretAccessKey: a.SecretAccessKey, SessionToken: a.SessionToken}
 		const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 		if signErr := v4.NewSigner().SignHTTP(ctx, credentials, request, emptySHA256, "s3", a.Region, time.Now()); signErr != nil {
@@ -99,7 +104,7 @@ func probeS3Bucket(ctx context.Context, client *http.Client, a BucketAccess) err
 
 func readS3BucketResponse(response *http.Response, a BucketAccess, method string) error {
 	region := response.Header.Get("X-Amz-Bucket-Region")
-	if response.StatusCode != http.StatusOK || (method == http.MethodHead && region != a.Region) || (region != "" && region != a.Region) {
+	if response.StatusCode != http.StatusOK || (a.Provider == "aws" && method == http.MethodHead && region != a.Region) || (region != "" && region != a.Region) {
 		return errors.New("bucket owner, region or access was refused")
 	}
 	if method == http.MethodHead {

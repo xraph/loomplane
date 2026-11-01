@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -127,6 +128,28 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		if c != nil {
 			cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 		}
+	}
+	if prov.Cloud == "cloudflare" {
+		cfg.Target = set.Target
+		if placement, ok := p.in.CloudPlacements[name]; ok {
+			cfg.Target = placement.ConnectionID
+		}
+		if cfg.Target == "" {
+			cfg.Target = p.in.Chosen[prov.Cloud]
+		}
+		if cfg.Target == "" {
+			if fallback, ok := p.connection(prov.Cloud); ok {
+				cfg.Target = fallback.ID
+			}
+		}
+		if c := p.targetConnection(name, base+".target", "target", prov.Cloud, cfg.Target); c != nil {
+			cfg.TargetAccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
+			cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
+		}
+		if set.Endpoint != nil || set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "") {
+			p.problem(Finding{Code: "worker-build-unsupported", Subject: ServiceSubject, Name: name, Path: base, Message: "Cloudflare Workers deploy prebundled JavaScript modules. Choose worker.main and build dependencies before publishing the reviewed commit."})
+		}
+		return
 	}
 	if !OwnedCloud(prov.Cloud) {
 		if set.Target != "" || set.Endpoint != nil || (set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "")) {
