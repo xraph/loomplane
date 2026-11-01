@@ -110,14 +110,17 @@ download_bundle() {
     || die "SHA256SUMS has no entry for $tarball"
   (cd "$tmp" && sha256sum -c check >/dev/null 2>&1) \
     || die "checksum mismatch for $tarball; refusing to install it"
-  mkdir -p "$LOOMPLANE_DIR"
+  mkdir -p "$LOOMPLANE_DIR" "$tmp/bundle"
   # The bundle is built by a CI user (uid 1001). Never keep its owner or
   # modes: that uid is the second user anyone creates on a Droplet.
-  tar --no-same-owner --no-same-permissions -xzf "$tmp/$tarball" -C "$LOOMPLANE_DIR"
-  chown -R root:root "$LOOMPLANE_DIR"
+  # Normalize only the extracted bundle. Existing gateway keys may use a
+  # custom directory and must keep their ownership and permissions.
+  tar --no-same-owner --no-same-permissions -xzf "$tmp/$tarball" -C "$tmp/bundle"
+  chown -R root:root "$tmp/bundle"
+  find "$tmp/bundle" -type d -exec chmod 0755 {} +
+  find "$tmp/bundle" -type f ! -name '.env*' -exec chmod 0644 {} +
+  cp -a "$tmp/bundle/." "$LOOMPLANE_DIR/"
   chmod 0755 "$LOOMPLANE_DIR"
-  find "$LOOMPLANE_DIR" -mindepth 1 -type d -exec chmod 0755 {} +
-  find "$LOOMPLANE_DIR" -mindepth 1 -type f ! -name '.env*' -exec chmod 0644 {} +
   # .env.example is the one .env* file meant to be readable.
   chmod 0644 "$LOOMPLANE_DIR/.env.example" 2>/dev/null || true
   find "$LOOMPLANE_DIR" -maxdepth 1 -type f -name '.env.*' ! -name .env.example -exec chmod 0600 {} +

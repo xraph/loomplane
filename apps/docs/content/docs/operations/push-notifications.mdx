@@ -78,6 +78,74 @@ The gateway needs at least one of the two platform key files. It refuses to star
 
 The two `*_BASE_URL` variables exist for tests. The gateway logs a warning at start when one is set.
 
+### Alongside Loomplane
+
+For a single host, [Production on Docker](/docs/operations/production-on-docker#optional-push-gateway)
+includes an opt-in gateway in the same Compose project as Loomplane and its
+workers. You set `COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`, supply
+the gateway hostname and key files, and Caddy serves both hostnames on the
+same ports. Normal installs continue to use XRaph's hosted gateway.
+
+With Helm, enable `push.gateway.enabled`. The chart deploys a separate
+workload and ClusterIP Service, and optionally an Ingress or HTTPRoute.
+Set `push.gatewayUrl` to its public HTTPS address. A gateway needs a
+hostname different from the dashboard because its public proxy serves
+only the two push routes.
+
+Create a Secret in the release namespace. Keep these files outside git:
+
+```bash
+kubectl -n loomplane create secret generic loomplane-push \
+  --from-file=sealing-key=./secrets/sealing-key \
+  --from-file=fcm-service-account.json=./secrets/fcm-service-account.json
+```
+
+Add these values to your existing Helm configuration:
+
+```yaml
+push:
+  gatewayUrl: https://push.example.com
+  gateway:
+    enabled: true
+    image:
+      tag: VERSION # Use a published gateway tag, or set digest instead.
+    existingSecret: loomplane-push
+    sealingKeyId: k202611
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: 64k
+      tls:
+        - secretName: push-tls
+          hosts: [push.example.com]
+```
+
+Provision the TLS certificate through your ingress controller or certificate
+manager. You can use `push.gateway.httpRoute.enabled` with `parentRefs`
+instead, attached to a Gateway with an HTTPS listener and a certificate for
+the push hostname. If you manage the proxy separately, leave both route
+options off and forward only `/v1/registrations` and `/v1/send` to the
+`<release>-push-gateway` Service on port 8790. Keep `/_/health` private and
+configure a 64 KB request limit at your proxy.
+
+The gateway mounts only its own Secret. API and worker pods do not mount
+it, and the gateway does not receive their database or encryption settings.
+For iOS, add `apns-key.p8` to the Secret, enable `push.gateway.apns.enabled`
+and set its `keyId`, `teamId` and `bundleId`. You can turn off FCM with
+`push.gateway.fcm.enabled=false` for an iOS-only Kubernetes gateway.
+
+The gateway reads keys at startup. After changing the Secret, restart its
+Deployment with `kubectl -n loomplane rollout restart deploy/loomplane-push-gateway`
+(use your release's name). During rotation, include `previous-sealing-key`
+and set `push.gateway.previousSealingKeyId` in the same upgrade. Every
+replica must use the same keys and IDs. Rate limits apply per replica, so
+keep the default single replica unless you account for the larger total.
+
+Hosting the gateway requires credentials for the mobile app you ship. Verify
+registration and a real notification on each enabled phone platform after
+you configure DNS, TLS and those credentials.
+
 ### Setup
 
 The stack lives in `deployments/push-gateway`: the gateway, and Caddy in front of it for TLS. Only Caddy keeps state (its certificates). Run this from that directory:

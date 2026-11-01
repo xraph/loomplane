@@ -41,7 +41,8 @@ build_bundle() {
   local tag=$1 digest=${2:-sha256:0000} dir=$srv/$1 bundle=$work/bundle-$1
   mkdir -p "$dir" "$bundle"
   cp /repo/deployments/production/compose.yaml /repo/deployments/production/Caddyfile \
-    /repo/deployments/production/.env.example "$bundle/"
+    /repo/deployments/production/.env.example /repo/deployments/production/compose.push-gateway.yaml \
+    /repo/deployments/production/Caddyfile.push-gateway "$bundle/"
   cp /repo/docs/docker-production.md "$bundle/README.md"
   echo "ghcr.io/xraph/loomplane@$digest" >"$bundle/image.txt"
   sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@$digest|" "$bundle/.env.example"
@@ -148,6 +149,15 @@ else
 fi
 
 # 4d. Upgrading prepare syncs LOOMPLANE_IMAGE and keeps secrets and config.
+mkdir -m 0700 "$install_dir/secrets"
+printf 'fixture-gateway-key' >"$install_dir/secrets/sealing-key"
+chown 10001:10001 "$install_dir/secrets/sealing-key"
+chmod 0400 "$install_dir/secrets/sealing-key"
+mkdir -m 0700 "$install_dir/gateway-keys"
+printf 'fixture-custom-key' >"$install_dir/gateway-keys/sealing-key"
+chown 10001:10001 "$install_dir/gateway-keys/sealing-key"
+chmod 0400 "$install_dir/gateway-keys/sealing-key"
+printf '\nPUSH_GATEWAY_SECRETS_DIR=./gateway-keys\n' >>"$install_dir/.env"
 build_bundle v9.9.7 sha256:1111
 if LOOMPLANE_VERSION=v9.9.7 bash "$installer" prepare >"$work/upgrade.log" 2>&1 \
   && grep -q '^LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@sha256:1111$' "$install_dir/.env" \
@@ -159,6 +169,17 @@ if LOOMPLANE_VERSION=v9.9.7 bash "$installer" prepare >"$work/upgrade.log" 2>&1 
   pass "prepare on an upgrade syncs LOOMPLANE_IMAGE and keeps secrets"
 else
   bad "prepare on an upgrade syncs LOOMPLANE_IMAGE and keeps secrets"; cat "$work/upgrade.log" >&2
+fi
+
+if [ "$(stat -c '%u:%g:%a' "$install_dir/secrets/sealing-key")" = 10001:10001:400 ] \
+  && [ "$(stat -c %a "$install_dir/secrets")" = 700 ] \
+  && [ "$(cat "$install_dir/secrets/sealing-key")" = fixture-gateway-key ] \
+  && [ "$(stat -c '%u:%g:%a' "$install_dir/gateway-keys/sealing-key")" = 10001:10001:400 ] \
+  && [ "$(stat -c %a "$install_dir/gateway-keys")" = 700 ] \
+  && [ "$(cat "$install_dir/gateway-keys/sealing-key")" = fixture-custom-key ]; then
+  pass "prepare preserves gateway key ownership, mode and contents"
+else
+  bad "prepare preserves gateway key ownership, mode and contents"
 fi
 
 # Keep the finished install for the host's `docker compose config` check.

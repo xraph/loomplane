@@ -1,4 +1,5 @@
 {{- include "loomplane.validate" . -}}
+{{- include "loomplane.validatePushGateway" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

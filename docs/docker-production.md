@@ -71,6 +71,65 @@ If GHCR requires authentication, run `docker login ghcr.io` with a token
 that can read the package. A newly published package may need its visibility
 changed to public in GitHub before anonymous pulls work.
 
+## Optional push gateway
+
+You can run the push gateway in this stack, behind the same Caddy instance.
+Use this if you operate XRaph's gateway or ship your own mobile app build.
+The store app needs XRaph's push credentials, so running a gateway with your
+own Firebase project or Apple key won't enable push for that app.
+
+Point a second hostname, such as `push.example.com`, at this host. It must
+be different from `LOOMPLANE_DOMAIN`. In `.env`, uncomment and set:
+
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml
+PUSH_GATEWAY_IMAGE=ghcr.io/xraph/loomplane-push-gateway:VERSION
+PUSH_GATEWAY_DOMAIN=push.example.com
+PUSH_GATEWAY_SEALING_KEY_ID=k202611
+```
+
+Choose a published gateway version, preferably pinned by digest. The Docker
+bundle includes `compose.push-gateway.yaml` and `Caddyfile.push-gateway`.
+`COMPOSE_FILE` keeps the gateway enabled for subsequent `docker compose`
+commands, including upgrades on a DigitalOcean install.
+
+Prepare its secret files from the directory containing `compose.yaml`:
+
+```bash
+umask 077
+mkdir -p secrets
+openssl rand -base64 32 > secrets/sealing-key
+touch secrets/previous-sealing-key secrets/apns-key.p8
+cp /path/to/firebase-service-account.json secrets/fcm-service-account.json
+sudo chown 10001:10001 secrets/*
+sudo chmod 0400 secrets/*
+docker compose config --quiet
+docker compose pull
+docker compose up -d --wait --wait-timeout 240
+```
+
+These commands start an Android gateway. For iOS, copy your Apple `.p8` key
+to `secrets/apns-key.p8`, give it the same owner and permissions, and set
+both `PUSH_GATEWAY_APNS_KEY_ID` and `PUSH_GATEWAY_APNS_TEAM_ID` in `.env`.
+Set `PUSH_GATEWAY_APNS_BUNDLE_ID` when your app uses a different bundle ID.
+The Compose option requires a Firebase service-account file even if you
+also enable iOS. Keep the empty previous-key and Apple files when unused.
+
+The option sets the API and workers' gateway URL to
+`https://PUSH_GATEWAY_DOMAIN` and enables push. Only Caddy publishes ports
+80 and 443. On the gateway hostname it exposes `/v1/registrations` and
+`/v1/send`, limits request bodies to 64 KB and keeps health checks private.
+Your phones and server both need to reach that hostname over HTTPS.
+
+Back up `secrets/` securely alongside `.env`. Never regenerate the sealing
+key on restart. Gateway key rotation follows the push notifications guide;
+keep `COMPOSE_FILE` enabled for those commands too. After an upgrade,
+restart Caddy to reload the mounted configuration. To return to the hosted
+gateway, run `docker compose stop push-gateway`, remove `COMPOSE_FILE` from
+`.env`, then run `docker compose up -d --remove-orphans` and
+`docker compose restart caddy`. The base stack uses
+`LOOMPLANE_PUSH_GATEWAY_URL`, which defaults to XRaph's gateway.
+
 ## Configuration and storage
 
 The API runs migrations before it becomes healthy. Compose starts the

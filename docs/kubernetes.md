@@ -256,3 +256,13 @@ seconds to finish requests. A worker's unfinished jobs go back on the queue.
 header lists what to change. `make k8s-manifest` regenerates it after a chart
 change, and CI fails when it's stale. Each release attaches the same file
 pinned to that release's image.
+
+## Optional push gateway
+
+Set `push.gateway.enabled=true` to deploy a gateway alongside the API and
+workers. Supply its own Secret, a published gateway image version and a
+public HTTPS hostname in `push.gatewayUrl`. The chart can create an Ingress
+or HTTPRoute that publishes only the two push routes. See the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+for a configuration example, TLS and key rotation. Hosting a gateway requires
+push credentials for the mobile app you ship.

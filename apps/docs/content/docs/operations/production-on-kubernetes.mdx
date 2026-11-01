@@ -122,3 +122,13 @@ Every organization on your instance shares that service account, so any of them 
 ## Without Helm
 
 Each release attaches `loomplane-VERSION-kubernetes.yaml`, the chart rendered for `kubectl apply` with an ingress-nginx Ingress. Create the Secret above, replace `loomplane.example.com`, and apply it.
+
+## Optional push gateway
+
+Set `push.gateway.enabled=true` to deploy a gateway alongside the API and
+workers. Supply its own Secret, a published gateway image version and a
+public HTTPS hostname in `push.gatewayUrl`. The chart can create an Ingress
+or HTTPRoute that publishes only the two push routes. See the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+for a configuration example, TLS and key rotation. Hosting a gateway requires
+push credentials for the mobile app you ship.

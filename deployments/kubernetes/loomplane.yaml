@@ -20,7 +20,7 @@ kind: PodDisruptionBudget
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -41,7 +41,7 @@ kind: PodDisruptionBudget
 metadata:
   name: loomplane-worker
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -63,7 +63,7 @@ kind: ServiceAccount
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -78,7 +78,7 @@ kind: ConfigMap
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -105,7 +105,7 @@ kind: Service
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -131,7 +131,7 @@ kind: Service
 metadata:
   name: loomplane-worker
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -158,7 +158,7 @@ kind: Service
 metadata:
   name: loomplane-blocked
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -178,7 +178,7 @@ kind: Deployment
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -201,7 +201,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 6388c155d0ba023f9788c986de41a8fb37991666d9fb616608d3ef18cfb6be13
+        checksum/config: 5b86d44a49947c44fb2413a9d47b7b071e85d1baaff3049645a665bd0fcc8940
       labels:
         app.kubernetes.io/name: loomplane
         app.kubernetes.io/instance: loomplane
@@ -335,7 +335,7 @@ kind: Deployment
 metadata:
   name: loomplane-worker
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"
@@ -358,7 +358,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 6388c155d0ba023f9788c986de41a8fb37991666d9fb616608d3ef18cfb6be13
+        checksum/config: 5b86d44a49947c44fb2413a9d47b7b071e85d1baaff3049645a665bd0fcc8940
       labels:
         app.kubernetes.io/name: loomplane
         app.kubernetes.io/instance: loomplane
@@ -484,7 +484,7 @@ kind: Ingress
 metadata:
   name: loomplane
   labels:
-    helm.sh/chart: loomplane-0.1.0
+    helm.sh/chart: loomplane-0.1.1
     app.kubernetes.io/name: loomplane
     app.kubernetes.io/instance: loomplane
     app.kubernetes.io/version: "main"

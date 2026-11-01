@@ -134,6 +134,18 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Production Docker smoke test
         run: bash scripts/test-production.sh loomplane:ci
+      - name: Build optional push gateway
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          load: true
+          tags: loomplane-push-gateway:ci
+          cache-from: type=gha,scope=push-gateway
+          cache-to: type=gha,mode=max,scope=push-gateway
+      - run: bash scripts/check-push-deployment.sh
+      - name: Combined Docker smoke test
+        run: bash scripts/test-push-gateway.sh loomplane-push-gateway:ci loomplane:ci
 
   helm:
     name: Helm chart
