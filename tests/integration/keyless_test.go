@@ -371,6 +371,18 @@ func TestKeyless_googleEndToEnd(t *testing.T) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.Permissions})
+		case "/sql/v1beta4/projects/shop-prod/instances", "/v1/projects/shop-prod/locations/-/instances", "/storage/v1/b":
+			if r.Method != http.MethodGet || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ya29.keyless-") {
+				t.Error("inventory must read through the connected Google identity")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			if r.URL.Path == "/storage/v1/b" && r.URL.Query().Get("project") != "shop-prod" {
+				t.Error("bucket inventory reached another project")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[],"instances":[]}`))
 		default:
 			t.Errorf("asked Google %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusNotFound)
