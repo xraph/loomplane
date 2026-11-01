@@ -9,14 +9,16 @@ import (
 )
 
 func TestSearchHooksRenderProbeRole(t *testing.T) {
-	kind, ok := recipes.Default().Kind("elasticsearch")
-	if !ok {
-		t.Fatal("Elasticsearch is not registered")
+	// SearchHooks serve the anonymous-probe revision; later revisions use
+	// authenticated engine hooks.
+	_, composition, err := recipes.Default().ResolveRevision("elasticsearch", "9.4", "2", "amd64", "server")
+	if err != nil {
+		t.Fatal(err)
 	}
-	c := kind.Components[0]
+	c := composition.Components[0]
 	var hooks deployments.CatalogHooks = fabriqloom.SearchHooks{}
 	files, err := hooks.Files(t.Context(), deployments.ComponentRun{
-		Kind: "elasticsearch", Component: recipes.ResolvedComponent{Component: c},
+		Kind: "elasticsearch", Component: c,
 	})
 	if err != nil {
 		t.Fatal(err)

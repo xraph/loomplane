@@ -117,6 +117,7 @@ func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 	if err = f.store.AcceptRoute(ctx, op); err != nil {
 		t.Fatal("quiescent direct runtime refused route", err)
 	}
+	approvedWorkloadPlan(t, f, "new-plan")
 	in.Plan = "new-plan"
 	in.Deployment = "new-deployment"
 	if _, err = reopened.BeginWorkloadAttempt(ctx, in, nil, false); !errors.Is(err, cloudinfra.ErrConflict) {
@@ -130,6 +131,7 @@ func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 func TestRouteWorkloadAttachmentWaitsForOrganizationAcceptance(t *testing.T) {
 	f, op := routeAttemptFixture(t)
 	ctx := t.Context()
+	approvedWorkloadPlan(t, f, "accepted")
 	// Shared acceptance holds this lock through comparison and commit, including
 	// when the accepted route set is empty. Pause at that exact empty-set boundary.
 	tx, err := f.db.BeginTx(ctx, nil)
