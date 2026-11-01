@@ -46,6 +46,13 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	if p.Revision == 0 || p.Revision != o.Input.PolicyRevision {
 		return blocked("review_required", "policy")
 	}
+	unknown, err := unresolvedLegacyCapacity(ctx, tx, o.OrgID, o.Input.Provider, o.Input.AccountID)
+	if err != nil {
+		return err
+	}
+	if unknown {
+		return blocked("stale_inventory", "account")
+	}
 	v := o.CapacityTarget
 	if !nonnegativeCapacity(v) || v.Servers <= 0 || v.CPUMillis <= 0 || v.MemoryBytes <= 0 || v.StorageBytes <= 0 {
 		return ErrInvalid

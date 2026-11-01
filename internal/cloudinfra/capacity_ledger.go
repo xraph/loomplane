@@ -330,6 +330,13 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		if !freshCapacity(account.CheckedAt, time.Now()) {
 			return capacityBlock(p, d, "stale_inventory", "account"), nil
 		}
+		unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, d.OrgID, o.Provider, o.AccountID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if unknown {
+			return capacityBlock(p, d, "stale_inventory", "account"), nil
+		}
 		accountUsed := account.Provisioned
 		for _, r := range reservations {
 			if r.reservation.Provider == o.Provider && r.reservation.AccountID == o.AccountID {
@@ -489,6 +496,15 @@ func (s *PgStore) reserveOperationCapacity(ctx context.Context, tx driver.Tx, o 
 		}
 		if o.CapacityTarget == nil || *o.CapacityTarget != r.Target {
 			return ErrConflict
+		}
+		if !o.Attempted && o.Provider != "server" {
+			unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, o.OrgID, o.Provider, o.AccountID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if unknown {
+				return &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "account")}
+			}
 		}
 		return nil
 	} else if !errors.Is(readErr, pgx.ErrNoRows) {

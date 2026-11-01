@@ -16,6 +16,7 @@ func reserveLegacyAttempt(ctx context.Context, tx driver.Tx, o *Operation) error
 		return err
 	}
 	if o.CapacityTarget == nil {
+		// Admission scans the persisted attempt as an unknown account hold.
 		return nil
 	}
 	if !nonnegativeCapacity(*o.CapacityTarget) {
