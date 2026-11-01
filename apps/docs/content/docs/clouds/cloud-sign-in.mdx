@@ -69,7 +69,32 @@ Copy the client ID and secret into Loomplane's **Cloud sign-in** settings. A pri
 
 When connecting, enter the **Account ID**, then choose **DNS**, **R2 storage** or **DNS and R2**. Loomplane verifies account access and checks only the selected services. A storage-only connection does not need DNS permissions. Existing connections default to DNS. Replace the credential to add R2 access to one; its account stays fixed. Existing API-token connections continue to work. Extra registrar or cache permissions are needed only for the operations that use them.
 
-R2 API-token connections also need Account Settings Read so resource sync can verify the account. R2 permission checks only list bucket metadata. A successful check does not prove bucket creation permission, and OAuth credentials are never passed to an application's S3 client. For application access, supply bucket-scoped R2 S3 credentials in Resources and complete its access check. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
+R2 API-token connections also need Account Settings Read so resource sync can verify the account. R2 permission checks only list bucket metadata. A successful check does not prove bucket creation permission, and OAuth credentials are never passed to an application's S3 client. A Worker in the same verified Cloudflare account can use a native binding. For other application targets, supply bucket-scoped R2 S3 credentials in Resources and complete its access check. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
+
+To create a bucket, add an `object-storage` resource to your manifest with `cloudflare-workers` as its provider and your Cloudflare connection ID as its target:
+
+```yaml
+version: 1
+resources:
+  assets:
+    kind: object-storage
+    provider: cloudflare-workers
+    target: conn_your_cloudflare_connection
+    settings:
+      jurisdiction: default
+```
+
+Review and approve the plan before Loomplane creates the bucket. Sync your account in Resources to discover existing buckets. After setting up the selected bucket's application access, you can attach it with its inventory ID:
+
+```yaml
+version: 1
+resources:
+  assets:
+    kind: object-storage
+    existing_resource: providerresource_your_bucket
+```
+
+Add `assets` to your application's `needs` to use it. Native bindings require a Worker in the bucket's account, with Workers deployment permissions on its connection. The R2 OAuth selection grants bucket management access only. Removing an existing-resource attachment disconnects it from the project and keeps the provider bucket.
 
 ## Sign in to your cloud
 
