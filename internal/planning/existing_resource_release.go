@@ -1,8 +1,8 @@
 package planning
 
-// checkExistingResourceCanaries runs after actual ramping actions are selected.
+// noteExistingResourceCanaries runs after actual ramping actions are selected.
 // Direct workers in a mixed release can still update their external access.
-func checkExistingResourceCanaries(result *Result) {
+func noteExistingResourceCanaries(result *Result) {
 	if result.Release == nil {
 		return
 	}
@@ -22,8 +22,7 @@ func checkExistingResourceCanaries(result *Result) {
 			if link.Subject != ResourceSubject || dependency == nil || dependency.Resource == nil || dependency.Resource.ExistingResource == nil || dependency.Op == Keep {
 				continue
 			}
-			result.Problems = append(result.Problems, Finding{Code: "canary-external-resource-access", Subject: ServiceSubject, Name: service.Name, Path: "services." + service.Name + ".needs", Message: "Use a direct release when adding or changing external resource access on Azure Container Apps. Its canary recovery restores the previous revision's secret references."})
-			result.Executable = false
+			result.Warnings = append(result.Warnings, Finding{Code: "canary-external-resource-baseline", Subject: ServiceSubject, Name: service.Name, Path: "services." + service.Name + ".needs", Message: "Azure prepares the baseline code with the reviewed external resource access before ramping this canary. Reverting the canary keeps that access."})
 			break
 		}
 	}

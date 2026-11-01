@@ -110,7 +110,7 @@ func TestExistingServiceRetryRequiresItsApprovedResourcePin(t *testing.T) {
 	}
 }
 
-func TestExistingAzureCanaryRefusesChangedExternalAccess(t *testing.T) {
+func TestExistingAzureCanaryVerifiesChangedExternalAccess(t *testing.T) {
 	pin := &planning.ExistingResourceConfig{ResourceID: "inventory", Revision: 1, EndpointID: "endpoint", EndpointRevision: 1, AccountIdentity: "account", ExternalID: "native", Incarnation: "physical"}
 	cfg := planning.ResourceConfig{Provider: "digitalocean", Kind: "postgres", AccountIdentity: "account", ExistingResource: pin}
 	raw, err := json.Marshal(cfg)
@@ -132,12 +132,8 @@ func TestExistingAzureCanaryRefusesChangedExternalAccess(t *testing.T) {
 				resolver := &retryResourceResolver{existingAccess: existingAccess{record: &providerresources.ProviderResource{ID: "inventory", Kind: "postgres", AccountIdentity: "account", ExternalID: "native", Incarnation: "physical", EndpointID: "endpoint", EndpointRevision: 1, Revision: 1}, endpoint: &catalogconnect.Endpoint{ID: "endpoint", Revision: 1, Engine: "postgres"}}}
 				runner := NewRunner(RunnerDeps{ExistingResources: resolver, ExistingEndpoints: &retryResourceChecker{}, ExistingDialer: retryResourceDialer{}})
 				err = runner.verifyExistingServiceAccess(t.Context(), job, map[string]*planning.Binding{"db": {Name: "db", Subject: planning.ResourceSubject, Provider: "digitalocean", ConnectionID: "resource-connection", Config: raw}})
-				if op == planning.Keep || !ramps {
-					if err != nil {
-						t.Fatalf("code-only canary/direct worker blocked: %v", err)
-					}
-				} else if err == nil || resolver.checks != 0 {
-					t.Fatalf("changed external credentials entered native canary revert path: %v", err)
+				if err != nil || resolver.checks != 1 {
+					t.Fatalf("reviewed canary/direct access was not verified: error=%v grant-checks=%d", err, resolver.checks)
 				}
 			})
 		}

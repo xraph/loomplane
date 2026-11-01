@@ -316,14 +316,33 @@ type Env struct {
 
 // App is an App Platform app.
 type App struct {
-	ID                   string      `json:"id"`
-	LiveURL              string      `json:"live_url"`
-	DefaultIngress       string      `json:"default_ingress"`
-	Spec                 AppSpec     `json:"spec"`
-	ActiveDeployment     *Deployment `json:"active_deployment"`
-	InProgressDeployment *Deployment `json:"in_progress_deployment"`
-	PendingDeployment    *Deployment `json:"pending_deployment"`
-	Domains              []AppDomain `json:"domains,omitempty"`
+	ID                   string          `json:"id"`
+	LiveURL              string          `json:"live_url"`
+	DefaultIngress       string          `json:"default_ingress"`
+	Spec                 AppSpec         `json:"spec"`
+	SpecRaw              json.RawMessage `json:"-"`
+	ActiveDeployment     *Deployment     `json:"active_deployment"`
+	InProgressDeployment *Deployment     `json:"in_progress_deployment"`
+	PendingDeployment    *Deployment     `json:"pending_deployment"`
+	Domains              []AppDomain     `json:"domains,omitempty"`
+}
+
+// UnmarshalJSON also retains provider settings that AppSpec does not write.
+func (a *App) UnmarshalJSON(data []byte) error {
+	type appJSON App
+	var decoded appJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw struct {
+		Spec json.RawMessage `json:"spec"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*a = App(decoded)
+	a.SpecRaw = raw.Spec
+	return nil
 }
 
 // Deployment phases.
@@ -336,11 +355,14 @@ const (
 
 // Deployment is one build and release of an app.
 type Deployment struct {
-	ID          string     `json:"id"`
-	Phase       string     `json:"phase"`
-	Services    []Deployed `json:"services"`
-	Workers     []Deployed `json:"workers"`
-	StaticSites []Deployed `json:"static_sites"`
+	ID    string `json:"id"`
+	Phase string `json:"phase"`
+	// Spec retains all provider fields so a retained rollback can verify the
+	// complete historical configuration, including fields we do not write.
+	Spec        json.RawMessage `json:"spec"`
+	Services    []Deployed      `json:"services"`
+	Workers     []Deployed      `json:"workers"`
+	StaticSites []Deployed      `json:"static_sites"`
 	Progress    *struct {
 		SuccessSteps int `json:"success_steps"`
 		TotalSteps   int `json:"total_steps"`

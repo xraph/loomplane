@@ -631,10 +631,12 @@ type ReleaseRecord struct {
 // ReleasedImage is what one service ran after a release: the image it
 // deployed, by digest when the executor recorded one, and where.
 type ReleasedImage struct {
-	Service      string
-	Provider     string
-	ConnectionID string
-	Region       string
+	// ExternalResources records whether the native release delivered external access.
+	ExternalResources bool
+	Service           string
+	Provider          string
+	ConnectionID      string
+	Region            string
 	// Registry is the registry connection the image was pushed through,
 	// for a server or Kubernetes service built by Loomplane.
 	Registry  string

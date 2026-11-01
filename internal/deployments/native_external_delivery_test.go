@@ -1,14 +1,13 @@
 package deployments
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-func TestDigitalOceanHistoricalRollbackCannotRestoreExternalCredentials(t *testing.T) {
+func TestDigitalOceanHistoricalExternalRollbackRequiresProof(t *testing.T) {
 	f, client := newFakeAppPlatform(t)
 	cfg := apiConfig()
 	cfg.TargetAccountIdentity = "reviewed-account"
@@ -18,7 +17,7 @@ func TestDigitalOceanHistoricalRollbackCannotRestoreExternalCredentials(t *testi
 	f.apps["existing-app"] = map[string]any{"name": "existing-app"}
 	f.active["existing-app"] = "current-deployment"
 	_, err := newDO(client).Apply(t.Context(), job)
-	if err == nil || !strings.Contains(err.Error(), "external") || len(f.rollbacks) != 0 || len(f.specs) != 0 {
+	if err == nil || len(f.rollbacks) != 0 || len(f.specs) != 0 {
 		t.Fatalf("historical external access reached provider rollback: error=%v rollback-count=%d", err, len(f.rollbacks))
 	}
 }

@@ -21,12 +21,12 @@ func TestNativeDigitalOceanTargetAllowsTokenRotationWithinReviewedTeam(t *testin
 	}
 }
 
-func TestAppPlatformRollbackRefusesHistoricalExternalCredentials(t *testing.T) {
+func TestAppPlatformRollbackReviewsHistoricalExternalCredentials(t *testing.T) {
 	commit := strings.Repeat("a", 40)
 	a := Action{Name: "api", Provider: "digitalocean", Op: Update, Service: &ServiceConfig{CommitSHA: commit, TargetAccountIdentity: "reviewed-account"}}
 	choice, artifact, finding := appPlatformRollback(a, ReleasedImage{Service: "api", Provider: "digitalocean", Revision: "historical-deployment", CommitSHA: commit}, "previous")
-	if finding == nil || artifact != nil || choice.Reused || !strings.Contains(finding.Message, "external") {
-		t.Fatal("historical rollback could restore unchecked external credentials")
+	if finding != nil || artifact == nil || !choice.Reused || !strings.Contains(choice.Reason, "verified") {
+		t.Fatal("historical external rollback was not offered with access verification")
 	}
 }
 

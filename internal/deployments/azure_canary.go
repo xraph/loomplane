@@ -156,6 +156,9 @@ type azureCanary struct {
 	app, name string
 	baseline  string
 	candidate string
+	// Keep a recorded source available until a new recovery baseline is
+	// returned and persisted, including when candidate preparation fails.
+	retainedSource string
 	// note shows what the canary couldn't tidy, when set.
 	note func(string)
 }
@@ -243,7 +246,7 @@ func (c *azureCanary) others(ctx context.Context) ([]string, error) {
 	}
 	var out []string
 	for _, rev := range active {
-		if !strings.EqualFold(rev.Name, c.baseline) && !strings.EqualFold(rev.Name, c.candidate) {
+		if !strings.EqualFold(rev.Name, c.baseline) && !strings.EqualFold(rev.Name, c.candidate) && !strings.EqualFold(rev.Name, c.retainedSource) {
 			out = append(out, rev.Name)
 		}
 	}
@@ -587,6 +590,10 @@ func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (_ *CanaryTarget, 
 	if changes := app.AppWideChanges(candidate); len(changes) > 0 {
 		return nil, azureAppWideRefusal(job, c.name, changes)
 	}
+	if err := c.externalBaseline(ctx, job, baseline); err != nil {
+		return nil, err
+	}
+	candidate.Properties.Configuration.Ingress.Traffic = c.alone()
 	if err := c.start(ctx, candidate, azureRestoreSuffix(job.Deployment.ID, job.Deployment.Retries)); err != nil {
 		return nil, err
 	}

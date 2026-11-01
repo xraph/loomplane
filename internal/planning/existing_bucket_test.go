@@ -132,7 +132,7 @@ func TestExternalCredentialRotationRedeploysKeptConsumers(t *testing.T) {
 	}
 }
 
-func TestAzureCanaryRequiresDirectReleaseForExternalAccessChanges(t *testing.T) {
+func TestAzureCanaryAllowsReviewedExternalAccessChanges(t *testing.T) {
 	for _, op := range []Op{Keep, Create, Update} {
 		for _, ramps := range []bool{false, true} {
 			t.Run(string(op)+"/"+map[bool]string{false: "direct-worker", true: "ramping-service"}[ramps], func(t *testing.T) {
@@ -149,7 +149,10 @@ func TestAzureCanaryRequiresDirectReleaseForExternalAccessChanges(t *testing.T) 
 				if result.Release.Ramps(service.ID) != ramps {
 					t.Fatalf("fixture selection differs from actual release: %+v", result.Release)
 				}
-				if hasCode(result.Problems, "canary-external-resource-access") != (ramps && op != Keep) {
+				if hasCode(result.Warnings, "canary-external-resource-baseline") != (ramps && op != Keep) {
+					t.Fatal("canary baseline access behavior was not explained in review")
+				}
+				if hasCode(result.Problems, "canary-external-resource-access") {
 					t.Fatalf("resolved canary gate for %s ramps=%v: %+v", op, ramps, result.Problems)
 				}
 			})

@@ -35,12 +35,6 @@ func (r *Runner) verifyExistingServiceAccess(ctx context.Context, job *Job, bind
 		if job.Action.Service.Workload == provider.StaticSite || job.Action.Service.Execution == provider.Static {
 			return errors.New("external resource credentials cannot be sent to a static site's build")
 		}
-		if job.Action.Provider == "azure-container-apps" && job.Plan.Release.Ramps(job.Action.ID) {
-			approved := approvedServiceResource(job.Plan, link.From)
-			if approved == nil || approved.Op != planning.Keep {
-				return errors.New("use a direct Azure release when external resource access changes; canary recovery restores the previous secret references")
-			}
-		}
 		seen[link.From] = true
 		scoped, ok := r.existingResources.(planning.ExistingProjectResourceResolver)
 		if !ok {

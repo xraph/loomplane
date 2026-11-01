@@ -171,9 +171,6 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
 	}
 	if cfg.Artifact != nil && cfg.Artifact.Revision != "" && job.Binding != nil && job.Binding.ExternalID != "" {
-		if cfg.TargetAccountIdentity != "" {
-			return nil, errors.New("the App Platform historical rollback cannot preserve the reviewed external resource credentials; deploy reviewed source with the current attachments instead")
-		}
 		return d.rollBack(ctx, token, job, cfg, &state, save)
 	}
 	branch := doBranchFor(job)
@@ -188,6 +185,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 			}
 			if app.ActiveDeployment != nil {
 				state.Previous = app.ActiveDeployment.ID
+			}
+			if proofErr := prepareDORollbackProof(ctx, job, spec, app); proofErr != nil {
+				return proofErr
 			}
 			dep, derr := d.Client.CreateDeployment(ctx, token, app.ID)
 			if derr != nil {
@@ -221,7 +221,10 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 		return nil, err
 	}
 	url := doAddress(cfg, app)
-	if err := d.waitForDNS(ctx, job, url); err != nil {
+	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
+		return nil, dnsErr
+	}
+	if err := d.keepRollbackProof(ctx, token, job, spec, app.ID, dep.ID); err != nil {
 		return nil, err
 	}
 	return &Outcome{ExternalID: app.ID, URL: url, Revision: dep.ID}, nil
@@ -234,9 +237,15 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 // deploy does, so a hostname change can't write the spec in between.
 func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg *planning.ServiceConfig, state *doState, save func()) (*Outcome, error) {
 	app := job.Binding.ExternalID
+	if err := d.checkRollbackProof(ctx, token, job, app, cfg.Artifact.Revision); err != nil {
+		return nil, err
+	}
 	if state.AppID != app || state.DeploymentID == "" {
 		job.Progress(StepDeploying, "Rolling App Platform back to deployment "+cfg.Artifact.Revision)
 		err := d.Client.WithApp(ctx, app, func(ctx context.Context) error {
+			if err := d.checkRollbackProof(ctx, token, job, app, cfg.Artifact.Revision); err != nil {
+				return err
+			}
 			dep, rollbackErr := d.Client.Rollback(ctx, token, app, cfg.Artifact.Revision)
 			if rollbackErr != nil {
 				return rollbackErr
@@ -258,7 +267,14 @@ func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg
 		return nil, err
 	}
 	url := doAddress(cfg, live)
-	if err := d.waitForDNS(ctx, job, url); err != nil {
+	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
+		return nil, dnsErr
+	}
+	repo, err := repositoryFor(job)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.keepRollbackProof(ctx, token, job, doAppSpec(job, cfg, repo, doBranchFor(job)), app, dep.ID); err != nil {
 		return nil, err
 	}
 	return &Outcome{ExternalID: live.ID, URL: url, Revision: dep.ID}, nil
@@ -393,8 +409,23 @@ func (d *DigitalOcean) refuse(ctx context.Context, token string, job *Job, state
 	}
 	switch {
 	case state.Previous != "":
-		if _, err := d.Client.Rollback(ctx, token, state.AppID, state.Previous); err != nil {
-			return fmt.Errorf("%w. It went live, and rolling back failed: %w. Roll the app back in DigitalOcean", mm, err)
+		if err := d.Client.WithApp(ctx, state.AppID, func(ctx context.Context) error {
+			previous := *job
+			if doHasResourceAccess(job) || job.Recall != nil {
+				if job.Binding == nil || job.Binding.ExternalID != state.AppID || job.Binding.Revision != state.Previous || job.Binding.CommitSHA == "" {
+					return doRollbackProofError()
+				}
+			}
+			if job.Binding != nil {
+				previous.CommitSHA = job.Binding.CommitSHA
+			}
+			if err := d.checkRollbackProof(ctx, token, &previous, state.AppID, state.Previous); err != nil {
+				return err
+			}
+			_, err := d.Client.Rollback(ctx, token, state.AppID, state.Previous)
+			return err
+		}); err != nil {
+			return fmt.Errorf("%w. It went live, and safe recovery could not restore the previous deployment: %w. Deploy reviewed source with the current attachments", mm, err)
 		}
 		return fmt.Errorf("%w. It went live, so Loomplane rolled the app back to what ran before. %s", mm, hint)
 	case job.Binding == nil:

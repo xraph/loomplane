@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -82,8 +83,79 @@ func CheckTraffic(traffic []TrafficWeight) error {
 // Revision is a container app revision: whether it runs, what share of the
 // traffic it has, and the template it was made from.
 type Revision struct {
-	Name       string             `json:"name"`
-	Properties RevisionProperties `json:"properties"`
+	Name        string             `json:"name"`
+	Properties  RevisionProperties `json:"properties"`
+	rawTemplate map[string]any
+}
+
+func (r *Revision) UnmarshalJSON(data []byte) error {
+	type wireRevision Revision
+	var decoded wireRevision
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw struct {
+		Properties struct {
+			Template map[string]any `json:"template"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = Revision(decoded)
+	r.rawTemplate = raw.Properties.Template
+	return nil
+}
+
+// SameTemplateExceptEnv compares the complete provider templates, including
+// fields outside Loomplane's model. Only the revision suffix and the named
+// container's selected variables may differ.
+func (r *Revision) SameTemplateExceptEnv(source *Revision, containerName string, keys []string) bool {
+	if r == nil || source == nil || r.rawTemplate == nil || source.rawTemplate == nil {
+		return false
+	}
+	without := func(template map[string]any) map[string]any {
+		wire, err := json.Marshal(template)
+		if err != nil {
+			return nil
+		}
+		var out map[string]any
+		if json.Unmarshal(wire, &out) != nil {
+			return nil
+		}
+		delete(out, "revisionSuffix")
+		containers, ok := out["containers"].([]any)
+		if !ok {
+			return nil
+		}
+		for _, item := range containers {
+			container, ok := item.(map[string]any)
+			if !ok || container["name"] != containerName {
+				continue
+			}
+			var env []any
+			if variables, ok := container["env"].([]any); ok {
+				env = variables
+			}
+			kept := make([]any, 0, len(env))
+			for _, item := range env {
+				var name string
+				if variable, ok := item.(map[string]any); ok {
+					if value, ok := variable["name"].(string); ok {
+						name = value
+					}
+				}
+				if !slices.Contains(keys, name) {
+					kept = append(kept, item)
+				}
+			}
+			container["env"] = kept
+			return out
+		}
+		return nil
+	}
+	a, b := without(r.rawTemplate), without(source.rawTemplate)
+	return a != nil && b != nil && reflect.DeepEqual(a, b)
 }
 
 // RevisionProperties are a revision's. All of them are read only.
@@ -327,7 +399,8 @@ func (s *Session) SetSecrets(ctx context.Context, appID string, secrets []Secret
 	return fmt.Errorf("azure didn't set container app %s's secrets as asked", path.Base(appID))
 }
 
-// SecretsRead are the app secrets a revision's variables read.
+// SecretsRead includes references in variables, secret volumes and scale
+// authentication, including fields outside Loomplane's typed template.
 func (r *Revision) SecretsRead() []string {
 	var out []string
 	for _, c := range r.Properties.Template.Containers {
@@ -337,6 +410,23 @@ func (r *Revision) SecretsRead() []string {
 			}
 		}
 	}
+	var visit func(any)
+	visit = func(value any) {
+		switch value := value.(type) {
+		case map[string]any:
+			for key, item := range value {
+				if name, ok := item.(string); key == "secretRef" && ok && name != "" && !slices.Contains(out, name) {
+					out = append(out, name)
+				}
+				visit(item)
+			}
+		case []any:
+			for _, item := range value {
+				visit(item)
+			}
+		}
+	}
+	visit(r.rawTemplate)
 	return out
 }
 
@@ -490,6 +580,116 @@ func shares(traffic []TrafficWeight) map[string]int {
 		}
 	}
 	return out
+}
+
+// CopyRevisionEnv copies a revision, replacing only the named variables in
+// its named container. Unknown template fields remain intact. Its secrets
+// are added without changing existing values, and traffic stays pinned.
+func (s *Session) CopyRevisionEnv(ctx context.Context, appID, revision, suffix, containerName string, remove []string, env []EnvVar, secrets []Secret) error {
+	p, err := s.revisionPath(appID, revision)
+	if err != nil {
+		return err
+	}
+	var raw struct {
+		Properties struct {
+			Template map[string]any `json:"template"`
+		} `json:"properties"`
+	}
+	if _, readErr := s.do(ctx, http.MethodGet, p, appsVersion, nil, &raw); readErr != nil {
+		return readErr
+	}
+	tmpl := raw.Properties.Template
+	containers, ok := tmpl["containers"].([]any)
+	if !ok || len(containers) == 0 {
+		return fmt.Errorf("azure shows no containers for revision %s", revision)
+	}
+	var container map[string]any
+	for _, item := range containers {
+		candidate, ok := item.(map[string]any)
+		if ok && candidate["name"] == containerName {
+			container = candidate
+			break
+		}
+	}
+	if container == nil {
+		return fmt.Errorf("azure shows no %s container for revision %s", containerName, revision)
+	}
+	replaced := map[string]bool{}
+	for _, key := range remove {
+		replaced[key] = true
+	}
+	for _, item := range env {
+		replaced[item.Name] = true
+	}
+	var previous []any
+	if variables, ok := container["env"].([]any); ok {
+		previous = variables
+	}
+	var next []any
+	for _, item := range previous {
+		var name string
+		if variable, ok := item.(map[string]any); ok {
+			if value, ok := variable["name"].(string); ok {
+				name = value
+			}
+		}
+		if !replaced[name] {
+			next = append(next, item)
+		}
+	}
+	for _, item := range env {
+		next = append(next, item)
+	}
+	container["env"] = next
+	tmpl["revisionSuffix"] = suffix
+	wire, err := json.Marshal(tmpl)
+	if err != nil {
+		return err
+	}
+	var expected Template
+	if decodeErr := json.Unmarshal(wire, &expected); decodeErr != nil {
+		return decodeErr
+	}
+	props := map[string]any{"template": tmpl}
+	if len(secrets) > 0 {
+		kept, secretErr := s.ListSecrets(ctx, appID)
+		if secretErr != nil {
+			return secretErr
+		}
+		for _, addition := range secrets {
+			existing := slices.IndexFunc(kept, func(secret Secret) bool { return secret.Name == addition.Name })
+			if existing >= 0 {
+				if kept[existing] != addition {
+					return fmt.Errorf("recovery secret %s already has another value", addition.Name)
+				}
+				continue
+			}
+			kept = append(kept, addition)
+		}
+		props["configuration"] = map[string]any{"secrets": kept}
+	}
+	_, perr := s.do(ctx, http.MethodPatch, appID, appsVersion, map[string]any{"properties": props}, nil)
+	app, werr := s.settle(ctx, appID)
+	if werr != nil {
+		return errors.Join(perr, werr)
+	}
+	if app.Properties.Template.RevisionSuffix != suffix {
+		if perr != nil {
+			return perr
+		}
+		return fmt.Errorf("azure didn't copy revision %s's environment", revision)
+	}
+	recovery, err := s.GetRevision(ctx, appID, path.Base(appID)+"--"+suffix)
+	if err != nil {
+		return err
+	}
+	if !recovery.Up() {
+		return fmt.Errorf("recovery revision %s can't take traffic: %s", recovery.Name, recovery.Why())
+	}
+	if !recovery.Runs(expected) {
+		return fmt.Errorf("recovery revision %s doesn't run the approved environment", recovery.Name)
+	}
+	return nil
 }
 
 // RestoreTemplate makes an app's template the one its revision called
