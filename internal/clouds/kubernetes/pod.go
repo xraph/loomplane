@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/internal/engineprobe"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -56,6 +57,12 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		container.Resources = corev1.ResourceRequirements{Requests: limits.DeepCopy(), Limits: limits}
 	}
 	switch protocol, health := labels[owned.LabelHealthProtocol], labels[owned.LabelHealth]; {
+	case labels[owned.LabelHealthChecker] != "":
+		command, err := engineprobe.Command(labels[owned.LabelCatalogKind], labels[owned.LabelHealthChecker])
+		if err != nil {
+			return nil, nil, err
+		}
+		container.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: command}}, PeriodSeconds: 2, TimeoutSeconds: 5, FailureThreshold: 10}
 	case protocol != "" && protocol != "redis":
 		return nil, nil, fmt.Errorf("unsupported readiness protocol %q", protocol)
 	case protocol == "redis" && len(ports) > 0:

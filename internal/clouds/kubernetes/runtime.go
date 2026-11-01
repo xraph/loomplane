@@ -180,7 +180,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}()
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}

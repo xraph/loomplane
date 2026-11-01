@@ -31,8 +31,8 @@ cd /data && exec docker-entrypoint.sh redis-server /tmp/falkordb.conf`
 // Fabriq's own integration harness tests against. Refreshing a pin: bump
 // Revision, replace both digests and this index, and rerun
 // TestQualifyNewEngineImages.
-func init() {
-	MustRegister(Kind{
+func legacyFalkorDB() Kind {
+	return Kind{
 		Name: "falkordb", Title: "FalkorDB", Placement: PlacementDependency,
 		Description: "Graph database for a Fabriq stack. Reached only on the environment network, with a generated password. Its data is rebuilt from Fabriq's source of truth, not backed up.",
 		Targets:     []string{"server", "kubernetes"},
@@ -52,5 +52,5 @@ func init() {
 			Resources: Resources{CPUMillis: 500, MemoryMB: 512},
 		}},
 		Outputs: []Output{{Name: "url", EnvKey: "FALKORDB_ADDR", From: &Ref{Component: "falkordb", Field: "address:redis"}}},
-	})
+	}
 }

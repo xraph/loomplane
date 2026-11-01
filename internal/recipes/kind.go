@@ -43,6 +43,7 @@ const (
 // connect to and the secrets Loomplane generates for them. A kind lives in
 // its own file and registers itself with MustRegister from init.
 type Kind struct {
+	replayError  string             // retained unsafe history may be inspected and removed, but never applied
 	Name         string             `json:"name"` // manifest kind
 	Title        string             `json:"title"`
 	Description  string             `json:"description,omitempty"`
@@ -198,8 +199,10 @@ type Port struct {
 // HTTPProbe checks a process with HTTP GET, Redis PING or Memcached
 // VERSION. Native protocol probes have no path.
 type HTTPProbe struct {
-	Port string `json:"port"` // a Port.Name with Protocol "http", "redis" or "memcached"
-	Path string `json:"path"` // "/readyz"; "" on a native protocol port
+	// Checker names a fixed authenticated engine check that reads mounted credentials.
+	Checker string `json:"checker,omitempty"`
+	Port    string `json:"port"` // a Port.Name with Protocol "http", "redis" or "memcached"
+	Path    string `json:"path"` // "/readyz"; "" on a native protocol port
 }
 
 // Volume is a component's data directory. Its data is rebuilt, never
@@ -284,13 +287,15 @@ const (
 	FieldPassword = "password"
 	FieldDatabase = "database"
 	FieldAdminURL = "admin-url" // the superuser URL; postgres-family dependencies only
+	FieldCACert   = "ca_cert"   // public PEM CA certificate for verified TLS
 	FieldQuery    = "query"     // raw query string of the dependency URL
 )
 
 // File is a file CatalogHooks.Files renders into a component.
 type File struct {
-	Path string      `json:"path"`           // absolute, no "..", not under /proc, /sys or /dev
-	Mode fs.FileMode `json:"mode,omitempty"` // default 0o444
+	CertificateSecret string      `json:"certificate_secret,omitempty"` // engine TLS bundle, issued for the trusted runtime instance
+	Path              string      `json:"path"`                         // absolute, no "..", not under /proc, /sys or /dev
+	Mode              fs.FileMode `json:"mode,omitempty"`               // default 0o444
 }
 
 // Dependency is a resource a composition connects to: one Loomplane
@@ -320,17 +325,19 @@ type Requirement struct {
 // GeneratedSecret is a random value Loomplane generates once and keeps
 // in Vault.
 type GeneratedSecret struct {
-	Name     string `json:"name"`               // "admin-password"
-	Bytes    int    `json:"bytes,omitempty"`    // random bytes, default 32
-	Encoding string `json:"encoding,omitempty"` // "base64url" (default) or "hex"
-	Prefix   string `json:"prefix,omitempty"`   // ^[a-z]{1,8}_$ or "", prepended verbatim
+	Generator string `json:"generator,omitempty"` // optional structured generator supplied by catalog hooks
+	Name      string `json:"name"`                // "admin-password"
+	Bytes     int    `json:"bytes,omitempty"`     // random bytes, default 32
+	Encoding  string `json:"encoding,omitempty"`  // "base64url" (default) or "hex"
+	Prefix    string `json:"prefix,omitempty"`    // ^[a-z]{1,8}_$ or "", prepended verbatim
 }
 
 // Output is a value a consuming service gets. It sets exactly one of From,
 // Template and PerConsumer.
 type Output struct {
-	Name        string `json:"name"`    // DNS label; Outputs[0] conventionally "url"
-	EnvKey      string `json:"env_key"` // "OCTOPUS_URL"
+	PublicCA    string `json:"public_ca,omitempty"` // public CA PEM from one declared engine TLS secret
+	Name        string `json:"name"`                // DNS label; Outputs[0] conventionally "url"
+	EnvKey      string `json:"env_key"`             // "OCTOPUS_URL"
 	From        *Ref   `json:"from,omitempty"`
 	PerConsumer bool   `json:"per_consumer,omitempty"` // issued per consuming service by the kind's ConsumerBinder
 	Secret      bool   `json:"secret,omitempty"`

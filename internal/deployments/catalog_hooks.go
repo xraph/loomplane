@@ -161,3 +161,18 @@ var (
 	_ EndpointResolver = (*catalogconnect.Service)(nil)
 	_ EndpointChecker  = (*catalogconnect.Checker)(nil)
 )
+
+// SecretGeneration carries stable resource identity and previously loaded
+// credentials to an optional structured generator. Values stay in process.
+type SecretGeneration struct {
+	OrgID, EnvironmentID, Resource, Kind string
+	Secret                               recipes.GeneratedSecret
+	Secrets                              map[string][]byte
+}
+
+// StructuredSecretGenerator runs only on a missing first-use secret and validates
+// every reused bundle. Validation must never repair or rotate existing material.
+type StructuredSecretGenerator interface {
+	GenerateSecret(context.Context, SecretGeneration) ([]byte, error)
+	ValidateSecret(context.Context, SecretGeneration, []byte) error
+}

@@ -70,6 +70,7 @@ const (
 	LabelRuntimeFiles     = "loomplane.runtime.files"
 	LabelKubernetesRules  = "loomplane.kubernetes.rules"
 	LabelHealthProtocol   = "loomplane.health.protocol"
+	LabelHealthChecker    = "loomplane.health.checker"
 	LabelFSGroup          = "loomplane.fs.group"
 	LabelFarp             = "loomplane.farp"
 

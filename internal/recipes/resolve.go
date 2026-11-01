@@ -17,6 +17,11 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 	if !ok {
 		return nil, fmt.Errorf("%s is not a composed catalog kind", kind)
 	}
+	return resolveKind(k, version, architecture, target)
+}
+
+func resolveKind(k Kind, version, architecture, target string) (*Composition, error) {
+	kind := k.Name
 	if !slices.Contains(k.Targets, target) {
 		return nil, fmt.Errorf("%s doesn't run on %s targets", kind, target)
 	}

@@ -266,7 +266,7 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 			return values, checkErr
 		}
 		if labels[owned.LabelRuntimeFiles] == "true" {
-			if filesErr := e.runtimeFiles(ctx, ref, &values); filesErr != nil {
+			if filesErr := e.runtimeFiles(ctx, ref, labels, &values); filesErr != nil {
 				return values, filesErr
 			}
 		}
@@ -520,7 +520,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	sp, labels := ownedSpec(job, image, state)
 	// Resolve and validate credentials before persisting any changed instance spec.
-	if _, err = e.values(ctx, labels); err != nil {
+	if _, err = e.values(owned.RuntimePreflight(ctx), labels); err != nil {
 		return nil, err
 	}
 	if checkErr := e.validateTarget(ctx, labels); checkErr != nil {

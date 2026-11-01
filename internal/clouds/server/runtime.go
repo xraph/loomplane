@@ -290,7 +290,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server", Namespace: ""}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +312,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
 	// The declared readiness stays on the container, as it does on a
 	// Kubernetes workload's readiness probe.
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelGPU, owned.LabelShmMB} {
+	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -486,14 +486,19 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 			return err
 		}
 		if info.State.Running {
-			if isDatabase(labels) {
+			switch {
+			case labels[owned.LabelHealthChecker] != "":
+				if probeErr := catalogReady(ctx, c, name, labels); probeErr == nil {
+					return nil
+				}
+			case isDatabase(labels):
 				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
-			} else if !probed(labels) {
+			case !probed(labels):
 				return nil
 			}
-			if !isDatabase(labels) {
+			if !isDatabase(labels) && labels[owned.LabelHealthChecker] == "" {
 				probe, probeErr := r.healthProbe(labels)
 				if probeErr != nil {
 					return probeErr
@@ -628,7 +633,12 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 				state = cpprovider.StateStarting
 			}
 		}
-		if probed(labels) {
+		if labels[owned.LabelHealthChecker] != "" {
+			ready = catalogReady(ctx, c, ContainerName(iid), labels) == nil
+			if !ready {
+				state = cpprovider.StateStarting
+			}
+		} else if probed(labels) {
 			ready = false
 			probe, probeErr := r.healthProbe(labels)
 			for _, value := range healthPorts(info, labels) {

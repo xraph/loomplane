@@ -27,8 +27,8 @@ package recipes
 // version Fabriq's own integration harness tests against. Refreshing a pin:
 // bump Revision, replace both digests and this index, and rerun
 // TestQualifyNewEngineImages.
-func init() {
-	MustRegister(Kind{
+func legacyElasticsearch() Kind {
+	return Kind{
 		Name: "elasticsearch", Title: "Elasticsearch", Placement: PlacementDependency,
 		Description: "Search index for a Fabriq stack. Reached only on the environment network, with a generated password. Its data is rebuilt from Fabriq's source of truth, not backed up.",
 		Targets:     []string{"server", "kubernetes"},
@@ -59,5 +59,5 @@ func init() {
 			Resources: Resources{CPUMillis: 1000, MemoryMB: 1536},
 		}},
 		Outputs: []Output{{Name: "url", EnvKey: "ELASTICSEARCH_URL", From: &Ref{Component: "elasticsearch", Field: "url:http"}}},
-	})
+	}
 }

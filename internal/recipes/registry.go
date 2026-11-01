@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xraph/loomplane/internal/engineprobe"
+	"github.com/xraph/loomplane/internal/enginetls"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -36,7 +38,7 @@ var (
 	protocols = []string{"http", "tcp", "redis", "memcached"}
 	// dependencyFields are what a Ref reads from a dependency other than a
 	// dependency-only kind.
-	dependencyFields = []string{FieldURL, FieldHost, FieldPort, FieldHostPort, FieldUsername, FieldPassword, FieldDatabase, FieldAdminURL, FieldQuery}
+	dependencyFields = []string{FieldURL, FieldHost, FieldPort, FieldHostPort, FieldUsername, FieldPassword, FieldDatabase, FieldAdminURL, FieldQuery, FieldCACert}
 
 	// A process's Kubernetes rules only discover Services.
 	ruleGroups    = []string{"", "discovery.k8s.io"}
@@ -62,11 +64,12 @@ type Registry struct {
 	mu      sync.RWMutex
 	kinds   map[string]Kind
 	engines map[string]Engine
+	history map[historicalRelease]Kind
 }
 
 // NewRegistry returns a registry with only the built-in engines.
 func NewRegistry() *Registry {
-	r := &Registry{kinds: map[string]Kind{}, engines: map[string]Engine{}}
+	r := &Registry{kinds: map[string]Kind{}, engines: map[string]Engine{}, history: map[historicalRelease]Kind{}}
 	for _, e := range builtinEngines() {
 		r.engines[e.Kind] = e
 	}
@@ -313,6 +316,9 @@ func (k Kind) info() KindInfo {
 func normalizeKind(k *Kind) {
 	for i := range k.Secrets {
 		s := &k.Secrets[i]
+		if s.Generator != "" {
+			continue
+		}
 		if s.Bytes == 0 {
 			s.Bytes = defaultSecretBytes
 		}
@@ -416,6 +422,12 @@ func validateKind(k Kind) []error {
 			f.add("secret %q is declared more than once", s.Name)
 		}
 		secrets[s.Name] = true
+		if s.Generator != "" {
+			if !namePattern.MatchString(s.Generator) || s.Bytes != 0 || s.Encoding != "" || s.Prefix != "" {
+				f.add("secret %q structured generator cannot also declare random encoding options", s.Name)
+			}
+			continue
+		}
 		if s.Bytes < 16 || s.Bytes > 1024 {
 			f.add("secret %q has %d random bytes; use 16 to 1024", s.Name, s.Bytes)
 		}
@@ -469,8 +481,13 @@ func validateKind(k Kind) []error {
 		}
 		envKeys[o.EnvKey] = true
 		what := fmt.Sprintf("output %q", o.Name)
-		if count(o.From != nil, o.Template != "", o.PerConsumer) != 1 {
-			f.add("%s must set exactly one of from, template and per consumer", what)
+		if count(o.From != nil, o.Template != "", o.PerConsumer, o.PublicCA != "") != 1 {
+			f.add("%s must set exactly one of from, template, per consumer and public CA", what)
+		}
+		if o.PublicCA != "" {
+			if !k.DirectService() || o.Secret || !slices.ContainsFunc(k.Secrets, func(s GeneratedSecret) bool { return s.Name == o.PublicCA && s.Generator == enginetls.Generator }) {
+				f.add("%s public CA must name a direct service engine TLS bundle and cannot be secret", what)
+			}
 		}
 		refs := validateReads(f, what, o.From, o.Template, components, dependencies, secrets)
 		validateRequires(f, what, o.Requires, "", refs, components, dependencies)
@@ -614,6 +631,13 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 		switch {
 		case !ok:
 			f.add("%s readiness names port %q, which it doesn't declare", what, probe.Port)
+		case probe.Checker != "":
+			if _, err := engineprobe.Command(k.Name, probe.Checker); err != nil {
+				f.add("%s has an unsupported authenticated readiness checker", what)
+			}
+			if probe.Path != "" {
+				f.add("%s authenticated readiness must not declare an HTTP path", what)
+			}
 		case port.Protocol == "redis" || port.Protocol == "memcached":
 			if probe.Path != "" {
 				f.add("%s readiness port %q speaks %s, so its path %q must be empty", what, probe.Port, port.Protocol, probe.Path)
@@ -682,6 +706,14 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 
 	files := map[string]bool{}
 	for _, file := range c.Files {
+		if file.CertificateSecret != "" {
+			expected, err := engineprobe.CertificatePath(k.Name)
+			if err != nil || file.Path != expected || c.Readiness == nil || c.Readiness.Checker != k.Name+"-v1" || !slices.ContainsFunc(k.Secrets, func(s GeneratedSecret) bool {
+				return s.Name == file.CertificateSecret && s.Generator == enginetls.Generator
+			}) {
+				f.add("%s has an unsupported deferred certificate file", what)
+			}
+		}
 		p := file.Path
 		switch {
 		case !path.IsAbs(p) || path.Clean(p) != p || strings.Contains(p, ".."):
@@ -1003,8 +1035,8 @@ func validateRef(f *findings, what string, ref *Ref, components map[string]*Comp
 			return
 		}
 		field, port, _ := strings.Cut(ref.Field, ":")
-		if field != "url" && field != "address" {
-			f.add("%s reads field %q; components have url:<port> and address:<port>", what, ref.Field)
+		if field != "url" && field != "address" && field != "host" && field != "port" {
+			f.add("%s reads field %q; components have url:<port>, address:<port>, host:<port> and port:<port>", what, ref.Field)
 			return
 		}
 		if !slices.ContainsFunc(c.Ports, func(p Port) bool { return p.Name == port }) {
