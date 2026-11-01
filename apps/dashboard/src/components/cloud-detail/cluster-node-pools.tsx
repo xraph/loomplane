@@ -1,7 +1,7 @@
 import * as api from "@/client/forge/loomplane/hooks"
 import type { CloudCluster } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { messageOf } from "@/client/errors"
 import {
   CloudEmpty,
@@ -10,10 +10,13 @@ import {
   CloudSectionHead,
   Rows,
   Row,
+  useInfrastructureRefresh,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 
+import { useLiveState } from "@/lib/realtime-state"
+import { useNow } from "@/lib/use-runs"
 import { observedTime } from "./cluster-money"
 
 export function ClusterNodePools({
@@ -41,7 +44,20 @@ export function ClusterNodePools({
       setError(messageOf(e, "Capacity refresh failed."))
     }
   }
+  const live = useLiveState()
+  const { refetch } = capacity
+  useEffect(() => {
+    void refetch().catch(() => undefined)
+  }, [refetch, live.lastSync, cluster.observedRevision])
+  useInfrastructureRefresh(true, refetch)
+  const now = useNow(1000)
   const data = capacity.data
+  const checked = Date.parse(data?.checkedAt ?? "")
+  const fresh =
+    !!data?.fresh &&
+    checked > 0 &&
+    checked <= now &&
+    now - checked <= 2 * 60_000
   return (
     <section className="grid gap-3" aria-label="Node pools">
       <CloudSectionHead
@@ -92,8 +108,15 @@ export function ClusterNodePools({
                   {pool.autoscale && ` · bounds ${pool.min} to ${pool.max}`}
                   {policy && (
                     <span className="block text-xs">
-                      Reviewed {policy.mode} · maximum{" "}
+                      Reviewed {policy.mode} · bounds{" "}
+                      {policy.min_nodes ?? policy.minNodes ?? "unknown"} to{" "}
                       {policy.max_nodes ?? policy.maxNodes ?? "unknown"}
+                      {policy.mode === "native" &&
+                      (!pool.autoscale ||
+                        pool.min !== (policy.min_nodes ?? policy.minNodes) ||
+                        pool.max !== (policy.max_nodes ?? policy.maxNodes))
+                        ? " · Awaiting provider convergence"
+                        : ""}
                       {policy.pause_reason
                         ? ` · ${String(policy.pause_reason).replaceAll("_", " ")}`
                         : ""}
@@ -113,7 +136,7 @@ export function ClusterNodePools({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs">
               {data
-                ? `${data.fresh ? "Fresh" : "Stale"} · ${data.complete && data.workloadsComplete ? "Complete" : "Incomplete"} · checked ${observedTime(data.checkedAt) ?? "time unavailable"}`
+                ? `${fresh ? "Fresh" : "Stale"} · ${data.complete && data.workloadsComplete ? "Complete" : "Incomplete"} · checked ${observedTime(data.checkedAt) ?? "time unavailable"}`
                 : "Observation unavailable"}
             </p>
             {canManage && (

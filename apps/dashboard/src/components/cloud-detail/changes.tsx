@@ -1,8 +1,9 @@
+import { useLiveState } from "@/lib/realtime-state"
 // One history for a Cloud: every reviewed move of a target, the default or an
 // environment, and server and cluster operations, newest first within each page.
 import type { UseQueryResult } from "@forge-go/client-react"
 import { ArrowRightIcon } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 
 import { messageOf } from "@/client/errors"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -164,10 +165,23 @@ function ChangeList({
   const ops = (operations?.data?.operations ?? []).filter(
     (o): o is Operation => !!o
   )
+  const live = useLiveState()
+  const refetchClusters = clusters?.refetch
+  useEffect(() => {
+    void refetchClusters?.().catch(() => undefined)
+  }, [refetchClusters, live.lastSync])
   useInfrastructureRefresh(
-    syncs.list.some(movingSync) ||
+    (clusters?.data?.items ?? []).some((o) =>
+      ["accepted", "running", "waiting_provider"].includes(o.status)
+    ) ||
+      syncs.list.some(movingSync) ||
       ops.some((o) => ["pending", "running", "waiting"].includes(o.status)),
-    async () => Promise.allSettled([syncs.refetch(), operations?.refetch()])
+    async () =>
+      Promise.allSettled([
+        syncs.refetch(),
+        operations?.refetch(),
+        clusters?.refetch(),
+      ])
   )
   const entries: Entry[] = [
     ...syncs.list.map((sync) => ({
@@ -260,15 +274,15 @@ function ChangeList({
             ) : e.kind === "clusters" ? (
               <Row key={e.op.id}>
                 <div className="min-w-0 flex-1">
-                  <a
+                  <Link
                     className="text-sm font-medium break-words hover:underline"
-                    href={`/clouds/${scope.cloud.id}?tab=servers&clusterOperation=${encodeURIComponent(e.op.id)}`}
+                    to="/clouds/$id"
+                    params={{ id: scope.cloud.id }}
+                    search={{ tab: "servers", clusterOperation: e.op.id }}
                   >
-                    {e.op.kind === "create"
-                      ? "Create cluster"
-                      : "Adopt cluster"}
-                    : {e.op.input.spec.name || e.op.input.ref.id}
-                  </a>
+                    {clusterChangeLabel(e.op.kind)}:{" "}
+                    {e.op.input.spec.name || e.op.input.ref.id}
+                  </Link>
                   <p className="text-xs text-muted-foreground">
                     {dateTime(Date.parse(e.op.createdAt))}
                   </p>
@@ -619,5 +633,26 @@ function OperationEntry({
     >
       <CloudError message={error} />
     </Entry>
+  )
+}
+
+export function clusterChangeLabel(kind: string) {
+  return (
+    (
+      {
+        create: "Create cluster",
+        "adopt-external": "Adopt external cluster",
+        "adopt-managed": "Adopt managed cluster",
+        "node-pool-create": "Add node pool",
+        "node-pool-update": "Change node pool",
+        "node-pool-delete": "Remove node pool",
+        "node-pool-scaling": "Change scaling bounds",
+        "cluster-configure": "Configure maintenance",
+        "cluster-upgrade": "Upgrade cluster",
+        "retire-cluster": "Retire cluster",
+        "detach-runtime": "Detach runtime",
+        "runtime-access-upgrade": "Upgrade namespace access",
+      } as Record<string, string>
+    )[kind] ?? kind.replaceAll("-", " ")
   )
 }

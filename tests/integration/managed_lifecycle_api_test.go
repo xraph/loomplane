@@ -82,12 +82,26 @@ func TestManagedLifecyclePublicAPI(t *testing.T) {
 		if err = os.MkdirAll(filepath.Dir(state), 0700); err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(map[string]string{"api_url": a.r.srv.URL, "manual_cluster_id": manualCluster, "access_attachment_id": accessAttachment, "cleanup_deployment_id": cleanupDeployment, "cleanup_plan_id": "fixture-cleanup-plan", "org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID, "owner_email": "clouds@example.test", "viewer_email": "lifecycle-viewer@example.test"})
+		extra, tick := lifecycleBrowserExtras(t, a, filepath.Dir(state))
+		values := map[string]string{"api_url": a.r.srv.URL, "manual_cluster_id": manualCluster, "access_attachment_id": accessAttachment, "cleanup_deployment_id": cleanupDeployment, "cleanup_plan_id": "fixture-cleanup-plan", "org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID, "owner_email": "clouds@example.test", "viewer_email": "lifecycle-viewer@example.test"}
+		for key, value := range extra {
+			values[key] = value
+		}
+		raw, _ := json.Marshal(values)
 		if err = os.WriteFile(state, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
 		browser := startInfrastructureBrowser(t, a.r.srv.URL, state)
-		browser.onTick = lifecycleCapacityRefresh(t, a, filepath.Dir(state), manualCluster)
+		refresh := lifecycleCapacityRefresh(t, a, filepath.Dir(state), manualCluster)
+		browser.onTick = func() error {
+			if err := refresh(); err != nil {
+				return err
+			}
+			if tick != nil {
+				return tick()
+			}
+			return nil
+		}
 		browser.checkpoint(t, "lifecycle", map[string]string{"org_id": a.org, "cloud_id": a.cloud, "project_id": a.project, "cluster_id": id, "operation_id": op.ID})
 	}
 }

@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { publishLiveState } from "@/lib/realtime-state"
 import { forgeClient } from "@/client/runtime"
 import type { Profile } from "@/client/forge/loomplane/types"
+import { ClusterNodePools } from "./cluster-node-pools"
 import { Clusters } from "./clusters"
 import { ClusterDetail, ClusterOperationDetail } from "./cluster-detail"
 vi.mock("@/lib/router", () => ({
@@ -35,6 +36,7 @@ vi.mock("@/lib/organization", () => ({
 }))
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   publishLiveState({
     status: "stale",
     transport: "ws",
@@ -334,6 +336,7 @@ it("keeps inventory visible while specific lifecycle permissions are denied", as
 it.each([
   "pdb_blocked",
   "unknown_price",
+  "stale_price",
   "unknown_quota",
   "observation_drift",
   "runtime_access_upgrade_required",
@@ -356,12 +359,270 @@ it.each([
         onRefreshReview={() => {}}
       />
     )
-    await screen.findByRole("button", { name: "Retry saved operation" })
+    const retry = await screen.findByRole("button", {
+      name: "Retry saved operation",
+    })
+    if (reason === "stale_price") {
+      expect(retry).toBeDisabled()
+      expect(
+        screen.getByRole("button", { name: "Refresh options and review" })
+      ).toBeEnabled()
+    }
     expect(screen.queryByRole("button", { name: /force|bypass/i })).toBeNull()
     expect(screen.getByRole("status")).toHaveTextContent(
       reason === "runtime_access_upgrade_required"
         ? "separately reviewed access upgrade"
-        : reason.replaceAll("_", " ")
+        : reason === "stale_price"
+          ? "Prices are out of date"
+          : reason.replaceAll("_", " ")
     )
   }
 )
+
+const currentCluster = {
+  id: "cluster",
+  cloudId: "cloud",
+  connectionId: "connection",
+  provider: "test",
+  ownership: "managed",
+  revision: 2,
+  observedRevision: 3,
+  observation: {
+    name: "physical",
+    ref: { id: "physical", region: "region" },
+    pools: [
+      {
+        id: "pool",
+        name: "workers",
+        size: "small",
+        count: 1,
+        autoscale: true,
+        min: 1,
+        max: 2,
+      },
+    ],
+  },
+} as unknown as import("@/client/forge/loomplane/types").CloudCluster
+
+it("reads persisted capacity after reconnect and ages freshness without provider writes", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+  vi.setSystemTime(new Date("2026-11-01T12:00:00Z"))
+  let revision = 1
+  let reads = 0
+  const writes: string[] = []
+  const checked = new Date().toISOString()
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method && init.method !== "GET") writes.push(String(input))
+      reads++
+      return Response.json({
+        resource_id: "cluster",
+        observation_revision: revision,
+        checked_at: checked,
+        fresh: true,
+        complete: true,
+        workloads_complete: true,
+        nodes: [],
+        conditions: [
+          {
+            type: "fixture",
+            reason:
+              revision === 1 ? "first observation" : "updated observation",
+          },
+        ],
+      })
+    }
+  )
+  mount(
+    <ClusterNodePools cluster={currentCluster} canManage onChange={() => {}} />
+  )
+  await screen.findByText(/first observation/)
+  const before = reads
+  revision = 2
+  act(() =>
+    publishLiveState({
+      status: "live",
+      transport: "ws",
+      lastSync: Date.now(),
+      gap: false,
+    })
+  )
+  await screen.findByText(/updated observation/)
+  expect(reads).toBeGreaterThan(before)
+  expect(screen.getByText(/^Fresh ·/)).toBeInTheDocument()
+  await act(async () => {
+    vi.advanceTimersByTime(121000)
+  })
+  expect(screen.getByText(/^Stale ·/)).toBeInTheDocument()
+  expect(writes).toEqual([])
+})
+
+it("shows observed native bounds separately while reviewed bounds await convergence", async () => {
+  vi.stubGlobal("fetch", async () =>
+    Response.json({ nodes: [], conditions: [], checked_at: "", fresh: false })
+  )
+  mount(
+    <ClusterNodePools
+      cluster={{
+        ...currentCluster,
+        scalingPolicies: {
+          pool: { mode: "native", min_nodes: 2, max_nodes: 3 },
+        },
+      }}
+      canManage
+      onChange={() => {}}
+    />
+  )
+  expect(
+    screen.getByText(/Observed 1 nodes · bounds 1 to 2/)
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(
+      /Reviewed native · bounds 2 to 3 · Awaiting provider convergence/
+    )
+  ).toBeInTheDocument()
+})
+
+it("retries the exact saved operation after reload", async () => {
+  const writes: string[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") writes.push(String(input))
+      return Response.json({
+        ...operation,
+        status: writes.length ? "accepted" : "needs_attention",
+        error: "pdb_blocked",
+      })
+    }
+  )
+  mount(
+    <ClusterOperationDetail
+      cloud={cloud}
+      id="op"
+      onBack={() => {}}
+      onRefreshReview={() => {}}
+    />
+  )
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "Retry saved operation" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatch(/cluster-operations\/op\/retry$/)
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry saved operation" })
+    ).toBeNull()
+  )
+})
+
+it("shows changed retirement inventory and clears acknowledgement before saving a replacement review", async () => {
+  const previews: unknown[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith("/apply"))
+        return Response.json({ message: "State changed" }, { status: 409 })
+      if (path.endsWith("/retirement/preview"))
+        return Response.json({
+          digest: "new-inventory",
+          checked_at: new Date().toISOString(),
+          blockers: [],
+          deletion_candidates: [],
+          retained_resources: [
+            {
+              id: "new-volume",
+              kind: "volume",
+              ownership: "managed",
+              survives_cluster_deletion: true,
+            },
+          ],
+          unknown_costs: ["storage"],
+        })
+      if (path.endsWith("/clusters/preview")) {
+        previews.push(JSON.parse(String(init?.body)))
+        return Response.json({ id: "replacement" })
+      }
+      if (path.endsWith("/attachments"))
+        return Response.json({ items: [{ id: "attachment", revision: 8 }] })
+      if (path.endsWith("/clusters/cluster"))
+        return Response.json({
+          ...currentCluster,
+          cloud_id: "cloud",
+          connection_id: "connection",
+        })
+      if (path.includes("cluster-options"))
+        return Response.json({
+          node_sizes: [],
+          account_id: "account",
+          connection_generation: 1,
+        })
+      if (path.includes("capacity-policy"))
+        return Response.json({ policy: { revision: 1 } })
+      if (path.includes("/cluster-operations/"))
+        return Response.json({
+          ...operation,
+          resource_id: "cluster",
+          kind: "detach-runtime",
+          input: {
+            ...operation.input,
+            retirement: {
+              attachment_id: "attachment",
+              expected_attachment_revision: 1,
+              review_digest: "old-inventory",
+            },
+            acknowledge_unknown_costs: true,
+          },
+        })
+      return Response.json({ id: "cloud", revision: 2 })
+    }
+  )
+  const saved = vi.fn()
+  mount(
+    <ClusterOperationDetail
+      cloud={cloud}
+      id="op"
+      onBack={() => {}}
+      onRefreshReview={() => {}}
+      onSaved={saved}
+    />
+  )
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("button", { name: "Apply reviewed change" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Refresh options and review" })
+  )
+  const save = await screen.findByRole("button", { name: "Save review" })
+  expect(save).toBeDisabled()
+  expect(previews).toEqual([])
+  await user.click(
+    screen.getByRole("button", { name: "Review retained resources" })
+  )
+  await screen.findByText("volume · new-volume")
+  expect(save).toBeDisabled()
+  await user.click(screen.getByRole("checkbox", { name: "Acknowledge review" }))
+  expect(save).toBeEnabled()
+  await user.click(
+    screen.getByRole("button", { name: "Review retained resources" })
+  )
+  await waitFor(() =>
+    expect(
+      screen.getByRole("checkbox", { name: "Acknowledge review" })
+    ).not.toBeChecked()
+  )
+  expect(save).toBeDisabled()
+  expect(previews).toEqual([])
+  await user.click(screen.getByRole("checkbox", { name: "Acknowledge review" }))
+  await user.click(save)
+  await waitFor(() => expect(saved).toHaveBeenCalledWith("replacement"))
+  expect(previews[0]).toMatchObject({
+    retirement: {
+      review_digest: "new-inventory",
+      expected_attachment_revision: 8,
+    },
+  })
+})

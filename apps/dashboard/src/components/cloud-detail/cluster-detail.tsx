@@ -2,6 +2,7 @@ import { Link } from "@/lib/router"
 import { useEffect, useRef, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
+  CloudCluster,
   CloudClusterOperation,
   Profile,
 } from "@/client/forge/loomplane/types"
@@ -261,6 +262,8 @@ export function ClusterDetail({
   )
 }
 const clusterReasons: Record<string, string> = {
+  stale_price:
+    "Prices are out of date. Refresh options and create a fresh review before applying this change.",
   runtime_bootstrap_unavailable:
     "Temporary cluster management access or its trust check failed. Verify the provider account and cluster identity before retrying.",
   runtime_permissions_unavailable:
@@ -299,6 +302,10 @@ export function ClusterOperationDetail({
   const apply = useMutation(api.useClusterOperationsApply)
   const retry = useMutation(api.useClusterOperationsRetry)
   const cancel = useMutation(api.useClusterOperationsCancel)
+  const [retirementRecovery, setRetirementRecovery] = useState<{
+    cluster: CloudCluster
+    attachmentRevision?: number
+  }>()
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState("")
   const [stale, setStale] = useState(false)
@@ -350,6 +357,20 @@ export function ClusterOperationDetail({
     try {
       const path = { cloudId: cloud.id, clusterId: saved.resourceId }
       const current = await api.useCloudClustersGet({ path }).refetch()
+      if (saved.input.retirement) {
+        const attachments = await api
+          .useCloudClustersAttachments({ path })
+          .refetch()
+        const selected = attachments.items?.find(
+          (a) => a.id === saved.input.retirement?.attachmentId
+        )
+        setAcknowledged(false)
+        setRetirementRecovery({
+          cluster: current,
+          attachmentRevision: selected?.revision,
+        })
+        return
+      }
       const currentCloud = await api
         .useOrganizationCloudsGet({ path: { cloudId: cloud.id } })
         .refetch()
@@ -391,26 +412,6 @@ export function ClusterOperationDetail({
             current.scalingPolicies?.[input.scaling.poolId]?.revision ?? 0
           ),
         }
-      if (input.retirement) {
-        const attachments = await api
-          .useCloudClustersAttachments({ path })
-          .refetch()
-        const selected = (attachments.items ?? []).find(
-          (a) => a.id === input.retirement?.attachmentId
-        )
-        const result = (await api.useCloudClustersRetirementPreview({
-          path,
-          body: {
-            attachmentId: input.retirement.attachmentId,
-            expectedAttachmentRevision: selected?.revision,
-          },
-        })) as import("@/client/forge/loomplane/types").ClusterRetirementReview
-        input.retirement = {
-          ...input.retirement,
-          reviewDigest: result.digest,
-          expectedAttachmentRevision: selected?.revision,
-        }
-      }
       const next = await preview.mutateAsync({
         path: { cloudId: cloud.id },
         body: input,
@@ -431,6 +432,8 @@ export function ClusterOperationDetail({
     unknownCost &&
     (!(estimate.components ?? []).length ||
       (estimate.components ?? []).some((c) => !c.category))
+  const needsFreshReview =
+    stale || op?.error === "stale_price" || missingCategories
   const setup =
     !!op && ["create", "adopt-external", "adopt-managed"].includes(op.kind)
   const allowed =
@@ -469,7 +472,22 @@ export function ClusterOperationDetail({
             <StatePill status={op.status} />
           </CloudSectionHead>
           <CloudError message={error} />
-          {(stale || missingCategories) && (
+          {retirementRecovery && (
+            <ClusterMaintenance
+              cluster={retirementRecovery.cluster}
+              cloud={cloud}
+              kind={op.kind}
+              attachmentId={op.input.retirement?.attachmentId}
+              attachmentRevision={retirementRecovery.attachmentRevision}
+              onClose={() => setRetirementRecovery(undefined)}
+              onSaved={(nextId) => {
+                setRetirementRecovery(undefined)
+                onSaved?.(nextId)
+              }}
+            />
+          )}
+
+          {needsFreshReview && (
             <Button
               size="sm"
               className="justify-self-start"
@@ -510,7 +528,7 @@ export function ClusterOperationDetail({
                 size="sm"
                 disabled={
                   busy ||
-                  stale ||
+                  needsFreshReview ||
                   !allowed ||
                   missingCategories ||
                   automaticUnknown ||
@@ -524,7 +542,7 @@ export function ClusterOperationDetail({
             {["needs_attention", "setup_incomplete"].includes(op.status) && (
               <Button
                 size="sm"
-                disabled={busy || !allowed}
+                disabled={busy || !allowed || needsFreshReview}
                 onClick={() => void act("retry")}
               >
                 Retry saved operation

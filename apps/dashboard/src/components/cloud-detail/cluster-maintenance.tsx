@@ -222,6 +222,10 @@ export function ClusterMaintenance({
     } catch (e) {
       setError(messageOf(e, "Cluster change could not be reviewed."))
       setStale(statusOf(e) === 409)
+      if (statusOf(e) === 409 && retiring) {
+        setRetirement(undefined)
+        setAck(false)
+      }
       if (retiring) setRetirement(undefined)
     } finally {
       locked.current = false
@@ -456,7 +460,10 @@ export function ClusterMaintenance({
                 kind === "detach-runtime" ? attachmentId : undefined
               }
               attachmentRevision={attachmentRevision}
-              onReview={setRetirement}
+              onReview={(review) => {
+                setAck(false)
+                setRetirement(review)
+              }}
             />
           )}
           <label className="flex items-start gap-2 text-sm">

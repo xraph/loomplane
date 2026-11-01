@@ -25,9 +25,23 @@ vi.mock("@/lib/organization", () => ({
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
-  ),
+  Link: ({
+    children,
+    to,
+    params,
+    search,
+  }: {
+    children: React.ReactNode
+    to: string
+    params?: Record<string, string>
+    search?: Record<string, string>
+  }) => {
+    let href = to
+    for (const [key, value] of Object.entries(params ?? {}))
+      href = href.replace(`$${key}`, encodeURIComponent(value))
+    const query = new URLSearchParams(search).toString()
+    return <a href={href + (query ? `?${query}` : "")}>{children}</a>
+  },
   useNavigate: () => () => Promise.resolve(),
 }))
 afterEach(() => {
