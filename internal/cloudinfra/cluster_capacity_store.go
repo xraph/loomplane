@@ -40,6 +40,20 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	if r.Kind != "cluster" || r.CloudID != cloud || clusterCapacityIdentityInvalid(r) || r.Observation == nil {
 		return nil, ErrConflict
 	}
+	if delays, ok := s.Clusters.(clusterObservationDelay); ok {
+		for pool, policy := range r.ScalingPolicies {
+			if policy.Revoked || policy.Mode != "native" {
+				continue
+			}
+			due, e := delays.ScalingObservationDeadline(ctx, p.OrgID, cloud, r.ID, pool)
+			if e != nil {
+				return nil, e
+			}
+			if s.now().Before(due) {
+				return nil, ErrPending
+			}
+		}
+	}
 	reader, access, err := s.clusterAccount(ctx, p, r.ConnectionID, provider.ClusterCapacityObservation)
 	if err != nil {
 		return nil, err
@@ -58,6 +72,16 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	}
 	facts, providerErr := capacity.ObserveClusterCapacity(ctx, access, r.Observation.Ref)
 	if providerErr != nil {
+		if delays, supported := s.Clusters.(clusterObservationDelay); supported && providerObservationDelay(providerErr) > 0 {
+			for pool, policy := range r.ScalingPolicies {
+				if policy.Revoked || policy.Mode != "native" {
+					continue
+				}
+				if delayErr := delays.DelayScalingObservation(ctx, p.OrgID, cloud, r.ID, pool, policy.Revision, providerObservationDelay(providerErr)); delayErr != nil {
+					return nil, delayErr
+				}
+			}
+		}
 		facts = provider.ProviderClusterCapacity{Provider: r.Provider, Ref: r.Observation.Ref, CheckedAt: s.now().UTC(), Conditions: []provider.ClusterCondition{{Type: "capacity", Status: "unknown", Reason: "provider_read_failed"}}}
 	}
 	in := ClusterInput{Kind: "management-observation", Provider: r.Provider, AccountID: r.AccountID, ConnectionID: r.ConnectionID, ConnectionGeneration: access.Generation, CloudRevision: profile.Revision, ResourceID: r.ID, ResourceRevision: r.Revision, Ref: r.Observation.Ref}
@@ -116,6 +140,11 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 			snapshot.Workloads[i].ReplicaProofGeneration = progress[w.DeploymentUID]
 		}
 	}
+	if !qualifiedWorkloads {
+		for i := range snapshot.Workloads {
+			snapshot.Workloads[i].SchedulerShortage = false
+		}
+	}
 	snapshot.CleanupInventory = projection
 	snapshot.ResourceID = r.ID
 	snapshot.ObservationRevision = revision
@@ -135,7 +164,13 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 		ctx = context.WithValue(ctx, cleanupObserverKey{}, cleanupObserver{org: p.OrgID, cloud: cloud, resource: r.ID, ca: r.Observation.CAHash, revision: revision, ref: r.Observation.Ref})
 	}
 	if qualifiedWorkloads {
-		ctx = context.WithValue(ctx, replicaObservationKey{}, replicaObservation{org: p.OrgID, resource: r.ID, revision: revision, proved: progress})
+		shortages := map[string]ClusterObservedWorkload{}
+		for _, w := range snapshot.Workloads {
+			if w.SchedulerShortage {
+				shortages[w.PodUID] = w
+			}
+		}
+		ctx = context.WithValue(ctx, replicaObservationKey{}, replicaObservation{org: p.OrgID, resource: r.ID, revision: revision, proved: progress, shortages: shortages})
 	}
 	if checkErr := st.SaveClusterCapacity(ctx, r, snapshot); checkErr != nil {
 		return nil, checkErr
@@ -167,6 +202,9 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	proof, hasProof := ctx.Value(replicaObservationKey{}).(replicaObservation)
 	workloads := map[string]bool{}
 	for _, w := range snapshot.Workloads {
+		if w.SchedulerShortage && (!hasProof || r == nil || proof.org != r.OrgID || proof.resource != r.ID || proof.revision != snapshot.ObservationRevision || proof.shortages[w.PodUID] != w) {
+			return ErrConflict
+		}
 		if w.ReplicaProofGeneration != 0 && (!hasProof || r == nil || proof.org != r.OrgID || proof.resource != r.ID || proof.revision != snapshot.ObservationRevision || proof.proved[w.DeploymentUID] != w.ReplicaProofGeneration || w.ReplicaProofGeneration <= 0 || w.DeploymentGeneration <= w.ReplicaProofGeneration) {
 			return ErrConflict
 		}
@@ -242,6 +280,9 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	}
 	if driftErr := saveCleanupDrift(ctx, tx, current, snapshot, snapshot.CleanupInventory); driftErr != nil {
 		return driftErr
+	}
+	if err := recordClusterDemandObservation(ctx, tx, current, snapshot); err != nil {
+		return err
 	}
 	if err := settleClusterEnvelopes(ctx, tx, current, snapshot, ""); err != nil {
 		return err

@@ -55,6 +55,14 @@ func TestManagedInstalledApplicationPending(t *testing.T) {
 // Kubernetes execution and readiness path independently of provider node supply.
 func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServiceFixture, f *poolFixture, creds *connections.Service, infra *cloudinfra.Service, svc *planning.Service, p *planning.Plan, res *planning.Result, mode string) {
 	t.Helper()
+	wake := mode == "cohort-wake"
+	if wake {
+		mode = "guaranteed"
+	}
+	testCohort := mode == "native-cohort"
+	if testCohort {
+		mode = "guaranteed"
+	}
 	missingMetrics := mode == "hpa-missing"
 	testHPA := mode == "hpa" || missingMetrics
 	if testHPA {
@@ -85,6 +93,9 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	cfg.Workload = provider.Worker
 	cfg.CapacityMode = mode
 	cfg.Scale = &manifest.Scale{Min: 1, Max: 1}
+	if wake {
+		cfg.Scale.Max = 90
+	}
 	if testHPA {
 		cfg.Scale = &manifest.Scale{Min: 2, Max: 3}
 	}
@@ -121,6 +132,10 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	svc.BindManagedRuntime(ce)
 	deps := deployments.RunnerDeps{Store: ds, Plans: f.plans, ManagedCleanup: ce, Capacity: svc, Credentials: creds, Variables: poolVars{}, Providers: providers.Registry(), CloudProfiles: e.clouds, Executors: map[string]deployments.Executor{"kubernetes": target}}
 	runner := deployments.NewRunner(deps)
+	if wake {
+		checkCohortWake(t, f, p, runner)
+		return
+	}
 	rs := orchestration.NewPgRunStore(e.pg)
 	saveInstalledDeploymentRoute(t, rs, p, orchestration.LegacyCleanupBuild)
 	dep := &deployments.Deployment{ID: "installed-release", OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, Environment: "production", PlanID: p.ID, StartedBy: "usr", Status: deployments.StatusRunning, StartedAt: time.Now(), Steps: []deployments.Step{{ActionID: a.ID, Status: deployments.StepPending}}}
@@ -262,6 +277,17 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	}
 	if releasePressure != nil {
 		requireSchedulerShortage(call, t, e.bootstrap.Kube, pending, receipt.ReleaseID)
+		if testCohort {
+			checkNativeCohort(call, t, e, infra, svc, f, *cfg.ClusterDemand.Profile, cfg.ClusterDemand.Input.ID, dep.ID)
+			cancel()
+			releasePressure()
+			select {
+			case <-done:
+			case <-time.After(15 * time.Second):
+				t.Fatal("cancelled workload runner did not stop")
+			}
+			return
+		}
 		releasePressure()
 	}
 	select {

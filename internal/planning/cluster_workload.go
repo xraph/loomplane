@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"time"
@@ -272,7 +273,28 @@ func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan 
 	switch d.Mode {
 	case "guaranteed":
 		if _, err = cloudinfra.NewPgStore(st.db).ReserveClusterWorkload(ctx, tx, d.Input, guard); err != nil {
-			return err
+			var shortage *cloudinfra.CapacityAdmissionError
+			if !errors.As(err, &shortage) || shortage.Block.Reason != "workload_capacity" || d.Profile == nil {
+				return err
+			}
+			cohort, joinErr := cloudinfra.JoinReviewedClusterDemand(ctx, tx, d.Input, d.Profile.PoolID, d.Profile.Digest)
+			if joinErr != nil {
+				return joinErr
+			}
+			if commitErr := tx.Commit(); commitErr != nil {
+				return commitErr
+			}
+			shortage.Block.CloudID = d.Input.CloudID
+			shortage.Block.PoolID = d.Profile.PoolID
+			shortage.Block.TargetID = d.Input.TargetID
+			shortage.Block.Retryable = true
+			if d.Input.Native != nil {
+				shortage.Block.PolicyRevision = d.Input.Native.PolicyRevision
+			}
+			return &cloudinfra.ClusterDemandWaitError{Cohort: cohort, Admission: shortage}
+		}
+		if _, releaseErr := tx.Exec(ctx, `DELETE FROM loomplane_cluster_demand_members WHERE org_id=$1 AND demand_id=$2 AND reason='review_capacity'`, d.Input.OrgID, d.Input.ID); releaseErr != nil {
+			return releaseErr
 		}
 	case "best_effort":
 		if checkErr := guard(ctx, tx, d.Input); checkErr != nil {

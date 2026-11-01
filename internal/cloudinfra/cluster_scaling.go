@@ -296,12 +296,25 @@ func (s *Service) ObserveClusterScaling(ctx context.Context, org, cloud, resourc
 	if checkErr := fence(ctx); checkErr != nil {
 		return nil, checkErr
 	}
+	delays, hasDelays := s.Clusters.(clusterObservationDelay)
+	if hasDelays {
+		due, readErr := delays.ScalingObservationDeadline(ctx, org, cloud, resource, pool)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if s.now().Before(due) {
+			return nil, ErrPending
+		}
+	}
 	reader, access, err := s.clusterAuthority(ctx, operation.Principal, cloud, operation.Input)
 	if err != nil {
 		return nil, err
 	}
 	observation, err := reader.GetCluster(ctx, access, operation.Input.Ref)
 	if err != nil {
+		if delay := providerObservationDelay(err); delay > 0 && hasDelays {
+			return nil, errors.Join(err, delays.DelayScalingObservation(ctx, org, cloud, resource, pool, policy.Revision, delay))
+		}
 		return nil, err
 	}
 	if !freshClusterEnvelopeEvidence(observation.ObservedAt, s.now()) || observation.Ref != operation.Input.Ref {
@@ -310,8 +323,18 @@ func (s *Service) ObserveClusterScaling(ctx context.Context, org, cloud, resourc
 	if checkErr := fence(ctx); checkErr != nil {
 		return nil, checkErr
 	}
+	breachChanged := false
+	for _, current := range r.ScalingPolicies {
+		if !current.Revoked && current.Mode == "native" && current.PauseReason == "" && scalingBreach(current, observation) != "" {
+			breachChanged = true
+			break
+		}
+	}
 	if err := store.SaveClusterScalingObservation(ctx, r, observation); err != nil {
 		return nil, err
+	}
+	if breachChanged {
+		s.wakeCapacityCloud(ctx, org, cloud, "cluster-breach:"+resource+":"+observation.ObservedAt.UTC().Format(time.RFC3339Nano))
 	}
 	return s.ObserveClusterCapacity(ctx, operation.Principal, cloud, resource)
 }
@@ -329,6 +352,15 @@ func (s *Service) CurrentClusterScalingPolicy(ctx context.Context, org, cloud, r
 	policy, ok := r.ScalingPolicies[pool]
 	if !ok || policy.Revoked || policy.Mode != "native" || policy.PauseReason != "" || r.CloudID != cloud || r.DeletedAt != nil || r.Observation == nil || !freshClusterEnvelopeEvidence(r.Observation.ObservedAt, s.now()) {
 		return nil, ErrConflict
+	}
+	if delays, hasDelays := s.Clusters.(clusterObservationDelay); hasDelays {
+		due, readErr := delays.ScalingObservationDeadline(ctx, org, cloud, resource, pool)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if s.now().Before(due) {
+			return nil, &CapacityAdmissionError{Block: CapacityBlock{Reason: "provider_throttled", CloudID: cloud, PoolID: pool, PolicyRevision: policy.Revision, Retryable: true}}
+		}
 	}
 	if reason := scalingBreach(policy, *r.Observation); reason != "" {
 		return nil, &ClusterMaintenanceAdmissionError{Reason: reason}

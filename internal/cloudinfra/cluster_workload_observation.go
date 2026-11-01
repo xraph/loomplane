@@ -2,6 +2,9 @@ package cloudinfra
 
 import (
 	"reflect"
+	"regexp"
+
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -13,7 +16,10 @@ import (
 // ClusterObservedWorkload retains request and owner identities, never a template.
 // Unmatched pods still consume requests. Only a complete owner chain earns credit.
 type ClusterObservedWorkload struct {
-	Running                bool                  `json:"running,omitempty"`
+	Running                bool `json:"running,omitempty"`
+	Pending                bool `json:"pending,omitempty"`
+	schedulerArchitecture  string
+	SchedulerShortage      bool                  `json:"scheduler_shortage,omitempty"`
 	PodUID                 string                `json:"pod_uid"`
 	NamespaceUID           string                `json:"namespace_uid,omitempty"`
 	DeploymentUID          string                `json:"deployment_uid,omitempty"`
@@ -76,7 +82,15 @@ func clusterWorkloadObservations(in kubernetes.CapacityInventory) ([]ClusterObse
 		if len(metrics.Extended) > 0 {
 			complete = false
 		}
-		w := ClusterObservedWorkload{PodUID: string(pod.UID), Requests: v, Running: pod.Status.Phase == corev1.PodRunning && pod.Spec.NodeName != ""}
+		w := ClusterObservedWorkload{PodUID: string(pod.UID), Requests: v, Running: pod.Status.Phase == corev1.PodRunning && pod.Spec.NodeName != "", Pending: pod.Status.Phase == corev1.PodPending}
+		if w.Pending && pod.DeletionTimestamp == nil && pod.Spec.NodeName == "" && pod.Status.NominatedNodeName == "" && supportedShortagePod(pod.Spec) {
+			for _, c := range pod.Status.Conditions {
+				if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable && schedulerInsufficient.MatchString(c.Message) {
+					w.SchedulerShortage = true
+					w.schedulerArchitecture = pod.Spec.NodeSelector[corev1.LabelArchStable]
+				}
+			}
+		}
 		for _, ns := range in.Namespaces {
 			if ns.Name == pod.Namespace && ns.DeletionTimestamp == nil {
 				w.NamespaceUID = string(ns.UID)
@@ -102,7 +116,7 @@ func clusterWorkloadObservations(in kubernetes.CapacityInventory) ([]ClusterObse
 				if len(currentTemplate.Labels) == 0 {
 					currentTemplate.Labels = nil
 				}
-				if !reflect.DeepEqual(*template, *currentTemplate) {
+				if !reflect.DeepEqual(*template, *currentTemplate) || !podHasReviewedRequests(pod.Spec, currentTemplate.Spec) {
 					continue
 				}
 				w.DeploymentUID, w.DeploymentGeneration, w.ReplicaSetUID, w.ReleaseID = string(dep.UID), dep.Generation, string(rs.UID), release
@@ -125,4 +139,53 @@ func workloadController(refs []metav1.OwnerReference, kind string) string {
 		found = string(ref.UID)
 	}
 	return found
+}
+
+var schedulerInsufficient = regexp.MustCompile(`^0/[1-9][0-9]* nodes are available: [1-9][0-9]* Insufficient (cpu|memory)(, [1-9][0-9]* Insufficient (cpu|memory))*\.`)
+
+func podHasReviewedRequests(pod, template corev1.PodSpec) bool {
+	if len(pod.Containers) != len(template.Containers) || len(pod.InitContainers) != len(template.InitContainers) || !apiequality.Semantic.DeepEqual(pod.NodeSelector, template.NodeSelector) || !apiequality.Semantic.DeepEqual(pod.Affinity, template.Affinity) || !apiequality.Semantic.DeepEqual(pod.TopologySpreadConstraints, template.TopologySpreadConstraints) || !apiequality.Semantic.DeepEqual(pod.RuntimeClassName, template.RuntimeClassName) || !apiequality.Semantic.DeepEqual(pod.Overhead, template.Overhead) || len(pod.SchedulingGates) != 0 || len(pod.ResourceClaims) != 0 || pod.SchedulerName != template.SchedulerName || pod.PriorityClassName != template.PriorityClassName {
+		return false
+	}
+	same := func(a, b []corev1.Container) bool {
+		for i, c := range a {
+			if c.Name != b[i].Name || c.Image != b[i].Image || !apiequality.Semantic.DeepEqual(c.Resources, b[i].Resources) {
+				return false
+			}
+		}
+		return true
+	}
+	return same(pod.Containers, template.Containers) && same(pod.InitContainers, template.InitContainers)
+}
+
+// The stock scheduler's insufficient-resource reason qualifies only for the
+// placement choices the workload planner reviewed. Admission webhooks can add
+// constraints to both a template and the resulting pods.
+func supportedShortagePod(p corev1.PodSpec) bool {
+	if p.SchedulerName != "" && p.SchedulerName != corev1.DefaultSchedulerName || p.Affinity != nil || len(p.TopologySpreadConstraints) > 0 || p.PriorityClassName != "" || p.Priority != nil && *p.Priority != 0 || p.RuntimeClassName != nil || len(p.SchedulingGates) > 0 || len(p.ResourceClaims) > 0 || p.Resources != nil || len(p.Overhead) > 0 || p.HostNetwork {
+		return false
+	}
+	for k := range p.NodeSelector {
+		if k != corev1.LabelArchStable {
+			return false
+		}
+	}
+	for _, tol := range p.Tolerations {
+		if tol.Effect != corev1.TaintEffectNoExecute || tol.Operator != corev1.TolerationOpExists || tol.Key != corev1.TaintNodeNotReady && tol.Key != corev1.TaintNodeUnreachable {
+			return false
+		}
+	}
+	for _, v := range p.Volumes {
+		if v.PersistentVolumeClaim != nil || v.Ephemeral != nil || v.HostPath != nil || v.CSI != nil {
+			return false
+		}
+	}
+	for _, c := range p.Containers {
+		for _, port := range c.Ports {
+			if port.HostPort != 0 {
+				return false
+			}
+		}
+	}
+	return len(p.InitContainers) == 0
 }

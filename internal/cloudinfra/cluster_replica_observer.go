@@ -43,6 +43,7 @@ type replicaObservation struct {
 	org, resource string
 	revision      int64
 	proved        map[string]int64
+	shortages     map[string]ClusterObservedWorkload
 }
 
 func saveObservedWorkloadAccounting(ctx context.Context, tx driver.Tx, r *ManagedResource, snapshot ClusterCapacitySnapshot) error {

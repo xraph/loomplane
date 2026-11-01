@@ -99,9 +99,12 @@ type CapacityBlock struct {
 }
 
 type CapacityDecision struct {
-	Placement   *Placement     `json:"placement,omitempty"`
-	ExpansionID string         `json:"expansion_id,omitempty"`
-	Block       *CapacityBlock `json:"block,omitempty"`
+	ClusterCohortID    string                  `json:"-"`
+	ClusterDemandState string                  `json:"-"`
+	ClusterPlacement   *ClusterDemandPlacement `json:"-"`
+	Placement          *Placement              `json:"placement,omitempty"`
+	ExpansionID        string                  `json:"expansion_id,omitempty"`
+	Block              *CapacityBlock          `json:"block,omitempty"`
 }
 
 type Expansion struct {

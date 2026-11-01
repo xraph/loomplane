@@ -226,7 +226,19 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 		var checkErr error
 		switch {
 		case a.Service.ClusterDemand != nil:
-			checkErr = s.resolveClusterWorkload(ctx, st, plan, a)
+			var resolver cloudinfra.ClusterDemandResolver = s
+			if authority, ok := s.capacity.(cloudinfra.ClusterDemandResolver); ok {
+				resolver = authority
+			}
+			d := a.Service.ClusterDemand.Input
+			var decision cloudinfra.CapacityDecision
+			decision, checkErr = resolver.ReconcileClusterDemand(ctx, org, d.CloudID, d.ID)
+			if checkErr == nil && decision.Block != nil {
+				checkErr = &cloudinfra.CapacityAdmissionError{Block: *decision.Block}
+			}
+			if checkErr == nil && (decision.ClusterPlacement == nil || decision.ClusterPlacement.DemandID != d.ID || decision.ClusterPlacement.ResourceID != d.ResourceID || decision.ClusterPlacement.TargetID != d.TargetID || decision.ClusterPlacement.Mode != a.Service.ClusterDemand.Mode) {
+				return ErrConflict
+			}
 		case !HasCapacityIntent(a):
 			connection := s.frontendConnection(a, plan.Connections)
 			if a.Op == Delete || a.Op == Keep || connection == "" || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {

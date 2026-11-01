@@ -120,7 +120,7 @@ func (s *PgStore) SaveClusterScalingObservation(ctx context.Context, r *ManagedR
 }
 
 func (s *PgStore) ListClusterScalingObservers(ctx context.Context) ([]ClusterScalingObserverScope, error) {
-	rows, err := s.db.Query(ctx, `SELECT r.org_id,r.cloud_id,r.id,p.key FROM loomplane_managed_resources r CROSS JOIN LATERAL (SELECT key FROM jsonb_each(coalesce(r.body->'scaling_policies','{}'::jsonb)) WHERE value->>'revoked'='false' AND value->>'mode'='native' ORDER BY key LIMIT 1) p WHERE r.deleted_at IS NULL ORDER BY r.body->>'observed_at',r.id LIMIT 100`)
+	rows, err := s.db.Query(ctx, `SELECT r.org_id,r.cloud_id,r.id,p.key FROM loomplane_managed_resources r CROSS JOIN LATERAL (SELECT key FROM jsonb_each(coalesce(r.body->'scaling_policies','{}'::jsonb)) WHERE value->>'revoked'='false' AND value->>'mode'='native' ORDER BY key LIMIT 1) p WHERE r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM loomplane_cluster_pool_advice d WHERE d.org_id=r.org_id AND d.resource_id=r.id AND d.pool_id=p.key AND d.retry_observation_at>clock_timestamp()) ORDER BY r.body->>'observed_at',r.id LIMIT 100`)
 	if err != nil {
 		return nil, err
 	}
