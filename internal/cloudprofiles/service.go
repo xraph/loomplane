@@ -89,6 +89,7 @@ type UpdateInput struct {
 
 // CreateTargetInput selects the initial placement of a new immutable slug.
 type CreateTargetInput struct {
+	LocationID   string `json:"location_id,omitempty"`
 	Runtime      string `json:"runtime"`
 	PoolID       string `json:"pool_id,omitempty"`
 	Name         string `json:"name"`
@@ -344,6 +345,19 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if in.PoolID == "" && in.Runtime != "managed" {
 		return nil, ErrInvalid
 	}
+	if in.LocationID != "" {
+		st, locationErr := s.locationStore()
+		if locationErr != nil {
+			return nil, locationErr
+		}
+		location, locationErr := st.GetLocation(ctx, p.OrgID, "", cloudID, in.LocationID)
+		if locationErr != nil {
+			return nil, locationErr
+		}
+		if location.Provider != in.Provider || location.ConnectionID != in.ConnectionID || location.Region != in.Region {
+			return nil, ErrInvalid
+		}
+	}
 	if placementErr := s.placement(ctx, p.OrgID, in, projectID); placementErr != nil {
 		return nil, placementErr
 	}
@@ -356,7 +370,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 		return nil, fmt.Errorf("generate target id: %w", err)
 	}
 	now := s.now().UTC()
-	target := &Target{Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Tags: tags, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	target := &Target{LocationID: in.LocationID, Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Tags: tags, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateTarget(ctx, target); err != nil {
 		return nil, err
 	}

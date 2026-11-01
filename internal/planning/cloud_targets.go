@@ -18,7 +18,9 @@ import (
 
 // CloudPlacement pins the reviewed Cloud configuration and verified account.
 type CloudPlacement struct {
-	Allocation string `json:"allocation,omitempty"`
+	LocationID        string `json:"location_id,omitempty"`
+	ManagedResourceID string `json:"managed_resource_id,omitempty"`
+	Allocation        string `json:"allocation,omitempty"`
 
 	PoolID               string `json:"pool_id,omitempty"`
 	PoolRevision         int64  `json:"pool_revision,omitempty"`
@@ -64,7 +66,7 @@ func (e *CloudPlacementError) Error() string { return e.Path + ": " + e.Message 
 // the Cloud server c runs, when it runs exactly one; a pool target's
 // server is its capacity resolution's to choose.
 func targetPlacement(a *cloudprofiles.Assignment, t cloudprofiles.Target, c ConnectionOption, identity, region, regionSource string) CloudPlacement {
-	p := CloudPlacement{GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, AssignmentRevision: a.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: regionSource}
+	p := CloudPlacement{LocationID: t.LocationID, ManagedResourceID: t.ManagedResourceID, GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, AssignmentRevision: a.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: regionSource}
 	if servers := c.cloudServers(a.CloudID); t.PoolID == "" && len(servers) == 1 {
 		p.ServerID = servers[0]
 	}
@@ -142,11 +144,31 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 	for _, name := range names {
 		// The resource runs on the target its environment gives it.
 		set := m.Resources[name].For(environment, m.Defaults)
-		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
-			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == set.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID && t.Revision > 0
-		})
+		i := -1
+		ambiguousLocation := false
+		for candidateIndex, candidate := range assignment.Targets {
+			if candidate.PoolID != "" || candidate.ConnectionID == "" || candidate.ConnectionID != set.Target || candidate.OrgID != assignment.OrgID || candidate.CloudID != assignment.CloudID || candidate.Revision < 1 {
+				continue
+			}
+			if candidate.LocationID != "" && set.Region != "" && candidate.Region != set.Region {
+				continue
+			}
+			if i < 0 {
+				i = candidateIndex
+				continue
+			}
+			if assignment.Targets[i].LocationID != candidate.LocationID {
+				ambiguousLocation = true
+			}
+		}
+		if ambiguousLocation {
+			continue
+		}
 		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == set.Target })
 		if i < 0 || ci < 0 {
+			continue
+		}
+		if assignment.Targets[i].LocationID != "" && (assignment.Targets[i].Region == "" || (set.Region != "" && set.Region != assignment.Targets[i].Region)) {
 			continue
 		}
 		identity := connections.AccountIdentity(options[ci].Cloud, options[ci].Account, options[ci].Details)
@@ -156,6 +178,9 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 		regionSource := "manifest"
 		if set.Region == "" {
 			regionSource = "default"
+			if assignment.Targets[i].LocationID != "" {
+				set.Region = assignment.Targets[i].Region
+			}
 		}
 		out[name] = targetPlacement(assignment, assignment.Targets[i], options[ci], identity, set.Region, regionSource)
 	}
@@ -342,6 +367,9 @@ func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bo
 	}
 	if target.OrgID != assignment.OrgID || target.CloudID != assignment.CloudID {
 		return CloudPlacement{}, set, fmt.Errorf("%s: target is outside the assignment scope", path)
+	}
+	if target.LocationID != "" && (target.Region == "" || (set.Region != "" && set.Region != target.Region)) {
+		return CloudPlacement{}, set, &CloudPlacementError{Code: "cloud-location-region-mismatch", Path: path, Message: "the manifest region differs from the target location; review a migration to another target"}
 	}
 	connectionID := target.ConnectionID
 	var pool *cloudinfra.Placement
