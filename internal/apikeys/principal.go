@@ -14,6 +14,12 @@ import (
 // ValidatePrincipal checks a saved key identity without retaining its secret.
 // The caller separately checks the user's current operation permission.
 func (s *Service) ValidatePrincipal(ctx context.Context, p security.Principal) error {
+	if p.IsFleet() {
+		return s.validateFleetPrincipal(ctx, p)
+	}
+	if p.Fleet != nil || security.IsFleetSubject(p.UserID) {
+		return ErrRejected
+	}
 	if p.OrgID == "" || p.UserID == "" || p.KeyID == "" || p.ReadOnly {
 		return ErrRejected
 	}
@@ -31,6 +37,9 @@ func (s *Service) ValidatePrincipal(ctx context.Context, p security.Principal) e
 		return errors.New("saved API key authority is temporarily unavailable")
 	}
 	if k == nil || k.ID.String() != p.KeyID || k.AppID != s.appID || k.TenantID != p.OrgID || k.CreatedBy != p.UserID || k.State != key.StateActive || k.RevokedAt != nil || k.PolicyID != nil || len(k.Scopes) > 0 || k.ExpiresAt == nil || !k.ExpiresAt.After(s.now()) || access(k) != Write {
+		return ErrRejected
+	}
+	if _, scoped := k.Metadata["kind"]; scoped {
 		return ErrRejected
 	}
 	return nil

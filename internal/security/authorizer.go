@@ -112,6 +112,11 @@ func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) 
 }
 
 func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, resourceID string) (*warden.CheckResult, error) {
+	// Fleet credentials use separately persisted grants. They never inherit
+	// member permissions or the general automation role, even for reads.
+	if p.IsFleet() || p.Fleet != nil || IsFleetSubject(p.UserID) {
+		return nil, ErrForbidden
+	}
 	if p.UserID == "" || p.OrgID == "" {
 		return nil, ErrUnauthenticated
 	}

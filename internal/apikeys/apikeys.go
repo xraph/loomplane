@@ -234,6 +234,12 @@ func (s *Service) Authenticate(ctx context.Context, raw string) (security.Princi
 	if _, system := security.IsSystemSubject(k.CreatedBy); system {
 		return security.Principal{}, ErrRejected
 	}
+	if _, scoped := k.Metadata["kind"]; scoped {
+		return s.fleetPrincipal(k)
+	}
+	if security.IsFleetSubject(k.CreatedBy) {
+		return security.Principal{}, ErrRejected
+	}
 	return security.Principal{
 		UserID: k.CreatedBy, OrgID: k.TenantID, KeyID: k.ID.String(),
 		ReadOnly: access(k) != Write,

@@ -31,6 +31,7 @@ const HeaderOrganization = "X-Loomplane-Org"
 
 // Principal is the caller of a request.
 type Principal struct {
+	Fleet  *FleetScope `json:"fleet_scope,omitempty"`
 	UserID string
 	OrgID  string
 	// KeyID is the API key the request came with, if it came with one. A
@@ -62,7 +63,7 @@ func Resolve(userID, sessionOrg, header string) (Principal, error) {
 	switch {
 	case userID == "":
 		return Principal{}, ErrUnauthenticated
-	case strings.HasPrefix(userID, systemPrefix):
+	case strings.HasPrefix(userID, systemPrefix), IsFleetSubject(userID):
 		// authsome never issues such an ID; refusing it anyway means no
 		// session can ever act as Loomplane automation.
 		return Principal{}, ErrUnauthenticated
