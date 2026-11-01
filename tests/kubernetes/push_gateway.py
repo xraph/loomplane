@@ -54,6 +54,7 @@ class Smoke:
         self.created = False
         self.values_file = self.directory / "values.json"
         self.cookie_file = self.directory / "cookies"
+        self.device_id = None
 
     def k(self, *args, **kwargs):
         return run(
@@ -198,6 +199,52 @@ class Smoke:
                     "X-Herald-Timestamp": timestamp,
                     "X-Herald-Signature": base64.b64encode(signature).decode(),
                 },
+            )
+        )
+
+    def wait_for_gateway(self):
+        architecture = self.k(
+            "get", "nodes", "-o", "jsonpath={.items[0].status.nodeInfo.architecture}"
+        ).decode()
+        assert architecture in ("amd64", "arm64"), architecture
+        executable = self.directory / "push-network-probe"
+        run(
+            "env",
+            "CGO_ENABLED=0",
+            "GOOS=linux",
+            f"GOARCH={architecture}",
+            "go",
+            "build",
+            "-p",
+            "2",
+            "-o",
+            executable,
+            FIXTURES / "network-probe",
+        )
+        self.k(
+            "exec",
+            "-i",
+            "deploy/loomplane",
+            "-c",
+            "api",
+            "--",
+            "sh",
+            "-ec",
+            "cat > /tmp/loomplane-push-probe; chmod 700 /tmp/loomplane-push-probe",
+            data=executable.read_bytes(),
+        )
+        # Exercise the API container's DNS, TLS roots and gateway route before
+        # the one real test push. Missing auth rejects this request before
+        # handle parsing, rate limits or provider delivery.
+        retry(
+            lambda: self.k(
+                "exec",
+                "deploy/loomplane",
+                "-c",
+                "api",
+                "--",
+                "/tmp/loomplane-push-probe",
+                timeout=20,
             )
         )
 
@@ -541,6 +588,7 @@ class Smoke:
             "PUSH_GATEWAY_FCM_BASE_URL=http://fake-fcm:8080",
         )
         self.k("rollout", "status", "deploy/loomplane-push-gateway", "--timeout=120s")
+        self.wait_for_gateway()
         token = (
             self.k(
                 "exec", "deploy/loomplane", "--", "loomplane", "setup-token", "--raw"
@@ -581,6 +629,7 @@ class Smoke:
                 },
             )
         )
+        self.device_id = device["id"]
         self.expect(
             200,
             "app.loomplane.test",
@@ -720,6 +769,35 @@ def main():
                 ]:
                     try:
                         print(smoke.k(*args).decode(), file=sys.stderr)
+                    except RuntimeError:
+                        pass
+                if smoke.device_id:
+                    try:
+                        print(
+                            smoke.k(
+                                "exec",
+                                "-i",
+                                "postgres",
+                                "--",
+                                "psql",
+                                "-X",
+                                "-U",
+                                "loomplane",
+                                "-d",
+                                "loomplane",
+                                "-v",
+                                "ON_ERROR_STOP=1",
+                                "-v",
+                                f"device_id={smoke.device_id}",
+                                data=(
+                                    "SELECT recipient AS device_id, channel, status, error "
+                                    "FROM herald_messages "
+                                    "WHERE channel = 'push' AND recipient = :'device_id' "
+                                    "ORDER BY created_at DESC LIMIT 5;\n"
+                                ).encode(),
+                            ).decode(),
+                            file=sys.stderr,
+                        )
                     except RuntimeError:
                         pass
             raise
