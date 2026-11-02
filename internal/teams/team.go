@@ -43,22 +43,22 @@ type Team struct {
 	Name        string    `json:"name"`        // 1 to 80 characters
 	Slug        string    `json:"slug"`        // from the name, unique in the workspace; what the agent names
 	Description string    `json:"description"` // up to 500 characters; the agent reads it to pick a team
-	Members     []Member  `json:"members"`
-	Grants      []Grant   `json:"grants"`
+	Members     []TeamMember  `json:"members"`
+	Grants      []TeamGrant   `json:"grants"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// Member is a current workspace member in a team.
-type Member struct {
+// TeamMember is a current workspace member in a team.
+type TeamMember struct {
 	UserID  string    `json:"user_id"`
 	Email   string    `json:"email"`
 	Name    string    `json:"name"`
 	AddedAt time.Time `json:"added_at"`
 }
 
-// Grant is the role a team gives its members on one scope.
-type Grant struct {
+// TeamGrant is the role a team gives its members on one scope.
+type TeamGrant struct {
 	ID        string `json:"id"`
 	Role      string `json:"role"`       // viewer, developer or admin
 	ProjectID string `json:"project_id"` // "" for the whole workspace

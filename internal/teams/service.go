@@ -100,7 +100,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateTea
 	if err != nil {
 		return nil, fmt.Errorf("generate team id: %w", err)
 	}
-	t := &Team{ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: description, Members: []Member{}, Grants: []Grant{}}
+	t := &Team{ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: description, Members: []TeamMember{}, Grants: []TeamGrant{}}
 	if insertErr := insertTeam(ctx, s.db, t, p.UserID); insertErr != nil {
 		return nil, insertErr
 	}
@@ -312,7 +312,7 @@ func (s *Service) RemoveGrant(ctx context.Context, p security.Principal, teamID,
 	if err != nil {
 		return nil, err
 	}
-	var gone Grant
+	var gone TeamGrant
 	err = s.change(ctx, p.OrgID, ceiling, teamID, func(tx driver.Tx) ([]queued, error) {
 		var txErr error
 		if gone, txErr = deleteGrant(ctx, tx, p.OrgID, teamID, grantID); txErr != nil {

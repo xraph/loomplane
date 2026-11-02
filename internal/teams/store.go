@@ -78,7 +78,7 @@ func loadTeams(ctx context.Context, q querier, orgID, teamID string) ([]Team, er
 	err := collect(ctx, q, `SELECT id, org_id, name, slug, description, created_at, updated_at
 		FROM loomplane_teams WHERE org_id = $1 AND ($2 = '' OR id = $2) ORDER BY name, id`,
 		[]any{orgID, teamID}, func(rows driver.Rows) error {
-			t := Team{Members: []Member{}, Grants: []Grant{}}
+			t := Team{Members: []TeamMember{}, Grants: []TeamGrant{}}
 			if scanErr := rows.Scan(&t.ID, &t.OrgID, &t.Name, &t.Slug, &t.Description, &t.CreatedAt, &t.UpdatedAt); scanErr != nil {
 				return scanErr
 			}
@@ -105,7 +105,7 @@ func loadTeams(ctx context.Context, q querier, orgID, teamID string) ([]Team, er
 		ORDER BY tm.team_id, name, u.email`,
 		[]any{orgID, teamID}, func(rows driver.Rows) error {
 			var id string
-			var m Member
+			var m TeamMember
 			if scanErr := rows.Scan(&id, &m.UserID, &m.Email, &m.Name, &m.AddedAt); scanErr != nil {
 				return scanErr
 			}
@@ -126,7 +126,7 @@ func loadTeams(ctx context.Context, q querier, orgID, teamID string) ([]Team, er
 		ORDER BY g.team_id, g.project_id NULLS FIRST`,
 		[]any{orgID, teamID}, func(rows driver.Rows) error {
 			var id string
-			var g Grant
+			var g TeamGrant
 			if scanErr := rows.Scan(&id, &g.ID, &g.Role, &g.ProjectID); scanErr != nil {
 				return scanErr
 			}
@@ -258,8 +258,8 @@ func upsertGrant(ctx context.Context, tx querier, orgID, teamID, id, role, proje
 var errNoSuchProject = fmt.Errorf("%w: no such project in this workspace", ErrInvalid)
 
 // deleteGrant removes one of the team's grants and returns what it was.
-func deleteGrant(ctx context.Context, tx querier, orgID, teamID, grantID string) (Grant, error) {
-	g := Grant{ID: grantID}
+func deleteGrant(ctx context.Context, tx querier, orgID, teamID, grantID string) (TeamGrant, error) {
+	g := TeamGrant{ID: grantID}
 	err := tx.QueryRow(ctx, `DELETE FROM loomplane_team_grants WHERE id = $1 AND team_id = $2 AND org_id = $3
 		RETURNING role, coalesce(project_id, '')`, grantID, teamID, orgID).Scan(&g.Role, &g.ProjectID)
 	if errors.Is(err, pgx.ErrNoRows) {
