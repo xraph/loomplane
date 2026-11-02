@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/xraph/keysmith"
+	"github.com/xraph/keysmith/id"
 	"github.com/xraph/keysmith/key"
 	"github.com/xraph/keysmith/store"
 
@@ -41,6 +43,16 @@ const (
 // PlatformAdmins tells whether a user administers the whole instance.
 type PlatformAdmins interface {
 	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
+}
+
+// ErrUnavailable is a store or permission backend that failed, as opposed to
+// a bad, spent or expired token (ErrRejected). A caller may answer 503.
+var ErrUnavailable = errors.New("node join tokens are temporarily unavailable")
+
+// MetaAuditor is an Auditor that can also take structured details. The join
+// token audit uses it when the Auditor offers it.
+type MetaAuditor interface {
+	RecordWithMeta(ctx context.Context, action string, p security.Principal, k APIKey, meta map[string]string)
 }
 
 // NodeJoinScope is what a joining machine is allowed to become.
@@ -91,6 +103,10 @@ func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal,
 		return nil, err
 	}
 	if scope.EdgeScope == EdgeScopeInstance {
+		// Instance-wide authority is session-only, like the instance console.
+		if p.KeyID != "" {
+			return nil, security.ErrForbidden
+		}
 		if s.admins == nil {
 			return nil, security.ErrForbidden
 		}
@@ -127,7 +143,13 @@ func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal,
 		return nil, fmt.Errorf("create the join token: %w", err)
 	}
 	if s.audit != nil {
-		s.audit.Record(ctx, "node.join_token.created", p, view(res.Key))
+		if ma, ok := s.audit.(MetaAuditor); ok {
+			ma.RecordWithMeta(ctx, "node.join_token.created", p, view(res.Key), map[string]string{
+				"minted_by_key_id": p.KeyID, "edge_scope": scope.EdgeScope, "minted_with_key": fmt.Sprint(p.KeyID != ""),
+			})
+		} else {
+			s.audit.Record(ctx, "node.join_token.created", p, view(res.Key))
+		}
 	}
 	return &NodeJoinToken{ID: res.Key.ID.String(), Secret: res.RawKey, ExpiresAt: expires}, nil
 }
@@ -141,11 +163,17 @@ func validNodeJoinScope(sc *NodeJoinScope) error {
 			return fmt.Errorf("%w: a label is empty or too long", ErrInvalid)
 		}
 	}
+	allowed := nodeproto.AllowableEndpoints()
+	var endpoints []nodeproto.Endpoint
 	for _, e := range sc.Endpoints {
-		if e == "" || len(e) > maxJoinField {
-			return fmt.Errorf("%w: an endpoint is empty or too long", ErrInvalid)
+		if !e.Valid() || !slices.Contains(allowed, e) {
+			return fmt.Errorf("%w: %q is not an endpoint a node can be allowed", ErrInvalid, e)
+		}
+		if !slices.Contains(endpoints, e) {
+			endpoints = append(endpoints, e)
 		}
 	}
+	sc.Endpoints = endpoints
 	switch sc.EdgeScope {
 	case "":
 		if sc.Edge {
@@ -164,14 +192,19 @@ func validNodeJoinScope(sc *NodeJoinScope) error {
 // ConsumeNodeJoinToken spends a join token and returns what it granted. A
 // token works once: the key is revoked with Keysmith's version check, so of
 // two callers racing on one token exactly one wins and the other is
-// rejected. Anything that isn't a live join token is ErrRejected.
+// rejected. Who minted it is checked again now, with their live role; if
+// that fails the token is burned all the same. Anything that isn't a live
+// join token is ErrRejected; a failing backend is ErrUnavailable.
 func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJoinClaim, error) {
 	if !IsNodeJoinToken(raw) {
 		return nil, ErrRejected
 	}
 	res, err := s.engine.ValidateKey(ctx, raw)
 	if err != nil {
-		return nil, ErrRejected
+		if errors.Is(err, keysmith.ErrInvalidKey) || errors.Is(err, keysmith.ErrKeyInactive) || errors.Is(err, keysmith.ErrKeyExpired) {
+			return nil, ErrRejected
+		}
+		return nil, ErrUnavailable
 	}
 	k := res.Key
 	claim, err := s.nodeJoinClaim(k)
@@ -179,24 +212,90 @@ func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJo
 		return nil, err
 	}
 	tctx := s.tenant(ctx, k.TenantID)
+	// Spend first, then check the minter: whoever wins the race owns the
+	// outcome, and a token that fails the check is burned.
+	if err = s.spendNodeJoinKey(tctx, k); err != nil {
+		return nil, err
+	}
+	ok, err := s.minterStillAllowed(ctx, claim)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrRejected
+	}
+	return claim, nil
+}
+
+func (s *Service) spendNodeJoinKey(tctx context.Context, k *key.Key) error {
 	// RevokeKey re-reads the key and writes only if its version is the one it
 	// read. A lost race shows as a conflict or as an already revoked key. A
 	// conflict can also be an unrelated write to the row, so look again: if
 	// the key is still active the token is still ours to spend.
 	for range 3 {
-		err = s.engine.RevokeKey(tctx, k.ID, "node joined")
+		err := s.engine.RevokeKey(tctx, k.ID, "node joined")
 		if err == nil {
-			return claim, nil
+			return nil
 		}
-		if !errors.Is(err, store.ErrKeyConflict) {
-			return nil, ErrRejected
+		switch {
+		case errors.Is(err, keysmith.ErrInvalidStateTransition) || errors.Is(err, store.ErrKeyNotFound):
+			return ErrRejected
+		case !errors.Is(err, store.ErrKeyConflict):
+			return ErrUnavailable
 		}
 		cur, gerr := s.engine.GetKey(tctx, k.ID)
-		if gerr != nil || cur.State != key.StateActive || cur.RevokedAt != nil {
-			return nil, ErrRejected
+		if gerr != nil {
+			return ErrUnavailable
+		}
+		if cur.State != key.StateActive || cur.RevokedAt != nil {
+			return ErrRejected
 		}
 	}
-	return nil, ErrRejected
+	return ErrUnavailable
+}
+
+// minterStillAllowed checks the person who minted a token, and the key they
+// minted it with, as they are now.
+func (s *Service) minterStillAllowed(ctx context.Context, c *NodeJoinClaim) (bool, error) {
+	if s.authz == nil {
+		return false, nil
+	}
+	ok, err := s.authz.Allowed(ctx, security.Principal{UserID: c.MintedBy, OrgID: c.OrgID}, security.NodeManage)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	if !ok {
+		return false, nil
+	}
+	if c.MintedByKeyID != "" {
+		kid, perr := id.ParseKeyID(c.MintedByKeyID)
+		if perr != nil {
+			return false, nil
+		}
+		mk, gerr := s.engine.GetKey(s.tenant(ctx, c.OrgID), kid)
+		if gerr != nil {
+			if errors.Is(gerr, store.ErrKeyNotFound) {
+				return false, nil
+			}
+			return false, ErrUnavailable
+		}
+		if mk == nil || mk.AppID != s.appID || mk.TenantID != c.OrgID || mk.CreatedBy != c.MintedBy || mk.State != key.StateActive || mk.RevokedAt != nil || mk.PolicyID != nil || len(mk.Scopes) > 0 || mk.ExpiresAt == nil || !mk.ExpiresAt.After(s.now()) || access(mk) != Write {
+			return false, nil
+		}
+	}
+	if c.Scope.EdgeScope == EdgeScopeInstance {
+		if s.admins == nil || c.MintedByKeyID != "" {
+			return false, nil
+		}
+		platform, perr := s.admins.IsPlatformAdmin(ctx, c.MintedBy)
+		if perr != nil {
+			return false, ErrUnavailable
+		}
+		if !platform {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *Service) nodeJoinClaim(k *key.Key) (*NodeJoinClaim, error) {

@@ -133,9 +133,18 @@ type keyAuditor struct {
 }
 
 func (a keyAuditor) Record(ctx context.Context, action string, p security.Principal, k apikeys.APIKey) {
+	a.RecordWithMeta(ctx, action, p, k, nil)
+}
+
+// RecordWithMeta is Record with extra string details, such as who minted a
+// node join token and with which key.
+func (a keyAuditor) RecordWithMeta(ctx context.Context, action string, p security.Principal, k apikeys.APIKey, meta map[string]string) {
 	b := a.chronicle.Warning(ctx, action, "api_key", k.ID).
 		Category("api_keys").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
 		Meta("name", k.Name).Meta("access", string(k.Access)).Meta("hint", k.Hint).Meta("created_by", k.CreatedBy)
+	for name, v := range meta {
+		b = b.Meta(name, v)
+	}
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
 	}
