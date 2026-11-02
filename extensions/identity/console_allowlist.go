@@ -27,6 +27,9 @@ var consoleCommands = func() map[consoleIntent]bool {
 	add("authsome",
 		"auth.logout",
 		"users.ban", "users.unban",
+		// A user's names, username and verified flag, through authsome's
+		// AdminUpdateUser. It can't touch email, password or roles.
+		"users.update",
 		"sessions.revoke", "sessions.bulkRevoke",
 	)
 	add("waitlist", "waitlist.approve", "waitlist.reject", "waitlist.delete")

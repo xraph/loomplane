@@ -24,7 +24,7 @@ func consoleTestRegistry(t *testing.T) contract.Registry {
 		"authsome": {
 			"users.list": q, "users.detail": q, "webhooks.detail": q, "credentials.detail": q,
 			"auth.setupStatus": q, "auth.dynamicConfig": q,
-			"users.ban": cmd, "users.unban": cmd, "sessions.revoke": cmd, "apps.delete": cmd,
+			"users.ban": cmd, "users.unban": cmd, "users.update": cmd, "sessions.revoke": cmd, "apps.delete": cmd,
 			"auth.setup": cmd, "roles.assign": cmd, "settings.update": cmd,
 			"auth.toggleFeature": cmd, "users.delete": cmd, "auth.login": cmd,
 		},
@@ -75,6 +75,8 @@ func TestConsoleAllowed(t *testing.T) {
 	}{
 		{"authsome", "users.list", q, true},
 		{"authsome", "users.ban", cmd, true},
+		// Names and the verified flag; an admin marks an email verified here.
+		{"authsome", "users.update", cmd, true},
 		{"authsome", "sessions.revoke", cmd, true},
 		{"authsome", "apps.delete", cmd, false},
 		{"authsome", "auth.setup", cmd, false},

@@ -637,8 +637,8 @@ github.com/xdg-go/stringprep v1.0.4 h1:XLI/Ng3O1Atzq0oBs3TWm+5ZVgkq2aqdlvP9JtoZ6
 github.com/xdg-go/stringprep v1.0.4/go.mod h1:mPGuuIYwz7CmR2bT9j4GbQqutWS1zV24gijq1dTyGkM=
 github.com/xlab/treeprint v1.2.0 h1:HzHnuAF1plUN2zGlAFHbSQP2qJ0ZAD3XF5XD7OesXRQ=
 github.com/xlab/treeprint v1.2.0/go.mod h1:gj5Gd3gPdKtR1ikdDK6fnFLdmIS0X30kTTuNd/WEJu0=
-github.com/xraph/authsome v1.8.3 h1:aUuQQaGbZgk1TWdMIiZZZ+LJ+JMcLbGeetIqRWnaNhk=
-github.com/xraph/authsome v1.8.3/go.mod h1:BnOu9q1FNj7s3rAnrBUNbOimkUrzK5RcsdAmz4d4POk=
+github.com/xraph/authsome v1.9.0 h1:hOJiVoymPEAJAF+zoMcDiXRZapix4HGEibFiHszfFMs=
+github.com/xraph/authsome v1.9.0/go.mod h1:YEJ9O+SC4a0BItc4XYRensT50E0OVXlGBABQStpXm8I=
 github.com/xraph/bastion v1.4.1 h1:E4RdUwB6sA1a2X1Y+36nST1J+xyw1H4Jokc6vQwMtqQ=
 github.com/xraph/bastion v1.4.1/go.mod h1:LuHlnOQHrtaBtq4GvCcwD7B65Ax4rukVUrUdBxnZuIc=
 github.com/xraph/chronicle v1.9.1 h1:GyHnc87hYwhZAounnOEXSFgTcxurUVJJhekpkqfhasA=

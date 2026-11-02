@@ -31,7 +31,10 @@ identity:
   base_path: /authsome
   app_id: "${LOOMPLANE_AUTHSOME_APP_ID:-}"
   publishable_key: "${LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY:-}"
-  require_email_verification: false
+  # Unset, accounts must verify their email wherever the instance can send
+  # mail, and needn't where it can't. true or false forces it. The account
+  # that runs first-time setup is verified by setup itself.
+  require_email_verification: "${LOOMPLANE_REQUIRE_EMAIL_VERIFICATION:-}"
   # The HttpOnly cookie the dashboard's session lives in. Cookies are shared
   # by every port on a host, so another authsome app on the same host needs
   # a different name, or each signs the other out.

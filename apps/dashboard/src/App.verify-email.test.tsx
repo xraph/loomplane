@@ -76,6 +76,25 @@ describe("email verification", () => {
     await screen.findByText("Protected page")
   })
 
+  // Nothing is left to verify, so the page would only ask for a code that
+  // no longer exists.
+  it("sends a verified account home from the verify page", async () => {
+    instance(true)
+    auth.user = { email: "ada@example.com", email_verified: true }
+    const history = await open("/verify-email?email=ada%40example.com")
+    await screen.findByText("Protected page")
+    await waitFor(() => expect(history.location.pathname).toBe("/"))
+  })
+
+  // Signed out, the page is how a new account gets its first session.
+  it("keeps the verify page for someone signed out", async () => {
+    instance(true)
+    auth.isAuthenticated = false
+    auth.user = null
+    await open("/verify-email?email=ada%40example.com")
+    await screen.findByText("verify-email card for ada@example.com")
+  })
+
   it("changes nothing when verification isn't required", async () => {
     instance(false)
     await open("/projects")

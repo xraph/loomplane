@@ -43,7 +43,7 @@ require (
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.8.3
+	github.com/xraph/authsome v1.9.0
 	github.com/xraph/bastion v1.4.1
 	github.com/xraph/chronicle v1.9.1
 	github.com/xraph/confy v1.1.0

@@ -71,6 +71,11 @@ export function App() {
   if (!setupPending && path === "/setup") {
     return <Navigate to="/sign-in" replace />
   }
+  // A signed-in account whose email is already verified has no code to
+  // enter, so the verify page would only ask for one that doesn't exist.
+  if (path === "/verify-email" && isAuthenticated && user?.email_verified) {
+    return <Navigate to="/" replace />
+  }
   if (recoveryPaths.includes(path)) {
     return (
       <AuthLayout title={authTitle(path)}>

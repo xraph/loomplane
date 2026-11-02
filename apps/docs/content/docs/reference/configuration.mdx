@@ -21,6 +21,7 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 | `LOOMPLANE_ARTIFACT_BUCKET` | `loomplane-artifacts` | The artifact bucket name |
 | `LOOMPLANE_BACKUP_URL` | Unset | An independent backend for recovery objects, such as an S3-compatible URL. Empty uses the artifact backend |
 | `LOOMPLANE_BACKUP_BUCKET` | `loomplane-backups` | The bucket for recovery objects |
+| `LOOMPLANE_REQUIRE_EMAIL_VERIFICATION` | On when email is set up | Whether an account must verify its email before it can sign in or use the API. Unset, it's on wherever Loomplane can send mail (SMTP, Resend or a mail directory) and off where it can't, since nobody could get a code. `true` or `false` forces it; production refuses `true` with no mail. The account that runs first-time setup is verified by setup itself |
 | `LOOMPLANE_SESSION_COOKIE` | `loomplane_session` | The HttpOnly session cookie's name. Cookies are shared by every port on a host, so another authsome app on the same host needs a different name |
 | `LOOMPLANE_AUTHSOME_APP_ID` | Built in | The authsome app (`aapp_...`) that holds Loomplane's users |
 | `LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY` | Built in | That app's public key |
@@ -112,7 +113,6 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `orchestration.concurrency` | `4` | Jobs one process runs at once. At least 1 |
 | `orchestration.poll_interval` | `1s` | How often idle workers look for jobs |
 | `identity.base_path` | `/authsome` | Where authsome's API is mounted |
-| `identity.require_email_verification` | `false` | Whether an account must verify its email before it can sign in or use the API. Sign-up's own session is refused too, until the email is verified |
 | `providers.plugins` | `[]` | A list of `{url, token}`. See [Provider plugins](/docs/extending/provider-plugins) |
 
 `providers.paused` also accepts a YAML list, in place of the variable.

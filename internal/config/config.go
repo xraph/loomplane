@@ -193,7 +193,11 @@ type IdentityConfig struct {
 	AppID string
 	// PublishableKey is the authsome app's public key.
 	PublishableKey string
-	// RequireEmailVerification makes sign-in wait for a verified email.
+	// EmailVerification is identity.require_email_verification as set.
+	// Nil, the default, means on wherever the instance can send mail.
+	EmailVerification *bool
+	// RequireEmailVerification is the setting resolved: whether an account
+	// must verify its email before it can sign in or use the API.
 	RequireEmailVerification bool
 	// SessionCookie names the HttpOnly cookie the dashboard's session is
 	// kept in. Cookies are shared by every port on a host, so two authsome
@@ -419,7 +423,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.BasePath, "identity.base_path")
 	r.str(&c.Identity.AppID, "identity.app_id")
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
-	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
+	r.optionalBool(&c.Identity.EmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
 	r.str(&c.Console.Path, "console.path")
@@ -509,6 +513,12 @@ func FromSource(src Getter) (Config, error) {
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
 	}
+	// Unset, verification follows mail: on wherever the code can be sent,
+	// since without mail nobody after the setup owner could verify.
+	c.Identity.RequireEmailVerification = c.Notifications.MailEnabled()
+	if c.Identity.EmailVerification != nil {
+		c.Identity.RequireEmailVerification = *c.Identity.EmailVerification
+	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -596,6 +606,9 @@ func (c *Config) productionChecks() []error {
 	var errs []error
 	if c.SecretKey == devSecretKey {
 		errs = append(errs, errors.New("production refuses the development secret_key; set LOOMPLANE_SECRET_KEY"))
+	}
+	if c.Identity.RequireEmailVerification && !c.Notifications.MailEnabled() {
+		errs = append(errs, errors.New("identity.require_email_verification is on but email is off, so nobody could get a code; set up SMTP or Resend, or set LOOMPLANE_REQUIRE_EMAIL_VERIFICATION=false"))
 	}
 	if strings.HasPrefix(c.PublicURL, "http://") {
 		errs = append(errs, errors.New("production needs an https public_url"))

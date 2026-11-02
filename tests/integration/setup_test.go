@@ -535,3 +535,85 @@ func TestSetup_envOverride(t *testing.T) {
 		t.Fatalf("public config = %+v, want the override to keep the waitlist off", got)
 	}
 }
+
+// With email verification required, the account that runs setup is let
+// in anyway: the setup token, or running the instance at all in
+// development, already proves who it is. Anyone who signs up after it gets
+// no session until they verify, in this tab or any other.
+func TestSetup_verificationRequired(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Identity.RequireEmailVerification = true
+	off := false
+	cfg.Identity.Waitlist = &off
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+
+	code, body := c.setup(ada)
+	if code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	var res struct {
+		OK                   bool `json:"ok"`
+		VerificationRequired bool `json:"verification_required"`
+	}
+	if err := json.Unmarshal([]byte(body), &res); err != nil || !res.OK || res.VerificationRequired {
+		t.Fatalf("setup body %s (err %v), want ok and the owner verified", body, err)
+	}
+	var sess struct {
+		UserID string `json:"user_id"`
+	}
+	c.get("/api/v1/session", &sess)
+	if sess.UserID == "" {
+		t.Fatal("the setup owner has no working session")
+	}
+
+	newcomer := &setupClient{t: t, base: c.base, key: c.key}
+	creds := map[string]string{"email": "grace@example.com", "password": "Hopper-Compiler-1952"}
+	status, raw, cookies := newcomer.send(http.MethodPost, "/authsome/v1/signup", creds)
+	if status != http.StatusCreated {
+		t.Fatalf("sign-up: %d %s", status, raw)
+	}
+	var signedUp struct {
+		SessionToken string `json:"session_token"`
+	}
+	if err := json.Unmarshal(raw, &signedUp); err != nil {
+		t.Fatal(err)
+	}
+	if signedUp.SessionToken != "" {
+		t.Fatal("an unverified sign-up got a session token")
+	}
+	for _, ck := range cookies {
+		if ck.Name == "loomplane_session" && ck.Value != "" {
+			t.Fatal("an unverified sign-up got a session cookie, which works in any tab")
+		}
+	}
+	if status, raw, _ := newcomer.send(http.MethodPost, "/authsome/v1/signin", creds); status != http.StatusForbidden {
+		t.Fatalf("an unverified sign-in: %d %s, want 403", status, raw)
+	}
+}
+
+// An instance set up before setup verified its owner can have an owner
+// whose email was never verified. Once verification is required, starting
+// it verifies that owner, so the person who set it up isn't locked out.
+func TestSetup_earlierOwnerIsVerifiedOnStart(t *testing.T) {
+	cfg := config.Defaults()
+	r, c := freshSetup(t, &cfg)
+	if code, body := c.setup(ada); code != http.StatusOK {
+		r.stop()
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	r.stop()
+	execSQL(t, cfg.Database.URL, `UPDATE authsome_users SET email_verified = false`)
+
+	cfg.Identity.RequireEmailVerification = true
+	r = startStoredWaitlist(t, cfg)
+	defer r.stop()
+	if n := countRows(t, cfg.Database.URL, `SELECT count(*) FROM authsome_users WHERE email_verified`); n != 1 {
+		t.Fatalf("%d verified users after the start, want the owner", n)
+	}
+	owner := &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	creds := map[string]string{"email": ada["email"], "password": ada["password"]}
+	if status, raw, _ := owner.send(http.MethodPost, "/authsome/v1/signin", creds); status != http.StatusOK {
+		t.Fatalf("the owner's sign-in after the upgrade: %d %s, want 200", status, raw)
+	}
+}
