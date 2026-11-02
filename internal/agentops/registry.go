@@ -260,6 +260,14 @@ func (r *Registry) Invoke(ctx context.Context, inv cortex.Invocation) (string, e
 func (r *Registry) run(ctx context.Context, inv cortex.Invocation, op Op, fn func(ctx context.Context, call Call) (any, error)) (string, error) {
 	call, err := CallFrom(inv)
 	if err != nil {
+		// A refused call is worth an audit entry most of all. It's
+		// recorded under the principal it came with, when that's a
+		// Loomplane principal: without one there's no workspace to keep
+		// the entry in.
+		if p, ok := inv.Principal.(security.Principal); ok && p.OrgID != "" {
+			refused := Call{Principal: p, RunID: inv.RunID.String(), CallID: inv.Call.ID}
+			r.record(ctx, refused, op, &callState{}, "", err)
+		}
 		return "", err
 	}
 	call.TaskID = TaskIDFrom(ctx)
@@ -270,6 +278,9 @@ func (r *Registry) run(ctx context.Context, inv cortex.Invocation, op Op, fn fun
 	risk, riskErr := op.risk(ctx, call, json.RawMessage(inv.Call.Arguments))
 	if riskErr != nil {
 		r.record(ctx, call, op, state, "", riskErr)
+		if errors.Is(riskErr, security.ErrForbidden) {
+			return notAllowed(riskErr, op.Permission), nil
+		}
 		return "", riskErr
 	}
 	out, err := fn(ctx, call)

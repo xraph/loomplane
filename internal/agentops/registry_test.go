@@ -237,3 +237,23 @@ func TestExternalOperationsHaveNoHandler(t *testing.T) {
 		t.Fatalf("ask_person ran in-process: %v", err)
 	}
 }
+
+// A call CallFrom refuses is audited too, under the principal it came with.
+func TestRefusedCallsAreAudited(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.call(t.Context(), as(orgA, ada), agentscope.Scope{OrgID: orgB}, "list_projects", nil); err == nil {
+		t.Fatal("org A's agent ran under org B's scope")
+	}
+	if _, err := w.call(t.Context(), security.Principal{UserID: ada, OrgID: orgA}, agentscope.Scope{OrgID: orgA}, "list_projects", nil); err == nil {
+		t.Fatal("a person called an operation")
+	}
+	events := w.audit.toolCalls()
+	if len(events) != 2 {
+		t.Fatalf("%d agent.tool.call events, want 2: %+v", len(events), events)
+	}
+	for i, e := range events {
+		if e.Attributes["tool"] != "list_projects" || e.Attributes["outcome"] != "forbidden" || e.Outcome != "denied" || e.Principal.OrgID != orgA {
+			t.Errorf("event %d: %+v", i, e)
+		}
+	}
+}

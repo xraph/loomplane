@@ -116,7 +116,7 @@ func TestAgentOperationsKeepToTheirWorkspace(t *testing.T) {
 	evidence := map[string]map[string]string{
 		"recent_canaries": {"project": proj.Slug, "environment": "production"},
 		"rollback_target": {"project": proj.Slug, "environment": "production"},
-		"binding_metrics": {"project": proj.Slug, "environment": "production", "service": "api"},
+		"binding_metrics": {"project": proj.Slug, "environment": "production", "service": "svc:ledger:node:apps/api"},
 	}
 	for op, args := range evidence {
 		res, err := a.invoke(t, reg, op, args)

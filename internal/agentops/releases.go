@@ -2,6 +2,7 @@ package agentops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -161,9 +162,9 @@ func (d *Deps) bindingMetrics(ctx context.Context, call Call, in defs.BindingMet
 		return bindingMetricsOutput{}, err
 	}
 	service := strings.TrimSpace(in.Service)
-	i := slices.IndexFunc(list, func(b *planning.Binding) bool { return b.Subject == planning.ServiceSubject && b.Name == service })
+	i := slices.IndexFunc(list, func(b *planning.Binding) bool { return runsService(b, service) })
 	if i < 0 {
-		return bindingMetricsOutput{}, fmt.Errorf("%w: %q in %s", errNoService, service, env.Name)
+		return bindingMetricsOutput{}, fmt.Errorf("%w: no service with graph ID %q runs in %s; pass the graph ID status shows in a binding's config.service", errNoService, service, env.Name)
 	}
 	// The reader takes only a binding ID: read the binding back by it in
 	// the caller's organization, and check it's the one found above.
@@ -171,7 +172,7 @@ func (d *Deps) bindingMetrics(ctx context.Context, call Call, in defs.BindingMet
 	if err != nil {
 		return bindingMetricsOutput{}, err
 	}
-	if b.ProjectID != p.ID || b.EnvironmentID != env.ID {
+	if b.ProjectID != p.ID || b.EnvironmentID != env.ID || !runsService(b, service) {
 		return bindingMetricsOutput{}, fmt.Errorf("%w: %q in %s", errNoService, service, env.Name)
 	}
 	if d.Health == nil {
@@ -199,6 +200,19 @@ func (d *Deps) bindingMetrics(ctx context.Context, call Call, in defs.BindingMet
 		Available: h.Available, UnavailableReason: d.quote(ctx, evidence, h.Reason),
 		Requests: h.Requests, Errors: h.Errors, ErrorRate: h.ErrorRate(), LatencyMS: h.LatencyMS, Statistic: h.Statistic,
 	}, nil
+}
+
+// runsService reports whether b runs the service whose graph ID is
+// graphID: a service binding's stored configuration names the service in
+// the analysis's graph, the ID set_variable and request_secret take too.
+func runsService(b *planning.Binding, graphID string) bool {
+	if b.Subject != planning.ServiceSubject || graphID == "" {
+		return false
+	}
+	var cfg struct {
+		Service string `json:"service"`
+	}
+	return json.Unmarshal(b.Config, &cfg) == nil && cfg.Service == graphID
 }
 
 // quoteCanary quotes why a canary stands as it does.

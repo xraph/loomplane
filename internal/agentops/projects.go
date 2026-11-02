@@ -12,6 +12,9 @@ import (
 	defs "github.com/xraph/loomplane/pkg/agentops"
 )
 
+// errProjectScoped is create_project in a run about one project.
+var errProjectScoped = fmt.Errorf("%w: this conversation is about one project; create projects from the workspace", errInvalid)
+
 // errProjectNotFound is a project reference that matches nothing.
 var errProjectNotFound = errors.New("project not found")
 
@@ -154,6 +157,9 @@ func registerProjects(r *Registry, d *Deps) {
 	})
 
 	Register(r, def("create_project"), security.ProjectCreate, func(ctx context.Context, call Call, in defs.CreateProjectInput) (*projects.Project, error) {
+		if call.Scope.ProjectID != "" {
+			return nil, errProjectScoped
+		}
 		p, err := d.Projects.Create(ctx, call.Principal, projects.CreateProjectInput{Name: in.Name, RepositoryURL: in.Repository})
 		if err != nil {
 			return nil, err

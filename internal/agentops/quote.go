@@ -35,10 +35,19 @@ func (d *Deps) quotePlan(ctx context.Context, p *planning.Plan) *planning.Plan {
 	out.Error = d.quote(ctx, agentsafety.SourceErrorOutput, p.Error)
 	out.Problems = d.quoteFindings(ctx, p.Problems)
 	out.Warnings = d.quoteFindings(ctx, p.Warnings)
+	// An automatic rollback's reason and decision note are built from
+	// watch evidence.
+	if p.Rollback != nil {
+		rb := *p.Rollback
+		rb.Reason = d.quote(ctx, evidence, rb.Reason)
+		out.Rollback = &rb
+	}
+	out.DecisionNote = d.quote(ctx, evidence, p.DecisionNote)
 	return &out
 }
 
-// quoteFindings quotes the evidence each finding cites: a line of a
+// quoteFindings quotes each finding's message, which can be a provider's
+// error word for word, and the evidence it cites: a line of a
 // repository's files.
 func (d *Deps) quoteFindings(ctx context.Context, in []planning.Finding) []planning.Finding {
 	if in == nil {
@@ -46,6 +55,7 @@ func (d *Deps) quoteFindings(ctx context.Context, in []planning.Finding) []plann
 	}
 	out := slices.Clone(in)
 	for i := range out {
+		out[i].Message = d.quote(ctx, agentsafety.SourceErrorOutput, out[i].Message)
 		if len(out[i].Evidence) == 0 {
 			continue
 		}
@@ -58,11 +68,13 @@ func (d *Deps) quoteFindings(ctx context.Context, in []planning.Finding) []plann
 	return out
 }
 
-// quoteDeployment quotes a deployment's error and each step's message and
-// warnings: they are what the cloud and the build said.
+// quoteDeployment quotes a deployment's error, its canary's reason (as
+// canary_report does) and each step's message and warnings: they are what
+// the cloud and the build said.
 func (d *Deps) quoteDeployment(ctx context.Context, dep *deployments.Deployment) *deployments.Deployment {
 	out := *dep
 	out.Error = d.quote(ctx, agentsafety.SourceErrorOutput, dep.Error)
+	out.Canary = d.quoteCanary(ctx, dep.Canary)
 	out.Steps = slices.Clone(dep.Steps)
 	for i := range out.Steps {
 		s := &out.Steps[i]

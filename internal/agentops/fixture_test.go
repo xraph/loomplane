@@ -654,13 +654,16 @@ func (f *fakePlans) DraftManifest(context.Context, security.Principal, string) (
 
 // fakeVariables is environments' service over a list.
 type fakeVariables struct {
-	authz   *security.Authorizer
+	authz   Authorizer
 	mu      sync.Mutex
 	list    []*environments.Variable
 	created []environments.CreateVariableInput
 }
 
-func (f *fakeVariables) ListProject(context.Context, security.Principal, string) ([]*environments.Variable, error) {
+func (f *fakeVariables) ListProject(ctx context.Context, p security.Principal, projectID string) ([]*environments.Variable, error) {
+	if err := f.authz.Require(ctx, p, security.VariableRead, projectID); err != nil {
+		return nil, err
+	}
 	return f.list, nil
 }
 

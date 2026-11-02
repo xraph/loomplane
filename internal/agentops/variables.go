@@ -3,6 +3,7 @@ package agentops
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/security"
@@ -13,6 +14,26 @@ import (
 // authorizer refuses such a call first (its risk is secret_or_external);
 // this is the second line.
 var errSecretNeedsAPerson = errors.New("secret values are typed by a person: call request_secret")
+
+// errEveryEnvironment is set_variable for every environment in a run
+// scoped to one.
+var errEveryEnvironment = fmt.Errorf("%w: this conversation is about one environment; name it", errOutOfScope)
+
+// scopedEnvironmentName is the name of the environment the run is scoped
+// to, or "" when it isn't.
+func (d *Deps) scopedEnvironmentName(ctx context.Context, call Call, projectID string) (string, error) {
+	if call.Scope.EnvironmentID == "" {
+		return "", nil
+	}
+	envs, err := d.environments(ctx, call, projectID)
+	if err != nil {
+		return "", err
+	}
+	if len(envs) != 1 {
+		return "", errOutOfScope
+	}
+	return envs[0].Name, nil
+}
 
 // variableView is a variable as the agent sees it: never a value, secret
 // or not. Set says whether it has one.
@@ -47,8 +68,17 @@ func registerVariables(r *Registry, d *Deps) {
 		if err != nil {
 			return variablesOutput{}, err
 		}
+		scoped, err := d.scopedEnvironmentName(ctx, call, p.ID)
+		if err != nil {
+			return variablesOutput{}, err
+		}
 		out := variablesOutput{Variables: make([]variableView, 0, len(list))}
 		for _, v := range list {
+			// A run scoped to one environment sees its variables and the
+			// ones set for every environment.
+			if scoped != "" && v.Environment != "" && v.Environment != scoped {
+				continue
+			}
 			out.Variables = append(out.Variables, viewOf(v))
 		}
 		return out, nil
@@ -61,6 +91,15 @@ func registerVariables(r *Registry, d *Deps) {
 		p, err := d.findProject(ctx, call, in.Project)
 		if err != nil {
 			return variableView{}, err
+		}
+		// A run scoped to one environment writes only there: neither to
+		// another nor to every environment at once.
+		if in.Environment != "" {
+			if _, err = d.environment(ctx, call, p.ID, in.Environment); err != nil {
+				return variableView{}, err
+			}
+		} else if call.Scope.EnvironmentID != "" {
+			return variableView{}, errEveryEnvironment
 		}
 		v, err := d.Environments.CreateProject(ctx, call.Principal, p.ID, environments.CreateVariableInput{
 			Key: in.Key, Value: in.Value, Environment: in.Environment, Service: in.Service,

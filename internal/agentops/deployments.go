@@ -166,6 +166,11 @@ func (d *Deps) lastLines(ctx context.Context, orgID, deploymentID string, n int)
 		if err != nil {
 			return nil, err
 		}
+		if pg.Gap {
+			// The store pruned past where this read was and starts again
+			// from its floor: so does the tail.
+			seen = 0
+		}
 		for _, l := range pg.Logs {
 			ring[seen%n] = logLine(l)
 			seen++

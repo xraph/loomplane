@@ -122,7 +122,7 @@ type DeploymentLogsInput struct {
 type BindingMetricsInput struct {
 	Project     string `json:"project" jsonschema:"the project's slug, name or ID"`
 	Environment string `json:"environment" jsonschema:"the environment, such as production"`
-	Service     string `json:"service" jsonschema:"the service's graph ID"`
+	Service     string `json:"service" jsonschema:"the service's graph ID, as status shows it in a binding's config.service"`
 	Minutes     int    `json:"minutes,omitempty" jsonschema:"how many minutes back to read; 30 if zero, at most 1440"`
 }
 
