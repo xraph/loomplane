@@ -19,6 +19,7 @@ import (
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 )
 
 // fillDeps gives the agent's operations Loomplane's services, from the
@@ -50,6 +51,7 @@ func (e *Extension) fillDeps(c forge.Container, projectSvc *projects.Service) er
 	resolve("the release health reader", func() (err error) { d.Health, err = forge.InjectType[releasehealth.Reader](c); return })
 	resolve("the planning store", func() (err error) { d.Bindings, err = forge.InjectType[*planning.PgStore](c); return })
 	resolve("the release watches", func() (err error) { d.Watches, err = forge.InjectType[*releasewatch.Service](c); return })
+	resolve("the teams service", func() (err error) { d.Teams, err = forge.InjectType[*teams.Service](c); return })
 	d.Safety = e.scanner
 	return errors.Join(errs...)
 }

@@ -20,9 +20,8 @@ import (
 	defs "github.com/xraph/loomplane/pkg/agentops"
 )
 
-// later are agent definitions this package doesn't serve yet: list_teams
-// needs the teams service, which lands with the teams work.
-var later = []string{"list_teams"}
+// later are agent definitions this package doesn't serve yet.
+var later []string
 
 func panicsWith(t *testing.T, want string, fn func()) {
 	t.Helper()

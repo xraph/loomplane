@@ -18,6 +18,7 @@ func Builtins(r *Registry, d *Deps) {
 	registerPlans(r, d)
 	registerDeployments(r, d)
 	registerReleases(r, d)
+	registerTeams(r, d)
 	registerRequests(r)
 }
 

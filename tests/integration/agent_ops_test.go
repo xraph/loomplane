@@ -216,3 +216,55 @@ func TestAgentAuthorizerKeepsToItsWorkspace(t *testing.T) {
 		t.Fatalf("Ledger's agent approving its own plan: %v", err)
 	}
 }
+
+// list_teams reads the real teams service as the agent acting for a
+// person: each workspace's agent lists its own teams with a member count,
+// never a member's email, and never the description as it was typed.
+func TestAgentListsOnlyItsWorkspacesTeams(t *testing.T) {
+	fake := agenttest.Anthropic(t)
+	a := startAgentOrg(t, fake.AIConfig())
+	defer a.r.stop()
+	a.budget("10")
+	a.enable(nil)
+	b := secondAgentOrg(t, a, "bob@example.com", "Ledger Co", "ledger-co")
+	b.budget("5")
+	b.enable(nil)
+
+	var team struct {
+		ID string `json:"id"`
+	}
+	b.owner.must(http.StatusCreated, http.MethodPost, "/api/v1/teams", map[string]string{"name": "Ledger crew", "description": "Keeps the books"}, &team)
+	b.owner.must(http.StatusOK, http.MethodPut, "/api/v1/teams/"+team.ID+"/members/"+b.userID(), nil, nil)
+	a.owner.must(http.StatusCreated, http.MethodPost, "/api/v1/teams", map[string]string{"name": "Engines"}, nil)
+
+	reg := inject[*agentops.Registry](t, a.container())
+	res, err := a.invoke(t, reg, "list_teams", defs.NoInput{})
+	if err != nil || !strings.Contains(res, `"slug":"engines"`) || strings.Contains(res, "ledger") || strings.Contains(res, "books") {
+		t.Fatalf("Engines' agent list_teams: %s, %v", res, err)
+	}
+	res, err = b.invoke(t, reg, "list_teams", defs.NoInput{})
+	if err != nil {
+		t.Fatalf("Ledger's agent list_teams: %v", err)
+	}
+	var out struct {
+		Teams []struct {
+			Slug        string `json:"slug"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			MemberCount int    `json:"member_count"`
+		} `json:"teams"`
+	}
+	if err := json.Unmarshal([]byte(res), &out); err != nil {
+		t.Fatal(err)
+	}
+	// This call has no shield tenant on its context, which a run has, so the scan
+	// fails and the description is withheld. Either way it never reaches
+	// the model as typed.
+	if len(out.Teams) != 1 || out.Teams[0].Slug != "ledger-crew" || out.Teams[0].Name != "Ledger crew" || out.Teams[0].MemberCount != 1 ||
+		out.Teams[0].Description == "Keeps the books" || out.Teams[0].Description == "" {
+		t.Fatalf("Ledger's agent list_teams: %s", res)
+	}
+	if strings.Contains(res, "@") || strings.Contains(res, b.userID()) || strings.Contains(res, team.ID) {
+		t.Fatalf("list_teams names the members: %s", res)
+	}
+}

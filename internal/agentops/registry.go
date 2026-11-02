@@ -35,6 +35,7 @@ import (
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 	defs "github.com/xraph/loomplane/pkg/agentops"
 )
 
@@ -471,6 +472,8 @@ type Deps struct {
 	// principal: *planning.PgStore.
 	Bindings BindingLookup
 	Watches  WatchService
+	// Teams lists the workspace's teams for list_teams: *teams.Service.
+	Teams TeamService
 	// Promote decides whether the agent may approve a production plan
 	// without a person: allowed, or the reasons it may not, in words a
 	// person reads. approve_plan asks it again just before approving.
@@ -482,6 +485,11 @@ type Deps struct {
 // BindingLookup is *planning.PgStore's binding read.
 type BindingLookup interface {
 	GetBinding(ctx context.Context, orgID, id string) (*planning.Binding, error)
+}
+
+// TeamService is *teams.Service.
+type TeamService interface {
+	List(ctx context.Context, p security.Principal) (*teams.TeamList, error)
 }
 
 // WatchService is *releasewatch.Service.

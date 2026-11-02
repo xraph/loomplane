@@ -38,6 +38,9 @@ const (
 	SourceManifest      = "manifest"
 	SourceErrorOutput   = "error_output"
 	SourceToolResult    = "tool_result"
+	// SourceTeamDescription is a team's description, which any member
+	// who manages teams can type.
+	SourceTeamDescription = "team_description"
 )
 
 // Withheld stands in for untrusted text that failed its scan, or couldn't
