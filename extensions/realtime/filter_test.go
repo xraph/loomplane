@@ -219,3 +219,35 @@ func TestNotificationEventsWithoutAUserReachNobody(t *testing.T) {
 		}
 	}
 }
+
+// Agent requests reach anyone who may talk to the agent. A task event
+// shows who ran a chat, its status and its tokens, so it reaches only those
+// who manage the workspace's AI; a person follows their own task through
+// the agent's Watch.
+func TestAgentEventsNeedAgentPermissions(t *testing.T) {
+	for event, want := range map[string]security.Permission{
+		"agent_task.updated":    security.AIManage,
+		"agent_task.deleted":    security.AIManage,
+		"agent_request.updated": security.AgentUse,
+		"agent_request.deleted": security.AgentUse,
+	} {
+		if got := permission(event); got != want {
+			t.Fatalf("%s needs %s, want %s", event, got, want)
+		}
+	}
+	input := []store.Event{
+		{OrgID: "org_a", Type: "agent_task.updated", EntityID: "atask_1"},
+		{OrgID: "org_a", Type: "agent_request.updated", EntityID: "areq_1"},
+	}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{denied: security.AIManage}}
+	got, err := e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 || got[0].Type != "agent_request.updated" {
+		t.Fatalf("agent:use without ai:manage: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{denied: security.AgentUse}
+	got, err = e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 || got[0].Type != "agent_task.updated" {
+		t.Fatalf("ai:manage without agent:use: %+v %v", got, err)
+	}
+}

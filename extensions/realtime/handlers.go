@@ -57,6 +57,13 @@ func permission(event string) security.Permission {
 		return security.CloudAccountRead
 	case "cloud_capacity", "cloud_cluster":
 		return security.OrganizationCloudManage
+	case "agent_request":
+		return security.AgentUse
+	case "agent_task":
+		// A task event shows who ran a chat, its status and its tokens, so
+		// only those who manage the workspace's AI see every task. A person
+		// follows their own through the agent's Watch.
+		return security.AIManage
 	default:
 		return security.ProjectRead
 	}
