@@ -372,7 +372,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 // SetTeamInput names a project's responsible team. A null or empty TeamID
 // clears it.
 type SetTeamInput struct {
-	TeamID *string `json:"team_id"`
+	TeamID *string `json:"team_id" nullable:"true"`
 }
 
 // SetTeam names the team responsible for a project, or clears it. Anyone

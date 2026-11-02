@@ -38,15 +38,15 @@ import (
 
 // Team is a named group of workspace members.
 type Team struct {
-	ID          string    `json:"id" forge:"id"` // typeid "team_..."
-	OrgID       string    `json:"org_id"`
-	Name        string    `json:"name"`        // 1 to 80 characters
-	Slug        string    `json:"slug"`        // from the name, unique in the workspace; what the agent names
-	Description string    `json:"description"` // up to 500 characters; the agent reads it to pick a team
-	Members     []TeamMember  `json:"members"`
-	Grants      []TeamGrant   `json:"grants"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string       `json:"id" forge:"id"` // typeid "team_..."
+	OrgID       string       `json:"org_id"`
+	Name        string       `json:"name"`        // 1 to 80 characters
+	Slug        string       `json:"slug"`        // from the name, unique in the workspace; what the agent names
+	Description string       `json:"description"` // up to 500 characters; the agent reads it to pick a team
+	Members     []TeamMember `json:"members"`
+	Grants      []TeamGrant  `json:"grants"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
 }
 
 // TeamMember is a current workspace member in a team.

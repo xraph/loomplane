@@ -194,12 +194,12 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 // organization; when nothing changes, one more read tells a missing project
 // from a team that isn't there.
 func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error) {
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
+	res, execErr := s.db.Exec(ctx, `UPDATE loomplane_projects
 		SET responsible_team_id = NULLIF($3, ''), updated_at = now()
 		WHERE org_id = $1 AND id = $2
 			AND ($3 = '' OR EXISTS (SELECT 1 FROM loomplane_teams t WHERE t.id = $3 AND t.org_id = $1))`,
 		orgID, id, teamID)
-	if err = teamWriteError(err); err != nil {
+	if err := teamWriteError(execErr); err != nil {
 		return nil, err
 	}
 	n, err := res.RowsAffected()

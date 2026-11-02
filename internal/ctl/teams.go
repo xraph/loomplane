@@ -186,8 +186,8 @@ func (a *App) deleteTeam(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	if err = c.DeleteTeam(ctxOf(ctx), t.ID); err != nil {
-		return err
+	if derr := c.DeleteTeam(ctxOf(ctx), t.ID); derr != nil {
+		return derr
 	}
 	a.printf("Deleted %s.\n", t.Name)
 	return nil
