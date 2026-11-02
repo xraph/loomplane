@@ -385,3 +385,72 @@ func TestCreateDefaults(t *testing.T) {
 		t.Fatalf("defaults: %+v", got)
 	}
 }
+
+func TestUpdateSettings(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	n := newNode("node_1", "org_1", "web-1")
+	n.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointDocker, nodeproto.EndpointKube}
+	if err := s.Create(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	// A status set elsewhere survives a settings write.
+	if err := s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
+		t.Fatal(err)
+	}
+	name, mode := "web-2", "relay"
+	got, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name, IngressMode: &mode, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusOnline || got.Name != "web-2" || got.IngressMode != "relay" || len(got.Endpoints) != 1 || got.Labels["zone"] != "a" {
+		t.Fatalf("node %+v", got)
+	}
+
+	// A stale widen is refused, and nothing changes.
+	_, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker, nodeproto.EndpointKube}})
+	if !errors.Is(err, ErrWidenRemotely) {
+		t.Fatalf("widen: %v", err)
+	}
+	// Narrowing to nothing and clearing labels are real changes.
+	got, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Endpoints: []nodeproto.Endpoint{}, Labels: map[string]string{}})
+	if err != nil || len(got.Endpoints) != 0 || len(got.Labels) != 0 {
+		t.Fatalf("empty: %v %+v", err, got)
+	}
+	// Wrong org and revoked nodes are not found.
+	if _, err = s.UpdateSettings(ctx, "org_2", "node_1", SettingsUpdate{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("org: %v", err)
+	}
+	cur, _ := s.GetByID(ctx, "node_1")
+	now := time.Now().UTC()
+	cur.RevokedAt, cur.RevokedBy = &now, "usr_1"
+	if err = s.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked: %v", err)
+	}
+	if _, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked widen: %v", err)
+	}
+}
+
+func TestUnchangedUpdateSettingsAppendsNoEvent(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := s.GetByID(ctx, "node_1")
+	var before, after int
+	q := `SELECT count(*) FROM loomplane_events WHERE type='node.updated'`
+	if err := conn.QueryRow(ctx, q).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &n.Name, Labels: n.Labels, IngressMode: &n.IngressMode, Endpoints: n.Endpoints}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, q).Scan(&after); err != nil || after != before {
+		t.Fatalf("events %d -> %d %v", before, after, err)
+	}
+}

@@ -170,6 +170,42 @@ func (s *PgStore) Update(ctx context.Context, n *Node) error {
 	return affected(res, err)
 }
 
+// UpdateSettings writes the settings u sets, and nothing else, on a node of
+// org that is not revoked. It leaves status, keys and sessions alone, so a
+// caller holding a stale copy cannot undo them. A non-nil Endpoints must be
+// a subset of the stored set, checked in the same statement.
+func (s *PgStore) UpdateSettings(ctx context.Context, org, id string, u SettingsUpdate) (*Node, error) {
+	var name, ingress, labels, endpoints *string
+	name, ingress = u.Name, u.IngressMode
+	if u.Labels != nil {
+		b, err := json.Marshal(u.Labels)
+		if err != nil {
+			return nil, err
+		}
+		v := string(b)
+		labels = &v
+	}
+	if u.Endpoints != nil {
+		b, err := json.Marshal(u.Endpoints)
+		if err != nil {
+			return nil, err
+		}
+		v := string(b)
+		endpoints = &v
+	}
+	n, err := scanNode(s.db.QueryRow(ctx, `UPDATE loomplane_nodes SET name=COALESCE($3,name),labels=COALESCE($4::jsonb,labels),ingress_mode=COALESCE($5,ingress_mode),endpoints=COALESCE($6::jsonb,endpoints),updated_at=now() WHERE org_id=$1 AND id=$2 AND revoked_at IS NULL AND ($6::jsonb IS NULL OR $6::jsonb <@ endpoints) RETURNING `+nodeColumns,
+		org, id, name, labels, ingress, endpoints))
+	if !errors.Is(err, ErrNotFound) {
+		return n, err
+	}
+	// No row changed: either there is no live node, or the new endpoints widen.
+	cur, gerr := s.Get(ctx, org, id)
+	if gerr == nil && cur.RevokedAt == nil && endpoints != nil {
+		return nil, ErrWidenRemotely
+	}
+	return nil, ErrNotFound
+}
+
 func affected(res interface{ RowsAffected() (int64, error) }, err error) error {
 	if err != nil {
 		return storeError(err)

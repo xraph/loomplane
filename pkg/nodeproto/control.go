@@ -87,6 +87,7 @@ type GPU struct {
 
 // Inventory is what a node reports about its machine. Ports80443 is "free" or "busy".
 type Inventory struct {
+	Hostname        string     `json:"hostname,omitempty"`
 	OS              string     `json:"os"`
 	Kernel          string     `json:"kernel"`
 	Arch            string     `json:"arch"`

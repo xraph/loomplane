@@ -93,6 +93,32 @@ func (f *fakeStore) Update(_ context.Context, n *Node) error {
 	f.nodes[n.ID] = c
 	return nil
 }
+func (f *fakeStore) UpdateSettings(_ context.Context, org, id string, u SettingsUpdate) (*Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.OrgID != org || n.RevokedAt != nil {
+		return nil, ErrNotFound
+	}
+	if u.Endpoints != nil {
+		for _, e := range u.Endpoints {
+			if !slices.Contains(n.Endpoints, e) {
+				return nil, ErrWidenRemotely
+			}
+		}
+		n.Endpoints = slices.Clone(u.Endpoints)
+	}
+	if u.Name != nil {
+		n.Name = *u.Name
+	}
+	if u.Labels != nil {
+		n.Labels = u.Labels
+	}
+	if u.IngressMode != nil {
+		n.IngressMode = *u.IngressMode
+	}
+	return clone(n), nil
+}
 func (f *fakeStore) Touch(context.Context, string, time.Time, nodeproto.Usage) error { return nil }
 func (f *fakeStore) SetStatus(_ context.Context, id string, s Status) error {
 	f.mu.Lock()
@@ -194,14 +220,70 @@ func TestJoinNameFromRequest(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in2 := joinReq()
 	in2.Name = "web"
-	res, _ := r.svc.Join(context.Background(), in2)
+	res, err := r.svc.Join(context.Background(), in2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n, _ := r.store.GetByID(context.Background(), res.NodeID); n.Name != "web" {
 		t.Fatalf("name %q", n.Name)
 	}
 	in3 := joinReq()
 	in3.Name = "web"
-	if _, err := r.svc.Join(context.Background(), in3); !errors.Is(err, ErrNameTaken) {
+	// The token is spent by now, so the operator needs a new one, and the
+	// name conflict is still visible.
+	_, err = r.svc.Join(context.Background(), in3)
+	if !errors.Is(err, ErrNameTaken) || !errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestJoinNameFromHostname(t *testing.T) {
+	cases := map[string]string{"Box_1.Local": "box-1-local", "  web01 ": "web01", strings.Repeat("a", 80): strings.Repeat("a", 63)}
+	for host, want := range cases {
+		r := newRig(t, apikeys.NodeJoinScope{}, true)
+		in := joinReq()
+		in.Inventory.Hostname = host
+		res, err := r.svc.Join(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, _ := r.store.GetByID(context.Background(), res.NodeID); n.Name != want {
+			t.Errorf("%q: name %q, want %q", host, n.Name, want)
+		}
+	}
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.Inventory.Hostname = "___"
+	res, _ := r.svc.Join(context.Background(), in)
+	if n, _ := r.store.GetByID(context.Background(), res.NodeID); !strings.HasPrefix(n.Name, "node-") {
+		t.Fatalf("name %q", n.Name)
+	}
+}
+
+func TestJoinValidatesInput(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	bad := []func(*JoinRequest){
+		func(in *JoinRequest) { in.Name = "Not A Label" },
+		func(in *JoinRequest) { in.Name = strings.Repeat("a", 64) },
+		func(in *JoinRequest) { in.Labels = map[string]string{strings.Repeat("k", 64): "v"} },
+		func(in *JoinRequest) { in.Labels = map[string]string{"k": strings.Repeat("v", 256)} },
+		func(in *JoinRequest) {
+			in.Labels = map[string]string{}
+			for i := 0; i < 33; i++ {
+				in.Labels[strings.Repeat("k", 1)+string(rune('a'+i%26))+string(rune('a'+i/26))] = "v"
+			}
+		},
+		func(in *JoinRequest) { in.PublicKey = []byte{1, 2, 3} },
+	}
+	for i, mut := range bad {
+		in := joinReq()
+		mut(&in)
+		if _, err := r.svc.Join(context.Background(), in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("case %d: err %v", i, err)
+		}
+	}
+	if r.tokens.calls != 0 {
+		t.Fatal("invalid input must not burn the token")
 	}
 }
 
@@ -258,7 +340,13 @@ func TestJoinVersionSkew(t *testing.T) {
 		{"v2.0.0", "v1.9.0", false},
 		{"v1.8.0", "dev", true},
 		{"dev", "v1.0.0", true},
-		{"v1.8.0", "weird", true},
+		{"v1.8.0", "weird", false},
+		{"v1.8.0", "", true},
+		{"v1.8.0", "0.1.0-dev", true},
+		{"0.1.0-dev", "v1.2.3", true},
+		{"0.1.0-dev", "0.1.0-dev", true},
+		{"1.8.0", "1.7.0", true},
+		{"weird", "v1.0.0", true},
 	}
 	for _, c := range cases {
 		r := newRig(t, apikeys.NodeJoinScope{}, true)
@@ -272,6 +360,40 @@ func TestJoinVersionSkew(t *testing.T) {
 		if !c.ok && (!errors.Is(err, ErrUpdateNode) || err.Error() != "update this node") {
 			t.Errorf("%s vs %s: err %v", c.svc, c.node, err)
 		}
+		if !c.ok && r.tokens.calls != 0 {
+			t.Errorf("%s vs %s: a refused node burned its token", c.svc, c.node)
+		}
+	}
+}
+
+func TestJoinRefusesNewerProtocol(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.ProtocolVersion = nodeproto.Version + 1
+	_, err := r.svc.Join(context.Background(), in)
+	if !errors.Is(err, ErrNodeNewer) || err.Error() != "this node is newer than Loomplane; update Loomplane first" || r.tokens.calls != 0 {
+		t.Fatalf("err %v calls %d", err, r.tokens.calls)
+	}
+}
+
+func TestJoinAdoptFailureRollsBackAndFreesName(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{CloudID: "cld_1"}, true)
+	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error { return errors.New("cloud down") }
+	in := joinReq()
+	in.Name = "web"
+	_, err := r.svc.Join(context.Background(), in)
+	if !errors.Is(err, ErrMintNewToken) {
+		t.Fatalf("err %v", err)
+	}
+	l, _ := r.store.List(context.Background(), "org_1")
+	if len(l) != 1 || l[0].Status != StatusRevoked || l[0].RevokedBy != "system:join-rollback" || l[0].RevokedAt == nil {
+		t.Fatalf("nodes %+v", l)
+	}
+	r.svc.Adopt = nil
+	in2 := joinReq()
+	in2.Name = "web"
+	if _, err := r.svc.Join(context.Background(), in2); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }
 
@@ -428,5 +550,99 @@ func TestViewerCannotRevoke(t *testing.T) {
 	n, _ := r.store.GetByID(context.Background(), id)
 	if n.Status == StatusRevoked {
 		t.Fatal("revoked anyway")
+	}
+}
+
+func TestUpdateIngressNotifies(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	mode := "relay"
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{IngressMode: &mode}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.sent) != 1 || r.sent[0].msg != (nodeproto.SetIngress{Mode: "relay"}) {
+		t.Fatalf("sent %+v", r.sent)
+	}
+	r.sent = nil
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{IngressMode: &mode}); err != nil || len(r.sent) != 0 {
+		t.Fatalf("unchanged: %v %+v", err, r.sent)
+	}
+}
+
+func TestUpdateNothingChangedIsNotAudited(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.audit.events) != 0 || len(r.sent) != 0 {
+		t.Fatalf("audit %+v sent %+v", r.audit.events, r.sent)
+	}
+}
+
+func TestUpdateEmptyIsARealChange(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	n, err := r.svc.Update(context.Background(), admin, id, Update{Endpoints: []nodeproto.Endpoint{}, Labels: map[string]string{}})
+	if err != nil || len(n.Endpoints) != 0 || len(n.Labels) != 0 {
+		t.Fatalf("err %v node %+v", err, n)
+	}
+	if len(r.sent) != 1 {
+		t.Fatalf("sent %+v", r.sent)
+	}
+}
+
+func TestUpdateKeepsConcurrentStatus(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	name := "renamed"
+	// A heartbeat flips the status between the read and the write.
+	r.store.nodes[id].Status = StatusOffline
+	n, err := r.svc.Update(context.Background(), admin, id, Update{Name: &name})
+	if err != nil || n.Status != StatusOffline {
+		t.Fatalf("err %v node %+v", err, n)
+	}
+}
+
+func TestRevokeTwiceNotifiesAgain(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r)
+	for i := 0; i < 2; i++ {
+		if err := r.svc.Revoke(context.Background(), admin, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(r.sent) != 2 || len(r.audit.events) != 1 {
+		t.Fatalf("sent %d audit %d", len(r.sent), len(r.audit.events))
+	}
+}
+
+func TestOtherOrgIsNotFound(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r)
+	other := security.Principal{UserID: "usr_9", OrgID: "org_2"}
+	if _, err := r.svc.Get(context.Background(), other, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get: %v", err)
+	}
+	if err := r.svc.Revoke(context.Background(), other, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoke: %v", err)
+	}
+	if n, _ := r.store.GetByID(context.Background(), id); n.Status == StatusRevoked {
+		t.Fatal("revoked across orgs")
+	}
+}
+
+func TestReadOnlyPrincipalCannotWrite(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	ro := security.Principal{UserID: "usr_1", OrgID: "org_1", ReadOnly: true}
+	if err := r.svc.Revoke(context.Background(), ro, id); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, err := r.svc.Update(context.Background(), ro, id, Update{}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := r.svc.Get(context.Background(), ro, id); err != nil {
+		t.Fatalf("get: %v", err)
 	}
 }

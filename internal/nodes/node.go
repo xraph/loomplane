@@ -27,6 +27,9 @@ var (
 	ErrNotFound = errors.New("nodes: not found")
 	// ErrNameTaken is returned when a live node of the org already has the name.
 	ErrNameTaken = errors.New("nodes: name taken")
+	// ErrWidenRemotely is returned when an update would add endpoints. Only
+	// the machine's owner can widen what it serves.
+	ErrWidenRemotely = errors.New("add endpoints on the machine with: loomctl node allow <endpoint>")
 )
 
 // Node is one machine in an org.
@@ -55,6 +58,15 @@ type Node struct {
 	UpdatedAt          time.Time            `json:"updated_at"`
 }
 
+// SettingsUpdate is the part of a node an owner may change remotely. A nil
+// field is left alone; a non-nil empty slice or map is a real change.
+type SettingsUpdate struct {
+	Name        *string
+	Labels      map[string]string
+	IngressMode *string
+	Endpoints   []nodeproto.Endpoint
+}
+
 // Session is the live connection a replica holds for a node. A newer epoch
 // fences an older connection.
 type Session struct {
@@ -73,6 +85,10 @@ type Store interface {
 	List(ctx context.Context, org string) ([]Node, error)
 	ListJoinedByKey(ctx context.Context, org, keyID string) ([]Node, error)
 	Update(ctx context.Context, n *Node) error
+	// UpdateSettings writes only the settings u sets (nil leaves a column
+	// alone) on a live node of org, and returns the stored node. A non-nil
+	// Endpoints must be a subset of the stored set, else ErrWidenRemotely.
+	UpdateSettings(ctx context.Context, org, id string, u SettingsUpdate) (*Node, error)
 	// Touch writes last_seen_at and usage only, so a heartbeat appends no event.
 	Touch(ctx context.Context, id string, at time.Time, usage nodeproto.Usage) error
 	SetStatus(ctx context.Context, id string, s Status) error

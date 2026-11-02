@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,9 +23,10 @@ var (
 	// ErrUpdateNode is returned to a node whose protocol or version is too far
 	// behind this Loomplane to join.
 	ErrUpdateNode = errors.New("update this node")
-	// ErrWidenRemotely is returned when an update would add endpoints. Only
-	// the machine's owner can widen what it serves.
-	ErrWidenRemotely = errors.New("add endpoints on the machine with: loomctl node allow <endpoint>")
+	// ErrNodeNewer is returned to a node that speaks a newer protocol.
+	ErrNodeNewer = errors.New("this node is newer than Loomplane; update Loomplane first")
+	// ErrInvalid is returned for a name, label or setting that is not allowed.
+	ErrInvalid = errors.New("nodes: invalid value")
 	// ErrMintNewToken wraps a failure to create the node after the join token
 	// was spent. The operator needs a fresh token.
 	ErrMintNewToken = errors.New("the join token was used but the node could not be created; mint a new join token and try again")
@@ -92,18 +94,30 @@ type Update struct {
 // Join spends the token and creates a pending node. The checks that need no
 // token run first, so a node that must update does not burn its token.
 func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error) {
+	if in.ProtocolVersion > nodeproto.Version {
+		return nil, ErrNodeNewer
+	}
 	if in.ProtocolVersion < nodeproto.Version || !s.versionOK(in.NodeVersion) {
 		return nil, ErrUpdateNode
 	}
 	if len(in.PublicKey) != ed25519.PublicKeySize {
-		return nil, errors.New("nodes: bad public key")
+		return nil, fmt.Errorf("%w: bad public key", ErrInvalid)
+	}
+	name := strings.TrimSpace(in.Name)
+	if name != "" && !dnsLabel.MatchString(name) {
+		return nil, fmt.Errorf("%w: name must be a lowercase DNS label of at most 63 characters", ErrInvalid)
+	}
+	if err := validateLabels(in.Labels); err != nil {
+		return nil, err
 	}
 	claim, err := s.Tokens.ConsumeNodeJoinToken(ctx, in.Token)
 	if err != nil {
 		return nil, err
 	}
 	id := "node_" + uuid.NewString()
-	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = hostLabel(in.Inventory.Hostname)
+	}
 	if name == "" {
 		name = "node-" + strings.ReplaceAll(id[len("node_"):], "-", "")[:6]
 	}
@@ -125,19 +139,52 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	if !claim.Scope.Edge {
 		n.EdgeScope = ""
 	}
+	// The token is spent, so every failure from here on asks for a new one.
 	if err := s.Store.Create(ctx, n); err != nil {
-		if errors.Is(err, ErrNameTaken) {
-			return nil, err
-		}
 		return nil, fmt.Errorf("%w: %w", ErrMintNewToken, err)
 	}
 	if s.Adopt != nil {
 		if err := s.Adopt(ctx, n, claim); err != nil {
-			return nil, fmt.Errorf("adopting into the cloud account: %w", err)
+			rb := security.Principal{OrgID: n.OrgID, UserID: joinRollback}
+			_ = s.revoke(ctx, n, joinRollback, rb, "node.revoked")
+			return nil, fmt.Errorf("%w: adopting into the cloud account: %w", ErrMintNewToken, err)
 		}
 	}
 	s.record(ctx, "node.joined", security.ActorPrincipal(claim.OrgID, claim.MintedBy), *n, map[string]string{"role": role})
 	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: claim.Scope.CloudID}, nil
+}
+
+const joinRollback = "system:join-rollback"
+
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// hostLabel turns a hostname into a DNS label, or "" when nothing is left.
+func hostLabel(h string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(h)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	return strings.Trim(out, "-")
+}
+
+func validateLabels(l map[string]string) error {
+	if len(l) > 32 {
+		return fmt.Errorf("%w: at most 32 labels", ErrInvalid)
+	}
+	for k, v := range l {
+		if k == "" || len(k) > 63 || len(v) > 255 {
+			return fmt.Errorf("%w: label keys are 1 to 63 characters and values at most 255", ErrInvalid)
+		}
+	}
+	return nil
 }
 
 // joinEndpoints is the request limited to the scope, where an empty scope
@@ -155,12 +202,22 @@ func joinEndpoints(req, scope []nodeproto.Endpoint) []nodeproto.Endpoint {
 	return out
 }
 
+// isDev reports a version that carries no number to compare.
+func isDev(v string) bool { return v == "" || v == "dev" || strings.HasSuffix(v, "-dev") }
+
 // versionOK allows an equal, newer or exactly one-minor-behind node on the
-// same major. A dev or unparsable version on either side passes.
+// same major. A dev build passes on either side. A node version that cannot
+// be parsed is refused; an unparsable service version passes.
 func (s *Service) versionOK(node string) bool {
-	sm, sn, ok1 := parseVersion(s.Version)
-	nm, nn, ok2 := parseVersion(node)
-	if !ok1 || !ok2 {
+	if isDev(node) || isDev(s.Version) {
+		return true
+	}
+	nm, nn, ok := parseVersion(node)
+	if !ok {
+		return false
+	}
+	sm, sn, ok := parseVersion(s.Version)
+	if !ok {
 		return true
 	}
 	if nm != sm {
@@ -222,54 +279,73 @@ func (s *Service) JoinedByKey(ctx context.Context, p security.Principal, keyID s
 }
 
 // Update renames a node, relabels it, narrows its endpoints or sets its
-// ingress mode. A live node hears a narrowing at once.
+// ingress mode. A nil field stays as it is; a non-nil empty slice or map is a
+// real change (narrow to nothing, clear the labels). Only the fields set are
+// written, so a stale read cannot undo a concurrent status change or narrow.
+// A live node hears a narrowing or an ingress change at once.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, u Update) (*Node, error) {
 	if err := s.allow(ctx, p, security.NodeManage, true); err != nil {
 		return nil, err
 	}
-	n, err := s.Store.Get(ctx, p.OrgID, id)
+	old, err := s.Store.Get(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
 	}
-	if n.Status == StatusRevoked {
+	if old.Status == StatusRevoked {
 		return nil, ErrNotFound
 	}
-	narrowed := false
+	set := SettingsUpdate{Name: u.Name, IngressMode: u.IngressMode}
 	if u.Endpoints != nil {
+		set.Endpoints = []nodeproto.Endpoint{}
 		for _, e := range u.Endpoints {
-			if !slices.Contains(n.Endpoints, e) {
+			if !slices.Contains(old.Endpoints, e) {
 				return nil, ErrWidenRemotely
 			}
+			if !slices.Contains(set.Endpoints, e) {
+				set.Endpoints = append(set.Endpoints, e)
+			}
 		}
-		next := joinEndpoints(u.Endpoints, nil)
-		narrowed = len(next) != len(n.Endpoints)
-		n.Endpoints = next
 	}
 	if u.IngressMode != nil {
 		switch *u.IngressMode {
 		case "none", "direct", "relay":
-			n.IngressMode = *u.IngressMode
 		default:
-			return nil, fmt.Errorf("nodes: ingress mode must be none, direct or relay")
+			return nil, fmt.Errorf("%w: ingress mode must be none, direct or relay", ErrInvalid)
 		}
 	}
 	if u.Name != nil {
 		name := strings.TrimSpace(*u.Name)
-		if name == "" {
-			return nil, errors.New("nodes: name is required")
+		if !dnsLabel.MatchString(name) {
+			return nil, fmt.Errorf("%w: name must be a lowercase DNS label of at most 63 characters", ErrInvalid)
 		}
-		n.Name = name
+		set.Name = &name
 	}
 	if u.Labels != nil {
-		n.Labels = maps.Clone(u.Labels)
+		if err := validateLabels(u.Labels); err != nil {
+			return nil, err
+		}
+		set.Labels = maps.Clone(u.Labels)
+		if set.Labels == nil {
+			set.Labels = map[string]string{}
+		}
 	}
-	if err := s.Store.Update(ctx, n); err != nil {
+	n, err := s.Store.UpdateSettings(ctx, p.OrgID, id, set)
+	if err != nil {
 		return nil, err
 	}
-	if narrowed && s.Notify != nil {
-		s.Notify(n.ID, nodeproto.Narrow{Endpoints: n.Endpoints})
+	narrowed := set.Endpoints != nil && !slices.Equal(n.Endpoints, old.Endpoints)
+	ingress := set.IngressMode != nil && n.IngressMode != old.IngressMode
+	if s.Notify != nil {
+		if narrowed {
+			s.Notify(n.ID, nodeproto.Narrow{Endpoints: n.Endpoints})
+		}
+		if ingress {
+			s.Notify(n.ID, nodeproto.SetIngress{Mode: n.IngressMode})
+		}
 	}
-	s.record(ctx, "node.updated", p, *n, nil)
+	if narrowed || ingress || n.Name != old.Name || !maps.Equal(n.Labels, old.Labels) {
+		s.record(ctx, "node.updated", p, *n, nil)
+	}
 	return n, nil
 }
 
@@ -298,6 +374,10 @@ func (s *Service) Leave(ctx context.Context, nodeID string) error {
 // is not terminal in SQL.
 func (s *Service) revoke(ctx context.Context, n *Node, by string, actor security.Principal, action string) error {
 	if n.Status == StatusRevoked {
+		// Say it again, so a message that was dropped can be retried.
+		if s.Notify != nil {
+			s.Notify(n.ID, nodeproto.Revoked{})
+		}
 		return nil
 	}
 	now := time.Now().UTC()
