@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,7 +34,7 @@ const projectColumns = `id, org_id, name, slug, description, icon, color, status
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
 const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
-	p.created_by, p.created_at, p.updated_at, p.exclusions,
+	p.created_by, p.created_at, p.updated_at, p.exclusions, p.autonomous_promotion, p.min_staging_soak_seconds,
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
 		FROM (SELECT s.repository, min(s.alias) AS first_alias FROM loomplane_project_sources s
 			WHERE s.project_id = p.id AND s.removed_at IS NULL GROUP BY s.repository) r), '{}')
@@ -43,7 +44,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
 	var exclusions []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.Repositories); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.AutonomousPromotion, &p.MinStagingSoakSeconds, &p.Repositories); err != nil {
 		return nil, err
 	}
 	if len(exclusions) > 0 {
@@ -131,7 +132,7 @@ func (s *PgStore) ListProjects(ctx context.Context, orgID string) ([]*Project, e
 }
 
 // UpdateProject writes p's mutable fields: name, description, icon, color,
-// status and updated_at.
+// status and updated_at. Exclusions and autonomy have writes of their own.
 func (s *PgStore) UpdateProject(ctx context.Context, p *Project) error {
 	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
 		SET name = $3, description = $4, icon = $5, color = $6, status = $7, updated_at = $8
@@ -185,6 +186,25 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return p, nil
+}
+
+// SetAutonomy implements Store. A nil field keeps the column's value, in
+// the same statement, so two changes to different fields can't lose each
+// other.
+func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, error) {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
+		SET autonomous_promotion = COALESCE($3, autonomous_promotion),
+			min_staging_soak_seconds = COALESCE($4, min_staging_soak_seconds),
+			updated_at = $5
+		WHERE org_id = $1 AND id = $2`,
+		orgID, id, in.AutonomousPromotion, in.MinStagingSoakSeconds, at)
+	if err != nil {
+		return nil, fmt.Errorf("update autonomy: %w", err)
+	}
+	if rerr := requireOneRow(res); rerr != nil {
+		return nil, rerr
+	}
+	return s.GetProject(ctx, orgID, id)
 }
 
 // DeleteProject removes the project; its environments go with it.

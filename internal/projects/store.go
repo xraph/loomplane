@@ -1,6 +1,9 @@
 package projects
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Store persists projects and environments. Every method is scoped to an
 // organization: a project in another organization reads as not found.
@@ -16,6 +19,10 @@ type Store interface {
 	// lose each other. An error from change aborts and is returned.
 	UpdateExclusions(ctx context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error)
 	DeleteProject(ctx context.Context, orgID, id string) error
+	// SetAutonomy writes the fields of in that aren't nil, and updated_at,
+	// in one statement, and returns the project as it is afterwards.
+	// UpdateProject never writes them.
+	SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, error)
 
 	// CreateEnvironment adds an environment. A name the project already
 	// has is ErrEnvironmentExists; a missing project is ErrNotFound.

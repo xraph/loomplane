@@ -64,10 +64,24 @@ type Project struct {
 	// Exclusions keep analysis-found services out of the graph, plans
 	// and deploys. See Exclusion.
 	Exclusions []Exclusion `json:"exclusions"`
-	Status     string      `json:"status"`
-	CreatedBy  string      `json:"created_by"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// AutonomousPromotion lets the AI agent promote a release it was asked
+	// for to production without asking a person first, once the release
+	// has passed every other check. Every project starts at "ask first"
+	// (false), and only a person who may approve deployments can change
+	// it (Service.SetAutonomy). It never covers continuous delivery, and
+	// never a change that deletes or replaces production data or
+	// resources: that always needs a person, whatever this says. The JSON
+	// names are the column names, so realtime project events agree with
+	// the API.
+	AutonomousPromotion bool `json:"autonomous_promotion"`
+	// MinStagingSoakSeconds is how long a release must have run in staging
+	// before the agent promotes it alone, in whole minutes up to a week.
+	// 0 asks for no minimum beyond the agent's own rule.
+	MinStagingSoakSeconds int64     `json:"min_staging_soak_seconds"`
+	Status                string    `json:"status"`
+	CreatedBy             string    `json:"created_by"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.
