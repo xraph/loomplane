@@ -3,9 +3,11 @@ package nodeproto
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -85,4 +87,42 @@ func Verify(pub ed25519.PublicKey, a Assertion, audience string, now time.Time) 
 func Fingerprint(pub ed25519.PublicKey) string {
 	sum := sha256.Sum256(pub)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// AuthScheme is the Authorization scheme a node connects with:
+// "LoomplaneNode <base64url(JSON Assertion)>" on GET /node/v1/connect.
+const AuthScheme = "LoomplaneNode"
+
+// MaxAuthorizationSize bounds the whole header value.
+const MaxAuthorizationSize = 8 << 10
+
+// ErrAuthorization is returned for an Authorization value that is not a node
+// assertion.
+var ErrAuthorization = errors.New("nodeproto: malformed node authorization")
+
+// EncodeAuthorization is the Authorization header value that carries a.
+func EncodeAuthorization(a Assertion) (string, error) {
+	b, err := json.Marshal(a)
+	if err != nil {
+		return "", err
+	}
+	return AuthScheme + " " + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// DecodeAuthorization reads an Authorization header value made by
+// EncodeAuthorization. It does not check the assertion.
+func DecodeAuthorization(v string) (Assertion, error) {
+	raw, ok := strings.CutPrefix(v, AuthScheme+" ")
+	if !ok || raw == "" || len(v) > MaxAuthorizationSize {
+		return Assertion{}, ErrAuthorization
+	}
+	b, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return Assertion{}, ErrAuthorization
+	}
+	var a Assertion
+	if err = json.Unmarshal(b, &a); err != nil {
+		return Assertion{}, ErrAuthorization
+	}
+	return a, nil
 }

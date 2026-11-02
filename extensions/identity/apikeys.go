@@ -60,6 +60,9 @@ type JoinedNodes interface {
 type CompromisedRevoke struct {
 	Revoked     apikeys.APIKey `json:"revoked"`
 	JoinedNodes []nodes.Node   `json:"joined_nodes"`
+	// JoinedNodesWithheld is true when the list is empty because it could not
+	// be read, or the caller may not manage nodes. It does not mean no node joined.
+	JoinedNodesWithheld bool `json:"joined_nodes_withheld"`
 }
 
 func (e *Extension) keyRoutes(r forge.Router) error { return e.keyRoutesWith(r, e.guard()) }
@@ -119,16 +122,17 @@ func (e *Extension) keyRoutesWith(r forge.Router, guard ...forge.Middleware) err
 			return c.NoContent(http.StatusNoContent)
 		}
 		// Only the key's owner or an admin gets past RevokeKey, so they alone
-		// see the node list. Without the nodes permission the list is empty.
-		out := CompromisedRevoke{Revoked: *revoked, JoinedNodes: []nodes.Node{}}
+		// see the node list. The key is revoked by now, so a list that cannot
+		// be read is withheld and logged, never a failure of the revoke.
+		out := CompromisedRevoke{Revoked: *revoked, JoinedNodes: []nodes.Node{}, JoinedNodesWithheld: true}
 		if lister := e.joinedNodes(); lister != nil {
 			joined, jerr := lister.JoinedByKey(ctx, p, revoked.ID)
 			switch {
 			case jerr == nil:
-				out.JoinedNodes = append(out.JoinedNodes, joined...)
+				out.JoinedNodes, out.JoinedNodesWithheld = append(out.JoinedNodes, joined...), false
 			case errors.Is(jerr, security.ErrForbidden):
 			default:
-				return jerr
+				e.Logger().Error("list the nodes that joined with a revoked key", forge.F("key", revoked.ID), forge.F("error", jerr.Error()))
 			}
 		}
 		return c.JSON(http.StatusOK, out)
@@ -145,7 +149,7 @@ func (e *Extension) keyRoutesWith(r forge.Router, guard ...forge.Middleware) err
 // RevokeKeyQuery is the query of apiKeys.revoke.
 type RevokeKeyQuery struct {
 	// Compromised asks for the nodes that joined with a token this key made.
-	Compromised bool `query:"compromised"`
+	Compromised bool `query:"compromised,omitempty"`
 }
 
 func (e *Extension) joinedNodes() JoinedNodes {

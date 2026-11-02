@@ -353,8 +353,8 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 		set.Name = &name
 	}
 	if u.Labels != nil {
-		if err := validateLabels(u.Labels); err != nil {
-			return nil, err
+		if lerr := validateLabels(u.Labels); lerr != nil {
+			return nil, lerr
 		}
 		set.Labels = maps.Clone(u.Labels)
 		if set.Labels == nil {

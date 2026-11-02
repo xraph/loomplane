@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,7 +46,8 @@ func compromisedFixture(t *testing.T, stub *joinedStub) (forge.Router, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &Extension{keys: keys, joined: func() JoinedNodes { return stub }}
+	e := &Extension{BaseExtension: forge.NewBaseExtension("test", "test", ""), keys: keys, joined: func() JoinedNodes { return stub }}
+	e.SetLogger(forge.NewNoopLogger())
 	r := forge.NewRouter()
 	if err = e.keyRoutesWith(r); err != nil {
 		t.Fatal(err)
@@ -85,6 +87,9 @@ func TestRevokeCompromisedListsNodes(t *testing.T) {
 	if got.Revoked.ID != id || got.Revoked.State != "revoked" || len(got.JoinedNodes) != 1 || got.JoinedNodes[0].ID != "node_1" {
 		t.Fatalf("body: %s", out.Body)
 	}
+	if !strings.Contains(out.Body.String(), `"joined_nodes_withheld":false`) {
+		t.Fatalf("body: %s", out.Body)
+	}
 	if strings.Contains(out.Body.String(), "public_key") || strings.Contains(out.Body.String(), "secret-bytes") {
 		t.Fatalf("the node's key leaked: %s", out.Body)
 	}
@@ -115,5 +120,20 @@ func TestRevokeCompromisedWithNoNodesSaysSo(t *testing.T) {
 	out := revokeAs(t, r, "owner", id, "?compromised=true")
 	if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"joined_nodes":[]`) {
 		t.Fatalf("status %d: %s", out.Code, out.Body)
+	}
+}
+
+// The key is revoked by the time the list is read, so a list that can't be
+// read is withheld, never a failed revoke.
+func TestRevokeCompromisedWithholdsAListItCannotRead(t *testing.T) {
+	for name, err := range map[string]error{"forbidden": security.ErrForbidden, "store down": errors.New("connection refused")} {
+		t.Run(name, func(t *testing.T) {
+			r, id := compromisedFixture(t, &joinedStub{err: err})
+			out := revokeAs(t, r, "owner", id, "?compromised=true")
+			if out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"joined_nodes":[]`) || !strings.Contains(out.Body.String(), `"joined_nodes_withheld":true`) ||
+				!strings.Contains(out.Body.String(), `"state":"revoked"`) {
+				t.Fatalf("status %d: %s", out.Code, out.Body)
+			}
+		})
 	}
 }

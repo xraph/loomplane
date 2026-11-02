@@ -135,7 +135,8 @@ func (e *Extension) Start(context.Context) error {
 	return nil
 }
 
-// Stop ends the sweep. Open sessions end with the process.
+// Stop ends the sweep and closes the node sessions this replica holds: their
+// contexts end with the extension's.
 func (e *Extension) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	cancel := e.cancel

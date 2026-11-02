@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,17 +65,6 @@ func serve(t *testing.T, r *rig) *httptest.Server {
 	return srv
 }
 
-func closeCode(t *testing.T, ws *websocket.Conn) int {
-	t.Helper()
-	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, _, err := ws.ReadMessage()
-	var ce *websocket.CloseError
-	if !errors.As(err, &ce) {
-		t.Fatalf("wanted a close frame, got %v", err)
-	}
-	return ce.Code
-}
-
 func TestChallengeRoute(t *testing.T) {
 	r := newRig(t)
 	srv := serve(t, r)
@@ -94,37 +82,53 @@ func TestChallengeRoute(t *testing.T) {
 	}
 }
 
+// dialWith connects with an Authorization header value ("" sends none).
+func dialWith(base, authorization string) (*websocket.Conn, *http.Response, error) {
+	h := http.Header{}
+	if authorization != "" {
+		h.Set("Authorization", authorization)
+	}
+	return websocket.DefaultDialer.Dial(wsURL(base), h)
+}
+
+// A refused node gets a literal HTTP 401 and is never upgraded.
 func TestConnectBadAssertionIs401(t *testing.T) {
 	r := newRig(t)
 	priv := r.seed(t, nodeproto.EndpointProbe)
 	srv := serve(t, r)
 
-	sign := func(c nodeproto.Challenge, key ed25519.PrivateKey) nodeproto.Assertion {
+	sign := func(c nodeproto.Challenge, key ed25519.PrivateKey) string {
 		a, err := nodeproto.Sign(key, c)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return a
+		v, err := nodeproto.EncodeAuthorization(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
 	_, other, _ := ed25519.GenerateKey(nil)
-	for name, a := range map[string]nodeproto.Assertion{
+	for name, v := range map[string]string{
 		"another key":   sign(challenge(t, srv.Client(), srv.URL, "node_1"), other),
 		"unknown node":  sign(challenge(t, srv.Client(), srv.URL, "node_404"), priv),
 		"made-up nonce": sign(nodeproto.Challenge{NodeID: "node_1", Audience: publicURL, Nonce: "AAAA", IssuedAt: time.Now()}, priv),
+		"no header":     "",
+		"other scheme":  "Bearer abc",
+		"not base64":    nodeproto.AuthScheme + " !!!",
+		"not json":      nodeproto.AuthScheme + " aGVsbG8",
+		"too long":      nodeproto.AuthScheme + " " + strings.Repeat("A", nodeproto.MaxAuthorizationSize),
 	} {
 		t.Run(name, func(t *testing.T) {
-			ws, resp, err := websocket.DefaultDialer.Dial(wsURL(srv.URL), nil)
-			if err != nil {
-				t.Fatal(err)
+			ws, resp, err := dialWith(srv.URL, v)
+			if err == nil {
+				_ = ws.Close()
+				t.Fatal("the connection was upgraded")
+			}
+			if resp == nil || resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") != nodeproto.AuthScheme {
+				t.Fatalf("response %v, %v", resp, err)
 			}
 			_ = resp.Body.Close()
-			defer func() { _ = ws.Close() }()
-			if err = ws.WriteJSON(a); err != nil {
-				t.Fatal(err)
-			}
-			if code := closeCode(t, ws); code != nodeproto.CloseUnauthorized {
-				t.Fatalf("close code %d", code)
-			}
 		})
 	}
 	if got := r.store.status("node_1"); got != nodes.StatusPending {
@@ -132,48 +136,54 @@ func TestConnectBadAssertionIs401(t *testing.T) {
 	}
 }
 
-func TestConnectRefusesAMalformedFirstMessage(t *testing.T) {
+func TestConnectRefusesAReplayedAssertion(t *testing.T) {
 	r := newRig(t)
+	priv := r.seed(t, nodeproto.EndpointProbe)
 	srv := serve(t, r)
-	for name, send := range map[string]func(*websocket.Conn) error{
-		"not json": func(ws *websocket.Conn) error { return ws.WriteMessage(websocket.TextMessage, []byte("hello")) },
-		"too large": func(ws *websocket.Conn) error {
-			return ws.WriteMessage(websocket.TextMessage, []byte(`{"x":"`+strings.Repeat("a", 17<<10)+`"}`))
-		},
-		"binary": func(ws *websocket.Conn) error { return ws.WriteMessage(websocket.BinaryMessage, []byte(`{}`)) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			ws, resp, err := websocket.DefaultDialer.Dial(wsURL(srv.URL), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_ = resp.Body.Close()
-			defer func() { _ = ws.Close() }()
-			_ = send(ws)
-			_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
-			if _, _, err = ws.ReadMessage(); err == nil {
-				t.Fatal("the connection stayed open")
-			}
-		})
+	a, err := nodeproto.Sign(priv, challenge(t, srv.Client(), srv.URL, "node_1"))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestConnectGivesUpOnASilentClient(t *testing.T) {
-	old := assertionTimeout
-	assertionTimeout = 150 * time.Millisecond
-	t.Cleanup(func() { assertionTimeout = old })
-	srv := serve(t, newRig(t))
-	ws, resp, err := websocket.DefaultDialer.Dial(wsURL(srv.URL), nil)
+	v, _ := nodeproto.EncodeAuthorization(a)
+	ws, resp, err := dialWith(srv.URL, v)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
 	defer func() { _ = ws.Close() }()
-	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
-	start := time.Now()
-	if _, _, err = ws.ReadMessage(); err == nil || time.Since(start) > 2*time.Second {
-		t.Fatalf("silent client: %v after %v", err, time.Since(start))
+	if _, resp, err = dialWith(srv.URL, v); err == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("replay: %v %v", resp, err)
 	}
+	_ = resp.Body.Close()
+}
+
+// A request that is not a WebSocket upgrade is answered before the
+// assertion is checked, so it cannot spend a challenge.
+func TestConnectPlainRequestKeepsTheChallenge(t *testing.T) {
+	r := newRig(t)
+	priv := r.seed(t, nodeproto.EndpointProbe)
+	srv := serve(t, r)
+	a, _ := nodeproto.Sign(priv, challenge(t, srv.Client(), srv.URL, "node_1"))
+	v, _ := nodeproto.EncodeAuthorization(a)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/node/v1/connect", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", v)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain GET: %d", resp.StatusCode)
+	}
+	ws, resp, err := dialWith(srv.URL, v)
+	if err != nil {
+		t.Fatalf("the challenge was spent: %v", err)
+	}
+	_ = resp.Body.Close()
+	_ = ws.Close()
 }
 
 func TestConnectRefusesABrowserOrigin(t *testing.T) {
@@ -197,15 +207,16 @@ func openSession(t *testing.T, dialer *websocket.Dialer, client *http.Client, ba
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws, resp, err := dialer.Dial(wsURL(base), nil)
+	v, err := nodeproto.EncodeAuthorization(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, resp, err := dialer.Dial(wsURL(base), http.Header{"Authorization": []string{v}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
 	t.Cleanup(func() { _ = ws.Close() })
-	if err = ws.WriteJSON(a); err != nil {
-		t.Fatal(err)
-	}
 	cfg := yamux.DefaultConfig()
 	cfg.LogOutput = io.Discard
 	mux, err := yamux.Server(nodes.NewWSConn(ws), cfg)

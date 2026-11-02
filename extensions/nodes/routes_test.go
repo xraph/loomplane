@@ -170,6 +170,13 @@ func TestJoinRouteErrors(t *testing.T) {
 	if out := r.do(t, http.MethodPost, "/api/v1/nodes/join", `not json`, nil); out.Code != http.StatusBadRequest {
 		t.Fatalf("not json: %d", out.Code)
 	}
+	if out := r.do(t, http.MethodPost, "/api/v1/nodes/join", joinBody(t, map[string]any{"public_key": "***"}), nil); out.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("key not base64: %d", out.Code)
+	}
+	huge := joinBody(t, map[string]any{"name": strings.Repeat("a", 2<<20)})
+	if out := r.do(t, http.MethodPost, "/api/v1/nodes/join", huge, nil); out.Code != http.StatusRequestEntityTooLarge || r.tokens.spent != 0 {
+		t.Fatalf("oversized: %d", out.Code)
+	}
 }
 
 func TestPatchWidenIs422(t *testing.T) {

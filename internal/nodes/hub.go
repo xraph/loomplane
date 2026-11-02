@@ -240,11 +240,14 @@ func (h *Hub) checkNonce(nodeID, nonce string, now time.Time) (time.Time, error)
 	return exp, nil
 }
 
-// authenticate checks the assertion: a nonce issued for this node and not
+// Authenticate checks the assertion: a nonce issued for this node and not
 // expired, a node that exists and is not revoked, a signature by its key over
 // this instance's audience, and a nonce not used before. The key is looked up
 // by the challenge's node id, so a key can only answer for its own node.
-func (h *Hub) authenticate(ctx context.Context, a nodeproto.Assertion) (*Node, error) {
+func (h *Hub) Authenticate(ctx context.Context, a nodeproto.Assertion) (*Node, error) {
+	if h.store == nil {
+		return nil, fmt.Errorf("%w: Authenticate before Bind", ErrHubConfig)
+	}
 	c := a.Challenge
 	now := h.now()
 	exp, err := h.checkNonce(c.NodeID, c.Nonce, now)
@@ -287,34 +290,26 @@ func yamuxConfig() *yamux.Config {
 	return cfg
 }
 
-// refuseUnauthorized tells a node it was refused, with a close frame it can
-// act on, then closes conn. A failure that is not about the node's identity
-// (the store is down, say) just closes: the node retries on its own.
-func refuseUnauthorized(conn *websocket.Conn, err error) {
-	if errors.Is(err, ErrUnauthorized) {
-		msg := websocket.FormatCloseMessage(nodeproto.CloseUnauthorized, "unauthorized")
-		_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
-	}
+// refuseUnauthorized tells a node it was refused after the upgrade, with a
+// close frame it can act on, then closes conn.
+func refuseUnauthorized(conn *websocket.Conn) {
+	msg := websocket.FormatCloseMessage(nodeproto.CloseUnauthorized, "unauthorized")
+	_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second)) //nolint:errcheck // the connection is closing either way
 	_ = conn.Close()
 }
 
-// Accept authenticates a node's connection and holds its session until it
-// ends. It owns conn: it closes it before returning, on every path. It
-// returns nil when an accepted session ends.
-func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, a nodeproto.Assertion) error {
+// Accept holds the session of a node Authenticate approved, until it ends.
+// It owns conn: it closes it before returning, on every path. It returns nil
+// when an accepted session ends.
+func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, n *Node) error {
 	if h.store == nil {
 		_ = conn.Close()
 		return fmt.Errorf("%w: Accept before Bind", ErrHubConfig)
 	}
-	n, err := h.authenticate(ctx, a)
-	if err != nil {
-		refuseUnauthorized(conn, err)
-		return err
-	}
 	epoch, err := h.store.ClaimSession(ctx, Session{NodeID: n.ID, Replica: h.self, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: h.now().UTC()})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			refuseUnauthorized(conn, ErrUnauthorized)
+			refuseUnauthorized(conn)
 			return fmt.Errorf("%w: node revoked", ErrUnauthorized)
 		}
 		_ = conn.Close()

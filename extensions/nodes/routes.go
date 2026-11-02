@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -69,9 +70,10 @@ type JoinToken struct {
 
 // NodeJoin is what a machine sends to join. The token authenticates it.
 type NodeJoin struct {
-	Token           string               `json:"token"`
-	Name            string               `json:"name,omitempty"`
-	PublicKey       []byte               `json:"public_key"`
+	Token string `json:"token"`
+	Name  string `json:"name,omitempty"`
+	// PublicKey is the node's Ed25519 public key, base64.
+	PublicKey       string               `json:"public_key"`
 	Endpoints       []nodeproto.Endpoint `json:"endpoints,omitempty"`
 	Labels          map[string]string    `json:"labels,omitempty"`
 	Inventory       nodeproto.Inventory  `json:"inventory"`
@@ -229,16 +231,24 @@ func (e *Extension) installCommand(token string) string {
 }
 
 func (e *Extension) join(c forge.Context) error {
-	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxJoinBody+1))
-	if err != nil || len(body) > maxJoinBody {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, maxJoinBody))
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.As(err, &tooBig):
 		return forge.NewHTTPError(http.StatusRequestEntityTooLarge, "the join request is too large")
+	case err != nil:
+		return forge.NewHTTPError(http.StatusBadRequest, "the join request could not be read")
 	}
 	var in NodeJoin
 	if err = json.Unmarshal(body, &in); err != nil {
 		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: token, public_key, node_version and protocol_version")
 	}
+	key, err := base64.StdEncoding.DecodeString(in.PublicKey)
+	if err != nil {
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, "public_key must be base64")
+	}
 	res, err := e.svc.Join(c.Request().Context(), nodes.JoinRequest{
-		Token: in.Token, Name: in.Name, PublicKey: in.PublicKey, Endpoints: in.Endpoints, Labels: in.Labels,
+		Token: in.Token, Name: in.Name, PublicKey: key, Endpoints: in.Endpoints, Labels: in.Labels,
 		Inventory: in.Inventory, NodeVersion: in.NodeVersion, ProtocolVersion: in.ProtocolVersion,
 	})
 	if err != nil {

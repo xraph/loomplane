@@ -110,16 +110,21 @@ func newHubRigWith(t *testing.T, store Store, replica string, o rigOpts) *hubRig
 	mux := http.NewServeMux()
 	up := websocket.Upgrader{}
 	mux.HandleFunc("/node/v1/connect", func(w http.ResponseWriter, req *http.Request) {
+		a, err := nodeproto.DecodeAuthorization(req.Header.Get("Authorization"))
+		var n *Node
+		if err == nil {
+			n, err = r.hub.Authenticate(req.Context(), a)
+		}
+		if err != nil {
+			r.accepted <- err
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		conn, err := up.Upgrade(w, req, nil)
 		if err != nil {
 			return
 		}
-		var a nodeproto.Assertion
-		if err := conn.ReadJSON(&a); err != nil {
-			_ = conn.Close()
-			return
-		}
-		r.accepted <- r.hub.Accept(req.Context(), conn, a)
+		r.accepted <- r.hub.Accept(req.Context(), conn, n)
 	})
 	mux.Handle("/_/nodes/hop", r.hub.HopHandler())
 	r.srv.Config.Handler = mux
@@ -175,37 +180,48 @@ func (r *hubRig) signed(id string, priv ed25519.PrivateKey) nodeproto.Assertion 
 }
 
 // dial opens a WebSocket to the rig and sends the assertion.
+// tryDial connects with a in the Authorization header.
+func (r *hubRig) tryDial(a nodeproto.Assertion) (*websocket.Conn, *http.Response, error) {
+	r.t.Helper()
+	v, err := nodeproto.EncodeAuthorization(a)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return r.dialer.Dial("ws"+strings.TrimPrefix(r.srv.URL, "http")+"/node/v1/connect", http.Header{"Authorization": []string{v}})
+}
+
 func (r *hubRig) dial(a nodeproto.Assertion) *websocket.Conn {
 	r.t.Helper()
-	ws, resp, err := r.dialer.Dial("ws"+strings.TrimPrefix(r.srv.URL, "http")+"/node/v1/connect", nil)
+	ws, resp, err := r.tryDial(a)
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	_ = resp.Body.Close()
 	r.t.Cleanup(func() { _ = ws.Close() })
-	if err := ws.WriteJSON(a); err != nil {
-		r.t.Fatal(err)
-	}
 	return ws
 }
 
-// refused dials with a and returns Accept's error.
+// refused dials with a and returns the error Authenticate gave. The node is
+// turned away with an HTTP 401 and never upgraded.
 func (r *hubRig) refused(a nodeproto.Assertion) error {
 	r.t.Helper()
-	ws := r.dial(a)
+	ws, resp, err := r.tryDial(a)
+	if err == nil {
+		_ = ws.Close()
+		r.t.Fatal("a refused node was upgraded")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		r.t.Fatalf("refused with %v, %v", resp, err)
+	}
+	_ = resp.Body.Close()
 	select {
 	case err := <-r.accepted:
 		if err == nil {
-			r.t.Fatal("Accept returned nil for a refused node")
-		}
-		// The hub closes a connection it refuses.
-		_ = ws.SetReadDeadline(time.Now().Add(time.Second))
-		if _, _, rerr := ws.ReadMessage(); rerr == nil {
-			r.t.Fatal("refused connection is still open")
+			r.t.Fatal("Authenticate returned nil for a refused node")
 		}
 		return err
 	case <-time.After(3 * time.Second):
-		r.t.Fatal("Accept did not return")
+		r.t.Fatal("no verdict")
 	}
 	return nil
 }

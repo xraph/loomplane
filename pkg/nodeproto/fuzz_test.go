@@ -16,7 +16,7 @@ func FuzzReadHeader(f *testing.F) {
 	f.Add([]byte{0, 0, 0, 0})
 	f.Add([]byte{0xff, 0xff, 0xff, 0xff})
 	f.Add([]byte{0, 0, 0, 2, '{', '}'})
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = ReadHeader(bytes.NewReader(data))
 	})
 }
@@ -25,7 +25,7 @@ func FuzzDecodeControl(f *testing.F) {
 	f.Add([]byte(`{"type":"hello","version":1}`))
 	f.Add([]byte(`{"type":"future"}`))
 	f.Add([]byte(`[]`))
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		_, _ = DecodeControl(data)
 	})
 }
@@ -38,7 +38,7 @@ func FuzzVerify(f *testing.F) {
 	f.Add(b)
 	f.Add([]byte(`{"challenge":{"issued_at":"9999-12-31T23:59:59-23:59"},"signature":"` + zeroSig + `"}`))
 	f.Add([]byte(`{"challenge":{"issued_at":"0000-01-01T00:00:00+23:59"},"signature":"` + zeroSig + `"}`))
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		var a Assertion
 		if json.Unmarshal(data, &a) != nil {
 			return

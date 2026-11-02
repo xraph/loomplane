@@ -173,7 +173,8 @@ func TestClaimSessionEpochs(t *testing.T) {
 		t.Fatalf("session after release: %v", err)
 	}
 	// Epochs keep rising after a release.
-	if e3, err := s.ClaimSession(ctx, Session{NodeID: "node_1", ConnectedAt: at}); err != nil || e3 != 3 {
+	e3, err := s.ClaimSession(ctx, Session{NodeID: "node_1", ConnectedAt: at})
+	if err != nil || e3 != 3 {
 		t.Fatalf("claim after release: %d %v", e3, err)
 	}
 	if _, err = s.ClaimSession(ctx, Session{NodeID: "ghost", ConnectedAt: at}); !errors.Is(err, ErrNotFound) {

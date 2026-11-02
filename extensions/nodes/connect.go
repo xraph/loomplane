@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/xraph/forge"
@@ -15,16 +14,9 @@ import (
 )
 
 const (
-	// maxAssertion bounds the first message. A signed challenge is a few
-	// hundred bytes.
-	maxAssertion = 16 << 10
 	// maxNodeID bounds the node a challenge is asked for.
 	maxNodeID = 128
 )
-
-// assertionTimeout is how long a new connection has to send its assertion.
-// A variable so a test need not wait the whole time.
-var assertionTimeout = 10 * time.Second
 
 // upgrader accepts a connection only when it carries no Origin header. A node
 // is not a browser, so a page in someone's browser can never open one.
@@ -68,35 +60,62 @@ func (e *Extension) challenge(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(e.hub.Challenge(id)) //nolint:errcheck // the client went away; nothing to do
 }
 
-// connect upgrades to a WebSocket and waits for the node's assertion, its
-// first message. A bad one closes the connection with a close frame the node
-// can read (nodeproto.CloseUnauthorized or CloseBadRequest); a good one hands
-// the connection to the hub for the life of the session.
+// connect authenticates a node from its Authorization header, then upgrades
+// to a WebSocket and hands the connection to the hub for the life of the
+// session. A request that is not a WebSocket upgrade, or carries a browser
+// Origin, is answered before anything is checked, so it cannot spend a
+// challenge. A missing, malformed or refused assertion is an HTTP 401 and no
+// upgrade happens.
 func (e *Extension) connect(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	if !websocket.IsWebSocketUpgrade(r) {
+		http.Error(w, "this endpoint is a WebSocket", http.StatusBadRequest)
+		return
+	}
+	if !upgrader.CheckOrigin(r) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+	a, err := nodeproto.DecodeAuthorization(r.Header.Get("Authorization"))
 	if err != nil {
-		// The upgrader has answered: 400 for a plain request, 403 for an Origin.
+		unauthorized(w)
 		return
 	}
-	conn.SetReadLimit(maxAssertion)
-	_ = conn.SetReadDeadline(time.Now().Add(assertionTimeout)) //nolint:errcheck // a dead connection fails the read below
-	typ, msg, err := conn.ReadMessage()
-	var a nodeproto.Assertion
-	if err != nil || typ != websocket.TextMessage || json.Unmarshal(msg, &a) != nil {
-		hangUp(conn, nodeproto.CloseBadRequest, "send the signed challenge as the first message")
-		return
-	}
-	_ = conn.SetReadDeadline(time.Time{}) //nolint:errcheck // a dead connection ends in Accept
-	ctx, cancel := e.sessionContext(r.Context())
-	defer cancel()
-	switch err = e.hub.Accept(ctx, conn, a); {
-	case err == nil, errors.Is(err, context.Canceled):
+	n, err := e.hub.Authenticate(r.Context(), a)
+	switch {
 	case errors.Is(err, nodes.ErrUnauthorized):
 		// Why is for the log; the node learns only that it was refused.
 		e.Logger().Info("a node was refused", forge.F("remote", r.RemoteAddr), forge.F("reason", err.Error()))
+		unauthorized(w)
+		return
+	case err != nil:
+		e.Logger().Warn("a node could not be checked", forge.F("remote", r.RemoteAddr), forge.F("error", err.Error()))
+		writeJSONError(w, http.StatusServiceUnavailable, "try again")
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	ctx, cancel := e.sessionContext(r.Context())
+	defer cancel()
+	switch err = e.hub.Accept(ctx, conn, n); {
+	case err == nil, errors.Is(err, context.Canceled):
+	case errors.Is(err, nodes.ErrUnauthorized):
+		e.Logger().Info("a node was revoked as it connected", forge.F("remote", r.RemoteAddr))
 	default:
 		e.Logger().Warn("a node session ended with an error", forge.F("remote", r.RemoteAddr), forge.F("error", err.Error()))
 	}
+}
+
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", nodeproto.AuthScheme)
+	writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck // the client went away; nothing to do
 }
 
 // sessionContext ends with the request and with the extension, so stopping
@@ -112,10 +131,4 @@ func (e *Extension) sessionContext(parent context.Context) (context.Context, con
 	}
 	stop := context.AfterFunc(run, cancel)
 	return ctx, func() { stop(); cancel() }
-}
-
-// hangUp sends a close frame and closes conn.
-func hangUp(conn *websocket.Conn, code int, reason string) {
-	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second)) //nolint:errcheck // the connection is closing either way
-	_ = conn.Close()
 }

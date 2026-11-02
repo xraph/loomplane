@@ -17,11 +17,9 @@ const Version = 1
 // WebSocket close codes the control plane sends a node before it hangs up.
 // They sit in the private range (4000 to 4999).
 const (
-	// CloseUnauthorized means the assertion was refused. Fetch a new challenge
-	// and retry; if it keeps happening the node was revoked.
+	// CloseUnauthorized means the node was revoked while it connected. A node
+	// whose assertion fails is refused before the upgrade, with HTTP 401.
 	CloseUnauthorized = 4401
-	// CloseBadRequest means the first message was not a usable assertion.
-	CloseBadRequest = 4400
 )
 
 // MaxHeaderSize is the largest stream header body, in bytes.
@@ -91,7 +89,7 @@ func WriteHeader(w io.Writer, h StreamHeader) error {
 		return fmt.Errorf("%w: %d bytes", ErrHeaderSize, len(body))
 	}
 	buf := make([]byte, 4+len(body))
-	binary.BigEndian.PutUint32(buf, uint32(len(body)))
+	binary.BigEndian.PutUint32(buf, uint32(len(body))) //nolint:gosec // bounded by MaxHeaderSize above
 	copy(buf[4:], body)
 	_, err = w.Write(buf)
 	return err
