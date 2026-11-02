@@ -7,37 +7,8 @@ import { NewWorkspace, Onboarding } from "@/pages/onboarding"
 
 const signOut = vi.hoisted(() => vi.fn(async () => {}))
 const switchOrganization = vi.hoisted(() => vi.fn(async () => {}))
-vi.mock("@authsome/ui-react", () => ({ useAuth: () => ({ signOut }) }))
-vi.mock("@authsome/ui-components", () => ({
-  AuthCard: ({
-    title,
-    children,
-    footer,
-  }: {
-    title: string
-    children: React.ReactNode
-    footer: React.ReactNode
-  }) => (
-    <section>
-      <h2>{title}</h2>
-      {children}
-      {footer}
-    </section>
-  ),
-}))
-vi.mock("@/components/auth-layout", () => ({
-  AuthLayout: ({
-    title,
-    children,
-  }: {
-    title: string
-    children: React.ReactNode
-  }) => (
-    <main>
-      <h1>{title}</h1>
-      {children}
-    </main>
-  ),
+vi.mock("@authsome/ui-react", () => ({
+  useAuth: () => ({ user: { email: "grace@acme.com" }, signOut }),
 }))
 vi.mock("@/components/organization-form", () => ({
   OrganizationForm: ({
@@ -72,24 +43,25 @@ it("starts a second workspace in the onboarding frame and switches to it", async
   expect(
     screen.getByRole("heading", { name: "Create another workspace" })
   ).toBeInTheDocument()
-  expect(
-    screen.getByRole("heading", { name: "Name your workspace" })
-  ).toBeInTheDocument()
   await userEvent.click(
     screen.getByRole("button", { name: "Create workspace" })
   )
   expect(switchOrganization).toHaveBeenCalledWith("org-b")
 })
 
-it("leads back to the workspace you came from instead of signing out", () => {
+it("leads back to the workspace you came from", () => {
   render(<NewWorkspace />)
   expect(screen.getByRole("link", { name: "Back to XRaph" })).toHaveAttribute(
     "href",
     "/"
   )
-  expect(
-    screen.queryByRole("button", { name: "Sign out" })
-  ).not.toBeInTheDocument()
+})
+
+it("uses the onboarding frame, not the sign-in one, and says who's signed in", () => {
+  render(<NewWorkspace />)
+  expect(screen.getByText("grace@acme.com")).toBeInTheDocument()
+  expect(screen.getByText("Loomplane by Xraph")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument()
 })
 
 it("offers to sign out when you have no workspace yet", async () => {
@@ -98,6 +70,9 @@ it("offers to sign out when you have no workspace yet", async () => {
   expect(
     screen.getByRole("heading", { name: "Create your workspace" })
   ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("link", { name: /Back to/ })
+  ).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole("button", { name: "Sign out" }))
   expect(signOut).toHaveBeenCalled()
 })

@@ -1,17 +1,18 @@
-import { AuthCard } from "@authsome/ui-components"
 import { useAuth } from "@authsome/ui-react"
 
-import { AuthLayout } from "@/components/auth-layout"
+import { OnboardingLayout } from "@/components/onboarding-layout"
 import { OrganizationForm } from "@/components/organization-form"
-import { Button, buttonVariants } from "@/components/ui/button"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
-import { cn } from "@/lib/utils"
+
+const footerLink =
+  "text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 
 /**
  * Onboarding asks a signed-in person to create a workspace: the first one,
- * when they have none, or another from the sidebar's New workspace. With
- * a workspace already, the way out leads back to it instead of signing out.
+ * when they have none, or another from the sidebar's New workspace. With a
+ * workspace already, it also leads back to that one. Signing out sits in
+ * the layout's header, beside who's signed in.
  */
 export function Onboarding({
   activate,
@@ -21,42 +22,23 @@ export function Onboarding({
   /** The workspace you came from, if you have one. */
   current?: string
 }) {
-  const { signOut } = useAuth()
+  const { user, signOut } = useAuth()
   return (
-    <AuthLayout
+    <OnboardingLayout
       title={current ? "Create another workspace" : "Create your workspace"}
+      lede="A workspace holds your projects, clouds and teammates. Its address is the first part of every dashboard link."
+      account={user?.email}
+      onSignOut={() => void signOut()}
+      footer={
+        current && (
+          <Link to="/" className={footerLink}>
+            Back to {current}
+          </Link>
+        )
+      }
     >
-      <AuthCard
-        title="Name your workspace"
-        description="Give your team's projects a home. You'll be the owner of this workspace."
-        align="left"
-        variant="borderless"
-        className="auth-card"
-        footer={
-          current ? (
-            <Link
-              to="/"
-              className={cn(
-                buttonVariants({ variant: "link" }),
-                "h-8 px-0 text-foreground"
-              )}
-            >
-              Back to {current}
-            </Link>
-          ) : (
-            <Button
-              variant="link"
-              className="h-8 px-0 text-foreground"
-              onClick={() => void signOut()}
-            >
-              Sign out
-            </Button>
-          )
-        }
-      >
-        <OrganizationForm onCreated={activate} />
-      </AuthCard>
-    </AuthLayout>
+      <OrganizationForm onCreated={activate} />
+    </OnboardingLayout>
   )
 }
 
