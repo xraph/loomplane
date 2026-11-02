@@ -5,6 +5,7 @@ package migrations
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/grove/migrate"
@@ -61,21 +62,13 @@ func TestAgentTablesAndTriggers(t *testing.T) {
 		t.Fatalf("task events: %v", got)
 	}
 	raw := strs(t, conn, `SELECT data::text FROM loomplane_events WHERE type='agent_task.updated'`)
-	var data map[string]any
-	if err := json.Unmarshal([]byte(raw[0]), &data); err != nil {
-		t.Fatal(err)
-	}
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
 	want := []string{"created_at", "environment_id", "error", "event_seq", "finished_at", "id", "kind", "max_tokens", "org_id", "project_id", "requested_by", "run_id", "status", "tokens", "updated_at"}
+	keys := keysOf(t, raw[0])
 	if !slices.Equal(keys, want) {
 		t.Fatalf("task event keys %v, want %v", keys, want)
 	}
 	for _, private := range []string{"input", "principal", "metadata", "session_id"} {
-		if _, ok := data[private]; ok {
+		if slices.Contains(keys, private) {
 			t.Fatalf("task event carries %s: %s", private, raw[0])
 		}
 	}
@@ -91,7 +84,7 @@ func TestAgentTablesAndTriggers(t *testing.T) {
 		t.Fatalf("task update events: %v", got)
 	}
 
-	exec(t, conn, `INSERT INTO loomplane_agent_run_events (task_id,seq,kind,data) VALUES ('atask_1',1,'message','{"text":"hi"}')`)
+	exec(t, conn, `INSERT INTO loomplane_agent_run_events (task_id,org_id,seq,kind,data) VALUES ('atask_1','org',1,'message','{"text":"hi"}')`)
 	if got := strs(t, conn, `SELECT (created_at IS NOT NULL)::text FROM loomplane_agent_run_events`); got[0] != "true" {
 		t.Fatalf("run event created_at: %v", got)
 	}
@@ -121,8 +114,9 @@ func TestAgentTablesAndTriggers(t *testing.T) {
 		task("atask_3", "run_3", "poetry", "queued", "4000"),
 		task("atask_4", "run_4", "chat", "sleeping", "4000"),
 		task("atask_5", "run_5", "chat", "queued", "0"),
-		`INSERT INTO loomplane_agent_run_events (task_id,seq,kind,data) VALUES ('atask_1',1,'message','{}')`, // same seq
-		`INSERT INTO loomplane_agent_run_events (task_id,seq,kind,data) VALUES ('atask_none',1,'message','{}')`,
+		`INSERT INTO loomplane_agent_run_events (task_id,org_id,seq,kind,data) VALUES ('atask_1','org',1,'message','{}')`, // same seq
+		`INSERT INTO loomplane_agent_run_events (task_id,org_id,seq,kind,data) VALUES ('atask_none','org',1,'message','{}')`,
+		`INSERT INTO loomplane_agent_run_events (task_id,seq,kind,data) VALUES ('atask_1',2,'message','{}')`, // no workspace
 	} {
 		if _, err := conn.Exec(ctx, sql); err == nil {
 			t.Fatalf("constraint accepted %s", sql)
@@ -131,13 +125,35 @@ func TestAgentTablesAndTriggers(t *testing.T) {
 	// Another tool call in the same run is a request of its own.
 	exec(t, conn, request("areq_2", "run_1", "call_2", "answer"))
 
+	// A request event says who it is for and where it stands, and never
+	// what was asked or answered. Saving only an answer emits nothing.
+	exec(t, conn, `INSERT INTO loomplane_agent_requests (id,org_id,project_id,task_id,run_id,kind,status,question,context,options,target,suspension_id,checkpoint_id,tool_call_id,asked_for,team_id,team_name,route_source,team_reason,route_note,expires_at,created_at,updated_at)
+ VALUES ('areq_3','org','proj','atask_1','run_1','provide_secret','pending','QUESTION-MARKER','[{"label":"CONTEXT-MARKER","path":"/"}]','["OPTION-MARKER"]','{"key":"TARGET-MARKER"}','SUSPENSION-MARKER','CHECKPOINT-MARKER','TOOLCALL-MARKER','usr_ada','team_1','Payments','project','REASON-MARKER','NOTE-MARKER',now()+interval '1 day',now(),now())`,
+		`UPDATE loomplane_agent_requests SET answer='ANSWER-MARKER', answered_by='ANSWERER-MARKER' WHERE id='areq_3'`,
+		`UPDATE loomplane_agent_requests SET status='answered', outcome='provided', answered_at=now() WHERE id='areq_3'`)
+	if got := strs(t, conn, `SELECT data->>'status' FROM loomplane_events WHERE type='agent_request.updated' AND entity_id='areq_3' ORDER BY sequence`); len(got) != 2 || got[0] != "pending" || got[1] != "answered" {
+		t.Fatalf("areq_3 events: %v", got)
+	}
+	requestKeys := []string{"asked_for", "created_at", "id", "kind", "org_id", "project_id", "route_source", "status", "team_id", "team_name", "updated_at"}
+	for _, payload := range strs(t, conn, `SELECT data::text FROM loomplane_events WHERE type LIKE 'agent_request.%' ORDER BY sequence`) {
+		if keys := keysOf(t, payload); !slices.Equal(keys, requestKeys) {
+			t.Fatalf("request event keys %v, want %v", keys, requestKeys)
+		}
+		if strings.Contains(payload, "MARKER") {
+			t.Fatalf("request event carries private text: %s", payload)
+		}
+	}
+	if got := strs(t, conn, `SELECT data->>'asked_for'||'|'||(data->>'team_id')||'|'||(data->>'team_name')||'|'||(data->>'route_source') FROM loomplane_events WHERE type='agent_request.updated' AND entity_id='areq_3' ORDER BY sequence LIMIT 1`); got[0] != "usr_ada|team_1|Payments|project" {
+		t.Fatalf("areq_3 routing: %v", got)
+	}
+
 	// Deleting a task takes its run events and requests with it, and each
 	// request's deletion is an event.
 	exec(t, conn, `DELETE FROM loomplane_agent_tasks WHERE id='atask_1'`)
 	if got := strs(t, conn, `SELECT (SELECT count(*) FROM loomplane_agent_run_events)+(SELECT count(*) FROM loomplane_agent_requests)||''`); got[0] != "0" {
 		t.Fatalf("a deleted task left %s rows", got[0])
 	}
-	if got := strs(t, conn, `SELECT type||'|'||entity_id FROM loomplane_events WHERE type LIKE 'agent_%.deleted' ORDER BY type,entity_id`); len(got) != 3 || got[0] != "agent_request.deleted|areq_1" || got[1] != "agent_request.deleted|areq_2" || got[2] != "agent_task.deleted|atask_1" {
+	if got := strs(t, conn, `SELECT type||'|'||entity_id FROM loomplane_events WHERE type LIKE 'agent_%.deleted' ORDER BY type,entity_id`); len(got) != 4 || got[0] != "agent_request.deleted|areq_1" || got[1] != "agent_request.deleted|areq_2" || got[2] != "agent_request.deleted|areq_3" || got[3] != "agent_task.deleted|atask_1" {
 		t.Fatalf("deleted events: %v", got)
 	}
 
@@ -145,12 +161,27 @@ func TestAgentTablesAndTriggers(t *testing.T) {
 	if got := strs(t, conn, tables); got[0] != "gone|gone|gone" {
 		t.Fatalf("down left tables: %v", got)
 	}
-	if got := strs(t, conn, `SELECT count(*)::text FROM pg_proc WHERE proname='loomplane_agent_task_event_trigger'`); got[0] != "0" {
-		t.Fatalf("down left the task trigger function: %v", got)
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_proc WHERE proname='loomplane_agent_event_trigger'`); got[0] != "0" {
+		t.Fatalf("down left the agent trigger function: %v", got)
 	}
 	// Up again after a down gives empty tables back.
 	up(t, ex, "agent_foundation")
 	if got := strs(t, conn, `SELECT (SELECT count(*) FROM loomplane_agent_tasks)+(SELECT count(*) FROM loomplane_agent_run_events)+(SELECT count(*) FROM loomplane_agent_requests)||''`); got[0] != "0" {
 		t.Fatalf("rows after down and up: %v", got)
 	}
+}
+
+// keysOf is the sorted top-level keys of a JSON object.
+func keysOf(t *testing.T, raw string) []string {
+	t.Helper()
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

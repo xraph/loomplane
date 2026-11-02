@@ -59,7 +59,7 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[cloudinfra.CapacityChange]("cloud_capacity.updated").Invalidates("CapacityPolicyView:{cloud_id}", "CapacityUsage:{cloud_id}", "Expansion[]"),
 		forge.Emits[notifications.NotificationCreated]("notification.created").Invalidates("NotificationList"),
 		forge.Emits[agentruns.TaskEvent]("agent_task.updated").As(forge.StreamUpsert).Invalidates("AgentTask", "AgentTask[]"), forge.Emits[agentruns.TaskEvent]("agent_task.deleted"),
-		forge.Emits[agentrequests.Request]("agent_request.updated").As(forge.StreamUpsert).Invalidates("AgentRequest", "AgentRequest[]"), forge.Emits[agentrequests.Request]("agent_request.deleted"),
+		forge.Emits[agentrequests.RequestEvent]("agent_request.updated").As(forge.StreamUpsert).Invalidates("AgentRequest", "AgentRequest[]"), forge.Emits[agentrequests.RequestEvent]("agent_request.deleted"),
 		forge.Emits[store.Log]("build.log").As(forge.StreamUpsert), forge.Emits[store.Collection]("build.collection").As(forge.StreamUpsert),
 	)
 }
@@ -87,7 +87,7 @@ func (e *Extension) routes(router forge.Router) error {
 		"cloud.updated": cloudprofiles.Profile{}, "cloud.deleted": cloudprofiles.Profile{}, "cloud_target.updated": cloudprofiles.Target{}, "cloud_target.deleted": cloudprofiles.Target{},
 		"environment_cloud.updated": cloudprofiles.EnvironmentCloudEvent{}, "cloud_sync.updated": cloudprofiles.CloudSyncEvent{},
 		"cloud_cluster.updated": cloudinfra.ClusterChange{}, "cloud_capacity.updated": cloudinfra.CapacityChange{}, "notification.created": notifications.NotificationCreated{},
-		"agent_task.updated": agentruns.TaskEvent{}, "agent_task.deleted": agentruns.TaskEvent{}, "agent_request.updated": agentrequests.Request{}, "agent_request.deleted": agentrequests.Request{},
+		"agent_task.updated": agentruns.TaskEvent{}, "agent_task.deleted": agentruns.TaskEvent{}, "agent_request.updated": agentrequests.RequestEvent{}, "agent_request.deleted": agentrequests.RequestEvent{},
 		"realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
 	}), streamBindings())
 }

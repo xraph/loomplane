@@ -163,6 +163,13 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			allowed = err == nil
 			grants[key] = allowed
 		}
+		if allowed && strings.HasPrefix(event.Type, "agent_request.") {
+			addressed, err := e.agentRequestReaches(ctx, p, event, grants)
+			if err != nil {
+				return nil, err
+			}
+			allowed = addressed
+		}
 		if allowed {
 			if event.Type == "cloud_sync.updated" && len(event.Data) > 0 {
 				managerErr := e.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
@@ -190,6 +197,29 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 		}
 	}
 	return out, nil
+}
+
+// agentRequestReaches says whether a request event reaches p: the person it
+// asks does, and so does anyone who manages the workspace's AI. Task 16 adds
+// the members of the team a request is routed to. A payload whose asked_for
+// can't be read reaches only managers.
+func (e *Extension) agentRequestReaches(ctx context.Context, p security.Principal, event store.Event, grants map[string]bool) (bool, error) {
+	var ref struct {
+		AskedFor string `json:"asked_for"`
+	}
+	if json.Unmarshal(event.Data, &ref) == nil && ref.AskedFor != "" && ref.AskedFor == p.UserID {
+		return true, nil
+	}
+	key := security.AIManage.Name() + ":"
+	if allowed, checked := grants[key]; checked {
+		return allowed, nil
+	}
+	err := e.authz.Require(ctx, p, security.AIManage, "")
+	if err != nil && !errors.Is(err, security.ErrForbidden) {
+		return false, err
+	}
+	grants[key] = err == nil
+	return err == nil, nil
 }
 
 func (e *Extension) snapshotFor(ctx context.Context, p security.Principal, sub Subscription) (*store.Snapshot, error) {

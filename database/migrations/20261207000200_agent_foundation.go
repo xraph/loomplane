@@ -8,15 +8,16 @@ import (
 )
 
 // The agent's tasks, the events of their runs, and the requests a run makes
-// of a person. Each table belongs to one workspace: tasks and requests carry
-// org_id, and run events reach theirs through their task. With AI off the
-// tables exist and nothing writes to them.
+// of a person. Each row carries the workspace it belongs to (org_id). With
+// AI off the tables exist and nothing writes to them.
 //
-// A task's realtime event comes from a trigger of its own that copies an
-// allowlist of columns. It never carries input (a chat message is the
-// person's), principal or metadata, and a change to only those emits
-// nothing. A request is a realtime agent_request event through the generic
-// state event trigger, whose function this leaves as it is.
+// Tasks and requests are realtime agent_task and agent_request events
+// through a trigger of their own that copies an allowlist of columns, and a
+// change to only the other columns emits nothing. A task event never
+// carries input (a chat message is the person's), the principal, the
+// session or the metadata. A request event says who it is for and where it
+// stands: never the question, its context, options or target, the answer
+// or who gave it, or the suspension, checkpoint and tool call ids.
 //
 // The route columns on requests (team_id to route_note) belong to teams,
 // whose tables come in a later migration, so they hold plain text with no
@@ -81,6 +82,7 @@ func init() {
 			err = db.NewCreateTable("loomplane_agent_run_events").IfNotExists().
 				Column("task_id", migrate.Text, migrate.NotNull(),
 					migrate.References("loomplane_agent_tasks", "id"), migrate.OnDelete(migrate.Cascade)).
+				Column("org_id", migrate.Text, migrate.NotNull()).
 				Column("seq", migrate.BigInt, migrate.NotNull()).
 				Column("kind", migrate.Text, migrate.NotNull()).
 				Column("data", migrate.JSON, migrate.NotNull()).
@@ -147,12 +149,22 @@ func init() {
 				return err
 			}
 
-			_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_agent_task_event_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+			// One function serves both tables; each event copies only its
+			// table's allowlist.
+			_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_agent_event_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
-	shown CONSTANT TEXT[] := ARRAY['id','org_id','project_id','environment_id','kind','run_id','status','requested_by','event_seq','tokens','max_tokens','error','created_at','updated_at','finished_at'];
+	entity CONSTANT TEXT := TG_ARGV[0];
+	shown TEXT[];
 	payload JSONB;
 	previous JSONB;
 BEGIN
+	IF TG_TABLE_NAME='loomplane_agent_tasks' THEN
+		shown:=ARRAY['id','org_id','project_id','environment_id','kind','run_id','status','requested_by','event_seq','tokens','max_tokens','error','created_at','updated_at','finished_at'];
+	ELSIF TG_TABLE_NAME='loomplane_agent_requests' THEN
+		shown:=ARRAY['id','org_id','project_id','kind','status','team_id','team_name','route_source','asked_for','created_at','updated_at'];
+	ELSE
+		RAISE EXCEPTION 'loomplane_agent_event_trigger has no allowlist for %', TG_TABLE_NAME;
+	END IF;
 	IF TG_OP<>'DELETE' THEN
 		SELECT jsonb_object_agg(key,value) INTO payload FROM jsonb_each(to_jsonb(NEW)) WHERE key=ANY(shown);
 	END IF;
@@ -162,26 +174,22 @@ BEGIN
 	IF TG_OP='UPDATE' AND previous IS NOT DISTINCT FROM payload THEN RETURN NULL; END IF;
 
 	IF TG_OP='DELETE' THEN
-		PERFORM loomplane_append_event(OLD.org_id,OLD.project_id,'agent_task.deleted',OLD.id,previous);
+		PERFORM loomplane_append_event(OLD.org_id,OLD.project_id,entity||'.deleted',OLD.id,previous);
 	ELSE
-		PERFORM loomplane_append_event(NEW.org_id,NEW.project_id,'agent_task.updated',NEW.id,payload);
+		PERFORM loomplane_append_event(NEW.org_id,NEW.project_id,entity||'.updated',NEW.id,payload);
 	END IF;
 	RETURN NULL;
 END $$`)
 			if err != nil {
-				return fmt.Errorf("create function loomplane_agent_task_event_trigger: %w", err)
+				return fmt.Errorf("create function loomplane_agent_event_trigger: %w", err)
 			}
-			_, err = db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_agent_task_event
-AFTER INSERT OR UPDATE OR DELETE ON loomplane_agent_tasks
-FOR EACH ROW EXECUTE FUNCTION loomplane_agent_task_event_trigger()`)
-			if err != nil {
-				return fmt.Errorf("create trigger loomplane_agent_task_event on loomplane_agent_tasks: %w", err)
-			}
-			_, err = db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_state_event
-AFTER INSERT OR UPDATE OR DELETE ON loomplane_agent_requests
-FOR EACH ROW EXECUTE FUNCTION loomplane_state_event_trigger('agent_request')`)
-			if err != nil {
-				return fmt.Errorf("create trigger loomplane_state_event on loomplane_agent_requests: %w", err)
+			for table, entity := range map[string]string{"loomplane_agent_tasks": "agent_task", "loomplane_agent_requests": "agent_request"} {
+				_, err = db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_agent_event
+AFTER INSERT OR UPDATE OR DELETE ON `+table+`
+FOR EACH ROW EXECUTE FUNCTION loomplane_agent_event_trigger('`+entity+`')`)
+				if err != nil {
+					return fmt.Errorf("create trigger loomplane_agent_event on %s: %w", table, err)
+				}
 			}
 			return nil
 		},
@@ -192,9 +200,9 @@ FOR EACH ROW EXECUTE FUNCTION loomplane_state_event_trigger('agent_request')`)
 					return err
 				}
 			}
-			_, err := db.Exec(ctx, `DROP FUNCTION IF EXISTS loomplane_agent_task_event_trigger()`)
+			_, err := db.Exec(ctx, `DROP FUNCTION IF EXISTS loomplane_agent_event_trigger()`)
 			if err != nil {
-				return fmt.Errorf("drop function loomplane_agent_task_event_trigger: %w", err)
+				return fmt.Errorf("drop function loomplane_agent_event_trigger: %w", err)
 			}
 			return nil
 		},
