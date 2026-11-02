@@ -57,10 +57,11 @@ Set the five App settings together, or none. Loomplane refuses to start with som
 
 ## Email
 
-An empty host disables email. Setting a username, password or sender without a host is an error.
+An empty host, with no Resend key or mail directory, disables email. Setting a username, password or sender without a host is an error.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `LOOMPLANE_NOTIFICATIONS_MAIL_DIR` | Unset | Writes each email to this folder as an `.eml` file instead of sending it. Development only; production refuses it |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_HOST` | Unset | The SMTP server |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_PORT` | `1025` | Its port, 1 to 65535 |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME` | Unset | Set with the password |

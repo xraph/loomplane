@@ -3,12 +3,15 @@ package notifications
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/driver"
+	emaildriver "github.com/xraph/herald/driver/email"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	heraldmem "github.com/xraph/herald/store/memory"
@@ -141,5 +144,46 @@ func TestSendWaitlistApprovedMailDisabled(t *testing.T) {
 	svc := &Service{cfg: config.Config{PublicURL: "https://loom.example"}}
 	if err := svc.SendWaitlistApproved(context.Background(), "ada@example.com"); !errors.Is(err, ErrMailDisabled) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMailDirWritesAuthMailToAFolder(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	n := config.NotificationsConfig{MailDir: dir}
+	p := mailProvider(n)
+	if p.Name != "loomplane-file" || p.Driver != "file" || p.Settings["dir"] != dir {
+		t.Fatalf("provider %+v", p)
+	}
+	store := heraldmem.New()
+	engine, err := herald.New(herald.WithStore(privateHeraldStore{Store: store}), herald.WithDriver(&emaildriver.FileDriver{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.SeedDefaultTemplates(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.CreateProvider(ctx, &provider.Provider{AppID: "app", Name: p.Name, Channel: "email", Driver: p.Driver, Credentials: p.Credentials, Settings: p.Settings, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: config.Config{Identity: config.IdentityConfig{AppID: "app"}, Notifications: n}, herald: engine}
+	req := &bridge.HeraldSendRequest{Channel: "email", Template: "auth.password-changed", To: []string{"ada@example.com"}}
+	if err = svc.AuthBridge().Send(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.eml"))
+	if len(files) != 1 {
+		t.Fatalf("want one .eml in %s, got %v", dir, files)
+	}
+	raw, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(raw), "To: <ada@example.com>") || !strings.Contains(string(raw), "From: <loomplane@localhost>") {
+		t.Fatalf("headers:\n%s", raw)
+	}
+}
+
+func TestMailProviderResolvesARelativeMailDir(t *testing.T) {
+	p := mailProvider(config.NotificationsConfig{MailDir: ".forge/mail"})
+	if !filepath.IsAbs(p.Settings["dir"]) || !strings.HasSuffix(p.Settings["dir"], filepath.Join(".forge", "mail")) {
+		t.Fatalf("dir %q", p.Settings["dir"])
 	}
 }

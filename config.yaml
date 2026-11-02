@@ -46,7 +46,11 @@ notifications:
   # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
   # "from" on a domain verified in Resend.
   resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
-  # Empty host (with no Resend key) disables email. For local Mailpit use 127.0.0.1:1025.
+  # Writes each email to this folder as an .eml file instead of sending it, so
+  # you can read local mail without a mail server. Set this, resend_api_key or
+  # smtp_host, only one. Production refuses it. .forge/mail is gitignored.
+  mail_dir: "${LOOMPLANE_NOTIFICATIONS_MAIL_DIR:-}"
+  # Empty host (with no Resend key or mail_dir) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"

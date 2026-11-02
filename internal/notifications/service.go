@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +69,7 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 		return nil, err
 	}
 	ms := privateHeraldStore{Store: heraldpg.New(db)}
-	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&emaildriver.ResendDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
+	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&emaildriver.ResendDriver{}), herald.WithDriver(&emaildriver.FileDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +87,8 @@ func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
 
 // Prepare is called after central migrations and before Authsome starts. It
-// configures exactly one application-owned mail provider (SMTP or Resend) and seeds templates.
+// configures exactly one application-owned mail provider (SMTP, Resend or a
+// mail directory) and seeds templates.
 // Replicas that start together take turns: the provider has no unique
 // constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
@@ -103,15 +105,7 @@ func (s *Service) prepare(ctx context.Context) error {
 	if !s.MailEnabled() {
 		return nil
 	}
-	n := s.cfg.Notifications
-	name, driverName := "loomplane-smtp", "smtp"
-	creds := map[string]string{"username": n.SMTPUsername, "password": n.SMTPPassword}
-	settings := map[string]string{"host": n.SMTPHost, "port": strconv.Itoa(n.SMTPPort), "use_tls": strconv.FormatBool(n.SMTPTLS), "from": n.From}
-	if n.ResendAPIKey != "" {
-		name, driverName = "loomplane-resend", "resend"
-		creds = map[string]string{"api_key": n.ResendAPIKey}
-		settings = map[string]string{"from": n.From}
-	}
+	mp := mailProvider(s.cfg.Notifications)
 	list, err := s.mailStore.ListAllProviders(ctx, s.cfg.Identity.AppID)
 	if err != nil {
 		return err
@@ -119,13 +113,13 @@ func (s *Service) prepare(ctx context.Context) error {
 	found := false
 	for _, p := range list {
 		switch p.Name {
-		case name:
+		case mp.Name:
 			found = true
 			enabled := true
-			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: creds, SetSettings: settings, Enabled: &enabled}); err != nil {
+			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: mp.Credentials, SetSettings: mp.Settings, Enabled: &enabled}); err != nil {
 				return err
 			}
-		case "loomplane-smtp", "loomplane-resend":
+		case "loomplane-smtp", "loomplane-resend", "loomplane-file":
 			// Exactly one application-owned mail provider stays enabled.
 			if !p.Enabled {
 				continue
@@ -139,7 +133,34 @@ func (s *Service) prepare(ctx context.Context) error {
 	if found {
 		return nil
 	}
-	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: name, Channel: "email", Driver: driverName, Credentials: creds, Settings: settings, Enabled: true})
+	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: mp.Name, Channel: "email", Driver: mp.Driver, Credentials: mp.Credentials, Settings: mp.Settings, Enabled: true})
+}
+
+// mailProvider is the one application-owned mail provider n configures:
+// Resend, a mail directory or SMTP. Validate has already refused more
+// than one.
+func mailProvider(n config.NotificationsConfig) provider.Provider {
+	switch {
+	case n.ResendAPIKey != "":
+		return provider.Provider{Name: "loomplane-resend", Driver: "resend",
+			Credentials: map[string]string{"api_key": n.ResendAPIKey}, Settings: map[string]string{"from": n.From}}
+	case n.MailDir != "":
+		// An absolute path, so the stored provider doesn't depend on the
+		// directory the server happens to start in.
+		dir, err := filepath.Abs(n.MailDir)
+		if err != nil {
+			dir = n.MailDir
+		}
+		from := n.From
+		if from == "" {
+			from = "loomplane@localhost"
+		}
+		return provider.Provider{Name: "loomplane-file", Driver: "file",
+			Credentials: map[string]string{}, Settings: map[string]string{"dir": dir, "from": from}}
+	}
+	return provider.Provider{Name: "loomplane-smtp", Driver: "smtp",
+		Credentials: map[string]string{"username": n.SMTPUsername, "password": n.SMTPPassword},
+		Settings:    map[string]string{"host": n.SMTPHost, "port": strconv.Itoa(n.SMTPPort), "use_tls": strconv.FormatBool(n.SMTPTLS), "from": n.From}}
 }
 func (s *Service) Run(ctx context.Context) error {
 	if err := s.registerEventTypes(ctx); err != nil {
