@@ -14,19 +14,22 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/aisettings"
+	"github.com/xraph/loomplane/internal/config"
 )
 
 // on is a harness with the agent on, on the key called name ("" for the
 // server's), and a context for its tenant.
-func on(t *testing.T, name, model string) (*harness, context.Context) {
+func on(t *testing.T, name, model string, change ...func(*agentsettings.Deps)) (*harness, context.Context) {
 	t.Helper()
-	h := newHarness(t)
+	h := newHarness(t, change...)
 	h.gw.priced["openai-compatible/llama"] = true
 	h.budget(t, "25")
 	switch name {
 	case "":
 	case "local":
 		h.putKey(t, name, openCompatKey("https://llm.example.com/v1"))
+	case "gpt":
+		h.putKey(t, name, aisettings.ProviderKeyInput{Type: "openai", Fields: map[string]string{"api_key": "sk-openai-ws-5678"}})
 	default:
 		h.putKey(t, name, anthropicKey())
 	}
@@ -113,6 +116,39 @@ func TestCredentialsReturnTheWorkspaceKey(t *testing.T) {
 	key, err := h2.svc.Credentials().GetCredential(ctx2, "anthropic")
 	if err != nil || key != secretValue {
 		t.Errorf("GetCredential %v", err)
+	}
+}
+
+// The server's ai.base_url is for the server's own key. A workspace key
+// with no base_url of its own goes to its provider's own API, never to
+// the operator's gateway.
+func TestWorkspaceKeysSkipTheServersBaseURL(t *testing.T) {
+	gateway := func(provider string) func(*agentsettings.Deps) {
+		return func(d *agentsettings.Deps) {
+			d.Config.Provider, d.Config.BaseURL = provider, "https://gateway.corp.example.com/v1"
+		}
+	}
+	h, ctx := on(t, "claude", "", gateway(config.AIProviderAnthropic))
+	c, err := h.svc.Credentials().ResolveCredential(ctx, "anthropic")
+	if err != nil || c.APIKey != secretValue || c.BaseURL != "https://api.anthropic.com" {
+		t.Fatalf("anthropic workspace key: %v %v", c, err)
+	}
+	h, ctx = on(t, "gpt", "gpt-x", gateway(config.AIProviderOpenAI))
+	c, err = h.svc.Credentials().ResolveCredential(ctx, "openai")
+	if err != nil || c.APIKey != "sk-openai-ws-5678" || c.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("openai workspace key: %v %v", c, err)
+	}
+	// On another provider than the server's, the provider was built with
+	// its own API already.
+	h, ctx = on(t, "gpt", "gpt-x", gateway(config.AIProviderAnthropic))
+	if c, err = h.svc.Credentials().ResolveCredential(ctx, "openai"); err != nil || c.BaseURL != "" {
+		t.Fatalf("another provider's key: %v %v", c, err)
+	}
+	// The server's own key still goes to ai.base_url: nexus serves it on
+	// the provider as built.
+	h, ctx = on(t, "", "", gateway(config.AIProviderAnthropic))
+	if _, err = h.svc.Credentials().ResolveCredential(ctx, "anthropic"); !errors.Is(err, provider.ErrCredentialNotFound) {
+		t.Fatalf("the server's key: %v", err)
 	}
 }
 

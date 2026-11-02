@@ -68,7 +68,21 @@ func (c *Credentials) ResolveCredential(ctx context.Context, providerName string
 	if k.Provider == config.AIProviderOpenAICompatible && k.BaseURL == "" {
 		return provider.Credential{}, fmt.Errorf("agentsettings: refused a call: the OpenAI-compatible key %q has no base_url", k.Name)
 	}
-	return provider.Credential{APIKey: k.APIKey, BaseURL: k.BaseURL}, nil
+	base := k.BaseURL
+	if base == "" && k.Provider == s.cfg.Provider && s.cfg.BaseURL != "" {
+		// The server's provider was built with ai.base_url, which is for
+		// the server's own key. A workspace key without a base URL of its
+		// own goes to its provider's own API, never the operator's gateway.
+		base = providerAPIs[k.Provider]
+	}
+	return provider.Credential{APIKey: k.APIKey, BaseURL: base}, nil
+}
+
+// providerAPIs are the providers' own APIs, as nexus's providers default
+// to them. OpenAI-compatible has none: its keys always carry a base URL.
+var providerAPIs = map[string]string{
+	config.AIProviderAnthropic: "https://api.anthropic.com",
+	config.AIProviderOpenAI:    "https://api.openai.com/v1",
 }
 
 // GetCredential implements provider.CredentialProvider, for a gateway that
