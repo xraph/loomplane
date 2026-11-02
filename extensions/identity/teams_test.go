@@ -48,13 +48,24 @@ func TestRefuseAuthsomeTeams(t *testing.T) {
 		{http.MethodDelete, "/v1/orgs/aorg_1/members/amem_1", false},
 		{http.MethodGet, "/v1/orgs", false},
 		{http.MethodGet, "/v1/orgs/aorg_1/teamsx", false},
+		// bunrouter routes on the raw path. Path.Clean would turn this
+		// into /v1/orgs/aorg_1, while the router hands "%2e%2e" to
+		// authsome's team handler as the team ID.
+		{http.MethodDelete, "/v1/orgs/aorg_1/teams/%2e%2e", true},
+		{http.MethodGet, "/v1/orgs/aorg_1/teams/%2E%2E/x", true},
+		// An encoded slash in the org ID: the decoded path has one segment
+		// too many, the raw one routes to the teams handler.
+		{http.MethodPost, "/v1/orgs/aorg%2F1/teams", true},
+		{http.MethodGet, "/v1/orgs/aorg_1/%74eams", true},
+		{http.MethodGet, "/v1/orgs/aorg%2F1/members", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			called := false
 			next := func(forge.Context) error { called = true; return nil }
-			req := httptest.NewRequestWithContext(t.Context(), tc.method, "/", http.NoBody)
-			req.URL.Path = tc.path
+			// Parsed as the server parses it, so Path and RawPath differ
+			// the way they would on the wire.
+			req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, http.NoBody)
 			err := refuseAuthsomeTeams(next)(forgehttp.NewContext(httptest.NewRecorder(), req, nil))
 			if !tc.refused {
 				if err != nil || !called {

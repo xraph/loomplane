@@ -147,6 +147,16 @@ func (e *Extension) Dependencies() []string {
 // Forge's central migrations the schema only exists once every extension
 // has registered, so anything that reads or writes waits for Start.
 func (e *Extension) Register(fapp forge.App) error {
+	err := e.register(fapp)
+	if err != nil {
+		// Stop may never run for an extension that failed to register,
+		// so the sync lock pool wireTeams opened is closed here.
+		err = errors.Join(err, e.closeLockPool())
+	}
+	return err
+}
+
+func (e *Extension) register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
@@ -339,11 +349,19 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
-	if e.lockPG != nil {
-		errs = append(errs, e.lockPG.Close())
-	}
+	errs = append(errs, e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
+}
+
+// closeLockPool closes the sync lock's pool, once.
+func (e *Extension) closeLockPool() error {
+	if e.lockPG == nil {
+		return nil
+	}
+	err := e.lockPG.Close()
+	e.lockPG = nil
+	return err
 }
 
 // Health checks authsome's store.

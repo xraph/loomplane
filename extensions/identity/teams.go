@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 
@@ -289,9 +290,24 @@ var authsomeTeamsPath = regexp.MustCompile(`^` + authsomeAPIPath + `/orgs/[^/]+/
 // made through authsome would be one Loomplane ignores.
 func refuseAuthsomeTeams(next forge.Handler) forge.Handler {
 	return func(c forge.Context) error {
-		if authsomeTeamsPath.MatchString(path.Clean(c.Request().URL.Path)) {
+		if isAuthsomeTeamsPath(c.Request().URL) {
 			return forge.NewHTTPError(http.StatusNotFound, "Loomplane's teams are at /api/v1/teams")
 		}
 		return next(c)
 	}
+}
+
+// isAuthsomeTeamsPath reports whether any spelling of the request's path
+// names authsome's team routes. bunrouter routes on the raw path when the
+// request has one, so the raw and escaped paths are checked as they are:
+// cleaning would fold "teams/%2e%2e" into the org, and decoding would
+// split an org ID holding "%2F". The decoded path, and its cleaned form,
+// are checked too, for "/%74eams", "//teams" and "/./teams".
+func isAuthsomeTeamsPath(u *url.URL) bool {
+	for _, p := range []string{u.RawPath, u.EscapedPath(), u.Path, path.Clean(u.Path)} {
+		if p != "" && authsomeTeamsPath.MatchString(p) {
+			return true
+		}
+	}
+	return false
 }
