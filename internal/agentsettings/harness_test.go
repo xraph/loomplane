@@ -160,14 +160,30 @@ func (r *recorder) take() []string {
 	return out
 }
 
-type fakeSeeder struct{ recorder }
+// fakeSeeder records seeds. during, when set, runs once inside the next
+// seed, for a write that lands while a turn-on is under way.
+type fakeSeeder struct {
+	recorder
+	during func()
+}
 
-func (s *fakeSeeder) Seed(_ context.Context, orgID string) error { return s.add("seed " + orgID) }
+func (s *fakeSeeder) Seed(_ context.Context, orgID string) error {
+	if f := s.during; f != nil {
+		s.during = nil
+		f()
+	}
+	return s.add("seed " + orgID)
+}
 
-type fakeRoles struct{ recorder }
+// fakeRoles records role changes. assignErr, when set, fails assigning.
+type fakeRoles struct {
+	recorder
+	assignErr error
+}
 
 func (r *fakeRoles) AssignAgent(_ context.Context, orgID string) error {
-	return r.add("assign " + orgID)
+	_ = r.add("assign " + orgID)
+	return r.assignErr
 }
 func (r *fakeRoles) RevokeAgent(_ context.Context, orgID string) error {
 	return r.add("revoke " + orgID)

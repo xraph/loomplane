@@ -17,13 +17,39 @@ const lookupTimeout = 5 * time.Second
 // nonPublic are ranges that aren't somewhere on the internet, beyond what
 // netip's Is* methods cover: shared address space, benchmarking, the
 // documentation ranges, 6to4 and NAT64 (which can reach private IPv4),
-// IPv4-compatible IPv6 and the reserved block.
+// IPv4-compatible IPv6, the reserved block and IPv6 site-local, which
+// netip counts as global.
 var nonPublic = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("192.88.99.0/24"), netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("::/96"), netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("2001::/23"), netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fec0::/10"),
+}
+
+// metadata are cloud instance metadata and host agent addresses outside
+// the link-local ranges: AWS's IPv6 one, Alibaba Cloud's and Azure's
+// WireServer. Like link-local addresses, they're refused everywhere.
+var metadata = []netip.Prefix{
+	netip.MustParsePrefix("fd00:ec2::254/128"), netip.MustParsePrefix("100.100.100.200/32"),
+	netip.MustParsePrefix("168.63.129.16/32"),
+}
+
+// hostOnly reports whether a is link-local or a cloud metadata address:
+// one that answers only the machine asking, and can hand out its
+// credentials.
+func hostOnly(a netip.Addr) bool {
+	a = a.Unmap()
+	if a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() {
+		return true
+	}
+	for _, p := range metadata {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // public reports whether a is an address on the internet.
@@ -48,8 +74,9 @@ func systemLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 // checkBaseURL decides whether the agent may send a workspace key, and
 // its requests, to raw. It must be an absolute http(s) URL without
 // credentials, https in production, and its host's every address outside
-// planning.endpoint_denied_cidrs and, except in development, outside
-// private, loopback, link-local and other non-public ranges. Messages
+// planning.endpoint_denied_cidrs, link-local ranges and cloud metadata
+// addresses, and except in development (where a local model server is
+// common) outside private, loopback and other non-public ranges. Messages
 // never quote the URL: it's the user's and could hold anything.
 //
 // It runs when a key is chosen for the agent and again before every call,
@@ -90,8 +117,11 @@ func (s *Service) checkBaseURL(ctx context.Context, raw string) error {
 				return invalid("the provider key's base_url reaches a network this server refuses (planning.endpoint_denied_cidrs)")
 			}
 		}
+		if hostOnly(a) {
+			return invalid("the provider key's base_url reaches a link-local or cloud metadata address, which the agent never calls")
+		}
 		if !allowPrivate && !public(a) {
-			return invalid("the provider key's base_url reaches a private, loopback or link-local address, which the agent can't call outside development")
+			return invalid("the provider key's base_url reaches a private or loopback address, which the agent can't call outside development")
 		}
 	}
 	return nil

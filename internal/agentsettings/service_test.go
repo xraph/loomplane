@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -175,8 +176,9 @@ func TestUpdateRefusesBaseURLsOnPrivateNetworks(t *testing.T) {
 		{"http://llm.example.com/v1", "https"},
 		{"https://10.0.0.5/v1", "private"},
 		{"https://localhost/v1", "private"},
-		{"https://169.254.169.254/latest", "private"},
+		{"https://169.254.169.254/latest", "cloud metadata"},
 		{"https://[fd00::1]/v1", "private"},
+		{"https://[fec0::1]/v1", "private"},
 		{"https://[::ffff:10.0.0.1]/v1", "private"},
 		{"https://100.64.0.1/v1", "private"},
 		{"https://sneaky.example.com/v1", "private"},
@@ -206,6 +208,22 @@ func TestUpdateRefusesBaseURLsOnPrivateNetworks(t *testing.T) {
 	dev.putKey(t, "mgmt", openCompatKey("http://mgmt.example.com/v1"))
 	_, err := dev.update(t, agentsettings.AgentUpdateInput{ProviderKey: ptr("mgmt")})
 	wantInvalid(t, err, "planning.endpoint_denied_cidrs")
+	// Nor link-local or cloud metadata addresses, in any environment.
+	for _, env := range []string{config.EnvDevelopment, config.EnvStaging, config.EnvProduction} {
+		for _, u := range []string{
+			"https://169.254.169.254/latest", "https://169.254.10.1/v1", "https://[fe80::1]/v1",
+			"https://[fd00:ec2::254]/latest", "https://100.100.100.200/latest", "https://168.63.129.16/machine",
+			"https://metadata.example.com/v1",
+		} {
+			h := newHarness(t, func(d *agentsettings.Deps) { d.Environment = env })
+			h.hosts["metadata.example.com"] = []netip.Addr{netip.MustParseAddr("169.254.169.254")}
+			h.putKey(t, "meta", openCompatKey(u))
+			_, err = h.update(t, agentsettings.AgentUpdateInput{ProviderKey: ptr("meta")})
+			if !errors.Is(err, agentsettings.ErrInvalid) || !strings.Contains(err.Error(), "link-local or cloud metadata") {
+				t.Errorf("%s in %s: %v", u, env, err)
+			}
+		}
+	}
 
 	// Staging allows http to a public host, not a private one.
 	staging := newHarness(t, func(d *agentsettings.Deps) { d.Environment = config.EnvStaging })
@@ -495,6 +513,77 @@ func TestProviderKeyWritesKeepTheAgentsKeyUsable(t *testing.T) {
 	}
 }
 
+// Two enables at the same revision: the one that claims the row first
+// turns the agent on, and the other changes nothing. However they
+// interleave, the agent ends on, with its tenant open and its role.
+func TestConcurrentEnablesLeaveTheAgentOn(t *testing.T) {
+	for name, existingTenant := range map[string]bool{"first enable": false, "enable again": true} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.budget(t, "25")
+			if existingTenant {
+				h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(true)})
+				h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(false)})
+			}
+			rev := h.rev(t)
+			h.gw.take()
+			h.roles.take()
+			var other error
+			// The other enable lands while the first is seeding.
+			h.seed.during = func() {
+				_, other = h.svc.Update(context.Background(), admin, agentsettings.AgentUpdateInput{Enabled: ptr(true), Revision: rev})
+			}
+			_, first := h.svc.Update(context.Background(), admin, agentsettings.AgentUpdateInput{Enabled: ptr(true), Revision: rev})
+			if errors.Is(first, agentsettings.ErrStale) == errors.Is(other, agentsettings.ErrStale) || (first != nil && !errors.Is(first, agentsettings.ErrStale)) || (other != nil && !errors.Is(other, agentsettings.ErrStale)) {
+				t.Fatalf("first %v, other %v: want one on and one stale", first, other)
+			}
+			st, _ := h.store.Get(context.Background(), org)
+			if !st.Enabled || st.NexusTenantID != "tenant_o" {
+				t.Fatalf("stored %+v", st)
+			}
+			calls := h.gw.take()
+			if len(calls) == 0 || calls[len(calls)-1] != "active tenant_o true" || slices.Contains(calls, "active tenant_o false") {
+				t.Errorf("gateway %v: the tenant isn't left open", calls)
+			}
+			roles := h.roles.take()
+			if !slices.Contains(roles, "assign o") || slices.Contains(roles, "revoke o") {
+				t.Errorf("roles %v: the agent isn't left its role", roles)
+			}
+		})
+	}
+}
+
+// A turn-on whose side effect fails puts the row back off, closes the
+// tenant and takes the role away again, and says why.
+func TestEnableRevertsWhenASideEffectFails(t *testing.T) {
+	h := newHarness(t)
+	h.budget(t, "25")
+	h.gw.take()
+	h.roles.assignErr = errors.New("warden is down")
+	_, err := h.update(t, agentsettings.AgentUpdateInput{Enabled: ptr(true)})
+	if err == nil || !strings.Contains(err.Error(), "warden is down") {
+		t.Fatalf("enable: %v", err)
+	}
+	if on, _ := h.svc.Enabled(context.Background(), org); on {
+		t.Error("the agent is on")
+	}
+	if got := h.roles.take(); !slices.Equal(got, []string{"assign o", "revoke o"}) {
+		t.Errorf("roles %v", got)
+	}
+	if got := h.gw.take(); !slices.Equal(got, []string{"ensure o 25.00", "active tenant_o false"}) {
+		t.Errorf("gateway %v", got)
+	}
+	// The tenant is kept for the next try, which works.
+	h.roles.assignErr = nil
+	v := h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(true)})
+	if !v.Enabled || v.NexusTenantID != "tenant_o" {
+		t.Errorf("retry %+v", v.Settings)
+	}
+	if events := h.audit.take(); len(events) == 0 {
+		t.Error("the retry wasn't audited")
+	}
+}
+
 // staleOnEnable is a store whose save that turns the agent on finds the
 // row changed, as when someone else saved meanwhile.
 type staleOnEnable struct{ agentsettings.Store }
@@ -506,9 +595,9 @@ func (s staleOnEnable) Save(ctx context.Context, in *agentsettings.Settings, exp
 	return s.Store.Save(ctx, in, expect)
 }
 
-// An enable whose last save fails leaves the agent without its role and
-// its tenant closed, as it was.
-func TestEnableUndoesWhenTheSaveFails(t *testing.T) {
+// An enable that loses its claim on the row changes nothing: no tenant,
+// no seed, no role.
+func TestALostClaimChangesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.budget(t, "25")
 	h.restart(func(d *agentsettings.Deps) { d.Store = staleOnEnable{h.store} })
@@ -516,11 +605,8 @@ func TestEnableUndoesWhenTheSaveFails(t *testing.T) {
 	if _, err := h.update(t, agentsettings.AgentUpdateInput{Enabled: ptr(true)}); !errors.Is(err, agentsettings.ErrStale) {
 		t.Fatalf("enable: %v", err)
 	}
-	if got := h.roles.take(); !slices.Equal(got, []string{"assign o", "revoke o"}) {
-		t.Errorf("roles %v", got)
-	}
-	if got := h.gw.take(); !slices.Equal(got, []string{"ensure o 25.00", "active tenant_o true", "active tenant_o false"}) {
-		t.Errorf("gateway %v", got)
+	if roles, calls, seeds := h.roles.take(), h.gw.take(), h.seed.take(); roles != nil || calls != nil || seeds != nil {
+		t.Errorf("a lost claim did roles %v, gateway %v, seeds %v", roles, calls, seeds)
 	}
 	if on, _ := h.svc.Enabled(context.Background(), org); on {
 		t.Error("the agent is on")

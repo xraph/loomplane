@@ -394,18 +394,17 @@ func (s *Service) Update(ctx context.Context, p security.Principal, in AgentUpda
 	}
 	gw, seeder, canceller, _ := s.bound()
 	next.UpdatedBy = p.UserID
-	rev := cur.Revision
 	turningOn, turningOff := next.Enabled && !cur.Enabled, !next.Enabled && cur.Enabled
-	if turningOn {
-		if rev, err = s.turnOn(ctx, p, cur, &next, gw, seeder, budget); err != nil {
-			return nil, err
-		}
-	}
-	if serr := s.store.Save(ctx, &next, rev); serr != nil {
-		if turningOn {
-			s.undoOn(ctx, gw, p.OrgID, next.NexusTenantID)
-		}
+	// One conditional save claims the change. Nothing outside the row
+	// moves until it wins, so of two writes at the same revision the one
+	// that loses touches neither nexus nor the agent's role.
+	if serr := s.store.Save(ctx, &next, cur.Revision); serr != nil {
 		return nil, serr
+	}
+	if turningOn {
+		if oerr := s.turnOn(ctx, p, &next, gw, seeder, budget); oerr != nil {
+			return nil, s.revertOn(ctx, gw, cur, &next, oerr)
+		}
 	}
 	attrs := map[string]any{"fields": changed}
 	if slices.Contains(changed, "provider_key") {
@@ -476,45 +475,58 @@ func (s *Service) validate(ctx context.Context, next *Settings, keyChanged bool)
 	return key, budget, nil
 }
 
-// turnOn makes the workspace's tenant, storing its ID at once so a retry
-// finds it, then seeds, assigns and opens. It returns the revision the
-// final save expects.
-func (s *Service) turnOn(ctx context.Context, p security.Principal, cur, next *Settings, gw Gateway, seeder Seeder, budget string) (int64, error) {
-	rev := cur.Revision
+// turnOn runs what turning the agent on needs, once its claim on the row
+// has won: it makes or finds the workspace's tenant, storing a new one's
+// ID at once so a retry finds it, then seeds, assigns and opens. next is
+// the claimed row, and holds the stored row when it returns.
+func (s *Service) turnOn(ctx context.Context, p security.Principal, next *Settings, gw Gateway, seeder Seeder, budget string) error {
 	if next.NexusTenantID == "" {
 		tenant, err := gw.EnsureTenant(ctx, p.OrgID, budget)
 		if err != nil {
-			return 0, fmt.Errorf("create the agent's nexus tenant: %w", err)
+			return fmt.Errorf("create the agent's nexus tenant: %w", err)
 		}
-		stage := *cur
-		stage.NexusTenantID, stage.UpdatedBy = tenant, p.UserID
-		if serr := s.store.Save(ctx, &stage, rev); serr != nil {
-			return 0, serr
+		withTenant := *next
+		withTenant.NexusTenantID = tenant
+		if serr := s.store.Save(ctx, &withTenant, next.Revision); serr != nil {
+			return serr
 		}
-		rev, next.NexusTenantID = stage.Revision, tenant
+		*next = withTenant
 	} else if err := gw.SetBudget(ctx, next.NexusTenantID, budget); err != nil {
-		return 0, fmt.Errorf("set the agent's nexus budget: %w", err)
+		return fmt.Errorf("set the agent's nexus budget: %w", err)
 	}
 	if seeder != nil {
 		if err := seeder.Seed(ctx, p.OrgID); err != nil {
-			return 0, fmt.Errorf("seed the agent's guardrails: %w", err)
+			return fmt.Errorf("seed the agent's guardrails: %w", err)
 		}
 	}
 	if s.roles != nil {
 		if err := s.roles.AssignAgent(ctx, p.OrgID); err != nil {
-			return 0, fmt.Errorf("give the agent its role: %w", err)
+			return fmt.Errorf("give the agent its role: %w", err)
 		}
 	}
 	if err := gw.SetActive(ctx, next.NexusTenantID, true); err != nil {
-		s.undoOn(ctx, gw, p.OrgID, next.NexusTenantID)
-		return 0, fmt.Errorf("open the agent's nexus tenant: %w", err)
+		return fmt.Errorf("open the agent's nexus tenant: %w", err)
 	}
-	return rev, nil
+	return nil
 }
 
-// undoOn closes the tenant and takes the agent's role away again, when
-// turning it on didn't finish, so an agent that's off holds neither. It's
-// best effort: the next enable or disable sets both again.
+// revertOn puts the row back as it was before a turn-on that didn't
+// finish, keeping any tenant it made, and then closes the tenant and takes
+// the role away. The revert is conditional too: when someone saved since
+// the claim, their row stands and nothing is undone.
+func (s *Service) revertOn(ctx context.Context, gw Gateway, cur, next *Settings, cause error) error {
+	back := *cur
+	back.NexusTenantID, back.UpdatedBy = next.NexusTenantID, next.UpdatedBy
+	if err := s.store.Save(ctx, &back, next.Revision); err != nil {
+		return fmt.Errorf("turning the agent on didn't finish, and its settings changed since: %w", cause)
+	}
+	s.undoOn(ctx, gw, cur.OrgID, back.NexusTenantID)
+	return fmt.Errorf("turning the agent on didn't finish, so it's still off: %w", cause)
+}
+
+// undoOn closes the tenant and takes the agent's role away again, once a
+// turn-on that didn't finish is reverted, so an agent that's off holds
+// neither. It's best effort: the next enable or disable sets both again.
 func (s *Service) undoOn(ctx context.Context, gw Gateway, orgID, tenantID string) {
 	if gw != nil && tenantID != "" {
 		_ = gw.SetActive(ctx, tenantID, false) //nolint:errcheck // best effort, see above
