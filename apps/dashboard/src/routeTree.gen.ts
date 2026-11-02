@@ -41,6 +41,7 @@ import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
+import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
@@ -211,6 +212,11 @@ const ServicesKindRoute = ServicesKindRouteImport.update({
   path: "/services/$kind",
   getParentRoute: () => rootRouteImport,
 } as any)
+const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
+  id: "/workspaces/new",
+  path: "/workspaces/new",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AiModelsIndexRoute = AiModelsIndexRouteImport.update({
   id: "/ai/models/",
   path: "/ai/models/",
@@ -287,6 +293,7 @@ export interface FileRoutesByFullPath {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
@@ -330,6 +337,7 @@ export interface FileRoutesByTo {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
   "/domains": typeof DomainsIndexRoute
@@ -374,6 +382,7 @@ export interface FileRoutesById {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
@@ -419,6 +428,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
@@ -462,6 +472,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/workspaces/new"
     | "/clouds"
     | "/deployments"
     | "/domains"
@@ -505,6 +516,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
@@ -549,6 +561,7 @@ export interface RootRouteChildren {
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
+  WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   DomainsIndexRoute: typeof DomainsIndexRoute
@@ -794,6 +807,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ServicesKindRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/workspaces/new": {
+      id: "/workspaces/new"
+      path: "/workspaces/new"
+      fullPath: "/workspaces/new"
+      preLoaderRoute: typeof WorkspacesNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/ai/models/": {
       id: "/ai/models/"
       path: "/ai/models"
@@ -885,6 +905,7 @@ const rootRouteChildren: RootRouteChildren = {
   NotificationsSettingsRoute: NotificationsSettingsRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
+  WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
   DomainsIndexRoute: DomainsIndexRoute,

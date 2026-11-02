@@ -10,7 +10,7 @@ import {
   KeyboardIcon,
   Settings2Icon,
 } from "lucide-react"
-import { type ComponentProps, useState } from "react"
+import { type ComponentProps } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -26,7 +26,6 @@ import {
   ProjectsIcon,
   ServicesIcon,
 } from "@/components/icons"
-import { OrganizationForm } from "@/components/organization-form"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
@@ -35,13 +34,6 @@ import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
 import { useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -61,7 +53,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
-import { Link, usePath } from "@/lib/router"
+import { Link, useNavigate, usePath } from "@/lib/router"
 import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
@@ -276,47 +268,28 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
 
 function Organizations() {
   const { session, organizations, switchOrganization } = useOrganization()
-  const [creating, setCreating] = useState(false)
+  const navigate = useNavigate()
   const switchTo = (orgId: string) =>
     switchOrganization(orgId).catch((err: unknown) =>
       toast.error(messageOf(err, "Couldn't switch workspace."))
     )
   return (
-    <>
-      <TeamSwitcher
-        activeId={session.orgId}
-        onSwitch={(id) => void switchTo(id)}
-        onCreate={() => setCreating(true)}
-        orgs={organizations.map((o) => ({
-          id: o.id,
-          name: o.name,
-          detail: o.slug,
-          // The active organization wears Loomplane's mark, so the corner
-          // still says where you are; the others go by their initial.
-          mark:
-            o.id === session.orgId
-              ? "brand"
-              : (o.name.trim()[0]?.toUpperCase() ?? "?"),
-        }))}
-      />
-      <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>New workspace</DialogTitle>
-            <DialogDescription>
-              A separate home for another team&apos;s projects. You&apos;ll be
-              its owner.
-            </DialogDescription>
-          </DialogHeader>
-          <OrganizationForm
-            onCreated={async (orgId) => {
-              await switchOrganization(orgId)
-              setCreating(false)
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-    </>
+    <TeamSwitcher
+      activeId={session.orgId}
+      onSwitch={(id) => void switchTo(id)}
+      onCreate={() => void navigate({ to: "/workspaces/new" })}
+      orgs={organizations.map((o) => ({
+        id: o.id,
+        name: o.name,
+        detail: o.slug,
+        // The active organization wears Loomplane's mark, so the corner
+        // still says where you are; the others go by their initial.
+        mark:
+          o.id === session.orgId
+            ? "brand"
+            : (o.name.trim()[0]?.toUpperCase() ?? "?"),
+      }))}
+    />
   )
 }
 

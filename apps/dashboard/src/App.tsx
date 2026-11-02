@@ -153,6 +153,8 @@ function Shell() {
   const path = usePath()
   const addressPending = useWorkspaceAddress()
   if (addressPending) return <PageLoading />
+  // A new workspace starts in the onboarding frame, not inside this one.
+  if (path === "/workspaces/new") return <Outlet />
   if (missing) {
     const current = organizations.find((o) => o.id === session.orgId)
     return (
