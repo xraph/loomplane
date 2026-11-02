@@ -115,5 +115,6 @@ test("is disabled without project update", async () => {
     name: "Responsible team",
   })
   await waitFor(() => expect(select).toBeDisabled())
-  expect(select).toHaveTextContent("Payments")
+  // The team's name arrives with the teams list, after the permissions.
+  await waitFor(() => expect(select).toHaveTextContent("Payments"))
 })

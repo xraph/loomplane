@@ -193,8 +193,9 @@ test("an admin removes a member and a role", async () => {
   await user.click(
     await within(card).findByRole("button", { name: "Remove Bo from Payments" })
   )
+  // The grant's label names the project, which the projects list fills in.
   await user.click(
-    within(card).getByRole("button", {
+    await within(card).findByRole("button", {
       name: "Remove Developer on checkout-api",
     })
   )
