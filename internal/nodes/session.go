@@ -2,14 +2,16 @@ package nodes
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -31,6 +33,8 @@ type session struct {
 	out  chan any
 	done chan struct{}
 	once sync.Once
+	// lastBeat is the hub clock's time of the last heartbeat, in unix nanos.
+	lastBeat atomic.Int64
 
 	// Touched only by the read loop.
 	inventoried bool
@@ -39,8 +43,10 @@ type session struct {
 }
 
 func newSession(h *Hub, n *Node, epoch int64, mux *yamux.Session, ctrl net.Conn) *session {
-	return &session{hub: h, nodeID: n.ID, orgID: n.OrgID, epoch: epoch, mux: mux, ctrl: ctrl,
+	s := &session{hub: h, nodeID: n.ID, orgID: n.OrgID, epoch: epoch, mux: mux, ctrl: ctrl,
 		out: make(chan any, controlQueue), done: make(chan struct{})}
+	s.lastBeat.Store(h.now().UnixNano())
+	return s
 }
 
 func (s *session) closed() bool {
@@ -128,6 +134,7 @@ func (s *session) readLoop() {
 		case nodeproto.Hello:
 			s.nodeVersion, s.protocol = m.NodeVersion, m.Version
 		case nodeproto.Heartbeat:
+			s.lastBeat.Store(s.hub.now().UnixNano())
 			s.hub.heartbeat(s, m)
 		case nodeproto.InventoryReport:
 			s.hub.inventory(s, m.Inventory)
@@ -265,16 +272,14 @@ func (h *Hub) release(nodeID string, epoch int64) {
 	}
 }
 
-// ended marks the node offline when this session is still the current one,
-// so a newer session's status isn't clobbered, and releases the row.
+// ended marks the node offline, in one statement that matches this
+// session's epoch, so a newer session's status isn't clobbered. Then it
+// releases the row.
 func (h *Hub) ended(s *session) {
 	ctx, cancel := opCtx()
 	defer cancel()
-	cur, err := h.store.Session(ctx, s.nodeID)
-	if err == nil && cur.Epoch == s.epoch {
-		if err := h.store.SetStatus(ctx, s.nodeID, StatusOffline); err != nil && !errors.Is(err, ErrNotFound) {
-			h.log.Warn("nodes: marking a node offline", "node", s.nodeID, "error", err)
-		}
+	if err := h.store.MarkOfflineIfEpoch(ctx, s.nodeID, s.epoch); err != nil {
+		h.log.Warn("nodes: marking a node offline", "node", s.nodeID, "error", err)
 	}
 	h.release(s.nodeID, s.epoch)
 }
@@ -350,7 +355,7 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 		}
 		s.deliver(nodeproto.Narrow{Endpoints: eps})
 	}
-	if !reflect.DeepEqual(old.Inventory, inv) {
+	if !inventoryEqual(old.Inventory, inv) {
 		h.fireInventory(n, old.Inventory, inv)
 	}
 	if first {
@@ -372,10 +377,18 @@ func (h *Hub) allowed(s *session, eps []nodeproto.Endpoint) {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
+	before, err := h.store.GetByID(ctx, s.nodeID)
+	if err != nil {
+		h.log.Warn("nodes: reading a node before allowing endpoints", "node", s.nodeID, "error", err)
+		return
+	}
 	n, err := h.store.AllowEndpoints(ctx, s.nodeID, add)
 	if err != nil {
 		h.log.Warn("nodes: adding endpoints a node allowed", "node", s.nodeID, "error", err)
 		return
+	}
+	if slices.Equal(before.Endpoints, n.Endpoints) {
+		return // already allowed: nothing to record
 	}
 	names := make([]string, len(add))
 	for i, e := range add {
@@ -401,4 +414,12 @@ func (h *Hub) leave(s *session) {
 		return
 	}
 	s.closeAfter(revokeGrace)
+}
+
+// inventoryEqual compares inventories by their wire encoding, so a nil slice
+// and an empty one, which encode the same, count as equal.
+func inventoryEqual(a, b nodeproto.Inventory) bool {
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }

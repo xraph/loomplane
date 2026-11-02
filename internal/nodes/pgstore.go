@@ -336,3 +336,10 @@ func (s *PgStore) DeleteExpiredNonces(ctx context.Context, now time.Time) error 
 	_, err := s.db.Exec(ctx, `DELETE FROM loomplane_node_nonces WHERE expires_at < $1`, now)
 	return err
 }
+
+// MarkOfflineIfEpoch sets the node offline in one statement, and only while
+// epoch is its current session epoch and it is not revoked.
+func (s *PgStore) MarkOfflineIfEpoch(ctx context.Context, id string, epoch int64) error {
+	_, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET status='offline',updated_at=now() WHERE id=$1 AND session_epoch=$2 AND revoked_at IS NULL`, id, epoch)
+	return err
+}

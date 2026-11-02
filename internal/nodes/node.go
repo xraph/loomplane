@@ -103,6 +103,10 @@ type Store interface {
 	// ReleaseSession deletes the session only when its epoch matches.
 	ReleaseSession(ctx context.Context, nodeID string, epoch int64) error
 	MarkStaleOffline(ctx context.Context, before time.Time) ([]string, error)
+	// MarkOfflineIfEpoch sets a live node offline only while epoch is still
+	// its current session epoch, so an ending session can't clobber the
+	// status of a newer one. No match is not an error.
+	MarkOfflineIfEpoch(ctx context.Context, id string, epoch int64) error
 	// ApplyInventory writes a node's reported inventory, version and protocol
 	// version on a node that is not revoked. It never touches endpoints or
 	// status: Inventory.Endpoints is informational.

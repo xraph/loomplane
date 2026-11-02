@@ -63,6 +63,14 @@ func hopTarget(replica string) bool {
 	return strings.HasPrefix(replica, "http://") || strings.HasPrefix(replica, "https://")
 }
 
+// hopAllowed reports whether this replica may dial target: https always,
+// plain http only with HopInsecure. Private hosts get no exception.
+func (h *Hub) hopAllowed(target string) bool { return hopSchemeAllowed(target, h.cfg) }
+
+func hopSchemeAllowed(target string, cfg HubConfig) bool {
+	return strings.HasPrefix(target, "https://") || (cfg.HopInsecure && strings.HasPrefix(target, "http://"))
+}
+
 // hopRequest is a verified hop.
 type hopRequest struct {
 	kind    string
@@ -281,7 +289,10 @@ func (c *bufConn) CloseWrite() error {
 }
 
 // hopDial connects to the replica at target, with TLS for an https target.
-func hopDial(ctx context.Context, target string) (net.Conn, error) {
+func hopDial(ctx context.Context, target string, cfg HubConfig) (net.Conn, error) {
+	if !hopSchemeAllowed(target, cfg) {
+		return nil, ErrHopInsecure
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, err
@@ -302,7 +313,7 @@ func hopDial(ctx context.Context, target string) (net.Conn, error) {
 	if u.Scheme != "https" {
 		return conn, nil
 	}
-	tc := tls.Client(conn, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
+	tc := tls.Client(conn, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12, RootCAs: cfg.HopRootCAs})
 	if err := tc.HandshakeContext(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -319,7 +330,7 @@ func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload
 		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
 		defer cancel()
 	}
-	conn, err := hopDial(ctx, target)
+	conn, err := hopDial(ctx, target, h.cfg)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -424,6 +435,10 @@ func (h *Hub) notifyRemote(nodeID string, msg any) {
 	defer cancel()
 	row, err := h.store.Session(ctx, nodeID)
 	if err != nil || row.Replica == h.self || !hopTarget(row.Replica) {
+		return
+	}
+	if !h.hopAllowed(row.Replica) {
+		h.log.Warn("nodes: not notifying a replica over plain http", "node", nodeID, "replica", row.Replica)
 		return
 	}
 	var line bytes.Buffer

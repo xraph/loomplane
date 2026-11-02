@@ -588,3 +588,48 @@ func TestUseNonceOnce(t *testing.T) {
 		t.Fatalf("live row pruned: %v", err)
 	}
 }
+
+func TestMarkOfflineIfEpoch(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	e1, err := s.ClaimSession(ctx, Session{NodeID: "node_1", Replica: "a", ConnectedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2, err := s.ClaimSession(ctx, Session{NodeID: "node_1", Replica: "b", ConnectedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
+		t.Fatal(err)
+	}
+	// The older session ending leaves the newer one's status alone.
+	if err = s.MarkOfflineIfEpoch(ctx, "node_1", e1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetByID(ctx, "node_1"); got.Status != StatusOnline {
+		t.Fatalf("stale epoch: %s", got.Status)
+	}
+	if err = s.MarkOfflineIfEpoch(ctx, "node_1", e2); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetByID(ctx, "node_1"); got.Status != StatusOffline {
+		t.Fatalf("current epoch: %s", got.Status)
+	}
+	// A revoked node stays revoked.
+	cur, _ := s.GetByID(ctx, "node_1")
+	now := time.Now().UTC()
+	cur.RevokedAt, cur.RevokedBy = &now, "usr_1"
+	if err = s.Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.MarkOfflineIfEpoch(ctx, "node_1", e2); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetByID(ctx, "node_1"); got.Status != StatusRevoked {
+		t.Fatalf("revoked: %s", got.Status)
+	}
+}

@@ -26,6 +26,8 @@ type fakeStore struct {
 	nonces   map[string]time.Time
 	touches  map[string]int
 	fail     error
+	// afterClaim runs after ClaimSession commits, outside the lock.
+	afterClaim func(nodeID string)
 }
 
 func newFakeStore() *fakeStore {
@@ -162,15 +164,28 @@ func (f *fakeStore) SetStatus(_ context.Context, id string, s Status) error {
 }
 func (f *fakeStore) ClaimSession(_ context.Context, s Session) (int64, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	n, ok := f.nodes[s.NodeID]
 	if !ok || n.RevokedAt != nil {
+		f.mu.Unlock()
 		return 0, ErrNotFound
 	}
 	f.epochs[s.NodeID]++
 	s.Epoch = f.epochs[s.NodeID]
 	f.sessions[s.NodeID] = s
+	hook := f.afterClaim
+	f.mu.Unlock()
+	if hook != nil {
+		hook(s.NodeID)
+	}
 	return s.Epoch, nil
+}
+func (f *fakeStore) MarkOfflineIfEpoch(_ context.Context, id string, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n, ok := f.nodes[id]; ok && n.RevokedAt == nil && f.epochs[id] == epoch {
+		n.Status = StatusOffline
+	}
+	return nil
 }
 func (f *fakeStore) Session(_ context.Context, id string) (*Session, error) {
 	f.mu.Lock()

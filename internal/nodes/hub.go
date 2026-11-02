@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -48,6 +49,9 @@ var (
 	ErrUnauthorized = errors.New("nodes: the node could not be authenticated")
 	// ErrHubConfig is returned when the hub is missing what it needs to run.
 	ErrHubConfig = errors.New("nodes: hub configuration")
+	// ErrHopInsecure is returned when a hop would cross plain http and
+	// HopInsecure is not set.
+	ErrHopInsecure = errors.New("nodes: refusing a replica hop over plain http; use an https advertise URL or set HopInsecure")
 	// ErrSuperseded is returned by Accept when a newer session for the same
 	// node took over before this one was registered.
 	ErrSuperseded = errors.New("nodes: a newer session for this node took over")
@@ -97,6 +101,13 @@ type HubConfig struct {
 	AdvertiseURL string
 	// HopSecret authenticates replica-to-replica hops. Required.
 	HopSecret []byte
+	// HopInsecure allows hops over plain http: an http AdvertiseURL here, and
+	// dialing http session addresses from here. Off by default; the hop
+	// carries stream bytes, so only set it on a private network.
+	HopInsecure bool
+	// HopRootCAs verifies other replicas' certificates on https hops. Nil
+	// means the system roots.
+	HopRootCAs *x509.CertPool
 	// ChallengeSecret signs challenge nonces so any replica can check them.
 	// Required. Derive it from the instance secret with HKDF info
 	// "loomplane-node-challenge".
@@ -167,6 +178,12 @@ func (h *Hub) Bind(store Store, svc *Service) error {
 	}
 	if store == nil {
 		return fmt.Errorf("%w: no store", ErrHubConfig)
+	}
+	if strings.HasPrefix(h.self, "http://") {
+		if !h.cfg.HopInsecure {
+			return fmt.Errorf("%w: the advertise URL %s is plain http: %w", ErrHubConfig, h.self, ErrHopInsecure)
+		}
+		h.log.Warn("nodes: replica hops run over plain http; stream bytes cross the network unencrypted", "advertise_url", h.self)
 	}
 	h.store, h.svc = store, svc
 	if svc != nil && svc.Notify == nil {
@@ -318,6 +335,12 @@ func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, a nodeproto.Asse
 		h.release(n.ID, epoch)
 		return ErrSuperseded
 	}
+	// A revoke that committed after the claim found no session to tell.
+	// Revoke writes before it notifies and this reads after registering, so
+	// one of the two sees the other.
+	if cur, err := h.store.GetByID(ctx, n.ID); err == nil && (cur.RevokedAt != nil || cur.Status == StatusRevoked) {
+		s.deliver(nodeproto.Revoked{})
+	}
 	stop := context.AfterFunc(ctx, s.close)
 	defer stop()
 	go s.writeLoop()
@@ -397,21 +420,18 @@ func notifiable(msg any) bool {
 }
 
 // Notify delivers a control message to the node's session wherever it is. It
-// never blocks on the network: a local session queues it, and a session on
-// another replica gets it through the hop in the background. Revoked is
-// also delivered to a local session even when the row names another replica,
-// so a stale local session can't outlive the revoke.
+// never blocks on the network: a local session queues it, and the replica
+// the session row names gets it through the hop in the background. Both
+// happen, because the local session may be a stale half-open one while the
+// live session is elsewhere. Every message here is idempotent on the node,
+// and the hop is skipped when the row names this replica.
 func (h *Hub) Notify(nodeID string, msg any) {
 	if !notifiable(msg) {
 		h.log.Warn("nodes: refusing to notify a node with this message", "node", nodeID, "type", fmt.Sprintf("%T", msg))
 		return
 	}
-	_, revoke := msg.(nodeproto.Revoked)
 	if s := h.local(nodeID); s != nil {
 		s.deliver(msg)
-		if !revoke {
-			return
-		}
 	}
 	go h.notifyRemote(nodeID, msg)
 }
@@ -457,6 +477,10 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 		if s != nil {
 			s.close() // a newer session lives on another replica
 		}
+		if !h.hopAllowed(row.Replica) {
+			h.log.Warn("nodes: not hopping to a replica over plain http", "node", n.ID, "replica", row.Replica)
+			return nil, ErrHopInsecure
+		}
 		return h.hopOpen(ctx, row.Replica, n, hdr)
 	}
 	if s != nil && row != nil && row.Epoch > s.epoch {
@@ -492,5 +516,23 @@ func (h *Hub) sweepOnce(ctx context.Context) {
 	}
 	if err := h.store.DeleteExpiredNonces(ctx, now); err != nil {
 		h.log.Warn("nodes: deleting expired challenge nonces", "error", err)
+	}
+	h.closeSilent(now)
+}
+
+// closeSilent closes local sessions that sent no heartbeat for 45 seconds.
+// It sends nothing: the node reconnects, and a fresh session takes over.
+func (h *Hub) closeSilent(now time.Time) {
+	h.mu.Lock()
+	var silent []*session
+	for _, s := range h.sessions {
+		if now.Sub(time.Unix(0, s.lastBeat.Load())) > offlineAfter {
+			silent = append(silent, s)
+		}
+	}
+	h.mu.Unlock()
+	for _, s := range silent {
+		h.log.Info("nodes: closing a session with no heartbeat", "node", s.nodeID, "epoch", s.epoch)
+		s.close()
 	}
 }

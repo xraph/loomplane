@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -65,6 +66,7 @@ type hubRig struct {
 	clock    *clock
 	logs     *syncBuf
 	accepted chan error
+	dialer   *websocket.Dialer
 }
 
 func newHubRig(t *testing.T, store *fakeStore, replica string) *hubRig {
@@ -76,12 +78,30 @@ func newHubRig(t *testing.T, store *fakeStore, replica string) *hubRig {
 
 func newHubRigOn(t *testing.T, store Store, replica string) *hubRig {
 	t.Helper()
+	return newHubRigWith(t, store, replica, rigOpts{insecure: true})
+}
+
+// rigOpts picks the rig's hop transport: plain http with HopInsecure, or TLS
+// trusting the certificates in pool.
+type rigOpts struct {
+	insecure bool
+	tls      bool
+	pool     *x509.CertPool
+}
+
+func newHubRigWith(t *testing.T, store Store, replica string, o rigOpts) *hubRig {
+	t.Helper()
 	r := &hubRig{t: t, st: store, audit: &fakeAudit{}, clock: &clock{}, logs: &syncBuf{}, accepted: make(chan error, 16)}
 	r.svc = &Service{Store: store, Authz: fakeAuthz{manage: true}, Audit: r.audit, Version: "v1.8.0"}
 	r.srv = httptest.NewUnstartedServer(nil)
+	scheme := "http://"
+	if o.tls {
+		scheme = "https://"
+	}
 	r.hub = NewHub(HubConfig{
-		Audience: "https://Loom.Example.com/", Replica: replica, AdvertiseURL: "http://" + r.srv.Listener.Addr().String(),
+		Audience: "https://Loom.Example.com/", Replica: replica, AdvertiseURL: scheme + r.srv.Listener.Addr().String(),
 		HopSecret: testHopSecret, ChallengeSecret: testChallengeSecret, Now: r.clock.Now,
+		HopInsecure: o.insecure, HopRootCAs: o.pool,
 		Log: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err := r.hub.Bind(store, r.svc); err != nil {
@@ -103,7 +123,13 @@ func newHubRigOn(t *testing.T, store Store, replica string) *hubRig {
 	})
 	mux.Handle("/_/nodes/hop", r.hub.HopHandler())
 	r.srv.Config.Handler = mux
-	r.srv.Start()
+	r.dialer = websocket.DefaultDialer
+	if o.tls {
+		r.srv.StartTLS()
+		r.dialer = &websocket.Dialer{TLSClientConfig: r.srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()}
+	} else {
+		r.srv.Start()
+	}
 	t.Cleanup(r.srv.Close)
 	return r
 }
@@ -151,7 +177,7 @@ func (r *hubRig) signed(id string, priv ed25519.PrivateKey) nodeproto.Assertion 
 // dial opens a WebSocket to the rig and sends the assertion.
 func (r *hubRig) dial(a nodeproto.Assertion) *websocket.Conn {
 	r.t.Helper()
-	ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(r.srv.URL, "http")+"/node/v1/connect", nil)
+	ws, resp, err := r.dialer.Dial("ws"+strings.TrimPrefix(r.srv.URL, "http")+"/node/v1/connect", nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -856,5 +882,146 @@ func TestUpdateNotifiesLiveNode(t *testing.T) {
 	}
 	if m := n.next(); m != (nodeproto.SetIngress{Mode: "relay"}) {
 		t.Fatalf("second %#v", m)
+	}
+}
+
+func TestRevokeDuringAcceptClosesSession(t *testing.T) {
+	store := newFakeStore()
+	r := newHubRig(t, store, "a")
+	priv := seedNode(t, store, "node_1", "web-1")
+	// The revoke commits after the claim and before the session registers,
+	// so its Notify finds no session anywhere.
+	var once sync.Once
+	store.afterClaim = func(id string) {
+		once.Do(func() {
+			if err := r.svc.Revoke(context.Background(), admin, id); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	start := time.Now()
+	ws := r.dial(r.signed("node_1", priv))
+	cfg := yamux.DefaultConfig()
+	cfg.LogOutput = io.Discard
+	mux, err := yamux.Server(NewWSConn(ws), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mux.Close()
+	// The session lives a few milliseconds, so the control stream may or may
+	// not be accepted here first; what matters is that it ends.
+	select {
+	case <-mux.CloseChan():
+	case <-time.After(time.Second - time.Since(start)):
+		t.Fatal("a session revoked during Accept is still open after 1s")
+	}
+	select {
+	case err := <-r.accepted:
+		if err != nil {
+			t.Fatalf("Accept refused instead of closing: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Accept did not return")
+	}
+	if r.hub.Online("node_1") {
+		t.Fatal("revoked node still online here")
+	}
+}
+
+func TestOnInventoryIgnoresNilVersusEmpty(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1")
+	// The stored copy has empty slices, as a write from Go can leave it.
+	// The report decodes from the wire with nil ones. Same inventory.
+	r.store.mu.Lock()
+	r.store.nodes["node_1"].Inventory = nodeproto.Inventory{OS: "linux", GPUs: []nodeproto.GPU{}, Endpoints: []nodeproto.Endpoint{}, PublicAddresses: []string{}}
+	r.store.mu.Unlock()
+	fired := make(chan struct{}, 8)
+	r.hub.OnInventory(func(context.Context, *Node, nodeproto.Inventory, nodeproto.Inventory) { fired <- struct{}{} })
+	online := make(chan struct{}, 1)
+	r.hub.OnOnline(func(context.Context, *Node) { online <- struct{}{} })
+	n := r.connect("node_1", priv, "")
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux"}})
+	select {
+	case <-online:
+	case <-time.After(3 * time.Second):
+		t.Fatal("inventory not handled")
+	}
+	select {
+	case <-fired:
+		t.Fatal("fired for nil versus empty")
+	case <-time.After(200 * time.Millisecond):
+	}
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "darwin"}})
+	select {
+	case <-fired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not fire on a real change")
+	}
+}
+
+func TestAllowedAuditsOnlyAChange(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	allowed := func() int {
+		c := 0
+		for _, e := range r.audit.list() {
+			if e.action == "node.allowed" {
+				c++
+			}
+		}
+		return c
+	}
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}})
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	waitFor(t, "audit", func() bool { return allowed() >= 1 })
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	n.send(nodeproto.Heartbeat{At: time.Now()}) // read in order, so the allow above is done after it
+	r.store.mu.Lock()
+	before := r.store.touches["node_1"]
+	r.store.mu.Unlock()
+	waitFor(t, "heartbeat", func() bool {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+		return r.store.touches["node_1"] > before
+	})
+	if c := allowed(); c != 1 {
+		t.Fatalf("node.allowed recorded %d times, want 1", c)
+	}
+}
+
+func TestSilentSessionIsClosed(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1")
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	sweep := func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r.hub.Sweep(ctx) // one pass
+	}
+	r.clock.advance(30 * time.Second)
+	sweep()
+	if !r.hub.Online("node_1") {
+		t.Fatal("closed a session inside the window")
+	}
+	n.send(nodeproto.Heartbeat{At: time.Now()})
+	waitFor(t, "heartbeat seen", func() bool {
+		r.store.mu.Lock()
+		defer r.store.mu.Unlock()
+		return r.store.touches["node_1"] >= 2
+	})
+	r.clock.advance(40 * time.Second) // 40 s since that heartbeat
+	sweep()
+	if !r.hub.Online("node_1") {
+		t.Fatal("a heartbeat did not reset the window")
+	}
+	r.clock.advance(6 * time.Second)
+	sweep()
+	n.closedWithin(time.Second)
+	if m, ok := <-n.msgs; ok && m != (nodeproto.Hello{Version: nodeproto.Version, Epoch: 1}) {
+		t.Fatalf("a silent session was sent %#v", m)
 	}
 }

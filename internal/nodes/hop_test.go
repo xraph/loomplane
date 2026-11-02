@@ -3,10 +3,12 @@ package nodes
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -210,5 +212,86 @@ func TestHopRejectsReplay(t *testing.T) {
 	}
 	if got := r.hopStatus(c); got != http.StatusUnauthorized {
 		t.Fatalf("replay: %d", got)
+	}
+}
+
+func TestNotifyReachesLiveSessionPastStaleLocal(t *testing.T) {
+	store := newFakeStore()
+	a := newHubRig(t, store, "a")
+	b := newHubRig(t, store, "b")
+	priv := seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe, nodeproto.EndpointDocker)
+	a.connect("node_1", priv, "")
+	waitFor(t, "online on a", func() bool { return a.hub.Online("node_1") })
+	// The machine reconnects to b while its old socket on a is half-open.
+	live := b.connect("node_1", priv, "")
+	if m := live.next(); m.(nodeproto.Hello).Epoch != 2 {
+		t.Fatalf("hello %#v", m)
+	}
+	if !a.hub.Online("node_1") {
+		t.Fatal("test needs a's stale session still registered")
+	}
+	if _, err := a.svc.Update(context.Background(), admin, "node_1", Update{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}); err != nil {
+		t.Fatal(err)
+	}
+	if m := live.next(); !reflect.DeepEqual(m, nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}) {
+		t.Fatalf("live session got %#v", m)
+	}
+}
+
+func TestBindRefusesPlainHTTPAdvertiseURL(t *testing.T) {
+	base := HubConfig{Audience: "https://loom.example.com", HopSecret: testHopSecret, ChallengeSecret: testChallengeSecret, AdvertiseURL: "http://10.0.0.5:8080"}
+	if err := NewHub(base).Bind(newFakeStore(), &Service{}); !errors.Is(err, ErrHubConfig) {
+		t.Fatalf("http advertise URL without HopInsecure: %v", err)
+	}
+	logs := &syncBuf{}
+	ok := base
+	ok.HopInsecure = true
+	ok.Log = slog.New(slog.NewTextHandler(logs, nil))
+	if err := NewHub(ok).Bind(newFakeStore(), &Service{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("no warning for an insecure hop: %q", logs.String())
+	}
+	tls := base
+	tls.AdvertiseURL = "https://10.0.0.5:8443"
+	if err := NewHub(tls).Bind(newFakeStore(), &Service{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHopToHTTPTargetRefusedWithoutFlag(t *testing.T) {
+	store := newFakeStore()
+	a := newHubRig(t, store, "a") // http, HopInsecure
+	b := newHubRigWith(t, store, "b", rigOpts{tls: true, pool: x509.NewCertPool()})
+	priv := seedNode(t, store, "node_1", "web-1")
+	a.connect("node_1", priv, "")
+	waitFor(t, "online on a", func() bool { return a.hub.Online("node_1") })
+	if _, err := b.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.Is(err, ErrHopInsecure) {
+		t.Fatalf("open through an http hop: %v", err)
+	}
+	if _, err := hopDial(context.Background(), a.hub.self, b.hub.cfg); !errors.Is(err, ErrHopInsecure) {
+		t.Fatalf("dial: %v", err)
+	}
+}
+
+func TestHopOverTLSWithCustomCA(t *testing.T) {
+	store := newFakeStore()
+	pool := x509.NewCertPool()
+	a := newHubRigWith(t, store, "a", rigOpts{tls: true, pool: pool})
+	b := newHubRigWith(t, store, "b", rigOpts{tls: true, pool: pool})
+	pool.AddCert(a.srv.Certificate())
+	pool.AddCert(b.srv.Certificate())
+	priv := seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := a.connect("node_1", priv, "tls:")
+	n.next()
+	waitFor(t, "online on a", func() bool { return a.hub.Online("node_1") })
+	echo(t, b.hub, "node_1", "tls:")
+
+	// A replica that doesn't trust a's CA can't reach it.
+	c := newHubRigWith(t, store, "c", rigOpts{tls: true, pool: x509.NewCertPool()})
+	var off ErrNodeOffline
+	if _, err := c.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+		t.Fatalf("untrusted hop: %v", err)
 	}
 }
