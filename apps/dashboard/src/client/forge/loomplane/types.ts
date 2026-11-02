@@ -3538,6 +3538,7 @@ export interface Project {
   color: string;
   createdAt: string;
   createdBy: string;
+  deploymentMode: string;
   description: string;
   exclusions: Exclusion[];
   icon: string;

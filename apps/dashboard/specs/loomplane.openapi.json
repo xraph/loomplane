@@ -26371,6 +26371,7 @@
       "Project": {
         "type": "object",
         "required": [
+          "deployment_mode",
           "id",
           "org_id",
           "name",
@@ -26400,6 +26401,9 @@
             "format": "date-time"
           },
           "created_by": {
+            "type": "string"
+          },
+          "deployment_mode": {
             "type": "string"
           },
           "description": {
