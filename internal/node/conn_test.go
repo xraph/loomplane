@@ -541,6 +541,74 @@ func TestAdminNarrowRemovesAcknowledgedEndpoint(t *testing.T) {
 	eventually(t, "docker to go", func() bool { return fmt.Sprint(nodeJSON(r).Endpoints) == "[probe]" })
 }
 
+func TestRefusedAllowLeavesPending(t *testing.T) {
+	r := newRig(t)
+	r.join(t, nodeproto.EndpointProbe)
+	rt := r.runtime(t)
+	// The hub refuses what it cannot allow, here a control request, and says so.
+	rt.live.Update(func(c *Config) { c.PendingAllowed = []nodeproto.Endpoint{nodeproto.EndpointDocker} })
+	if err := rt.handle(nil, nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, Ack: []nodeproto.Endpoint{nodeproto.EndpointDocker}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := rt.live.Load(); len(c.PendingAllowed) != 0 {
+		t.Fatalf("still pending: %+v", c)
+	}
+	// And it is not in the stored set, so it goes.
+	rt.live.Update(func(c *Config) {
+		c.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}
+		c.PendingAllowed = []nodeproto.Endpoint{nodeproto.EndpointDocker}
+	})
+	if err := rt.handle(nil, nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, Ack: []nodeproto.Endpoint{nodeproto.EndpointDocker}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := rt.live.Load(); fmt.Sprint(c.Endpoints) != "[probe]" || len(c.PendingAllowed) != 0 {
+		t.Fatalf("a refused endpoint stayed: %+v", c)
+	}
+}
+
+func TestAllowAcknowledgedAfterStoreRecovers(t *testing.T) {
+	r := newRig(t)
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	r.env.Store.FailAllow(errors.New("database is down"))
+	rt := r.runtime(t)
+	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+		t.Fatal(err)
+	}
+	start(t, rt)
+	eventually(t, "the first narrow", func() bool { return rt.narrows.Load() >= 1 })
+	time.Sleep(100 * time.Millisecond) // an ack, if one were coming, is in flight
+	if c := nodeJSON(r); fmt.Sprint(c.PendingAllowed) != "[docker]" {
+		t.Fatalf("pending was cleared without an ack: %+v", c)
+	}
+	r.env.Store.FailAllow(nil)
+	r.env.RestartHub(t) // the node reconnects and sends it again
+	eventually(t, "the ack after the store recovered", func() bool {
+		return len(nodeJSON(r).PendingAllowed) == 0 && fmt.Sprint(r.env.Store.Node(cfg.NodeID).Endpoints) == "[probe docker]"
+	})
+	if c := rt.live.Load(); fmt.Sprint(c.Endpoints) != "[probe docker]" {
+		t.Fatalf("live config: %+v", c)
+	}
+}
+
+func TestUnknownEndpointsDroppedOnLoad(t *testing.T) {
+	r := newRig(t)
+	r.join(t, nodeproto.EndpointProbe)
+	cfg := nodeJSON(r)
+	cfg.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe, "bogus", nodeproto.EndpointControl}
+	cfg.PendingAllowed = []nodeproto.Endpoint{"bogus", nodeproto.EndpointDocker}
+	if err := r.st.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	rt := r.runtime(t)
+	c := rt.live.Load()
+	if fmt.Sprint(c.Endpoints) != "[probe]" || len(c.PendingAllowed) != 0 {
+		t.Fatalf("loaded: %+v", c)
+	}
+	if !strings.Contains(r.logs.String(), "endpoints:bogus") {
+		t.Fatalf("the drop was not logged:\n%s", r.logs.String())
+	}
+}
+
 func TestSetIngressReconciledOnConnect(t *testing.T) {
 	r := newRig(t)
 	cfg := r.join(t, nodeproto.EndpointProbe)

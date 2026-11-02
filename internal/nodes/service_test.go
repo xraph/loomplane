@@ -26,6 +26,8 @@ type fakeStore struct {
 	nonces   map[string]time.Time
 	touches  map[string]int
 	fail     error
+	// allowErr makes AllowEndpoints fail, as a store outage would.
+	allowErr error
 	// afterClaim runs after ClaimSession commits, outside the lock.
 	afterClaim func(nodeID string)
 }
@@ -233,6 +235,9 @@ func (f *fakeStore) ApplyInventory(_ context.Context, id string, inv nodeproto.I
 func (f *fakeStore) AllowEndpoints(_ context.Context, id string, add []nodeproto.Endpoint) (*Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.allowErr != nil {
+		return nil, f.allowErr
+	}
 	n, ok := f.nodes[id]
 	if !ok || n.RevokedAt != nil {
 		return nil, ErrNotFound

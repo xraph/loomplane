@@ -1000,13 +1000,52 @@ func TestAllowedIsAcknowledgedWithNarrow(t *testing.T) {
 	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
 	n.next() // hello
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
-	want := nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}}
+	want := nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}, Ack: []nodeproto.Endpoint{nodeproto.EndpointDocker}}
 	if m := n.next(); !reflect.DeepEqual(m, want) {
 		t.Fatalf("message %#v", m)
 	}
 	// Allowing what is already allowed is acknowledged too.
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
 	if m := n.next(); !reflect.DeepEqual(m, want) {
+		t.Fatalf("message %#v", m)
+	}
+}
+
+func TestAllowedRefusalIsAcknowledged(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	n.next() // hello
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointControl, "bogus"}})
+	want := nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, Ack: []nodeproto.Endpoint{nodeproto.EndpointControl, "bogus"}}
+	if m := n.next(); !reflect.DeepEqual(m, want) {
+		t.Fatalf("message %#v", m)
+	}
+	// A mix: the taken one is stored, all are acknowledged.
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker, "bogus"}})
+	want = nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}, Ack: []nodeproto.Endpoint{nodeproto.EndpointDocker, "bogus"}}
+	if m := n.next(); !reflect.DeepEqual(m, want) {
+		t.Fatalf("message %#v", m)
+	}
+}
+
+func TestAllowedTransientErrorSendsNoAck(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	n.next() // hello
+	r.store.mu.Lock()
+	r.store.allowErr = errors.New("database is down")
+	r.store.mu.Unlock()
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	n.quiet(200 * time.Millisecond)
+	r.store.mu.Lock()
+	r.store.allowErr = nil
+	r.store.mu.Unlock()
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	if m, ok := n.next().(nodeproto.Narrow); !ok || len(m.Ack) != 1 {
 		t.Fatalf("message %#v", m)
 	}
 }

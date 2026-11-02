@@ -22,6 +22,7 @@ type Store struct {
 	BeforeClaim func(nodeID string)
 
 	mu       sync.Mutex
+	allowErr error
 	nodes    map[string]*nodes.Node
 	epochs   map[string]int64
 	sessions map[string]nodes.Session
@@ -251,9 +252,20 @@ func (s *Store) ApplyInventory(_ context.Context, id string, inv nodeproto.Inven
 	return nil
 }
 
+// FailAllow makes AllowEndpoints return err, as a store outage would; nil
+// restores it.
+func (s *Store) FailAllow(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowErr = err
+}
+
 func (s *Store) AllowEndpoints(_ context.Context, id string, add []nodeproto.Endpoint) (*nodes.Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.allowErr != nil {
+		return nil, s.allowErr
+	}
 	n, ok := s.nodes[id]
 	if !ok || n.RevokedAt != nil {
 		return nil, nodes.ErrNotFound

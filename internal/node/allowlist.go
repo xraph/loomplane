@@ -45,6 +45,18 @@ func (c *Config) Narrow(keep []nodeproto.Endpoint) []nodeproto.Endpoint {
 	return next
 }
 
+// Acknowledge stops treating eps as pending: Loomplane has decided on them.
+// What it kept is in the Narrow that carries them, which runs after this.
+func (c *Config) Acknowledge(eps []nodeproto.Endpoint) {
+	var pending []nodeproto.Endpoint
+	for _, e := range c.PendingAllowed {
+		if !slices.Contains(eps, e) {
+			pending = append(pending, e)
+		}
+	}
+	c.PendingAllowed = pending
+}
+
 // Live holds the node's current Config so the control loop can change it while
 // streams are being served. It is copy on write: readers get a value and never
 // see a half-updated slice.

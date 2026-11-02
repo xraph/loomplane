@@ -27,9 +27,13 @@ type InventoryReport struct {
 	Inventory Inventory `json:"inventory"`
 }
 
-// Narrow asks a node to serve only these endpoints.
+// Narrow asks a node to serve only these endpoints. Ack lists endpoints the
+// node asked to allow with Allowed that the control plane has now decided on,
+// whether it took them or not. The node stops treating them as pending, and
+// Endpoints says which it kept.
 type Narrow struct {
 	Endpoints []Endpoint `json:"endpoints"`
+	Ack       []Endpoint `json:"ack,omitempty"`
 }
 
 // NarrowApplied confirms the endpoints a node now serves.

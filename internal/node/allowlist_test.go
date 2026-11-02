@@ -142,3 +142,11 @@ func TestNarrowStillRemovesNonPending(t *testing.T) {
 		t.Fatalf("got %v", c.Endpoints)
 	}
 }
+
+func TestAcknowledgeEndsPending(t *testing.T) {
+	c := Config{Endpoints: []nodeproto.Endpoint{eProbe, eDocker}, PendingAllowed: []nodeproto.Endpoint{eDocker, eKube}}
+	c.Acknowledge([]nodeproto.Endpoint{eDocker})
+	if !reflect.DeepEqual(c.PendingAllowed, []nodeproto.Endpoint{eKube}) {
+		t.Fatalf("got %v", c.PendingAllowed)
+	}
+}

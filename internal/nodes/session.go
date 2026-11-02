@@ -384,15 +384,21 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 }
 
 // allowed adds endpoints the owner allowed on the machine. Control, public
-// and unknown endpoints are dropped.
+// and unknown endpoints are dropped. Every Allowed that could be weighed is
+// answered with a Narrow of the stored set whose Ack names what was asked,
+// taken or not, so the node can stop carrying it as pending. A store error
+// that may pass sends nothing, and the node asks again on its next connect.
 func (h *Hub) allowed(s *session, eps []nodeproto.Endpoint) {
-	add := []nodeproto.Endpoint{}
+	asked, add := []nodeproto.Endpoint{}, []nodeproto.Endpoint{}
 	for _, e := range eps {
+		if !slices.Contains(asked, e) {
+			asked = append(asked, e)
+		}
 		if slices.Contains(nodeproto.AllowableEndpoints(), e) && !slices.Contains(add, e) {
 			add = append(add, e)
 		}
 	}
-	if len(add) == 0 {
+	if len(asked) == 0 {
 		return
 	}
 	ctx, cancel := opCtx()
@@ -402,20 +408,26 @@ func (h *Hub) allowed(s *session, eps []nodeproto.Endpoint) {
 		h.log.Warn("nodes: reading a node before allowing endpoints", "node", s.nodeID, "error", err)
 		return
 	}
-	n, err := h.store.AllowEndpoints(ctx, s.nodeID, add)
-	if err != nil {
-		h.log.Warn("nodes: adding endpoints a node allowed", "node", s.nodeID, "error", err)
-		return
+	n := before
+	if len(add) > 0 {
+		got, aerr := h.store.AllowEndpoints(ctx, s.nodeID, add)
+		switch {
+		case errors.Is(aerr, ErrNotFound):
+			// Revoked meanwhile: nothing taken, and the answer says so.
+		case aerr != nil:
+			h.log.Warn("nodes: adding endpoints a node allowed", "node", s.nodeID, "error", aerr)
+			return
+		default:
+			n = got
+		}
 	}
-	// The node keeps what its owner allowed until it hears the control plane
-	// has it, and this Narrow, which carries the stored set, is that word.
-	ack := n.Endpoints
-	if ack == nil {
-		ack = []nodeproto.Endpoint{}
+	stored := n.Endpoints
+	if stored == nil {
+		stored = []nodeproto.Endpoint{}
 	}
-	s.deliver(nodeproto.Narrow{Endpoints: ack})
+	s.deliver(nodeproto.Narrow{Endpoints: stored, Ack: asked})
 	if slices.Equal(before.Endpoints, n.Endpoints) {
-		return // already allowed: nothing to record
+		return // nothing taken, or already allowed: nothing to record
 	}
 	names := make([]string, len(add))
 	for i, e := range add {

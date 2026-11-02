@@ -105,9 +105,41 @@ func NewRuntime(st State, reg *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading this node's config (has it joined? run loomctl node join): %w", err)
 	}
-	r := &Runtime{st: st, reg: reg, live: NewLive(cfg), nodeVersion: buildinfo.Version}
+	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version}
+	r.live = NewLive(r.sanitized(cfg))
 	reg.Register(nodeproto.EndpointProbe, ProbeHandler(r.detectOptions))
 	return r, nil
+}
+
+// sanitized drops endpoints this build cannot allow from the allowlist and
+// from PendingAllowed, as a hand-edited node.json or an older build may have
+// left them, and pending ones that are no longer in the allowlist.
+func (r *Runtime) sanitized(c Config) Config {
+	var dropped []string
+	keep := func(eps []nodeproto.Endpoint, what string) []nodeproto.Endpoint {
+		var out []nodeproto.Endpoint
+		for _, e := range eps {
+			if slices.Contains(nodeproto.AllowableEndpoints(), e) && !slices.Contains(out, e) {
+				out = append(out, e)
+			} else {
+				dropped = append(dropped, what+":"+sanitize(string(e)))
+			}
+		}
+		return out
+	}
+	c.Endpoints = nonNil(keep(c.Endpoints, "endpoints"))
+	c.PendingAllowed = keep(c.PendingAllowed, "pending_allowed")
+	pending := c.PendingAllowed[:0:0]
+	for _, e := range c.PendingAllowed {
+		if slices.Contains(c.Endpoints, e) {
+			pending = append(pending, e)
+		}
+	}
+	c.PendingAllowed = pending
+	if len(dropped) > 0 {
+		r.log().Warn("loomplane-node: dropped endpoints this node cannot allow from node.json", "dropped", dropped)
+	}
+	return c
 }
 
 // Run keeps the connection to Loomplane until ctx ends (it then returns nil),
@@ -549,7 +581,10 @@ func (s *session) accept(ctx context.Context) {
 func (r *Runtime) handle(s *session, msg any) error {
 	switch m := msg.(type) {
 	case nodeproto.Narrow:
-		cfg, err := r.apply(func(c *Config) { c.Narrow(m.Endpoints) })
+		cfg, err := r.apply(func(c *Config) {
+			c.Acknowledge(m.Ack)
+			c.Narrow(m.Endpoints)
+		})
 		r.narrows.Add(1)
 		if err != nil {
 			// The change holds in memory and goes unacknowledged; the
