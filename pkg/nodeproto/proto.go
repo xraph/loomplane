@@ -14,6 +14,16 @@ import (
 // Version is the protocol version a node announces in Hello.
 const Version = 1
 
+// WebSocket close codes the control plane sends a node before it hangs up.
+// They sit in the private range (4000 to 4999).
+const (
+	// CloseUnauthorized means the assertion was refused. Fetch a new challenge
+	// and retry; if it keeps happening the node was revoked.
+	CloseUnauthorized = 4401
+	// CloseBadRequest means the first message was not a usable assertion.
+	CloseBadRequest = 4400
+)
+
 // MaxHeaderSize is the largest stream header body, in bytes.
 const MaxHeaderSize = 16 * 1024
 

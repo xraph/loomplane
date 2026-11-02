@@ -287,6 +287,17 @@ func yamuxConfig() *yamux.Config {
 	return cfg
 }
 
+// refuseUnauthorized tells a node it was refused, with a close frame it can
+// act on, then closes conn. A failure that is not about the node's identity
+// (the store is down, say) just closes: the node retries on its own.
+func refuseUnauthorized(conn *websocket.Conn, err error) {
+	if errors.Is(err, ErrUnauthorized) {
+		msg := websocket.FormatCloseMessage(nodeproto.CloseUnauthorized, "unauthorized")
+		_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+	}
+	_ = conn.Close()
+}
+
 // Accept authenticates a node's connection and holds its session until it
 // ends. It owns conn: it closes it before returning, on every path. It
 // returns nil when an accepted session ends.
@@ -297,15 +308,16 @@ func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, a nodeproto.Asse
 	}
 	n, err := h.authenticate(ctx, a)
 	if err != nil {
-		_ = conn.Close()
+		refuseUnauthorized(conn, err)
 		return err
 	}
 	epoch, err := h.store.ClaimSession(ctx, Session{NodeID: n.ID, Replica: h.self, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: h.now().UTC()})
 	if err != nil {
-		_ = conn.Close()
 		if errors.Is(err, ErrNotFound) {
+			refuseUnauthorized(conn, ErrUnauthorized)
 			return fmt.Errorf("%w: node revoked", ErrUnauthorized)
 		}
+		_ = conn.Close()
 		return err
 	}
 	mux, err := yamux.Client(NewWSConn(conn), yamuxConfig())

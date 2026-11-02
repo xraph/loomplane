@@ -201,36 +201,45 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]APIKey, err
 // Revoke revokes one of the caller's keys, or anyone's for an owner or
 // admin. It works at once.
 func (s *Service) Revoke(ctx context.Context, p security.Principal, keyID string) error {
+	_, err := s.RevokeKey(ctx, p, keyID)
+	return err
+}
+
+// RevokeKey is Revoke, and returns the key as it stands once revoked. Only
+// the key's owner or an admin gets this far, so the caller may show them
+// what else the key reached.
+func (s *Service) RevokeKey(ctx context.Context, p security.Principal, keyID string) (*APIKey, error) {
 	if p.KeyID != "" {
-		return ErrNotWithKey
+		return nil, ErrNotWithKey
 	}
 	kid, err := id.ParseKeyID(keyID)
 	if err != nil {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	tctx := s.tenant(ctx, p.OrgID)
 	k, err := s.engine.GetKey(tctx, kid)
 	if err != nil || k.TenantID != p.OrgID || k.AppID != s.appID {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	if k.CreatedBy != p.UserID {
 		admin, aerr := s.admin(ctx, p)
 		if aerr != nil {
-			return aerr
+			return nil, aerr
 		}
 		if !admin {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
 	}
 	if err := s.engine.RevokeKey(tctx, kid, "revoked by "+p.UserID); err != nil {
-		return fmt.Errorf("revoke the key: %w", err)
+		return nil, fmt.Errorf("revoke the key: %w", err)
 	}
+	v := view(k)
+	now := s.now().UTC()
+	v.State, v.RevokedAt = string(key.StateRevoked), &now
 	if s.audit != nil {
-		v := view(k)
-		v.State = string(key.StateRevoked)
 		s.audit.Record(ctx, "api_key.revoked", p, v)
 	}
-	return nil
+	return &v, nil
 }
 
 // Authenticate checks a key and returns who it acts as.

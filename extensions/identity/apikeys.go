@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/apikeys"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -46,8 +47,25 @@ type APIKeyList struct {
 	Keys []apikeys.APIKey `json:"keys"`
 }
 
-func (e *Extension) keyRoutes(r forge.Router) error {
-	g := r.Group("/api/v1/api-keys", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("API keys"))
+// JoinedNodes lists the nodes that joined with a token an API key made. The
+// nodes extension provides it; identity can't import that extension, so it
+// asks for this when a revoke says the key was compromised.
+type JoinedNodes interface {
+	JoinedByKey(ctx context.Context, p security.Principal, keyID string) ([]nodes.Node, error)
+}
+
+// CompromisedRevoke is the answer to revoking a key as compromised: the key,
+// and the nodes that joined with a token it made, which the operator may now
+// want to revoke too.
+type CompromisedRevoke struct {
+	Revoked     apikeys.APIKey `json:"revoked"`
+	JoinedNodes []nodes.Node   `json:"joined_nodes"`
+}
+
+func (e *Extension) keyRoutes(r forge.Router) error { return e.keyRoutesWith(r, e.guard()) }
+
+func (e *Extension) keyRoutesWith(r forge.Router, guard ...forge.Middleware) error {
+	g := r.Group("/api/v1/api-keys", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("API keys"))
 	if err := g.GET("", func(c forge.Context) error {
 		p, err := principalOf(c)
 		if err != nil {
@@ -92,16 +110,49 @@ func (e *Extension) keyRoutes(r forge.Router) error {
 		if err != nil {
 			return err
 		}
-		if err := e.keys.Revoke(c.Request().Context(), p, c.Param("id")); err != nil {
+		ctx := c.Request().Context()
+		revoked, err := e.keys.RevokeKey(ctx, p, c.Param("id"))
+		if err != nil {
 			return keyError(err)
 		}
-		return c.NoContent(http.StatusNoContent)
+		if c.Request().URL.Query().Get("compromised") != "true" {
+			return c.NoContent(http.StatusNoContent)
+		}
+		// Only the key's owner or an admin gets past RevokeKey, so they alone
+		// see the node list. Without the nodes permission the list is empty.
+		out := CompromisedRevoke{Revoked: *revoked, JoinedNodes: []nodes.Node{}}
+		if lister := e.joinedNodes(); lister != nil {
+			joined, jerr := lister.JoinedByKey(ctx, p, revoked.ID)
+			switch {
+			case jerr == nil:
+				out.JoinedNodes = append(out.JoinedNodes, joined...)
+			case errors.Is(jerr, security.ErrForbidden):
+			default:
+				return jerr
+			}
+		}
+		return c.JSON(http.StatusOK, out)
 	},
 		forge.WithName("apiKeys.revoke"),
-		forge.WithSummary("Revoke an API key, at once"),
+		forge.WithSummary("Revoke an API key, at once. With compromised=true, also list the nodes that joined with a token it made."),
+		forge.WithQuerySchema(RevokeKeyQuery{}),
 		forge.WithNoContentResponse(),
+		forge.WithResponseSchema(http.StatusOK, "The key and the nodes that joined with it", CompromisedRevoke{}),
 		forge.WithEntity(forge.EntityDef{Type: "APIKey", IDField: "id"}),
 	)
+}
+
+// RevokeKeyQuery is the query of apiKeys.revoke.
+type RevokeKeyQuery struct {
+	// Compromised asks for the nodes that joined with a token this key made.
+	Compromised bool `query:"compromised"`
+}
+
+func (e *Extension) joinedNodes() JoinedNodes {
+	if e.joined == nil {
+		return nil
+	}
+	return e.joined()
 }
 
 func principalOf(c forge.Context) (security.Principal, error) {

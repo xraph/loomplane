@@ -75,6 +75,7 @@ type Config struct {
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
+	Nodes         NodesConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -506,6 +507,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
 	r.boolean(&c.Push.Enabled, "push.enabled")
 	r.str(&c.Push.GatewayURL, "push.gateway_url")
+	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
+	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
+	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -519,7 +523,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment))
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:

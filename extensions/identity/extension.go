@@ -56,6 +56,7 @@ import (
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/instance"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
@@ -86,16 +87,19 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	pg            *pgdriver.PgDB
-	store         *authpg.Store
-	orgs          *organization.Plugin
-	warden        *warden.Engine
-	authz         *security.Authorizer
-	audit         *chronicle.Chronicle
-	auditStore    chronstore.Store
-	smith         *keysmith.Engine
-	engine        *authsome.Engine
-	keys          *apikeys.Service
+	pg         *pgdriver.PgDB
+	store      *authpg.Store
+	orgs       *organization.Plugin
+	warden     *warden.Engine
+	authz      *security.Authorizer
+	audit      *chronicle.Chronicle
+	auditStore chronstore.Store
+	smith      *keysmith.Engine
+	engine     *authsome.Engine
+	keys       *apikeys.Service
+	// joined finds the nodes a key's join tokens brought in. The nodes
+	// extension registers after this one, so it is looked up per request.
+	joined        func() JoinedNodes
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
 	instance      *instance.Settings
@@ -187,11 +191,19 @@ func (e *Extension) Register(fapp forge.App) error {
 	// ProvideValue keys on its type parameter, so each value goes in with
 	// its own concrete type.
 	c := fapp.Container()
+	e.joined = func() JoinedNodes {
+		svc, err := forge.InjectType[*nodes.Service](c)
+		if err != nil {
+			return nil
+		}
+		return svc
+	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
+		forge.ProvideValue(c, e.keys),
 		forge.ProvideValue(c, Guard{e.guard()}),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {

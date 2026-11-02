@@ -77,6 +77,16 @@ Loomplane can send phone notifications through a gateway that hands them to Appl
 | `LOOMPLANE_PUSH_ENABLED` | `true` | Turn it off and the app hides push settings for this server |
 | `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` | The gateway that hands notifications to Apple and Google. Only XRaph's gateway can reach the store app |
 
+## Nodes
+
+Machines that join an organization hold one connection to a replica. When you run several replicas, a request for a node reaches the replica that holds it over a hop on `/_/nodes/hop`, signed with a secret every replica derives from `LOOMPLANE_SECRET_KEY`. With one replica you set nothing here.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_NODES_ADVERTISE_URL` | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. Set each replica's own address. Use `https`, or a private network with the setting below |
+| `LOOMPLANE_NODES_HOP_INSECURE` | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
+| `LOOMPLANE_NODES_HOP_CA_FILE` | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+
 ## Cloud sign-in
 
 | Variable | Default | What it does |

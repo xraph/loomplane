@@ -62,6 +62,19 @@ push:
   # gateway can reach the store app.
   gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
 
+nodes:
+  # Where the other replicas of this Loomplane reach this one, for the hop
+  # that carries a node's streams between replicas (/_/nodes/hop). Leave it
+  # empty on a single replica. With several, set each replica's own URL, and
+  # keep it on a private network or behind https.
+  advertise_url: "${LOOMPLANE_NODES_ADVERTISE_URL:-}"
+  # Allows that hop over plain http. The hop carries stream bytes, so turn
+  # this on only on a private network.
+  hop_insecure: "${LOOMPLANE_NODES_HOP_INSECURE:-false}"
+  # A PEM file of the roots that verify the other replicas' certificates on
+  # an https hop. Empty uses the system roots.
+  hop_ca_file: "${LOOMPLANE_NODES_HOP_CA_FILE:-}"
+
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).
   dir: "${LOOMPLANE_DASHBOARD_DIR:-}"
