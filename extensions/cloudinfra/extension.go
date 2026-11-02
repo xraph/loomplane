@@ -33,6 +33,15 @@ import (
 
 const Name = "loomplane-cloud-infrastructure"
 
+// newService builds the service with the operator's capacity gates taken
+// from config, so a gate can't be left at its zero value by accident.
+func newService(cfg config.CloudsConfig, d cloudinfra.Deps) *cloudinfra.Service {
+	d.ClusterCapacity = cfg.ClusterCapacity
+	d.ManagedClusters = cfg.ManagedClusters
+	d.EnableAutomaticCapacity = cfg.AutomaticCapacity.Enabled
+	return cloudinfra.NewService(d)
+}
+
 // registrationSweepEvery spaces renewal sweeps; each one reads a domain
 // back from the registrar at most daily.
 const registrationSweepEvery = time.Hour
@@ -103,7 +112,7 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	e.svc = cloudinfra.NewService(cloudinfra.Deps{ReplicaVerifier: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey), ClusterCapacity: e.cfg.Clouds.ClusterCapacity, ManagedClusters: e.cfg.Clouds.ManagedClusters, Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
+	e.svc = newService(e.cfg.Clouds, cloudinfra.Deps{ReplicaVerifier: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey), Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) }})
 	creds.ManagedCredentials = e.svc
 	files, filesErr := forge.InjectType[*backupfiles.Store](c)
