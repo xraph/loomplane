@@ -1015,10 +1015,56 @@ func TestSettingsChangesAreAudited(t *testing.T) {
 		}
 	}
 	for _, e := range events {
-		s := fmt.Sprint(e.Attributes)
+		attrs := maps.Clone(e.Attributes)
+		delete(attrs, "provider_key_id") // a generated ID can hold any digits
+		s := fmt.Sprint(attrs)
 		if strings.Contains(s, secretValue) || strings.Contains(s, "100") {
 			t.Errorf("%s attributes carry a value: %s", e.Action, s)
 		}
+	}
+}
+
+// A provider key's put and delete name the key's ID and hint, and never
+// its secret.
+func TestProviderKeyAuditNamesIDAndHint(t *testing.T) {
+	h := newHarness(t)
+	k := h.put(t, "claude", anthropicKey())
+	if err := h.svc.DeleteProviderKey(context.Background(), admin, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	events := h.audit.all()
+	if len(events) != 2 {
+		t.Fatalf("events %+v", events)
+	}
+	for _, e := range events {
+		if e.Attributes["provider_key_id"] != k.ID || e.Attributes["key_hint"] != "wxyz" {
+			t.Errorf("%s attributes %v, want id %s and hint wxyz", e.Action, e.Attributes, k.ID)
+		}
+		if strings.Contains(fmt.Sprint(e.Attributes), secretValue) {
+			t.Errorf("%s carries the secret: %v", e.Action, e.Attributes)
+		}
+	}
+}
+
+// KeyInfo is a key's metadata without its secret fields, for services that
+// pick a key without reading it.
+func TestKeyInfoHasNoSecrets(t *testing.T) {
+	h := newHarness(t)
+	in := anthropicKey()
+	in.Fields["base_url"] = "https://proxy.example.com"
+	h.put(t, "claude", in)
+	k, err := h.svc.KeyInfo(context.Background(), "org", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.Type != "anthropic" || k.KeyHint != "wxyz" || k.Fields["base_url"] != "https://proxy.example.com" || len(k.Projects) != 0 {
+		t.Errorf("info %+v", k)
+	}
+	if _, ok := k.Fields["api_key"]; ok || strings.Contains(fmt.Sprintf("%+v", k), secretValue) {
+		t.Errorf("info carries the secret: %+v", k)
+	}
+	if _, err := h.svc.KeyInfo(context.Background(), "org", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing key: %v", err)
 	}
 }
 
