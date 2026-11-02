@@ -528,7 +528,8 @@ it("sets a targetless Cloud's one provider and account", async () => {
   expect(
     await screen.findByText(/every service on it runs here/)
   ).toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "Set default" }))
+  // The section head and the empty state both offer it; either opens the dialog.
+  await user.click(screen.getAllByRole("button", { name: "Set default" })[0]!)
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
@@ -561,7 +562,9 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   fixture({ inUse: true })
   show()
   await openTab("Targets")
-  await user.click(await screen.findByRole("button", { name: "Set default" }))
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Set default" }))[0]!
+  )
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )

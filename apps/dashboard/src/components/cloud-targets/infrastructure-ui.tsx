@@ -61,10 +61,10 @@ export function CloudTabs({
   )
 }
 /**
- * CloudEmpty is a Cloud page's empty state, in the shared design: a list
- * that will fill shows a faded preview of its rows, a prerequisite or a
- * missing page is a centered notice, and one inside a form or dialog stays
- * compact.
+ * CloudEmpty is a Cloud page's empty state, always centered: a list that
+ * will fill shows a faded preview of its rows, a prerequisite or a missing
+ * page is a notice, and one inside a form or dialog is the same notice with
+ * less room around it.
  */
 export function CloudEmpty({
   title,
@@ -81,11 +81,11 @@ export function CloudEmpty({
 }) {
   return (
     <ZeroState
-      variant={
-        kind === "compact" ? "compact" : kind === "inline" ? "inline" : "panel"
+      variant="panel"
+      preview={kind === "list"}
+      className={
+        kind === "compact" || kind === "inline" ? "gap-3 px-5 py-6" : undefined
       }
-      preview={kind === "list" || kind === "compact"}
-      className={kind === "inline" ? "gap-3 px-0 py-2" : undefined}
     >
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">

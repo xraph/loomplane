@@ -385,7 +385,26 @@ export function DefaultPlacementSection({
           </CloudTableRow>
         </CloudTable>
       ) : (
-        <CloudEmpty kind="compact" title="No default yet">
+        <CloudEmpty
+          kind="list"
+          icon={AsteriskIcon}
+          title="No default yet"
+          action={
+            manage && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={set.isPending}
+                onClick={() => {
+                  setError("")
+                  setEditing(true)
+                }}
+              >
+                Set default
+              </Button>
+            )
+          }
+        >
           {targets.length === 0
             ? "With no targets, every service on it runs here. Until you set one, services on this Cloud have nowhere to run."
             : "Services that don't name or tag a target have nowhere to run."}
