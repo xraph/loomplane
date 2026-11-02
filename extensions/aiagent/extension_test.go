@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/xraph/forge"
@@ -14,6 +15,9 @@ import (
 	"github.com/xraph/nexus/provider"
 	"github.com/xraph/nexus/tenant"
 	"github.com/xraph/weave"
+	weaveext "github.com/xraph/weave/extension"
+	"github.com/xraph/weave/vectorstore"
+	vectormemory "github.com/xraph/weave/vectorstore/memory"
 
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -221,9 +225,19 @@ func (g *groveProvider) Register(app forge.App) error {
 
 func (g *groveProvider) Start(context.Context) error { g.MarkStarted(); return nil }
 
+// shutdownRecorder is a weave plugin that notes the engine's shutdown.
+type shutdownRecorder struct{ stopped atomic.Bool }
+
+func (*shutdownRecorder) Name() string { return "shutdown-recorder" }
+func (r *shutdownRecorder) OnShutdown(context.Context) error {
+	r.stopped.Store(true)
+	return nil
+}
+
 // The libraries borrow Loomplane's database from the container. Stopping
 // them must leave it open: the rest of the app still stops after them,
-// and grove closes it last.
+// and grove closes it last. Weave's engine stops for real, recovery loop
+// and plugins included.
 func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	ctx := context.Background()
 	drv := sqlitedriver.New()
@@ -235,9 +249,16 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// pgvector needs Postgres; weave keeps its vectors in memory here.
+	restore := newVectorStore
+	newVectorStore = func(*grove.DB, int) vectorstore.VectorStore { return vectormemory.New() }
+	t.Cleanup(func() { newVectorStore = restore })
 
-	// Knowledge stays off: weave's pgvector needs Postgres.
-	ext := New(config.Config{AI: serverAI()}, nil)
+	ai := serverAI()
+	ai.Knowledge = config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: 8}
+	ext := New(config.Config{AI: ai}, nil)
+	shutdown := &shutdownRecorder{}
+	weaveext.WithExtension(shutdown)(ext.weave.Extension)
 	app := forge.New(forge.WithAppName("libraries-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
 	if err = app.RegisterExtension(&groveProvider{BaseExtension: forge.NewBaseExtension("grove", "0", "test database"), db: db}); err != nil {
 		t.Fatal(err)
@@ -255,5 +276,11 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	}
 	if err = db.Ping(ctx); err != nil {
 		t.Fatalf("a library closed the shared database: %v", err)
+	}
+	if !shutdown.stopped.Load() {
+		t.Fatal("weave's engine didn't stop: its plugins never heard")
+	}
+	if ext.weave.IsStarted() {
+		t.Fatal("weave still reads as started")
 	}
 }

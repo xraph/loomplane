@@ -11,6 +11,7 @@ import (
 	weavenexus "github.com/xraph/weave/embedder/nexus"
 	weaveengine "github.com/xraph/weave/engine"
 	weaveext "github.com/xraph/weave/extension"
+	"github.com/xraph/weave/vectorstore"
 	"github.com/xraph/weave/vectorstore/pgvector"
 
 	"github.com/xraph/loomplane/internal/agentsettings"
@@ -26,6 +27,12 @@ const knowledgeUnavailable = "Knowledge isn't set up yet on this server"
 // then knowledge is configured or not, and never available.
 var bootKnowledge = func(_ context.Context, cfg config.AIConfig, _ *grove.DB) agentsettings.KnowledgeStatus {
 	return agentsettings.KnowledgeStatus{Configured: cfg.Knowledge.Configured(), Available: false, Reason: knowledgeUnavailable}
+}
+
+// newVectorStore is knowledge's vector store: pgvector over Loomplane's
+// database. Tests swap it, since pgvector needs Postgres.
+var newVectorStore = func(db *grove.DB, dimensions int) vectorstore.VectorStore {
+	return pgvector.New(db, pgvector.WithDimensions(dimensions))
 }
 
 // knowledgeExtension is weave's extension, given its vector store and
@@ -55,18 +62,9 @@ func (k *knowledgeExtension) Register(app forge.App) error {
 	if err != nil {
 		return fmt.Errorf("knowledge needs the grove extension: %w", err)
 	}
-	weaveext.WithVectorStore(pgvector.New(db, pgvector.WithDimensions(k.ai.Knowledge.Dimensions)))(k.Extension)
+	weaveext.WithVectorStore(newVectorStore(db, k.ai.Knowledge.Dimensions))(k.Extension)
 	weaveext.WithEngineOption(weaveengine.WithEmbedder(newEmbedder(k.ai, k.gateway, k.tenants)))(k.Extension)
 	return k.Extension.Register(app)
-}
-
-// Stop marks weave stopped without stopping its engine, whose Stop closes
-// its store: the store wraps Loomplane's own database, which grove closes
-// last. The engine has nothing else to stop: its recovery loop is off and
-// it has no plugins.
-func (k *knowledgeExtension) Stop(context.Context) error {
-	k.MarkStopped()
-	return nil
 }
 
 // newEmbedder embeds through nexus with the server's embedding model,
