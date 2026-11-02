@@ -262,6 +262,27 @@ func TestExternalRequestToolsAreAllowed(t *testing.T) {
 	}
 }
 
+// The tool authorizer refuses a request that names a team without saying
+// why, before cortex suspends the run, and the model reads the refusal.
+func TestATeamWithoutAReasonIsRefused(t *testing.T) {
+	w := newWorld(t)
+	for name, args := range map[string]map[string]string{
+		"ask_person":                {"question": "Which region?", "team": "payments"},
+		"request_secret":            {"project": "prj_mono", "key": "STRIPE_KEY", "why": "payments", "team": "payments"},
+		"request_github_connection": {"why": "to read the repository", "team": "payments", "team_reason": " "},
+		"request_cloud_connection":  {"cloud": "aws", "why": "to deploy", "team": "payments"},
+	} {
+		err := w.authorize(w.a, as(orgA, ada), name, args)
+		if err == nil || !strings.Contains(err.Error(), "say why this team") {
+			t.Errorf("%s without a reason: %v", name, err)
+		}
+		args["team_reason"] = "they own payments"
+		if err := w.authorize(w.a, as(orgA, ada), name, args); err != nil {
+			t.Errorf("%s with a reason: %v", name, err)
+		}
+	}
+}
+
 func TestUnknownToolIsDenied(t *testing.T) {
 	w := newWorld(t)
 	err := w.authorize(w.a, as(orgA, ada), "drop_database", map[string]string{"name": "db"})

@@ -155,7 +155,8 @@ func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.
 //   - destroy_production, which only approve_plan has, always pauses for
 //     a person.
 //   - secret_or_external runs for the requests to a person, which cortex
-//     suspends; anything else (a secret set_variable) is ErrNeedsPerson,
+//     suspends, once agentops.ValidateRequest passes (a team named needs a
+//     reason); anything else (a secret set_variable) is ErrNeedsPerson,
 //     naming the request to make instead.
 //
 // A production retry_deployment is ErrNeedsPerson, and a plan that sets a
@@ -197,7 +198,7 @@ func (a *Authorizer) Authorize(ctx context.Context, s cortex.Subject, tc llm.Too
 		return fmt.Errorf("%w: %s changes production", ErrNeedsPerson, tc.Name)
 	case defs.RiskSecretOrExternal:
 		if op.External() {
-			return nil
+			return agentops.ValidateRequest(tc.Name, json.RawMessage(tc.Arguments))
 		}
 		if tc.Name == setVariable {
 			return fmt.Errorf("%w: a secret's value is typed into Loomplane by a person: call request_secret instead", ErrNeedsPerson)
