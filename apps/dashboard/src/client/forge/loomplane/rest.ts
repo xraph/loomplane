@@ -5020,6 +5020,40 @@ export class RESTClient extends Client {
     },
 
     /**
+     * What the caller may do on one project, team grants included
+     */
+    permissions: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectPermissions> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/permissions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectPermissions"],
+      };
+
+      return this.request<types.ProjectPermissions>(config);
+    },
+
+    /**
+     * Name the team responsible for a project, or clear it with null
+     */
+    setTeam: async (id: string, body: types.SetTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/team`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * Change a project's name, description, icon or color
      */
     update: async (id: string, body: types.UpdateProjectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -5845,6 +5879,159 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.DiscoverySource>(config);
+    },
+
+  };
+
+  public readonly teams = {
+    /**
+     * Put a workspace member in the team
+     */
+    addMember: async (id: string, userId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/members/${encodeURIComponent(String(userId))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Create a team
+     */
+    create: async (body: types.CreateTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreateTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Delete a team. Its members lose the roles it gave them, and projects it was responsible for have none.
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * One team
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * The workspace's teams, with their members and grants
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TeamList> => {
+      let __path = `/api/v1/teams`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TeamList"],
+      };
+
+      return this.request<types.TeamList>(config);
+    },
+
+    /**
+     * Take one of the team's roles away from its members
+     */
+    removeGrant: async (id: string, grantId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/grants/${encodeURIComponent(String(grantId))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Take a person out of the team
+     */
+    removeMember: async (id: string, userId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/members/${encodeURIComponent(String(userId))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Give the team a role on a project, or on the whole workspace without a project. Never above your own role.
+     */
+    setGrant: async (id: string, body: types.SetGrantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/grants`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetGrantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Rename a team or change its description
+     */
+    update: async (id: string, body: types.UpdateTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["UpdateTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
     },
 
   };
