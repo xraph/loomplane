@@ -516,6 +516,13 @@ func TestAddMemberQueuesAndSyncs(t *testing.T) {
 	if e := r.audit.last(); e.Action != "team.member.remove" || e.Attributes["user_id"] != grace {
 		t.Fatalf("audit %+v", e)
 	}
+	// She's out, so removing her again says so, and changes nothing.
+	if _, err = r.svc.RemoveMember(ctx, as(bo), team.ID, grace); !errors.Is(err, ErrMemberNotFound) {
+		t.Fatalf("removing her twice = %v, want ErrMemberNotFound", err)
+	}
+	if s, q := r.authz.synced(), r.queue(); len(s)+len(q) != 0 {
+		t.Fatalf("the second removal synced %v and queued %v", s, q)
+	}
 	if _, err = r.svc.RemoveMember(ctx, as(vi), team.ID, ada); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("Vi's RemoveMember = %v, want ErrForbidden", err)
 	}

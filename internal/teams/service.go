@@ -26,7 +26,8 @@ const (
 var teamRoles = map[string]bool{security.RoleViewer: true, security.RoleDeveloper: true, security.RoleAdmin: true}
 
 // Service manages teams. Every method that takes a Principal checks it
-// first: member:read to read, member:manage to change.
+// first: member:read to read, member:manage to change. Only people change
+// teams: Loomplane automation and the agent are refused every write.
 type Service struct {
 	db      *pgdriver.PgDB
 	authz   Authorizer
@@ -81,6 +82,9 @@ func (s *Service) load(ctx context.Context, orgID, id string) (*Team, error) {
 
 // Create makes a team in the caller's workspace.
 func (s *Service) Create(ctx context.Context, p security.Principal, in CreateTeamInput) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
@@ -107,6 +111,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateTea
 // Update changes a team's name or description. A new name re-derives the
 // slug. Rights don't change, so nobody is synced.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateTeamInput) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
@@ -146,6 +153,9 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 // project's responsible team. Its members are queued before it goes, and
 // synced once it has.
 func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
+	if err := refuseAutomation(p); err != nil {
+		return err
+	}
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return err
 	}
@@ -168,6 +178,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 // "loomplane:<org>", the agent's "agent:<org>"), is refused before any
 // lookup.
 func (s *Service) AddMember(ctx context.Context, p security.Principal, teamID, userID string) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if userID == "" || strings.Contains(userID, ":") {
 		return nil, fmt.Errorf("%w: only a person can join a team", ErrInvalid)
 	}
@@ -199,25 +212,28 @@ func (s *Service) AddMember(ctx context.Context, p security.Principal, teamID, u
 }
 
 // RemoveMember takes a person out of the team. Removing someone who isn't
-// in it changes nothing.
+// in it is ErrMemberNotFound, and changes nothing.
 func (s *Service) RemoveMember(ctx context.Context, p security.Principal, teamID, userID string) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
-	removed := false
 	err := s.change(ctx, p.OrgID, teamID, func(tx driver.Tx) ([]queued, error) {
-		var err error
-		if removed, err = removeMember(ctx, tx, teamID, userID); err != nil || !removed {
+		removed, err := removeMember(ctx, tx, teamID, userID)
+		if err != nil {
 			return nil, err
+		}
+		if !removed {
+			return nil, ErrMemberNotFound
 		}
 		return queuePerson(ctx, tx, p.OrgID, userID)
 	})
 	if err != nil {
 		return nil, err
 	}
-	if removed {
-		s.record(ctx, p, "team.member.remove", teamID, map[string]any{"user_id": userID})
-	}
+	s.record(ctx, p, "team.member.remove", teamID, map[string]any{"user_id": userID})
 	return s.load(ctx, p.OrgID, teamID)
 }
 
@@ -225,6 +241,9 @@ func (s *Service) RemoveMember(ctx context.Context, p security.Principal, teamID
 // or on the whole workspace. The caller can't grant a role above their own
 // member role (security.MayGrant).
 func (s *Service) SetGrant(ctx context.Context, p security.Principal, teamID string, in SetGrantInput) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if !teamRoles[in.Role] {
 		return nil, fmt.Errorf("%w: a team's role is viewer, developer or admin", ErrInvalid)
 	}
@@ -263,6 +282,9 @@ func (s *Service) SetGrant(ctx context.Context, p security.Principal, teamID str
 
 // RemoveGrant takes one of the team's grants away from all its members.
 func (s *Service) RemoveGrant(ctx context.Context, p security.Principal, teamID, grantID string) (*Team, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
@@ -425,6 +447,16 @@ func (s *Service) record(ctx context.Context, p security.Principal, action, team
 		return
 	}
 	s.audit.Record(ctx, AuditEvent{Action: action, TeamID: teamID, Principal: p, Attributes: attrs})
+}
+
+// refuseAutomation refuses a write by anyone but a person: Loomplane
+// automation, or any subject holding ":" (the agent's "agent:<org>"). It
+// runs before the permission check, so neither one is ever looked up.
+func refuseAutomation(p security.Principal) error {
+	if p.IsServiceAccount() || p.UserID == "" || strings.Contains(p.UserID, ":") {
+		return fmt.Errorf("%w: only a person can change a team", security.ErrForbidden)
+	}
+	return nil
 }
 
 // cleanName trims a team name, checks its length and derives its slug.

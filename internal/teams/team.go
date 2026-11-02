@@ -101,6 +101,8 @@ var (
 	ErrInvalid = errors.New("invalid team")
 	// ErrNotMember means the person isn't a member of the workspace.
 	ErrNotMember = errors.New("that person isn't a member of this workspace")
+	// ErrMemberNotFound means the person isn't in the team.
+	ErrMemberNotFound = errors.New("that person isn't in this team")
 )
 
 // Authorizer is the part of security.Authorizer the service uses.

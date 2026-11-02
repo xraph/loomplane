@@ -66,6 +66,9 @@ func (e *Extension) routes(r forge.Router) error {
 	if err := e.memberRoutes(v1); err != nil {
 		return err
 	}
+	if err := e.teamRoutes(v1); err != nil {
+		return err
+	}
 	return e.keyRoutes(r)
 }
 

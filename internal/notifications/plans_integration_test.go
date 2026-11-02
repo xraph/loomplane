@@ -578,3 +578,48 @@ func TestPlanWaitingStaysInItsOrg(t *testing.T) {
 		t.Fatalf("plan.waiting rows for %v", got)
 	}
 }
+
+// Only an admin grant makes a team's members approvers. Gus's team has a
+// developer grant on project-a and another on the whole workspace, so he
+// gets no plan.waiting row.
+func TestPlanWaitingSkipsADeveloperGrant(t *testing.T) {
+	svc, _ := teamPlanRig(t)
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('gus','app','gus@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_gus','org-a','gus','viewer')`,
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-d','org-a','D','d','ada')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-d','org-a','gus','amem_gus','ada')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-d1','team-d','org-a','developer','project-a','ada'),('grant-d2','team-d','org-a','developer',NULL,'ada')`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee", "fay"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
+	}
+}
+
+// An admin grant on the whole workspace (project_id NULL) reaches every
+// project's plans: Hal gets a row for a plan on project-a.
+func TestPlanWaitingReachesAWorkspaceAdminGrant(t *testing.T) {
+	svc, _ := teamPlanRig(t)
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('hal','app','hal@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_hal','org-a','hal','viewer')`,
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-w','org-a','W','w','ada')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-w','org-a','hal','amem_hal','ada')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-w','team-w','org-a','admin',NULL,'ada')`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee", "fay", "hal"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
+	}
+}
