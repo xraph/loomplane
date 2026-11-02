@@ -252,6 +252,189 @@
         }
       }
     },
+    "/api/v1/ai/settings/agent": {
+      "get": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "The agent's settings, what it runs with and its month's budget, without any key",
+        "operationId": "aiSettings.getAgent",
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Turn the agent on or off, or change its provider key or model",
+        "description": "Turning the agent on needs its monthly budget, a provider key (or the server's key) and a model this server prices: nexus's catalog or ai.prices. A key's own model prices don't count for the agent.",
+        "operationId": "aiSettings.updateAgent",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/agent/budget": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Set the agent's monthly budget, its share of the workspace's; 0 releases it while the agent is off",
+        "operationId": "aiSettings.setAgentBudget",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentBudgetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/budget": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Set the workspace's monthly AI budget, which every allocation shares",
+        "operationId": "aiSettings.setBudget",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceBudgetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/View"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/provider-keys/{name}": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Add a provider key, or change one; its secrets are never shown again",
+        "description": "Anthropic, OpenAI and OpenAI-compatible keys only. Secret fields are write-only: no answer carries them, and only the key's hint (its last four characters) is shown. A secret field left out keeps its value. The key the agent uses must stay granted to every project.",
+        "operationId": "aiSettings.putProviderKey",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Path parameter: name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderKeyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The key, without its secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderKey"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Delete a provider key, unless the agent or the workspace embeddings use it",
+        "operationId": "aiSettings.deleteProviderKey",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Path parameter: name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/v1/ai/settings/huggingface-token": {
       "put": {
         "tags": [
@@ -29311,6 +29494,283 @@
             "items": {
               "$ref": "#/components/schemas/EdgeRule"
             }
+          }
+        }
+      },
+      "AgentBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentUpdateInputBody": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgentView": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "enabled",
+          "provider_key",
+          "model",
+          "knowledge",
+          "nexus_tenant_id",
+          "revision",
+          "updated_at",
+          "server",
+          "effective",
+          "budget",
+          "knowledge_status",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/EffectiveView"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "key": {
+            "$ref": "#/components/schemas/KeyView"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "knowledge_status": {
+            "$ref": "#/components/schemas/KnowledgeStatus"
+          },
+          "model": {
+            "type": "string"
+          },
+          "nexus_tenant_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerDefaults"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "BudgetState": {
+        "type": "object",
+        "required": [
+          "limit_usd",
+          "spent_usd",
+          "exhausted"
+        ],
+        "properties": {
+          "exhausted": {
+            "type": "boolean"
+          },
+          "limit_usd": {
+            "type": "string"
+          },
+          "spent_usd": {
+            "type": "string"
+          }
+        }
+      },
+      "EffectiveView": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "summary_model"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "summary_model": {
+            "type": "string"
+          }
+        }
+      },
+      "KeyView": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "hint"
+        ],
+        "properties": {
+          "hint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "KnowledgeStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderKeyInputBody": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "task",
+                "input_per_million",
+                "output_per_million"
+              ],
+              "properties": {
+                "context_window": {
+                  "type": "integer"
+                },
+                "dimensions": {
+                  "type": "integer"
+                },
+                "embedding_per_million": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "input_per_million": {
+                  "type": "string"
+                },
+                "max_output": {
+                  "type": "integer"
+                },
+                "output_per_million": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ServerDefaults": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "key_set"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "key_set": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "revision"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       }
