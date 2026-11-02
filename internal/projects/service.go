@@ -385,12 +385,19 @@ func (s *Service) SetTeam(ctx context.Context, p security.Principal, id string, 
 	if in.TeamID != nil {
 		teamID = strings.TrimSpace(*in.TeamID)
 	}
+	before, err := s.store.GetProject(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
 	proj, err := s.store.SetResponsibleTeam(ctx, p.OrgID, id, teamID)
 	if err != nil {
 		return nil, err
 	}
+	if teamID == "" && before.ResponsibleTeamID == "" {
+		return proj, nil // nothing changed, so nothing to audit
+	}
 	s.record(ctx, AuditEvent{Action: "project.team.set", Severity: "info", ProjectID: proj.ID, Principal: p,
-		Attributes: map[string]any{"team_id": teamID}})
+		Attributes: map[string]any{"team_id": teamID, "previous_team_id": before.ResponsibleTeamID}})
 	return proj, nil
 }
 

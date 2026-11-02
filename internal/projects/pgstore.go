@@ -15,6 +15,9 @@ import (
 // pgUniqueViolation is Postgres's SQLSTATE for a unique constraint failure.
 const pgUniqueViolation = "23505"
 
+// pgForeignKeyViolation is Postgres's SQLSTATE for a foreign key failure.
+const pgForeignKeyViolation = "23503"
+
 // PgStore is the Postgres Store, over the grove pgdriver pool the grove
 // extension owns. The schema is migration group "loomplane"
 // (database/migrations).
@@ -196,8 +199,8 @@ func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID stri
 		WHERE org_id = $1 AND id = $2
 			AND ($3 = '' OR EXISTS (SELECT 1 FROM loomplane_teams t WHERE t.id = $3 AND t.org_id = $1))`,
 		orgID, id, teamID)
-	if err != nil {
-		return nil, fmt.Errorf("set responsible team: %w", err)
+	if err = teamWriteError(err); err != nil {
+		return nil, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -341,6 +344,20 @@ func requireOneRow(res interface{ RowsAffected() (int64, error) }) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// teamWriteError maps the error of the responsible-team update. A foreign
+// key violation means the team was deleted between the check and the write,
+// so the caller named a team that isn't there.
+func teamWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+		return ErrTeamNotFound
+	}
+	return fmt.Errorf("set responsible team: %w", err)
 }
 
 func isUniqueViolation(err error) bool {

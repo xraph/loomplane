@@ -907,8 +907,8 @@ func TestSetTeamClearsAndAudits(t *testing.T) {
 	if want := []string{org + "/proj_1/", org + "/proj_1/"}; !slices.Equal(store.teamSets, want) {
 		t.Fatalf("store calls %v, want %v", store.teamSets, want)
 	}
-	if len(audit.events) != 2 {
-		t.Fatalf("audit %v", audit.actions)
+	if len(audit.events) != 1 {
+		t.Fatalf("audit %v: clearing a project with no team must not audit", audit.actions)
 	}
 	e := audit.events[0]
 	if e.Action != "project.team.set" || e.ProjectID != "proj_1" || e.Principal.UserID != "ausr_dev" {
@@ -917,13 +917,16 @@ func TestSetTeamClearsAndAudits(t *testing.T) {
 	if v, ok := e.Attributes["team_id"]; !ok || v != "" {
 		t.Fatalf("team_id attribute %v (present %v)", v, ok)
 	}
+	if e.Attributes["previous_team_id"] != "team_1" {
+		t.Fatalf("previous_team_id attribute %v", e.Attributes["previous_team_id"])
+	}
 
 	// Another workspace's team is refused, and nothing is audited.
 	other := "team_other"
 	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &other}); !errors.Is(err, ErrTeamNotFound) {
 		t.Fatalf("another workspace's team: %v", err)
 	}
-	if len(audit.events) != 2 {
+	if len(audit.events) != 1 {
 		t.Fatalf("a refused change was audited: %v", audit.actions)
 	}
 	mine := "team_1"
@@ -932,5 +935,37 @@ func TestSetTeamClearsAndAudits(t *testing.T) {
 	}
 	if last := audit.events[len(audit.events)-1]; last.Attributes["team_id"] != "team_1" {
 		t.Fatalf("team_id attribute %v", last.Attributes["team_id"])
+	}
+}
+
+func TestSetTeamAuditsThePreviousTeam(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org, ResponsibleTeamID: "team_1"}
+	store.teams["team_1"] = org
+	store.teams["team_2"] = org
+	audit := &auditRecorder{}
+	svc := NewService(store, &checkRecorder{}, &initRecorder{}, audit)
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+
+	next := "team_2"
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &next}); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("audit %v", audit.actions)
+	}
+	a := audit.events[0].Attributes
+	if a["team_id"] != "team_2" || a["previous_team_id"] != "team_1" {
+		t.Fatalf("attributes %v", a)
+	}
+
+	// A project with no team, cleared again, changes nothing and audits nothing.
+	store.projects["proj_1"].ResponsibleTeamID = ""
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("clearing an unset team was audited: %v", audit.actions)
 	}
 }
