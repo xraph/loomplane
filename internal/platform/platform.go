@@ -31,6 +31,7 @@ import (
 
 	"github.com/xraph/loomplane/database/migrations"
 	aiext "github.com/xraph/loomplane/extensions/ai"
+	"github.com/xraph/loomplane/extensions/aiagent"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	dbgatewayext "github.com/xraph/loomplane/extensions/dbgateway"
@@ -105,7 +106,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 	jobs := newJobs(deployments.Options(owner(), cfg.Orchestration.Concurrency),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
-		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
+		dispatchext.WithQueues(queues(cfg)),
 		// Followers check for a leader every half lease. A short lease
 		// means a leader that stops, a restarted replica or a stopped
 		// worker, is replaced in seconds, and the drift check keeps its
@@ -168,6 +169,11 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// route, hook or setting is registered at all.
 	if cfg.AI.Enabled {
 		exts = append(exts, aiext.New(cfg, jobs.Engine))
+		// The agent and the libraries it runs on come after the AI
+		// section, which provides the agent's settings.
+		agent := aiagent.New(cfg, jobs.Engine)
+		exts = append(exts, agent.LibraryExtensions()...)
+		exts = append(exts, agent)
 	} else {
 		// What AI scheduled while it was on stays in the database and keeps
 		// firing; this gives those jobs handlers that do nothing, and adds
@@ -176,6 +182,17 @@ func Extensions(cfg config.Config) []forge.Extension {
 	}
 	exts = append(exts, console(exts))
 	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))
+}
+
+// queues are the Dispatch queues this process works: the default and
+// orchestration queues, and the agent's when AI is on. With AI off nothing
+// enqueues on the agent's queue, and nothing works it.
+func queues(cfg config.Config) []string {
+	q := []string{"default", orchestration.Queue}
+	if cfg.AI.Enabled {
+		q = append(q, aiagent.Queue)
+	}
+	return q
 }
 
 // console is the Forge dashboard's API, mounted for platform admins as the

@@ -37,6 +37,27 @@
         }
       }
     },
+    "/api/v1/agent/status": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Whether the AI agent is on, on this server and in the workspace",
+        "operationId": "agentStatus.get",
+        "responses": {
+          "200": {
+            "description": "The agent's status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentsettingsStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ai/models/deployments": {
       "get": {
         "tags": [
@@ -6406,6 +6427,50 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AnalysisList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/autonomy": {
+      "put": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Let the agent promote a release to production without asking first, after a minimum staging soak",
+        "description": "Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.",
+        "operationId": "projectAutonomy.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
                 }
               }
             }
@@ -12932,6 +12997,26 @@
           }
         }
       },
+      "AgentsettingsStatus": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "server": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "enabled",
+          "knowledge"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentsettings.Status"
+      },
       "Allocation": {
         "type": "object",
         "required": [
@@ -13376,6 +13461,17 @@
             "type": "boolean"
           },
           "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AutonomyInputBody": {
+        "type": "object",
+        "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
+          "min_staging_soak_seconds": {
             "type": "integer"
           }
         }
@@ -23513,12 +23609,17 @@
           "color",
           "repositories",
           "exclusions",
+          "autonomous_promotion",
+          "min_staging_soak_seconds",
           "status",
           "created_by",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
           "color": {
             "type": "string"
           },
@@ -23544,6 +23645,9 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "min_staging_soak_seconds": {
+            "type": "integer"
           },
           "name": {
             "type": "string"
