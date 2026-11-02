@@ -10,12 +10,34 @@ import (
 
 	"github.com/xraph/forge/cli"
 
+	"github.com/xraph/loomplane/internal/node"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
 var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 
+// commands are loomctl's commands: its own, then the node group it shares
+// with loomplane.
 func (a *App) commands() []cli.Command {
+	return append(a.ownCommands(), node.Commands(node.Options{
+		Version: a.opts.Version, Out: a.opts.Out, Getenv: a.opts.Getenv, Login: a.nodeLogin,
+	})...)
+}
+
+// nodeLogin is the login node join, list and revoke act with: the saved one,
+// or the environment's.
+func (a *App) nodeLogin() (url, key string, err error) {
+	s, err := a.settings()
+	if err != nil {
+		return "", "", err
+	}
+	if s.URL == "" || s.Key == "" {
+		return "", "", fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
+	}
+	return s.URL, s.Key, nil
+}
+
+func (a *App) ownCommands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
 		a.federationCommand(),

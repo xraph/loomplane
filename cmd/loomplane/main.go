@@ -8,6 +8,7 @@
 //	loomplane migrations   show applied and pending migrations
 //	loomplane migrate      apply pending migrations
 //	loomplane setup-token  print the link that finishes first-run setup
+//	loomplane node         join this machine to Loomplane as a node (join, run, status, allow, leave, list, revoke)
 //	loomplane --help       list every command
 //
 // Keep this package to this one file: `forge dev` builds main.go on its
@@ -53,6 +54,12 @@ func main() {
 // newApp runs after flags parse and before the chosen command. Building the
 // app does no I/O; Forge registers and starts extensions when it starts.
 func newApp(cli.CommandContext) (forge.App, error) {
+	// A machine that joined as a node has no database and no configuration,
+	// so the node commands run without the app. They exit with node.ExitCode
+	// through Forge's own exit code, and never read ctx.App().
+	if len(os.Args) > 1 && os.Args[1] == "node" {
+		return nil, nil //nolint:nilnil // no app is the point
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return nil, err

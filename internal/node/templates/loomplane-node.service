@@ -1,0 +1,19 @@
+[Unit]
+Description=Loomplane node
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{.User}}
+ExecStart={{.Exec}} node run --state-dir {{.StateDir}}
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{.StateDir}}
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

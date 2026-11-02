@@ -1,0 +1,19 @@
+[Unit]
+Description=Loomplane node
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loomplane-node
+ExecStart=/var/lib/loomplane-node/bin/loomctl node run --state-dir /var/lib/loomplane-node
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/loomplane-node
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

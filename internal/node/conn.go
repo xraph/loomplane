@@ -87,6 +87,10 @@ type Runtime struct {
 	mu  sync.Mutex
 	cur *session
 
+	// leaving is set once Leave has asked Loomplane to revoke this node, and
+	// cleared by the next connection that Loomplane accepts.
+	leaving atomic.Bool
+
 	// Tunables, set by tests.
 	minDelay, maxDelay, stableAfter time.Duration
 	heartbeatEvery, detectEvery     time.Duration
@@ -188,6 +192,7 @@ func (r *Runtime) inventory(ctx context.Context) nodeproto.Inventory {
 
 // Run connects, serves and reconnects. See the package func Run.
 func (r *Runtime) Run(ctx context.Context) error {
+	defer r.serveControl(ctx)()
 	minDelay, maxDelay := orDur(r.minDelay, defaultMinDelay), orDur(r.maxDelay, defaultMaxDelay)
 	delay := minDelay
 	for {
@@ -196,8 +201,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return nil
 		}
 		var up *UpgradeError
+		// A node that asked to leave and is now refused was revoked by that
+		// request, even if the Revoked notice was lost with the connection.
+		revoked := errors.Is(err, ErrRevoked) || (r.leaving.Load() && errors.Is(err, errKeyRefused))
 		switch {
-		case errors.Is(err, ErrRevoked):
+		case revoked:
 			if derr := r.st.DeleteConfig(); derr != nil {
 				r.log().Error("loomplane-node: removing node.json after a revoke", "error", derr)
 			}
@@ -337,7 +345,8 @@ func (r *Runtime) once(ctx context.Context) (time.Duration, error) {
 	stop := context.AfterFunc(ctx, func() { _ = mux.Close() })
 	defer stop()
 
-	s := &session{r: r, mux: mux}
+	s := &session{r: r, mux: mux, done: make(chan struct{})}
+	defer close(s.done)
 	err = s.run(ctx)
 	cancel()
 	_ = mux.Close()
@@ -400,7 +409,8 @@ type session struct {
 	wg      sync.WaitGroup // the session's own helpers
 	serving sync.WaitGroup // handlers serving streams
 
-	lastInv []byte // the inventory last sent, JSON
+	done    chan struct{} // closed once the session is over
+	lastInv []byte        // the inventory last sent, JSON
 	invMu   sync.Mutex
 }
 
@@ -492,6 +502,7 @@ func (s *session) greet(ctx context.Context, hello nodeproto.Hello) error {
 	// Attach first, so an Allow from here on is sent live, and then read
 	// what is pending: nothing falls between the two. What the owner allowed
 	// goes before the first inventory, which the hub answers with a Narrow.
+	r.leaving.Store(false)
 	r.attach(s)
 	if pending := r.live.Load().PendingAllowed; len(pending) > 0 {
 		if err := s.send(nodeproto.Allowed{Endpoints: pending}); err != nil {
@@ -639,30 +650,16 @@ func (r *Runtime) apply(f func(*Config)) (Config, error) {
 // owner can allow are accepted: not control, public or unknown ones. A failed
 // save changes nothing.
 func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
-	var add []nodeproto.Endpoint
-	for _, e := range eps {
-		if !slices.Contains(nodeproto.AllowableEndpoints(), e) {
-			return fmt.Errorf("%q cannot be allowed here; choose from %v", e, nodeproto.AllowableEndpoints())
-		}
-		if !slices.Contains(add, e) {
-			add = append(add, e)
-		}
+	add, err := AllowableOnly(eps)
+	if err != nil {
+		return err
 	}
 	if len(add) == 0 {
 		return nil
 	}
 	r.cfgMu.Lock()
 	prev := r.live.Load()
-	cfg := r.live.Update(func(c *Config) {
-		for _, e := range add {
-			if !slices.Contains(c.Endpoints, e) {
-				c.Endpoints = append(c.Endpoints, e)
-			}
-			if !slices.Contains(c.PendingAllowed, e) {
-				c.PendingAllowed = append(c.PendingAllowed, e)
-			}
-		}
-	})
+	cfg := r.live.Update(func(c *Config) { c.Widen(add) })
 	if err := r.st.SaveConfig(cfg); err != nil {
 		r.live.Update(func(c *Config) { c.Endpoints, c.PendingAllowed = prev.Endpoints, prev.PendingAllowed })
 		r.cfgMu.Unlock()

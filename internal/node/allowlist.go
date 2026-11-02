@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,35 @@ func (c *Config) Narrow(keep []nodeproto.Endpoint) []nodeproto.Endpoint {
 	}
 	c.PendingAllowed = pending
 	return next
+}
+
+// Widen adds eps to the allowlist and to PendingAllowed, which keeps a Narrow
+// from taking them back until Loomplane has seen them. It is what an owner's
+// allow does, on the running node and, with no service running, on node.json.
+func (c *Config) Widen(eps []nodeproto.Endpoint) {
+	for _, e := range eps {
+		if !slices.Contains(c.Endpoints, e) {
+			c.Endpoints = append(c.Endpoints, e)
+		}
+		if !slices.Contains(c.PendingAllowed, e) {
+			c.PendingAllowed = append(c.PendingAllowed, e)
+		}
+	}
+}
+
+// AllowableOnly returns eps without duplicates, or an error naming the first
+// endpoint an owner cannot allow: control, public and unknown ones.
+func AllowableOnly(eps []nodeproto.Endpoint) ([]nodeproto.Endpoint, error) {
+	var out []nodeproto.Endpoint
+	for _, e := range eps {
+		if !slices.Contains(nodeproto.AllowableEndpoints(), e) {
+			return nil, fmt.Errorf("%q cannot be allowed here; choose from %v", e, nodeproto.AllowableEndpoints())
+		}
+		if !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // Acknowledge stops treating eps as pending: Loomplane has decided on them.
