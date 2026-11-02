@@ -1,6 +1,8 @@
-// Package nodestest is an in-memory node store and a small HTTP front for a
-// real nodes.Hub, so the machine side can be tested against the real hub
-// without a database. Only tests import it.
+// Package nodestest is an in-memory node store, a join token spender and
+// helpers to build a real nodes.Hub over them, so the machine side can be
+// tested against the real hub and the real handlers (extensions/nodes
+// NodeHandler) without a database. Only tests may import it; nothing outside
+// a _test.go file does.
 package nodestest
 
 import (

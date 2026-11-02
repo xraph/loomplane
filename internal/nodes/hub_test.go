@@ -825,7 +825,11 @@ func TestInventoryDoesNotWiden(t *testing.T) {
 	if got := r.node("node_1"); !slices.Equal(got.Endpoints, []nodeproto.Endpoint{nodeproto.EndpointProbe}) || len(got.Inventory.Endpoints) != 2 {
 		t.Fatalf("node %+v", got)
 	}
-	// Later inventories don't send it again.
+	// The ingress mode follows it, so a change made while the node was away lands.
+	if m := n.next(); !reflect.DeepEqual(m, nodeproto.SetIngress{Mode: nodeproto.IngressNone}) {
+		t.Fatalf("message %#v", m)
+	}
+	// Later inventories don't send them again.
 	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux"}})
 	n.quiet(150 * time.Millisecond)
 	// An owner narrowing to the same set still sends it (ruling R13).
@@ -986,6 +990,40 @@ func TestOnInventoryIgnoresNilVersusEmpty(t *testing.T) {
 	case <-fired:
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not fire on a real change")
+	}
+}
+
+func TestAllowedIsAcknowledgedWithNarrow(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	n.next() // hello
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	want := nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}}
+	if m := n.next(); !reflect.DeepEqual(m, want) {
+		t.Fatalf("message %#v", m)
+	}
+	// Allowing what is already allowed is acknowledged too.
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	if m := n.next(); !reflect.DeepEqual(m, want) {
+		t.Fatalf("message %#v", m)
+	}
+}
+
+func TestFirstInventorySendsIngressMode(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	mode := nodeproto.IngressRelay
+	if _, err := r.svc.Update(context.Background(), admin, "node_1", Update{IngressMode: &mode}); err != nil {
+		t.Fatal(err)
+	}
+	n := r.connect("node_1", priv, "")
+	n.next() // hello
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux"}})
+	n.next() // narrow
+	if m := n.next(); !reflect.DeepEqual(m, nodeproto.SetIngress{Mode: nodeproto.IngressRelay}) {
+		t.Fatalf("message %#v", m)
 	}
 }
 

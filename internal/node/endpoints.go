@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
@@ -37,6 +38,9 @@ func (r *Registry) Register(e nodeproto.Endpoint, h Handler) {
 
 const verdictRefused = 1
 
+// headerTimeout is how long a stream may take to send its header.
+var headerTimeout = 10 * time.Second
+
 // Serve reads the stream header, writes the verdict and runs the handler.
 // The wire contract matches the hub: one verdict byte, 0 for accepted, and for
 // anything else a reason line ending in a newline.
@@ -49,7 +53,15 @@ func (r *Registry) logger() *slog.Logger {
 
 func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 	defer func() { _ = stream.Close() }()
+	// A stream that never sends its header must not hold a goroutine forever.
+	dl, canDeadline := stream.(interface{ SetReadDeadline(time.Time) error })
+	if canDeadline {
+		_ = dl.SetReadDeadline(time.Now().Add(headerTimeout)) //nolint:errcheck // a stream that cannot take a deadline just waits
+	}
 	hdr, err := nodeproto.ReadHeader(stream)
+	if canDeadline {
+		_ = dl.SetReadDeadline(time.Time{}) //nolint:errcheck // as above
+	}
 	if err != nil {
 		r.logger().Warn("loomplane-node: reading a stream header", "error", err)
 		return

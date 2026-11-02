@@ -368,6 +368,12 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 			eps = []nodeproto.Endpoint{}
 		}
 		s.deliver(nodeproto.Narrow{Endpoints: eps})
+		// The ingress mode may have changed while the node was away.
+		mode := n.IngressMode
+		if mode == "" {
+			mode = nodeproto.IngressNone
+		}
+		s.deliver(nodeproto.SetIngress{Mode: mode})
 	}
 	if !inventoryEqual(old.Inventory, inv) {
 		h.fireInventory(n, old.Inventory, inv)
@@ -401,6 +407,13 @@ func (h *Hub) allowed(s *session, eps []nodeproto.Endpoint) {
 		h.log.Warn("nodes: adding endpoints a node allowed", "node", s.nodeID, "error", err)
 		return
 	}
+	// The node keeps what its owner allowed until it hears the control plane
+	// has it, and this Narrow, which carries the stored set, is that word.
+	ack := n.Endpoints
+	if ack == nil {
+		ack = []nodeproto.Endpoint{}
+	}
+	s.deliver(nodeproto.Narrow{Endpoints: ack})
 	if slices.Equal(before.Endpoints, n.Endpoints) {
 		return // already allowed: nothing to record
 	}

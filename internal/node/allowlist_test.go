@@ -115,3 +115,30 @@ func TestLiveConcurrentNarrowAndServe(t *testing.T) {
 		t.Fatal("narrowed endpoint still allowed")
 	}
 }
+
+func TestNarrowKeepsPendingUntilAcknowledged(t *testing.T) {
+	c := Config{Endpoints: []nodeproto.Endpoint{eProbe, eDocker}, PendingAllowed: []nodeproto.Endpoint{eDocker}}
+	// A narrow made before Loomplane heard of docker cannot remove it.
+	got := c.Narrow([]nodeproto.Endpoint{eProbe})
+	if !reflect.DeepEqual(got, []nodeproto.Endpoint{eProbe, eDocker}) || !reflect.DeepEqual(c.PendingAllowed, []nodeproto.Endpoint{eDocker}) {
+		t.Fatalf("pending was narrowed away: %v / %v", got, c.PendingAllowed)
+	}
+	// One that includes it is the acknowledgement.
+	c.Narrow([]nodeproto.Endpoint{eProbe, eDocker})
+	if len(c.PendingAllowed) != 0 || !reflect.DeepEqual(c.Endpoints, []nodeproto.Endpoint{eProbe, eDocker}) {
+		t.Fatalf("not acknowledged: %v / %v", c.Endpoints, c.PendingAllowed)
+	}
+	// Now an admin narrow removes it like any other.
+	c.Narrow([]nodeproto.Endpoint{eProbe})
+	if !reflect.DeepEqual(c.Endpoints, []nodeproto.Endpoint{eProbe}) {
+		t.Fatalf("an acknowledged endpoint survived a narrow: %v", c.Endpoints)
+	}
+}
+
+func TestNarrowStillRemovesNonPending(t *testing.T) {
+	c := Config{Endpoints: []nodeproto.Endpoint{eProbe, eDocker, eKube}, PendingAllowed: []nodeproto.Endpoint{eKube}}
+	c.Narrow([]nodeproto.Endpoint{eProbe})
+	if !reflect.DeepEqual(c.Endpoints, []nodeproto.Endpoint{eProbe, eKube}) {
+		t.Fatalf("got %v", c.Endpoints)
+	}
+}

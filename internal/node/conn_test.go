@@ -57,7 +57,7 @@ func eventually(t *testing.T, what string, f func() bool) {
 }
 
 type rig struct {
-	env  *nodestest.Env
+	env  *testEnv
 	srv  *httptest.Server
 	st   State
 	reg  *Registry
@@ -70,7 +70,7 @@ func newRig(t *testing.T) *rig {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
 	r := &rig{srv: srv, st: State{Dir: filepath.Join(t.TempDir(), "state")}, logs: &syncBuf{}}
-	r.env = nodestest.New(t, "http://"+srv.Listener.Addr().String())
+	r.env = newTestEnv(t, "http://"+srv.Listener.Addr().String())
 	srv.Config.Handler = r.env.Handler()
 	srv.Start()
 	t.Cleanup(srv.Close)
@@ -113,6 +113,16 @@ func (r *rig) runtime(t *testing.T) *Runtime {
 	rt.minDelay, rt.maxDelay = 10*time.Millisecond, 50*time.Millisecond
 	rt.detectBase = quietDetect()
 	return rt
+}
+
+// startCancelable is start with a way to stop Run early.
+func startCancelable(t *testing.T, rt *Runtime) (context.CancelFunc, chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { _ = rt.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return cancel, done
 }
 
 // start runs rt until the test ends, and returns what Run returned.
@@ -260,11 +270,10 @@ func TestRunRevokedExits3(t *testing.T) {
 
 func TestRunRevokedAtConnectExits3(t *testing.T) {
 	r := newRig(t)
-	cfg := r.join(t, nodeproto.EndpointProbe)
+	r.join(t, nodeproto.EndpointProbe)
 	// Revoked after the assertion checks out and before the session is claimed.
 	r.env.Store.BeforeClaim = func(id string) { r.env.Store.Revoke(id) }
 	done := start(t, r.runtime(t))
-	_ = cfg
 	assertRevoked(t, r, done)
 }
 
@@ -357,7 +366,7 @@ func TestRunUsesProxy(t *testing.T) {
 	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	// A loopback address never goes through a proxy, so name the server.
 	url := "https://example.com:" + port
-	env := nodestest.New(t, url)
+	env := newTestEnv(t, url)
 	srv.Config.Handler = env.Handler()
 	srv.StartTLS()
 	defer srv.Close()
@@ -390,8 +399,7 @@ func TestRunUsesProxy(t *testing.T) {
 	t.Setenv("no_proxy", "")
 
 	st := State{Dir: filepath.Join(t.TempDir(), "state")}
-	pub := seedNode(t, env, st, url)
-	_ = pub
+	seedNode(t, env, st, url)
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
 	reg := &Registry{Log: discardLog()}
@@ -409,7 +417,7 @@ func TestRunUsesProxy(t *testing.T) {
 
 // seedNode puts a node in the store with the key the state directory holds,
 // and writes the matching node.json, so a test can skip Join.
-func seedNode(t *testing.T, env *nodestest.Env, st State, url string) ed25519.PublicKey {
+func seedNode(t *testing.T, env *testEnv, st State, url string) {
 	t.Helper()
 	priv, err := st.Identity()
 	if err != nil {
@@ -428,7 +436,6 @@ func seedNode(t *testing.T, env *nodestest.Env, st State, url string) ed25519.Pu
 	if err = st.SaveConfig(Config{URL: url, NodeID: "node_1", OrgID: nodestest.Org, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, IngressMode: nodeproto.IngressNone}); err != nil {
 		t.Fatal(err)
 	}
-	return pub
 }
 
 func TestAllowWhileConnected(t *testing.T) {
@@ -463,22 +470,129 @@ func TestAllowWhileConnected(t *testing.T) {
 	}
 }
 
-func TestAllowQueuedUntilConnected(t *testing.T) {
+func nodeJSON(r *rig) Config {
+	c, _ := r.st.LoadConfig()
+	return c
+}
+
+func TestAllowBeforeFirstNarrowSurvives(t *testing.T) {
 	r := newRig(t)
 	cfg := r.join(t, nodeproto.EndpointProbe)
 	rt := r.runtime(t)
+	start(t, rt)
+	// No waiting for the hub's first Narrow: it carries the old set.
 	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
 		t.Fatal(err)
 	}
-	start(t, rt)
-	eventually(t, "the queued allow to arrive", func() bool {
+	eventually(t, "the hub to store docker", func() bool {
 		return fmt.Sprint(r.env.Store.Node(cfg.NodeID).Endpoints) == "[probe docker]"
 	})
-	eventually(t, "the node to be online", func() bool { return r.online(cfg.NodeID) })
-	// The hub's first Narrow carries the widened set, so docker survives.
-	time.Sleep(100 * time.Millisecond)
-	if c := rt.live.Load(); len(c.Endpoints) != 2 {
-		t.Fatalf("a narrow dropped the allowed endpoint: %+v", c)
+	eventually(t, "the acknowledgement to clear pending", func() bool {
+		c := nodeJSON(r)
+		return len(c.PendingAllowed) == 0 && fmt.Sprint(c.Endpoints) == "[probe docker]"
+	})
+	if c := rt.live.Load(); fmt.Sprint(c.Endpoints) != "[probe docker]" || len(c.PendingAllowed) != 0 {
+		t.Fatalf("live config: %+v", c)
+	}
+	if c, err := r.open(nodeproto.EndpointDocker, cfg.NodeID); err != nil {
+		t.Fatalf("docker after allow: %v", err)
+	} else {
+		_ = c.Close()
+	}
+}
+
+func TestAllowSurvivesRestart(t *testing.T) {
+	r := newRig(t)
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	// Allowed while no connection was up, by a process that then died.
+	if err := r.runtime(t).Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+		t.Fatal(err)
+	}
+	if c := nodeJSON(r); fmt.Sprint(c.PendingAllowed) != "[docker]" || fmt.Sprint(c.Endpoints) != "[probe docker]" {
+		t.Fatalf("saved: %+v", c)
+	}
+	rt := r.runtime(t) // a new process, reading node.json
+	rt.narrows.Store(0)
+	start(t, rt)
+	eventually(t, "the hub to learn of docker", func() bool {
+		return fmt.Sprint(r.env.Store.Node(cfg.NodeID).Endpoints) == "[probe docker]"
+	})
+	eventually(t, "pending to clear", func() bool { return len(nodeJSON(r).PendingAllowed) == 0 })
+	if c := rt.live.Load(); fmt.Sprint(c.Endpoints) != "[probe docker]" {
+		t.Fatalf("live config: %+v", c)
+	}
+}
+
+func TestAdminNarrowRemovesAcknowledgedEndpoint(t *testing.T) {
+	r := newRig(t)
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	rt := r.runtime(t)
+	start(t, rt)
+	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "pending to clear", func() bool {
+		c := nodeJSON(r)
+		return len(c.PendingAllowed) == 0 && len(c.Endpoints) == 2
+	})
+	if _, err := r.env.Svc.Update(t.Context(), nodestest.Principal, cfg.NodeID, nodes.Update{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "docker to go", func() bool { return fmt.Sprint(nodeJSON(r).Endpoints) == "[probe]" })
+}
+
+func TestSetIngressReconciledOnConnect(t *testing.T) {
+	r := newRig(t)
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	set := func(mode string) {
+		if _, err := r.env.Svc.Update(t.Context(), nodestest.Principal, cfg.NodeID, nodes.Update{IngressMode: &mode}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(nodeproto.IngressRelay)
+	rt := r.runtime(t)
+	cancel, done := startCancelable(t, rt)
+	eventually(t, "relay to be saved", func() bool { return nodeJSON(r).IngressMode == nodeproto.IngressRelay })
+	cancel()
+	<-done
+
+	// Changed while the node is away: nobody can tell it.
+	set(nodeproto.IngressNone)
+	rt2 := r.runtime(t)
+	if rt2.live.Load().IngressMode != nodeproto.IngressRelay {
+		t.Fatal("the stopped node should still say relay")
+	}
+	start(t, rt2)
+	eventually(t, "none to be saved", func() bool { return nodeJSON(r).IngressMode == nodeproto.IngressNone })
+	if got := rt2.live.Load().IngressMode; got != nodeproto.IngressNone {
+		t.Fatalf("live ingress mode %q", got)
+	}
+	if _, err := r.open(nodeproto.EndpointPublic, cfg.NodeID); !errors.Is(err, nodes.ErrEndpointRefused) {
+		t.Fatalf("public after reconcile: %v", err)
+	}
+}
+
+func TestFailedSaveKeepsChangeAndSendsNoAck(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere")
+	}
+	r := newRig(t)
+	r.join(t, nodeproto.EndpointProbe, nodeproto.EndpointDocker)
+	rt := r.runtime(t)
+	if err := os.Chmod(r.st.Dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(r.st.Dir, 0o700) }()
+	// A nil session records no acks, so a nil error from handle means the
+	// failed save was logged and swallowed rather than sent on.
+	if err := rt.handle(nil, nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.live.Load().Endpoints; fmt.Sprint(got) != "[probe]" {
+		t.Fatalf("the in-memory narrow was dropped: %v", got)
+	}
+	if !strings.Contains(r.logs.String(), "saving a narrowed allowlist") {
+		t.Fatalf("the failure was not logged:\n%s", r.logs.String())
 	}
 }
 

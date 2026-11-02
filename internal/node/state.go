@@ -58,9 +58,12 @@ type Config struct {
 	OrgID              string               `json:"org_id"`
 	IdentityGeneration int64                `json:"identity_generation"`
 	Endpoints          []nodeproto.Endpoint `json:"endpoints"`
-	IngressMode        string               `json:"ingress_mode"`
-	DockerSocket       string               `json:"docker_socket,omitempty"`
-	Edge               bool                 `json:"edge,omitempty"`
+	// PendingAllowed is what the owner allowed here that Loomplane has not
+	// yet acknowledged. A Narrow cannot remove it, and every connect sends it.
+	PendingAllowed []nodeproto.Endpoint `json:"pending_allowed,omitempty"`
+	IngressMode    string               `json:"ingress_mode"`
+	DockerSocket   string               `json:"docker_socket,omitempty"`
+	Edge           bool                 `json:"edge,omitempty"`
 }
 
 func (s State) uid() int {

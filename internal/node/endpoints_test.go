@@ -124,3 +124,21 @@ func TestRefusalReasonIsSanitized(t *testing.T) {
 	}
 	<-done
 }
+
+func TestServeDropsStreamWithNoHeader(t *testing.T) {
+	old := headerTimeout
+	headerTimeout = 50 * time.Millisecond
+	defer func() { headerTimeout = old }()
+	a, b := net.Pipe()
+	defer func() { _ = a.Close() }()
+	done := make(chan struct{})
+	go func() {
+		(&Registry{Log: discardLog()}).Serve(context.Background(), NewLive(Config{}), b)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve waited forever for a header")
+	}
+}

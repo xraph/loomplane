@@ -21,17 +21,27 @@ func (c Config) Allows(e nodeproto.Endpoint) bool {
 	return slices.Contains(c.Endpoints, e)
 }
 
-// Narrow keeps only the endpoints that are both allowed now and in keep, and
-// returns the result. It never widens, so a stale Narrow that arrives after a
-// narrower one changes nothing.
+// Narrow keeps the endpoints that are both allowed now and in keep, plus any
+// still in PendingAllowed, and returns the result. It never widens, so a
+// stale Narrow that arrives after a narrower one changes nothing. A pending
+// endpoint is one the owner just allowed and Loomplane has not acknowledged,
+// so a Narrow made before it knew cannot take it away. A pending endpoint that
+// is in keep is acknowledged and stops being pending.
 func (c *Config) Narrow(keep []nodeproto.Endpoint) []nodeproto.Endpoint {
 	next := make([]nodeproto.Endpoint, 0, len(c.Endpoints))
 	for _, e := range c.Endpoints {
-		if slices.Contains(keep, e) {
+		if slices.Contains(keep, e) || slices.Contains(c.PendingAllowed, e) {
 			next = append(next, e)
 		}
 	}
 	c.Endpoints = next
+	var pending []nodeproto.Endpoint
+	for _, e := range c.PendingAllowed {
+		if !slices.Contains(keep, e) && slices.Contains(next, e) {
+			pending = append(pending, e)
+		}
+	}
+	c.PendingAllowed = pending
 	return next
 }
 
@@ -47,6 +57,7 @@ type Live struct {
 func NewLive(c Config) *Live {
 	l := &Live{}
 	c.Endpoints = slices.Clone(c.Endpoints)
+	c.PendingAllowed = slices.Clone(c.PendingAllowed)
 	l.p.Store(&c)
 	return l
 }
@@ -55,6 +66,7 @@ func NewLive(c Config) *Live {
 func (l *Live) Load() Config {
 	c := *l.p.Load()
 	c.Endpoints = slices.Clone(c.Endpoints)
+	c.PendingAllowed = slices.Clone(c.PendingAllowed)
 	return c
 }
 
@@ -65,9 +77,11 @@ func (l *Live) Update(f func(*Config)) Config {
 	defer l.mu.Unlock()
 	next := *l.p.Load()
 	next.Endpoints = slices.Clone(next.Endpoints)
+	next.PendingAllowed = slices.Clone(next.PendingAllowed)
 	f(&next)
 	stored := next
 	stored.Endpoints = slices.Clone(next.Endpoints)
+	stored.PendingAllowed = slices.Clone(next.PendingAllowed)
 	l.p.Store(&stored)
 	return next
 }

@@ -39,9 +39,13 @@ const (
 	handshakeTimeout   = 30 * time.Second
 	controlWriteWait   = 10 * time.Second
 	maxControlLine     = 1 << 20
+	servingGrace       = 10 * time.Second
 
 	refusedKeyMessage = "Loomplane refused this node's key; if it was revoked, run loomctl node leave"
 )
+
+// errKeyRefused is a 401 on connect. It is logged where it happens.
+var errKeyRefused = errors.New("loomplane refused the node's key")
 
 // ErrRevoked is what Run returns once Loomplane no longer trusts this node.
 // node.json is gone by then and the key stays.
@@ -80,15 +84,14 @@ type Runtime struct {
 	// changes cannot save out of order.
 	cfgMu sync.Mutex
 
-	mu      sync.Mutex
-	cur     *session
-	pending []nodeproto.Endpoint // allowed while no session was up
+	mu  sync.Mutex
+	cur *session
 
 	// Tunables, set by tests.
 	minDelay, maxDelay, stableAfter time.Duration
 	heartbeatEvery, detectEvery     time.Duration
 	nodeVersion                     string
-	narrows                         atomic.Int32 // Narrow messages applied, for tests
+	narrows                         atomic.Int32 // Narrow messages applied; tests wait on it
 	detectBase                      DetectOptions
 	detect                          func(context.Context) nodeproto.Inventory
 	tls                             *tls.Config
@@ -174,7 +177,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 			delay = minDelay
 		}
 		wait := jitter(delay)
-		if err != nil {
+		if err != nil && !errors.Is(err, errKeyRefused) { // that one logged itself
 			r.log().Warn("loomplane-node: the connection to Loomplane ended", "error", err, "retry_in", wait.Round(time.Millisecond))
 		}
 		t := time.NewTimer(wait)
@@ -194,11 +197,13 @@ func jitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.8 + 0.4*rand.Float64())) //nolint:gosec // jitter needs no secrecy
 }
 
-// httpClient is for the challenge request. It honours the proxy environment.
+// proxy picks the proxy for a request from the environment (HTTPS_PROXY,
+// HTTP_PROXY and NO_PROXY), read each time so a change is seen.
 func (r *Runtime) proxy(req *http.Request) (*url.URL, error) {
 	return httpproxy.FromEnvironment().ProxyFunc()(req.URL)
 }
 
+// httpClient is for the challenge request. It honours the proxy environment.
 func (r *Runtime) httpClient() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
 		Proxy: r.proxy, TLSClientConfig: r.tls, TLSHandshakeTimeout: 15 * time.Second, DisableKeepAlives: true,
@@ -305,6 +310,7 @@ func (r *Runtime) once(ctx context.Context) (time.Duration, error) {
 	cancel()
 	_ = mux.Close()
 	s.wg.Wait()
+	s.waitServing()
 	r.detach(s)
 	if ws.code() == nodeproto.CloseUnauthorized {
 		err = ErrRevoked
@@ -321,7 +327,7 @@ func (r *Runtime) dialError(err error, resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		r.log().Warn(refusedKeyMessage)
-		return errors.New("Loomplane answered 401") //nolint:staticcheck // names the product
+		return errKeyRefused
 	case http.StatusUpgradeRequired:
 		return &UpgradeError{Message: serverMessage(body)}
 	}
@@ -355,17 +361,31 @@ func serverMessage(body []byte) string {
 
 // session is one live connection: a yamux server whose stream 0 is control.
 type session struct {
-	r    *Runtime
-	mux  *yamux.Session
-	ctrl *yamux.Stream
-	wmu  sync.Mutex
-	wg   sync.WaitGroup
+	r       *Runtime
+	mux     *yamux.Session
+	ctrl    *yamux.Stream
+	wmu     sync.Mutex
+	wg      sync.WaitGroup // the session's own helpers
+	serving sync.WaitGroup // handlers serving streams
 
 	lastInv []byte // the inventory last sent, JSON
 	invMu   sync.Mutex
 }
 
 // send writes one control message. A failed write ends the session.
+// waitServing waits for the stream handlers, whose streams and context are
+// closed by now, so that none still runs when Run deletes node.json or
+// returns. A handler that ignores both is abandoned after servingGrace.
+func (s *session) waitServing() {
+	done := make(chan struct{})
+	go func() { s.serving.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(servingGrace):
+		s.r.log().Warn("loomplane-node: a stream handler outlived its connection")
+	}
+}
+
 func (s *session) send(msg any) error {
 	if s == nil {
 		return nil
@@ -437,11 +457,12 @@ func (s *session) greet(ctx context.Context, hello nodeproto.Hello) error {
 	if err := s.send(nodeproto.Hello{Version: nodeproto.Version, NodeVersion: r.nodeVersion, Epoch: hello.Epoch}); err != nil {
 		return err
 	}
-	// What the owner allowed while we were away goes before the first
-	// inventory: the hub narrows to what it stored right after that.
-	if pending := r.attach(s); len(pending) > 0 {
+	// Attach first, so an Allow from here on is sent live, and then read
+	// what is pending: nothing falls between the two. What the owner allowed
+	// goes before the first inventory, which the hub answers with a Narrow.
+	r.attach(s)
+	if pending := r.live.Load().PendingAllowed; len(pending) > 0 {
 		if err := s.send(nodeproto.Allowed{Endpoints: pending}); err != nil {
-			r.queue(pending)
 			return err
 		}
 	}
@@ -516,7 +537,11 @@ func (s *session) accept(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		go s.r.reg.Serve(ctx, s.r.live, st)
+		s.serving.Add(1)
+		go func() {
+			defer s.serving.Done()
+			s.r.reg.Serve(ctx, s.r.live, st)
+		}()
 	}
 }
 
@@ -525,11 +550,13 @@ func (r *Runtime) handle(s *session, msg any) error {
 	switch m := msg.(type) {
 	case nodeproto.Narrow:
 		cfg, err := r.apply(func(c *Config) { c.Narrow(m.Endpoints) })
-		if err != nil {
-			// The narrowing holds in memory, and the next connect repeats it.
-			r.log().Error("loomplane-node: saving a narrowed allowlist", "error", err)
-		}
 		r.narrows.Add(1)
+		if err != nil {
+			// The change holds in memory and goes unacknowledged; the
+			// Narrow the hub sends on the next connect repeats it.
+			r.log().Error("loomplane-node: saving a narrowed allowlist", "error", err)
+			return nil
+		}
 		return s.send(nodeproto.NarrowApplied{Endpoints: nonNil(cfg.Endpoints)})
 	case nodeproto.SetIngress:
 		switch m.Mode {
@@ -541,6 +568,7 @@ func (r *Runtime) handle(s *session, msg any) error {
 		cfg, err := r.apply(func(c *Config) { c.IngressMode = m.Mode })
 		if err != nil {
 			r.log().Error("loomplane-node: saving the ingress mode", "error", err)
+			return nil
 		}
 		return s.send(nodeproto.IngressApplied{Mode: cfg.IngressMode})
 	case nodeproto.Revoked:
@@ -567,11 +595,14 @@ func (r *Runtime) apply(f func(*Config)) (Config, error) {
 	return cfg, r.st.SaveConfig(cfg)
 }
 
-// Allow widens what this machine serves, on its owner's say-so. It updates
-// the live config, saves node.json and tells Loomplane with an Allowed
-// message, now when connected and on the next connect otherwise. Only
-// endpoints an owner can allow are accepted: not control, public or unknown
-// ones. A failed save changes nothing.
+// Allow widens what this machine serves, on its owner's say-so. It adds the
+// endpoints to the live config and to PendingAllowed, saves node.json, and
+// tells Loomplane with an Allowed message when connected. Loomplane answers
+// with a Narrow that includes them, which ends the pending state. Until then
+// no Narrow can remove them, and every connect sends them again, so an allow
+// made while offline, or before a restart, still arrives. Only endpoints an
+// owner can allow are accepted: not control, public or unknown ones. A failed
+// save changes nothing.
 func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
 	var add []nodeproto.Endpoint
 	for _, e := range eps {
@@ -586,16 +617,19 @@ func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
 		return nil
 	}
 	r.cfgMu.Lock()
-	prev := r.live.Load().Endpoints
+	prev := r.live.Load()
 	cfg := r.live.Update(func(c *Config) {
 		for _, e := range add {
 			if !slices.Contains(c.Endpoints, e) {
 				c.Endpoints = append(c.Endpoints, e)
 			}
+			if !slices.Contains(c.PendingAllowed, e) {
+				c.PendingAllowed = append(c.PendingAllowed, e)
+			}
 		}
 	})
 	if err := r.st.SaveConfig(cfg); err != nil {
-		r.live.Update(func(c *Config) { c.Endpoints = prev })
+		r.live.Update(func(c *Config) { c.Endpoints, c.PendingAllowed = prev.Endpoints, prev.PendingAllowed })
 		r.cfgMu.Unlock()
 		return err
 	}
@@ -604,31 +638,18 @@ func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
 	r.mu.Lock()
 	s := r.cur
 	r.mu.Unlock()
-	if s != nil && s.send(nodeproto.Allowed{Endpoints: add}) == nil {
-		return nil
+	if s != nil {
+		// A failed send ends the session, and the next connect sends it again.
+		_ = s.send(nodeproto.Allowed{Endpoints: add}) //nolint:errcheck // see above
 	}
-	r.queue(add)
 	return nil
 }
 
-func (r *Runtime) queue(eps []nodeproto.Endpoint) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, e := range eps {
-		if !slices.Contains(r.pending, e) {
-			r.pending = append(r.pending, e)
-		}
-	}
-}
-
-// attach makes s the live session and returns what was allowed meanwhile.
-func (r *Runtime) attach(s *session) []nodeproto.Endpoint {
+// attach makes s the live session.
+func (r *Runtime) attach(s *session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cur = s
-	p := r.pending
-	r.pending = nil
-	return p
 }
 
 func (r *Runtime) detach(s *session) {
