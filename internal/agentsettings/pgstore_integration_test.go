@@ -25,7 +25,7 @@ import (
 var settingsMigrations = map[string]string{
 	"20261125000100": "ai_settings",
 	"20261126000100": "ai_huggingface_token",
-	"20261207000100": "ai_settings_agent",
+	"20261209000100": "ai_settings_agent",
 }
 
 // scratchStores are both stores over a database of their own, dropped when

@@ -7,22 +7,75 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/xraph/grove/driver"
 	"go.jetify.com/typeid/v2"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 func managedScopeValid(s ManagedScope) bool {
-	return s.Epoch > 0 && s.Release != "" && s.Release == WorkloadReleaseID(s.RuntimeRef, s.RuntimeRevision) &&
-		s.Org != "" && s.Project != "" && s.Environment != "" && s.Service != "" && s.Plan != "" && s.Deployment != "" && s.Action != "" && s.Connection != "" && s.Instance != "" && s.Namespace != "" && s.NamespaceUID != "" && len(s.ClusterCA) == 64 &&
-		strings.HasPrefix(s.RuntimeRef, s.Org+"/"+s.Environment+"/"+s.Service+"/runtime_") &&
-		(s.RuntimeRevision == s.Deployment+"/"+s.Action || strings.HasPrefix(s.RuntimeRevision, s.Deployment+"/"+s.Action+"/"))
+	if hasGroupScope(s) {
+		return groupManagedScopeValid(s)
+	}
+	if hasLifecycleScope(s) {
+		return lifecycleManagedScopeValid(s)
+	}
+	return legacyManagedScopeValid(s)
+}
+
+// CheckServingUpdate verifies the exact ctrlplane release after its provider
+// callback. During the callback only the running deployment may issue writes.
+func (s *ControllerStore) CheckServingUpdate(ctx context.Context, org, instance, plan, connection, revision string) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
+	if checkErr := checkManagedUpdateRelease(ctx, tx, org, instance, plan, connection, revision, true); checkErr != nil {
+		return checkErr
+	}
+	return tx.Commit()
+}
+
+func (r ControllerReceipt) CheckServingUpdate(ctx context.Context, tx driver.Tx) error {
+	last := strings.LastIndexByte(r.RuntimeRevision, '/')
+	if last < 0 || !strings.HasPrefix(r.RuntimeRevision[last+1:], "rel_") {
+		return nil
+	}
+	return checkManagedUpdateRelease(ctx, tx, r.OrgID, r.InstanceID, r.PlanID, r.ConnectionID, r.RuntimeRevision, true)
+}
+
+func checkManagedUpdateRelease(ctx context.Context, tx driver.Tx, org, instance, plan, connection, revision string, serving bool) error {
+	last := strings.LastIndexByte(revision, '/')
+	if last < 0 || !strings.HasPrefix(revision[last+1:], "rel_") {
+		return ErrManagedAuthority
+	}
+	base, release := revision[:last], revision[last+1:]
+	var valid bool
+	err := tx.QueryRow(ctx, `SELECT loomplane_managed_update_current($1,$2,$3,$4,$5,$6,$7)`, org, instance, connection, plan, base, release, serving).Scan(&valid)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return ErrManagedAuthority
+	}
+	return nil
 }
 
 // guardManagedScope runs under the organization lock, which orders grant and
 // Cloud scope changes. Row locks also serialize attempt takeover and revocation.
 func guardManagedScope(ctx context.Context, tx driver.Tx, s ManagedScope) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, s.Org, s.Environment); err != nil {
+		return err
+	}
 	if !managedScopeValid(s) {
 		return ErrManagedAuthority
+	}
+	if last := strings.LastIndexByte(s.RuntimeRevision, '/'); last >= 0 && strings.HasPrefix(s.RuntimeRevision[last+1:], "rel_") {
+		if checkErr := checkManagedUpdateRelease(ctx, tx, s.Org, s.Instance, s.Plan, s.Connection, s.RuntimeRevision, false); checkErr != nil {
+			return checkErr
+		}
 	}
 	var valid bool
 	err := tx.QueryRow(ctx, `SELECT true FROM loomplane_plans p
@@ -31,7 +84,7 @@ func guardManagedScope(ctx context.Context, tx driver.Tx, s ManagedScope) error 
  JOIN loomplane_deployments d ON d.org_id=p.org_id AND d.id=w.deployment_id AND d.plan_id=p.id AND d.status='running'
  JOIN loomplane_cloud_connections c ON c.org_id=p.org_id AND c.id=i.body->'input'->>'connection_id'
  WHERE p.org_id=$1 AND p.project_id=$2 AND p.environment_id=$3 AND p.id=$4 AND i.service=$5 AND w.deployment_id=$6 AND w.generation=$7
- AND w.active AND NOT w.settled AND NOT w.legacy_unfenced AND p.status='approved' AND p.required_runtime_protocol IN ('managed-workload-journal-v1','managed-cleanup-journal-v1')
+ AND w.active AND NOT w.settled AND NOT w.legacy_unfenced AND p.status='approved' AND p.required_runtime_protocol IN ('managed-workload-journal-v1','managed-cleanup-journal-v1','managed-cleanup-execution-v1')
  AND loomplane_cluster_workload_scope_current(p,i.body) AND i.body->'input'->>'action_id'=$8 AND c.id=$9
  AND c.details->>'namespace'=$10 AND c.details->>'namespace_uid'=$11 AND c.details->>'cluster_ca'=$12
  AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=p.org_id AND d.id=w.deployment_id AND d.status IN ('cancelled','paused'))
@@ -55,6 +108,12 @@ func (s *ControllerStore) OpenManagedScope(ctx context.Context, scope ManagedSco
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
 	if checkErr := lockManagedOrganization(ctx, tx, scope.Org); checkErr != nil {
+		return checkErr
+	}
+	if s.demandGuard == nil {
+		return ErrManagedAuthority
+	}
+	if checkErr := s.demandGuard(ctx, tx, scope); checkErr != nil {
 		return checkErr
 	}
 	if checkErr := guardManagedScope(ctx, tx, scope); checkErr != nil {
@@ -96,6 +155,12 @@ func (s *ControllerStore) Issue(ctx context.Context, scope ManagedScope, request
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
 	if checkErr := lockManagedOrganization(ctx, tx, scope.Org); checkErr != nil {
+		return "", checkErr
+	}
+	if s.demandGuard == nil {
+		return "", ErrManagedAuthority
+	}
+	if checkErr := s.demandGuard(ctx, tx, scope); checkErr != nil {
 		return "", checkErr
 	}
 	if checkErr := guardManagedScope(ctx, tx, scope); checkErr != nil {
@@ -157,8 +222,12 @@ func (s *ControllerStore) Resolve(ctx context.Context, id string, scope ManagedS
 	if err != nil {
 		return err
 	}
+	var sig []byte
+	if mac, ok := ctx.Value(replicaMACKey{}).([]byte); ok {
+		sig = mac
+	}
 	var resolved string
-	err = s.db.QueryRow(ctx, `UPDATE loomplane_managed_workload_issuances SET outcome=$4,revision=revision+1,updated_at=clock_timestamp(),resolved_at=coalesce(resolved_at,clock_timestamp()) WHERE id=$1 AND org_id=$2 AND scope=$3 AND (outcome IS NULL OR outcome=$4) AND ($5='' OR request->>'UID'='' OR request->>'UID'=$5) RETURNING id`, id, scope.Org, raw, result, outcome.UID).Scan(&resolved)
+	err = s.db.QueryRow(ctx, `UPDATE loomplane_managed_workload_issuances SET replica_spec_mac=CASE WHEN outcome IS NULL THEN $6::bytea ELSE replica_spec_mac END,outcome=$4,revision=revision+1,updated_at=clock_timestamp(),resolved_at=coalesce(resolved_at,clock_timestamp()) WHERE id=$1 AND org_id=$2 AND scope=$3 AND (outcome IS NULL OR outcome=$4) AND ($5='' OR request->>'UID'='' OR request->>'UID'=$5) RETURNING id`, id, scope.Org, raw, result, outcome.UID, sig).Scan(&resolved)
 	return err
 }
 

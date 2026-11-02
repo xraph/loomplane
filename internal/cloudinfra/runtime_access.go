@@ -256,13 +256,13 @@ func (s *Service) checkRuntimeAccessIdentity(ctx context.Context, a *RuntimeAtta
 	if err != nil || pin.RoleUID != record.Input.RoleUID || pin.RoleBindingUID != record.Input.RoleBindingUID || pin.NamespaceUID != record.Input.NamespaceUID || pin.ServiceAccountUID != record.Input.ServiceAccountUID {
 		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
-	if err = kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
+	if err := kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
 		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
-	if err = client.CheckRuntimeBoundaries(ctx); err != nil {
+	if err := client.CheckRuntimeBoundaries(ctx); err != nil {
 		return nil, err
 	}
-	if err = client.CheckRuntimeAccess(ctx, record.Input.Profile); err != nil {
+	if err := client.CheckRuntimeAccess(ctx, record.Input.Profile); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -286,17 +286,17 @@ func (s *Service) startClusterOperation(ctx context.Context, o *ClusterOperation
 	return s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt)
 }
 
-func (s *Service) verifyRuntimeAccessCredential(ctx context.Context, a *RuntimeAttachment, enrollment *ClusterOperation, r *ManagedResource, client *kube.Client) error {
+func (s *Service) verifyRuntimeAccessCredential(ctx context.Context, a *RuntimeAttachment, enrollment *ClusterOperation, r *ManagedResource, client *kube.Client) (*RuntimeAccessRecord, error) {
 	store, ok := s.Clusters.(RuntimeAccessStore)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	record, err := store.GetRuntimeAccess(ctx, a.OrgID, a.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if record == nil {
-		return nil
+		return nil, nil
 	}
 	guard := func() error {
 		if _, _, checkErr := s.enrollmentAuthority(ctx, enrollment); checkErr != nil {
@@ -314,25 +314,25 @@ func (s *Service) verifyRuntimeAccessCredential(ctx context.Context, a *RuntimeA
 	}
 	management, err := s.clusterBootstrapChecked(ctx, enrollment, r, guard)
 	if err != nil {
-		return errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
+		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
 	role, binding, err := kube.ReadRuntimeAccess(ctx, management.Kube, record.Input)
 	if err != nil {
-		return errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
+		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
 	request := enrollmentRequest(enrollment)
 	request.RuntimeAccess = &record.Input.Profile
 	rules, err := kube.EnrollmentRoleRules(request)
 	if err != nil || !reflect.DeepEqual(role.Rules, rules) || role.ResourceVersion != record.Receipt.ResourceVersion || kube.RuntimeAccessDigest(role.Rules) != record.Receipt.RulesDigest || role.Annotations[kube.RuntimeAccessOperationAnnotation] != record.OperationID || role.Annotations[kube.RuntimeAccessDigestAnnotation] != record.Receipt.RequestDigest || binding.ResourceVersion != record.Input.RoleBindingResourceVersion || kube.RuntimeBindingDigest(binding) != record.Input.RoleBindingSubjectsRefDigest {
-		return errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
+		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
 	if _, err = s.checkRuntimeAccessIdentity(ctx, a, client); err != nil {
-		return err
+		return nil, err
 	}
 	if err = guard(); err != nil {
-		return errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
+		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
-	return nil
+	return record, nil
 }
 
 func (s *Service) verifyUpgradeRuntime(ctx context.Context, facts *runtimeAccessContext, profile provider.RuntimeAccessProfile) error {
@@ -355,14 +355,14 @@ func (s *Service) verifyUpgradeRuntime(ctx context.Context, facts *runtimeAccess
 	if err != nil {
 		return err
 	}
-	if err = kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
-		return err
+	if checkErr := kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); checkErr != nil {
+		return checkErr
 	}
-	if err = client.CheckRuntimeBoundaries(ctx); err != nil {
-		return err
+	if checkErr := client.CheckRuntimeBoundaries(ctx); checkErr != nil {
+		return checkErr
 	}
-	if err = client.CheckRuntimeAccess(ctx, profile); err != nil {
-		return err
+	if checkErr := client.CheckRuntimeAccess(ctx, profile); checkErr != nil {
+		return checkErr
 	}
 	_, _, err = s.enrollmentAuthority(ctx, facts.enrollment)
 	return err
@@ -386,8 +386,8 @@ func (s *Service) QualifiedRuntimeAccess(ctx context.Context, a *RuntimeAttachme
 	if err != nil {
 		return nil, err
 	}
-	if err = s.verifyRuntimeAccessCredential(ctx, a, enrollment, resource, client); err != nil {
-		return nil, err
+	if _, verifyErr := s.verifyRuntimeAccessCredential(ctx, a, enrollment, resource, client); verifyErr != nil {
+		return nil, verifyErr
 	}
 	store, ok := s.Clusters.(RuntimeAccessStore)
 	if !ok {

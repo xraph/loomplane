@@ -38,6 +38,17 @@ export function ProductMark({
   className?: string
 }) {
   const logo = productLogos[product]
+  if (logo.asset)
+    return (
+      <img
+        src={logo.asset}
+        width={size}
+        height={size}
+        alt=""
+        aria-hidden="true"
+        className={cn("shrink-0", className)}
+      />
+    )
   const dark = isDark(logo.color)
   return (
     <svg

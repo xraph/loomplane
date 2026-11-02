@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	store "github.com/xraph/loomplane/internal/realtime"
@@ -276,6 +277,45 @@ func TestAgentRequestEventsReachThePersonAsked(t *testing.T) {
 		got, err := e.filter(t.Context(), p, Subscription{}, events)
 		if err != nil || len(got) != tc.want {
 			t.Fatalf("%s: %+v %v", name, got, err)
+		}
+	}
+}
+
+func TestPlanEgressRedactsHistoricalAuthorityWithoutChangingCursor(t *testing.T) {
+	raw := json.RawMessage(`{"id":"plan","revision":"original","actions":[{"id":"service:api","cleanup_targets":[{"kind":"remove_release","scope":{"Service":"api","Plan":"old","RuntimeRef":"private-runtime"},"unresolved":["private-issuance"],"accepted":[{"id":"private-journal","request":{"Resource":"deployments","Name":"api","CleanupSource":"private-capture"}}]}]}]}`)
+	original := string(raw)
+	e := &Extension{authz: permissionFixture{}}
+	for _, kind := range []string{"plan.updated", "plan.deleted"} {
+		in := []store.Event{{ID: "event", OrgID: "org", ProjectID: "project", Type: kind, Data: raw}}
+		got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, in)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("filter: %+v %v", got, err)
+		}
+		if strings.Contains(string(got[0].Data), "private-") || !strings.Contains(string(got[0].Data), `"revision":"original"`) || !strings.Contains(string(got[0].Data), `"unresolved_writes":1`) || got[0].ID != "event" {
+			t.Fatalf("unsafe event: %+v", got)
+		}
+		if string(in[0].Data) != original {
+			t.Fatal("changed replay storage")
+		}
+		e.authz = permissionFixture{denied: security.DeploymentRead}
+		denied, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, in)
+		if err != nil || len(denied) != 0 {
+			t.Fatalf("denied: %+v %v", denied, err)
+		}
+		e.authz = permissionFixture{}
+	}
+}
+
+func TestPlanEgressExcludesPrivateLocationReview(t *testing.T) {
+	raw := json.RawMessage(`{"id":"p","project_id":"restricted","actions":[{"id":"service:api","service":{"capacity_intent":{"demand":{"target_id":"granted-target","location_review":{"policy":{"preferred_locations":["private-ungranted-location"]},"candidates":[{"runtime_connection_id":"private-runtime-pin"}]}}}}}]}`)
+	e := &Extension{authz: permissionFixture{}}
+	for _, kind := range []string{"plan.created", "plan.updated", "plan.deleted"} {
+		got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, []store.Event{{ID: "cursor", OrgID: "org", ProjectID: "restricted", Type: kind, Data: raw}})
+		if err != nil || len(got) != 1 {
+			t.Fatalf("event: %+v %v", got, err)
+		}
+		if strings.Contains(string(got[0].Data), "private-") || strings.Contains(string(got[0].Data), "location_review") || got[0].ID != "cursor" {
+			t.Fatalf("unsafe public event: %+v", got)
 		}
 	}
 }

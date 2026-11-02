@@ -57,7 +57,7 @@ func unpublishedCleanupRelease(t *testing.T, f *poolFixture, svc *planning.Servi
 	scope.RuntimeRef += "-unpublished"
 	scope.RuntimeRevision = deployment + "/service:api"
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if err = journal.OpenManagedScope(t.Context(), scope); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestManagedCleanupClosureTakeover(t *testing.T) {
 					t.Fatal(err)
 				}
 				scope.Epoch = attempt.Generation
-				if err = kube.NewControllerStore(f.db).WithClusterCapacity(true).OpenManagedScope(t.Context(), scope); err != nil {
+				if err = kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db)).OpenManagedScope(t.Context(), scope); err != nil {
 					t.Fatal(err)
 				}
 				switch change {

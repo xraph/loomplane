@@ -69,7 +69,11 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { databaseTargetProvider } from "@/lib/catalog-targets"
 import { deployDatabase } from "@/lib/catalog"
-import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
+import {
+  databaseRecipes,
+  isComposedDatabase,
+  type DatabaseKind,
+} from "@/lib/catalog-recipes"
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
 import { recoverySelection } from "@/lib/service-recovery"
@@ -203,6 +207,9 @@ function targetMode(
 
 // The accounts that can run each engine, for the empty state.
 const runsOnClouds: Record<DatabaseKind, string[]> = {
+  falkordb: ["server", "kubernetes"],
+  elasticsearch: ["server", "kubernetes"],
+  opensearch: ["server", "kubernetes"],
   rabbitmq: ["server"],
   nats: ["server"],
   postgres: ["aws", "gcp", "server", "kubernetes"],
@@ -243,6 +250,7 @@ function DatabaseDeployment({
     value: { consumerProject: "", network: "", forwardingRule: "" },
   })
   const [daily, setDaily] = useState(true)
+  const [reviewPlan, setReviewPlan] = useState("")
   const [pending, setPending] = useState(false)
   const [progress, setProgress] = useState("")
   const [error, setError] = useState("")
@@ -318,7 +326,11 @@ function DatabaseDeployment({
           target: selected,
           provider: targetProvider,
           targetSettings: selectedTarget?.details,
-          daily: !managed && daily && can("service_backup:manage"),
+          daily:
+            !isComposedDatabase(kind) &&
+            !managed &&
+            daily &&
+            can("service_backup:manage"),
           managed:
             managed && profile
               ? {
@@ -333,9 +345,14 @@ function DatabaseDeployment({
         (id) => {
           setCreated(id)
           onCreated?.(id)
-        }
+        },
+        setReviewPlan
       )
-      toast.success(`${recipe.title} deployed`)
+      toast.success(
+        isComposedDatabase(kind)
+          ? `${recipe.title} plan ready for review`
+          : `${recipe.title} deployed`
+      )
     } catch (cause) {
       setError(messageOf(cause, "Deployment could not finish"))
     } finally {
@@ -536,7 +553,9 @@ function DatabaseDeployment({
             />
           )}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-            {!managed && can("service_backup:manage") ? (
+            {!managed &&
+            !isComposedDatabase(kind) &&
+            can("service_backup:manage") ? (
               <label className="flex items-center gap-2 text-[13px]">
                 <Checkbox
                   checked={daily}
@@ -558,7 +577,9 @@ function DatabaseDeployment({
                 locked || !allowed || !name.trim() || !selected || !managedReady
               }
             >
-              {pending ? "Deploying…" : `Deploy ${recipe.title}`}
+              {pending
+                ? "Preparing…"
+                : `${isComposedDatabase(kind) ? "Review" : "Deploy"} ${recipe.title}`}
             </Button>
           </div>
         </form>
@@ -582,9 +603,19 @@ function DatabaseDeployment({
       {created && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl bg-overdye-tint px-4 py-3">
           <span className="flex-1 text-[13px]">
-            {recipe.title} is on its own project now, with its backups under
-            Backups.
+            {reviewPlan
+              ? "Your service project is ready. Review the deployment plan to start the service."
+              : `${recipe.title} is on its own project now, with its backups under Backups.`}
           </span>
+          {reviewPlan && (
+            <Link
+              to="/deployments/$id"
+              params={{ id: reviewPlan }}
+              className={buttonVariants({ size: "sm" })}
+            >
+              Review deployment
+            </Link>
+          )}
           <Link
             to="/projects/$id"
             params={{ id: created }}
@@ -598,6 +629,7 @@ function DatabaseDeployment({
             disabled={pending}
             onClick={() => {
               setCreated("")
+              setReviewPlan("")
               setError("")
               setProgress("")
               setName("")

@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -183,7 +184,7 @@ func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 // Initial Create persists its revision and ServiceRefs. Updated instances need
 // the ready runtime receipt and the latest exact controller deployment success.
 const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state FROM cp_deployments d WHERE d.tenant_id=i.tenant_id AND d.instance_id=i.id ORDER BY d.created_at DESC,d.id DESC LIMIT 1) deployment ON true`
-const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
+const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id WHEN i.state='running' AND i.provider_name LIKE 'kubernetes.%' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND i.labels->>'` + owned.LabelRevision + `'=nullif(i.labels->>'` + owned.LabelManagedRevisionBase + `','')||'/'||deployment.release_id THEN i.labels->>'` + owned.LabelRevision + `' ELSE '' END`
 const routedRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>routed.name ELSE i.labels->>('` + owned.LabelReceiptServicePrefix + `'||routed.name) END`
 
 // routableComponent matches a composed catalog component's process on a port
@@ -659,7 +660,20 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 	return tx.Commit()
 }
 
+// GuardRouteOwnership rechecks the authoritative mapping for saved route work.
+func (s *PgStore) GuardRouteOwnership(ctx context.Context, route Route) error {
+	return projects.GuardUnmanagedEnvironment(ctx, s.db, route.OrgID, route.Input.EnvironmentID)
+}
+
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
+	if err := s.GuardRouteOwnership(ctx, op.Route); err != nil {
+		return nil, err
+	}
+	if op.Source != nil {
+		if err := s.GuardRouteOwnership(ctx, *op.Source); err != nil {
+			return nil, err
+		}
+	}
 	if noServerIngress(op.Route) {
 		if err := s.SaveRouteOperation(ctx, op); err != nil {
 			return nil, err

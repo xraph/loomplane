@@ -1,0 +1,9 @@
+{
+  "name": "loomplane-cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "start": "wrangler dev"
+  }
+}

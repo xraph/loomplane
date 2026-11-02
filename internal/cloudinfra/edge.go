@@ -202,6 +202,13 @@ func (s *Service) acceptEdge(ctx context.Context, p security.Principal, project,
 
 func (s *Service) edgeAuthority(ctx context.Context, p security.Principal, route Route) (*Zone, provider.DNSAdapter, provider.InfrastructureCredential, error) {
 	var empty provider.InfrastructureCredential
+	ds, err := s.domainStore()
+	if err != nil {
+		return nil, nil, empty, err
+	}
+	if ownershipErr := ds.GuardRouteOwnership(ctx, route); ownershipErr != nil {
+		return nil, nil, empty, ownershipErr
+	}
 	if s.CapacityPrincipal != nil {
 		if checkErr := s.CapacityPrincipal.ValidatePrincipal(ctx, p); checkErr != nil {
 			return nil, nil, empty, checkErr
@@ -209,10 +216,6 @@ func (s *Service) edgeAuthority(ctx context.Context, p security.Principal, route
 	}
 	if checkErr := s.domainScope(ctx, p, route.ProjectID, true); checkErr != nil {
 		return nil, nil, empty, checkErr
-	}
-	ds, err := s.domainStore()
-	if err != nil {
-		return nil, nil, empty, err
 	}
 	zone, err := s.linkedZone(ctx, ds, route.OrgID, route.Input.ZoneID)
 	if err != nil {

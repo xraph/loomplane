@@ -188,6 +188,7 @@ type DomainStore interface {
 	BeginIngress(context.Context, *RouteOperation) (*IngressState, error)
 	BeginServerIngress(context.Context, string, string) (*IngressState, error)
 	SaveServerIngress(context.Context, string, string, *IngressState) error
+	GuardRouteOwnership(context.Context, Route) error
 	ValidateRetainedRoute(context.Context, Route) error
 	ValidateRouteCleanup(context.Context, Route) error
 	CompleteHandoff(context.Context, *RouteOperation) error

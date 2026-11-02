@@ -25,6 +25,10 @@ type Store interface {
 	// row lock.
 	// UpdateProject never writes them.
 	SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error)
+	// SetResponsibleTeam names the team responsible for the project, or
+	// clears it for "". A team outside orgID is ErrTeamNotFound; a missing
+	// project is ErrNotFound.
+	SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error)
 
 	// CreateEnvironment adds an environment. A name the project already
 	// has is ErrEnvironmentExists; a missing project is ErrNotFound.

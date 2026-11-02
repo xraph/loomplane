@@ -31,15 +31,18 @@ type fakeAppPlatform struct {
 	mu sync.Mutex
 	// tip is the commit App Platform builds; liveAt is the phase at which
 	// a deployment first reports it, BUILDING or ACTIVE.
-	tip, liveAt string
-	apps        map[string]map[string]any
-	active      map[string]string // app ID → live deployment ID
-	specs       []map[string]any
-	created     []string // deployments Apply started
-	canceled    []string
-	rollbacks   []string
-	deleted     []string
-	databases   map[string]map[string]any
+	tip, liveAt    string
+	apps           map[string]map[string]any
+	active         map[string]string // app ID → live deployment ID
+	specs          []map[string]any
+	created        []string // deployments Apply started
+	canceled       []string
+	rollbacks      []string
+	deleted        []string
+	databases      map[string]map[string]any
+	deployments    map[string]map[string]any // immutable specs keyed by deployment ID
+	alterBuild     func(map[string]any)      // provider-side edits before the first readback
+	encryptSecrets bool
 	// held reports whether the client's lock is held, and locked records
 	// it for the first call of each method and path.
 	held   func() bool
@@ -48,7 +51,7 @@ type fakeAppPlatform struct {
 
 func newFakeAppPlatform(t *testing.T) (*fakeAppPlatform, *digitalocean.Client) {
 	t.Helper()
-	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}, locked: map[string]bool{}}
+	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}, deployments: map[string]map[string]any{}, locked: map[string]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, digitalocean.New(srv.URL)
@@ -93,6 +96,7 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{"apps": out})
 	case r.Method == http.MethodPost && r.URL.Path == "/v2/apps":
 		spec := body["spec"].(map[string]any)
+		f.encryptSpec(spec)
 		id := "app-" + spec["name"].(string)
 		f.apps[id], f.specs = spec, append(f.specs, spec)
 		a := app(id)
@@ -100,6 +104,7 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{"app": a})
 	case len(parts) == 3 && parts[1] == "apps" && r.Method == http.MethodPut:
 		f.apps[parts[2]] = body["spec"].(map[string]any)
+		f.encryptSpec(f.apps[parts[2]])
 		f.specs = append(f.specs, f.apps[parts[2]])
 		reply(200, map[string]any{"app": app(parts[2])})
 	case len(parts) == 3 && parts[1] == "apps" && r.Method == http.MethodGet:
@@ -114,6 +119,14 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{"id": parts[2]})
 	case len(parts) == 4 && parts[3] == "deployments" && r.Method == http.MethodPost:
 		dep := "dep-" + parts[2]
+		f.deployments[dep] = f.apps[parts[2]]
+		if f.alterBuild != nil {
+			raw, _ := json.Marshal(f.deployments[dep])
+			var spec map[string]any
+			_ = json.Unmarshal(raw, &spec)
+			f.alterBuild(spec)
+			f.deployments[dep] = spec
+		}
 		f.created = append(f.created, dep)
 		reply(200, map[string]any{"deployment": map[string]any{"id": dep, "phase": "PENDING_BUILD"}})
 	case len(parts) == 5 && parts[3] == "deployments" && r.Method == http.MethodGet:
@@ -126,13 +139,16 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 			phase = "ACTIVE"
 			f.active[parts[2]] = parts[4]
 		}
-		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase,
+		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "spec": f.deployments[parts[4]],
 			"services": []any{map[string]any{"name": "api", "source_commit_hash": hash}}}})
 	case len(parts) == 6 && parts[5] == "cancel":
 		f.canceled = append(f.canceled, parts[4])
 		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": "CANCELED"}})
 	case len(parts) == 4 && parts[3] == "rollback":
 		f.rollbacks = append(f.rollbacks, body["deployment_id"].(string))
+		if spec := f.deployments[body["deployment_id"].(string)]; spec != nil {
+			f.apps[parts[2]], f.deployments["rb"] = spec, spec
+		}
 		reply(200, map[string]any{"deployment": map[string]any{"id": "rb"}})
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/databases":
 		out := make([]any, 0, len(f.databases))
@@ -158,6 +174,24 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		reply(404, map[string]string{"id": "not_found", "message": "no route " + r.Method + " " + r.URL.Path})
+	}
+}
+
+func (f *fakeAppPlatform) encryptSpec(spec map[string]any) {
+	if !f.encryptSecrets {
+		return
+	}
+	for _, kind := range []string{"services", "workers", "static_sites"} {
+		components, _ := spec[kind].([]any)
+		for _, component := range components {
+			envs, _ := component.(map[string]any)["envs"].([]any)
+			for _, item := range envs {
+				env := item.(map[string]any)
+				if env["type"] == "SECRET" {
+					env["value"] = "EV[" + env["value"].(string) + "]"
+				}
+			}
+		}
 	}
 }
 

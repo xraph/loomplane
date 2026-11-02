@@ -215,7 +215,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -262,19 +262,23 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		automount := false
 		template.Spec.AutomountServiceAccountToken = &automount
 	}
-	port, err := healthPort(spec, labels)
-	if err != nil {
-		return nil, err
-	}
-	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
-	switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
-	case database != "":
-		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
-	case labels[owned.LabelHealthProtocol] == "redis":
-		// A RESP port keeps the TCP probe.
-	case health != "":
-		// A catalog component declares an HTTP readiness probe.
-		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
+	// Fixed authenticated probes already rendered by runtimePod also govern
+	// StatefulSets. Legacy database probes keep their recorded behavior.
+	if labels[owned.LabelHealthChecker] == "" {
+		port, portErr := healthPort(spec, labels)
+		if portErr != nil {
+			return nil, portErr
+		}
+		template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
+		switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
+		case database != "":
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+		case labels[owned.LabelHealthProtocol] == "redis":
+			// A RESP port keeps the TCP probe.
+		case health != "":
+			// A catalog component declares an HTTP readiness probe.
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
+		}
 	}
 	for i, v := range spec.Volumes {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: v.Name, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claims[i].Name}}})

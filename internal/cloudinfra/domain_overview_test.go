@@ -507,3 +507,5 @@ func TestRouteStatusAndServiceHostnamesUseInheritedVerification(t *testing.T) {
 		t.Fatalf("service hostnames: %+v", got)
 	}
 }
+
+func (*overviewStore) GuardRouteOwnership(context.Context, Route) error { return nil }

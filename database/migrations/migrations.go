@@ -91,6 +91,7 @@ func All() []*migrate.Group {
 		chronpg.Migrations,
 		dispatchpg.Migrations,
 		cppg.Migrations,
+		managedInstancesGroup(),
 		vaultpg.Migrations,
 		NativeCredentialsGroup(),
 		kspg.Migrations,

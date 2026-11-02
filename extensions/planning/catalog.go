@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -183,8 +184,10 @@ func (e *Extension) checkEndpoint(c forge.Context, p security.Principal, in cata
 	result := report.Result()
 	// A cluster has nothing inside it to dial from, so its check runs from
 	// Loomplane, as a plan's does.
-	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil && cloud == connections.Kubernetes {
-		result.Notes = append(result.Notes, "Checked from Loomplane, not from inside the cluster.")
+	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil {
+		if note := planning.ResourceCheckNote(cloud); note != "" {
+			result.Notes = append(result.Notes, note)
+		}
 	}
 	return result, nil
 }

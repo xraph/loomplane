@@ -6,8 +6,10 @@ import (
 	drt "github.com/xraph/dispatch/durable/runtime"
 )
 
-const ManagedCleanupBuild = "deployment-v6"
-const ManagedCleanupProtocol = "managed-cleanup-journal-v1"
+const LegacyCleanupBuild = "deployment-v6"
+const ManagedCleanupBuild = "deployment-v7"
+const LegacyCleanupProtocol = "managed-cleanup-journal-v1"
+const ManagedCleanupProtocol = "managed-cleanup-execution-v1"
 
 type managedCleanupContextKey struct{}
 
@@ -31,5 +33,14 @@ func (d *Deployments) ManagedCleanupOptions(owner string, concurrency int) drt.O
 			return activity(ManagedCleanupContext(ctx), info, raw)
 		}
 	}
+	return options
+}
+
+// LegacyCleanupOptions preserves v6 workflow registrations for replay and cancellation.
+func (d *Deployments) LegacyCleanupOptions(owner string, concurrency int) drt.Options {
+	options := d.ManagedWorkloadOptions(owner, concurrency)
+	options.BuildID = LegacyCleanupBuild
+	options.Workflows[managedFailedCleanupWorkflow] = d.managedCleanupWorkflow
+	options.Activities[managedFailedCleanupActivity] = d.managedCleanupActivity
 	return options
 }

@@ -11,7 +11,7 @@ import (
 
 func TestProjectAutonomyColumns(t *testing.T) {
 	// Databases record the version and name, so the filename can't drift.
-	if m := migration(t, "project_autonomy"); m.Version != "20261207000300" {
+	if m := migration(t, "project_autonomy"); m.Version != "20261209000300" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, ex := scratch(t)

@@ -43,6 +43,9 @@ func lockCapacityCloud(ctx context.Context, tx driver.Tx, org, cloud string) err
 	if err := cloudprofiles.LockOrganization(ctx, tx, org); err != nil {
 		return err
 	}
+	if _, checkErr := tx.Exec(ctx, `SELECT loomplane_cluster_controls_current($1,'')`, org); checkErr != nil {
+		return checkErr
+	}
 	var id string
 	return storeError(tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id))
 }
@@ -105,6 +108,9 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	}
 	if err := lockCapacityCloud(ctx, tx, d.OrgID, d.CloudID); err != nil {
 		return nil, err
+	}
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, d.OrgID, d.ProjectID, d.LocationReview, time.Now()); checkErr != nil {
+		return nil, checkErr
 	}
 	p, err := capacityPolicyTx(ctx, tx, d.OrgID, d.CloudID)
 	if err != nil {
@@ -327,6 +333,13 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		if !freshCapacity(account.CheckedAt, time.Now()) {
 			return capacityBlock(p, d, "stale_inventory", "account"), nil
 		}
+		unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, d.OrgID, o.Provider, o.AccountID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if unknown {
+			return capacityBlock(p, d, "stale_inventory", "account"), nil
+		}
 		accountUsed := account.Provisioned
 		for _, r := range reservations {
 			if r.reservation.Provider == o.Provider && r.reservation.AccountID == o.AccountID {
@@ -486,6 +499,15 @@ func (s *PgStore) reserveOperationCapacity(ctx context.Context, tx driver.Tx, o 
 		}
 		if o.CapacityTarget == nil || *o.CapacityTarget != r.Target {
 			return ErrConflict
+		}
+		if !o.Attempted && o.Provider != "server" {
+			unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, o.OrgID, o.Provider, o.AccountID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if unknown {
+				return &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "account")}
+			}
 		}
 		return nil
 	} else if !errors.Is(readErr, pgx.ErrNoRows) {

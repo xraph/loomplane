@@ -5,6 +5,7 @@ import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
   CopyIcon,
+  DatabaseIcon,
   FolderGit2Icon,
   KeyboardIcon,
   Settings2Icon,
@@ -66,6 +67,7 @@ import { useRuns } from "@/lib/use-runs"
 
 const settingsPaths = [
   "/members",
+  "/teams",
   "/variables",
   "/integrations",
   "/cloud-sign-in",
@@ -167,6 +169,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       isActive: path.startsWith("/clouds"),
     },
     {
+      title: "Resources",
+      icon: <DatabaseIcon />,
+      link: <Link to="/resources" />,
+      isActive: path.startsWith("/resources"),
+    },
+    {
       title: "Infrastructure",
       icon: <InfrastructureIcon />,
       link: <Link to="/infrastructure" />,
@@ -192,6 +200,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "Members",
           link: <Link to="/members" />,
           isActive: path.startsWith("/members"),
+        },
+        {
+          title: "Teams",
+          link: <Link to="/teams" />,
+          isActive: path.startsWith("/teams"),
         },
         {
           title: "Variables",

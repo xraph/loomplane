@@ -27,11 +27,12 @@ var ErrOwned = errors.New("the matching Kubernetes resource is not owned by this
 
 type Session func(context.Context, map[string]string) (*Client, error)
 type Runtime struct {
-	Session          Session
-	Values           owned.Values
-	WaitReady        func(context.Context, *Client, string) error
-	RecordController func(context.Context, ControllerReceipt) error
-	Wait             time.Duration
+	Session            Session
+	Values             owned.Values
+	WaitReady          func(context.Context, *Client, string) error
+	RecordController   func(context.Context, ControllerReceipt) error
+	CompleteRetirement func(context.Context, id.ID, map[string]string) (bool, error)
+	Wait               time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -112,7 +113,7 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 	if err != nil {
 		o.pull = nil
 	}
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		o.ingress, err = c.Kube.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
 		if checkErr := accept(o.ingress, err); checkErr != nil {
 			return nil, checkErr
@@ -137,6 +138,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	start, err := owned.StartTimeout(labels)
 	if err != nil {
 		return nil, err
+	}
+	if len(spec.Volumes) > 0 && labels[owned.LabelPodGroup] != "" {
+		return nil, ErrInvalid
 	}
 	if len(spec.Volumes) > 0 {
 		return r.applyPersistent(ctx, iid, spec, labels, start)
@@ -176,7 +180,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}()
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -195,6 +199,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
 	if err != nil {
 		return nil, err
+	}
+	if checkErr := preflightPodGroup(spec, labels, values); checkErr != nil {
+		return nil, checkErr
 	}
 	// The account comes first so a refused rule changes nothing else.
 	account, err := r.applyAccess(ctx, c, iid, labels)
@@ -231,6 +238,15 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
+	if arch := labels[owned.LabelSchedulingArchitecture]; arch != "" {
+		if !c.Config.journalRequired() || arch != "amd64" && arch != "arm64" || labels[owned.LabelArchitecture] != "" && labels[owned.LabelArchitecture] != arch {
+			return nil, ErrManagedAuthority
+		}
+		if template.Spec.NodeSelector == nil {
+			template.Spec.NodeSelector = map[string]string{}
+		}
+		template.Spec.NodeSelector[corev1.LabelArchStable] = arch
+	}
 	template.Labels = maps.Clone(identity)
 	if c.Config.journalRequired() {
 		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
@@ -252,6 +268,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		replicas = int32(n)
 	}
 	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: *template}}
+	if strategyErr := podGroupStrategy(deployment, labels); strategyErr != nil {
+		return nil, strategyErr
+	}
 	if labels[owned.LabelGPU] != "" {
 		// A surge pod would wait for a GPU the old pod still holds.
 		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
@@ -301,7 +320,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, recordErr
 		}
 	}
-	if labels[owned.LabelPublic] == "true" {
+	if ordinaryIngress(c) && labels[owned.LabelPublic] == "true" {
 		if len(servicePorts) == 0 || labels[owned.LabelHostname] == "" {
 			return nil, errors.New("a public Kubernetes service needs a hostname and port")
 		}
@@ -368,7 +387,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
-		public := labels[owned.LabelPublic] == "true"
+		public := ordinaryIngress(c) && labels[owned.LabelPublic] == "true"
 		address := "http://" + name + "." + ns + ".svc:" + strconv.Itoa(int(port.Port))
 		if public {
 			scheme := "http"
@@ -469,9 +488,17 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 }
 
 func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
+	if r.CompleteRetirement != nil {
+		if handled, err := r.CompleteRetirement(ctx, iid, labels); handled || err != nil {
+			return err
+		}
+	}
 	c, err := r.session(ctx, iid, owned.ForOperation(labels, "remove"))
 	if err != nil {
 		return err
+	}
+	if c.Config.journalRequired() {
+		return ErrManagedAuthority
 	}
 	objects, err := r.objects(ctx, c, iid, labels)
 	if err != nil {
@@ -747,7 +774,7 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 			return c.Kube.AppsV1().Deployments(ns).Delete(ctx, name, deleteOwnedOptions(o))
 		},
 	}))
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		original = nil
 		if old.ingress != nil {
 			original = old.ingress

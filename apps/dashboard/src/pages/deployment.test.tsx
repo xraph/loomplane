@@ -314,3 +314,49 @@ test("a newer Cloud sync deployment doesn't hide the rollback", async () => {
     await screen.findByRole("button", { name: "Roll back" })
   ).toBeInTheDocument()
 })
+
+test("renders historical null plan collections and the managed cleanup route", async () => {
+  serve(
+    {
+      ...plan(undefined, "approved"),
+      problems: null,
+      warnings: null,
+      sources: null,
+      actions: [
+        {
+          id: "service:api",
+          name: "api",
+          op: "create",
+          provider: "kubernetes",
+          service: {
+            provider: "kubernetes",
+            cluster_demand: {
+              mode: "best_effort",
+              maximum: { cpu_millis: 100, memory_bytes: 100 },
+            },
+          },
+        },
+      ],
+    },
+    {
+      "/deployment": {
+        id: "dep",
+        plan_id: "plan_1",
+        status: "cancelled",
+        steps: [],
+        started_at: "2026-11-01T00:00:00Z",
+      },
+      "/cleanup": {
+        deployment_id: "dep",
+        status: "cancelled",
+        variant: "managed_workload",
+        review_id: "review",
+        revision: "digest",
+      },
+    }
+  )
+  expect(await screen.findByText("Deployment cleanup")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("button", { name: "Review cleanup" })
+  ).toBeInTheDocument()
+})

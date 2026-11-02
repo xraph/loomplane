@@ -187,6 +187,23 @@ it("warns about Google testing mode", async () => {
   ).toBeTruthy()
 })
 
+it("explains the Cloudflare app registration before saving", async () => {
+  stub([{ cloud: "cloudflare", source: "none" }])
+  const user = userEvent.setup()
+  renderPage()
+  await user.click(await screen.findByRole("button", { name: "Set up" }))
+  const dialog = await screen.findByRole("dialog")
+  expect(
+    within(dialog)
+      .getByRole("link", { name: "Register a Cloudflare OAuth client" })
+      .getAttribute("href")
+  ).toBe(
+    "https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/"
+  )
+  expect(within(dialog).getByText(/client_secret_basic/)).toBeTruthy()
+  expect(within(dialog).getByText(/offline_access/)).toBeTruthy()
+})
+
 it("shows keyless on, with the issuer", async () => {
   keyless = { enabled: true, issuer: "https://loomplane.example", reason: "" }
   stub(mixed)

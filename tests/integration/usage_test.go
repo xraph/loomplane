@@ -31,6 +31,13 @@ func TestUsage_readsSpendAndTrafficFromConnectedClouds(t *testing.T) {
 			_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","email":"ada@example.com","status":"active","team":{"uuid":"team-acme","name":"Acme"}}}`))
 		case "/v2/customers/my/balance":
 			_, _ = w.Write([]byte(`{"month_to_date_usage":"11.21"}`))
+		case "/v2/databases":
+			if r.Method != http.MethodGet {
+				t.Error("background inventory must not mutate databases")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
 		default:
 			t.Errorf("asked DigitalOcean %s", r.URL)
 			w.WriteHeader(http.StatusNotFound)

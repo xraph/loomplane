@@ -1,0 +1,23 @@
+# Fixture addresses and Secret names. These credentials do not exist.
+publicURL: https://loomplane.example.com
+secrets:
+  existingSecret: loomplane
+push:
+  gatewayUrl: https://push.example.com
+  gateway:
+    enabled: true
+    image:
+      tag: v0.1.0
+    existingSecret: loomplane-push
+    sealingKeyId: ci
+    ingress:
+      enabled: true
+      className: nginx
+      tls:
+        - secretName: push-tls
+          hosts: [push.example.com]
+    httpRoute:
+      enabled: true
+      parentRefs:
+        - name: public
+          namespace: gateway

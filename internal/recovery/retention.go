@@ -122,10 +122,23 @@ func retentionScope(b *Backup) (recoveryScope, error) {
 	}
 	// WAL and incremental chains require a separate dependency-aware planner.
 	fullFormat := map[string]string{"postgres": "pg-dump-custom-v1", "mysql": "mysqldump-sql-v1", "mariadb": "mariadb-dump-sql-v1", "redis": "redis-rdb-v1", "valkey": "valkey-rdb-v1"}
-	if cfg.Catalog.BackupFormat != fullFormat[familyOf(cfg.Kind)] {
+	format := ""
+	family := familyOf(cfg.Kind)
+	if cfg.Catalog != nil {
+		format = cfg.Catalog.BackupFormat
+	}
+	if cfg.Component != nil {
+		descriptor, err := Describe(&cfg, nil)
+		if err != nil {
+			return recoveryScope{}, err
+		}
+		family, format = descriptor.Engine, descriptor.Format
+		fullFormat[family] = map[string]string{"falkordb": "falkordb-rdb-v1", "elasticsearch": "elasticsearch-snapshot-v1", "opensearch": "opensearch-snapshot-v1", "duckdb": "duckdb-checkpoint-v1"}[family]
+	}
+	if format == "" || format != fullFormat[family] {
 		return recoveryScope{}, fmt.Errorf("%w: retention requires independent full backups", ErrInvalid)
 	}
-	return recoveryScope{b.OrgID, b.ProjectID, b.EnvironmentID, b.Name, source.ID, source.ExternalID, source.ConnectionID, source.Provider, cfg.Catalog.BackupFormat}, nil
+	return recoveryScope{b.OrgID, b.ProjectID, b.EnvironmentID, b.Name, source.ID, source.ExternalID, source.ConnectionID, source.Provider, format}, nil
 }
 
 func usableRetentionPoint(b *Backup, now time.Time) bool {

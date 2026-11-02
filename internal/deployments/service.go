@@ -68,12 +68,16 @@ var ErrStaleRollback = errors.New(StaleRollback)
 // succeeded stay as they are. Approving is what lets someone act on the
 // clouds, so retrying needs the same role.
 func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
-		return nil, err
-	}
 	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	// On the deployment's project, so a team's approver there may retry.
+	if aerr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); aerr != nil {
+		return nil, aerr
+	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	if d.Status == StatusFailed && d.Error == StaleRollback {
 		return nil, ErrStaleRollback
@@ -125,18 +129,26 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 
 // Get returns one deployment.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.GetDeployment(ctx, p.OrgID, id)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, d.ProjectID); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // ForPlan returns the deployment an approved plan started.
 func (s *Service) ForPlan(ctx context.Context, p security.Principal, planID string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	d, err := s.store.ForPlan(ctx, p.OrgID, planID)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.ForPlan(ctx, p.OrgID, planID)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, d.ProjectID); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // ErrNoCanaries is a service whose store keeps no canaries.

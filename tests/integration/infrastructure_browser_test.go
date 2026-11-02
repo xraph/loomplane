@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ type infrastructureBrowser struct {
 	directory string
 	stop      sync.Once
 	shutdown  func()
+	onTick    func() error
 }
 
 func startInfrastructureBrowser(t *testing.T, appURL, statePath string) *infrastructureBrowser {
@@ -34,6 +36,12 @@ func startInfrastructureBrowser(t *testing.T, appURL, statePath string) *infrast
 	b := &infrastructureBrowser{directory: filepath.Dir(statePath)}
 	b.setTarget(t, appURL)
 	b.proxy = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/capacity") {
+			if _, err := os.Stat(filepath.Join(b.directory, "fail-capacity")); err == nil {
+				http.Error(w, "acceptance capacity outage", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		if req.URL.Path == "/api/v1/realtime/ws" {
 			if _, err := os.Stat(filepath.Join(b.directory, "disable-ws")); err == nil {
 				http.Error(w, "acceptance websocket outage", http.StatusServiceUnavailable)
@@ -102,6 +110,11 @@ func (b *infrastructureBrowser) checkpoint(t *testing.T, stage string, metadata 
 	t.Logf("browser acceptance checkpoint %s: localhost:5190; create %s to continue", stage, filepath.Join(b.directory, "continue-"+stage))
 	deadline := time.Now().Add(30 * time.Minute)
 	for time.Now().Before(deadline) {
+		if b.onTick != nil {
+			if tickErr := b.onTick(); tickErr != nil {
+				t.Fatal(tickErr)
+			}
+		}
 		if _, err = os.Stat(filepath.Join(b.directory, "continue-"+stage)); err == nil {
 			return
 		}

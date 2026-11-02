@@ -86,7 +86,13 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 	default:
 		return errors.New("choose --provider server, kubernetes, rds or cloud-sql")
 	}
-	if targetProvider != "server" && kind != "postgres" {
+	composedCluster := false
+	if targetProvider == "kubernetes" {
+		if info, ok := kindInfo(a.opts.Recipes, kind); ok {
+			composedCluster = slices.Contains(info.Targets, "kubernetes") && (kind == "falkordb" || kind == "elasticsearch" || kind == "opensearch" || kind == "duckdb")
+		}
+	}
+	if targetProvider != "server" && kind != "postgres" && !composedCluster {
 		return fmt.Errorf("%s currently supports --kind postgres only", targetProvider)
 	}
 	region := strings.TrimSpace(ctx.String("region"))

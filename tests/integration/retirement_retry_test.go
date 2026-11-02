@@ -267,10 +267,9 @@ func TestRetirementFinishFencesAttemptEvenIfTokenIsReused(t *testing.T) {
 }
 
 func TestRetirementHistoryMigrationPreservesExistingExecution(t *testing.T) {
-	groups := migrations.All()
 	older := migrate.NewGroup(migrations.GroupName)
 	var historyMigration *migrate.Migration
-	for _, migration := range groups[0].Migrations() {
+	for _, migration := range migrations.Group().Migrations() {
 		if migration.Version >= "20261020000700" {
 			if migration.Version == "20261020000700" {
 				historyMigration = migration
@@ -282,8 +281,9 @@ func TestRetirementHistoryMigrationPreservesExistingExecution(t *testing.T) {
 	if historyMigration == nil {
 		t.Fatal("history migration missing")
 	}
-	groups[0] = older
-	conn, store := retirementFixtureSchema(t, groups)
+	// Bootstrap only the historical application schema. Later dependent
+	// groups require tables that the full upgrade creates below.
+	conn, store := retirementFixtureSchema(t, []*migrate.Group{older})
 	if _, err := conn.Exec(t.Context(), `INSERT INTO loomplane_backup_retirements(id,org_id,project_id,backup_id,source_key,witness_id,request_id,policy,object,witness_object,status,attempt,token,lease_until,created_by)
  SELECT 'legacy-retirement',b.org_id,b.project_id,b.id,'legacy-source',w.id,'legacy-request','{"older_than_days":7,"keep_last":1}',b.object,w.object,'running',2,'legacy-worker',now()+interval '50 minutes','u'
  FROM loomplane_service_backups b JOIN loomplane_service_backups w ON w.id='w' WHERE b.id='b'`); err != nil {

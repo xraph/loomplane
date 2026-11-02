@@ -28,6 +28,10 @@ func (r *Runner) resolvePendingIdentity(ctx context.Context, job *Job, rc *repla
 		return nil, ErrNoExecutor
 	}
 	rich, richOK := exec.(pendingCloudResolver)
+	// Vercel native resource receipts do not replace service project recovery.
+	if _, native := exec.(*Vercel); native && job.Action.Resource == nil {
+		richOK = false
+	}
 	legacy, legacyOK := exec.(PendingCloudResource)
 	if !richOK && !legacyOK {
 		return nil, errors.New("original executor cannot resolve its unfinished resource")
@@ -117,6 +121,14 @@ func removePendingOrBound(ctx context.Context, exec Executor, job *Job, bound *p
 }
 
 func (r *Runner) canResolvePendingAction(a planning.Action) bool {
+	if a.Provider == "vercel" && a.Resource == nil && a.Op == planning.Create {
+		if _, native := r.executors[a.Provider].(*Vercel); native {
+			return false
+		}
+	}
+	if a.Resource != nil && a.Resource.ExistingResource != nil {
+		return false
+	}
 	if a.Op == planning.Replace {
 		return true
 	}

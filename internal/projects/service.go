@@ -294,7 +294,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	now := s.now().UTC()
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
-		Icon: icon, Color: color,
+		Icon: icon, Color: color, DeploymentMode: "application",
 		Repositories: []string{}, Exclusions: []Exclusion{}, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
@@ -366,6 +366,38 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 	}
 	s.record(ctx, AuditEvent{Action: "project.update", Severity: "info", ProjectID: proj.ID, Principal: p,
 		Attributes: map[string]any{"fields": fields}})
+	return proj, nil
+}
+
+// SetTeamInput names a project's responsible team. A null or empty TeamID
+// clears it.
+type SetTeamInput struct {
+	TeamID *string `json:"team_id" nullable:"true"`
+}
+
+// SetTeam names the team responsible for a project, or clears it. Anyone
+// who may update the project may; the team must be in the same workspace.
+func (s *Service) SetTeam(ctx context.Context, p security.Principal, id string, in SetTeamInput) (*Project, error) {
+	if err := s.authz.Require(ctx, p, security.ProjectUpdate, id); err != nil {
+		return nil, err
+	}
+	teamID := ""
+	if in.TeamID != nil {
+		teamID = strings.TrimSpace(*in.TeamID)
+	}
+	before, err := s.store.GetProject(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	proj, err := s.store.SetResponsibleTeam(ctx, p.OrgID, id, teamID)
+	if err != nil {
+		return nil, err
+	}
+	if teamID == "" && before.ResponsibleTeamID == "" {
+		return proj, nil // nothing changed, so nothing to audit
+	}
+	s.record(ctx, AuditEvent{Action: "project.team.set", Severity: "info", ProjectID: proj.ID, Principal: p,
+		Attributes: map[string]any{"team_id": teamID, "previous_team_id": before.ResponsibleTeamID}})
 	return proj, nil
 }
 

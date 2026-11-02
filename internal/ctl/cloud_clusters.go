@@ -12,8 +12,8 @@ import (
 )
 
 func (a *App) cloudClustersCommand() cli.Command {
-	commands := make([]cli.Command, 0, 10)
-	for _, name := range []string{"list", "show", "options", "discover", "preview", "operations", "operation", "apply", "retry", "cancel"} {
+	commands := make([]cli.Command, 0, 14)
+	for _, name := range []string{"list", "show", "options", "discover", "preview", "operations", "operation", "apply", "retry", "cancel", "capacity", "refresh-capacity", "retirement-preview", "detach-preview"} {
 		flags := append(recoveryFlags(), infraFileFlag(), infraYesFlag(), cloudFlag("review", "Exact saved review digest"), cloudFlag("region", "Provider region"), cloudFlag("cursor", "Next page cursor"))
 		commands = append(commands, infraCommand(name, "cloud-clusters "+name+" <cloud-id> [resource-id]", "Manage reviewed cluster setup", func(ctx cli.CommandContext) error { return a.clusterCommand(ctx, name) }, flags...))
 	}
@@ -39,6 +39,21 @@ func (a *App) clusterCommand(ctx cli.CommandContext, action string) error {
 		out, err = c.CloudClusters(ctxOf(ctx), cloud, ctx.String("cursor"))
 	case "show":
 		out, err = c.CloudCluster(ctxOf(ctx), cloud, id)
+	case "capacity":
+		out, err = c.CloudClusterCapacity(ctxOf(ctx), cloud, id)
+	case "refresh-capacity":
+		out, err = c.RefreshCloudClusterCapacity(ctxOf(ctx), cloud, id)
+	case "retirement-preview":
+		out, err = c.PreviewCloudClusterRetirement(ctxOf(ctx), cloud, id)
+	case "detach-preview":
+		var in client.ClusterRetirementPreviewInput
+		if readErr := a.infrastructureInput(ctx, &in); readErr != nil {
+			return readErr
+		}
+		if in.AttachmentID == "" || in.ExpectedAttachmentRevision < 1 {
+			return errors.New("give the attachment ID and its current revision")
+		}
+		out, err = c.PreviewCloudClusterDetach(ctxOf(ctx), cloud, id, in.AttachmentID, in.ExpectedAttachmentRevision)
 	case "options":
 		out, err = c.CloudClusterOptions(ctxOf(ctx), cloud, id, ctx.String("region"))
 	case "discover":

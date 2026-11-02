@@ -47,6 +47,7 @@ const labelImage = owned.LabelImage
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
+	ExistingResources    planning.ExistingProjectResourceResolver
 	RouteGuard           RuntimeRemovalGuard
 	FirecrackerAuthority fc.Issuer
 
@@ -265,7 +266,7 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 			return values, checkErr
 		}
 		if labels[owned.LabelRuntimeFiles] == "true" {
-			if filesErr := e.runtimeFiles(ctx, ref, &values); filesErr != nil {
+			if filesErr := e.runtimeFiles(ctx, ref, labels, &values); filesErr != nil {
 				return values, filesErr
 			}
 		}
@@ -480,6 +481,14 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if err != nil {
 		return nil, err
 	}
+	if verifyErr := builder.verifyPodGroup(ctx, job, &state.Image); verifyErr != nil {
+		return nil, verifyErr
+	}
+	if job.Action.Service.PodGroup != nil {
+		if saveErr := save(); saveErr != nil {
+			return nil, saveErr
+		}
+	}
 	if state.RuntimeRef == "" {
 		ref, refErr := typeid.Generate("runtime")
 		if refErr != nil {
@@ -511,12 +520,13 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	sp, labels := ownedSpec(job, image, state)
 	// Resolve and validate credentials before persisting any changed instance spec.
-	if _, err = e.values(ctx, labels); err != nil {
+	if _, err = e.values(owned.RuntimePreflight(ctx), labels); err != nil {
 		return nil, err
 	}
 	if checkErr := e.validateTarget(ctx, labels); checkErr != nil {
 		return nil, checkErr
 	}
+	var expectedRevision string
 	var previousServices []cpprovider.ServiceSpec
 	var previousLabels map[string]string
 	if inst != nil {
@@ -556,7 +566,18 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		if _, err = e.Ctrl.Instances.Update(ctx, inst.ID, instance.UpdateRequest{Services: []cpprovider.ServiceSpec{sp}, Labels: labels}); err != nil {
 			return nil, err
 		}
-		_, err = e.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}}, CommitSHA: job.CommitSHA, Notes: "Plan " + job.Plan.ID})
+		notes := "Plan " + job.Plan.ID
+		if base := labels[owned.LabelManagedRevisionBase]; base != "" {
+			notes = "Managed workload " + job.Plan.ID + "/" + base
+		}
+		var applied *deploy.Deployment
+		applied, err = e.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}}, CommitSHA: job.CommitSHA, Notes: notes})
+		if err == nil && labels[owned.LabelManagedRevisionBase] != "" {
+			if applied == nil || applied.InstanceID != inst.ID || applied.TenantID != job.Deployment.OrgID || applied.State != deploy.DeploySucceeded {
+				return nil, kubernetes.ErrManagedAuthority
+			}
+			expectedRevision = labels[owned.LabelManagedRevisionBase] + "/" + applied.ReleaseID.String()
+		}
 		if err != nil {
 			restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -580,6 +601,18 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if err != nil {
 		return nil, err
 	}
+	if expectedRevision != "" {
+		if inst.Labels[owned.LabelRevision] != expectedRevision {
+			return nil, kubernetes.ErrManagedAuthority
+		}
+		store, ok := e.Controllers.(*kubernetes.ControllerStore)
+		if !ok {
+			return nil, kubernetes.ErrManagedAuthority
+		}
+		if checkErr := store.CheckServingUpdate(ctx, job.Deployment.OrgID, inst.ID.String(), job.Plan.ID, job.Connection.ID, inst.Labels[owned.LabelRevision]); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	state.Committed = true
 	if saveErr := save(); saveErr != nil {
 		return nil, saveErr
@@ -601,6 +634,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
 	if len(job.Action.Routes) > 0 {
 		labels[labelReleaseAttempt] = job.Deployment.ID + "/" + job.Action.ID
+	}
+	if d := cfg.ClusterDemand; d != nil && d.Mode == "guaranteed" && d.ProfileArchitecture && d.Profile != nil {
+		labels[owned.LabelSchedulingArchitecture] = d.Profile.Architecture
 	}
 	labels[owned.LabelPlan] = job.Deployment.PlanID
 	if cfg.CloudPlacement != nil && cfg.CloudPlacement.PoolID != "" {
@@ -668,7 +704,12 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		}
 	}
 	if job.Action.Provider == "kubernetes" {
-		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedWorkloadResources(cfg)
+		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedMainResources(cfg)
+	}
+	if cfg.PodGroup != nil {
+		raw, _ := json.Marshal(cfg.PodGroup) //nolint:errcheck // the contract contains only strings, integers and slices
+		labels[owned.LabelPodGroup] = string(raw)
+		labels[owned.LabelWorkloadCapability] = cfg.WorkloadCapabilityRevision
 	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
 	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {
@@ -701,6 +742,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		// starts another container. Only their digest is a label.
 		labels[owned.LabelRuntimeFiles] = "true"
 		labels[owned.LabelRevision] += "/" + job.filesRevision
+	}
+	if cfg.ClusterDemand != nil && job.Action.Provider == "kubernetes" {
+		labels[owned.LabelManagedRevisionBase] = labels[owned.LabelRevision]
 	}
 	return sp, labels
 }
@@ -803,16 +847,43 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		return err
 	}
 	ref := state.Removals[b.ExternalID]
+	proof, hasRetiredRemoval := ctx.Value(retiredRemovalKey{}).(*retiredRemoval)
+	var retiredFiles bool
+	if hasRetiredRemoval && proof != nil {
+		if inst == nil && !errors.Is(err, ctrlplane.ErrNotFound) {
+			return kubernetes.ErrManagedAuthority
+		}
+		g := proof.grants[0]
+		if g.Target.Scope.Instance != b.ExternalID || g.Target.Scope.Org != b.OrgID || g.Target.Scope.Connection != b.ConnectionID {
+			return kubernetes.ErrManagedAuthority
+		}
+		recorded, files, readErr := proof.store.RetiredRuntimeRef(ctx, g)
+		if readErr != nil {
+			return readErr
+		}
+		if ref != "" && ref != recorded {
+			return kubernetes.ErrManagedAuthority
+		}
+		ref, retiredFiles = recorded, files
+	}
 	if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
 		return refErr
 	}
 	// A component's files go with its runtime values, whether its instance
 	// says so or, once it's gone, its binding.
-	files := declaresFiles(b)
+	files := retiredFiles || declaresFiles(b)
 	if inst != nil {
 		files = files || inst.Labels[owned.LabelRuntimeFiles] == "true"
 		if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
 			return errors.New("the binding does not own this infrastructure instance")
+		}
+		if proof != nil {
+			if ref != inst.Labels[owned.LabelRuntime] {
+				return kubernetes.ErrManagedAuthority
+			}
+			if checkErr := proof.verifiedProvider(ctx, e, key, iid); checkErr != nil {
+				return checkErr
+			}
 		}
 		ref = inst.Labels[owned.LabelRuntime]
 		if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
@@ -830,10 +901,26 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		if deleteErr := e.Ctrl.Instances.Delete(ctx, iid); deleteErr != nil {
 			return deleteErr
 		}
+		if proof != nil {
+			if checkErr := proof.verifyGone(ctx, e, iid, inst.State); checkErr != nil {
+				return checkErr
+			}
+		}
 	}
 	if ref != "" {
 		if e.Secrets == nil {
 			return ErrNoCredential
+		}
+		token := ""
+		if proof != nil {
+			var beginErr error
+			token, beginErr = proof.store.BeginRetiredRuntimeRemoval(ctx, proof.grants[0])
+			if beginErr != nil {
+				return beginErr
+			}
+			if token == "" {
+				return nil
+			}
 		}
 		if files {
 			if deleteErr := e.deleteRuntimeFiles(ctx, b.OrgID, b.EnvironmentID, b.Name, map[string]string{owned.LabelRuntime: ref, owned.LabelRuntimeFiles: "true"}); deleteErr != nil {
@@ -842,6 +929,13 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		}
 		if deleteErr := e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, b.Name, ref); deleteErr != nil {
 			return deleteErr
+		}
+		if proof != nil {
+			resolution, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if resolveErr := proof.store.ResolveRetiredRuntimeRemoval(resolution, proof.grants[0], token); resolveErr != nil {
+				return resolveErr
+			}
 		}
 		delete(state.Removals, b.ExternalID)
 		return save()

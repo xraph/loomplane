@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite" // Registers the embedded durable journal driver.
 )
 
@@ -30,13 +29,8 @@ func OpenStore(dir string) (*Store, error) {
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 		return nil, ErrInvalid
 	}
-	fd, err := unix.Open(filepath.Join(dir, "agent.lock"), unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	lock, err := lockStore(dir)
 	if err != nil {
-		return nil, err
-	}
-	lock := os.NewFile(uintptr(fd), "agent.lock")
-	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		_ = lock.Close()
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", filepath.Join(dir, "state.sqlite"))

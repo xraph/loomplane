@@ -8,6 +8,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -45,13 +46,13 @@ func releaseRoutes(r forge.Router, guard identity.Guard, svc releaseService) err
 		if err != nil {
 			return fail(err)
 		}
-		return c.JSON(http.StatusCreated, plan)
+		return c.JSON(http.StatusCreated, publicplan.Project(plan))
 	}
 	if err := g.POST("/projects/:id/plans", createPlan,
 		forge.WithName("plans.create"),
 		forge.WithSummary("Plan an environment from the current manifest and one commit of each repository, or what another environment runs, replacing its open plan; a scope moves only some of them"),
 		forge.WithRequestSchema(planning.CreatePlanInput{}),
-		forge.WithResponseSchema(http.StatusCreated, "The plan", planning.Plan{}),
+		forge.WithResponseSchema(http.StatusCreated, "The plan", publicplan.Plan{}),
 	); err != nil {
 		return err
 	}
@@ -89,13 +90,13 @@ func releaseRoutes(r forge.Router, guard identity.Guard, svc releaseService) err
 		if err != nil {
 			return fail(err)
 		}
-		return c.JSON(http.StatusCreated, plan)
+		return c.JSON(http.StatusCreated, publicplan.Project(plan))
 	}
 	return g.POST("/projects/:id/rollbacks", createRollback,
 		forge.WithName("rollbacks.create"),
 		forge.WithSummary("Plan the environment back to its previous successful release, with a reason; a person approves it like any plan. Data-bearing resources and services stay as they are"),
 		forge.WithRequestSchema(planning.RollbackInput{}),
-		forge.WithResponseSchema(http.StatusCreated, "The rollback plan", planning.Plan{}),
+		forge.WithResponseSchema(http.StatusCreated, "The rollback plan", publicplan.Plan{}),
 	)
 }
 

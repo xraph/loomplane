@@ -3,6 +3,10 @@ package cloudinfra
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/projects"
 
 	"github.com/xraph/grove/driver"
 )
@@ -17,6 +21,13 @@ var (
 // guardDeploymentEffects runs under the organization gate. Accepted effects
 // can reconcile, but a paused or cancelled deployment cannot accept new work.
 func guardDeploymentEffects(ctx context.Context, tx driver.Tx, org, plan string, accepted bool) error {
+	var environment string
+	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT environment_id FROM loomplane_plans WHERE org_id=$1 AND id=$2),'')`, org, plan).Scan(&environment); err != nil {
+		return err
+	}
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, org, environment); err != nil {
+		return err
+	}
 	if accepted {
 		return nil
 	}
@@ -30,7 +41,7 @@ func guardDeploymentEffects(ctx context.Context, tx driver.Tx, org, plan string,
 	case "cancelled":
 		return ErrWorkloadCancelled
 	}
-	return nil
+	return cloudprofiles.ValidatePlanLocationReviewsTx(ctx, tx, org, plan, time.Now())
 }
 
 // CancelUnstartedCapacity runs inside the cancellation transaction, after its

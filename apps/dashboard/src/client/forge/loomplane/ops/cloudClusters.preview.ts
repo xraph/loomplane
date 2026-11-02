@@ -8,7 +8,7 @@ export const op_cloudClusters_preview = {
   entity: 'CloudClusterOperation',
   rootType: 'CloudClusterOperation',
   provides: ['CloudClusterOperation:{id}'],
-  invalidates: ['CloudCluster', 'CloudClusterOperation', 'CloudClusterOperationPage', 'CloudClusterOperation[]', 'CloudClusterPage'],
+  invalidates: ['CloudCluster', 'CloudClusterOperation', 'CloudClusterOperationPage', 'CloudClusterOperation[]', 'CloudClusterPage', 'RuntimeAttachmentPage'],
   bodyCodec: codec_ClusterInputBody,
   responseCodec: codec_CloudClusterOperation,
 } as const satisfies OperationMeta;

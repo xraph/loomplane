@@ -16,6 +16,9 @@ import (
 // pgUniqueViolation is Postgres's SQLSTATE for a unique constraint failure.
 const pgUniqueViolation = "23505"
 
+// pgForeignKeyViolation is Postgres's SQLSTATE for a foreign key failure.
+const pgForeignKeyViolation = "23503"
+
 // PgStore is the Postgres Store, over the grove pgdriver pool the grove
 // extension owns. The schema is migration group "loomplane"
 // (database/migrations).
@@ -34,7 +37,8 @@ const projectColumns = `id, org_id, name, slug, description, icon, color, status
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
 const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
-	p.created_by, p.created_at, p.updated_at, p.exclusions, p.autonomous_promotion, p.min_staging_soak_seconds,
+	p.created_by, p.created_at, p.updated_at, p.exclusions, p.deployment_mode, coalesce(p.responsible_team_id, ''),
+	p.autonomous_promotion, p.min_staging_soak_seconds,
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
 		FROM (SELECT s.repository, min(s.alias) AS first_alias FROM loomplane_project_sources s
 			WHERE s.project_id = p.id AND s.removed_at IS NULL GROUP BY s.repository) r), '{}')
@@ -44,7 +48,8 @@ func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
 	var exclusions []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.AutonomousPromotion, &p.MinStagingSoakSeconds, &p.Repositories); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.DeploymentMode, &p.ResponsibleTeamID,
+		&p.AutonomousPromotion, &p.MinStagingSoakSeconds, &p.Repositories); err != nil {
 		return nil, err
 	}
 	if len(exclusions) > 0 {
@@ -152,6 +157,10 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Order the global source gate before parent and quota row locks.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return nil, err
+	}
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT exclusions FROM loomplane_projects WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -224,8 +233,41 @@ func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in Autonomy
 	return p, before, nil
 }
 
+// SetResponsibleTeam implements Store. The team must be in the project's
+// organization; when nothing changes, one more read tells a missing project
+// from a team that isn't there.
+func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error) {
+	res, execErr := s.db.Exec(ctx, `UPDATE loomplane_projects
+		SET responsible_team_id = NULLIF($3, ''), updated_at = now()
+		WHERE org_id = $1 AND id = $2
+			AND ($3 = '' OR EXISTS (SELECT 1 FROM loomplane_teams t WHERE t.id = $3 AND t.org_id = $1))`,
+		orgID, id, teamID)
+	if err := teamWriteError(execErr); err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("rows affected: %w", err)
+	}
+	p, err := s.GetProject(ctx, orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrTeamNotFound
+	}
+	return p, nil
+}
+
 // DeleteProject removes the project; its environments go with it.
 func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) error {
+	var managed bool
+	if managedErr := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_fleets WHERE org_id=$1 AND (project_id=$2 OR control_project_id=$2))`, orgID, id).Scan(&managed); managedErr != nil {
+		return managedErr
+	}
+	if managed {
+		return ErrFleetManaged
+	}
 	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id)
 	if err != nil {
 		return fmt.Errorf("delete project: %w", err)
@@ -234,6 +276,8 @@ func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) error {
 }
 
 const environmentColumns = `id, org_id, project_id, name, kind, created_at, updated_at`
+
+const environmentReadColumns = environmentColumns + `,coalesce((SELECT i.id FROM loomplane_fleet_instances i WHERE i.org_id=loomplane_environments.org_id AND i.environment_id=loomplane_environments.id),'')`
 
 // CreateEnvironment implements Store.
 func (s *PgStore) CreateEnvironment(ctx context.Context, e *Environment) error {
@@ -253,9 +297,9 @@ func (s *PgStore) CreateEnvironment(ctx context.Context, e *Environment) error {
 // GetEnvironment returns one environment, or ErrEnvironmentNotFound.
 func (s *PgStore) GetEnvironment(ctx context.Context, orgID, projectID, id string) (*Environment, error) {
 	var e Environment
-	err := s.db.QueryRow(ctx, `SELECT `+environmentColumns+` FROM loomplane_environments
+	err := s.db.QueryRow(ctx, `SELECT `+environmentReadColumns+` FROM loomplane_environments
 		WHERE org_id = $1 AND project_id = $2 AND id = $3`, orgID, projectID, id).
-		Scan(&e.ID, &e.OrgID, &e.ProjectID, &e.Name, &e.Kind, &e.CreatedAt, &e.UpdatedAt)
+		Scan(&e.ID, &e.OrgID, &e.ProjectID, &e.Name, &e.Kind, &e.CreatedAt, &e.UpdatedAt, &e.InstanceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrEnvironmentNotFound
 	}
@@ -274,6 +318,10 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Take the source gate before parent row locks used by variable cascades.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('variable-sources/v1',0))`); err != nil {
+		return err
+	}
 	var locked string
 	err = tx.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, projectID).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -281,6 +329,13 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 	}
 	if err != nil {
 		return fmt.Errorf("lock project: %w", err)
+	}
+	var managed bool
+	if managedErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_fleet_instances WHERE org_id=$1 AND project_id=$2 AND environment_id=$3)`, orgID, projectID, id).Scan(&managed); managedErr != nil {
+		return managedErr
+	}
+	if managed {
+		return ErrFleetManaged
 	}
 	var total int
 	var exists bool
@@ -305,7 +360,7 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 
 // ListEnvironments returns the project's environments, production first.
 func (s *PgStore) ListEnvironments(ctx context.Context, orgID, projectID string) ([]*Environment, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+environmentColumns+`
+	rows, err := s.db.Query(ctx, `SELECT `+environmentReadColumns+`
 		FROM loomplane_environments WHERE org_id = $1 AND project_id = $2
 		ORDER BY array_position(ARRAY['production', 'staging', 'preview', 'development'], kind), name`, orgID, projectID)
 	if err != nil {
@@ -315,7 +370,7 @@ func (s *PgStore) ListEnvironments(ctx context.Context, orgID, projectID string)
 	out := []*Environment{}
 	for rows.Next() {
 		var e Environment
-		if err := rows.Scan(&e.ID, &e.OrgID, &e.ProjectID, &e.Name, &e.Kind, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.OrgID, &e.ProjectID, &e.Name, &e.Kind, &e.CreatedAt, &e.UpdatedAt, &e.InstanceID); err != nil {
 			return nil, fmt.Errorf("scan environment: %w", err)
 		}
 		e.CreatedAt, e.UpdatedAt = e.CreatedAt.UTC(), e.UpdatedAt.UTC()
@@ -331,6 +386,9 @@ func (s *PgStore) ListEnvironments(ctx context.Context, orgID, projectID string)
 // local zone, and the API should answer the same however the server's
 // clock is set.
 func (p *Project) normalize() {
+	if p.DeploymentMode == "" {
+		p.DeploymentMode = "application"
+	}
 	p.CreatedAt, p.UpdatedAt = p.CreatedAt.UTC(), p.UpdatedAt.UTC()
 	if p.Repositories == nil {
 		p.Repositories = []string{}
@@ -352,6 +410,20 @@ func requireOneRow(res interface{ RowsAffected() (int64, error) }) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// teamWriteError maps the error of the responsible-team update. A foreign
+// key violation means the team was deleted between the check and the write,
+// so the caller named a team that isn't there.
+func teamWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+		return ErrTeamNotFound
+	}
+	return fmt.Errorf("set responsible team: %w", err)
 }
 
 func isUniqueViolation(err error) bool {

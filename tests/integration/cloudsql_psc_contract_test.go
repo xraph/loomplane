@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -20,15 +21,21 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 	app := start(t, cfg)
 	defer app.stop()
 	c := &client{t: t, base: app.srv.URL, key: cfg.Identity.PublishableKey}
+	type contractSchema struct {
+		Ref        string                    `json:"$ref"`
+		Properties map[string]map[string]any `json:"properties"`
+		Required   []string                  `json:"required"`
+	}
 	for _, route := range []string{"/openapi.json", "/asyncapi.json"} {
 		var raw json.RawMessage
 		c.must(http.StatusOK, http.MethodGet, route, nil, &raw)
 		var spec struct {
 			Components struct {
-				Schemas map[string]struct {
-					Properties map[string]map[string]any `json:"properties"`
-					Required   []string                  `json:"required"`
-				} `json:"schemas"`
+				Schemas  map[string]contractSchema `json:"schemas"`
+				Messages map[string]struct {
+					Name    string         `json:"name"`
+					Payload contractSchema `json:"payload"`
+				} `json:"messages"`
 			} `json:"components"`
 		}
 		if err := json.Unmarshal(raw, &spec); err != nil {
@@ -47,6 +54,29 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 			}
 		}
 		binding := spec.Components.Schemas["Binding"]
+		if route == "/asyncapi.json" {
+			found := false
+			for _, message := range spec.Components.Messages {
+				if message.Name == "binding.updated" {
+					binding = message.Payload
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal(route, "missing binding.updated message")
+			}
+			if binding.Ref != "" {
+				name, ok := strings.CutPrefix(binding.Ref, "#/components/schemas/")
+				if !ok {
+					t.Fatal(route, "unsupported binding payload reference", binding.Ref)
+				}
+				binding, ok = spec.Components.Schemas[name]
+				if !ok {
+					t.Fatal(route, "missing binding payload schema", name)
+				}
+			}
+		}
 		if binding.Properties["owned_resources"]["type"] != "object" || slices.Contains(binding.Required, "owned_resources") {
 			t.Fatal(route, "missing optional binding ownership object", binding.Properties["owned_resources"])
 		}

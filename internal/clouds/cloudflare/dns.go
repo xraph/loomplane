@@ -52,7 +52,7 @@ func checkCredential(ctx context.Context, credential provider.InfrastructureCred
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if credential.Provider != "cloudflare" || credential.AccountID == "" || CheckToken(credential.Token) != nil {
+	if credential.Provider != "cloudflare" || credential.AccountID == "" || GrantToken(credential.Token) != nil {
 		return provider.ErrInfrastructureInvalid
 	}
 	return nil

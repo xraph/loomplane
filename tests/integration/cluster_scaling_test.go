@@ -72,3 +72,30 @@ func TestClusterScalingExternalBreachPersists(t *testing.T) {
 		t.Fatal(dependencies, err)
 	}
 }
+
+func TestClusterScalingCooldown(t *testing.T) {
+	sql := managedClusterDB(t)
+	claim := func(pool, op string) *time.Time {
+		var deadline *time.Time
+		if err := sql.QueryRow(t.Context(), `SELECT loomplane_claim_pool_growth('org','cloud','cluster',$1,$2,600)`, pool, op).Scan(&deadline); err != nil {
+			t.Fatal(err)
+		}
+		return deadline
+	}
+	if claim("first", "manual-growth") != nil || claim("second", "native-bounds") != nil {
+		t.Fatal("independent first attempts blocked")
+	}
+	deadline := claim("first", "increased-bounds")
+	if deadline == nil || time.Until(*deadline) < 599*time.Second {
+		t.Fatal("second attempt did not retain initial cooldown", deadline)
+	}
+	if again := claim("first", "retry"); again == nil || !again.Equal(*deadline) {
+		t.Fatal("retry extended the deadline")
+	}
+	if _, err := sql.Exec(t.Context(), `UPDATE loomplane_cluster_pool_growth SET issued_at=now()-interval '601 seconds',next_growth_at=now()-interval '1 second' WHERE pool_id='first'`); err != nil {
+		t.Fatal(err)
+	}
+	if claim("first", "next-growth") != nil {
+		t.Fatal("elapsed cooldown blocked growth")
+	}
+}

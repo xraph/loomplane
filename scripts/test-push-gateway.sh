@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Exercise the push gateway stack with throwaway secrets and loopback TLS.
+# Exercise the gateway alone, or alongside Loomplane with a second image argument.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d)
 project="loomplane-push-smoke-$(date +%s)-$$"
-export PUSH_GATEWAY_IMAGE=${1:?Usage: scripts/test-push-gateway.sh IMAGE}
+export PUSH_GATEWAY_IMAGE=${1:?Usage: scripts/test-push-gateway.sh GATEWAY_IMAGE [LOOMPLANE_IMAGE [BUNDLE_DIR]]}
 export PUSH_GATEWAY_DOMAIN=localhost ACME_EMAIL=smoke@example.com
 export PUSH_GATEWAY_SECRETS_DIR=$scratch
 export PUSH_GATEWAY_SEALING_KEY_ID=smoke
@@ -34,8 +34,28 @@ services:
     ports: !override
       - "127.0.0.1::443"
 YAML
-compose=(docker compose --env-file /dev/null -p "$project"
-  -f "$root/deployments/push-gateway/compose.yaml" -f "$scratch/override.yaml")
+# Ignore a developer's enabled Compose files and real service credentials.
+export COMPOSE_FILE='' COMPOSE_PROFILES=''
+compose=(docker compose --env-file /dev/null -p "$project")
+if [ -n "${2:-}" ]; then
+  export LOOMPLANE_IMAGE=$2 LOOMPLANE_DOMAIN=localhost PUSH_GATEWAY_DOMAIN=push.localhost
+  export LOOMPLANE_SECRET_KEY POSTGRES_PASSWORD
+  LOOMPLANE_SECRET_KEY=$(openssl rand -base64 32)
+  POSTGRES_PASSWORD=$(openssl rand -hex 32)
+  export LOOMPLANE_GITHUB_APP_ID='' LOOMPLANE_GITHUB_APP_SLUG=''
+  export LOOMPLANE_GITHUB_PRIVATE_KEY='' LOOMPLANE_GITHUB_CLIENT_ID=''
+  export LOOMPLANE_GITHUB_CLIENT_SECRET='' LOOMPLANE_GITHUB_WEBHOOK_SECRET=''
+  export LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY='' LOOMPLANE_NOTIFICATIONS_SMTP_HOST=''
+  export LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME='' LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD=''
+  export LOOMPLANE_NOTIFICATIONS_FROM='' LOOMPLANE_BACKUP_URL='' LOOMPLANE_PAUSED_PROVIDERS=''
+  export LOOMPLANE_GITHUB_API_URL=https://api.github.com LOOMPLANE_GITHUB_WEB_URL=https://github.com
+  production_dir=${3:-$root/deployments/production}
+  compose+=(-f "$production_dir/compose.yaml"
+    -f "$production_dir/compose.push-gateway.yaml")
+else
+  compose+=(-f "$root/deployments/push-gateway/compose.yaml")
+fi
+compose+=(-f "$scratch/override.yaml")
 cleanup() {
   result=$?
   if [ "$result" -ne 0 ]; then
@@ -67,12 +87,13 @@ if grep -Eq 'PUSH_GATEWAY_APNS_KEY_FILE: [^"]' <<<"$off"; then
   exit 1
 fi
 "${compose[@]}" config --quiet
-"${compose[@]}" up -d --wait --wait-timeout 120
+"${compose[@]}" up -d --wait --wait-timeout 240
 endpoint=$("${compose[@]}" port caddy 443)
 port=${endpoint##*:}
-url="https://localhost:$port"
+url="https://$PUSH_GATEWAY_DOMAIN:$port"
+curl_args=(--insecure --resolve "$PUSH_GATEWAY_DOMAIN:$port:127.0.0.1")
 # Only this isolated test accepts Caddy's local CA. Production uses public TLS.
-code() { curl --insecure --silent --output /dev/null --write-out '%{http_code}' "$@"; }
+code() { curl "${curl_args[@]}" --silent --output /dev/null --write-out '%{http_code}' "$@"; }
 for _ in $(seq 1 20); do
   [ "$(code "$url/")" = 404 ] && break
   sleep 1
@@ -82,7 +103,7 @@ test "$(code "$url/_/health")" = 404
 test "$(code "$url/")" = 404
 test "$(code -X POST -H 'Content-Type: application/json' -d '{}' "$url/v1/registrations")" = 400
 server_key=$(head -c 32 /dev/urandom | base64)
-registration=$(curl --insecure --silent --show-error --write-out '\n%{http_code}' \
+registration=$(curl "${curl_args[@]}" --silent --show-error --write-out '\n%{http_code}' \
   -X POST -H 'Content-Type: application/json' \
   -d "{\"platform\":\"android\",\"token\":\"smoke-token\",\"server_key\":\"$server_key\"}" \
   "$url/v1/registrations")
@@ -93,6 +114,18 @@ case "$(head -n 1 <<<"$registration" | jq -r .handle)" in
 esac
 head -c 71680 /dev/zero | tr '\0' 'a' >"$scratch/big.txt"
 test "$(code -X POST -H 'Content-Type: application/json' --data-binary "@$scratch/big.txt" "$url/v1/send")" = 413
+
+if [ -n "${2:-}" ]; then
+  curl --insecure --fail --silent --show-error "https://localhost:$port/" >"$scratch/index.html"
+  grep -q '<html' "$scratch/index.html"
+  test "$(code "https://localhost:$port/_/health")" = 404
+  test "$(code "https://localhost:$port/api/v1/projects")" = 401
+  for service in loomplane loomplane-worker; do
+    # shellcheck disable=SC2016 # Expanded inside the disposable container.
+    "${compose[@]}" exec -T "$service" sh -ec \
+      'test "$LOOMPLANE_PUSH_GATEWAY_URL" = https://push.localhost; test "$LOOMPLANE_PUSH_ENABLED" = true; test ! -e /run/secrets/sealing_key'
+  done
+fi
 
 # shellcheck disable=SC2016 # Expanded by the shell inside the container.
 "${compose[@]}" exec -T push-gateway sh -ec \

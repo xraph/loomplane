@@ -139,7 +139,8 @@ function SignedIn() {
 function Shell() {
   const { session, organizations, missing } = useOrganization()
   const path = usePath()
-  useWorkspaceAddress()
+  const addressPending = useWorkspaceAddress()
+  if (addressPending) return <PageLoading />
   if (missing) {
     const current = organizations.find((o) => o.id === session.orgId)
     return (
@@ -170,6 +171,9 @@ function Shell() {
 function useWorkspaceAddress() {
   const router = useRouter()
   const location = useRouterState({ select: (state) => state.location })
+  const routing = useRouterState({
+    select: (state) => state.status === "pending",
+  })
   const { slug } = useOrganization()
   const named = requestedWorkspace(location)
   const stale =
@@ -177,6 +181,7 @@ function useWorkspaceAddress() {
   useEffect(() => {
     if (stale) void router.navigate({ href: stale, replace: true })
   }, [router, stale, slug])
+  return !!stale || routing
 }
 
 export function Problem({

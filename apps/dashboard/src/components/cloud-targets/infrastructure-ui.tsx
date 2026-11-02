@@ -61,10 +61,10 @@ export function CloudTabs({
   )
 }
 /**
- * CloudEmpty is a Cloud page's empty state, in the shared design: a list
- * that will fill shows a faded preview of its rows, a prerequisite or a
- * missing page is a centered notice, and one inside a form or dialog stays
- * compact.
+ * CloudEmpty is a Cloud page's empty state, always centered: a list that
+ * will fill shows a faded preview of its rows, a prerequisite or a missing
+ * page is a notice, and one inside a form or dialog is the same notice with
+ * less room around it.
  */
 export function CloudEmpty({
   title,
@@ -81,11 +81,11 @@ export function CloudEmpty({
 }) {
   return (
     <ZeroState
-      variant={
-        kind === "compact" ? "compact" : kind === "inline" ? "inline" : "panel"
+      variant="panel"
+      preview={kind === "list"}
+      className={
+        kind === "compact" || kind === "inline" ? "gap-3 px-5 py-6" : undefined
       }
-      preview={kind === "list" || kind === "compact"}
-      className={kind === "inline" ? "gap-3 px-0 py-2" : undefined}
     >
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
@@ -211,6 +211,10 @@ const waitingStates = [
   "preview",
   "draining",
   "awaiting_approval",
+  "needs_attention",
+  "setup_incomplete",
+  "review_required",
+  "waiting_provider",
 ]
 
 export function stateTone(status: string): Tone {
@@ -223,14 +227,51 @@ export function stateTone(status: string): Tone {
   return "quiet"
 }
 
+// One word per status, shared by every Cloud page, so the same state never
+// reads "Done" in one tab and "Succeeded" in the next.
+const statusWords: Record<string, string> = {
+  succeeded: "Done",
+  applied: "Done",
+  completed: "Done",
+  synced: "In sync",
+  ready: "Ready",
+  healthy: "Ready",
+  running: "Running",
+  applying: "Applying",
+  accepted: "Accepted",
+  provisioning: "Starting",
+  enrolling: "Starting",
+  waiting_provider: "Waiting on provider",
+  routing_pending: "Waiting on routing",
+  cleanup_pending: "Waiting on cleanup",
+  draining: "Draining",
+  preview: "In review",
+  needs_attention: "Needs attention",
+  setup_incomplete: "Setup incomplete",
+  awaiting_approval: "Waiting for you",
+  review_required: "Needs review",
+  reverting: "Reverting",
+  reverted: "Reverted",
+  failed: "Failed",
+  error: "Failed",
+  blocked: "Blocked",
+  hard_limit: "Over a limit",
+  limit: "Over a limit",
+  cancelled: "Cancelled",
+  canceled: "Cancelled",
+}
+
+/** statusWord names an infrastructure status as a person would say it. */
+export function statusWord(status: string): string {
+  const known = statusWords[status]
+  if (known) return known
+  const word = status.replace(/_/g, " ")
+  return word.charAt(0).toUpperCase() + word.slice(1)
+}
+
 /** StatePill is an infrastructure status in its tone. */
 export function StatePill({ status }: { status: string }) {
-  const word = status.replace(/_/g, " ")
-  return (
-    <StatusPill tone={stateTone(status)}>
-      {word.charAt(0).toUpperCase() + word.slice(1)}
-    </StatusPill>
-  )
+  return <StatusPill tone={stateTone(status)}>{statusWord(status)}</StatusPill>
 }
 
 export const rowClass =

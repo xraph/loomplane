@@ -31,6 +31,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentStatus = {
+    /**
+     * Whether the AI agent is on, on this server and in the workspace
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentsettingsStatus> => {
+      let __path = `/api/v1/agent/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentsettingsStatus"],
+      };
+
+      return this.request<types.AgentsettingsStatus>(config);
+    },
+
+  };
+
   public readonly aiModelDeployments = {
     /**
      * Stop a model that's waiting for its GPU server; a server already approved stays in Infrastructure
@@ -335,6 +354,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Delete a provider key, unless the agent or the workspace embeddings use it
+     */
+    deleteProviderKey: async (name: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/ai/settings/provider-keys/${encodeURIComponent(String(name))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * The workspace's AI settings, without any secret, and whether you can change them
      */
     get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
@@ -348,6 +383,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.View>(config);
+    },
+
+    /**
+     * The agent's settings, what it runs with and its month's budget, without any key
+     */
+    getAgent: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
     },
 
     /**
@@ -366,6 +417,80 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.HuggingFaceToken>(config);
+    },
+
+    /**
+     * Add a provider key, or change one; its secrets are never shown again
+     * Anthropic, OpenAI and OpenAI-compatible keys only. Secret fields are write-only: no answer carries them, and only the key's hint (its last four characters) is shown. A secret field left out keeps its value. The key the agent uses must stay granted to every project.
+     */
+    putProviderKey: async (name: string, body: types.ProviderKeyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderKey> => {
+      let __path = `/api/v1/ai/settings/provider-keys/${encodeURIComponent(String(name))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderKeyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderKey"],
+      };
+
+      return this.request<types.ProviderKey>(config);
+    },
+
+    /**
+     * Set the agent's monthly budget, its share of the workspace's; 0 releases it while the agent is off
+     */
+    setAgentBudget: async (body: types.AgentBudgetInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent/budget`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AgentBudgetInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
+    },
+
+    /**
+     * Set the workspace's monthly AI budget, which every allocation shares
+     */
+    setBudget: async (body: types.WorkspaceBudgetInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
+      let __path = `/api/v1/ai/settings/budget`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["WorkspaceBudgetInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["View"],
+      };
+
+      return this.request<types.View>(config);
+    },
+
+    /**
+     * Turn the agent on or off, or change its provider key or model
+     * Turning the agent on needs its monthly budget, a provider key (or the server's key) and a model this server prices: nexus's catalog or ai.prices. A key's own model prices don't count for the agent.
+     */
+    updateAgent: async (body: types.AgentUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AgentUpdateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
     },
 
   };
@@ -839,6 +964,66 @@ export class RESTClient extends Client {
 
   public readonly cloudClusters = {
     /**
+     * cloudClusters.attachments
+     */
+    attachments: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RuntimeAttachmentPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/attachments`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RuntimeAttachmentPage"],
+      };
+
+      return this.request<types.RuntimeAttachmentPage>(config);
+    },
+
+    /**
+     * cloudClusters.capacity
+     */
+    capacity: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
      * cloudClusters.get
      */
     get: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudCluster> => {
@@ -944,6 +1129,40 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * cloudClusters.refreshCapacity
+     */
+    refreshCapacity: async (cloudId: string, clusterId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
+     * cloudClusters.retirementPreview
+     */
+    retirementPreview: async (cloudId: string, clusterId: string, body: types.ClusterRetirementPreviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterRetirementReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/retirement/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterRetirementPreviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterRetirementReview"],
+      };
+
+      return this.request<types.ClusterRetirementReview>(config);
     },
 
   };
@@ -2137,6 +2356,23 @@ export class RESTClient extends Client {
         url: __path,
         body,
         bodyCodec: CODECS["FailedCleanupInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupCancel: async (id: string, body: types.FailedCleanupCancelInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupCancelInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["FailedCleanup"],
@@ -4863,6 +5099,28 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly projectAutonomy = {
+    /**
+     * Let the agent promote a release to production without asking first, after a minimum staging soak
+     * Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.
+     */
+    update: async (id: string, body: types.AutonomyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/autonomy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AutonomyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+  };
+
   public readonly projectVariables = {
     /**
      * Set a variable for a project, or for one of its services
@@ -5020,6 +5278,40 @@ export class RESTClient extends Client {
     },
 
     /**
+     * What the caller may do on one project, team grants included
+     */
+    permissions: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectPermissions> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/permissions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectPermissions"],
+      };
+
+      return this.request<types.ProjectPermissions>(config);
+    },
+
+    /**
+     * Name the team responsible for a project, or clear it with null
+     */
+    setTeam: async (id: string, body: types.SetTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/team`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * Change a project's name, description, icon or color
      */
     update: async (id: string, body: types.UpdateProjectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -5035,6 +5327,75 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Project>(config);
+    },
+
+  };
+
+  public readonly providerResources = {
+    /**
+     * Store an application DSN for a verified provider resource
+     */
+    connect: async (resourceId: string, body: types.ProviderResourceConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}/connection`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderResourceConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * Read a provider resource without its credentials
+     */
+    get: async (resourceId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * List your provider resource inventory and sync attempts
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceList> => {
+      let __path = `/api/v1/provider-resources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceList"],
+      };
+
+      return this.request<types.ProviderResourceList>(config);
+    },
+
+    /**
+     * Refresh a connected account's resource inventory
+     */
+    sync: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceSync> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/resource-syncs`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceSync"],
+      };
+
+      return this.request<types.ProviderResourceSync>(config);
     },
 
   };
@@ -5743,15 +6104,15 @@ export class RESTClient extends Client {
 
   public readonly setup = {
     /**
-     * Create the first account and organization
+     * Create the first account, make it the platform owner, and create its organization
      */
-    complete: async (body: types.SetupRequest, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
+    complete: async (body: types.SetupRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
       let __path = `/api/v1/setup`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["SetupRequest"],
+        bodyCodec: CODECS["SetupRequestBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["SetupResponse"],
@@ -5761,7 +6122,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Whether first-run setup is still waiting
+     * Whether this instance still waits for its first account
      */
     status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {
       let __path = `/api/v1/setup`;
@@ -5845,6 +6206,159 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.DiscoverySource>(config);
+    },
+
+  };
+
+  public readonly teams = {
+    /**
+     * Put a workspace member in the team
+     */
+    addMember: async (id: string, userId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/members/${encodeURIComponent(String(userId))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Create a team
+     */
+    create: async (body: types.CreateTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CreateTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Delete a team. Its members lose the roles it gave them, and projects it was responsible for have none.
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * One team
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * The workspace's teams, with their members and grants
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TeamList> => {
+      let __path = `/api/v1/teams`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TeamList"],
+      };
+
+      return this.request<types.TeamList>(config);
+    },
+
+    /**
+     * Take one of the team's roles away from its members
+     */
+    removeGrant: async (id: string, grantId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/grants/${encodeURIComponent(String(grantId))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Take a person out of the team
+     */
+    removeMember: async (id: string, userId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/members/${encodeURIComponent(String(userId))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Give the team a role on a project, or on the whole workspace without a project. Never above your own role.
+     */
+    setGrant: async (id: string, body: types.SetGrantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}/grants`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetGrantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
+    },
+
+    /**
+     * Rename a team or change its description
+     */
+    update: async (id: string, body: types.UpdateTeamInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Team> => {
+      let __path = `/api/v1/teams/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["UpdateTeamInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Team"],
+      };
+
+      return this.request<types.Team>(config);
     },
 
   };

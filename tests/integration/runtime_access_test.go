@@ -230,15 +230,28 @@ func TestRuntimeAccessLostResponseRecoveryRealAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	benignClusterObservation(t, f.store, a.ClusterID)
 	if _, err = svc.ApplyCluster(t.Context(), f.principal, "cloud", op.ID, cloudinfra.ApplyInput{Review: op.Digest}); err != nil {
 		t.Fatal(err)
 	}
+	benignClusterObservation(t, f.store, a.ClusterID)
 	svc.Clusters = &runtimeAccessCrashStore{PgStore: f.store, crash: true}
 	enrollmentMustCrash(t, func() {
 		if e := svc.ReconcileRuntimeAccessOperation(t.Context(), "org", op.ID, nil); e != nil {
 			t.Fatal(e)
 		}
 	})
+	r, readErr := f.store.GetManagedResource(t.Context(), "org", a.ClusterID)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	changed := *r.Observation
+	changed.Version += "-incompatible"
+	changed.ObservedAt = time.Now().UTC()
+	if err = f.store.SaveClusterScalingObservation(t.Context(), r, changed); !errors.Is(err, cloudinfra.ErrBusy) {
+		t.Fatal("accepted access upgrade allowed material observer change", err)
+	}
+	benignClusterObservation(t, f.store, a.ClusterID)
 	role, err := f.bootstrap.Kube.RbacV1().Roles(a.Namespace).Get(t.Context(), a.ServiceAccountName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)

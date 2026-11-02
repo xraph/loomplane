@@ -43,16 +43,18 @@ const (
 // connect to and the secrets Loomplane generates for them. A kind lives in
 // its own file and registers itself with MustRegister from init.
 type Kind struct {
-	Name         string            `json:"name"` // manifest kind
-	Title        string            `json:"title"`
-	Description  string            `json:"description,omitempty"`
-	Placement    Placement         `json:"placement"`
-	Targets      []string          `json:"targets"`  // subset of "server", "kubernetes"
-	Releases     []Release         `json:"releases"` // newest first; Releases[0].Version is the default
-	Dependencies []Dependency      `json:"dependencies,omitempty"`
-	Secrets      []GeneratedSecret `json:"secrets,omitempty"`
-	Components   []Component       `json:"components"`
-	Outputs      []Output          `json:"outputs,omitempty"` // Outputs[0] is the primary, kept under the resource's "url"
+	replayError  string             // retained unsafe history may be inspected and removed, but never applied
+	Name         string             `json:"name"` // manifest kind
+	Title        string             `json:"title"`
+	Description  string             `json:"description,omitempty"`
+	Placement    Placement          `json:"placement"`
+	Service      *ServiceDefinition `json:"service,omitempty"`
+	Targets      []string           `json:"targets"`  // subset of "server", "kubernetes"
+	Releases     []Release          `json:"releases"` // newest first; Releases[0].Version is the default
+	Dependencies []Dependency       `json:"dependencies,omitempty"`
+	Secrets      []GeneratedSecret  `json:"secrets,omitempty"`
+	Components   []Component        `json:"components"`
+	Outputs      []Output           `json:"outputs,omitempty"` // Outputs[0] is the primary, kept under the resource's "url"
 	// ConsumerOptions are the values a consuming service chooses when it
 	// links, such as a tenant, passed to the kind's ConsumerBinder.
 	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
@@ -73,6 +75,14 @@ type Kind struct {
 	// one sentence, with {resource} and {environment} for the names. The
 	// planner falls back to naming the enabled setting without it.
 	OptInAdvice string `json:"-"`
+}
+
+// ServiceDefinition describes a reusable process's published connection fields.
+// Recovery and BackupFormat identify a native adapter when both are set.
+type ServiceDefinition struct {
+	Connection   map[string]string `json:"connection"`
+	Recovery     string            `json:"recovery,omitempty"`
+	BackupFormat string            `json:"backup_format,omitempty"`
 }
 
 // Setting is a value a resource of the kind sets under
@@ -189,8 +199,10 @@ type Port struct {
 // HTTPProbe checks a process with HTTP GET, Redis PING or Memcached
 // VERSION. Native protocol probes have no path.
 type HTTPProbe struct {
-	Port string `json:"port"` // a Port.Name with Protocol "http", "redis" or "memcached"
-	Path string `json:"path"` // "/readyz"; "" on a native protocol port
+	// Checker names a fixed authenticated engine check that reads mounted credentials.
+	Checker string `json:"checker,omitempty"`
+	Port    string `json:"port"` // a Port.Name with Protocol "http", "redis" or "memcached"
+	Path    string `json:"path"` // "/readyz"; "" on a native protocol port
 }
 
 // Volume is a component's data directory. Its data is rebuilt, never
@@ -259,8 +271,8 @@ type EnvVar struct {
 type Ref struct {
 	Dependency string `json:"dependency,omitempty"` // a Dependency.Name
 	Component  string `json:"component,omitempty"`  // a sibling Component.Name
-	// Field is, for dependencies, a Field constant, or on a dependency-only
-	// kind "url", "output:<name>" or "secret:<name>"; for components
+	// Field is, for dependencies, a Field constant, or on a direct service
+	// "url", "output:<name>" or "secret:<name>"; for components
 	// "url:<port name>" or "address:<port name>".
 	Field string `json:"field"`
 }
@@ -275,13 +287,15 @@ const (
 	FieldPassword = "password"
 	FieldDatabase = "database"
 	FieldAdminURL = "admin-url" // the superuser URL; postgres-family dependencies only
+	FieldCACert   = "ca_cert"   // public PEM CA certificate for verified TLS
 	FieldQuery    = "query"     // raw query string of the dependency URL
 )
 
 // File is a file CatalogHooks.Files renders into a component.
 type File struct {
-	Path string      `json:"path"`           // absolute, no "..", not under /proc, /sys or /dev
-	Mode fs.FileMode `json:"mode,omitempty"` // default 0o444
+	CertificateSecret string      `json:"certificate_secret,omitempty"` // engine TLS bundle, issued for the trusted runtime instance
+	Path              string      `json:"path"`                         // absolute, no "..", not under /proc, /sys or /dev
+	Mode              fs.FileMode `json:"mode,omitempty"`               // default 0o444
 }
 
 // Dependency is a resource a composition connects to: one Loomplane
@@ -311,17 +325,19 @@ type Requirement struct {
 // GeneratedSecret is a random value Loomplane generates once and keeps
 // in Vault.
 type GeneratedSecret struct {
-	Name     string `json:"name"`               // "admin-password"
-	Bytes    int    `json:"bytes,omitempty"`    // random bytes, default 32
-	Encoding string `json:"encoding,omitempty"` // "base64url" (default) or "hex"
-	Prefix   string `json:"prefix,omitempty"`   // ^[a-z]{1,8}_$ or "", prepended verbatim
+	Generator string `json:"generator,omitempty"` // optional structured generator supplied by catalog hooks
+	Name      string `json:"name"`                // "admin-password"
+	Bytes     int    `json:"bytes,omitempty"`     // random bytes, default 32
+	Encoding  string `json:"encoding,omitempty"`  // "base64url" (default) or "hex"
+	Prefix    string `json:"prefix,omitempty"`    // ^[a-z]{1,8}_$ or "", prepended verbatim
 }
 
 // Output is a value a consuming service gets. It sets exactly one of From,
 // Template and PerConsumer.
 type Output struct {
-	Name        string `json:"name"`    // DNS label; Outputs[0] conventionally "url"
-	EnvKey      string `json:"env_key"` // "OCTOPUS_URL"
+	PublicCA    string `json:"public_ca,omitempty"` // public CA PEM from one declared engine TLS secret
+	Name        string `json:"name"`                // DNS label; Outputs[0] conventionally "url"
+	EnvKey      string `json:"env_key"`             // "OCTOPUS_URL"
 	From        *Ref   `json:"from,omitempty"`
 	PerConsumer bool   `json:"per_consumer,omitempty"` // issued per consuming service by the kind's ConsumerBinder
 	Secret      bool   `json:"secret,omitempty"`
@@ -435,6 +451,11 @@ type OutputInfo struct {
 // clone copies every slice, map and pointer so a registered kind never
 // shares memory with its caller.
 func (k Kind) clone() Kind {
+	if k.Service != nil {
+		service := *k.Service
+		service.Connection = maps.Clone(service.Connection)
+		k.Service = &service
+	}
 	k.Targets = slices.Clone(k.Targets)
 	k.Releases = slices.Clone(k.Releases)
 	for i := range k.Releases {

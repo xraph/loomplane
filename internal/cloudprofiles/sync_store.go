@@ -348,6 +348,13 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	if err != nil {
 		return nil, storeError(err)
 	}
+	for _, env := range envs {
+		for _, review := range env.LocationReviews {
+			if checkErr := ValidateLocationReviewTx(ctx, tx, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), review, time.Now()); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+	}
 	if p.Reverts != "" {
 		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_syncs SET status='reverting',body=jsonb_set(body,'{status}','"reverting"'),version=version+1,updated_at=$4 WHERE org_id=$1 AND project_id=$2 AND id=$3`, p.OrgID, p.ProjectID, p.Reverts, sync.CreatedAt)
 		if err != nil {

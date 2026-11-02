@@ -13,36 +13,39 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/security"
 )
 
 var ErrManagedFailedCleanupConflict = errors.New("managed failed cleanup requires a current review")
+var ErrHistoricalFailedCleanup = errors.New("cancel the previous cleanup review and approve a new one for this worker")
 var ErrManagedFailedCleanupUnavailable = errors.New("managed failed cleanup execution is unavailable")
 
 const ManagedCleanupAbandonFailed ManagedCleanupKind = "abandon_failed_release"
 
 // ManagedFailedCleanup retains each accepted actor and exact target set.
 type ManagedFailedCleanup struct {
-	Blockers     []string               `json:"blockers,omitempty"`
-	ID           string                 `json:"review_id"`
-	Org          string                 `json:"-"`
-	Deployment   string                 `json:"deployment_id"`
-	Sequence     int64                  `json:"review_sequence"`
-	Predecessor  string                 `json:"predecessor,omitempty"`
-	Digest       string                 `json:"revision"`
-	Status       string                 `json:"status"`
-	Attempt      int                    `json:"attempt"`
-	Error        string                 `json:"error,omitempty"`
-	Actor        security.Principal     `json:"-"`
-	Targets      []ManagedCleanupTarget `json:"targets"`
-	RevokedAt    *time.Time             `json:"-"`
-	SupersededAt *time.Time             `json:"-"`
+	RequiredProtocol string                 `json:"-"`
+	Blockers         []string               `json:"blockers,omitempty"`
+	ID               string                 `json:"review_id"`
+	Org              string                 `json:"-"`
+	Deployment       string                 `json:"deployment_id"`
+	Sequence         int64                  `json:"review_sequence"`
+	Predecessor      string                 `json:"predecessor,omitempty"`
+	Digest           string                 `json:"revision"`
+	Status           string                 `json:"status"`
+	Attempt          int                    `json:"attempt"`
+	Error            string                 `json:"error,omitempty"`
+	Actor            security.Principal     `json:"-"`
+	Targets          []ManagedCleanupTarget `json:"targets"`
+	RevokedAt        *time.Time             `json:"-"`
+	SupersededAt     *time.Time             `json:"-"`
 }
 
 func scanManagedFailed(row pgx.Row) (*ManagedFailedCleanup, error) {
 	var out ManagedFailedCleanup
 	var actor, targets []byte
-	err := row.Scan(&out.ID, &out.Org, &out.Deployment, &out.Sequence, &out.Predecessor, &out.Digest, &out.Status, &out.Attempt, &out.Error, &actor, &targets, &out.RevokedAt, &out.SupersededAt)
+	err := row.Scan(&out.ID, &out.Org, &out.Deployment, &out.Sequence, &out.Predecessor, &out.Digest, &out.Status, &out.Attempt, &out.Error, &actor, &targets, &out.RevokedAt, &out.SupersededAt, &out.RequiredProtocol)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,7 +61,7 @@ func scanManagedFailed(row pgx.Row) (*ManagedFailedCleanup, error) {
 	return &out, nil
 }
 
-const managedFailedColumns = `id,org_id,deployment_id,sequence,coalesce(predecessor_id,''),review_digest,status,attempt,error,actor,targets,revoked_at,superseded_at`
+const managedFailedColumns = `id,org_id,deployment_id,sequence,coalesce(predecessor_id,''),review_digest,status,attempt,error,actor,targets,revoked_at,superseded_at,required_protocol`
 
 func (s *ManagedCleanupStore) CurrentFailedCleanup(ctx context.Context, org, deployment string) (*ManagedFailedCleanup, error) {
 	return scanManagedFailed(s.db.QueryRow(ctx, `SELECT `+managedFailedColumns+` FROM loomplane_managed_failed_cleanups WHERE org_id=$1 AND deployment_id=$2 AND superseded_at IS NULL`, org, deployment))
@@ -81,7 +84,7 @@ func (s *ManagedCleanupStore) previewFailed(ctx context.Context, tx driver.Tx, p
 	if err := s.actor(ctx, p, p.OrgID, project); err != nil {
 		return nil, err
 	}
-	out := &ManagedFailedCleanup{Org: p.OrgID, Deployment: deployment, Sequence: 1}
+	out := &ManagedFailedCleanup{RequiredProtocol: orchestration.ManagedCleanupProtocol, Org: p.OrgID, Deployment: deployment, Sequence: 1}
 	var raw []byte
 	if err := tx.QueryRow(ctx, `SELECT loomplane_managed_failed_cleanup_targets($1,$2)`, p.OrgID, deployment).Scan(&raw); err != nil {
 		return nil, err
@@ -92,9 +95,9 @@ func (s *ManagedCleanupStore) previewFailed(ctx context.Context, tx driver.Tx, p
 	if len(out.Targets) == 0 {
 		return nil, ErrNotFound
 	}
-	var predecessor, predecessorStatus string
+	var predecessor, predecessorStatus, predecessorProtocol string
 	var sequence int64
-	err := tx.QueryRow(ctx, `SELECT id,sequence,status FROM loomplane_managed_failed_cleanups WHERE org_id=$1 AND deployment_id=$2 AND superseded_at IS NULL FOR UPDATE`, p.OrgID, deployment).Scan(&predecessor, &sequence, &predecessorStatus)
+	err := tx.QueryRow(ctx, `SELECT id,sequence,status,required_protocol FROM loomplane_managed_failed_cleanups WHERE org_id=$1 AND deployment_id=$2 AND superseded_at IS NULL FOR UPDATE`, p.OrgID, deployment).Scan(&predecessor, &sequence, &predecessorStatus, &predecessorProtocol)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
@@ -102,15 +105,19 @@ func (s *ManagedCleanupStore) previewFailed(ctx context.Context, tx driver.Tx, p
 		out.Predecessor = predecessor
 		out.Sequence = sequence + 1
 		if predecessorStatus == "pending" {
-			out.Blockers = append(out.Blockers, "managed_cleanup_review_in_progress")
+			if predecessorProtocol != orchestration.ManagedCleanupProtocol {
+				out.Blockers = append(out.Blockers, "cancel_legacy_cleanup_review")
+			} else {
+				out.Blockers = append(out.Blockers, "managed_cleanup_review_in_progress")
+			}
 		}
 	}
 	body, err := json.Marshal(struct {
-		Deployment, Predecessor string
-		Sequence                int64
-		Retries                 int
-		Targets                 []ManagedCleanupTarget
-	}{deployment, out.Predecessor, out.Sequence, retries, out.Targets})
+		Deployment, Predecessor, Protocol string
+		Sequence                          int64
+		Retries                           int
+		Targets                           []ManagedCleanupTarget
+	}{deployment, out.Predecessor, out.RequiredProtocol, out.Sequence, retries, out.Targets})
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +209,9 @@ func (s *ManagedCleanupStore) AcceptFailedCleanup(ctx context.Context, p securit
 	}
 	if e == nil {
 		if existing.Status == "pending" {
+			if existing.RequiredProtocol != orchestration.ManagedCleanupProtocol {
+				return nil, ErrHistoricalFailedCleanup
+			}
 			return nil, ErrManagedFailedCleanupConflict
 		}
 		var drained bool
@@ -247,7 +257,7 @@ func (s *ManagedCleanupStore) AcceptFailedCleanup(ctx context.Context, p securit
 	out.Actor = p
 	out.Status = "pending"
 	out.Attempt = 1
-	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_managed_failed_cleanups(id,org_id,deployment_id,sequence,predecessor_id,review_digest,actor,targets) VALUES($1,$2,$3,$4,nullif($5,''),$6,$7,$8)`, out.ID, p.OrgID, deployment, out.Sequence, out.Predecessor, out.Digest, actor, targets); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_managed_failed_cleanups(id,org_id,deployment_id,sequence,predecessor_id,review_digest,actor,targets,required_protocol) VALUES($1,$2,$3,$4,nullif($5,''),$6,$7,$8,$9)`, out.ID, p.OrgID, deployment, out.Sequence, out.Predecessor, out.Digest, actor, targets, out.RequiredProtocol); err != nil {
 		return nil, err
 	}
 	return out, tx.Commit()

@@ -171,7 +171,10 @@ it("switches an existing connection to keyless", async () => {
   )
   const user = userEvent.setup()
   await user.click(
-    await screen.findByRole("button", { name: "Switch to keyless" })
+    await screen.findByRole("button", { name: "More account actions" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Switch to keyless" })
   )
   expect(await screen.findByText("https://loomplane.example")).toBeTruthy()
   await user.type(screen.getByLabelText("Role ARN"), "arn:aws:iam::1:role/x")
@@ -203,7 +206,13 @@ it("says a connection is connected keylessly", async () => {
     </ClientProvider>
   )
   expect(await screen.findByText("Connected keylessly")).toBeTruthy()
-  expect(screen.queryByRole("button", { name: "Switch to keyless" })).toBeNull()
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "More account actions" }))
+  await screen.findByRole("menuitem", { name: "Replace credential" })
+  expect(
+    screen.queryByRole("menuitem", { name: "Switch to keyless" })
+  ).toBeNull()
 })
 
 it("replaces a keyless connection's credential with a key, not keyless again", async () => {

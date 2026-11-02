@@ -29,12 +29,12 @@ func TestManagedCleanupProtocolPersistence(t *testing.T) {
 		t.Fatal("cleanup without new demand has no protocol")
 	}
 	saveCleanupReview(t, f, plan, result)
-	for _, build := range []string{"deployment-v2", "deployment-v3", "deployment-v4", "deployment-v5"} {
+	for _, build := range []string{"deployment-v2", "deployment-v3", "deployment-v4", "deployment-v5", "deployment-v6"} {
 		if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,$2,jsonb_build_object('build_id',$2::text))`, plan.ID, build); err == nil {
 			t.Fatal("accepted old build", build)
 		}
 	}
-	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,'cleanup-route','{"build_id":"deployment-v6"}')`, plan.ID); err != nil {
+	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_runs(org_id,plan_id,workflow_id,request) VALUES('org',$1,'cleanup-route','{"build_id":"deployment-v7"}')`, plan.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_deployment_workflow_participants(org_id,plan_id,workflow_id) VALUES('org',$1,'cleanup-route')`, plan.ID); err != nil {
@@ -86,7 +86,7 @@ func TestManagedCleanupProtocolApplicationProfile(t *testing.T) {
 	}
 	scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: "fresh-instance", RuntimeRef: "org/env/api/runtime_cleanup_protocol", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: "apps", NamespaceUID: "namespace-uid", ClusterCA: strings.Repeat("a", 64), Epoch: attempt.Generation}
 	scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	identity := kube.ManagedRuntimeIdentity{Org: scope.Org, Project: scope.Project, Environment: scope.Environment, Service: scope.Service, Plan: scope.Plan, Connection: scope.Connection, Instance: scope.Instance, RuntimeRef: scope.RuntimeRef, RuntimeRevision: scope.RuntimeRevision, Namespace: scope.Namespace, NamespaceUID: scope.NamespaceUID, ClusterCA: scope.ClusterCA}
 	profile, err := journal.WithClusterCapacity(false).ManagedProfileFor(t.Context(), identity)
 	if err != nil || profile != kube.ManagedProfileJournal {

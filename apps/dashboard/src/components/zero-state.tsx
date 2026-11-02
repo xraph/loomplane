@@ -28,7 +28,8 @@ const zeroStateVariants = cva(
         panel: "items-center rounded-[14px] px-6 py-10 text-center",
         // Already inside a card, so just the content.
         inline: "items-start p-5 text-left",
-        compact: "items-start gap-3 py-5 text-left",
+        // Centred like a panel, with less room, for a section or a dialog.
+        compact: "items-center gap-3 px-5 py-6 text-center",
       },
     },
     defaultVariants: { variant: "panel" },
@@ -93,7 +94,7 @@ function ZeroStateHeader({
       data-slot="empty-header"
       className={cn(
         "flex max-w-md flex-col gap-1.5",
-        variant === "panel" ? "items-center" : "items-start",
+        variant === "inline" ? "items-start" : "items-center",
         className
       )}
       {...props}

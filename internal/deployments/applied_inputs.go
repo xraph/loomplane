@@ -61,7 +61,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 		if durable && ref != "" {
 			return fmt.Errorf("applied variable snapshot is missing: %w", err)
 		}
-		values, secrets, verr := r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, cfg.Service)
+		values, secrets, verr := r.deploymentVariables(ctx, d, cfg.Service)
 		if verr != nil {
 			return fmt.Errorf("resolve applied variables: %w", verr)
 		}

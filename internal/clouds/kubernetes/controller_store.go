@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 )
 
@@ -15,9 +16,15 @@ var ErrControllerMissing = errors.New("no trusted Kubernetes controller receipt"
 type ControllerStore struct {
 	db              *pgdriver.PgDB
 	capacityEnabled bool
+	replicaProofKey []byte
+	demandGuard     func(context.Context, driver.Tx, ManagedScope) error
 }
 
 func NewControllerStore(db *pgdriver.PgDB) *ControllerStore { return &ControllerStore{db: db} }
+
+func (s *ControllerStore) ManagedWritesEnabled() bool {
+	return s != nil && s.db != nil && s.capacityEnabled
+}
 
 // RecordController accepts evidence only from the successful runtime mutation.
 // Retries retain one receipt per runtime attempt. A replaced UID needs a fresh
@@ -128,4 +135,9 @@ func (s *ControllerStore) GetController(ctx context.Context, org, connection, in
 		return nil, ErrOwned
 	}
 	return &r, nil
+}
+
+func (s *ControllerStore) WithManagedDemandGuard(guard func(context.Context, driver.Tx, ManagedScope) error) *ControllerStore {
+	s.demandGuard = guard
+	return s
 }

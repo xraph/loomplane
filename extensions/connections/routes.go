@@ -115,8 +115,9 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 		},
 		{
 			Cloud: connections.Cloudflare, Title: "Cloudflare", Credential: "API token",
-			Help:     "Create an API token in Cloudflare under My Profile, API Tokens, scoped to this account, with Zone Read and DNS Edit for the zones Loomplane manages. Add Registrar edit only if you want to register domains from Loomplane. Loomplane checks each permission without changing anything and says which are missing. If the token can read account settings, the connection shows the account's name; otherwise Loomplane shows the account ID.",
-			Settings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}},
+			Help:           "Sign in when a Cloudflare OAuth app is set up, or create an API token under My Profile, API Tokens. Choose DNS, R2 storage or both. DNS needs Zone Read and DNS Edit. R2 needs Account Settings Read and Workers R2 Storage Read to sync, plus Write to create buckets. Add Registrar edit only to register domains. Application uploads use separate R2 S3 credentials. Loomplane checks access without creating resources.",
+			Settings:       []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}, {Key: "services", Label: "What to connect"}},
+			SignInSettings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}, {Key: "services", Label: "What to connect"}},
 		},
 		{
 			Cloud: connections.Azure, Title: "Microsoft Azure", Credential: "Client secret",

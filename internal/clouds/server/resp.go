@@ -31,7 +31,7 @@ func pingRESP(ctx context.Context, timeout time.Duration, dial func(context.Cont
 
 // probed reports whether a workload declares a readiness probe.
 func probed(labels map[string]string) bool {
-	return labels[owned.LabelHealth] != "" || labels[owned.LabelHealthProtocol] != ""
+	return labels[owned.LabelHealth] != "" || labels[owned.LabelHealthProtocol] != "" || labels[owned.LabelHealthChecker] != ""
 }
 
 // healthProbe is the readiness probe a workload declares: a RESP PING when

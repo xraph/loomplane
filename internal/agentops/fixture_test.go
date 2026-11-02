@@ -333,6 +333,10 @@ func (m *memProjects) SetAutonomy(context.Context, string, string, projects.Auto
 	return nil, projects.Autonomy{}, projects.ErrNotFound
 }
 
+func (m *memProjects) SetResponsibleTeam(context.Context, string, string, string) (*projects.Project, error) {
+	return nil, projects.ErrNotFound
+}
+
 func (m *memProjects) CreateEnvironment(_ context.Context, e *projects.Environment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

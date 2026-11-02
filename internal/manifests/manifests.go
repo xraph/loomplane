@@ -157,9 +157,11 @@ type ResourceUse struct {
 
 // NewResource is a resource to add to the manifest.
 type NewResource struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Provider string `json:"provider,omitempty"`
+	ExistingResource string `json:"existing_resource,omitempty"`
+	Region           string `json:"region,omitempty"`
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	Provider         string `json:"provider,omitempty"`
 	// Target is the checked server connection a catalog resource runs on.
 	Target  string                  `json:"target,omitempty"`
 	Version string                  `json:"version,omitempty"`
@@ -240,7 +242,7 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 	}
 	out, err := manifest.WithResource(doc, name, manifest.Resource{
 		Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
-		Settings: r.Settings, GPU: r.GPU,
+		Settings: r.Settings, GPU: r.GPU, ExistingResource: r.ExistingResource, Region: r.Region,
 	})
 	if err != nil || environment == "" {
 		return out, err

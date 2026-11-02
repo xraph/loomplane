@@ -41,7 +41,7 @@ func newCleanupIssuerFixture(t *testing.T, retire bool, keyIDs ...string) *clean
 func prepareCleanupIssuerFixture(t *testing.T, retire bool, prepare func(*poolFixture, *planning.Service, *planning.Plan, *planning.Result, kube.ManagedScope), keyIDs ...string) *cleanupIssuerFixture {
 	t.Helper()
 	f, svc, plan, result, scope := cleanupTargetFixture(t)
-	application := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	application := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	serviceWrite, err := application.Issue(t.Context(), scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: scope.Namespace, Name: scope.Instance, Method: "POST"})
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func prepareCleanupIssuerFixture(t *testing.T, retire bool, prepare func(*poolFi
 	if err = auth.Assign(t.Context(), "org", "reviewer", security.RoleOwner, "test"); err != nil {
 		t.Fatal(err)
 	}
-	return &cleanupIssuerFixture{poolFixture: f, store: planning.NewManagedCleanupStore(f.db, auth, nil), auth: auth, member: member, scope: scope, selection: planning.ManagedCleanupSelection{Org: "org", Plan: plan.ID, Action: "service:api", Deployment: "cleanup-deployment"}, request: kube.ManagedRequest{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "apps", Name: "old-instance", UID: "deployment-uid", Method: "DELETE"}, ctx: ctx}
+	return &cleanupIssuerFixture{poolFixture: f, store: planning.NewManagedCleanupStore(f.db, auth, nil), auth: auth, member: member, scope: scope, selection: planning.ManagedCleanupSelection{Org: "org", Plan: plan.ID, Action: "service:api", Deployment: "cleanup-deployment"}, request: kube.ManagedRequest{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "apps", Name: "old-instance", UID: "deployment-uid", ResourceVersion: "1", Method: "DELETE"}, ctx: ctx}
 }
 
 func (f *cleanupIssuerFixture) open(t *testing.T) *planning.ManagedCleanupGrant {
@@ -107,7 +107,7 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 	if g.SchemaVersion != 1 || g.Revision != 1 || g.CreatedAt.IsZero() {
 		t.Fatalf("grant metadata: %+v", g)
 	}
-	application := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+	application := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 	if _, checkErr := application.Issue(t.Context(), f.scope, f.request); checkErr == nil {
 		t.Fatal("application scope reopened")
 	}
@@ -126,6 +126,11 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 		if _, err = j.Issue(f.ctx, f.scope, changed); err == nil {
 			t.Fatal("unknown cleanup allowed changed resourceVersion")
 		}
+	}
+	changedPolicy := f.request
+	changedPolicy.PropagationPolicy = "Orphan"
+	if _, err = j.Issue(f.ctx, f.scope, changedPolicy); err == nil {
+		t.Fatal("unknown historical propagation silently changed")
 	}
 	other := f.request
 	other.Resource = "services"
@@ -167,9 +172,7 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 	if err = f.sql.QueryRow(t.Context(), `SELECT cleanup_grant_id,cleanup_grant_revision FROM loomplane_managed_workload_issuances WHERE id=$1`, unknown).Scan(&link, &revision); err != nil || link != g.ID || revision != g.Revision {
 		t.Fatalf("link: %s %d %v", link, revision, err)
 	}
-	if _, err = f.sql.Exec(t.Context(), `DELETE FROM loomplane_bindings WHERE id='cleanup-binding'`); err != nil {
-		t.Fatal(err)
-	}
+	historicalCleanupBindingLoss(t.Context(), t, f.sql, "org", "cleanup-binding")
 	again, err := f.store.Open(f.ctx, f.selection)
 	if err != nil || again.ID != g.ID {
 		t.Fatalf("reopen after binding removal: %+v %v", again, err)
@@ -241,9 +244,7 @@ func TestManagedCleanupIssuerCurrentAuthorization(t *testing.T) {
 				if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_cloud_assignments WHERE org_id='org'`); checkErr != nil {
 					t.Fatal(checkErr)
 				}
-				if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_bindings WHERE id='cleanup-binding'`); checkErr != nil {
-					t.Fatal(checkErr)
-				}
+				historicalCleanupBindingLoss(t.Context(), t, f.sql, "org", "cleanup-binding")
 			}
 			if query := queries[change]; query != "" {
 				if _, checkErr := f.sql.Exec(t.Context(), query); checkErr != nil {
@@ -388,5 +389,44 @@ func TestManagedCleanupIssuerReadAuthorization(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatal("revoked grant called runtime reader")
+	}
+}
+
+func TestManagedCleanupPendingOwnerFence(t *testing.T) {
+	f := newCleanupIssuerFixture(t, false)
+	grant := f.open(t)
+	journal := f.store.Journal("org", grant.ID)
+	r := f.request
+	r.ResourceVersion = "5"
+	write, err := journal.Issue(f.ctx, f.scope, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func(release, instance string) error {
+		_, e := f.sql.Exec(f.ctx, `INSERT INTO loomplane_managed_workload_authority(org_id,release_id,epoch,body)
+ SELECT org_id,$1,epoch,body||jsonb_build_object('Instance',$2::text,'Connection','another-connection','Release',$1::text) FROM loomplane_managed_workload_authority WHERE release_id=$3`, release, instance, f.scope.Release)
+		return e
+	}
+	if err = open("competing", f.scope.Instance); err == nil {
+		t.Fatal("new aliased owner crossed pending delete")
+	}
+	if err = open("unrelated", "another-instance"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.sql.Exec(f.ctx, `INSERT INTO loomplane_managed_workload_issuances(id,org_id,release_id,epoch,scope,request)
+ SELECT 'competing-write',org_id,release_id,epoch,scope||'{"Connection":"another-connection"}'::jsonb,request||'{"Method":"PUT"}'::jsonb FROM loomplane_managed_workload_issuances WHERE id=$1`, write); err == nil {
+		t.Fatal("old writer crossed pending cleanup")
+	}
+	if err = f.store.Revoke(f.ctx, "org", grant.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = open("competing", f.scope.Instance); err == nil {
+		t.Fatal("revocation erased pending fence")
+	}
+	if err = journal.Resolve(f.ctx, write, f.scope, kube.ManagedOutcome{State: "accepted", StatusCode: 200, UID: r.UID, ResourceVersion: "6"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = open("competing", f.scope.Instance); err != nil {
+		t.Fatal("historical resolution did not clear fence", err)
 	}
 }

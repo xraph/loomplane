@@ -10,7 +10,7 @@ import (
 func TestAllRunsLibraryGroupsAfterLoomplanes(t *testing.T) {
 	want := []string{
 		"loomplane", "authsome", "authsome-waitlist", "warden", "chronicle", "dispatch",
-		"ctrlplane", "vault", "loomplane_native_credentials", "keysmith", "trove", "herald", "relay",
+		"ctrlplane", "loomplane_managed_instances", "vault", "loomplane_native_credentials", "keysmith", "trove", "herald", "relay",
 		"cortex", "nexus", "shield", "weave",
 	}
 	got := make([]string, 0, len(want))

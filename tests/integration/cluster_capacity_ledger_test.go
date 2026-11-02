@@ -578,72 +578,318 @@ func TestClusterEnvelopeLegacyCloudGate(t *testing.T) {
 }
 
 func TestClusterCapacityLedgerLegacyFirstAttemptBarrier(t *testing.T) {
-	for _, serverFirst := range []bool{false, true} {
-		t.Run(map[bool]string{false: "cluster_wins", true: "server_wins"}[serverFirst], func(t *testing.T) {
-			f := ledgerFixture(t)
-			if err := cloudprofiles.NewPgStore(ledgerDB(t, f)).CreateProfile(t.Context(), &cloudprofiles.Profile{ID: "peer", OrgID: "org", ProjectID: "proj", Name: "Peer", Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
-				t.Fatal(err)
-			}
-			o, err := f.svc.PreviewServer(t.Context(), f.p, "peer", cloudinfra.ServerInput{Kind: "create", Name: "peer-server", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			o.Status = "pending"
-			if err = f.store.Accept(t.Context(), o); err != nil {
-				t.Fatal(err)
-			}
-			early := make(chan error, 1)
-			resume := make(chan struct{})
-			finished := make(chan error, 1)
-			go func() {
-				early <- f.store.EnsureInfrastructureCapacity(t.Context(), o)
-				<-resume
-				o.Attempted = true
-				finished <- f.store.SaveOperation(t.Context(), o)
-			}()
-			if err = <-early; err != nil {
-				close(resume)
-				<-finished
-				t.Fatal(err)
-			}
-			if serverFirst {
-				close(resume)
-				if err = <-finished; err != nil {
-					t.Fatal(err)
-				}
-				var holds int
-				if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE id=$1 AND status='reserved'`, o.ID).Scan(&holds); err != nil || holds != 1 {
-					t.Fatal("first effect lacks durable hold", holds, err)
-				}
-			}
-			cluster := clusterLedgerPreview(t, f, "barrier-cluster")
-			if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','1'::jsonb)`); err != nil {
-				t.Fatal(err)
-			}
-			err = f.store.AcceptClusterOperation(t.Context(), cluster, 2)
-			if serverFirst {
-				if err == nil {
-					t.Fatal("cluster ignored unresolved server effect")
-				}
-				// Historical checkpointing remains available after another account user appears.
-				if err = f.store.SaveOperation(t.Context(), o); err != nil {
-					t.Fatal("attempted recovery blocked", err)
-				}
-				return
-			}
-			if err != nil {
-				close(resume)
-				<-finished
-				t.Fatal(err)
-			}
-			close(resume)
-			if err = <-finished; !errors.Is(err, cloudinfra.ErrConflict) {
-				t.Fatal("server crossed first-effect barrier", err)
-			}
-			saved, err := f.store.GetOperation(t.Context(), "org", "peer", o.ID)
-			if err != nil || saved.Attempted {
-				t.Fatal("blocked attempt persisted", saved, err)
+	for _, historical := range []bool{false, true} {
+		t.Run(map[bool]string{false: "modern", true: "historical"}[historical], func(t *testing.T) {
+			for _, serverFirst := range []bool{false, true} {
+				t.Run(map[bool]string{false: "cluster_wins", true: "server_wins"}[serverFirst], func(t *testing.T) {
+					f := ledgerFixture(t)
+					if err := cloudprofiles.NewPgStore(ledgerDB(t, f)).CreateProfile(t.Context(), &cloudprofiles.Profile{ID: "peer", OrgID: "org", ProjectID: "proj", Name: "Peer", Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+						t.Fatal(err)
+					}
+					o, err := f.svc.PreviewServer(t.Context(), f.p, "peer", cloudinfra.ServerInput{Kind: "create", Name: "peer-server", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if historical {
+						// Insert the representation approved before capacity targets existed.
+						o.ID += "-historical"
+						o.CapacityTarget = nil
+						if err = f.store.CreatePreview(t.Context(), o); err != nil {
+							t.Fatal(err)
+						}
+					}
+
+					o.Status = "pending"
+					if err = f.store.Accept(t.Context(), o); err != nil {
+						t.Fatal(err)
+					}
+					early := make(chan error, 1)
+					resume := make(chan struct{})
+					finished := make(chan error, 1)
+					go func() {
+						early <- f.store.EnsureInfrastructureCapacity(t.Context(), o)
+						<-resume
+						o.Attempted = true
+						finished <- f.store.SaveOperation(t.Context(), o)
+					}()
+					if err = <-early; err != nil {
+						close(resume)
+						<-finished
+						t.Fatal(err)
+					}
+					if serverFirst {
+						close(resume)
+						if err = <-finished; err != nil {
+							t.Fatal(err)
+						}
+						var holds int
+						if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE id=$1 AND status='reserved'`, o.ID).Scan(&holds); err != nil || (!historical && holds != 1) {
+							t.Fatal("first effect lacks durable hold", holds, err)
+						}
+					}
+					cluster := clusterLedgerPreview(t, f, "barrier-cluster")
+					legacyLedgerAlias(t, f, cluster)
+					if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','1'::jsonb)`); err != nil {
+						t.Fatal(err)
+					}
+					err = f.store.AcceptClusterOperation(t.Context(), cluster, 2)
+					if serverFirst {
+						if err == nil {
+							t.Fatal("cluster ignored unresolved server effect")
+						}
+						// Historical checkpointing remains available after another account user appears.
+						if err = f.store.SaveOperation(t.Context(), o); err != nil {
+							t.Fatal("attempted recovery blocked", err)
+						}
+						return
+					}
+					if err != nil {
+						close(resume)
+						<-finished
+						t.Fatal(err)
+					}
+					close(resume)
+					if err = <-finished; !errors.Is(err, cloudinfra.ErrConflict) {
+						t.Fatal("server crossed first-effect barrier", err)
+					}
+					saved, err := f.store.GetOperation(t.Context(), "org", "peer", o.ID)
+					if err != nil || saved.Attempted {
+						t.Fatal("blocked attempt persisted", saved, err)
+					}
+				})
 			}
 		})
+	}
+}
+
+func legacyLedgerOperation(t *testing.T, f *infraFixture, kind, account string) *cloudinfra.Operation {
+	t.Helper()
+	if err := cloudprofiles.NewPgStore(ledgerDB(t, f)).CreateProfile(t.Context(), &cloudprofiles.Profile{ID: "peer", OrgID: "org", ProjectID: "proj", Name: "Peer", Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Minute).UTC()
+	o := &cloudinfra.Operation{ID: "historical", OrgID: "org", CloudID: "peer", ServerID: "historical-host", Provider: "digitalocean", AccountID: account, ConnectionID: "infra-account", Review: "original-approved-review", Status: "failed", Attempted: true, Input: cloudinfra.ServerInput{Kind: kind, Size: "small"}, CreatedAt: now, UpdatedAt: now, ExpiresAt: now}
+	// Insert an already-attempted old row without passing a new first-attempt hook.
+	if err := f.store.CreatePreview(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func legacyLedgerAlias(t *testing.T, f *infraFixture, o *cloudinfra.ClusterOperation) {
+	t.Helper()
+	alias := &connections.Connection{ID: "legacy-account-alias", OrgID: "org", Cloud: connections.DigitalOcean, Name: "Alias", Status: connections.StatusReady, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := connections.NewPgStore(ledgerDB(t, f)).CreateConnection(t.Context(), alias); err != nil {
+		t.Fatal(err)
+	}
+	o.Input.ConnectionID = alias.ID
+	o.Input.ConnectionGeneration = alias.Generation
+	raw, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cluster_operations SET body=$1 WHERE id=$2`, raw, o.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func legacyLedgerMembership(t *testing.T, f *infraFixture, members []provider.CapacityServer, complete bool, checked time.Time) {
+	t.Helper()
+	gen, err := f.store.BeginCapacityRefresh(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := int64(len(members))
+	resources := cloudinfra.CapacityResources{Servers: inventoryNumber(count), CPUMillis: inventoryNumber(count * 2000), MemoryBytes: inventoryNumber(count * (2 << 30)), StorageBytes: inventoryNumber(count * 20_000_000_000)}
+	if err = f.store.SaveCapacityInventory(t.Context(), "org", "cloud", gen, nil, []cloudinfra.CapacityAccountSnapshot{{Provider: "digitalocean", AccountID: "account", Provisioned: resources, Quota: provider.CapacityQuota{Servers: inventoryNumber(2)}, CheckedAt: checked}}); err != nil {
+		t.Fatal(err)
+	}
+	membership := map[string]any{"provider": "digitalocean", "account_id": "account", "complete": complete, "checked_at": checked, "servers": members}
+	raw, err := json.Marshal(membership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET membership=$1 WHERE org_id='org' AND provider='digitalocean' AND account_id='account'`, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClusterCapacityLedgerHistoricalSettlement(t *testing.T) {
+	for _, test := range []struct {
+		name, kind, resolution string
+		allowed                bool
+	}{
+		{"lost_create_response", "create", "lost", false},
+		{"aggregate_only", "create", "aggregate", false},
+		{"legacy_null_membership", "create", "null_membership", false},
+		{"partial_create_response", "create", "partial", false},
+		{"missing_action_receipt", "create", "no_actions", false},
+		{"cancelled_unknown_effect", "create", "cancelled", false},
+		{"succeeded_unknown_effect", "create", "succeeded", false},
+		{"resize_still_running", "resize", "partial", false},
+		{"wrong_action_identity", "resize", "wrong_action", false},
+		{"wrong_member_identity", "create", "wrong_member", false},
+		{"incomplete_membership", "create", "incomplete", false},
+		{"old_membership", "resize", "old", false},
+		{"exact_create", "create", "complete", true},
+		{"exact_resize", "resize", "complete", true},
+		{"empty_snapshot_is_not_absence", "create", "empty", false},
+		{"wrong_delete_identity", "create", "wrong_delete", false},
+		{"exact_absence", "create", "absent", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := ledgerFixture(t)
+			o := legacyLedgerOperation(t, f, test.kind, "account")
+			cluster := clusterLedgerPreview(t, f, "legacy-settlement")
+			legacyLedgerAlias(t, f, cluster)
+			var original string
+			if err := f.sql.QueryRow(t.Context(), `SELECT body::text FROM loomplane_infrastructure_operations WHERE id=$1`, o.ID).Scan(&original); err != nil {
+				t.Fatal(err)
+			}
+			// Aggregate-only fresh inventory cannot resolve the historical attempt.
+			if err := f.store.AcceptClusterOperation(t.Context(), cluster, 2); !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatal("already attempted historical effect was omitted", err)
+			}
+			var unchanged string
+			if err := f.sql.QueryRow(t.Context(), `SELECT body::text FROM loomplane_infrastructure_operations WHERE id=$1`, o.ID).Scan(&unchanged); err != nil || unchanged != original {
+				t.Fatal("admission rewrote the historical body", err)
+			}
+			o.ResourceID = "physical-server"
+			o.Actions = []provider.InfrastructureAction{{ID: "action", ResourceID: o.ResourceID, Kind: test.kind, Status: "completed"}}
+			members := []provider.CapacityServer{{ID: o.ResourceID, CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(2 << 30), StorageBytes: inventoryNumber(20_000_000_000)}}
+			checked := time.Now().UTC()
+			switch test.resolution {
+			case "lost":
+				o.ResourceID = ""
+				o.Actions = nil
+				members = nil
+			case "no_actions":
+				o.Actions = nil
+			case "cancelled", "succeeded":
+				o.Status = test.resolution
+				o.Actions = nil
+			case "partial":
+				o.Actions = append(o.Actions, provider.InfrastructureAction{ID: "pending", ResourceID: o.ResourceID, Kind: test.kind, Status: "in-progress"})
+			case "wrong_action":
+				o.Actions[0].ResourceID = "other-server"
+			case "wrong_member":
+				members[0].ID = "other-server"
+			case "old":
+				o.UpdatedAt = checked
+				checked = checked.Add(-time.Millisecond)
+			case "empty", "wrong_delete", "absent":
+				members = nil
+			}
+			if err := f.store.SaveOperation(t.Context(), o); err != nil {
+				t.Fatal("historical resolution checkpoint blocked", err)
+			}
+			if test.resolution == "absent" || test.resolution == "wrong_delete" {
+				deletion := *o
+				deletion.ID = "historical-delete"
+				deletion.Status = "succeeded"
+				deletion.Input.Kind = "delete"
+				deletion.AbsenceConfirmedAt = checked.Add(-time.Second)
+				if test.resolution == "wrong_delete" {
+					deletion.ResourceID = "other-server"
+				}
+				if err := f.store.CreatePreview(t.Context(), &deletion); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.resolution != "aggregate" {
+				legacyLedgerMembership(t, f, members, test.resolution != "incomplete", checked)
+			}
+			if test.resolution == "null_membership" {
+				if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET membership=NULL`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.resolution == "complete" {
+				if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','1'::jsonb)`); err != nil {
+					t.Fatal(err)
+				}
+				var blocked *cloudinfra.CapacityAdmissionError
+				if err := f.store.AcceptClusterOperation(t.Context(), cluster, 2); !errors.As(err, &blocked) || blocked.Block.Reason != "provider_quota" {
+					t.Fatal("settled server disappeared from account usage", err)
+				}
+				if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','2'::jsonb)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := f.store.AcceptClusterOperation(t.Context(), cluster, 2)
+			if test.allowed && err != nil {
+				t.Fatal("exact historical settlement did not unblock admission", err)
+			}
+			if !test.allowed && !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatal("unresolved historical effect admitted", err)
+			}
+			saved, err := f.store.GetOperation(t.Context(), "org", "peer", o.ID)
+			if err != nil || saved.CapacityTarget != nil || saved.Review != "original-approved-review" {
+				t.Fatal("historical approval changed", saved, err)
+			}
+		})
+	}
+}
+
+func TestClusterCapacityLedgerHistoricalAccountScope(t *testing.T) {
+	for _, account := range []string{"account", "unrelated-account"} {
+		t.Run(account, func(t *testing.T) {
+			f := ledgerFixture(t)
+			legacyLedgerOperation(t, f, "create", account)
+			server := ledgerPreview(t, f)
+			err := f.store.Accept(t.Context(), server)
+			if account == "account" {
+				if !errors.Is(err, cloudinfra.ErrConflict) {
+					t.Fatal("server admission omitted unknown peer effect", err)
+				}
+			} else if err != nil {
+				t.Fatal("unrelated account blocked server admission", err)
+			}
+		})
+	}
+	f := ledgerFixture(t)
+	legacyLedgerOperation(t, f, "create", "unrelated-account")
+	cluster := clusterLedgerPreview(t, f, "unrelated-cluster")
+	if err := f.store.AcceptClusterOperation(t.Context(), cluster, 2); err != nil {
+		t.Fatal("unrelated account blocked cluster admission", err)
+	}
+}
+
+func TestClusterCapacityLedgerHistoricalServerRecheck(t *testing.T) {
+	f := ledgerFixture(t)
+	server := ledgerPreview(t, f)
+	if err := f.store.Accept(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	legacyLedgerOperation(t, f, "create", "account")
+	server.Attempted = true
+	if err := f.store.SaveOperation(t.Context(), server); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("reserved server crossed first-effect barrier beside unknown legacy effect", err)
+	}
+	saved, err := f.store.GetOperation(t.Context(), "org", "cloud", server.ID)
+	if err != nil || saved.Attempted {
+		t.Fatal("blocked modern attempt persisted", saved, err)
+	}
+}
+
+func TestClusterCapacityLedgerHistoricalClusterRecheck(t *testing.T) {
+	f := ledgerFixture(t)
+	cluster := clusterLedgerPreview(t, f, "historical-recheck")
+	legacyLedgerAlias(t, f, cluster)
+	if err := f.store.AcceptClusterOperation(t.Context(), cluster, 2); err != nil {
+		t.Fatal(err)
+	}
+	legacyLedgerOperation(t, f, "create", "account")
+	leased, err := f.store.LeaseClusterOperation(t.Context(), "org", cluster.ID, "worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocked *cloudinfra.CapacityAdmissionError
+	if err = f.store.AttemptClusterCreate(t.Context(), leased); !errors.As(err, &blocked) || blocked.Block.Resource != "account" {
+		t.Fatal("accepted cluster crossed first-effect barrier beside unknown legacy effect", err)
+	}
+	saved, err := f.store.GetClusterOperation(t.Context(), "org", "cloud", cluster.ID)
+	if err != nil || saved.Steps[0].State != "pending" {
+		t.Fatal("blocked cluster attempt persisted", saved, err)
 	}
 }

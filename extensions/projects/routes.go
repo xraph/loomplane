@@ -23,6 +23,13 @@ type EnvironmentList struct {
 	Environments []projects.Environment `json:"environments"`
 }
 
+// ProjectPermissions is the body of GET /api/v1/projects/:id/permissions:
+// the names of the project permissions the caller holds on that project,
+// in security.ProjectPermissions order.
+type ProjectPermissions struct {
+	Permissions []string `json:"permissions"`
+}
+
 // ForgeEnvelope tells the generated client the list wraps Projects.
 func (ProjectList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "projects"}
@@ -58,6 +65,17 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithName("projects.update"), forge.WithSummary("Change a project's name, description, icon or color"),
 			forge.WithRequestSchema(projects.UpdateProjectInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
+		}},
+		{http.MethodPut, "/projects/:id/team", e.setTeam, []forge.RouteOption{
+			forge.WithName("projects.setTeam"),
+			forge.WithSummary("Name the team responsible for a project, or clear it with null"),
+			forge.WithRequestSchema(projects.SetTeamInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
+		}},
+		{http.MethodGet, "/projects/:id/permissions", e.permissions, []forge.RouteOption{
+			forge.WithName("projects.permissions"),
+			forge.WithSummary("What the caller may do on one project, team grants included"),
+			forge.WithResponseSchema(http.StatusOK, "The caller's permissions on the project", ProjectPermissions{}),
 		}},
 		{http.MethodPost, "/projects/:id/exclusions", e.exclude, []forge.RouteOption{
 			forge.WithName("projects.exclude"),
@@ -103,6 +121,8 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			err = g.GET(rt.path, rt.handler, rt.opts...)
 		case http.MethodPost:
 			err = g.POST(rt.path, rt.handler, rt.opts...)
+		case http.MethodPut:
+			err = g.PUT(rt.path, rt.handler, rt.opts...)
 		case http.MethodPatch:
 			err = g.PATCH(rt.path, rt.handler, rt.opts...)
 		case http.MethodDelete:
@@ -177,6 +197,47 @@ func (e *Extension) update(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, proj)
+}
+
+func (e *Extension) setTeam(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in projects.SetTeamInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"team_id\": \"team_...\"}, or null to clear it")
+	}
+	proj, err := e.svc.SetTeam(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, proj)
+}
+
+// permissions answers what the caller may do on one project. Reading the
+// project first keeps another workspace's project a 404, as GET is.
+func (e *Extension) permissions(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	proj, err := e.svc.Get(ctx, p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	out := ProjectPermissions{Permissions: []string{}}
+	for _, perm := range security.ProjectPermissions() {
+		ok, err := e.authz.AllowedOn(ctx, p, perm, proj.ID)
+		if err != nil {
+			return fail(err)
+		}
+		if ok {
+			out.Permissions = append(out.Permissions, perm.Name())
+		}
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func (e *Extension) exclude(c forge.Context) error {

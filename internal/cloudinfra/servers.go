@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
@@ -160,6 +161,9 @@ type Runtime interface {
 }
 
 type Deps struct {
+	InstanceAuthority       InstanceNamespaceAuthority
+	InstanceIsolation       InstanceNamespaceQualifier
+	ReplicaVerifier         *kubernetes.ControllerStore
 	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig
 	ClusterCapacity         config.ClusterCapacityConfig
@@ -168,7 +172,8 @@ type Deps struct {
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup
-	// EnableAutomaticCapacity stays false until integrated qualification.
+	// EnableAutomaticCapacity comes from clouds.automatic_capacity.enabled,
+	// which stays off by default until integrated qualification.
 	EnableAutomaticCapacity bool
 	Domains                 DomainStore
 	Registrations           RegistrationStore

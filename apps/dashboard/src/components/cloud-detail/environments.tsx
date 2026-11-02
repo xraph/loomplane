@@ -2,7 +2,6 @@
 // using the Cloud, choose which target each service runs on, and stop using
 // it. Each goes through the same reviewed change the rest of the page uses.
 import type { UseQueryResult } from "@forge-go/client-react"
-import { PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import * as api from "@/client/forge/loomplane/hooks"
@@ -19,11 +18,17 @@ import { useQuery } from "@/client/hooks"
 import { ChangeReview } from "@/components/cloud-targets/change-review"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
+  ActionsCell,
+  Cell,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  RowMenu,
+} from "@/components/cloud-targets/cloud-page"
+import {
   CloudEmpty,
   CloudSectionHead,
   Field,
-  Row,
-  Rows,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { ServiceAdoption } from "@/components/cloud-targets/service-adoption"
 import { QueryError } from "@/components/query-error"
@@ -37,6 +42,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import {
   SelectContent,
   SelectItem,
@@ -71,6 +77,11 @@ export function envState(
   return { label: "In sync", tone: "live" }
 }
 
+/**
+ * EnvironmentsOnCloud lists the environments that use the Cloud. Starting to
+ * use it lives in the page header (UseInEnvironment); each row chooses
+ * targets or stops using the Cloud.
+ */
 export function EnvironmentsOnCloud({
   scope,
   usage,
@@ -89,28 +100,18 @@ export function EnvironmentsOnCloud({
 }) {
   const { can } = useOrganization()
   const permitted = can("cloud_account:manage") && can("deployment:approve")
-  const [adding, setAdding] = useState(false)
   const [adopting, setAdopting] = useState<EnvironmentUsage | null>(null)
   const [leaving, setLeaving] = useState<EnvironmentUsage | null>(null)
   const envs = usage.data?.environments ?? []
   const assigned = envs.filter((e) => e.assigned)
   const projectOf = (id: string) => projects.find((p) => p.id === id)
-  const choices = grants
-    ? projects.filter((p) => grants.some((g) => g.projectId === p.id))
-    : projects.filter((p) => p.id === scope.project)
   return (
-    <section aria-label="Environments on this Cloud" className="grid gap-3">
+    <section aria-label="Environments on this Cloud" className="grid gap-2.5">
       <CloudSectionHead
         title="Environments on this Cloud"
         count={usage.data ? assigned.length : undefined}
-      >
-        {permitted && choices.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <PlusIcon />
-            Use in an environment
-          </Button>
-        )}
-      </CloudSectionHead>
+        description="Each one runs its services on this Cloud's targets."
+      />
       {usage.status === "error" ? (
         <QueryError
           error={usage.error}
@@ -118,15 +119,20 @@ export function EnvironmentsOnCloud({
           retry={usage.refetch}
         />
       ) : !usage.data ? (
-        <Skeleton className="h-24 rounded-xl" />
+        <Skeleton className="h-32 rounded-xl" />
       ) : envs.length === 0 ? (
-        <CloudEmpty kind="inline" title="No environment uses this Cloud yet">
+        <CloudEmpty kind="list" title="No environments yet">
           {grants && grants.length === 0
             ? "Give a project access first, then choose an environment to use it."
             : "Choose an environment to use it. Its services then run on this Cloud's targets."}
         </CloudEmpty>
       ) : (
-        <Rows>
+        <CloudTable
+          label="Environments on this Cloud"
+          columns="minmax(0,1fr) 150px 150px"
+          head={["Environment", "State", ""]}
+          minWidth={480}
+        >
           {envs.map((env) => {
             const project = projectOf(env.projectId)
             const style = project ? projectStyle(project) : null
@@ -136,20 +142,20 @@ export function EnvironmentsOnCloud({
               0
             )
             return (
-              <Row key={env.environmentId} className="flex-wrap gap-y-2">
-                <span className="flex min-w-0 flex-[1_1_220px] items-center gap-2.5">
-                  {style && (
-                    <ProjectIcon
-                      icon={style.icon}
-                      color={style.color}
-                      size="sm"
-                    />
-                  )}
-                  <span className="grid min-w-0 gap-0.5">
-                    <span className="truncate text-[13px] font-medium">
-                      {env.environmentName}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
+              <CloudTableRow key={env.environmentId}>
+                <NameCell
+                  tile={
+                    style && (
+                      <ProjectIcon
+                        icon={style.icon}
+                        color={style.color}
+                        className="size-7 rounded-lg"
+                      />
+                    )
+                  }
+                  name={env.environmentName}
+                  meta={
+                    <>
                       <Link
                         to="/projects/$id"
                         params={{ id: env.projectId }}
@@ -158,44 +164,39 @@ export function EnvironmentsOnCloud({
                         {env.projectName}
                       </Link>{" "}
                       · {serviceCount(running)}
-                    </span>
-                  </span>
-                </span>
-                <StatusPill tone={state.tone}>{state.label}</StatusPill>
-                {permitted && env.assigned && (
-                  <span className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setAdopting(env)}
-                    >
-                      Choose targets
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setLeaving(env)}
-                    >
-                      Stop using
-                    </Button>
-                  </span>
-                )}
-              </Row>
+                    </>
+                  }
+                />
+                <Cell>
+                  <StatusPill tone={state.tone}>{state.label}</StatusPill>
+                </Cell>
+                <ActionsCell>
+                  {permitted && env.assigned && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAdopting(env)}
+                      >
+                        Choose targets
+                      </Button>
+                      <RowMenu
+                        label={`More actions for ${env.environmentName}`}
+                      >
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setLeaving(env)}
+                        >
+                          Stop using this Cloud
+                        </DropdownMenuItem>
+                      </RowMenu>
+                    </>
+                  )}
+                </ActionsCell>
+              </CloudTableRow>
             )
           })}
-        </Rows>
-      )}
-      {adding && (
-        <UseInEnvironment
-          scope={scope}
-          projects={choices}
-          taken={assigned.map((e) => e.environmentId)}
-          onClose={() => setAdding(false)}
-          onApplied={() => {
-            setAdding(false)
-            onChanged()
-          }}
-        />
+        </CloudTable>
       )}
       {adopting && (
         <ChooseTargets
@@ -267,7 +268,8 @@ function Assignment({
   )
 }
 
-function UseInEnvironment({
+/** UseInEnvironment picks a project's environment and reviews moving it here. */
+export function UseInEnvironment({
   scope,
   projects,
   taken,

@@ -324,7 +324,7 @@ function EdgeCacheForm({
           cookies, authorization headers and non-GET/HEAD requests bypass cache.
         </p>
         {policy.rules.length === 0 ? (
-          <ZeroState variant="compact" className="items-start text-left">
+          <ZeroState variant="compact">
             <ZeroStateHeader>
               <ZeroStateTitle>No cache rules</ZeroStateTitle>
               <ZeroStateDescription>

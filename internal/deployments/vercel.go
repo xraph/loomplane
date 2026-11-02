@@ -50,6 +50,9 @@ type Vercel struct {
 
 var _ Executor = (*Vercel)(nil)
 
+// RetainCheckpointOnRetry keeps native resource create intents and identities.
+func (*Vercel) RetainCheckpointOnRetry() bool { return true }
+
 type vercelState struct {
 	ProjectID    string `json:"project_id,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
@@ -70,7 +73,21 @@ func ProjectName(job *Job) string {
 }
 
 // Apply implements Executor.
-func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
+	if job.Action.Resource != nil {
+		return v.applyResource(ctx, job)
+	}
+	if job.Secrets == nil {
+		job.Secrets = map[string]bool{}
+	}
+	if job.Action.Service != nil {
+		for _, link := range job.Action.Service.Env {
+			if link.Subject == planning.ResourceSubject {
+				job.Secrets[link.Key] = true
+			}
+		}
+	}
+	defer nativeDeliveryBoundary(job)(&err)
 	cfg := job.Action.Service
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: vercel runs web apps and static sites, not %s", ErrNoExecutor, job.Action.Subject)
@@ -101,11 +118,36 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if state.ProjectID != "" && state.ProjectID != project.ID {
+		return nil, errors.New("the Vercel project identity changed since this deployment started")
+	}
 	state.ProjectID = project.ID
 	if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
 		return nil, checkpointErr
 	}
-	if serr := v.Client.SetEnv(ctx, tok, project.ID, job.Env, job.Secrets); serr != nil {
+	if checkErr := vercelCredentialBridgeCollision(job, project.ID); checkErr != nil {
+		return nil, checkErr
+	}
+	var resourceKeys []string
+	for _, link := range cfg.Env {
+		if link.Subject == planning.ResourceSubject {
+			resourceKeys = append(resourceKeys, link.Key)
+		}
+	}
+	if len(resourceKeys) > 0 {
+		owner := tok.TeamID
+		if owner == "" && job.Connection != nil {
+			owner = job.Connection.Details["user_id"]
+		}
+		if checkErr := v.Client.VerifyResourceProject(ctx, tok, project.ID, owner); checkErr != nil {
+			return nil, checkErr
+		}
+		if checkErr := v.Client.VerifyRuntimeResourceIsolation(ctx, tok, project.ID, resourceKeys); checkErr != nil {
+			return nil, checkErr
+		}
+	}
+	_, buildEnv, buildSecrets := vercelDeploymentEnvironments(job)
+	if serr := v.Client.SetEnv(ctx, tok, project.ID, buildEnv, buildSecrets); serr != nil {
 		return nil, serr
 	}
 	if state.DeploymentID == "" {
@@ -144,9 +186,10 @@ func (v *Vercel) deploy(ctx context.Context, tok vercel.Token, job *Job, project
 	if err != nil {
 		return "", err
 	}
-	d, err := v.Client.CreateDeployment(ctx, tok, project, files, map[string]string{
+	runtimeEnv, buildEnv, _ := vercelDeploymentEnvironments(job)
+	d, err := v.Client.CreateDeploymentWithRuntimeEnv(ctx, tok, project, files, map[string]string{
 		"githubCommitSha": job.CommitSHA, "loomplanePlan": job.Plan.ID,
-	})
+	}, runtimeEnv, buildEnv)
 	if err != nil {
 		return "", fmt.Errorf("create the vercel deployment: %w", err)
 	}
@@ -245,6 +288,9 @@ type File = vercel.File
 // Remove implements Executor: it deletes the Vercel project, and with it
 // its deployments.
 func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	if b.Subject == planning.ResourceSubject || job.Action.Resource != nil {
+		return v.removeResource(ctx, job, b)
+	}
 	if b.ExternalID == "" {
 		return nil
 	}
@@ -254,6 +300,9 @@ func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 // Observe implements Executor: the project, and which deployment its
 // production domain serves.
 func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding) (*Observation, error) {
+	if b.Subject == planning.ResourceSubject {
+		return v.observeResource(ctx, conn, credential, b)
+	}
 	tok := vercel.Token{Value: strings.TrimSpace(string(credential))}
 	if conn != nil {
 		tok.TeamID = conn.Details["team_id"]

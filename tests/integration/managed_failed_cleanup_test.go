@@ -152,7 +152,7 @@ func TestManagedFailedCleanupGrantVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal := f.store.Journal("org", grant.ID)
-	if err = kube.NewControllerStore(f.db).WithClusterCapacity(true).OpenManagedScope(t.Context(), f.scope); err == nil {
+	if err = kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db)).OpenManagedScope(t.Context(), f.scope); err == nil {
 		t.Fatal("abandoned application authority reopened")
 	}
 	issuance, err := journal.Issue(f.ctx, f.scope, f.request)
@@ -236,7 +236,7 @@ func TestManagedFailedCleanupAuthorizationAndStaleness(t *testing.T) {
 			case "unknown write":
 				_, err = f.sql.Exec(t.Context(), `UPDATE loomplane_deployments SET status='running' WHERE id=$1`, f.scope.Deployment)
 				if err == nil {
-					_, err = kube.NewControllerStore(f.db).WithClusterCapacity(true).Issue(t.Context(), f.scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: f.scope.Namespace, Name: f.scope.Instance, Method: "PUT"})
+					_, err = kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db)).Issue(t.Context(), f.scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: f.scope.Namespace, Name: f.scope.Instance, Method: "PUT"})
 				}
 				if err == nil {
 					_, err = f.sql.Exec(t.Context(), `UPDATE loomplane_deployments SET status='failed' WHERE id=$1`, f.scope.Deployment)

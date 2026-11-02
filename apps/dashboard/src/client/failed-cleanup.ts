@@ -1,3 +1,4 @@
+import { op_deployments_cleanupCancel } from "@/client/forge/loomplane/ops/deployments.cleanupCancel"
 import { mutation, query } from "@forge-go/client-core"
 import { op_deployments_cleanup } from "@/client/forge/loomplane/ops/deployments.cleanup"
 import { op_deployments_cleanupPreview } from "@/client/forge/loomplane/ops/deployments.cleanupPreview"
@@ -28,3 +29,8 @@ export const useCleanupRetry = mutation<FailedCleanup>({
   ...op_deployments_cleanupRetry,
   invalidates,
 })
+
+export const useCleanupCancel = mutation<
+  FailedCleanup,
+  { expectedReviewId: string }
+>({ ...op_deployments_cleanupCancel, invalidates })

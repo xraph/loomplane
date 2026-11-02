@@ -461,6 +461,13 @@ func scalingPoolSetup(t *testing.T) *scalingPoolAPI {
 			_, _ = w.Write([]byte(`{"sizes":[{"slug":"gpu-l4x1-24gb","memory":16384,"vcpus":4,"disk":100,"available":true,"price_hourly":0.85,"price_monthly":632.4,"regions":["tor1"],"gpu_info":{"count":1,"model":"nvidia_l4","vram":{"amount":24,"unit":"gib"}}}],"links":{}}`))
 		case "/v2/images":
 			_, _ = w.Write([]byte(`{"images":[{"id":1,"slug":"gpu-h100x1-base","name":"AI/ML Ready","distribution":"Ubuntu","public":true,"regions":["tor1"],"min_disk_size":50}],"links":{}}`))
+		case "/v2/databases":
+			if r.Method != http.MethodGet {
+				t.Error("background inventory must not mutate databases")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
 		default:
 			t.Errorf("asked DigitalOcean %s", r.URL)
 			w.WriteHeader(http.StatusNotFound)

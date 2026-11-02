@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -19,16 +20,9 @@ func OwnedCloud(cloud string) bool {
 // ReviewedConnectionSettings copies only placement settings. Credential and
 // permission-check metadata can change without changing a destination.
 func ReviewedConnectionSettings(cloud string, details map[string]string) map[string]string {
-	var keys []string
-	switch cloud {
-	case "server":
-		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
-	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
-	case "firecracker":
-		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "runtime_identity", "ingress_address"}
-	case "registry":
-		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
+	keys := reviewedPlacementKeys(cloud, details)
+	if cloud == "firecracker" {
+		keys = append(keys, "runtime_identity")
 	}
 	if details["managed_attachment_id"] != "" {
 		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
@@ -40,6 +34,50 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 				out = map[string]string{}
 			}
 			out[k] = v
+		}
+	}
+	return out
+}
+
+func reviewedPlacementKeys(cloud string, details map[string]string) []string {
+	var keys []string
+	switch cloud {
+	case "azure":
+		keys = []string{"tenant_id", "subscription_id", "resource_group", "registry_pull"}
+	case "digitalocean":
+		keys = []string{"team_uuid"}
+		if strings.TrimSpace(details["team_uuid"]) == "" {
+			keys = []string{"account_uuid"}
+		}
+	case "server":
+		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
+	case "kubernetes":
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
+	case "firecracker":
+		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "ingress_address"}
+	case "registry":
+		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
+	}
+	return keys
+}
+
+// PublicReviewedSettings retains reviewed placement without execution selectors
+// or runtime qualification identities. It shares the planner's placement keys.
+func PublicReviewedSettings(details map[string]string) map[string]string {
+	if details == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, cloud := range []string{"azure", "digitalocean", "server", "kubernetes", "firecracker", "registry"} {
+		for _, key := range reviewedPlacementKeys(cloud, details) {
+			if value, ok := details[key]; ok {
+				out[key] = value
+			}
+		}
+	}
+	for _, key := range []string{"build_workers", "build_runtime_class", "runtime_class", "region", "zone"} {
+		if value, ok := details[key]; ok {
+			out[key] = value
 		}
 	}
 	return out
@@ -85,11 +123,34 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 }
 
 func (p *planner) configureTarget(name, base string, prov *provider.Provider, set manifest.Settings, cfg *ServiceConfig) {
+	cfg.Placement = set.Placement
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		c := p.targetConnection(name, base+".cloud_target", "target", prov.Cloud, placement.ConnectionID)
 		if c != nil {
 			cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 		}
+	}
+	if prov.Cloud == "cloudflare" {
+		cfg.Target = set.Target
+		if placement, ok := p.in.CloudPlacements[name]; ok {
+			cfg.Target = placement.ConnectionID
+		}
+		if cfg.Target == "" {
+			cfg.Target = p.in.Chosen[prov.Cloud]
+		}
+		if cfg.Target == "" {
+			if fallback, ok := p.connection(prov.Cloud); ok {
+				cfg.Target = fallback.ID
+			}
+		}
+		if c := p.targetConnection(name, base+".target", "target", prov.Cloud, cfg.Target); c != nil {
+			cfg.TargetAccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
+			cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
+		}
+		if set.Endpoint != nil || set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "") {
+			p.problem(Finding{Code: "worker-build-unsupported", Subject: ServiceSubject, Name: name, Path: base, Message: "Cloudflare Workers deploy prebundled JavaScript modules. Choose worker.main and build dependencies before publishing the reviewed commit."})
+		}
+		return
 	}
 	if !OwnedCloud(prov.Cloud) {
 		if set.Target != "" || set.Endpoint != nil || (set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "")) {

@@ -54,6 +54,13 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","email":"ada@example.com","status":"active","team":{"uuid":"team-acme","name":"Acme"}}}`))
+		case "/v2/databases":
+			if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+accessToken {
+				t.Error("inventory must read through the connected account")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
 		default:
 			t.Errorf("asked DigitalOcean %s", r.URL)
 			w.WriteHeader(http.StatusNotFound)
@@ -254,6 +261,18 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.UserPermissions})
+		case "/sql/v1beta4/projects/shop-prod/instances", "/v1/projects/shop-prod/locations/-/instances", "/storage/v1/b":
+			if auth := r.Header.Get("Authorization"); r.Method != http.MethodGet || auth != "Bearer "+freshToken && auth != "Bearer "+firstToken {
+				t.Error("inventory must read through the connected Google grant")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			if r.URL.Path == "/storage/v1/b" && r.URL.Query().Get("project") != "shop-prod" {
+				t.Error("bucket inventory reached another project")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[],"instances":[]}`))
 		default:
 			t.Errorf("asked Google %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusNotFound)

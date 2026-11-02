@@ -36,9 +36,9 @@ type poolFixture struct {
 	pool   *cloudinfra.Pool
 }
 
-func newPoolFixture(t *testing.T) *poolFixture {
+func newPoolFixture(t *testing.T, through ...string) *poolFixture {
 	t.Helper()
-	clouds, sql, db := cloudSyncDatabase(t)
+	clouds, sql, db := cloudSyncDatabase(t, through...)
 	st := cloudinfra.NewPgStore(db)
 	now := time.Now().UTC()
 	cs := connections.NewPgStore(db)

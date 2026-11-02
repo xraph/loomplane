@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -789,14 +790,39 @@ func checkAutomaticEnvelopePrices(o *ClusterOperation) error {
 	if o.Input.EnvelopeReview == nil || !o.Input.EnvelopeReview.Automatic {
 		return nil
 	}
-	if o.MoneyEstimate == nil || !o.MoneyEstimate.Known || !freshClusterEnvelopeEvidence(o.MoneyEstimate.CheckedAt, time.Now()) {
-		return ErrConflict
+	check := func(m *MoneyEstimate) error {
+		if m == nil {
+			return &ClusterPriceError{Reason: "missing_price", Categories: []string{"estimate"}}
+		}
+		if !m.Known {
+			categories := []string{}
+			for _, c := range m.Components {
+				if c.HourlyMicroUSD == nil {
+					category := c.Category
+					if category == "" {
+						category = "unclassified"
+					}
+					if !slices.Contains(categories, category) {
+						categories = append(categories, category)
+					}
+				}
+			}
+			return &ClusterPriceError{Reason: "unknown_price", Categories: categories}
+		}
+		if !freshClusterEnvelopeEvidence(m.CheckedAt, time.Now()) {
+			return &ClusterPriceError{Reason: "stale_price"}
+		}
+		return nil
+	}
+	if err := check(o.MoneyEstimate); err != nil {
+		return err
 	}
 	for _, review := range o.Input.EnvelopeReview.Pools {
-		if !review.Money.Known || !freshClusterEnvelopeEvidence(review.Money.CheckedAt, time.Now()) {
-			return ErrConflict
+		if err := check(&review.Money); err != nil {
+			return err
 		}
 	}
+
 	return nil
 }
 

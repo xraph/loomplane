@@ -77,7 +77,7 @@ If the toolkit setup fails, the server says so, takes no GPU work and keeps cost
 
 You can put a GPU server in a pool from **Pools and reservations**. Give the pool a GPU kind and each server a GPU budget, which is how many of its GPUs the pool may hand out. A GPU pool refuses CPU work, and a CPU pool can't hold GPU budgets.
 
-Pools can also grow by creating GPU Droplets themselves, inside a GPU ceiling for each kind. You configure that growth and those ceilings through the Cloud's capacity policy, which has no screen in the dashboard yet. When they are set, a few rules apply:
+Pools can also grow by creating GPU Droplets themselves, inside a GPU ceiling for each kind. You configure that growth and those ceilings through the Cloud's capacity policy, which has no screen in the dashboard yet. None of it happens until the operator sets `LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED=true` (see [Configuration](/docs/reference/configuration#cloud-capacity)), which is off by default while it's being qualified. When they are set, a few rules apply:
 
 - A kind with no Cloud ceiling allows no GPUs at all.
 - Each GPU pool has its own ceiling for its kind, and it can't go above the Cloud's.

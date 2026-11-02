@@ -253,7 +253,7 @@ function ReviewContent({
             ))}
             {(preview.environments ?? []).map((env) => (
               <div key={env.environmentId} className="rounded-lg border p-3">
-                <EnvironmentProgress environment={env} />
+                <EnvironmentProgress environment={env} heading />
                 <p className="text-muted-foreground">
                   {env.services?.join(", ") ||
                     (preview.blockers?.length || env.error

@@ -1,0 +1,40 @@
+#cloud-config
+# Paste this into the Droplet "User data" box. Edit the three values in
+# /etc/loomplane/install.env first. Secrets are generated on the Droplet, so
+# nothing sensitive goes in here.
+write_files:
+  - path: /etc/loomplane/install.env
+    permissions: "0600"
+    content: |
+      # Hostname Loomplane will answer on. A bare hostname, no https://.
+      LOOMPLANE_DOMAIN="loomplane.example.com"
+      # Where Let's Encrypt sends certificate notices.
+      ACME_EMAIL="ops@example.com"
+      # Leave empty for the newest stable release, or pin one such as v0.1.0.
+      LOOMPLANE_VERSION=""
+      # Optional. On a 4 GB Droplet set this to 1 to keep analysis memory low.
+      # LOOMPLANE_ANALYSIS_CONCURRENCY=1
+
+runcmd:
+  - - bash
+    - -ec
+    - |
+      set -a
+      . /etc/loomplane/install.env
+      set +a
+      v="$LOOMPLANE_VERSION"
+      if [ -z "$v" ]; then
+        v=$(curl -fsSL --max-time 20 --retry 3 https://api.github.com/repos/xraph/loomplane/releases/latest \
+          | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+      fi
+      if [ -z "$v" ]; then
+        echo "loomplane-install: couldn't find a Loomplane release; set LOOMPLANE_VERSION" >&2
+        exit 1
+      fi
+      raw="https://raw.githubusercontent.com/xraph/loomplane/$v/deployments/digitalocean"
+      mkdir -p /usr/local/lib/loomplane
+      curl -fsSL --retry 3 -o /usr/local/lib/loomplane/install.sh "$raw/install.sh"
+      curl -fsSL --retry 3 -o /etc/update-motd.d/99-loomplane "$raw/files/etc/update-motd.d/99-loomplane"
+      curl -fsSL --retry 3 -o /usr/local/bin/loomplane-setup "$raw/files/usr/local/bin/loomplane-setup"
+      chmod 0755 /usr/local/lib/loomplane/install.sh /etc/update-motd.d/99-loomplane /usr/local/bin/loomplane-setup
+      LOOMPLANE_VERSION="$v" bash /usr/local/lib/loomplane/install.sh all

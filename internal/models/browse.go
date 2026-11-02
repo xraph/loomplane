@@ -53,10 +53,14 @@ type ConnectionLister interface {
 
 // Authorizer decides whether a principal may act. *security.Authorizer is
 // the real one. Require is for acting, and may repair a member's roles;
-// Allowed only answers, for what a page offers, and never repairs.
+// AllowedOn only answers, for what a page offers, and never repairs.
+// Anything that acts on one project passes its ID, so a team's grant on the
+// project counts; Allowed answers for the whole workspace, which only
+// workspace actions such as creating a GPU server use.
 type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 	Allowed(ctx context.Context, p security.Principal, perm security.Permission) (bool, error)
+	AllowedOn(ctx context.Context, p security.Principal, perm security.Permission, projectID string) (bool, error)
 }
 
 // Deps are what the models service reads.

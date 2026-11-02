@@ -154,8 +154,9 @@ type AcceptedPlan struct {
 
 // EnvironmentSnapshot compares the complete serving set during acceptance.
 type EnvironmentSnapshot struct {
-	Routes       json.RawMessage `json:"routes,omitempty"`
-	AcceptedPlan *AcceptedPlan   `json:"accepted_plan,omitempty"`
+	LocationReviews []*LocationReview `json:"location_reviews,omitempty"`
+	Routes          json.RawMessage   `json:"routes,omitempty"`
+	AcceptedPlan    *AcceptedPlan     `json:"accepted_plan,omitempty"`
 
 	ProjectID          string          `json:"project_id,omitempty"`
 	EnvironmentID      string          `json:"environment_id"`

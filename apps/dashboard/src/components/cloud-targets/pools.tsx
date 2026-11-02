@@ -1,13 +1,24 @@
+import { PlusIcon } from "lucide-react"
 import { EmptyIcon, PoolsIcon, ProjectsIcon } from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
-import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import {
+  ActionsCell,
+  Cell,
+  CloudCallout,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  RowMenu,
+} from "@/components/cloud-targets/cloud-page"
 import {
   SelectTrigger,
   SelectValue,
   SelectContent,
   SelectItem,
 } from "@/components/ui/select"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
+import { Skeleton } from "@/components/ui/skeleton"
+import { StatusPill } from "@/components/runs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
@@ -41,17 +52,27 @@ import {
   CloudError,
   CloudSectionHead,
   Field,
-  Row,
-  Rows,
   SetupReads,
+  stateTone,
 } from "./infrastructure-ui"
 
+const poolColumns = "minmax(0,1.1fr) minmax(0,1.5fr) minmax(0,1fr) 150px"
+const vcpu = (millis: number) => `${Number((millis / 1000).toFixed(2))}`
+const gib = (bytes: number) => `${Number((bytes / 2 ** 30).toFixed(1))}`
+
+/**
+ * Pools lists a Cloud's server pools: which servers each holds and the
+ * budget each gives to services. Growth rules live on the Capacity tab.
+ */
 export function Pools({
   cloud,
   servers,
+  primary = true,
 }: {
   cloud: Profile
   servers: Server[]
+  /** Whether Add pool is the tab's main action. */
+  primary?: boolean
 }) {
   const pools = useQuery(api.useCloudPoolsList, { path: { cloudId: cloud.id } })
   const [editing, setEditing] = useState<Pool | "new" | null>(null)
@@ -62,39 +83,38 @@ export function Pools({
   const unread = list.some((p) => p.acceleratorKind)
     ? servers.filter(gpusUnread).map((s) => s.name)
     : []
+  const add = (
+    <Button
+      size="sm"
+      variant={primary ? "default" : "outline"}
+      disabled={!servers.some((s) => s.status === "ready")}
+      onClick={() => setEditing("new")}
+    >
+      <PlusIcon />
+      Add pool
+    </Button>
+  )
   return (
-    <section className="grid gap-3" aria-label="Server pools">
+    <section className="grid gap-2.5" aria-label="Server pools">
       <CloudSectionHead
         title="Pools"
         count={pools.data ? list.length : undefined}
-        description="A pool groups servers and caps what each one gives to services. A target picks a pool."
+        description={
+          <>
+            A pool groups servers and caps what each one gives to services. A
+            target picks a pool.
+            <span className="block">
+              Growth rules are set on the Capacity tab.
+            </span>
+          </>
+        }
       >
-        <>
-          {servers.length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setRecovering(true)}
-            >
-              Recover reservation
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!servers.some((s) => s.status === "ready")}
-            onClick={() => setEditing("new")}
-          >
-            Add pool
-          </Button>
-        </>
+        {add}
       </CloudSectionHead>
       {unread.length > 0 && (
-        <Alert>
-          <AlertDescription>
-            {`The GPUs on ${unread.join(", ")} couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds.`}
-          </AlertDescription>
-        </Alert>
+        <CloudCallout title="GPUs couldn't be read">
+          {`The GPUs on ${unread.join(", ")} couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds.`}
+        </CloudCallout>
       )}
       {pools.status === "error" ? (
         <QueryError
@@ -103,46 +123,89 @@ export function Pools({
           retry={pools.refetch}
         />
       ) : !pools.data ? (
-        <CloudLoading>Loading pools...</CloudLoading>
+        <Skeleton className="h-32 rounded-xl" />
       ) : !list.length ? (
-        <CloudEmpty kind="list" icon={PoolsIcon} title="No server pools">
-          Add ready servers to a pool and choose their usable CPU and memory
-          budgets.
+        <CloudEmpty
+          kind="list"
+          icon={PoolsIcon}
+          title="No pools yet"
+          action={add}
+        >
+          Add ready servers to a pool and choose the CPU and memory each gives
+          to services.
         </CloudEmpty>
       ) : (
-        <Rows>
-          {list.map((p) => (
-            <Row key={p.id}>
-              <div>
-                <p className="font-mono text-[13px] font-medium">{p.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {p.members.length}{" "}
-                  {p.members.length === 1 ? "server" : "servers"}
-                  {p.members.some((m) => m.draining) &&
-                    ` · ${p.members.filter((m) => m.draining).length} draining`}
-                  {p.acceleratorKind &&
-                    ` · ${p.members.reduce((n, m) => n + (m.gpus ?? 0), 0)} ${gpuTitle(p.acceleratorKind)} GPUs`}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setEditing(p)}
-                >
-                  Edit pool
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setMoving(p)}
-                >
-                  Review service move
-                </Button>
-              </div>
-            </Row>
-          ))}
-        </Rows>
+        <CloudTable
+          label="Pools"
+          columns={poolColumns}
+          head={["Pool", "Servers", "Capacity", ""]}
+        >
+          {list.map((p) => {
+            const draining = p.members.filter((m) => m.draining).length
+            const gpus = p.members.reduce((n, m) => n + (m.gpus ?? 0), 0)
+            return (
+              <CloudTableRow key={p.id}>
+                <NameCell
+                  mono
+                  tile={<PoolsIcon />}
+                  name={p.name}
+                  meta={[
+                    `${p.members.length} ${p.members.length === 1 ? "server" : "servers"}`,
+                    draining > 0 && `${draining} draining`,
+                    p.acceleratorKind &&
+                      `${gpus} ${gpuTitle(p.acceleratorKind)} GPUs`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                />
+                <Cell>
+                  <span className="flex flex-wrap gap-1">
+                    {p.members.map((m) => {
+                      const server = servers.find((s) => s.id === m.serverId)
+                      return (
+                        <StatusPill
+                          key={m.serverId}
+                          tone={
+                            m.draining
+                              ? "waiting"
+                              : server
+                                ? stateTone(server.status)
+                                : "quiet"
+                          }
+                        >
+                          {server?.name ?? m.serverId}
+                          {m.draining && " · draining"}
+                        </StatusPill>
+                      )
+                    })}
+                  </span>
+                </Cell>
+                <Cell className="text-[12.5px] tabular-nums">
+                  {vcpu(p.members.reduce((n, m) => n + m.cpuMillis, 0))} vCPU ·{" "}
+                  {gib(p.members.reduce((n, m) => n + m.memoryBytes, 0))} GiB
+                  {p.acceleratorKind && ` · ${gpus} GPUs`}
+                </Cell>
+                <ActionsCell>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEditing(p)}
+                  >
+                    Edit pool
+                  </Button>
+                  <RowMenu label={`More actions for ${p.name}`}>
+                    <DropdownMenuItem onClick={() => setMoving(p)}>
+                      Move services
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setRecovering(true)}>
+                      Recover reservation
+                    </DropdownMenuItem>
+                  </RowMenu>
+                </ActionsCell>
+              </CloudTableRow>
+            )
+          })}
+        </CloudTable>
       )}
       {editing && (
         <PoolEditor
@@ -252,10 +315,12 @@ function PoolEditor({
     <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{pool ? "Edit pool" : "Add pool"}</DialogTitle>
+          <DialogTitle>
+            {pool ? `Edit pool ${pool.name}` : "Add a pool"}
+          </DialogTitle>
           <DialogDescription>
-            Reserve explicit usable host budgets. Pool membership does not
-            create a private network.
+            Choose the servers in this pool and what each gives to services.
+            Pool membership doesn't create a private network.
           </DialogDescription>
         </DialogHeader>
         <Field label="Pool name">
@@ -331,30 +396,13 @@ function PoolEditor({
                 )}
                 {member && (
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <Field label="CPU budget (millicores)">
+                    <Field label="CPU budget (vCPU)">
                       <Input
                         type="number"
-                        min={1}
+                        min={0.001}
+                        step="any"
                         aria-label={`CPU budget for ${s.name}`}
-                        value={member.cpuMillis}
-                        onChange={(e) =>
-                          setInput({
-                            ...input,
-                            members: input.members.map((m) =>
-                              m.serverId === s.id
-                                ? { ...m, cpuMillis: Number(e.target.value) }
-                                : m
-                            ),
-                          })
-                        }
-                      />
-                    </Field>
-                    <Field label="Memory budget (MiB)">
-                      <Input
-                        type="number"
-                        min={1}
-                        aria-label={`Memory budget for ${s.name}`}
-                        value={member.memoryBytes / 1048576}
+                        value={member.cpuMillis / 1000}
                         onChange={(e) =>
                           setInput({
                             ...input,
@@ -362,8 +410,35 @@ function PoolEditor({
                               m.serverId === s.id
                                 ? {
                                     ...m,
-                                    memoryBytes:
-                                      Number(e.target.value) * 1048576,
+                                    cpuMillis: Math.round(
+                                      Number(e.target.value) * 1000
+                                    ),
+                                  }
+                                : m
+                            ),
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Memory budget (GiB)">
+                      <Input
+                        type="number"
+                        min={0.001}
+                        step="any"
+                        aria-label={`Memory budget for ${s.name}`}
+                        value={Number(
+                          (member.memoryBytes / 2 ** 30).toFixed(3)
+                        )}
+                        onChange={(e) =>
+                          setInput({
+                            ...input,
+                            members: input.members.map((m) =>
+                              m.serverId === s.id
+                                ? {
+                                    ...m,
+                                    memoryBytes: Math.round(
+                                      Number(e.target.value) * 2 ** 30
+                                    ),
                                   }
                                 : m
                             ),
@@ -511,10 +586,10 @@ function MoveEditor({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Review service move</DialogTitle>
+          <DialogTitle>Move a service onto {pool.name}</DialogTitle>
           <DialogDescription>
-            Move one service's current release. Persistent data migration needs
-            its own review.
+            Move one service's current release to a server in this pool.
+            Persistent data migration needs its own review.
           </DialogDescription>
         </DialogHeader>
         {accepted ? (
@@ -529,20 +604,25 @@ function MoveEditor({
               environment before the intent expires. The plan consumes the
               reviewed destination intent and checks current capacity.
             </p>
-            <Button
-              nativeButton={false}
-              render={
-                <Link
-                  to="/deployments/new"
-                  search={{
-                    project: input.projectId,
-                    environment: environmentName,
-                  }}
-                />
-              }
-            >
-              Create deployment plan
-            </Button>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>
+                Close
+              </Button>
+              <Button
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/deployments/new"
+                    search={{
+                      project: input.projectId,
+                      environment: environmentName,
+                    }}
+                  />
+                }
+              >
+                Create deployment plan
+              </Button>
+            </DialogFooter>
           </div>
         ) : (
           <>
@@ -638,23 +718,28 @@ function MoveEditor({
                 placement.
               </p>
             )}
-            <Button
-              disabled={
-                preview.isPending ||
-                apply.isPending ||
-                projects.status !== "success" ||
-                !environmentName ||
-                !input.environmentId ||
-                !input.service ||
-                !input.destinationServerId
-              }
-              onClick={() => void act()}
-            >
-              {review ? "Accept reviewed move" : "Preview move"}
-            </Button>
+            <CloudError message={error} />
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  preview.isPending ||
+                  apply.isPending ||
+                  projects.status !== "success" ||
+                  !environmentName ||
+                  !input.environmentId ||
+                  !input.service ||
+                  !input.destinationServerId
+                }
+                onClick={() => void act()}
+              >
+                {review ? "Accept reviewed move" : "Preview move"}
+              </Button>
+            </DialogFooter>
           </>
         )}
-        <CloudError message={error} />
       </DialogContent>
     </Dialog>
   )
@@ -782,10 +867,10 @@ export function Recovery({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Recover reservation</DialogTitle>
+          <DialogTitle>Recover a reservation</DialogTitle>
           <DialogDescription>
             Recovery uses the saved review. Active unreconciled attempts and
-            serving bindings cannot be abandoned.
+            serving bindings can't be abandoned.
           </DialogDescription>
         </DialogHeader>
         <Field label="Plan ID">
@@ -827,16 +912,21 @@ export function Recovery({
           </div>
         )}
         <CloudError message={error} />
-        {!done && (
-          <Button
-            disabled={
-              !planId || !service || preview.isPending || recover.isPending
-            }
-            onClick={() => void act()}
-          >
-            {review ? "Apply reviewed recovery" : "Preview recovery"}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {done ? "Close" : "Cancel"}
           </Button>
-        )}
+          {!done && (
+            <Button
+              disabled={
+                !planId || !service || preview.isPending || recover.isPending
+              }
+              onClick={() => void act()}
+            >
+              {review ? "Apply reviewed recovery" : "Preview recovery"}
+            </Button>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

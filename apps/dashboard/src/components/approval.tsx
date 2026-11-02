@@ -29,7 +29,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { canaryLine, canaryFindings } from "@/lib/canary"
 import { relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { Link } from "@/lib/router"
 import type { Run } from "@/lib/runs"
 import { cn } from "@/lib/utils"
@@ -140,7 +140,7 @@ export function ApprovalCallout({
   now: number
   className?: string
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const { decide, busy, approving } = useDecision(run)
   const p = run.plan
   return (
@@ -195,7 +195,7 @@ export function ApprovalCallout({
 
 /** ApprovalCard is the deployment page's decision, with a note to keep. */
 export function ApprovalCard({ run }: { run: Run }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const { decide, busy, approving, rejecting } = useDecision(run)
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState("")

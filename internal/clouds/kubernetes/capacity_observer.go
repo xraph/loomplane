@@ -14,22 +14,24 @@ import (
 
 // CapacityInventory uses management credentials. Namespace runtime roles do not grant these reads.
 type CapacityInventory struct {
-	DaemonSets     []appsv1.DaemonSet
-	Namespaces     []corev1.Namespace
-	ReplicaSets    []appsv1.ReplicaSet
-	Deployments    []appsv1.Deployment
-	Nodes          []corev1.Node
-	Pods           []corev1.Pod
-	Volumes        []corev1.PersistentVolume
-	StorageClasses []storagev1.StorageClass
-	CheckedAt      time.Time
-	Complete       bool
+	DaemonSets             []appsv1.DaemonSet
+	Namespaces             []corev1.Namespace
+	ReplicaSets            []appsv1.ReplicaSet
+	Deployments            []appsv1.Deployment
+	Nodes                  []corev1.Node
+	Pods                   []corev1.Pod
+	Volumes                []corev1.PersistentVolume
+	StorageClasses         []storagev1.StorageClass
+	CheckedAt              time.Time
+	Complete               bool
+	WorkloadListsVersioned bool
 }
 
 func CapacityObserverRules() []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "persistentvolumes", "namespaces"}, Verbs: []string{"get", "list"}},
 		{APIGroups: []string{"apps"}, Resources: []string{"replicasets", "deployments", "daemonsets"}, Verbs: []string{"get", "list"}},
+		{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: []string{"get"}},
 		{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: []string{"get", "list"}},
 	}
 }
@@ -75,6 +77,7 @@ func ReadCapacityInventory(ctx context.Context, client kubeclient.Interface) (Ca
 		return out, err
 	}
 	out.Deployments = deployments.Items
+	out.WorkloadListsVersioned = namespaces.ResourceVersion != "" && pods.ResourceVersion != "" && replicas.ResourceVersion != "" && deployments.ResourceVersion != ""
 	daemons, err := client.AppsV1().DaemonSets("").List(ctx, opts)
 	if err != nil {
 		return out, err

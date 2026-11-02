@@ -1,4 +1,4 @@
-// A new scaling pool starts with no servers and grows from a rule. Creating
+// A new scaling pool starts with no servers and grows from a rule. Adding
 // it saves the pool and the Cloud's policy, turned on and with the new rule,
 // in one request, so neither exists without the other.
 import { useState } from "react"
@@ -15,11 +15,8 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
-import {
-  CloudError,
-  Field,
-  SetupReads,
-} from "@/components/cloud-targets/infrastructure-ui"
+import { CloudCallout } from "@/components/cloud-targets/cloud-page"
+import { Field, SetupReads } from "@/components/cloud-targets/infrastructure-ui"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -51,11 +48,11 @@ import { gpuTitle, nvidiaKinds } from "@/lib/gpu"
 import { RuleFields } from "./capacity-rule"
 
 const unsavedText =
-  "Save or discard your changes to the growth policy first. A new pool is created with the policy as it's saved."
+  "Save or discard your changes to the growth policy first. A new pool is added with the policy as it's saved."
 // Named as the growth policy's switch is labelled, so you can find it.
-const turnsOnText = "Creating it also turns on Let pools on this Cloud grow."
+const turnsOnText = "Adding it also turns on Let pools on this Cloud grow."
 const offText =
-  "Automatic expansion isn't on for this Loomplane yet, so this pool stays empty until you add a server to it. You can still create it."
+  "Automatic expansion isn't on for this Loomplane yet, so this pool stays empty until you add a server to it. You can still add it."
 
 export function NewScalingPool({
   cloudId,
@@ -89,7 +86,7 @@ export function NewScalingPool({
     <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>New scaling pool</DialogTitle>
+          <DialogTitle>Add a scaling pool</DialogTitle>
           <DialogDescription>
             It starts with no servers. When a deployment needs room, Loomplane
             adds servers to it from this rule, within the Cloud&apos;s limits.
@@ -211,7 +208,7 @@ function ScalingPoolForm({
         setStale(true)
         void reload().catch(() => undefined)
       } else {
-        setError(messageOf(err, "The pool wasn't created."))
+        setError(messageOf(err, "The pool wasn't added."))
       }
     }
   }
@@ -289,7 +286,11 @@ function ScalingPoolForm({
             ))}
           </ul>
         )}
-        <CloudError message={stale ? staleText : error} />
+        {stale ? (
+          <CloudCallout title={staleText} />
+        ) : (
+          error && <CloudCallout tone="error" title={error} />
+        )}
       </div>
       <DialogFooter className="flex-wrap">
         <Button
@@ -302,7 +303,7 @@ function ScalingPoolForm({
         </Button>
         <Button type="submit" disabled={busy || !valid}>
           {busy && <Spinner />}
-          Create pool
+          Add pool
         </Button>
       </DialogFooter>
     </form>

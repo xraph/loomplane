@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // AppliedInputReader verifies access to encrypted variables and source artifacts.
@@ -70,6 +71,11 @@ func (s *Service) PreviewCloudChange(ctx context.Context, p security.Principal, 
 func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, project string, in cloudprofiles.ChangeInput, reverts string) (*cloudprofiles.Preview, error) {
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
+	}
+	if in.EnvironmentID != "" {
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, in.EnvironmentID); guardErr != nil {
+			return nil, guardErr
+		}
 	}
 	st, err := s.syncStore()
 	if err != nil {
@@ -195,6 +201,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			continue
 		}
 		found = true
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, env.ID); guardErr != nil {
+			if errors.Is(guardErr, projects.ErrFleetManaged) {
+				preview.Blockers = append(preview.Blockers, "Manage instance placement through its fleet.")
+				continue
+			}
+			return nil, guardErr
+		}
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env.ID)
 		if e != nil {
 			return nil, e
@@ -365,6 +378,47 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			selector = defaultPlacementSelector
 		}
 		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
+		locationReviews := []*cloudprofiles.LocationReview{}
+		priorLocations := map[string]locationSelection{}
+		for i := range result.Actions {
+			action := &result.Actions[i]
+			if action.Service == nil || action.Service.Placement == nil {
+				continue
+			}
+			cfg := action.Service
+			pin := cfg.CloudPlacement
+			if cfg.CapacityIntent != nil {
+				pin = &CloudPlacement{TargetID: cfg.CapacityIntent.Demand.TargetID, TargetName: cfg.CapacityIntent.TargetName}
+			}
+			if pin == nil || !selectsPlacement(selector, pin) {
+				continue
+			}
+			set := manifest.Settings{Placement: cfg.Placement, CloudTarget: pin.TargetName, Size: cfg.Size, Scale: cfg.Scale}
+			_, selection, placementErr := s.selectLocation(ctx, plan, after, set, action.Name, planningBindings, options, nil, cfg.Repo, priorLocations, &locationCapacityReview{Intent: cfg.CapacityIntent, Placement: cfg.CloudPlacement, Before: preview.Before}, locationRequirements{Workload: cfg.Workload})
+			if result.LocationPlacements == nil {
+				result.LocationPlacements = map[string]LocationPlacementDecision{}
+			}
+			result.LocationPlacements[action.Name] = selection.Decision
+			if placementErr != nil {
+				result.Problems = append(result.Problems, Finding{Code: "location-placement", Subject: ServiceSubject, Name: action.Name, Message: placementErr.Error()})
+				result.Executable = false
+				continue
+			}
+			if cfg.CapacityIntent != nil {
+				cfg.CapacityIntent.Demand.LocationReview = selection.Review
+				cfg.CapacityIntent.Demand.IntentHash = ""
+				hash, hashErr := Digest(cfg.CapacityIntent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				cfg.CapacityIntent.Demand.IntentHash = hash
+			} else {
+				cfg.CloudPlacement.LocationReview = selection.Review
+			}
+			priorLocations[action.Name] = selection
+			locationReviews = append(locationReviews, selection.Review)
+		}
+
 		for i := range result.Actions {
 			a := &result.Actions[i]
 			c := compensations[a.ID]
@@ -467,7 +521,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if string(routeSnapshot) == "null" {
 			routeSnapshot = []byte("[]")
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {
@@ -549,6 +603,9 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
+	}
+	if ownershipErr := s.requireUnmanagedSnapshot(ctx, p.OrgID, project, snapshot); ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	if preview.Revision != revision {
 		return nil, cloudprofiles.ErrConflict

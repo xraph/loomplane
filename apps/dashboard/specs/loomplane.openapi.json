@@ -389,6 +389,50 @@
         }
       }
     },
+    "/api/v1/ai/settings/huggingface-token": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Check a Hugging Face token with Hugging Face and save it as the workspace's; it's never shown again",
+        "operationId": "aiSettings.putHuggingFaceToken",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HuggingFaceTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The token's hint and account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HuggingFaceToken"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it",
+        "operationId": "aiSettings.deleteHuggingFaceToken",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/v1/ai/settings/provider-keys/{name}": {
       "put": {
         "tags": [
@@ -449,50 +493,6 @@
             }
           }
         ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          }
-        }
-      }
-    },
-    "/api/v1/ai/settings/huggingface-token": {
-      "put": {
-        "tags": [
-          "AI"
-        ],
-        "summary": "Check a Hugging Face token with Hugging Face and save it as the workspace's; it's never shown again",
-        "operationId": "aiSettings.putHuggingFaceToken",
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/HuggingFaceTokenInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "The token's hint and account",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HuggingFaceToken"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "AI"
-        ],
-        "summary": "Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it",
-        "operationId": "aiSettings.deleteHuggingFaceToken",
         "responses": {
           "204": {
             "description": "No Content"
@@ -1507,6 +1507,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1569,6 +1589,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1617,6 +1657,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         },
         "summary": "clusterOperations.apply",
@@ -1627,7 +1687,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1664,6 +1725,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         },
         "summary": "clusterOperations.cancel",
@@ -1674,7 +1755,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1711,6 +1793,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         },
         "summary": "clusterOperations.retry",
@@ -1721,7 +1823,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1783,6 +1886,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1836,6 +1959,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -1875,6 +2018,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         },
         "summary": "cloudClusters.preview",
@@ -1885,7 +2048,8 @@
           "CloudCluster",
           "CloudClusterOperation",
           "CloudClusterPage",
-          "CloudClusterOperationPage"
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
         ]
       }
     },
@@ -1947,8 +2111,343 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
           }
         }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/attachments": {
+      "get": {
+        "operationId": "cloudClusters.attachments",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeAttachmentPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.attachments",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-entity": {
+          "idField": "cluster_id",
+          "type": "RuntimeAttachmentPage"
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/capacity": {
+      "get": {
+        "tags": [
+          "Cloud clusters"
+        ],
+        "summary": "cloudClusters.capacity",
+        "operationId": "cloudClusters.capacity",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterCapacity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/capacity/refresh": {
+      "post": {
+        "operationId": "cloudClusters.refreshCapacity",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterCapacity"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.refreshCapacity",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-invalidates": [
+          "CloudCluster",
+          "CloudClusterOperation",
+          "CloudClusterPage",
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
+        ]
+      }
+    },
+    "/api/v1/clouds/{cloudId}/clusters/{clusterId}/retirement/preview": {
+      "post": {
+        "operationId": "cloudClusters.retirementPreview",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "description": "Path parameter: clusterId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterRetirementPreviewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterRetirementReview"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review or inventory conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Blocked intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterProblem"
+                }
+              }
+            }
+          }
+        },
+        "summary": "cloudClusters.retirementPreview",
+        "tags": [
+          "Cloud clusters"
+        ],
+        "x-forge-invalidates": [
+          "CloudCluster",
+          "CloudClusterOperation",
+          "CloudClusterPage",
+          "CloudClusterOperationPage",
+          "RuntimeAttachmentPage"
+        ]
       }
     },
     "/api/v1/clouds/{cloudId}/default-placement": {
@@ -3566,6 +4065,116 @@
         }
       }
     },
+    "/api/v1/connections/{connectionId}/registry": {
+      "get": {
+        "tags": [
+          "Managed registries"
+        ],
+        "summary": "Read registry DNS, maintenance and backups",
+        "operationId": "registries.get",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedRegistryView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{connectionId}/registry/actions": {
+      "post": {
+        "operationId": "registries.action",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryActionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedRegistryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Queue registry maintenance",
+        "tags": [
+          "Managed registries"
+        ],
+        "x-forge-invalidates": [
+          "ManagedRegistryView"
+        ]
+      }
+    },
+    "/api/v1/connections/{connectionId}/resource-syncs": {
+      "post": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Refresh a connected account's resource inventory",
+        "operationId": "providerResources.sync",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed resource sync attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResourceSync"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}": {
       "get": {
         "tags": [
@@ -4014,6 +4623,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -4056,6 +4675,68 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/cleanup/cancel": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanupCancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailedCleanupCancelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cleanup issuance fenced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -4087,6 +4768,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
+                }
+              }
+            }
           }
         }
       }
@@ -4115,6 +4806,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Review changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupProblem"
                 }
               }
             }
@@ -8605,6 +9306,38 @@
         }
       }
     },
+    "/api/v1/projects/{id}/permissions": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "What the caller may do on one project, team grants included",
+        "operationId": "projects.permissions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's permissions on the project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPermissions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/plans": {
       "get": {
         "tags": [
@@ -9057,6 +9790,49 @@
         }
       }
     },
+    "/api/v1/projects/{id}/team": {
+      "put": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Name the team responsible for a project, or clear it with null",
+        "operationId": "projects.setTeam",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTeamInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/variables": {
       "get": {
         "tags": [
@@ -9277,6 +10053,201 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RouteOperation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.get",
+        "operationId": "domainEdge.get",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.update",
+        "operationId": "domainEdge.update",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/purge": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.purge",
+        "operationId": "domainEdge.purge",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgePurgeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/retry": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.retry",
+        "operationId": "domainEdge.retry",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveRouteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
                 }
               }
             }
@@ -11378,6 +12349,102 @@
         }
       }
     },
+    "/api/v1/provider-resources": {
+      "get": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "List your provider resource inventory and sync attempts",
+        "operationId": "providerResources.list",
+        "responses": {
+          "200": {
+            "description": "Provider resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResourceList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider-resources/{resourceId}": {
+      "get": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Read a provider resource without its credentials",
+        "operationId": "providerResources.get",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "description": "Path parameter: resourceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provider-resources/{resourceId}/connection": {
+      "put": {
+        "tags": [
+          "Provider resources"
+        ],
+        "summary": "Store an application DSN for a verified provider resource",
+        "operationId": "providerResources.connect",
+        "parameters": [
+          {
+            "name": "resourceId",
+            "in": "path",
+            "description": "Path parameter: resourceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderResourceConnectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Provider resource connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/providers": {
       "get": {
         "tags": [
@@ -12219,6 +13286,381 @@
         }
       }
     },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Whether this instance still waits for its first account",
+        "operationId": "setup.status",
+        "responses": {
+          "200": {
+            "description": "Setup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "setup.complete",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setup is done and the session cookie is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create the first account, make it the platform owner, and create its organization",
+        "tags": [
+          "Identity"
+        ],
+        "x-forge-no-entity": true
+      }
+    },
+    "/api/v1/teams": {
+      "get": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "The workspace's teams, with their members and grants",
+        "operationId": "teams.list",
+        "responses": {
+          "200": {
+            "description": "Teams",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Create a team",
+        "operationId": "teams.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeamInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}": {
+      "get": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "One team",
+        "operationId": "teams.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "teams.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Delete a team. Its members lose the roles it gave them, and projects it was responsible for have none.",
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "x-forge-invalidates": [
+          "Team[]"
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Rename a team or change its description",
+        "operationId": "teams.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTeamInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}/grants": {
+      "put": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Give the team a role on a project, or on the whole workspace without a project. Never above your own role.",
+        "operationId": "teams.setGrant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGrantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}/grants/{grant_id}": {
+      "delete": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Take one of the team's roles away from its members",
+        "operationId": "teams.removeGrant",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "grant_id",
+            "in": "path",
+            "description": "Path parameter: grant_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{id}/members/{user_id}": {
+      "put": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Put a workspace member in the team",
+        "operationId": "teams.addMember",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Path parameter: user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Teams",
+          "Identity"
+        ],
+        "summary": "Take a person out of the team",
+        "operationId": "teams.removeMember",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Path parameter: user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The team",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/usage/spend": {
       "get": {
         "tags": [
@@ -12390,330 +13832,6 @@
           }
         }
       }
-    },
-    "/api/v1/setup": {
-      "get": {
-        "tags": [
-          "Identity"
-        ],
-        "summary": "Whether first-run setup is still waiting",
-        "operationId": "setup.status",
-        "responses": {
-          "200": {
-            "description": "Setup status",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SetupStatus"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Identity"
-        ],
-        "summary": "Create the first account and organization",
-        "operationId": "setup.complete",
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetupRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Setup finished",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SetupResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/connections/{connectionId}/registry": {
-      "get": {
-        "tags": [
-          "Managed registries"
-        ],
-        "summary": "Read registry DNS, maintenance and backups",
-        "operationId": "registries.get",
-        "parameters": [
-          {
-            "name": "connectionId",
-            "in": "path",
-            "description": "Path parameter: connectionId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Registry",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ManagedRegistryView"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/connections/{connectionId}/registry/actions": {
-      "post": {
-        "operationId": "registries.action",
-        "parameters": [
-          {
-            "name": "connectionId",
-            "in": "path",
-            "description": "Path parameter: connectionId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegistryActionInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Registry",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ManagedRegistryView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Queue registry maintenance",
-        "tags": [
-          "Managed registries"
-        ],
-        "x-forge-invalidates": [
-          "ManagedRegistryView"
-        ]
-      }
-    },
-    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge": {
-      "get": {
-        "tags": [
-          "Domains"
-        ],
-        "summary": "domainEdge.get",
-        "operationId": "domainEdge.get",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "routeId",
-            "in": "path",
-            "description": "Path parameter: routeId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EdgeState"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Domains"
-        ],
-        "summary": "domainEdge.update",
-        "operationId": "domainEdge.update",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "routeId",
-            "in": "path",
-            "description": "Path parameter: routeId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EdgeInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EdgeState"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/purge": {
-      "post": {
-        "tags": [
-          "Domains"
-        ],
-        "summary": "domainEdge.purge",
-        "operationId": "domainEdge.purge",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "routeId",
-            "in": "path",
-            "description": "Path parameter: routeId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EdgePurgeInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EdgeState"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/retry": {
-      "post": {
-        "tags": [
-          "Domains"
-        ],
-        "summary": "domainEdge.retry",
-        "operationId": "domainEdge.retry",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "routeId",
-            "in": "path",
-            "description": "Path parameter: routeId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RemoveRouteInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EdgeState"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -12858,6 +13976,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Change"
+            }
+          },
+          "cleanup_targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupTarget"
             }
           },
           "cloud_adoption": {
@@ -13208,20 +14332,6 @@
           }
         }
       },
-      "AppliedInputs": {
-        "type": "object",
-        "properties": {
-          "artifact_key": {
-            "type": "string"
-          },
-          "source": {
-            "$ref": "#/components/schemas/PlanSource"
-          },
-          "variables": {
-            "type": "string"
-          }
-        }
-      },
       "ApplyCloudInputBody": {
         "type": "object",
         "required": [
@@ -13406,6 +14516,9 @@
           },
           "resource_revision": {
             "type": "integer"
+          },
+          "runtime_access": {
+            "$ref": "#/components/schemas/RuntimeAccessProfile"
           },
           "service_account_name": {
             "type": "string"
@@ -13791,6 +14904,29 @@
           }
         }
       },
+      "BudgetReview": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "policy_revision",
+          "estimate",
+          "digest"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/MoneyEstimate"
+          },
+          "policy_revision": {
+            "type": "integer"
+          }
+        }
+      },
       "Build": {
         "type": "object",
         "properties": {
@@ -13834,6 +14970,9 @@
         "type": "object",
         "properties": {
           "builder": {
+            "type": "string"
+          },
+          "builder_cloud": {
             "type": "string"
           },
           "builder_settings": {
@@ -14119,6 +15258,25 @@
           }
         }
       },
+      "CapacityBudget": {
+        "type": "object",
+        "required": [
+          "max_hourly_micro_usd",
+          "max_horizon_micro_usd",
+          "horizon_seconds"
+        ],
+        "properties": {
+          "horizon_seconds": {
+            "type": "integer"
+          },
+          "max_horizon_micro_usd": {
+            "type": "string"
+          },
+          "max_hourly_micro_usd": {
+            "type": "string"
+          }
+        }
+      },
       "CapacityDemand": {
         "type": "object",
         "required": [
@@ -14186,7 +15344,6 @@
         "type": "object",
         "required": [
           "demand",
-          "provider_pin",
           "template",
           "template_hash",
           "commit_sha",
@@ -14211,9 +15368,6 @@
           },
           "grant_revision": {
             "type": "integer"
-          },
-          "provider_pin": {
-            "$ref": "#/components/schemas/CapacityTemplatePin"
           },
           "target_name": {
             "type": "string"
@@ -14266,6 +15420,9 @@
           "frontend_limits"
         ],
         "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/CapacityBudget"
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -14327,6 +15484,9 @@
               "frontend_limits"
             ],
             "properties": {
+              "budget": {
+                "$ref": "#/components/schemas/CapacityBudget"
+              },
               "cloud_id": {
                 "type": "string"
               },
@@ -14422,6 +15582,24 @@
             "type": "string",
             "format": "date-time"
           },
+          "cluster_checked_at": {
+            "type": "string"
+          },
+          "cluster_complete": {
+            "type": "boolean"
+          },
+          "cluster_conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterCondition"
+            }
+          },
+          "cluster_node": {
+            "$ref": "#/components/schemas/CloudinfraClusterNodeCapacity"
+          },
+          "cluster_resource_id": {
+            "type": "string"
+          },
           "gpu_kind": {
             "type": "string"
           },
@@ -14464,21 +15642,6 @@
             "type": "integer"
           },
           "storage_bytes": {
-            "type": "integer"
-          }
-        }
-      },
-      "CapacityTemplatePin": {
-        "type": "object",
-        "required": [
-          "connection_generation",
-          "account_id"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "connection_generation": {
             "type": "integer"
           }
         }
@@ -14905,6 +16068,44 @@
           }
         }
       },
+      "CleanupObject": {
+        "type": "object",
+        "required": [
+          "resource",
+          "name",
+          "namespace"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "CleanupProblem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "CleanupReview": {
         "type": "object",
         "required": [
@@ -14917,6 +16118,12 @@
           "effect"
         ],
         "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "connection_id": {
             "type": "string"
           },
@@ -14924,6 +16131,9 @@
             "type": "string"
           },
           "effect": {
+            "type": "string"
+          },
+          "previous_review_id": {
             "type": "string"
           },
           "provider": {
@@ -14935,10 +16145,132 @@
           "resource": {
             "type": "string"
           },
+          "review_sequence": {
+            "type": "integer"
+          },
           "revision": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupTarget"
+            }
+          },
+          "variant": {
             "type": "string"
           }
         }
+      },
+      "CleanupTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "service",
+          "plan_id",
+          "deployment_id",
+          "namespace",
+          "objects",
+          "unresolved_writes",
+          "identity_current"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "identity_current": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupObject"
+            }
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "unresolved_writes": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClientClusterNodeCapacity": {
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/ClientClusterResourceMetrics"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/ClientClusterResourceMetrics"
+          },
+          "taints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodePoolTaint"
+            }
+          },
+          "unschedulable": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool_id",
+          "zone",
+          "architecture",
+          "ready",
+          "unschedulable",
+          "allocatable",
+          "requests",
+          "taints"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/client.ClusterNodeCapacity"
+      },
+      "ClientClusterResourceMetrics": {
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "extended": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extended"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/client.ClusterResourceMetrics"
       },
       "CloudAdoption": {
         "type": "object",
@@ -14946,14 +16278,10 @@
           "binding_id",
           "external_id",
           "revision",
-          "plan_id",
-          "config_digest"
+          "plan_id"
         ],
         "properties": {
           "binding_id": {
-            "type": "string"
-          },
-          "config_digest": {
             "type": "string"
           },
           "external_id": {
@@ -14970,6 +16298,9 @@
       "CloudCluster": {
         "type": "object",
         "required": [
+          "retained_price_checked_at",
+          "desired_revision",
+          "observed_revision",
           "id",
           "cloud_id",
           "provider",
@@ -14992,6 +16323,9 @@
           "connection_id": {
             "type": "string"
           },
+          "desired_revision": {
+            "type": "integer"
+          },
           "external_id": {
             "type": "string"
           },
@@ -15008,14 +16342,31 @@
           "observation": {
             "$ref": "#/components/schemas/ClusterObservation"
           },
+          "observed_revision": {
+            "type": "integer"
+          },
           "ownership": {
             "type": "string"
           },
           "provider": {
             "type": "string"
           },
+          "retained_price_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retained_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
           "revision": {
             "type": "integer"
+          },
+          "scaling_policies": {
+            "type": "object",
+            "additionalProperties": true
           },
           "status": {
             "type": "string"
@@ -15051,6 +16402,9 @@
           "attempt": {
             "type": "integer"
           },
+          "budget_review": {
+            "$ref": "#/components/schemas/BudgetReview"
+          },
           "cancel_requested": {
             "type": "boolean"
           },
@@ -15066,6 +16420,9 @@
           },
           "enrollment": {
             "$ref": "#/components/schemas/ClusterEnrollmentSummary"
+          },
+          "envelope_review": {
+            "$ref": "#/components/schemas/ClusterEnvelopeReview"
           },
           "error": {
             "type": "string"
@@ -15086,6 +16443,9 @@
           },
           "kind": {
             "type": "string"
+          },
+          "money_estimate": {
+            "$ref": "#/components/schemas/MoneyEstimate"
           },
           "resource_id": {
             "type": "string"
@@ -15153,8 +16513,6 @@
         "required": [
           "plan_id",
           "action_id",
-          "source",
-          "candidate",
           "retained",
           "server_attempt",
           "original_completed"
@@ -15162,9 +16520,6 @@
         "properties": {
           "action_id": {
             "type": "string"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/Binding"
           },
           "original_completed": {
             "type": "boolean"
@@ -15183,9 +16538,6 @@
           },
           "server_attempt": {
             "type": "boolean"
-          },
-          "source": {
-            "$ref": "#/components/schemas/Binding"
           }
         }
       },
@@ -15248,6 +16600,7 @@
       "CloudPlacement": {
         "type": "object",
         "required": [
+          "account_identity",
           "cloud_id",
           "cloud_revision",
           "assignment_revision",
@@ -15255,8 +16608,7 @@
           "target_revision",
           "target_name",
           "provider",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -15481,6 +16833,96 @@
         "type": "object",
         "x-forge-envelope": "targets"
       },
+      "CloudinfraClusterNodeCapacity": {
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/CloudinfraClusterResourceMetrics"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "external_vm_id": {
+            "type": "string"
+          },
+          "gpu_kinds": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "node_uid": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provisioned": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/CloudinfraClusterResourceMetrics"
+          },
+          "taints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodePoolTaint"
+            }
+          },
+          "unschedulable": {
+            "type": "boolean"
+          },
+          "zone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_vm_id",
+          "node_uid",
+          "pool_id",
+          "zone",
+          "architecture",
+          "taints",
+          "ready",
+          "unschedulable",
+          "provisioned",
+          "allocatable",
+          "requests",
+          "gpu_kinds",
+          "provenance"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterNodeCapacity"
+      },
+      "CloudinfraClusterResourceMetrics": {
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "extended": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extended"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterResourceMetrics"
+      },
       "CloudinfraMoveInputBody": {
         "properties": {
           "destination_server_id": {
@@ -15674,6 +17116,53 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudprofiles.UpdateInput"
       },
+      "ClusterCapacity": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "observation_revision",
+          "checked_at",
+          "complete",
+          "fresh",
+          "workloads_complete",
+          "nodes",
+          "conditions"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterCondition"
+            }
+          },
+          "fresh": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientClusterNodeCapacity"
+            }
+          },
+          "observation_revision": {
+            "type": "integer"
+          },
+          "resource_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "workloads_complete": {
+            "type": "boolean"
+          }
+        }
+      },
       "ClusterCondition": {
         "type": "object",
         "required": [
@@ -15689,6 +17178,24 @@
           },
           "type": {
             "type": "string"
+          }
+        }
+      },
+      "ClusterDemand": {
+        "type": "object",
+        "required": [
+          "mode",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ClusterSchedulingProfile"
           }
         }
       },
@@ -15717,6 +17224,53 @@
           },
           "target_id": {
             "type": "string"
+          }
+        }
+      },
+      "ClusterEnvelopeResources": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClusterEnvelopeReview": {
+        "type": "object",
+        "required": [
+          "automatic",
+          "pools"
+        ],
+        "properties": {
+          "automatic": {
+            "type": "boolean"
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterPoolEnvelopeReview"
+            }
           }
         }
       },
@@ -15765,6 +17319,9 @@
           "kind": {
             "type": "string"
           },
+          "maintenance": {
+            "$ref": "#/components/schemas/ClusterMaintenanceInput"
+          },
           "management_reachable": {
             "type": "boolean"
           },
@@ -15789,6 +17346,15 @@
           },
           "resource_revision": {
             "type": "integer"
+          },
+          "retirement": {
+            "$ref": "#/components/schemas/ClusterRetirementInput"
+          },
+          "runtime_access": {
+            "$ref": "#/components/schemas/RuntimeAccessReview"
+          },
+          "scaling": {
+            "$ref": "#/components/schemas/ClusterScalingInput"
           },
           "spec": {
             "$ref": "#/components/schemas/ClusterSpec"
@@ -15871,6 +17437,9 @@
               "resource_revision": {
                 "type": "integer"
               },
+              "runtime_access": {
+                "$ref": "#/components/schemas/RuntimeAccessProfile"
+              },
               "service_account_name": {
                 "type": "string"
               },
@@ -15893,6 +17462,39 @@
           },
           "kind": {
             "type": "string"
+          },
+          "maintenance": {
+            "type": "object",
+            "required": [
+              "observation_digest",
+              "observed_revision"
+            ],
+            "properties": {
+              "drain_digest": {
+                "type": "string"
+              },
+              "observation_digest": {
+                "type": "string"
+              },
+              "observed_revision": {
+                "type": "integer"
+              },
+              "pool": {
+                "$ref": "#/components/schemas/NodePoolSpec"
+              },
+              "pool_id": {
+                "type": "string"
+              },
+              "update": {
+                "$ref": "#/components/schemas/ClusterUpdate"
+              },
+              "version": {
+                "type": "string"
+              },
+              "window": {
+                "$ref": "#/components/schemas/ClusterMaintenanceWindow"
+              }
+            }
           },
           "management_reachable": {
             "type": "boolean"
@@ -15939,10 +17541,91 @@
           "resource_revision": {
             "type": "integer"
           },
+          "retirement": {
+            "type": "object",
+            "required": [
+              "review_digest"
+            ],
+            "properties": {
+              "attachment_id": {
+                "type": "string"
+              },
+              "expected_attachment_revision": {
+                "type": "integer"
+              },
+              "review_digest": {
+                "type": "string"
+              }
+            }
+          },
+          "runtime_access": {
+            "type": "object",
+            "required": [
+              "attachment_id",
+              "profile"
+            ],
+            "properties": {
+              "attachment_id": {
+                "type": "string"
+              },
+              "attachment_revision": {
+                "type": "integer"
+              },
+              "capability_revision": {
+                "type": "integer"
+              },
+              "namespace": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/components/schemas/RuntimeAccessProfile"
+              },
+              "project_id": {
+                "type": "string"
+              }
+            }
+          },
+          "scaling": {
+            "type": "object",
+            "required": [
+              "expected_revision",
+              "pool_id",
+              "mode",
+              "min_nodes",
+              "max_nodes",
+              "cooldown_seconds",
+              "continuity_floor"
+            ],
+            "properties": {
+              "continuity_floor": {
+                "type": "integer"
+              },
+              "continuity_pool_id": {
+                "type": "string"
+              },
+              "cooldown_seconds": {
+                "type": "integer"
+              },
+              "expected_revision": {
+                "type": "integer"
+              },
+              "max_nodes": {
+                "type": "integer"
+              },
+              "min_nodes": {
+                "type": "integer"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "pool_id": {
+                "type": "string"
+              }
+            }
+          },
           "spec": {
             "type": "object",
             "required": [
-              "operation_id",
               "name",
               "region",
               "version",
@@ -15969,9 +17652,6 @@
                 "items": {
                   "$ref": "#/components/schemas/NodePoolSpec"
                 }
-              },
-              "operation_id": {
-                "type": "string"
               },
               "provider_options": {
                 "$ref": "#/components/schemas/ClusterProviderOptions"
@@ -16000,6 +17680,68 @@
             "type": "string"
           },
           "start_time": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterMaintenanceInput": {
+        "type": "object",
+        "required": [
+          "observation_digest",
+          "observed_revision"
+        ],
+        "properties": {
+          "drain_digest": {
+            "type": "string"
+          },
+          "observation_digest": {
+            "type": "string"
+          },
+          "observed_revision": {
+            "type": "integer"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/NodePoolSpec"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "update": {
+            "$ref": "#/components/schemas/ClusterUpdate"
+          },
+          "version": {
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ClusterMaintenanceWindow"
+          }
+        }
+      },
+      "ClusterMaintenanceWindow": {
+        "type": "object",
+        "required": [
+          "timezone",
+          "local_start",
+          "duration_seconds",
+          "start_utc",
+          "end_utc"
+        ],
+        "properties": {
+          "duration_seconds": {
+            "type": "integer"
+          },
+          "end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "local_start": {
+            "type": "string"
+          },
+          "start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timezone": {
             "type": "string"
           }
         }
@@ -16065,6 +17807,12 @@
           },
           "endpoint": {
             "type": "string"
+          },
+          "ha": {
+            "type": "boolean"
+          },
+          "maintenance": {
+            "$ref": "#/components/schemas/ClusterMaintenance"
           },
           "name": {
             "type": "string"
@@ -16169,6 +17917,61 @@
           }
         }
       },
+      "ClusterPoolEnvelopeReview": {
+        "type": "object",
+        "required": [
+          "pool_id",
+          "maximum",
+          "initial",
+          "baseline",
+          "money"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "initial": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterEnvelopeResources"
+          },
+          "money": {
+            "$ref": "#/components/schemas/MoneyEstimate"
+          },
+          "pool_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterProblem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
       "ClusterProviderOptions": {
         "type": "object",
         "required": [
@@ -16211,10 +18014,166 @@
           }
         }
       },
+      "ClusterRetirementInput": {
+        "type": "object",
+        "required": [
+          "review_digest"
+        ],
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "expected_attachment_revision": {
+            "type": "integer"
+          },
+          "review_digest": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterRetirementPreviewInputBody": {
+        "type": "object",
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "expected_attachment_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "ClusterRetirementReview": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "blockers",
+          "deletion_candidates",
+          "retained_resources",
+          "estimated_remaining_hourly_micro_usd",
+          "unknown_costs",
+          "checked_at",
+          "digest"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletion_candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
+          "digest": {
+            "type": "string"
+          },
+          "estimated_remaining_hourly_micro_usd": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "retained_resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetainedResource"
+            }
+          },
+          "unknown_costs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ClusterScalingInput": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "pool_id",
+          "mode",
+          "min_nodes",
+          "max_nodes",
+          "cooldown_seconds",
+          "continuity_floor"
+        ],
+        "properties": {
+          "continuity_floor": {
+            "type": "integer"
+          },
+          "continuity_pool_id": {
+            "type": "string"
+          },
+          "cooldown_seconds": {
+            "type": "integer"
+          },
+          "expected_revision": {
+            "type": "integer"
+          },
+          "max_nodes": {
+            "type": "integer"
+          },
+          "min_nodes": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterSchedulingProfile": {
+        "type": "object",
+        "required": [
+          "pool_id",
+          "template_digest",
+          "digest",
+          "architecture",
+          "zone",
+          "allocatable",
+          "overhead",
+          "available"
+        ],
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "available": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "overhead": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "template_digest": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
       "ClusterSpec": {
         "type": "object",
         "required": [
-          "operation_id",
           "name",
           "region",
           "version",
@@ -16242,9 +18201,6 @@
               "$ref": "#/components/schemas/NodePoolSpec"
             }
           },
-          "operation_id": {
-            "type": "string"
-          },
           "provider_options": {
             "$ref": "#/components/schemas/ClusterProviderOptions"
           },
@@ -16260,8 +18216,7 @@
         "type": "object",
         "required": [
           "name",
-          "state",
-          "request_digest"
+          "state"
         ],
         "properties": {
           "attempted_at": {
@@ -16273,17 +18228,56 @@
           "name": {
             "type": "string"
           },
-          "remote_operation_id": {
-            "type": "string"
-          },
-          "remote_resource_id": {
-            "type": "string"
-          },
-          "request_digest": {
-            "type": "string"
-          },
           "state": {
             "type": "string"
+          }
+        }
+      },
+      "ClusterUpdate": {
+        "type": "object",
+        "required": [
+          "field_mask",
+          "maintenance",
+          "ha"
+        ],
+        "properties": {
+          "field_mask": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ha": {
+            "type": "boolean"
+          },
+          "maintenance": {
+            "$ref": "#/components/schemas/ClusterMaintenance"
+          },
+          "provider_options": {
+            "$ref": "#/components/schemas/ClusterProviderOptions"
+          }
+        }
+      },
+      "ClusterWorkloadVector": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "ephemeral_storage_bytes",
+          "pods"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
           }
         }
       },
@@ -16680,6 +18674,37 @@
           }
         }
       },
+      "Cost": {
+        "type": "object",
+        "required": [
+          "hourly_usd",
+          "known",
+          "estimate",
+          "source",
+          "share",
+          "monthly_usd"
+        ],
+        "properties": {
+          "estimate": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "string"
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "monthly_usd": {
+            "type": "string"
+          },
+          "share": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
       "Coverage": {
         "type": "object",
         "required": [
@@ -16710,37 +18735,6 @@
           },
           "unverified": {
             "type": "boolean"
-          }
-        }
-      },
-      "Cost": {
-        "type": "object",
-        "required": [
-          "hourly_usd",
-          "known",
-          "estimate",
-          "source",
-          "share",
-          "monthly_usd"
-        ],
-        "properties": {
-          "estimate": {
-            "type": "boolean"
-          },
-          "hourly_usd": {
-            "type": "string"
-          },
-          "known": {
-            "type": "boolean"
-          },
-          "monthly_usd": {
-            "type": "string"
-          },
-          "share": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string"
           }
         }
       },
@@ -17962,6 +19956,628 @@
           }
         }
       },
+      "EdgeInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "policy"
+        ],
+        "properties": {
+          "policy": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "invalidate_on_deploy",
+              "rules"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "invalidate_on_deploy": {
+                "type": "boolean"
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeRule"
+                }
+              }
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "EdgePolicy": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "invalidate_on_deploy",
+          "rules"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "invalidate_on_deploy": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeRule"
+            }
+          }
+        }
+      },
+      "AgentBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "revision"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgentUpdateInputBody": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgentView": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "enabled",
+          "provider_key",
+          "model",
+          "knowledge",
+          "nexus_tenant_id",
+          "revision",
+          "updated_at",
+          "server",
+          "effective",
+          "budget",
+          "knowledge_status",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/EffectiveView"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "key": {
+            "$ref": "#/components/schemas/KeyView"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "knowledge_status": {
+            "$ref": "#/components/schemas/KnowledgeStatus"
+          },
+          "model": {
+            "type": "string"
+          },
+          "nexus_tenant_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerDefaults"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "BudgetState": {
+        "type": "object",
+        "required": [
+          "limit_usd",
+          "spent_usd",
+          "exhausted"
+        ],
+        "properties": {
+          "exhausted": {
+            "type": "boolean"
+          },
+          "limit_usd": {
+            "type": "string"
+          },
+          "spent_usd": {
+            "type": "string"
+          }
+        }
+      },
+      "EffectiveView": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "summary_model"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "summary_model": {
+            "type": "string"
+          }
+        }
+      },
+      "KeyView": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "hint"
+        ],
+        "properties": {
+          "hint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "KnowledgeStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderKeyInputBody": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "task",
+                "input_per_million",
+                "output_per_million"
+              ],
+              "properties": {
+                "context_window": {
+                  "type": "integer"
+                },
+                "dimensions": {
+                  "type": "integer"
+                },
+                "embedding_per_million": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "input_per_million": {
+                  "type": "string"
+                },
+                "max_output": {
+                  "type": "integer"
+                },
+                "output_per_million": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ServerDefaults": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "key_set"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "key_set": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "revision"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "Team": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "slug",
+          "description",
+          "members",
+          "grants",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamGrant"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamMember"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TeamGrant": {
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "project_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "TeamMember": {
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "name",
+          "added_at"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TeamList": {
+        "properties": {
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Team"
+            }
+          }
+        },
+        "required": [
+          "teams"
+        ],
+        "type": "object",
+        "x-forge-envelope": "teams"
+      },
+      "CreateTeamInputBody": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SetGrantInputBody": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "SetTeamInputBody": {
+        "type": "object",
+        "properties": {
+          "team_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "UpdateTeamInputBody": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectPermissions": {
+        "type": "object",
+        "required": [
+          "permissions"
+        ],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EdgePurgeInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "urls"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer"
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EdgeRule": {
+        "type": "object",
+        "required": [
+          "path_prefix",
+          "mode",
+          "edge_ttl",
+          "browser_ttl"
+        ],
+        "properties": {
+          "browser_ttl": {
+            "type": "integer"
+          },
+          "edge_ttl": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "EdgeState": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "org_id",
+          "project_id",
+          "revision",
+          "policy",
+          "status",
+          "message",
+          "kind",
+          "requested_at",
+          "applied_at",
+          "last_purge_at"
+        ],
+        "properties": {
+          "applied_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "desired": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "invalidation_error": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_deployment_id": {
+            "type": "string"
+          },
+          "last_purge_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/EdgePolicy"
+          },
+          "prior": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "EditInputBody": {
         "type": "object",
         "properties": {
@@ -17978,6 +20594,9 @@
               "enabled_in": {
                 "type": "string"
               },
+              "existing_resource": {
+                "type": "string"
+              },
               "gpu": {
                 "$ref": "#/components/schemas/ManifestGPU"
               },
@@ -17988,6 +20607,9 @@
                 "type": "string"
               },
               "provider": {
+                "type": "string"
+              },
+              "region": {
                 "type": "string"
               },
               "settings": {
@@ -18779,6 +21401,41 @@
           }
         }
       },
+      "ExistingResourceConfig": {
+        "type": "object",
+        "required": [
+          "incarnation",
+          "account_identity",
+          "resource_id",
+          "endpoint_id",
+          "revision",
+          "endpoint_revision",
+          "external_id"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_revision": {
+            "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
       "Expansion": {
         "type": "object",
         "required": [
@@ -18982,10 +21639,33 @@
           "error": {
             "type": "string"
           },
+          "error_code": {
+            "type": "string"
+          },
+          "review_id": {
+            "type": "string"
+          },
+          "review_sequence": {
+            "type": "integer"
+          },
           "revision": {
             "type": "string"
           },
           "status": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        }
+      },
+      "FailedCleanupCancelInputBody": {
+        "type": "object",
+        "required": [
+          "expected_review_id"
+        ],
+        "properties": {
+          "expected_review_id": {
             "type": "string"
           }
         }
@@ -19140,65 +21820,6 @@
           },
           "status": {
             "type": "string"
-          }
-        }
-      },
-      "FrontendDemand": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "target_id",
-          "project_id",
-          "environment_id",
-          "service",
-          "plan_id",
-          "provider",
-          "connection_id",
-          "account_id",
-          "target_revision",
-          "connection_generation",
-          "grant_revision"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "connection_generation": {
-            "type": "integer"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "target_revision": {
-            "type": "integer"
           }
         }
       },
@@ -20571,9 +23192,9 @@
       "ManagedDatabaseConfig": {
         "type": "object",
         "required": [
+          "account_identity",
           "profile",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -20704,6 +23325,72 @@
             "type": "string"
           },
           "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ManagedRegistryBackup": {
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "size"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        }
+      },
+      "ManagedRegistryView": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "generation",
+          "hostname",
+          "status",
+          "message",
+          "action",
+          "phase",
+          "dns_ready",
+          "backups"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRegistryBackup"
+            }
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "dns_ready": {
+            "type": "boolean"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         }
@@ -21115,6 +23802,81 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/models.UpdateInput"
+      },
+      "MoneyComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "category",
+          "source",
+          "quantity"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "hourly_micro_usd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_checked_at": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "MoneyEstimate": {
+        "type": "object",
+        "required": [
+          "hourly_micro_usd",
+          "horizon_micro_usd",
+          "horizon_seconds",
+          "known",
+          "missing_components",
+          "price_digest",
+          "checked_at",
+          "components"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MoneyComponent"
+            }
+          },
+          "horizon_micro_usd": {
+            "type": "string"
+          },
+          "horizon_seconds": {
+            "type": "integer"
+          },
+          "hourly_micro_usd": {
+            "type": "string"
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "missing_components": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "price_digest": {
+            "type": "string"
+          }
+        }
       },
       "MoveInput": {
         "type": "object",
@@ -21979,6 +24741,9 @@
           "count": {
             "type": "integer"
           },
+          "id": {
+            "type": "string"
+          },
           "labels": {
             "type": "object",
             "additionalProperties": true
@@ -22381,6 +25146,9 @@
             "type": "string",
             "format": "date-time"
           },
+          "budget_review": {
+            "$ref": "#/components/schemas/BudgetReview"
+          },
           "capacity_checked_at": {
             "type": "string",
             "format": "date-time"
@@ -22430,6 +25198,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "money_estimate": {
+            "$ref": "#/components/schemas/MoneyEstimate"
           },
           "org_id": {
             "type": "string"
@@ -23611,6 +26382,7 @@
           "exclusions",
           "autonomous_promotion",
           "min_staging_soak_seconds",
+          "responsible_team_id",
           "status",
           "created_by",
           "created_at",
@@ -23670,6 +26442,9 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "responsible_team_id": {
+            "type": "string"
           }
         }
       },
@@ -23987,6 +26762,393 @@
           }
         }
       },
+      "ProviderResource": {
+        "type": "object",
+        "required": [
+          "identity_scope",
+          "ownership_state",
+          "consumers",
+          "credential_methods",
+          "endpoint_proof_required",
+          "id",
+          "org_id",
+          "provider",
+          "connection_identity",
+          "account_identity",
+          "connection_id",
+          "connection_generation",
+          "external_id",
+          "incarnation",
+          "scope",
+          "name",
+          "kind",
+          "version",
+          "region",
+          "status",
+          "host",
+          "database",
+          "port",
+          "ownership",
+          "endpoint_id",
+          "endpoint_revision",
+          "revision",
+          "observed_at",
+          "observation_state",
+          "connection_state"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "bucket_owner": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "connection_identity": {
+            "type": "string"
+          },
+          "connection_state": {
+            "type": "string"
+          },
+          "consumers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderResourceConsumer"
+            }
+          },
+          "credential_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "database": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_proof_required": {
+            "type": "boolean"
+          },
+          "endpoint_revision": {
+            "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "identity_scope": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observation_state": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "ownership_state": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "api_account_id": {
+            "type": "string"
+          },
+          "attachment_note": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceConnectInputBody": {
+        "type": "object",
+        "properties": {
+          "bucket_access": {
+            "type": "object",
+            "properties": {
+              "access_key_id": {
+                "type": "string"
+              },
+              "bucket": {
+                "type": "string"
+              },
+              "expected_owner": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "secret_access_key": {
+                "type": "string"
+              },
+              "service_account_json": {
+                "type": "string"
+              },
+              "session_token": {
+                "type": "string"
+              },
+              "account_id": {
+                "type": "string"
+              },
+              "jurisdiction": {
+                "type": "string"
+              }
+            }
+          },
+          "dsn": {
+            "type": "string"
+          },
+          "api_access": {
+            "type": "object",
+            "properties": {
+              "account_id": {
+                "type": "string"
+              },
+              "class_name": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "incarnation": {
+                "type": "string"
+              },
+              "jurisdiction": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "native": {
+                "type": "boolean"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "script_name": {
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              },
+              "values": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "provider_project_id": {
+            "type": "string"
+          },
+          "provider_environment": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceConsumer": {
+        "type": "object",
+        "required": [
+          "id",
+          "binding_id",
+          "project_id",
+          "environment_id",
+          "name"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderResourceList": {
+        "type": "object",
+        "required": [
+          "resources",
+          "syncs",
+          "supported_providers"
+        ],
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProviderResource"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          },
+          "supported_providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "syncs": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProviderResourceSync"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ProviderResourceSync": {
+        "type": "object",
+        "required": [
+          "refresh_opt_in",
+          "connection_identity",
+          "requested_by",
+          "id",
+          "org_id",
+          "connection_id",
+          "provider",
+          "account_identity",
+          "connection_generation",
+          "sequence",
+          "scope",
+          "status",
+          "error",
+          "started_at"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "connection_identity": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "refresh_opt_in": {
+            "type": "boolean"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "requested_key_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "ProviderStatus": {
         "type": "object",
         "required": [
@@ -24051,6 +27213,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceSetting"
+            }
+          },
+          "import_only": {
+            "type": "boolean"
           }
         }
       },
@@ -24062,7 +27233,8 @@
           "auth_base_path",
           "features",
           "setup_pending",
-          "waitlist"
+          "waitlist",
+          "setup_token_required"
         ],
         "properties": {
           "app_id": {
@@ -24081,6 +27253,9 @@
             "type": "string"
           },
           "setup_pending": {
+            "type": "boolean"
+          },
+          "setup_token_required": {
             "type": "boolean"
           },
           "waitlist": {
@@ -24120,8 +27295,7 @@
           "time_zone",
           "settings",
           "created_at",
-          "last_seen_at",
-          "quiet_hours"
+          "last_seen_at"
         ],
         "properties": {
           "created_at": {
@@ -24142,24 +27316,11 @@
             "type": "string"
           },
           "quiet_hours": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/QuietHours"
-              },
-              {
-                "type": "object",
-                "nullable": true,
-                "enum": [
-                  null
-                ]
-              }
-            ]
+            "$ref": "#/components/schemas/QuietHours"
           },
           "settings": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
+            "additionalProperties": true
           },
           "time_zone": {
             "type": "string"
@@ -24471,9 +27632,7 @@
           },
           "settings": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
+            "additionalProperties": true
           },
           "time_zone": {
             "type": "string"
@@ -24731,6 +27890,34 @@
                 }
               ]
             }
+          }
+        }
+      },
+      "RegistryActionInputBody": {
+        "type": "object",
+        "required": [
+          "kind",
+          "generation",
+          "hostname"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string"
+          },
+          "delete_data": {
+            "type": "boolean"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "remove_setup": {
+            "type": "boolean"
           }
         }
       },
@@ -25117,6 +28304,9 @@
           "kind"
         ],
         "properties": {
+          "account_identity": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
@@ -25128,6 +28318,9 @@
           },
           "composition": {
             "$ref": "#/components/schemas/CompositionConfig"
+          },
+          "existing_resource": {
+            "$ref": "#/components/schemas/ExistingResourceConfig"
           },
           "kind": {
             "type": "string"
@@ -25156,6 +28349,14 @@
           },
           "version": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "endpoint_pins": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -25383,6 +28584,32 @@
           },
           "service": {
             "type": "string"
+          }
+        }
+      },
+      "RetainedResource": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "ownership",
+          "survives_cluster_deletion"
+        ],
+        "properties": {
+          "estimated_hourly_micro_usd": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ownership": {
+            "type": "string"
+          },
+          "survives_cluster_deletion": {
+            "type": "boolean"
           }
         }
       },
@@ -26394,6 +29621,107 @@
           }
         }
       },
+      "RuntimeAccessProfile": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "cleanup_dependents",
+          "hpa"
+        ],
+        "properties": {
+          "cleanup_dependents": {
+            "type": "boolean"
+          },
+          "hpa": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "integer"
+          }
+        }
+      },
+      "RuntimeAccessReview": {
+        "type": "object",
+        "required": [
+          "attachment_id",
+          "profile"
+        ],
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "attachment_revision": {
+            "type": "integer"
+          },
+          "capability_revision": {
+            "type": "integer"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RuntimeAccessProfile"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RuntimeAttachmentPage": {
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "items"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuntimeAttachmentSummary"
+            }
+          }
+        }
+      },
+      "RuntimeAttachmentSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "namespace",
+          "project_id",
+          "capability_revision",
+          "state"
+        ],
+        "properties": {
+          "capability_revision": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RuntimeAccessProfile"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
       "RuntimeHealth": {
         "type": "object",
         "required": [
@@ -26562,6 +29890,9 @@
               "frontend_limits"
             ],
             "properties": {
+              "budget": {
+                "$ref": "#/components/schemas/CapacityBudget"
+              },
               "cloud_id": {
                 "type": "string"
               },
@@ -26680,7 +30011,8 @@
           "revision",
           "health",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "price_checked_at"
         ],
         "properties": {
           "accelerator": {
@@ -26726,6 +30058,10 @@
           },
           "ownership": {
             "type": "string"
+          },
+          "price_checked_at": {
+            "type": "string",
+            "format": "date-time"
           },
           "priced_size": {
             "type": "string"
@@ -26805,6 +30141,9 @@
           "cloud_revision"
         ],
         "properties": {
+          "acknowledge_unknown_costs": {
+            "type": "boolean"
+          },
           "cloud_revision": {
             "type": "integer"
           },
@@ -26844,6 +30183,9 @@
           "cloud_revision"
         ],
         "properties": {
+          "acknowledge_unknown_costs": {
+            "type": "boolean"
+          },
           "cloud_revision": {
             "type": "integer"
           },
@@ -27188,9 +30530,6 @@
           "public"
         ],
         "properties": {
-          "applied_inputs": {
-            "$ref": "#/components/schemas/AppliedInputs"
-          },
           "artifact": {
             "$ref": "#/components/schemas/ReusedArtifact"
           },
@@ -27203,6 +30542,9 @@
           "capacity_intent": {
             "$ref": "#/components/schemas/CapacityIntent"
           },
+          "capacity_mode": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
@@ -27211,6 +30553,9 @@
           },
           "cloud_sql_network": {
             "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          },
+          "cluster_demand": {
+            "$ref": "#/components/schemas/ClusterDemand"
           },
           "commit_sha": {
             "type": "string"
@@ -27244,9 +30589,6 @@
           },
           "framework": {
             "type": "string"
-          },
-          "frontend_demand": {
-            "$ref": "#/components/schemas/FrontendDemand"
           },
           "gateway": {
             "type": "array",
@@ -27302,12 +30644,18 @@
           "target": {
             "type": "string"
           },
+          "target_account_identity": {
+            "type": "string"
+          },
           "target_settings": {
             "type": "object",
             "additionalProperties": true
           },
           "workload": {
             "type": "string"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerSettings"
           }
         }
       },
@@ -27467,6 +30815,58 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "SetupRequestBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "email",
+          "password",
+          "organization_name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization_name": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "verification_required"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "verification_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "type": "boolean"
           }
         }
       },
@@ -28323,11 +31723,7 @@
         ],
         "properties": {
           "status": {
-            "type": "string",
-            "enum": [
-              "sent",
-              "quiet_hours"
-            ]
+            "type": "string"
           }
         }
       },
@@ -28463,26 +31859,27 @@
       },
       "UpdateDeviceInputBody": {
         "type": "object",
+        "required": [
+          "quiet_hours"
+        ],
         "properties": {
           "quiet_hours": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/QuietHours"
+            "type": "object",
+            "required": [
+              "Set"
+            ],
+            "properties": {
+              "Set": {
+                "type": "boolean"
               },
-              {
-                "type": "object",
-                "nullable": true,
-                "enum": [
-                  null
-                ]
+              "Value": {
+                "$ref": "#/components/schemas/QuietHours"
               }
-            ]
+            }
           },
           "settings": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
+            "additionalProperties": true
           },
           "time_zone": {
             "type": "string"
@@ -29289,596 +32686,70 @@
           }
         }
       },
-      "SetupStatus": {
-        "type": "object",
-        "required": [
-          "pending"
-        ],
-        "properties": {
-          "pending": {
-            "type": "boolean"
-          }
-        }
-      },
-      "SetupRequest": {
+      "ResourceSetting": {
         "type": "object",
         "required": [
           "name",
-          "email",
-          "password",
-          "organization_name"
+          "title",
+          "pattern"
         ],
         "properties": {
-          "email": {
+          "default": {
             "type": "string"
           },
           "name": {
             "type": "string"
           },
-          "organization_name": {
+          "pattern": {
             "type": "string"
           },
-          "password": {
-            "type": "string"
-          }
-        }
-      },
-      "SetupResponse": {
-        "type": "object",
-        "required": [
-          "ok",
-          "verification_required"
-        ],
-        "properties": {
-          "ok": {
+          "required": {
             "type": "boolean"
           },
-          "verification_required": {
-            "type": "boolean"
-          }
-        }
-      },
-      "ManagedRegistryBackup": {
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "size"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "id": {
-            "type": "string"
-          },
-          "size": {
-            "type": "integer"
-          }
-        }
-      },
-      "ManagedRegistryView": {
-        "type": "object",
-        "required": [
-          "connection_id",
-          "generation",
-          "hostname",
-          "status",
-          "message",
-          "action",
-          "phase",
-          "dns_ready",
-          "backups"
-        ],
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "backups": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ManagedRegistryBackup"
-            }
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "dns_ready": {
-            "type": "boolean"
-          },
-          "generation": {
-            "type": "integer"
-          },
-          "hostname": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "phase": {
-            "type": "string"
-          },
-          "status": {
+          "title": {
             "type": "string"
           }
         }
       },
-      "RegistryActionInputBody": {
+      "WorkerSettings": {
         "type": "object",
         "required": [
-          "kind",
-          "generation",
-          "hostname"
+          "main",
+          "compatibility_date"
         ],
         "properties": {
-          "backup_id": {
+          "compatibility_date": {
             "type": "string"
           },
-          "delete_data": {
-            "type": "boolean"
-          },
-          "generation": {
-            "type": "integer"
-          },
-          "hostname": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "remove_setup": {
-            "type": "boolean"
-          }
-        }
-      },
-      "EdgeInputBody": {
-        "type": "object",
-        "required": [
-          "revision",
-          "policy"
-        ],
-        "properties": {
-          "policy": {
-            "type": "object",
-            "required": [
-              "enabled",
-              "invalidate_on_deploy",
-              "rules"
-            ],
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "invalidate_on_deploy": {
-                "type": "boolean"
-              },
-              "rules": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/EdgeRule"
-                }
-              }
-            }
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "EdgePurgeInputBody": {
-        "type": "object",
-        "required": [
-          "revision",
-          "urls"
-        ],
-        "properties": {
-          "revision": {
-            "type": "integer"
-          },
-          "urls": {
+          "compatibility_flags": {
             "type": "array",
             "items": {
               "type": "string"
             }
-          }
-        }
-      },
-      "EdgeRule": {
-        "type": "object",
-        "required": [
-          "path_prefix",
-          "mode",
-          "edge_ttl",
-          "browser_ttl"
-        ],
-        "properties": {
-          "browser_ttl": {
-            "type": "integer"
           },
-          "edge_ttl": {
-            "type": "integer"
-          },
-          "mode": {
-            "type": "string"
-          },
-          "path_prefix": {
-            "type": "string"
-          }
-        }
-      },
-      "EdgeState": {
-        "type": "object",
-        "required": [
-          "route_id",
-          "org_id",
-          "project_id",
-          "revision",
-          "policy",
-          "status",
-          "message",
-          "kind",
-          "requested_at",
-          "applied_at",
-          "last_purge_at"
-        ],
-        "properties": {
-          "applied_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "desired": {
-            "$ref": "#/components/schemas/DNSRecord"
-          },
-          "invalidation_error": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "last_deployment_id": {
-            "type": "string"
-          },
-          "last_purge_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "message": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "policy": {
-            "$ref": "#/components/schemas/EdgePolicy"
-          },
-          "prior": {
-            "$ref": "#/components/schemas/DNSRecord"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "requested_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "route_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "urls": {
+          "durable_objects": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/DurableObjectClass"
             }
-          }
-        }
-      },
-      "EdgePolicy": {
-        "type": "object",
-        "required": [
-          "enabled",
-          "invalidate_on_deploy",
-          "rules"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean"
           },
-          "invalidate_on_deploy": {
-            "type": "boolean"
-          },
-          "rules": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EdgeRule"
-            }
-          }
-        }
-      },
-      "AgentBudgetInputBody": {
-        "type": "object",
-        "required": [
-          "monthly_budget_usd",
-          "revision"
-        ],
-        "properties": {
-          "monthly_budget_usd": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "AgentUpdateInputBody": {
-        "type": "object",
-        "required": [
-          "revision"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "knowledge": {
-            "type": "boolean"
-          },
-          "model": {
-            "type": "string"
-          },
-          "provider_key": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "AgentView": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "enabled",
-          "provider_key",
-          "model",
-          "knowledge",
-          "nexus_tenant_id",
-          "revision",
-          "updated_at",
-          "server",
-          "effective",
-          "budget",
-          "knowledge_status",
-          "available"
-        ],
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "budget": {
-            "$ref": "#/components/schemas/BudgetState"
-          },
-          "effective": {
-            "$ref": "#/components/schemas/EffectiveView"
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "key": {
-            "$ref": "#/components/schemas/KeyView"
-          },
-          "knowledge": {
-            "type": "boolean"
-          },
-          "knowledge_status": {
-            "$ref": "#/components/schemas/KnowledgeStatus"
-          },
-          "model": {
-            "type": "string"
-          },
-          "nexus_tenant_id": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "problem": {
-            "type": "string"
-          },
-          "provider_key": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "server": {
-            "$ref": "#/components/schemas/ServerDefaults"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updated_by": {
+          "main": {
             "type": "string"
           }
         }
       },
-      "BudgetState": {
-        "type": "object",
-        "required": [
-          "limit_usd",
-          "spent_usd",
-          "exhausted"
-        ],
-        "properties": {
-          "exhausted": {
-            "type": "boolean"
-          },
-          "limit_usd": {
-            "type": "string"
-          },
-          "spent_usd": {
-            "type": "string"
-          }
-        }
-      },
-      "EffectiveView": {
-        "type": "object",
-        "required": [
-          "provider",
-          "model",
-          "summary_model"
-        ],
-        "properties": {
-          "base_url": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "summary_model": {
-            "type": "string"
-          }
-        }
-      },
-      "KeyView": {
+      "DurableObjectClass": {
         "type": "object",
         "required": [
           "name",
-          "type",
-          "hint"
+          "class_name"
         ],
         "properties": {
-          "hint": {
+          "class_name": {
             "type": "string"
           },
           "name": {
             "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        }
-      },
-      "KnowledgeStatus": {
-        "type": "object",
-        "required": [
-          "configured",
-          "available"
-        ],
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "configured": {
-            "type": "boolean"
-          },
-          "reason": {
-            "type": "string"
-          }
-        }
-      },
-      "ProviderKeyInputBody": {
-        "type": "object",
-        "required": [
-          "type"
-        ],
-        "properties": {
-          "fields": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "models": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "task",
-                "input_per_million",
-                "output_per_million"
-              ],
-              "properties": {
-                "context_window": {
-                  "type": "integer"
-                },
-                "dimensions": {
-                  "type": "integer"
-                },
-                "embedding_per_million": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "input_per_million": {
-                  "type": "string"
-                },
-                "max_output": {
-                  "type": "integer"
-                },
-                "output_per_million": {
-                  "type": "string"
-                },
-                "task": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "projects": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "type": {
-            "type": "string"
-          }
-        }
-      },
-      "ServerDefaults": {
-        "type": "object",
-        "required": [
-          "provider",
-          "model",
-          "key_set"
-        ],
-        "properties": {
-          "base_url": {
-            "type": "string"
-          },
-          "key_set": {
-            "type": "boolean"
-          },
-          "model": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          }
-        }
-      },
-      "WorkspaceBudgetInputBody": {
-        "type": "object",
-        "required": [
-          "monthly_budget_usd",
-          "revision"
-        ],
-        "properties": {
-          "monthly_budget_usd": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
           }
         }
       }

@@ -477,3 +477,19 @@ func TestHistory_deploymentReadsAnyDeployment(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryRetainsNativeExternalResourceDelivery(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	cfg := &planning.ServiceConfig{Provider: "digitalocean", CommitSHA: "reviewed", TargetAccountIdentity: "team"}
+	historyRelease{plan: "external-plan", deployment: "external-deployment", env: "env_b", status: StatusSucceeded, finished: at(10, 0),
+		actions: []planning.Action{serviceAction("api", "create", "digitalocean", "nyc", cfg)},
+		steps:   []Step{serviceStep("api", "create", StepSucceeded, "", "historical-provider-revision")},
+	}.record(ctx, t, h, pg)
+	got, err := h.ReleasedImages(ctx, "org", "env_b", at(11, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["api"].ExternalResources {
+		t.Fatal("history lost historical external access after attachment removal")
+	}
+}

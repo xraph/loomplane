@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/publicplan"
 	store "github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
@@ -45,7 +46,7 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[discovery.Source]("source.updated").As(forge.StreamUpsert), forge.Emits[discovery.Source]("source.deleted"),
 		forge.Emits[discovery.Analysis]("analysis.updated").As(forge.StreamUpsert), forge.Emits[discovery.Analysis]("analysis.deleted"),
 		forge.Emits[manifests.Revision]("manifest.updated").As(forge.StreamUpsert), forge.Emits[manifests.Revision]("manifest.deleted"),
-		forge.Emits[planning.Plan]("plan.updated").As(forge.StreamUpsert), forge.Emits[planning.Plan]("plan.deleted"),
+		forge.Emits[publicplan.Plan]("plan.updated").As(forge.StreamUpsert), forge.Emits[publicplan.Plan]("plan.deleted"),
 		forge.Emits[planning.Binding]("binding.updated").As(forge.StreamUpsert).Invalidates("Binding[]", "Instance[]"), forge.Emits[planning.Binding]("binding.deleted"),
 		forge.Emits[connections.Connection]("connection.updated").As(forge.StreamUpsert), forge.Emits[connections.Connection]("connection.deleted"),
 		forge.Emits[deployments.Deployment]("deployment.updated").As(forge.StreamUpsert).Invalidates("Deployment[]", "Instance[]"), forge.Emits[deployments.Deployment]("deployment.deleted"),
@@ -80,7 +81,7 @@ func (e *Extension) routes(router forge.Router) error {
 	return g.EventStream("/realtime/events", e.events, forge.WithName("realtime.events"), forge.WithQuerySchema(ScopeQuery{}), forge.WithSSEMessages(map[string]any{
 		"project.updated": projects.Project{}, "project.deleted": projects.Project{}, "environment.updated": projects.Environment{}, "environment.deleted": projects.Environment{},
 		"source.updated": discovery.Source{}, "source.deleted": discovery.Source{}, "analysis.updated": discovery.Analysis{}, "analysis.deleted": discovery.Analysis{},
-		"manifest.updated": manifests.Revision{}, "manifest.deleted": manifests.Revision{}, "plan.updated": planning.Plan{}, "plan.deleted": planning.Plan{},
+		"manifest.updated": manifests.Revision{}, "manifest.deleted": manifests.Revision{}, "plan.updated": publicplan.Plan{}, "plan.deleted": publicplan.Plan{},
 		"binding.updated": planning.Binding{}, "binding.deleted": planning.Binding{}, "connection.updated": connections.Connection{}, "connection.deleted": connections.Connection{},
 		"deployment.updated": deployments.Deployment{}, "deployment.deleted": deployments.Deployment{}, "canary_verdict.updated": deployments.CanaryVerdict{}, "canary_verdict.deleted": deployments.CanaryVerdict{},
 		"release_watch.updated": releasewatch.Watch{}, "release_watch.deleted": releasewatch.Watch{}, "build.log": store.Log{}, "build.collection": store.Collection{},

@@ -66,6 +66,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	nativeOutputs    *nativeOutputInventory
 	cleanupCheck     func(context.Context) error
 	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
@@ -219,8 +220,13 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	capacity CapacityResolver
-	routes   ReleaseRoutes
+	instances         planning.InstanceVerifier
+	managedCleanup    *ManagedCleanupExecution
+	existingResources planning.ExistingResourceResolver
+	existingEndpoints planning.EndpointChecker
+	existingDialer    planning.TargetDialer
+	capacity          CapacityResolver
+	routes            ReleaseRoutes
 
 	cloudSyncAuth  CloudSyncAuthorizer
 	cloudProfiles  cloudprofiles.Resolver
@@ -253,6 +259,11 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	Instances         planning.InstanceVerifier
+	ManagedCleanup    *ManagedCleanupExecution
+	ExistingResources planning.ExistingResourceResolver
+	ExistingEndpoints planning.EndpointChecker
+	ExistingDialer    planning.TargetDialer
 	// Authz and BackupPolicies recheck and install reviewed backup defaults.
 	Authz          Authorizer
 	BackupPolicies BackupPolicyInstaller
@@ -334,7 +345,8 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{
+	return &Runner{instances: d.Instances, managedCleanup: d.ManagedCleanup,
+		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
@@ -685,10 +697,10 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return guardErr
+	}
 	if deferredPlan(plan) {
-		if checkErr := legacyCapacityGuard(ctx, plan); checkErr != nil {
-			return checkErr
-		}
 		wait, checkErr := r.AssessCapacity(ctx, orgID, deploymentID)
 		if checkErr != nil {
 			return checkErr
@@ -880,6 +892,26 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
 		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
 	}
+	around, err := r.environmentBindings(ctx, d, a.ID)
+	if err != nil {
+		return err
+	}
+	current, resources := around.current, around.resources
+	if a.Op == planning.Delete && len(a.CleanupTargets) > 0 {
+		var handled bool
+		ctx, handled, err = r.managedDelete(ctx, d, plan, a, current, step, resume, heartbeat)
+		if handled || err != nil {
+			return err
+		}
+	}
+	if a.Op == planning.Delete && len(a.CleanupTargets) == 0 && current != nil {
+		if checkErr := r.guardUnreviewedRemoval(ctx, current); checkErr != nil {
+			return checkErr
+		}
+	}
+	if (a.Resource != nil && a.Resource.ExistingResource != nil) || planning.ExistingResourceBinding(current) {
+		return r.runExistingResource(ctx, d, plan, a, current, step, progress)
+	}
 	if a.Op == planning.Keep && a.AdoptCloudPlacement {
 		return r.adoptCloudPlacement(ctx, d, plan, a, step, heartbeat)
 	}
@@ -891,11 +923,6 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	around, err := r.environmentBindings(ctx, d, a.ID)
-	if err != nil {
-		return err
-	}
-	current, resources := around.current, around.resources
 	deleting := a.Op == planning.Delete
 	if deleting && current == nil {
 		return nil
@@ -922,6 +949,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil && !unreachable {
 		return err
 	}
+	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
+		return targetErr
+	}
 	if checkErr := checkAdmittedDaemon(ctx, a, conn); checkErr != nil {
 		return checkErr
 	}
@@ -932,9 +962,17 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		if a.Service != nil && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 			return fmt.Errorf("the target settings for %s changed since this plan was reviewed; plan again", a.Name)
 		}
+		if a.Resource != nil && a.Resource.AccountIdentity != "" && a.Resource.AccountIdentity != connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details) {
+			return fmt.Errorf("the reviewed account for %s changed; check the connection and plan again", a.Name)
+		}
 	}
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
+	}
+	if !deleting {
+		if accessErr := r.verifyExistingServiceAccess(ctx, &Job{Deployment: d, Plan: plan, Action: a, Connection: conn}, resources); accessErr != nil {
+			return accessErr
+		}
 	}
 	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, resources); captureErr != nil {
 		return captureErr
@@ -1045,8 +1083,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
-	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
-		return effectErr
+	if a.Service == nil || a.Service.ClusterDemand == nil {
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
 	}
 	if _, fenced := server.EffectFenceFrom(ctx); fenced {
 		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
@@ -1082,6 +1122,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	if err != nil {
 		return err
+	}
+	if outputErr := job.finishNativeOutputs(ctx); outputErr != nil {
+		return outputErr
 	}
 	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
 	step.Warnings = append(step.Warnings, applyWarnings...)
@@ -1211,6 +1254,9 @@ func (r *Runner) newJob(ctx context.Context, d *Deployment, plan *planning.Plan,
 		},
 		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
 	}
+	if outputErr := r.trackNativeOutputs(ctx, job); outputErr != nil {
+		return nil, outputErr
+	}
 	// A gateway is built from the source Loomplane generates for its
 	// routes, and the database gateway from the program Loomplane ships,
 	// not from the repository.
@@ -1241,6 +1287,12 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 	if a.Service == nil {
 		return nil
 	}
+	if err := r.verifyExistingServiceAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
+	if err := r.verifyExistingSnapshotAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
 	if !a.Service.Generated() {
 		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
 			return r.appliedSource(ctx, d, a)
@@ -1256,7 +1308,7 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 		return err
 	}
 	for _, link := range a.Service.Env {
-		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil && !planning.ExistingResourceBinding(b) {
 			job.Attach = append(job.Attach, b)
 		}
 	}
@@ -1406,6 +1458,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if err := r.confirmFrontendRemoval(ctx, exec, job, bound); err != nil {
 			return err
 		}
+		if job.nativeOutputs != nil {
+			if forgetErr := job.Forget(ctx); forgetErr != nil {
+				return forgetErr
+			}
+		}
 	}
 	// The database gateway's cloud service is gone, or out of reach for
 	// good, so its record and keys go too, while the binding still says
@@ -1413,7 +1470,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	if err := r.removeDatabaseGateway(ctx, job.Deployment, bound); err != nil {
 		return err
 	}
-	if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
+	if state, ok := ctx.Value(managedActionCleanupKey{}).(*managedActionCleanup); ok {
+		if _, removeErr := r.managedCleanup.Store.GuardManagedDeleteBinding(ctx, state.selection, bound, true); removeErr != nil {
+			return removeErr
+		}
+	} else if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
 		return err
 	}
 	step.Warnings = append(step.Warnings, warnings...)
@@ -1439,18 +1500,27 @@ type unreachableRemover interface {
 func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *planning.Binding, warn func(error),
 	rc *replaceCheckpoint, heartbeat func([]byte) error,
 ) error {
+	ctx, managed, cleanupErr := r.ensureManagedActionCleanup(ctx, job.Deployment, job.Plan, job.Action, job.Resume, heartbeat)
+	if cleanupErr != nil {
+		return cleanupErr
+	}
 	left := slices.Clone(bound.Replaced)
 	var errs []error
 	for _, old := range bound.Replaced {
 		if c := job.Action.Compensation; c != nil && c.Retained && (old.PlanID != c.Candidate.PlanID || bindingIdentity(&old) != bindingIdentity(&c.Candidate)) {
 			continue
 		}
+		if managed == nil || !managed.reviewed(&old) {
+			if checkErr := r.guardUnreviewedRemoval(ctx, &old); checkErr != nil {
+				return checkErr
+			}
+		}
 		done := true
 		same, identityErr := r.sameBindingResource(ctx, job.Deployment.OrgID, &old, bound)
 		if identityErr != nil {
 			return identityErr
 		}
-		if !same {
+		if !same && (managed == nil || !managed.removed(&old)) {
 			var err error
 			done, err = r.removeOne(ctx, job, &old, rc, heartbeat)
 			mine := own != nil && bindingIdentity(own) == bindingIdentity(&old)
@@ -1468,7 +1538,16 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 		left = slices.DeleteFunc(left, func(b planning.Binding) bool {
 			return bindingIdentity(&b) == bindingIdentity(&old)
 		})
-		if err := r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left); err != nil {
+		var err error
+		if managed != nil {
+			err = r.managedCleanup.Store.SetReviewedReplaced(ctx, managed.selection, bound, left)
+			if err == nil {
+				bound.Replaced = slices.Clone(left)
+			}
+		} else {
+			err = r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left)
+		}
+		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
 	}
@@ -1480,6 +1559,9 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 // done reports whether to stop recording it: it's gone, or nothing here
 // could ever reach it.
 func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding, rc *replaceCheckpoint, heartbeat func([]byte) error) (done bool, err error) {
+	if planning.ExistingResourceBinding(old) {
+		return true, nil
+	}
 	a := job.Action
 	exec, ok := r.executors[old.Provider]
 	// Deleting the action deletes the binding that tracks the old one, so
@@ -1641,7 +1723,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if secret == nil {
 			secret = map[string]bool{}
 		}
-	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
+	} else if env, secret, err = r.deploymentVariables(ctx, d, a.Service.Service); err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {
@@ -1950,7 +2032,7 @@ func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" || plan.Catalog {
+	if plan.CloudSyncID != "" || plan.Catalog || plan.Kind == planning.KindInstance {
 		return nil
 	}
 	release := &planning.DeployedRelease{

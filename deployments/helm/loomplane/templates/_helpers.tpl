@@ -208,3 +208,47 @@ one replica and no shared volume.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/* A separate name and image keep the gateway independent of the API. */}}
+{{- define "loomplane.pushGatewayName" -}}
+{{- printf "%s-push-gateway" (include "loomplane.fullname" . | trunc 50 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "loomplane.pushGatewayImage" -}}
+{{- include "loomplane.image" (dict "Values" (dict "image" .Values.push.gateway.image) "Chart" .Chart) -}}
+{{- end -}}
+
+{{- define "loomplane.validatePushGateway" -}}
+{{- $g := .Values.push.gateway -}}
+{{- if $g.enabled -}}
+{{- $_ := required "push.gateway.existingSecret is required" $g.existingSecret -}}
+{{- $_ = required "push.gateway.sealingKeyId is required" $g.sealingKeyId -}}
+{{- if not (regexMatch "^[A-Za-z0-9_-]{1,32}$" $g.sealingKeyId) -}}
+{{- fail "push.gateway.sealingKeyId must be 1 to 32 letters, digits, underscores or hyphens" -}}
+{{- end -}}
+{{- if and $g.previousSealingKeyId (or (eq $g.previousSealingKeyId $g.sealingKeyId) (not (regexMatch "^[A-Za-z0-9_-]{1,32}$" $g.previousSealingKeyId))) -}}
+{{- fail "push.gateway.previousSealingKeyId must be a different valid sealing key ID" -}}
+{{- end -}}
+{{- if not (or $g.image.tag $g.image.digest) -}}
+{{- fail "Set push.gateway.image.tag or push.gateway.image.digest to a published gateway image" -}}
+{{- end -}}
+{{- if not (or $g.fcm.enabled $g.apns.enabled) -}}
+{{- fail "Enable push.gateway.fcm.enabled or push.gateway.apns.enabled" -}}
+{{- end -}}
+{{- if and $g.apns.enabled (or (not (regexMatch "^[A-Za-z0-9]{10}$" $g.apns.keyId)) (not (regexMatch "^[A-Za-z0-9]{10}$" $g.apns.teamId))) -}}
+{{- fail "APNs needs 10-character push.gateway.apns.keyId and push.gateway.apns.teamId" -}}
+{{- end -}}
+{{- if not (regexMatch "^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?/?$" .Values.push.gatewayUrl) -}}
+{{- fail "push.gatewayUrl must be an HTTPS URL with a bare hostname" -}}
+{{- end -}}
+{{- if eq (lower (urlParse .Values.push.gatewayUrl).host) (lower (include "loomplane.publicHost" .)) -}}
+{{- fail "push.gatewayUrl needs a different hostname from publicURL" -}}
+{{- end -}}
+{{- if and $g.ingress.enabled (not $g.ingress.tls) -}}
+{{- fail "push.gateway.ingress.tls needs a certificate for the gateway hostname" -}}
+{{- end -}}
+{{- if and $g.httpRoute.enabled (not $g.httpRoute.parentRefs) -}}
+{{- fail "push.gateway.httpRoute.parentRefs needs an HTTPS Gateway" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

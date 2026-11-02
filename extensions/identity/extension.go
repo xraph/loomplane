@@ -59,6 +59,8 @@ import (
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/setuptoken"
+	"github.com/xraph/loomplane/internal/teams"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
@@ -95,6 +97,8 @@ type Extension struct {
 	smith         *keysmith.Engine
 	engine        *authsome.Engine
 	keys          *apikeys.Service
+	teams         *teams.Service
+	lockPG        *pgdriver.PgDB // the sync lock's own pool (wireTeams)
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
 	instance      *instance.Settings
@@ -144,6 +148,16 @@ func (e *Extension) Dependencies() []string {
 // Forge's central migrations the schema only exists once every extension
 // has registered, so anything that reads or writes waits for Start.
 func (e *Extension) Register(fapp forge.App) error {
+	err := e.register(fapp)
+	if err != nil {
+		// Stop may never run for an extension that failed to register,
+		// so the sync lock pool wireTeams opened is closed here.
+		err = errors.Join(err, e.closeLockPool())
+	}
+	return err
+}
+
+func (e *Extension) register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
@@ -159,7 +173,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
-	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
+	if e.warden, err = warden.NewEngine(
+		warden.WithStore(wstore),
+		warden.WithCache(warden.NewMemoryCache()),
+		warden.WithLogger(e.Logger()),
+	); err != nil {
 		return fmt.Errorf("warden: %w", err)
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
@@ -171,6 +189,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("chronicle: %w", err)
 	}
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
+	if teamsErr := e.wireTeams(); teamsErr != nil {
+		return teamsErr
+	}
 	if e.smith, err = keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db)))); err != nil {
 		return fmt.Errorf("keysmith: %w", err)
 	}
@@ -184,6 +205,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	c := fapp.Container()
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
@@ -213,6 +235,11 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	// every approval, from REST or the console, sends the email.
 	e.waitlist.SetWaitlistStore(approvalMailer{Store: e.waitlistStore, send: e.notifications.SendWaitlistApproved, log: e.Logger()})
 	e.gate = e.newSignupGate()
+	// A person who leaves the workspace leaves its teams first, and a
+	// revoke that fails afterwards goes on the sync queue.
+	memberSync := security.NewSync(e.authz)
+	memberSync.SetLeaver(e.teams.Leave)
+	memberSync.SetRequeuer(e.teams.Requeue)
 	tokens, err := security.TokenEncryptor(e.cfg.SecretKey)
 	if err != nil {
 		return nil, err
@@ -241,7 +268,7 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		authsome.WithPlugin(password.New()),
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
-		authsome.WithPlugin(security.NewSync(e.authz)),
+		authsome.WithPlugin(memberSync),
 		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
 		authsome.WithPlugin(e.waitlist),
 		// Last, so it judges a sign-up the other plugins have accepted.
@@ -267,8 +294,23 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
+	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
+}
+
+// logSetupLink tells the operator, in production while setup is pending,
+// where to open setup. A failure is logged; it never stops the start.
+func (e *Extension) logSetupLink(ctx context.Context) {
+	if e.cfg.IsDevelopment() || !e.setupPending(ctx) {
+		return
+	}
+	token, err := setuptoken.Derive(e.cfg.SecretKey)
+	if err != nil {
+		e.Logger().Error("derive the setup token", forge.F("error", err.Error()))
+		return
+	}
+	e.Logger().Warn("setup is waiting", forge.F("url", setuptoken.Link(e.cfg.PublicURL, token)))
 }
 
 // setting sets one of authsome's settings for the whole engine.
@@ -287,6 +329,9 @@ func (e *Extension) setting(ctx context.Context, key string, value any) error {
 // middleware and routes stay out of Loomplane's API.
 func (e *Extension) mount(ctx context.Context) error {
 	r := forge.NewRouter()
+	// Ahead of everything, so a team route is refused before authsome
+	// looks at the session or counts the request.
+	r.Use(refuseAuthsomeTeams)
 	r.Use(rateLimitScope)
 	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
@@ -324,8 +369,19 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
+	errs = append(errs, e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
+}
+
+// closeLockPool closes the sync lock's pool, once.
+func (e *Extension) closeLockPool() error {
+	if e.lockPG == nil {
+		return nil
+	}
+	err := e.lockPG.Close()
+	e.lockPG = nil
+	return err
 }
 
 // Health checks authsome's store.

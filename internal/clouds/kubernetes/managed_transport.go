@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
 // managedTransport surrounds the shared client-go transport, so each REST retry
@@ -22,6 +23,7 @@ type managedTransport struct {
 	next    http.RoundTripper
 	journal ManagedJournal
 	scope   ManagedScope
+	cleanup bool
 }
 
 func (t *managedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -61,7 +63,13 @@ func (t *managedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 15*time.Second)
 	defer cancel()
-	if checkErr := t.journal.Resolve(ctx, issuance, t.scope, outcome); checkErr != nil {
+	var checkErr error
+	if store, ok := t.journal.(*ControllerStore); ok {
+		checkErr = store.resolveApplicationResponse(ctx, issuance, t.scope, mutation, outcome, data)
+	} else {
+		checkErr = t.journal.Resolve(ctx, issuance, t.scope, outcome)
+	}
+	if checkErr != nil {
 		return nil, checkErr
 	}
 	return response, nil
@@ -84,10 +92,29 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		return out, ErrManagedAuthority
 	}
 	out.Namespace, out.Resource = parts[1], parts[2]
+	if t.scope.GroupID != "" && (t.scope.GroupOperation == "prepare" && out.Resource == "ingresses" || t.scope.GroupOperation == "promote" && out.Resource != "ingresses" || req.Method == http.MethodDelete) {
+		return out, ErrManagedAuthority
+	}
 	if len(parts) == 4 {
 		out.Name = parts[3]
 	}
 	allowed := map[string]string{"secrets": "", "services": "", "serviceaccounts": "", "deployments": "apps", "horizontalpodautoscalers": "autoscaling", "ingresses": "networking.k8s.io", "roles": "rbac.authorization.k8s.io", "rolebindings": "rbac.authorization.k8s.io"}
+	if hasLifecycleScope(t.scope) {
+		allowed = map[string]string{"jobs": "batch", "secrets": ""}
+	}
+	descendant := t.cleanup && (out.Resource == "pods" || out.Resource == "replicasets")
+	query := req.URL.Query()
+	delete(query, "timeout")
+	if hasLifecycleScope(t.scope) && len(query) > 0 {
+		return out, ErrManagedAuthority
+	}
+	if t.cleanup && (req.Method != http.MethodDelete || len(query) > 0) {
+		return out, ErrManagedAuthority
+	}
+	if descendant {
+		allowed["pods"] = ""
+		allowed["replicasets"] = "apps"
+	}
 	group, ok := allowed[out.Resource]
 	validVersion := out.Version == "v1" || out.Resource == "horizontalpodautoscalers" && out.Version == "v2"
 	if !ok || group != out.Group || !validVersion {
@@ -111,22 +138,59 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 	case http.MethodPost, http.MethodPut:
 		var object struct {
 			Metadata metav1.ObjectMeta `json:"metadata"`
+			Spec     struct {
+				Template struct {
+					Spec struct {
+						NodeSelector map[string]string `json:"nodeSelector"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
 		}
 		if json.Unmarshal(body, &object) != nil {
 			return out, ErrManagedAuthority
 		}
+		if out.Resource == "deployments" {
+			out.SchedulingArchitecture = object.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"]
+		}
 		m := object.Metadata
-		if m.Namespace != out.Namespace || m.Name == "" || out.Name != "" && out.Name != m.Name || m.Labels[owned.LabelOrg] != t.scope.Org || m.Labels[owned.LabelProject] != t.scope.Project || m.Labels[owned.LabelEnvironment] != t.scope.Environment || m.Labels[owned.LabelInstance] != t.scope.Instance {
+		groupIngress := t.scope.GroupID != "" && out.Resource == "ingresses"
+		if m.Namespace != out.Namespace || m.Name == "" || out.Name != "" && out.Name != m.Name || m.Labels[owned.LabelOrg] != t.scope.Org || m.Labels[owned.LabelProject] != t.scope.Project || m.Labels[owned.LabelEnvironment] != t.scope.Environment || !groupIngress && m.Labels[owned.LabelInstance] != t.scope.Instance {
 			return out, ErrManagedAuthority
+		}
+		if groupIngress {
+			var receipt domain.ServingMemberReceipt
+			if m.Labels[groupIngressLabel] != t.scope.GroupID || m.Labels[groupMemberLabel] != t.scope.MemberID || json.Unmarshal([]byte(m.Annotations[groupSwitchAnnotation]), &receipt) != nil || receipt.Scope != (domain.Scope{OrgID: t.scope.Org, ProjectID: t.scope.Project, EnvironmentID: t.scope.Environment}) || receipt.GroupID != t.scope.GroupID || receipt.MemberID != t.scope.MemberID || receipt.Generation != t.scope.GroupGeneration || receipt.Namespace != t.scope.Namespace || receipt.NamespaceUID != t.scope.NamespaceUID {
+				return out, ErrManagedAuthority
+			}
+			out.GroupSwitch = &receipt
 		}
 		out.Name, out.UID = m.Name, string(m.UID)
 		out.ResourceVersion = m.ResourceVersion
 	case http.MethodDelete:
-		var options metav1.DeleteOptions
-		if out.Name == "" || json.Unmarshal(body, &options) != nil || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
+		var options struct {
+			metav1.TypeMeta
+			Preconditions     *metav1.Preconditions       `json:"preconditions,omitempty"`
+			PropagationPolicy *metav1.DeletionPropagation `json:"propagationPolicy,omitempty"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		if t.cleanup || hasLifecycleScope(t.scope) {
+			decoder.DisallowUnknownFields()
+		}
+		if out.Name == "" || decoder.Decode(&options) != nil || !errors.Is(decoder.Decode(&struct{}{}), io.EOF) || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
 			return out, ErrManagedAuthority
 		}
 		out.UID = string(*options.Preconditions.UID)
+		if hasLifecycleScope(t.scope) && options.PropagationPolicy != nil {
+			out.PropagationPolicy = string(*options.PropagationPolicy)
+		}
+		if t.cleanup {
+			if options.PropagationPolicy != nil {
+				out.PropagationPolicy = string(*options.PropagationPolicy)
+			}
+			if out.PropagationPolicy != string(metav1.DeletePropagationOrphan) {
+				return out, ErrManagedAuthority
+			}
+		}
 		if options.Preconditions.ResourceVersion != nil {
 			out.ResourceVersion = *options.Preconditions.ResourceVersion
 			if out.ResourceVersion == "" {
@@ -138,11 +202,26 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		// mutations until their ownership and outcome semantics are implemented.
 		return out, ErrManagedAuthority
 	}
+	if hasLifecycleScope(t.scope) {
+		if validationErr := validateLifecycleRequest(t.scope, out, body); validationErr != nil {
+			return out, validationErr
+		}
+		return out, nil
+	}
+	if t.cleanup && out.ResourceVersion == "" {
+		return out, ErrManagedAuthority
+	}
+	if descendant {
+		return out, nil
+	}
 	iid, err := id.ParseWithPrefix(t.scope.Instance, id.PrefixInstance)
 	if err != nil {
 		return out, ErrManagedAuthority
 	}
 	name := WorkloadName(iid)
+	if t.scope.GroupID != "" && out.Resource == "ingresses" {
+		name = GroupIngressName(domain.Scope{OrgID: t.scope.Org, ProjectID: t.scope.Project, EnvironmentID: t.scope.Environment}, t.scope.GroupID, t.scope.MemberID)
+	}
 	validName := out.Name == name || out.Resource == "secrets" && (out.Name == name+"-runtime" || out.Name == name+"-pull")
 	if !validName {
 		return out, ErrManagedAuthority

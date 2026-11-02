@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xraph/loomplane/internal/engineprobe"
+	"github.com/xraph/loomplane/internal/enginetls"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -36,7 +38,7 @@ var (
 	protocols = []string{"http", "tcp", "redis", "memcached"}
 	// dependencyFields are what a Ref reads from a dependency other than a
 	// dependency-only kind.
-	dependencyFields = []string{FieldURL, FieldHost, FieldPort, FieldHostPort, FieldUsername, FieldPassword, FieldDatabase, FieldAdminURL, FieldQuery}
+	dependencyFields = []string{FieldURL, FieldHost, FieldPort, FieldHostPort, FieldUsername, FieldPassword, FieldDatabase, FieldAdminURL, FieldQuery, FieldCACert}
 
 	// A process's Kubernetes rules only discover Services.
 	ruleGroups    = []string{"", "discovery.k8s.io"}
@@ -62,11 +64,12 @@ type Registry struct {
 	mu      sync.RWMutex
 	kinds   map[string]Kind
 	engines map[string]Engine
+	history map[historicalRelease]Kind
 }
 
 // NewRegistry returns a registry with only the built-in engines.
 func NewRegistry() *Registry {
-	r := &Registry{kinds: map[string]Kind{}, engines: map[string]Engine{}}
+	r := &Registry{kinds: map[string]Kind{}, engines: map[string]Engine{}, history: map[historicalRelease]Kind{}}
 	for _, e := range builtinEngines() {
 		r.engines[e.Kind] = e
 	}
@@ -313,6 +316,9 @@ func (k Kind) info() KindInfo {
 func normalizeKind(k *Kind) {
 	for i := range k.Secrets {
 		s := &k.Secrets[i]
+		if s.Generator != "" {
+			continue
+		}
 		if s.Bytes == 0 {
 			s.Bytes = defaultSecretBytes
 		}
@@ -369,11 +375,12 @@ func validateKind(k Kind) []error {
 	if k.Placement != PlacementServiceProject && k.Placement != PlacementAppProject && k.Placement != PlacementDependency {
 		f.add("placement %q is not %s, %s or %s", k.Placement, PlacementServiceProject, PlacementAppProject, PlacementDependency)
 	}
+	f.errs = append(f.errs, serviceFindings(k)...)
 	validateTargets(f, k.Targets)
 	if !featurePattern.MatchString(k.Feature) {
 		f.add("feature %q must be at most 16 lowercase letters", k.Feature)
 	}
-	if k.Placement == PlacementDependency {
+	if k.Placement == PlacementDependency && k.Service == nil {
 		validateDependencyOnly(f, k)
 	}
 
@@ -415,6 +422,12 @@ func validateKind(k Kind) []error {
 			f.add("secret %q is declared more than once", s.Name)
 		}
 		secrets[s.Name] = true
+		if s.Generator != "" {
+			if !namePattern.MatchString(s.Generator) || s.Bytes != 0 || s.Encoding != "" || s.Prefix != "" {
+				f.add("secret %q structured generator cannot also declare random encoding options", s.Name)
+			}
+			continue
+		}
 		if s.Bytes < 16 || s.Bytes > 1024 {
 			f.add("secret %q has %d random bytes; use 16 to 1024", s.Name, s.Bytes)
 		}
@@ -468,8 +481,13 @@ func validateKind(k Kind) []error {
 		}
 		envKeys[o.EnvKey] = true
 		what := fmt.Sprintf("output %q", o.Name)
-		if count(o.From != nil, o.Template != "", o.PerConsumer) != 1 {
-			f.add("%s must set exactly one of from, template and per consumer", what)
+		if count(o.From != nil, o.Template != "", o.PerConsumer, o.PublicCA != "") != 1 {
+			f.add("%s must set exactly one of from, template, per consumer and public CA", what)
+		}
+		if o.PublicCA != "" {
+			if !k.DirectService() || o.Secret || !slices.ContainsFunc(k.Secrets, func(s GeneratedSecret) bool { return s.Name == o.PublicCA && s.Generator == enginetls.Generator }) {
+				f.add("%s public CA must name a direct service engine TLS bundle and cannot be secret", what)
+			}
 		}
 		refs := validateReads(f, what, o.From, o.Template, components, dependencies, secrets)
 		validateRequires(f, what, o.Requires, "", refs, components, dependencies)
@@ -613,6 +631,13 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 		switch {
 		case !ok:
 			f.add("%s readiness names port %q, which it doesn't declare", what, probe.Port)
+		case probe.Checker != "":
+			if _, err := engineprobe.Command(k.Name, probe.Checker); err != nil {
+				f.add("%s has an unsupported authenticated readiness checker", what)
+			}
+			if probe.Path != "" {
+				f.add("%s authenticated readiness must not declare an HTTP path", what)
+			}
 		case port.Protocol == "redis" || port.Protocol == "memcached":
 			if probe.Path != "" {
 				f.add("%s readiness port %q speaks %s, so its path %q must be empty", what, probe.Port, port.Protocol, probe.Path)
@@ -635,7 +660,9 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 
 	switch {
 	case c.Protection == ProtectionNative:
-		f.add("%s has native protection, which is reserved for engines", what)
+		if k.Service == nil || !k.DirectService() || c.Role != RoleProcess || c.Volume == nil || !qualifiedServiceRecovery(k) {
+			f.add("%s native protection requires a reusable persistent service and recovery contract", what)
+		}
 	case c.Protection == ProtectionExternal:
 		f.add("%s has external protection, which is for dependencies", what)
 	case c.Volume != nil && c.Protection != ProtectionRebuildable:
@@ -681,6 +708,14 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 
 	files := map[string]bool{}
 	for _, file := range c.Files {
+		if file.CertificateSecret != "" {
+			expected, err := engineprobe.CertificatePath(k.Name)
+			if err != nil || file.Path != expected || c.Readiness == nil || c.Readiness.Checker != k.Name+"-v1" || !slices.ContainsFunc(k.Secrets, func(s GeneratedSecret) bool {
+				return s.Name == file.CertificateSecret && s.Generator == enginetls.Generator
+			}) {
+				f.add("%s has an unsupported deferred certificate file", what)
+			}
+		}
 		p := file.Path
 		switch {
 		case !path.IsAbs(p) || path.Clean(p) != p || strings.Contains(p, ".."):
@@ -812,6 +847,44 @@ func count(set ...bool) int {
 		}
 	}
 	return n
+}
+
+// serviceFindings checks the contract used for a directly bound service.
+func serviceFindings(k Kind) []error {
+	if k.Service == nil {
+		return nil
+	}
+	f := &findings{where: k.Name}
+	if len(k.Components) != 1 || k.Components[0].Role != RoleProcess {
+		f.add("a reusable service runs exactly one process and no other components")
+	}
+	if len(k.Dependencies) > 0 {
+		f.add("a reusable service has no dependencies of its own")
+	}
+	if k.Service.Connection[FieldURL] == "" {
+		f.add("a reusable service connection must map url to a declared output")
+	}
+	for field, name := range k.Service.Connection {
+		if !slices.Contains(dependencyFields, field) {
+			f.add("service connection field %q is not a standard field", field)
+		}
+		i := slices.IndexFunc(k.Outputs, func(o Output) bool { return o.Name == name })
+		if i < 0 {
+			f.add("service connection field %q names undeclared output %q", field, name)
+		}
+	}
+	for _, o := range k.Outputs {
+		if o.PerConsumer {
+			f.add("a reusable service output %q cannot be per consumer", o.Name)
+		}
+	}
+	if len(k.ConsumerOptions) > 0 {
+		f.add("a reusable service takes no consumer options")
+	}
+	if (k.Service.Recovery == "") != (k.Service.BackupFormat == "") {
+		f.add("service recovery and backup format must be declared together")
+	}
+	return f.errs
 }
 
 // validateDependencyOnly checks what a dependency-only kind can't have.
@@ -964,8 +1037,8 @@ func validateRef(f *findings, what string, ref *Ref, components map[string]*Comp
 			return
 		}
 		field, port, _ := strings.Cut(ref.Field, ":")
-		if field != "url" && field != "address" {
-			f.add("%s reads field %q; components have url:<port> and address:<port>", what, ref.Field)
+		if field != "url" && field != "address" && field != "host" && field != "port" {
+			f.add("%s reads field %q; components have url:<port>, address:<port>, host:<port> and port:<port>", what, ref.Field)
 			return
 		}
 		if !slices.ContainsFunc(c.Ports, func(p Port) bool { return p.Name == port }) {
@@ -992,10 +1065,15 @@ func crossFindings(k Kind, kinds map[string]Kind, engines map[string]Engine) []e
 	reads := dependencyReads(k)
 	for _, d := range k.Dependencies {
 		var only *Kind
+		var services []Kind
 		for _, name := range d.Kinds {
-			if dk, ok := kinds[name]; ok && dk.Placement == PlacementDependency {
-				only = &dk
-				break
+			if dk, ok := kinds[name]; ok {
+				if dk.Placement == PlacementDependency && dk.Service == nil {
+					only = &dk
+				}
+				if dk.Service != nil {
+					services = append(services, dk)
+				}
 			}
 		}
 		if only != nil {
@@ -1007,8 +1085,23 @@ func crossFindings(k Kind, kinds map[string]Kind, engines map[string]Engine) []e
 			}
 		}
 		for _, use := range reads[d.Name] {
+			if _, _, private := cutAny(use.field, "output:", "secret:"); private && d.External != nil {
+				f.add("%s reads private field %q from dependency %q, which accepts external endpoints without published outputs or secrets", use.what, use.field, d.Name)
+			}
 			if only != nil {
 				validateDependencyOnlyField(f, use.what, use.field, d.Name, *only)
+				continue
+			}
+			for _, service := range services {
+				if slices.Contains(dependencyFields, use.field) {
+					if use.field == FieldAdminURL && service.Service.Connection[FieldAdminURL] == "" {
+						f.add("%s reads admin-url from dependency %q, but %s declares no admin connection", use.what, d.Name, service.Name)
+					}
+				} else {
+					validateDependencyOnlyField(f, use.what, use.field, d.Name, service)
+				}
+			}
+			if len(services) == len(d.Kinds) {
 				continue
 			}
 			if _, _, ok := cutAny(use.field, "output:", "secret:"); ok && known(d.Kinds, kinds, engines) {
@@ -1050,8 +1143,8 @@ func dependencyReads(k Kind) map[string][]fieldUse {
 	return out
 }
 
-// validateDependencyOnlyField checks a field read from a dependency-only
-// kind: url (its primary output), output:<name> or secret:<name>.
+// validateDependencyOnlyField checks a published field read from a direct
+// service: url (its primary output), output:<name> or secret:<name>.
 func validateDependencyOnlyField(f *findings, what, field, dependency string, dk Kind) {
 	prefix, name, _ := cutAny(field, "output:", "secret:")
 	switch {
@@ -1280,4 +1373,12 @@ func validateEngine(e Engine) []error {
 		}
 	}
 	return f.errs
+}
+
+func qualifiedServiceRecovery(k Kind) bool {
+	if k.Service == nil || k.Service.Recovery != k.Name {
+		return false
+	}
+	formats := map[string]string{"falkordb": "falkordb-rdb-v1", "elasticsearch": "elasticsearch-snapshot-v1", "opensearch": "opensearch-snapshot-v1", "duckdb": "duckdb-checkpoint-v1"}
+	return formats[k.Name] != "" && formats[k.Name] == k.Service.BackupFormat
 }

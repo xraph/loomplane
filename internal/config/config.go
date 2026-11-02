@@ -265,8 +265,10 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
-	ManagedClusters ManagedClustersConfig
-	ClusterCapacity ClusterCapacityConfig
+	MultiLocationDelivery bool
+	ManagedClusters       ManagedClustersConfig
+	ClusterCapacity       ClusterCapacityConfig
+	AutomaticCapacity     AutomaticCapacityConfig
 
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
@@ -313,7 +315,7 @@ type OAuthApp struct {
 }
 
 // oauthClouds are the clouds that can connect by signing in.
-var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure"}
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure", "cloudflare"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -427,6 +429,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
 	r.str(&c.Console.Path, "console.path")
+	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
@@ -470,6 +473,8 @@ func FromSource(src Getter) (Config, error) {
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
 	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.boolean(&c.Clouds.AutomaticCapacity.Enabled, "clouds.automatic_capacity.enabled")
+	r.boolean(&c.Clouds.MultiLocationDelivery, "clouds.multi_location_delivery")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
@@ -797,6 +802,9 @@ func (r *reader) integer(dst *int, key string) {
 		*dst = t
 	case int64:
 		*dst = int(t)
+	case bool:
+		// confy turns "1" and "0" variables into bools, so read them as numbers.
+		*dst = map[bool]int{true: 1, false: 0}[t]
 	case float64:
 		if t != float64(int(t)) {
 			r.fail(key, "a whole number", v)
@@ -902,3 +910,7 @@ func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String
 
 // ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
 type ClusterCapacityConfig struct{ Enabled bool }
+
+// AutomaticCapacityConfig lets server pools grow on their own from saved
+// capacity policies. It stays off until integrated qualification.
+type AutomaticCapacityConfig struct{ Enabled bool }

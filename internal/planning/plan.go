@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
+	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -43,6 +44,7 @@ const (
 // Plan kinds. A release deploys the manifest; a promotion deploys what
 // another environment runs; a rollback restores an earlier release.
 const (
+	KindInstance  = "instance"
 	KindRelease   = "release"
 	KindPromotion = "promotion" // made with CreatePlanInput.From
 	KindRollback  = "rollback"
@@ -154,22 +156,27 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	CapacityMode   string                     `json:"capacity_mode,omitempty"`
-	ClusterDemand  *ClusterWorkloadDemand     `json:"cluster_demand,omitempty"`
-	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
-	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
-	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
-	CloudPlacement *CloudPlacement            `json:"cloud_placement,omitempty"`
-	Catalog        *recipes.Recipe            `json:"catalog,omitempty"`
-	Provider       string                     `json:"provider"`
-	Region         string                     `json:"region,omitempty"`
-	Target         string                     `json:"target,omitempty"`
-	TargetSettings map[string]string          `json:"target_settings,omitempty"`
-	Endpoint       *manifest.Endpoint         `json:"endpoint,omitempty"`
-	HealthPath     string                     `json:"health_path,omitempty"`
-	BuildTarget    *BuildTarget               `json:"build_target,omitempty"`
-	Workload       provider.Workload          `json:"workload"`
-	Execution      provider.Execution         `json:"execution"`
+	PodGroup                   *manifest.PodGroup             `json:"pod_group,omitempty"`
+	WorkloadCapabilityRevision string                         `json:"workload_capability_revision,omitempty"`
+	Worker                     *provider.WorkerSettings       `json:"worker,omitempty"`
+	Placement                  *manifest.PlacementConstraints `json:"placement,omitempty"`
+	CapacityMode               string                         `json:"capacity_mode,omitempty"`
+	ClusterDemand              *ClusterWorkloadDemand         `json:"cluster_demand,omitempty"`
+	FrontendDemand             *cloudinfra.FrontendDemand     `json:"frontend_demand,omitempty"`
+	CapacityIntent             *CapacityIntent                `json:"capacity_intent,omitempty"`
+	AppliedInputs              *AppliedInputs                 `json:"applied_inputs,omitempty"`
+	CloudPlacement             *CloudPlacement                `json:"cloud_placement,omitempty"`
+	Catalog                    *recipes.Recipe                `json:"catalog,omitempty"`
+	Provider                   string                         `json:"provider"`
+	Region                     string                         `json:"region,omitempty"`
+	Target                     string                         `json:"target,omitempty"`
+	TargetSettings             map[string]string              `json:"target_settings,omitempty"`
+	TargetAccountIdentity      string                         `json:"target_account_identity,omitempty"`
+	Endpoint                   *manifest.Endpoint             `json:"endpoint,omitempty"`
+	HealthPath                 string                         `json:"health_path,omitempty"`
+	BuildTarget                *BuildTarget                   `json:"build_target,omitempty"`
+	Workload                   provider.Workload              `json:"workload"`
+	Execution                  provider.Execution             `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -278,7 +285,7 @@ func DataBearing(a Action) bool {
 	case ResourceSubject:
 		return a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Protection != recipes.ProtectionNone
 	case ServiceSubject:
-		return a.Service != nil && (a.Service.Catalog != nil ||
+		return a.Service != nil && ((a.Service.Worker != nil && len(a.Service.Worker.DurableObjects) > 0) || a.Service.Catalog != nil ||
 			(a.Service.Component != nil && a.Service.Component.Protection != recipes.ProtectionNone))
 	}
 	return false
@@ -385,14 +392,18 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
-	Target         string                 `json:"target,omitempty"`
-	TargetSettings map[string]string      `json:"target_settings,omitempty"`
-	Catalog        *recipes.Recipe        `json:"catalog,omitempty"`
-	Managed        *ManagedDatabaseConfig `json:"managed,omitempty"`
-	Provider       string                 `json:"provider"`
-	Region         string                 `json:"region,omitempty"`
-	Kind           string                 `json:"kind"`
-	Version        string                 `json:"version,omitempty"`
+	EndpointPins     map[string]EndpointPin  `json:"endpoint_pins,omitempty"`
+	Settings         map[string]string       `json:"settings,omitempty"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	AccountIdentity  string                  `json:"account_identity,omitempty"`
+	Target           string                  `json:"target,omitempty"`
+	TargetSettings   map[string]string       `json:"target_settings,omitempty"`
+	Catalog          *recipes.Recipe         `json:"catalog,omitempty"`
+	Managed          *ManagedDatabaseConfig  `json:"managed,omitempty"`
+	Provider         string                  `json:"provider"`
+	Region           string                  `json:"region,omitempty"`
+	Kind             string                  `json:"kind"`
+	Version          string                  `json:"version,omitempty"`
 	// Composition is set on the action for a composed catalog resource
 	// itself, and Component on each of its components' actions.
 	Composition *CompositionConfig `json:"composition,omitempty"`
@@ -427,7 +438,8 @@ const (
 // DependencyChoice is where a composed catalog resource gets one
 // dependency.
 type DependencyChoice struct {
-	Mode string `json:"mode"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	Mode             string                  `json:"mode"`
 	// Resource is the action name: ComponentActionName(parent, dependency)
 	// for a new one, the manifest name for a connected resource.
 	Resource string `json:"resource,omitempty"`
@@ -500,12 +512,14 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	RequiredRuntimeProtocol string    `json:"required_runtime_protocol,omitempty"`
-	CloudSyncID             string    `json:"cloud_sync_id,omitempty"`
-	Actions                 []Action  `json:"actions"`
-	Problems                []Finding `json:"problems"`
-	Warnings                []Finding `json:"warnings"`
-	Summary                 Summary   `json:"summary"`
+	PlacementGroups         []domain.QualifiedGroupPlan          `json:"placement_groups,omitempty"`
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Actions                 []Action                             `json:"actions"`
+	Problems                []Finding                            `json:"problems"`
+	Warnings                []Finding                            `json:"warnings"`
+	Summary                 Summary                              `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -627,10 +641,12 @@ type ReleaseRecord struct {
 // ReleasedImage is what one service ran after a release: the image it
 // deployed, by digest when the executor recorded one, and where.
 type ReleasedImage struct {
-	Service      string
-	Provider     string
-	ConnectionID string
-	Region       string
+	// ExternalResources records whether the native release delivered external access.
+	ExternalResources bool
+	Service           string
+	Provider          string
+	ConnectionID      string
+	Region            string
 	// Registry is the registry connection the image was pushed through,
 	// for a server or Kubernetes service built by Loomplane.
 	Registry  string
@@ -670,9 +686,16 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	RequiredRuntimeProtocol string `json:"required_runtime_protocol,omitempty"`
-	CloudSyncID             string `json:"cloud_sync_id,omitempty"`
-	Catalog                 bool   `json:"catalog"`
+	PlacementGroups []domain.QualifiedGroupPlan `json:"placement_groups,omitempty"`
+	// FleetInput is internal: ordinary APIs and realtime events never serialize it.
+	FleetInput *InstancePlanInput `json:"-"`
+	// ManagedInstanceID is derived from the environment ownership table on every read.
+	ManagedInstanceID string `json:"-"`
+
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Catalog                 bool                                 `json:"catalog"`
 	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
 	// fields below equal their column names: the realtime trigger
 	// serialises rows with to_jsonb.
@@ -724,6 +747,8 @@ type Plan struct {
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
 func (p *Plan) setResult(r *Result) {
+	p.PlacementGroups = r.PlacementGroups
+	p.LocationPlacements = r.LocationPlacements
 	p.CloudSyncID = r.CloudSyncID
 	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
@@ -734,6 +759,8 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
+		PlacementGroups:         p.PlacementGroups,
+		LocationPlacements:      p.LocationPlacements,
 		CloudSyncID:             p.CloudSyncID,
 		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,
 		Actions:                 p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,

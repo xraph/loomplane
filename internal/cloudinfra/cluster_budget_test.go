@@ -99,3 +99,19 @@ func TestClusterBudgetPhysicalNodeOverlap(t *testing.T) {
 		t.Fatal("ambiguous membership dropped costs", count, ok)
 	}
 }
+
+func TestClusterNodeMoneyPublicCategories(t *testing.T) {
+	checked := time.Now().UTC()
+	estimate, err := clusterNodeMoney(ClusterInput{Provider: "digitalocean", AccountID: "account", Spec: provider.ClusterSpec{NodePools: []provider.NodePoolSpec{{Name: "workers", Size: "small", Count: 2}}}}, provider.ClusterOptions{Digest: "catalog", CheckedAt: checked}, 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(estimate.Components) != 5 {
+		t.Fatal("missing cost categories")
+	}
+	for _, c := range estimate.Components {
+		if c.Category == "" || c.PriceCheckedAt == nil || !c.PriceCheckedAt.Equal(checked) {
+			t.Fatalf("component lacks public provenance: %s", c.Name)
+		}
+	}
+}

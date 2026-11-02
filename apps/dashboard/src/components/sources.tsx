@@ -63,7 +63,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { isActive, lastRead } from "@/lib/architecture"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 
 /**
  * refreshRepositories re-reads the project after its sources change: the
@@ -86,7 +86,7 @@ function sourceURL(s: Source): string {
 
 /** SourcesCard lists a project's repositories, with what was last read from each. */
 export function SourcesCard({ project }: { project: Project }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const analyses = useAnalyses(project.id)
   const start = useMutation(useAnalysesCreate)

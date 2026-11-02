@@ -5,7 +5,32 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/setuptoken"
 )
+
+func TestSetupTokenOK(t *testing.T) {
+	// 32 bytes, base64-encoded.
+	const key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	want, err := setuptoken.Derive(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prod := &Extension{cfg: config.Config{Environment: config.EnvProduction, SecretKey: key}}
+	if !prod.setupTokenOK(want) {
+		t.Error("production refuses the derived token")
+	}
+	for _, bad := range []string{"", "nope"} {
+		if prod.setupTokenOK(bad) {
+			t.Errorf("production accepts %q", bad)
+		}
+	}
+	dev := &Extension{cfg: config.Config{Environment: config.EnvDevelopment, SecretKey: key}}
+	if !dev.setupTokenOK("") {
+		t.Error("development refuses an empty token")
+	}
+}
 
 func TestSetupContextFlag(t *testing.T) {
 	if isSetup(context.Background()) {

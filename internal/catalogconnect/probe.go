@@ -43,7 +43,7 @@ type Checker struct {
 	Probers map[string]Prober
 }
 
-var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis"}
+var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage"}
 
 // EngineTitle names an engine the way checks word it: "PostgreSQL",
 // "Redis".
@@ -87,8 +87,8 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 	if dial == nil {
 		return nil, errors.New("check a DSN: no dialer")
 	}
-	if req.Engine != EnginePostgres && req.Engine != EngineRedis {
-		return nil, fmt.Errorf("%w: Loomplane checks postgres and redis endpoints, not %q", ErrInvalid, req.Engine)
+	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) {
+		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis and bucket endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
 	e := &Endpoint{Engine: req.Engine}
@@ -269,7 +269,7 @@ func problem(address, dsn string, err error) string {
 	if pe.answered {
 		return fmt.Sprintf("%s refused the check: %s", address, msg)
 	}
-	return fmt.Sprintf("%s isn't reachable from the target: %s", address, msg)
+	return fmt.Sprintf("%s isn't reachable through this connection check: %s", address, msg)
 }
 
 // minSecret is the shortest password redact removes from a message. A
@@ -288,7 +288,7 @@ func redact(msg, dsn string) string {
 			msg = strings.ReplaceAll(msg, pw, "[redacted]")
 		}
 	}
-	return msg
+	return redactAPIAccess(redactBucketAccess(msg, dsn), dsn)
 }
 
 var leadingVersion = regexp.MustCompile(`^\d+(\.\d+)*`)

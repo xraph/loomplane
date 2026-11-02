@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/connections"
 	federationstore "github.com/xraph/loomplane/internal/federation"
+	"github.com/xraph/loomplane/internal/graph"
 	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
@@ -33,7 +34,7 @@ func (s *PgStore) GetFederationDestination(ctx context.Context, orgID, id string
 	return d, nil
 }
 
-func (s *Service) federationInput(ctx context.Context, p *Plan, m *manifest.Manifest) (*FederationInput, error) {
+func (s *Service) federationInput(ctx context.Context, p *Plan, m *manifest.Manifest, g *graph.Graph, bindings []*Binding) (*FederationInput, error) {
 	if m.Version != manifest.FederationVersion {
 		return nil, nil
 	}
@@ -53,6 +54,22 @@ func (s *Service) federationInput(ctx context.Context, p *Plan, m *manifest.Mani
 		}
 		if d.Scope == in.Scope {
 			in.Destinations[id] = d
+		}
+	}
+	if len(m.Federation.PlacementGroups) > 0 && s.features[FeatureMultiLocationDelivery] {
+		if s.memberPrerequisites == nil {
+			in.GroupFindings = append(in.GroupFindings, Finding{Code: "placement_group_prerequisites_unavailable", Message: "Placement group prerequisite checks are unavailable."})
+		} else {
+			groups, err := s.memberPrerequisites.PreviewPlacementGroups(ctx, p, m, g, bindings)
+			if err != nil {
+				code := "placement_group_profile_unqualified"
+				if errors.Is(err, ErrGroupVariableSnapshotsUnavailable) {
+					code = "placement_group_variable_snapshots_unavailable"
+				}
+				in.GroupFindings = append(in.GroupFindings, Finding{Code: code, Message: "Placement group prerequisites need review."})
+			} else {
+				in.GroupPlans = groups
+			}
 		}
 	}
 	return in, nil

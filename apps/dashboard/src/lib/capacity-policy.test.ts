@@ -237,3 +237,14 @@ describe("scaling pools", () => {
     )
   })
 })
+
+it("preserves exact budget dollars and refuses rounded approvals", async () => {
+  const { moneyInput, moneyText } = await import("./capacity-policy")
+  expect(moneyInput("9007199254.740993")).toBe("9007199254740993")
+  expect(moneyText("9007199254740993")).toBe("9007199254.740993")
+  expect(moneyInput("0")).toBe("0")
+  expect(moneyInput("1.0000001")).toBeUndefined()
+  expect(moneyInput("9223372036854.775808")).toBeUndefined()
+  expect(moneyInput("1e3")).toBeUndefined()
+  expect(moneyInput("")).toBeUndefined()
+})

@@ -384,6 +384,13 @@ func TestCheckRouteResolvesTheRequirement(t *testing.T) {
 	if !got.OK || !slices.Equal(got.Notes, []string{"Checked from Loomplane, not from inside the cluster."}) {
 		t.Fatalf("cluster result: %+v", got)
 	}
+	for _, cloud := range []string{connections.DigitalOcean, connections.Azure} {
+		dialer.clouds["native"] = cloud
+		got = result(send("admin", body("sample", "postgres", "native")))
+		if !got.OK || len(got.Notes) != 1 || !strings.Contains(got.Notes[0], "from Loomplane") || !strings.Contains(got.Notes[0], "outbound network") {
+			t.Fatalf("native check hid its network scope: %+v", got)
+		}
+	}
 
 	// What the endpoint lacks fails the check.
 	prober.report = catalogconnect.Report{Version: "15.2", Problems: []string{"PostgreSQL 15.2 is older than 16"}}

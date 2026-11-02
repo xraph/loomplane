@@ -37,6 +37,9 @@ type PublicConfig struct {
 	// Waitlist means sign-up needs an invitation or an approved waitlist
 	// entry.
 	Waitlist bool `json:"waitlist"`
+	// SetupTokenRequired means setup is pending and needs the setup token
+	// from the API's log. It is never true in development.
+	SetupTokenRequired bool `json:"setup_token_required"`
 	// ConsolePath is where the instance console is mounted, for platform
 	// admins only.
 	ConsolePath string `json:"console_path,omitempty"`
@@ -64,6 +67,9 @@ func (e *Extension) routes(r forge.Router) error {
 		return err
 	}
 	if err := e.memberRoutes(v1); err != nil {
+		return err
+	}
+	if err := e.teamRoutes(v1); err != nil {
 		return err
 	}
 	return e.keyRoutes(r)
@@ -97,6 +103,7 @@ func (e *Extension) publicConfig(c forge.Context) error {
 	ctx := c.Request().Context()
 	out := e.staticPublicConfig()
 	out.SetupPending = e.setupPending(ctx)
+	out.SetupTokenRequired = out.SetupPending && !e.cfg.IsDevelopment()
 	out.Waitlist = e.waitlistOn(ctx)
 	if e.holdsPlatformRole(ctx) {
 		out.ConsolePath = e.cfg.Console.Path
