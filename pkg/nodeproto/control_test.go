@@ -27,6 +27,7 @@ func TestControlRoundTrip(t *testing.T) {
 		IngressApplied{Mode: "direct"},
 		Revoked{},
 		Leave{},
+		Allowed{Endpoints: []Endpoint{EndpointDocker}},
 		RotateKey{NewPublicKey: []byte{1, 2, 3}, Signature: []byte{4, 5, 6}},
 	}
 	for _, msg := range msgs {
@@ -105,5 +106,15 @@ func TestEveryControlTypeRoundTrips(t *testing.T) {
 		if !reflect.DeepEqual(got, msg) {
 			t.Errorf("%s: got %+v, want %+v", name, got, msg)
 		}
+	}
+}
+
+func TestAllowedWireType(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EncodeControl(&buf, Allowed{Endpoints: []Endpoint{EndpointDocker}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != `{"type":"allowed","endpoints":["docker"]}` {
+		t.Fatalf("got %s", got)
 	}
 }

@@ -1,9 +1,12 @@
 package nodes
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -273,10 +276,21 @@ type sent struct {
 
 type auditEvent struct{ action, actor string }
 
-type fakeAudit struct{ events []auditEvent }
+type fakeAudit struct {
+	mu     sync.Mutex
+	events []auditEvent
+}
 
 func (a *fakeAudit) Record(_ context.Context, action string, p security.Principal, _ Node, _ map[string]string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.events = append(a.events, auditEvent{action, p.UserID})
+}
+
+func (a *fakeAudit) list() []auditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.events)
 }
 
 type rig struct {
@@ -688,8 +702,99 @@ func TestUpdateNothingChangedIsNotAudited(t *testing.T) {
 	if _, err := r.svc.Update(context.Background(), admin, id, Update{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.audit.events) != 0 || len(r.sent) != 0 {
-		t.Fatalf("audit %+v sent %+v", r.audit.events, r.sent)
+	if len(r.audit.events) != 0 {
+		t.Fatalf("audit %+v", r.audit.events)
+	}
+	// Ruling R13: any endpoints update is sent, changed or not, so a node
+	// that missed an earlier narrow converges.
+	if len(r.sent) != 1 || !reflect.DeepEqual(r.sent[0].msg, nodeproto.Narrow{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}) {
+		t.Fatalf("sent %+v", r.sent)
+	}
+	r.sent = nil
+	name := "renamed"
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{Name: &name}); err != nil || len(r.sent) != 0 {
+		t.Fatalf("rename sent %+v %v", r.sent, err)
+	}
+}
+
+func TestJoinHostnameCollisionRetriesWithSuffix(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	first := joinReq()
+	first.Inventory.Hostname = "box"
+	if _, err := r.svc.Join(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := joinReq()
+	second.Inventory.Hostname = "box"
+	res, err := r.svc.Join(context.Background(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.store.GetByID(context.Background(), res.NodeID)
+	want := "box-" + strings.ReplaceAll(strings.TrimPrefix(res.NodeID, "node_"), "-", "")[:4]
+	if n.Name != want {
+		t.Fatalf("name %q, want %q", n.Name, want)
+	}
+	// A long hostname still gives a DNS label.
+	long := joinReq()
+	long.Inventory.Hostname = strings.Repeat("a", 80)
+	if _, err = r.svc.Join(context.Background(), long); err != nil {
+		t.Fatal(err)
+	}
+	long2 := joinReq()
+	long2.Inventory.Hostname = strings.Repeat("a", 80)
+	res, err = r.svc.Join(context.Background(), long2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := r.store.GetByID(context.Background(), res.NodeID); len(n.Name) > 63 || !dnsLabel.MatchString(n.Name) {
+		t.Fatalf("long name %q", n.Name)
+	}
+}
+
+func TestJoinExplicitNameCollisionDoesNotRetry(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.Name = "web"
+	if _, err := r.svc.Join(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	in2 := joinReq()
+	in2.Name = "web"
+	in2.Inventory.Hostname = "box"
+	if _, err := r.svc.Join(context.Background(), in2); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestJoinRollbackSurvivesCancelAndLogsFailure(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The caller goes away while adopting; the rollback still lands.
+	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error { cancel(); return errors.New("cloud down") }
+	if _, err := r.svc.Join(ctx, joinReq()); !errors.Is(err, ErrMintNewToken) {
+		t.Fatalf("err %v", err)
+	}
+	l, _ := r.store.List(context.Background(), "org_1")
+	if len(l) != 1 || l[0].Status != StatusRevoked {
+		t.Fatalf("nodes %+v", l)
+	}
+
+	var buf bytes.Buffer
+	r2 := newRig(t, apikeys.NodeJoinScope{}, true)
+	r2.svc.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	r2.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error {
+		r2.store.mu.Lock()
+		r2.store.fail = errors.New("db down")
+		r2.store.mu.Unlock()
+		return errors.New("cloud down")
+	}
+	if _, err := r2.svc.Join(context.Background(), joinReq()); !errors.Is(err, ErrMintNewToken) {
+		t.Fatalf("err %v", err)
+	}
+	if !strings.Contains(buf.String(), "db down") {
+		t.Fatalf("rollback failure not logged: %q", buf.String())
 	}
 }
 

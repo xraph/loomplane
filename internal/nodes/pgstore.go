@@ -324,12 +324,10 @@ func (s *PgStore) AllowEndpoints(ctx context.Context, id string, add []nodeproto
 // use, on any replica, fail with ErrNonceUsed.
 func (s *PgStore) UseNonce(ctx context.Context, nonce string, expires time.Time) error {
 	res, err := s.db.Exec(ctx, `INSERT INTO loomplane_node_nonces(nonce,expires_at) VALUES($1,$2) ON CONFLICT (nonce) DO NOTHING`, nonce, expires)
-	if err := affected(res, err); errors.Is(err, ErrNotFound) {
+	if err = affected(res, err); errors.Is(err, ErrNotFound) {
 		return ErrNonceUsed
-	} else if err != nil {
-		return err
 	}
-	return nil
+	return err
 }
 
 // DeleteExpiredNonces drops spent nonces whose expiry is before now. They

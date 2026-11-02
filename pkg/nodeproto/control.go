@@ -53,6 +53,13 @@ type Revoked struct{}
 // Leave is sent by a node that asks to be revoked, as `node leave` does.
 type Leave struct{}
 
+// Allowed is sent by a node when its owner widens what it serves on the
+// machine, as `node allow` does. The control plane adds these endpoints to
+// the node's record; it never widens on its own.
+type Allowed struct {
+	Endpoints []Endpoint `json:"endpoints"`
+}
+
 // RotateKey replaces a node's key. Phase 5 uses it.
 type RotateKey struct {
 	NewPublicKey []byte `json:"new_public_key"`
@@ -113,6 +120,7 @@ var controlTypes = map[string]func() any{
 	"ingress_applied": func() any { return new(IngressApplied) },
 	"revoked":         func() any { return new(Revoked) },
 	"leave":           func() any { return new(Leave) },
+	"allowed":         func() any { return new(Allowed) },
 	"rotate_key":      func() any { return new(RotateKey) },
 }
 
@@ -136,6 +144,8 @@ func typeName(msg any) string {
 		return "revoked"
 	case Leave:
 		return "leave"
+	case Allowed:
+		return "allowed"
 	case RotateKey:
 		return "rotate_key"
 	}
@@ -205,6 +215,8 @@ func DecodeControl(line []byte) (any, error) {
 	case *Revoked:
 		return *m, nil
 	case *Leave:
+		return *m, nil
+	case *Allowed:
 		return *m, nil
 	case *RotateKey:
 		return *m, nil

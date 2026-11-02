@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"regexp"
 	"slices"
@@ -60,6 +61,15 @@ type Service struct {
 	Notify func(nodeID string, msg any)
 	// Adopt links a joined node to its cloud account. Phase 2 fills it. It may be nil.
 	Adopt func(ctx context.Context, n *Node, claim *apikeys.NodeJoinClaim) error
+	// Log receives failures nobody else sees. Nil means slog.Default().
+	Log *slog.Logger
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.Log != nil {
+		return s.Log
+	}
+	return slog.Default()
 }
 
 // JoinRequest is what a machine sends to join.
@@ -115,8 +125,10 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		return nil, err
 	}
 	id := "node_" + uuid.NewString()
+	fromHost := false
 	if name == "" {
 		name = hostLabel(in.Inventory.Hostname)
+		fromHost = name != ""
 	}
 	if name == "" {
 		name = "node-" + strings.ReplaceAll(id[len("node_"):], "-", "")[:6]
@@ -140,13 +152,23 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		n.EdgeScope = ""
 	}
 	// The token is spent, so every failure from here on asks for a new one.
-	if err := s.Store.Create(ctx, n); err != nil {
+	err = s.Store.Create(ctx, n)
+	if fromHost && errors.Is(err, ErrNameTaken) {
+		// Two machines with one hostname: tell them apart once by id.
+		n.Name = suffixed(name, id)
+		err = s.Store.Create(ctx, n)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrMintNewToken, err)
 	}
 	if s.Adopt != nil {
 		if err := s.Adopt(ctx, n, claim); err != nil {
+			// Free the name even when the caller has gone, and say so if
+			// that fails: a pending node would hold it otherwise.
 			rb := security.Principal{OrgID: n.OrgID, UserID: joinRollback}
-			_ = s.revoke(ctx, n, joinRollback, rb, "node.revoked")
+			if rerr := s.revoke(context.WithoutCancel(ctx), n, joinRollback, rb, "node.revoked"); rerr != nil {
+				s.log().Error("nodes: rolling back a join whose adoption failed", "node", n.ID, "org", n.OrgID, "error", rerr)
+			}
 			return nil, fmt.Errorf("%w: adopting into the cloud account: %w", ErrMintNewToken, err)
 		}
 	}
@@ -157,6 +179,16 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 const joinRollback = "system:join-rollback"
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// suffixed is name with "-" and the first four characters of the id's uuid,
+// trimmed so the result is still a DNS label.
+func suffixed(name, id string) string {
+	tag := strings.ReplaceAll(strings.TrimPrefix(id, "node_"), "-", "")[:4]
+	if len(name) > 63-5 {
+		name = strings.TrimRight(name[:63-5], "-")
+	}
+	return name + "-" + tag
+}
 
 // hostLabel turns a hostname into a DNS label, or "" when nothing is left.
 func hostLabel(h string) string {
@@ -282,7 +314,7 @@ func (s *Service) JoinedByKey(ctx context.Context, p security.Principal, keyID s
 // ingress mode. A nil field stays as it is; a non-nil empty slice or map is a
 // real change (narrow to nothing, clear the labels). Only the fields set are
 // written, so a stale read cannot undo a concurrent status change or narrow.
-// A live node hears a narrowing or an ingress change at once.
+// A live node hears every endpoints update and any ingress change at once.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, u Update) (*Node, error) {
 	if err := s.allow(ctx, p, security.NodeManage, true); err != nil {
 		return nil, err
@@ -336,7 +368,9 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 	narrowed := set.Endpoints != nil && !slices.Equal(n.Endpoints, old.Endpoints)
 	ingress := set.IngressMode != nil && n.IngressMode != old.IngressMode
 	if s.Notify != nil {
-		if narrowed {
+		// Ruling R13: send every endpoints update, changed or not. Narrowing
+		// is idempotent on the node, and a node that missed one converges.
+		if set.Endpoints != nil {
 			s.Notify(n.ID, nodeproto.Narrow{Endpoints: n.Endpoints})
 		}
 		if ingress {
