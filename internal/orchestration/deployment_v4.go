@@ -156,6 +156,7 @@ func climb(w *drt.Workflow, p string, dep deployInput, ramp CanaryRamp) string {
 		if err := callInto(w, fmt.Sprintf("%s-weigh-%d", p, i), ActivityCanaryWeigh, in, canaryEffectTimeout, 0, activityAttempts, &applied); err != nil {
 			return fmt.Sprintf("Traffic couldn't move to %d%%: %v", weight, err)
 		}
+		applied = applied.UTC().Truncate(time.Microsecond)
 		for k := 0; ; k++ {
 			wait := ramp.Hold
 			if k == 0 {

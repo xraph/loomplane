@@ -73,6 +73,9 @@ func storeError(err error) error {
 		case "23503":
 			return ErrNotFound
 		case "23514":
+			if IsStaleCleanupReview(err) {
+				return ErrConflict
+			}
 			return ErrInvalid
 		}
 	}
@@ -380,4 +383,10 @@ func targetRuntime(t *Target) string {
 		return "managed"
 	}
 	return t.Runtime
+}
+
+// IsStaleCleanupReview recognizes the immutable-target trigger without exposing SQL.
+func IsStaleCleanupReview(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23514" && (pg.Message == "cleanup target changed; review again" || pg.Message == "cleanup target is unresolved or untrusted")
 }

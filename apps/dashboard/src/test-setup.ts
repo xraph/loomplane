@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest"
-import { cleanup } from "@testing-library/react"
+import { cleanup, configure } from "@testing-library/react"
 import { afterEach } from "vitest"
+
+// Split routes and query updates can wait behind concurrent build work.
+configure({ asyncUtilTimeout: 3_000 })
 
 afterEach(() => {
   cleanup()

@@ -17,23 +17,40 @@ const (
 
 // ManagedCleanupTarget pins the old release you reviewed. It grants no writes.
 type ManagedCleanupTarget struct {
-	Kind                 ManagedCleanupKind         `json:"kind"`
-	Origin               string                     `json:"origin"`
-	ParentBindingID      string                     `json:"parent_binding_id"`
-	SchemaVersion        int                        `json:"schema_version"`
-	BindingRefs          []ManagedCleanupBindingRef `json:"binding_refs,omitempty"`
-	Binding              ManagedCleanupBinding      `json:"binding"`
-	Scope                kubernetes.ManagedScope    `json:"scope"`
-	AuthorityEpoch       int64                      `json:"authority_epoch"`
-	AuthorityRevision    int64                      `json:"authority_revision"`
-	RevokedAt            *string                    `json:"revoked_at"`
-	AttachmentID         string                     `json:"attachment_id"`
-	AttachmentRevision   int64                      `json:"attachment_revision"`
-	TrustRevision        string                     `json:"trust_revision"`
-	ConnectionGeneration int64                      `json:"connection_generation"`
-	Accepted             []ManagedCleanupOutcome    `json:"accepted"`
-	Unresolved           []string                   `json:"unresolved"`
-	IdentityCurrent      bool                       `json:"identity_current"`
+	MixedCurrentBinding  *ManagedCleanupCurrentBinding `json:"mixed_current_binding,omitempty"`
+	Kind                 ManagedCleanupKind            `json:"kind"`
+	Origin               string                        `json:"origin"`
+	ParentBindingID      string                        `json:"parent_binding_id"`
+	SchemaVersion        int                           `json:"schema_version"`
+	BindingRefs          []ManagedCleanupBindingRef    `json:"binding_refs,omitempty"`
+	Binding              ManagedCleanupBinding         `json:"binding"`
+	Scope                kubernetes.ManagedScope       `json:"scope"`
+	AuthorityEpoch       int64                         `json:"authority_epoch"`
+	AuthorityRevision    int64                         `json:"authority_revision"`
+	RevokedAt            *string                       `json:"revoked_at"`
+	AttachmentID         string                        `json:"attachment_id"`
+	AttachmentRevision   int64                         `json:"attachment_revision"`
+	TrustRevision        string                        `json:"trust_revision"`
+	ConnectionGeneration int64                         `json:"connection_generation"`
+	Accepted             []ManagedCleanupOutcome       `json:"accepted"`
+	Unresolved           []string                      `json:"unresolved"`
+	IdentityCurrent      bool                          `json:"identity_current"`
+}
+
+// ManagedCleanupCurrentBinding pins the current service row when the managed
+// targets in a Delete review are all retained predecessors.
+type ManagedCleanupCurrentBinding struct {
+	ManagedCleanupBinding
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	EnvironmentID string `json:"environment_id"`
+	Name          string `json:"name"`
+	Subject       string `json:"subject"`
+	Provider      string `json:"provider"`
+	Region        string `json:"region"`
+	Engine        string `json:"engine"`
+	PhysicalID    string `json:"physical_id"`
+	ConfigHash    string `json:"config_hash"`
 }
 
 type ManagedCleanupBindingRef struct {

@@ -62,6 +62,9 @@ func (p *planner) kinds() *recipes.Registry {
 // whether a resource is on goes through here.
 func resourceOn(kinds *recipes.Registry, r manifest.Resource, environment string, d manifest.Defaults) bool {
 	enabled := r.For(environment, d).Enabled
+	if r.ExistingResource != "" && len(r.Environments) > 0 {
+		return enabled != nil && *enabled
+	}
 	if kinds == nil {
 		kinds = recipes.Default()
 	}
@@ -305,6 +308,21 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 
 	choices, uses := p.dependencies(name, base, r, kind, prov, set, connection, region)
 
+	if kind.DirectService() {
+		c := composition.Components[0]
+		cfg := resource()
+		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name], Settings: maps.Clone(values)}
+		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
+		cfg.Component.Component.Resources = ComponentResources(c.Resources, cfg.Component.GPU)
+		a := &Action{ID: actionID(ResourceSubject, name), Subject: ResourceSubject, Name: name, Provider: prov.Name, ConnectionID: connection.ID, Region: region, Engine: provider.ResourceEngine, Creates: componentCreates(kind.Title, c.Component), Resource: cfg, Step: 1}
+		p.diff(a, cfg, cfg.Provider, cfg.Region)
+		p.namedChanges(a)
+		p.cacheResize(name, base, kind, a, prov.Cloud)
+		p.resources[name] = a
+		p.actions = append(p.actions, a)
+		return
+	}
+
 	// Components start after the deepest action they use: step 2 after a
 	// database, later after a composed resource's parent, which publishes
 	// its outputs only once its own components are up.
@@ -455,6 +473,10 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 		case !on:
 		case u.Resource != "":
 			choice = DependencyChoice{Mode: DependencyResource, Resource: u.Resource, Kind: m.Resources[u.Resource].Kind}
+			if connected := p.resources[u.Resource]; connected != nil && connected.Resource != nil && connected.Resource.ExistingResource != nil {
+				pin := *connected.Resource.ExistingResource
+				choice.Mode, choice.External, choice.ExistingResource = DependencyExternal, pin.EndpointID, &pin
+			}
 		case u.External != "":
 			// Endpoint checks decide whether it's usable.
 			choice = DependencyChoice{Mode: DependencyExternal, External: u.External}
@@ -469,10 +491,16 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 			choice = was
 		} else {
 			p.checkConnected(name, path, dep, choice)
-			p.checkExternal(name, path, kind, dep, choice, r.Target, prov.Cloud)
+			p.checkExternal(name, path, kind, dep, choice, connection.ID, prov.Cloud)
 		}
 		choices[dep.Name] = choice
 		switch choice.Mode {
+		case DependencyExternal:
+			if choice.ExistingResource != nil {
+				if a := p.resources[choice.Resource]; a != nil {
+					uses = append(uses, a.ID)
+				}
+			}
 		case DependencyResource:
 			if a := p.resources[choice.Resource]; a != nil {
 				uses = append(uses, a.ID)
@@ -532,7 +560,7 @@ func firstKind(dep recipes.Dependency) string {
 // checkConnected reports a connected manifest resource the dependency
 // can't use: one of another kind, one that's off, or one on another target.
 func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choice DependencyChoice) {
-	if choice.Mode != DependencyResource {
+	if choice.Mode != DependencyResource && (choice.Mode != DependencyExternal || choice.ExistingResource == nil) {
 		return
 	}
 	path += ".resource"
@@ -553,6 +581,9 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 		}
 		return // otherwise a problem says why it couldn't be planned
 	}
+	if connected.Resource != nil && connected.Resource.ExistingResource != nil {
+		return
+	}
 	if connected.Resource == nil || !p.sameTarget(name, connected) {
 		p.problem(Finding{
 			Code: "catalog-connect-across-targets", Subject: ResourceSubject, Name: name, Path: path,
@@ -568,7 +599,11 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 	if choice.Mode != DependencyExternal {
 		return
 	}
-	path += ".external"
+	if choice.ExistingResource != nil {
+		path += ".resource"
+	} else {
+		path += ".external"
+	}
 	finding := func(code, message string) Finding {
 		return Finding{Code: code, Subject: ResourceSubject, Name: name, Path: path, Message: message}
 	}
@@ -582,7 +617,7 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 	}
 	id := choice.External
 	check, ok := p.in.Endpoints[endpointKey(id, connection, *dep.External, catalogconnect.ConsumerOf(kind, dep.Name))]
-	if !ok {
+	if !ok && choice.ExistingResource == nil {
 		check, ok = p.in.Endpoints[id]
 	}
 	label := "endpoint " + id
@@ -637,10 +672,10 @@ func (p *planner) sameTarget(name string, connected *Action) bool {
 
 // provision plans a dependency a composed resource gets one of its own of:
 // an ordinary database of the dependency's first kind, named for it, or
-// the one component of a dependency-only kind.
+// the directly bound process of a reusable service or dependency-only kind.
 func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.Dependency, action string, prov *provider.Provider, set manifest.ResourceSettings, connection *ConnectionOption, region string) *Action {
 	kind := firstKind(dep)
-	if only, ok := p.kinds().Kind(kind); ok && only.Placement == recipes.PlacementDependency {
+	if only, ok := p.kinds().Kind(kind); ok && only.DirectService() {
 		return p.provisionComponent(name, base, dep, only, action, prov, connection, region, set.GPU)
 	}
 	engine, ok := p.kinds().Engine(kind)
@@ -707,7 +742,7 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 	return a
 }
 
-// provisionComponent plans the one process of a dependency-only kind as
+// provisionComponent plans the directly bound process of a kind as
 // a component action of its own, named for the dependency. It publishes
 // its own outputs and secrets, so it's its own resource; no composition
 // action is planned for it.
@@ -738,7 +773,7 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
 		return nil
 	}
-	// The registry gives a dependency-only kind exactly one component, a
+	// The registry gives a direct service exactly one component, a
 	// process; never run anything else as the dependency.
 	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Role == recipes.RoleProcess })
 	if i < 0 {
@@ -750,6 +785,9 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 		Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: ReviewedConnectionSettings(connection.Cloud, connection.Details),
 		Kind: kind.Name, Version: composition.Version,
 		Component: &ComponentConfig{Kind: kind.Name, Resource: action, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component)},
+	}
+	if len(kind.Settings) > 0 {
+		cfg.Component.Settings = p.resourceSettings(name, path, manifest.Resource{}, kind)
 	}
 	cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, gpu, connection)
 	a := &Action{
@@ -809,6 +847,10 @@ func (p *planner) boundChoices(name string) map[string]DependencyChoice {
 func switched(was, now DependencyChoice) bool {
 	if was.Mode == DependencyOff || now.Mode == DependencyOff {
 		return false
+	}
+	if was.ExistingResource != nil || now.ExistingResource != nil {
+		a, b := was.ExistingResource, now.ExistingResource
+		return was.Mode != now.Mode || a == nil || b == nil || a.ResourceID != b.ResourceID || a.AccountIdentity != b.AccountIdentity || a.ExternalID != b.ExternalID || a.Incarnation != b.Incarnation || was.Kind != now.Kind
 	}
 	return was.Mode != now.Mode || was.Resource != now.Resource || was.External != now.External
 }

@@ -345,6 +345,9 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 	}
 	value := &yaml.Node{Kind: yaml.MappingNode}
 	value.Content = append(value.Content, scalar("kind"), scalar(r.Kind))
+	if r.ExistingResource != "" {
+		value.Content = append(value.Content, scalar("existing_resource"), scalar(r.ExistingResource))
+	}
 	if r.Provider != "" {
 		value.Content = append(value.Content, scalar("provider"), scalar(r.Provider))
 	}

@@ -12,9 +12,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/xraph/grove/driver"
+	"github.com/xraph/grove/drivers/pgdriver"
+
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	kube "github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -41,6 +45,15 @@ func (a managedDemandAuthority) CurrentClusterScalingPolicy(context.Context, str
 func managedDemandFixture(t *testing.T, identity ...map[string]string) (*poolFixture, *planning.Service, *planning.Plan, *planning.Result, *capacityPlanAuth) {
 	t.Helper()
 	f, r, _, _ := clusterWorkloadFixture(t, identity...)
+	return setupDemandForAttachment(t, f, r, "cluster-target", "cluster-runtime", "attachment")
+}
+
+func setupDemandForAttachment(t *testing.T, f *poolFixture, r *cloudinfra.ManagedResource, target, connection, attachment string, architectures ...string) (*poolFixture, *planning.Service, *planning.Plan, *planning.Result, *capacityPlanAuth) {
+	t.Helper()
+	arch := "amd64"
+	if len(architectures) > 0 {
+		arch = architectures[0]
+	}
 	now := time.Now().UTC()
 	policy := cloudinfra.ClusterScalingPolicy{ID: "scaling-fixture", OrgID: "org", SchemaVersion: 1, Revision: 1, ResourceID: r.ID, PoolID: "pool", Mode: "native", MinNodes: 1, MaxNodes: 3, OperationID: "scaling-operation", CooldownSeconds: 600}
 	r.ScalingPolicies = map[string]cloudinfra.ClusterScalingPolicy{"pool": policy}
@@ -55,7 +68,7 @@ func managedDemandFixture(t *testing.T, identity ...map[string]string) (*poolFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := cloudinfra.ClusterCapacitySnapshot{ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, Ref: r.Observation.Ref, ObservationRevision: revision, CheckedAt: now, Complete: true, WorkloadsComplete: true, Workloads: []cloudinfra.ClusterObservedWorkload{{PodUID: "busy-application", Requests: cloudinfra.ClusterWorkloadVector{CPUMillis: 1900, MemoryBytes: 1 << 30, Pods: 1}}}, Nodes: []cloudinfra.ClusterNodeCapacity{{ExternalVMID: "vm", NodeUID: "node", PoolID: "pool", Ready: true, Architecture: "amd64", Zone: "zone", Allocatable: cloudinfra.ClusterResourceMetrics{CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(2 << 30), EphemeralStorageBytes: inventoryNumber(10 << 30), Pods: inventoryNumber(20)}}}}
+	snapshot := cloudinfra.ClusterCapacitySnapshot{ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, Ref: r.Observation.Ref, ObservationRevision: revision, CheckedAt: now, Complete: true, WorkloadsComplete: true, Workloads: []cloudinfra.ClusterObservedWorkload{{PodUID: "busy-application", Requests: cloudinfra.ClusterWorkloadVector{CPUMillis: 1900, MemoryBytes: 1 << 30, Pods: 1}}}, Nodes: []cloudinfra.ClusterNodeCapacity{{ExternalVMID: "vm", NodeUID: "node", PoolID: "pool", Ready: true, Architecture: arch, Zone: "zone", Allocatable: cloudinfra.ClusterResourceMetrics{CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(2 << 30), EphemeralStorageBytes: inventoryNumber(10 << 30), Pods: inventoryNumber(20)}}}}
 	snapshot.SchedulingProfiles = cloudinfra.BuildClusterSchedulingProfiles(snapshot, *r.Observation, kube.CapacityInventory{Complete: true, CheckedAt: now, Nodes: []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node", UID: "node", Labels: map[string]string{corev1.LabelInstanceTypeStable: "known-fixture"}}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.36"}}}}}, now)
 	if len(snapshot.SchedulingProfiles) != 1 {
 		t.Fatal("profile fixture unqualified")
@@ -71,12 +84,12 @@ func managedDemandFixture(t *testing.T, identity ...map[string]string) (*poolFix
 	auth := &capacityPlanAuth{}
 	svc := planning.NewService(planning.Deps{Store: f.plans, Authz: auth, Capacity: managedDemandAuthority{policy: policy}})
 	plan := &planning.Plan{ID: "managed-plan", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", CreatedBy: "usr"}
-	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: "cluster-runtime", TargetSettings: map[string]string{"managed_attachment_id": "attachment", "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": "amd64"}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 4}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "cluster-target", TargetRevision: 1, GrantRevision: 1, ConnectionID: "cluster-runtime", Provider: "kubernetes"}}
-	result := &planning.Result{Executable: true, Connections: map[string]string{"kubernetes": "cluster-runtime"}, Actions: []planning.Action{{ID: "service:api", Subject: planning.ServiceSubject, Name: "api", Op: planning.Create, Provider: "kubernetes", Service: cfg}}}
+	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: connection, TargetSettings: map[string]string{"managed_attachment_id": attachment, "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": arch}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 4}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: target, TargetRevision: 1, GrantRevision: 1, ConnectionID: connection, Provider: "kubernetes"}}
+	result := &planning.Result{Executable: true, Connections: map[string]string{"kubernetes": connection}, Actions: []planning.Action{{ID: "service:api", Subject: planning.ServiceSubject, Name: "api", Op: planning.Create, Provider: "kubernetes", Service: cfg}}}
 	return f, svc, plan, result, auth
 }
 
-func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, result *planning.Result) {
+func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, result *planning.Result, actors ...security.Principal) {
 	t.Helper()
 	raw, err := json.Marshal(result)
 	if err != nil {
@@ -88,7 +101,22 @@ func saveManagedDemandPlan(t *testing.T, f *poolFixture, plan *planning.Plan, re
 	if ok, err := f.plans.Decide(t.Context(), "org", plan.ID, "approved", "usr", "", time.Now()); err == nil || ok {
 		t.Fatal("approval without authenticated actor succeeded")
 	}
-	acceptFuture(t, f, plan.ID)
+	if len(actors) > 0 {
+		ok, approveErr := f.plans.Decide(security.WithPrincipal(t.Context(), actors[0]), "org", plan.ID, "approved", "usr", "", time.Now())
+		if approveErr != nil || !ok {
+			t.Fatal(approveErr)
+		}
+	} else {
+		acceptFuture(t, f, plan.ID)
+	}
+}
+
+// ledgerRuntimeFixture isolates reservation math from the installed worker,
+// which TestManagedInstalledApplicationPending exercises on kind.
+type ledgerRuntimeFixture struct{}
+
+func (ledgerRuntimeFixture) QualifyClusterWorkload(context.Context, *planning.Plan, planning.Action) error {
+	return nil
 }
 
 func TestClusterScalingApprovedDemandReservation(t *testing.T) {
@@ -97,11 +125,10 @@ func TestClusterScalingApprovedDemandReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	saveManagedDemandPlan(t, f, plan, result)
+	svc.BindManagedRuntime(ledgerRuntimeFixture{})
 	for range 2 {
-		err := svc.ResolveCapacityIntents(t.Context(), "org", plan.ID)
-		var blocked *cloudinfra.CapacityAdmissionError
-		if !errors.As(err, &blocked) || blocked.Block.Reason != "managed_workload_execution_unqualified" {
-			t.Fatalf("reservation did not reach execution gate: %v", err)
+		if err := svc.ResolveCapacityIntents(t.Context(), "org", plan.ID); err != nil {
+			t.Fatal(err)
 		}
 	}
 	var raw []byte
@@ -173,8 +200,9 @@ func TestClusterScalingDemandCurrentAuthority(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = svc.ResolveCapacityIntents(t.Context(), "org", plan.ID); err == nil {
-				t.Fatal("execution must remain gated")
+			svc.BindManagedRuntime(ledgerRuntimeFixture{})
+			if err = svc.ResolveCapacityIntents(t.Context(), "org", plan.ID); (err == nil) != (which == "best_effort") {
+				t.Fatal("unexpected admission", which, err)
 			}
 			var count int
 			if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cluster_workload_holds WHERE plan_id=$1`, plan.ID).Scan(&count); err != nil {
@@ -184,5 +212,31 @@ func TestClusterScalingDemandCurrentAuthority(t *testing.T) {
 				t.Fatalf("denied/best-effort demand reserved guaranteed fleet capacity: %d", count)
 			}
 		})
+	}
+}
+
+func (a managedDemandAuthority) CurrentClusterScalingPolicyTx(ctx context.Context, _ driver.Tx, org, cloud, resource, pool string) (*cloudinfra.ClusterScalingPolicy, error) {
+	return a.CurrentClusterScalingPolicy(ctx, org, cloud, resource, pool)
+}
+
+// Fixture policies replace only the provider's standing approval. The real
+// planner guard still verifies the persisted actor, scope and fresh envelope.
+func managedFixtureDemandGuard(db *pgdriver.PgDB, authorizers ...planning.Authorizer) func(context.Context, driver.Tx, kube.ManagedScope) error {
+	return func(ctx context.Context, tx driver.Tx, scope kube.ManagedScope) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT r.body FROM loomplane_managed_resources r JOIN loomplane_cluster_workload_intents i ON i.org_id=r.org_id AND i.body->'input'->>'resource_id'=r.id WHERE i.org_id=$1 AND i.plan_id=$2 AND i.service=$3`, scope.Org, scope.Plan, scope.Service).Scan(&raw); err != nil {
+			return err
+		}
+		var r cloudinfra.ManagedResource
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return err
+		}
+		policy := r.ScalingPolicies["pool"]
+		var auth planning.Authorizer = &capacityPlanAuth{}
+		if len(authorizers) > 0 {
+			auth = authorizers[0]
+		}
+		svc := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Authz: auth, Capacity: managedDemandAuthority{policy: policy}})
+		return svc.GuardManagedDemandEffect(ctx, tx, scope)
 	}
 }

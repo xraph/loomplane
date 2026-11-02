@@ -28,6 +28,7 @@ const projectLabel = "loomplane.io/project"
 
 // EnrollmentState contains identity receipts, never credentials.
 type EnrollmentState struct {
+	Isolation         *InstanceIsolationState      `json:"isolation,omitempty"`
 	AccessInput       *provider.RuntimeAccessInput `json:"access_input,omitempty"`
 	AccessReceipt     *RuntimeAccessReceipt        `json:"access_receipt,omitempty"`
 	NamespaceUID      string                       `json:"namespace_uid"`
@@ -36,6 +37,7 @@ type EnrollmentState struct {
 	Attempted         map[string]bool              `json:"attempted"`
 }
 type EnrollmentRequest struct {
+	InstancePolicy                                                       *provider.InstanceIsolationPolicy
 	RuntimeAccess                                                        *provider.RuntimeAccessProfile
 	OperationID, RequestDigest                                           string
 	RequireIngress, RequireTLS                                           bool
@@ -65,6 +67,17 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 	if state == nil || checkpoint == nil || in.AttachmentID == "" || in.ProjectID == "" || !namespaceRE.MatchString(in.Namespace) || !namespaceRE.MatchString(in.ServiceAccountName) {
 		return ErrInvalid
 	}
+	if state.Isolation != nil && in.InstancePolicy == nil {
+		return ErrInvalid
+	}
+	if in.InstancePolicy != nil {
+		if err := in.InstancePolicy.Validate(); err != nil {
+			return err
+		}
+		if in.AdoptNamespace {
+			return ErrInvalid
+		}
+	}
 	if state.Objects == nil {
 		state.Objects = map[string]string{}
 	}
@@ -72,13 +85,21 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 		state.Attempted = map[string]bool{}
 	}
 	labels := map[string]string{enrollmentLabel: in.AttachmentID, projectLabel: in.ProjectID}
+	namespaceLabels := map[string]string{enrollmentLabel: in.AttachmentID, projectLabel: in.ProjectID}
+	for key, value := range instanceSecurityLabels(in.InstancePolicy) {
+		namespaceLabels[key] = value
+	}
+	namespaceAnnotations, policyErr := instanceNamespaceAnnotations(in.InstancePolicy)
+	if policyErr != nil {
+		return policyErr
+	}
 	ns, err := k.CoreV1().Namespaces().Get(ctx, in.Namespace, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) && !in.AdoptNamespace && state.NamespaceUID == "" {
 		state.Attempted["Namespace"] = true
 		if checkErr := checkpoint(ctx, state); checkErr != nil {
 			return checkErr
 		}
-		ns, err = k.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: in.Namespace, Labels: labels}}, metav1.CreateOptions{})
+		ns, err = k.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: in.Namespace, Labels: namespaceLabels, Annotations: namespaceAnnotations}}, metav1.CreateOptions{})
 	}
 	if err != nil {
 		return err
@@ -94,6 +115,9 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 		return ErrInvalid
 	}
 	if state.NamespaceUID != "" && state.NamespaceUID != string(ns.UID) {
+		return ErrInvalid
+	}
+	if !instanceSecurityMatches(ns, in.InstancePolicy) {
 		return ErrInvalid
 	}
 	state.NamespaceUID = string(ns.UID)
@@ -190,6 +214,9 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 		if checkErr := checkpoint(ctx, state); checkErr != nil {
 			return checkErr
 		}
+	}
+	if isolationErr := establishInstanceIsolation(ctx, k, in, state, checkpoint); isolationErr != nil {
+		return isolationErr
 	}
 	if in.RuntimeAccess != nil {
 		pin := provider.RuntimeAccessInput{AttachmentID: in.AttachmentID, AttachmentRevision: 1, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: state.NamespaceUID, ServiceAccountName: in.ServiceAccountName, ServiceAccountUID: state.ServiceAccountUID, RoleName: in.ServiceAccountName, RoleUID: state.Objects["Role"], RoleBindingName: in.ServiceAccountName, RoleBindingUID: state.Objects["RoleBinding"], Profile: *in.RuntimeAccess}

@@ -346,7 +346,7 @@ func newCanaryFixture(t *testing.T, yaml string) *canaryFixture {
 	f.workflows.BindRunStore(orchestration.NewPgRunStore(db))
 	// More than one task of a kind at once, so a revert can run while a
 	// weigh the test holds is still in flight.
-	options := f.workflows.CanaryOptions("canary", 4)
+	options := f.workflows.LegacyCleanupOptions("canary", 4)
 	options.PollInterval = 10 * time.Millisecond
 	worker, err := drt.NewWorker(ds, options)
 	if err != nil {
@@ -1291,7 +1291,14 @@ func TestPlansWithoutReleaseBlocksKeepTheirRevisionAcrossTheUpgrade(t *testing.T
 func TestCanaryReleasesMigrationOnAFreshDatabase(t *testing.T) {
 	ctx := t.Context()
 	dsn := freshDatabase(t)
-	groups := []*migrate.Group{migrations.Group()}
+	const version = "20261104000100"
+	group := migrate.NewGroup(migrations.GroupName)
+	for _, step := range migrations.Group().Migrations() {
+		if step.Version <= version {
+			group.MustRegister(step)
+		}
+	}
+	groups := []*migrate.Group{group}
 	if err := ops.Migrate(ctx, dsn, groups); err != nil {
 		t.Fatal(err)
 	}
@@ -1324,25 +1331,13 @@ func TestCanaryReleasesMigrationOnAFreshDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	// Grove rolls back the last applied migration only, so later ones go
-	// first, one at a time, until the canary's own does. Until then the
-	// canary's schema stays.
+	// Test the canary at its historical schema version. Later migrations
+	// deliberately retain accounting history and cannot be rolled back.
 	const present = "loomplane_canary_verdicts jsonb loomplane_deployment_workflow_runs_build"
-	o := migrate.NewOrchestrator(pgmigrate.New(db), migrations.Group())
-	for n := 0; ; n++ {
-		if n == len(migrations.Group().Migrations()) {
-			t.Fatal("rolled back every migration without reaching canary_releases")
-		}
-		if got := schema(); got != present {
-			t.Fatalf("schema before rolling back canary_releases: %s", got)
-		}
-		res, rerr := o.Rollback(ctx)
-		if rerr != nil || len(res.Rollback) != 1 {
-			t.Fatalf("rollback: %+v %v", res, rerr)
-		}
-		if res.Rollback[0].Version == "20261104000100" {
-			break
-		}
+	o := migrate.NewOrchestrator(pgmigrate.New(db), group)
+	res, rerr := o.Rollback(ctx)
+	if rerr != nil || len(res.Rollback) != 1 || res.Rollback[0].Version != version {
+		t.Fatalf("rollback: %+v %v", res, rerr)
 	}
 	if got := schema(); got != "none none loomplane_deployment_workflow_runs_request_check" {
 		t.Fatalf("schema after the down migration: %s", got)

@@ -34,7 +34,11 @@ describe("first-run setup gating", () => {
   it.each(["/", "/sign-in"])(
     "sends a signed-out visitor at %s to setup",
     (path) => {
-      setInstance({ setupPending: true, waitlist: false })
+      setInstance({
+        setupPending: true,
+        waitlist: false,
+        setupTokenRequired: false,
+      })
       route.path = path
       render(<App />)
       expect(
@@ -45,7 +49,11 @@ describe("first-run setup gating", () => {
   )
 
   it("shows setup at /setup without moving", () => {
-    setInstance({ setupPending: true, waitlist: false })
+    setInstance({
+      setupPending: true,
+      waitlist: false,
+      setupTokenRequired: false,
+    })
     route.path = "/setup"
     render(<App />)
     expect(
@@ -55,7 +63,11 @@ describe("first-run setup gating", () => {
   })
 
   it("sends /setup to sign-in once setup is done", () => {
-    setInstance({ setupPending: false, waitlist: false })
+    setInstance({
+      setupPending: false,
+      waitlist: false,
+      setupTokenRequired: false,
+    })
     route.path = "/setup"
     render(<App />)
     expect(screen.getByText("location /sign-in")).toBeInTheDocument()

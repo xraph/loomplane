@@ -18,6 +18,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/aisettings"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -788,5 +789,20 @@ func TestViewerCannotDeploy(t *testing.T) {
 		if out := do(t, r, c, as(security.RoleViewer)); out.Code != http.StatusForbidden {
 			t.Errorf("viewer %s %s: %d %s", c.method, c.path, out.Code, out.Body.String())
 		}
+	}
+}
+
+func TestModelServerReviewUsesPublicMoney(t *testing.T) {
+	value := int64(9007199254740993)
+	preview := &models.DeployPreview{Server: &cloudinfra.Operation{Review: "original-review", MoneyEstimate: &cloudinfra.MoneyEstimate{HourlyMicroUSD: value, Components: []cloudinfra.MoneyComponent{{Identity: "private-account-membership"}}}, BudgetReview: &cloudinfra.BudgetReview{AccountScope: "private-account-membership"}}}
+	raw, err := json.Marshal(publicDeployPreview(preview))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-account-membership") || !strings.Contains(string(raw), `"hourly_micro_usd":"9007199254740993"`) {
+		t.Fatalf("unsafe model server review: %s", raw)
+	}
+	if preview.Server.Review != "original-review" || preview.Server.MoneyEstimate.HourlyMicroUSD != value {
+		t.Fatal("mutated saved server review")
 	}
 }

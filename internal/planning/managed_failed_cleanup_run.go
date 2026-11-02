@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -31,6 +32,9 @@ func (s *ManagedCleanupStore) RetryFailedCleanup(ctx context.Context, p security
 	}
 	if checkErr := s.actor(ctx, r.Actor, r.Org, r.Targets[0].Scope.Project); checkErr != nil {
 		return nil, checkErr
+	}
+	if r.RequiredProtocol != orchestration.ManagedCleanupProtocol {
+		return nil, ErrHistoricalFailedCleanup
 	}
 	var revoked bool
 	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_cleanup_grants WHERE org_id=$1 AND failed_review_id=$2 AND execution_attempt=$3 AND revoked_at IS NOT NULL)`, r.Org, r.ID, r.Attempt).Scan(&revoked); checkErr != nil {
@@ -101,7 +105,7 @@ func (s *ManagedCleanupStore) FinishFailedCleanup(ctx context.Context, org, id s
 }
 
 func (s *ManagedCleanupStore) PendingFailedCleanups(ctx context.Context) ([]ManagedFailedCleanup, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+managedFailedColumns+` FROM loomplane_managed_failed_cleanups WHERE status='pending' AND revoked_at IS NULL AND superseded_at IS NULL AND delivered_attempt<attempt ORDER BY updated_at LIMIT 100`)
+	rows, err := s.db.Query(ctx, `SELECT `+managedFailedColumns+` FROM loomplane_managed_failed_cleanups WHERE status='pending' AND revoked_at IS NULL AND superseded_at IS NULL AND delivered_attempt<attempt AND required_protocol=$1 ORDER BY updated_at LIMIT 100`, orchestration.ManagedCleanupProtocol)
 	if err != nil {
 		return nil, err
 	}

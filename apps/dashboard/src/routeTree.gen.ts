@@ -37,11 +37,13 @@ import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.ind
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
+import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
+import { Route as IntegrationsConnectCloudRouteImport } from "./routes/integrations.connect.$cloud"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
@@ -188,6 +190,11 @@ const ProjectsIdRoute = ProjectsIdRouteImport.update({
   path: "/projects/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
+  id: "/resources/",
+  path: "/resources/",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServicesIndexRoute = ServicesIndexRouteImport.update({
   id: "/services/",
   path: "/services/",
@@ -213,6 +220,12 @@ const CloudsAccountsIdRoute = CloudsAccountsIdRouteImport.update({
   path: "/clouds/accounts/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsConnectCloudRoute =
+  IntegrationsConnectCloudRouteImport.update({
+    id: "/integrations/connect/$cloud",
+    path: "/integrations/connect/$cloud",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
   id: "/integrations/github/setup",
   path: "/integrations/github/setup",
@@ -273,9 +286,11 @@ export interface FileRoutesByFullPath {
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
+  "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models/": typeof AiModelsIndexRoute
@@ -313,9 +328,11 @@ export interface FileRoutesByTo {
   "/domains": typeof DomainsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
+  "/resources": typeof ResourcesIndexRoute
   "/services": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models": typeof AiModelsIndexRoute
@@ -354,9 +371,11 @@ export interface FileRoutesById {
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
+  "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models/": typeof AiModelsIndexRoute
@@ -396,9 +415,11 @@ export interface FileRouteTypes {
     | "/domains/"
     | "/integrations/"
     | "/projects/"
+    | "/resources/"
     | "/services/"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/ai/models/"
@@ -436,9 +457,11 @@ export interface FileRouteTypes {
     | "/domains"
     | "/integrations"
     | "/projects"
+    | "/resources"
     | "/services"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/ai/models"
@@ -476,9 +499,11 @@ export interface FileRouteTypes {
     | "/domains/"
     | "/integrations/"
     | "/projects/"
+    | "/resources/"
     | "/services/"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/ai/models/"
@@ -517,9 +542,11 @@ export interface RootRouteChildren {
   DomainsIndexRoute: typeof DomainsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  ResourcesIndexRoute: typeof ResourcesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
   AiModelsSplatRoute: typeof AiModelsSplatRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
+  IntegrationsConnectCloudRoute: typeof IntegrationsConnectCloudRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
   AiModelsIndexRoute: typeof AiModelsIndexRoute
@@ -726,6 +753,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/resources/": {
+      id: "/resources/"
+      path: "/resources"
+      fullPath: "/resources/"
+      preLoaderRoute: typeof ResourcesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/services/": {
       id: "/services/"
       path: "/services"
@@ -759,6 +793,13 @@ declare module "@tanstack/react-router" {
       path: "/clouds/accounts/$id"
       fullPath: "/clouds/accounts/$id"
       preLoaderRoute: typeof CloudsAccountsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/integrations/connect/$cloud": {
+      id: "/integrations/connect/$cloud"
+      path: "/integrations/connect/$cloud"
+      fullPath: "/integrations/connect/$cloud"
+      preLoaderRoute: typeof IntegrationsConnectCloudRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/integrations/github/setup": {
@@ -829,9 +870,11 @@ const rootRouteChildren: RootRouteChildren = {
   DomainsIndexRoute: DomainsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  ResourcesIndexRoute: ResourcesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
   AiModelsSplatRoute: AiModelsSplatRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
+  IntegrationsConnectCloudRoute: IntegrationsConnectCloudRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
   AiModelsIndexRoute: AiModelsIndexRoute,

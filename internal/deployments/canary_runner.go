@@ -221,6 +221,12 @@ func (r *Runner) canaryJob(ctx context.Context, d *Deployment, plan *planning.Pl
 	if err != nil {
 		return nil, err
 	}
+	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
+		return nil, targetErr
+	}
+	if accessErr := r.verifyExistingServiceAccess(ctx, &Job{Deployment: d, Plan: plan, Action: a, Connection: conn}, around.resources); accessErr != nil {
+		return nil, accessErr
+	}
 	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, around.resources); captureErr != nil {
 		return nil, captureErr
 	}

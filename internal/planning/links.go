@@ -99,7 +99,7 @@ func (p *planner) markInternal() {
 	m := p.in.Manifest
 	for _, name := range m.ServiceNames() {
 		a := p.services[name]
-		if a == nil || a.Service == nil {
+		if a == nil || a.Service == nil || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		for _, need := range m.Services[name].Needs {

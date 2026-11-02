@@ -1,0 +1,25 @@
+#!/bin/sh
+# Message of the day for a Loomplane install.
+dir="${LOOMPLANE_DIR:-/srv/loomplane}"
+
+echo
+if [ ! -f /var/lib/cloud/instance/boot-finished ]; then
+  echo "Loomplane is still installing. Follow /var/log/cloud-init-output.log."
+  echo
+  exit 0
+fi
+if [ ! -f "$dir/.configured" ]; then
+  echo "Run loomplane-setup to finish installing Loomplane."
+  echo
+  exit 0
+fi
+
+echo "Loomplane lives in $dir."
+# A short timeout keeps a slow database from hanging a login.
+link=$(cd "$dir" && timeout 5 docker compose exec -T loomplane loomplane setup-token 2>/dev/null) || link=""
+case "$link" in
+  "" | "Setup is complete."*) ;;
+  *) echo "$link" ;;
+esac
+echo "$dir/.env holds the secret key. Keep a copy somewhere safe: without it, stored credentials can't be recovered."
+echo

@@ -1,0 +1,73 @@
+# Add to compose.yaml to run the gateway behind the same HTTPS proxy.
+# Set COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml in .env to keep it
+# enabled for every pull, up and down command.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  loomplane:
+    environment:
+      LOOMPLANE_PUSH_ENABLED: "true"
+      LOOMPLANE_PUSH_GATEWAY_URL: https://${PUSH_GATEWAY_DOMAIN:?Set PUSH_GATEWAY_DOMAIN to the gateway hostname}
+  loomplane-worker:
+    environment:
+      LOOMPLANE_PUSH_ENABLED: "true"
+      LOOMPLANE_PUSH_GATEWAY_URL: https://${PUSH_GATEWAY_DOMAIN:?Set PUSH_GATEWAY_DOMAIN to the gateway hostname}
+  caddy:
+    depends_on:
+      push-gateway:
+        condition: service_healthy
+    environment:
+      PUSH_GATEWAY_DOMAIN: ${PUSH_GATEWAY_DOMAIN:?Set PUSH_GATEWAY_DOMAIN to the gateway hostname}
+    volumes:
+      - ./Caddyfile.push-gateway:/etc/caddy/Caddyfile:ro
+
+  push-gateway:
+    image: ${PUSH_GATEWAY_IMAGE:?Set PUSH_GATEWAY_IMAGE to a release tag or digest}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    pids_limit: 128
+    mem_limit: 256m
+    logging: *logging
+    networks: [backend, egress]
+    environment:
+      PUSH_GATEWAY_ADDR: :8790
+      PUSH_GATEWAY_SEALING_KEY_ID: ${PUSH_GATEWAY_SEALING_KEY_ID:?Set PUSH_GATEWAY_SEALING_KEY_ID, for example k202611}
+      PUSH_GATEWAY_SEALING_KEY_FILE: /run/secrets/sealing_key
+      # Set only together with an ID.
+      PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID: ${PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID:-}
+      PUSH_GATEWAY_PREVIOUS_SEALING_KEY_FILE: ${PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID:+/run/secrets/previous_sealing_key}
+      PUSH_GATEWAY_FCM_CREDENTIALS_FILE: /run/secrets/fcm_service_account
+      # iOS is on only once an APNs key ID is set, so Android can go live
+      # first. The gateway refuses to start with the APNs IDs but no key file,
+      # so keep the key ID and team ID together and unset both to turn iOS off.
+      PUSH_GATEWAY_APNS_KEY_FILE: ${PUSH_GATEWAY_APNS_KEY_ID:+/run/secrets/apns_key}
+      PUSH_GATEWAY_APNS_KEY_ID: ${PUSH_GATEWAY_APNS_KEY_ID:-}
+      PUSH_GATEWAY_APNS_TEAM_ID: ${PUSH_GATEWAY_APNS_TEAM_ID:-}
+      # Empty means the binary's default, com.loomplane.app.
+      PUSH_GATEWAY_APNS_BUNDLE_ID: ${PUSH_GATEWAY_APNS_BUNDLE_ID:-}
+      # Sends per second per server key, and sends per minute per device.
+      PUSH_GATEWAY_SERVER_RATE: ${PUSH_GATEWAY_SERVER_RATE:-50}
+      PUSH_GATEWAY_HANDLE_RATE: ${PUSH_GATEWAY_HANDLE_RATE:-30}
+    secrets:
+      - sealing_key
+      - previous_sealing_key
+      - fcm_service_account
+      - apns_key
+
+secrets:
+  sealing_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/sealing-key
+  previous_sealing_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/previous-sealing-key
+  fcm_service_account:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/fcm-service-account.json
+  apns_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/apns-key.p8

@@ -3,7 +3,29 @@ const databaseStorage =
 const cacheStorage =
   "Private endpoint, AOF persistence every second and native RDB snapshots. The dataset is limited to 128 MiB without eviction. Keep backups outside this host. Recovery copies are read-only. This profile has no failover."
 
+export function isComposedDatabase(kind: string): boolean {
+  return ["falkordb", "elasticsearch", "opensearch", "duckdb"].includes(kind)
+}
+
 export const databaseRecipes = {
+  falkordb: {
+    title: "FalkorDB",
+    version: "4.2",
+    description:
+      "Private graph database with native RDB backups. Recovery copies allow read-only graph queries. Kubernetes backups are not available yet.",
+  },
+  elasticsearch: {
+    title: "Elasticsearch",
+    version: "9.4",
+    description:
+      "Native snapshots preserve ordinary user indices, including hidden indices, mappings and aliases. Security, global state and data streams are excluded. Kubernetes backups are not available yet.",
+  },
+  opensearch: {
+    title: "OpenSearch",
+    version: "3.9",
+    description:
+      "Private search with verified TLS and native snapshots of ordinary user indices, mappings and aliases. Security and global state are excluded. Kubernetes backups are not available yet.",
+  },
   rabbitmq: {
     title: "RabbitMQ",
     version: "4.3",

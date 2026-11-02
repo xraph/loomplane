@@ -94,6 +94,7 @@ export type RuleDraft = {
 export type FrontendDraft = { unlimited: boolean; maximum: string }
 
 export type Draft = {
+  budget?: { hourly: string; horizon: string; hours: string }
   enabled: boolean
   approval: boolean
   ceilings: Ceilings
@@ -147,6 +148,13 @@ export function draftOf(policy: CapacityPolicy): Draft {
   // A policy never saved has no ceilings: its fields start empty, not at 0.
   const saved = policy.revision > 0
   return {
+    budget: policy.budget
+      ? {
+          hourly: moneyText(policy.budget.maxHourlyMicroUsd),
+          horizon: moneyText(policy.budget.maxHorizonMicroUsd),
+          hours: String(policy.budget.horizonSeconds / 3600),
+        }
+      : undefined,
     enabled: policy.enabled,
     approval: policy.requireExpansionApproval,
     ceilings: saved ? ceilingsOf(policy.limits) : emptyCeilings,
@@ -337,6 +345,16 @@ export function check(
   targets: Target[]
 ): { policy?: CapacityPolicy; problems: string[] } {
   const problems: string[] = []
+  const hourly = d.budget ? moneyInput(d.budget.hourly) : undefined
+  const horizon = d.budget ? moneyInput(d.budget.horizon) : undefined
+  const seconds = d.budget ? Number(d.budget.hours) * 3600 : 0
+  if (
+    d.budget &&
+    (!hourly || !horizon || !Number.isSafeInteger(seconds) || seconds <= 0)
+  )
+    problems.push(
+      "Enter non-negative USD amounts with at most six decimal places and a positive whole-second budget horizon."
+    )
   const cloud = cloudValues(d, base)
   const { values } = cloud
   const missing = ceilingNames.filter(
@@ -383,6 +401,13 @@ export function check(
     problems,
     policy: {
       ...base,
+      budget: d.budget
+        ? {
+            maxHourlyMicroUsd: hourly!,
+            maxHorizonMicroUsd: horizon!,
+            horizonSeconds: seconds,
+          }
+        : undefined,
       enabled: d.enabled,
       requireExpansionApproval: d.approval,
       limits: Object.fromEntries(
@@ -467,4 +492,16 @@ export function growProblem(policy: CapacityPolicy, kind: string): string {
   )
     return `A GPU pool needs a GPU ceiling for ${gpuTitle(kind)}. Add one under Growth policy and save it first.`
   return ""
+}
+
+export function moneyText(micro: string): string {
+  if (!/^\d+$/.test(micro)) return ""
+  const value = BigInt(micro)
+  return `${value / 1000000n}.${(value % 1000000n).toString().padStart(6, "0")}`
+}
+export function moneyInput(usd: string): string | undefined {
+  if (!/^\d+(\.\d{1,6})?$/.test(usd.trim())) return undefined
+  const [whole, fraction = ""] = usd.trim().split(".")
+  const value = BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"))
+  return value <= 9223372036854775807n ? String(value) : undefined
 }

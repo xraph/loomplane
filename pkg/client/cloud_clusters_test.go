@@ -27,3 +27,55 @@ func TestClusterClientWireContract(t *testing.T) {
 		t.Fatalf("%+v %v", out, err)
 	}
 }
+
+func TestLifecycleClientExactMoneyAndCleanupSelector(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/clouds/cloud/clusters/cluster/attachments":
+			if r.Method != "GET" {
+				t.Error("attachment read used mutation")
+			}
+			_, _ = w.Write([]byte(`{"cluster_id":"cluster","items":[{"id":"attachment","revision":9,"namespace":"workers","capability_revision":2,"profile":{"schema_version":1,"cleanup_dependents":true}}]}`))
+		case "/api/v1/clouds/cloud/clusters/cluster/capacity":
+			if r.Method != "GET" {
+				t.Error("read used mutation")
+			}
+			_, _ = w.Write([]byte(`{"resource_id":"cluster","observation_revision":2}`))
+		case "/api/v1/clouds/cloud/clusters/cluster/capacity/refresh":
+			if r.Method != "POST" {
+				t.Error("refresh used GET")
+			}
+			_, _ = w.Write([]byte(`{"resource_id":"cluster","observation_revision":3}`))
+		case "/api/v1/clouds/cloud/cluster-operations/op":
+			_, _ = w.Write([]byte(`{"id":"op","money_estimate":{"hourly_micro_usd":"9223372036854775807"}}`))
+		case "/api/v1/deployments/deployment/cleanup/cancel":
+			var in map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Fatal(err)
+			}
+			if len(in) != 1 || in["expected_review_id"] != "accepted-review" {
+				t.Fatalf("selector: %+v", in)
+			}
+			_, _ = w.Write([]byte(`{"review_id":"accepted-review","status":"cancelled"}`))
+		default:
+			t.Errorf("unexpected route: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	c := New(server.URL, "key")
+	if v, e := c.CloudClusterAttachments(t.Context(), "cloud", "cluster"); e != nil || len(v.Items) != 1 || v.Items[0].Revision != 9 || !v.Items[0].Profile.CleanupDependents {
+		t.Fatalf("attachments %+v %v", v, e)
+	}
+	if v, e := c.CloudClusterCapacity(t.Context(), "cloud", "cluster"); e != nil || v.ObservationRevision != 2 {
+		t.Fatalf("capacity %+v %v", v, e)
+	}
+	if v, e := c.RefreshCloudClusterCapacity(t.Context(), "cloud", "cluster"); e != nil || v.ObservationRevision != 3 {
+		t.Fatalf("refresh %+v %v", v, e)
+	}
+	if v, e := c.CloudClusterOperation(t.Context(), "cloud", "op"); e != nil || v.MoneyEstimate.HourlyMicroUSD != "9223372036854775807" {
+		t.Fatalf("money %+v %v", v, e)
+	}
+	if v, e := c.CancelFailedCleanup(t.Context(), "deployment", "accepted-review"); e != nil || v.ReviewID != "accepted-review" {
+		t.Fatalf("cancel %+v %v", v, e)
+	}
+}

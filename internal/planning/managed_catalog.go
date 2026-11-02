@@ -3,6 +3,7 @@ package planning
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manageddb"
@@ -20,6 +21,11 @@ type ManagedDatabaseConfig struct {
 }
 
 func (p *planner) configureManagedCatalog(name, base string, resource manifest.Resource, cfg *ResourceConfig, action *Action) {
+	// Other installed native adapters keep their existing reviewed creation
+	// contract. Their provider defaults do not imply native recovery support.
+	if cfg.Provider != "rds" && cfg.Provider != "cloud-sql" {
+		return
+	}
 	binding := p.bindings[action.ID]
 	var old ResourceConfig
 	if binding != nil {
@@ -61,6 +67,14 @@ func (p *planner) configureManagedCatalog(name, base string, resource manifest.R
 		return
 	}
 	conn, ok := p.connection(prov.Cloud)
+	if action.ConnectionID != "" {
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == action.ConnectionID && c.Cloud == prov.Cloud && c.Ready })
+		if i >= 0 {
+			conn, ok = p.in.Connections[i], true
+		} else {
+			ok = false
+		}
+	}
 	if !ok {
 		return // Connection selection reports its own blocking finding.
 	}

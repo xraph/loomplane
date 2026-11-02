@@ -43,7 +43,7 @@ EXECUTE FUNCTION loomplane_plan_notice()`); err != nil {
 }
 
 // planNoticeFunction0300 is loomplane_plan_notice() as this migration
-// wrote it. The teams migration (20261207000700) replaces the function and
+// wrote it. The teams migration (20261208000900) replaces the function and
 // its down puts this one back, so the text lives here once.
 const planNoticeFunction0300 = `CREATE OR REPLACE FUNCTION loomplane_plan_notice() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN

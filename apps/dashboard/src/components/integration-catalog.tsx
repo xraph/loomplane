@@ -22,7 +22,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cloudPurposes } from "@/lib/integrations"
+import { cloudPurposes, serverKinds } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -44,9 +44,6 @@ const groups: { value: Group | "all"; label: string; note?: string }[] = [
   },
   { value: "notify", label: "Notifications", note: "Where results go" },
 ]
-
-// Servers you run yourself; every other connection form is a cloud.
-const serverKinds = new Set(["server", "kubernetes", "registry"])
 
 const serverPurposes: Record<string, string> = {
   server:

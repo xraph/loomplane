@@ -43,7 +43,10 @@ console:
   path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
 
 notifications:
-  # Empty host disables email. For local Mailpit use 127.0.0.1:1025.
+  # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
+  # "from" on a domain verified in Resend.
+  resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
+  # Empty host (with no Resend key) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"
@@ -93,7 +96,7 @@ analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the
   # system's temporary directory.
   work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
-  concurrency: 2
+  concurrency: "${LOOMPLANE_ANALYSIS_CONCURRENCY:-2}"
 
 # Deployment planning.
 planning:
@@ -154,6 +157,10 @@ clouds:
     max_node_hourly_micro_usd: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODE_HOURLY_MICRO_USD:-0}"
     max_nodes: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODES:-0}"
     max_account_creates: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_ACCOUNT_CREATES:-2}"
+  # Lets pools add servers on their own, within each Cloud's capacity policy.
+  # Off, policies are saved but nothing grows. Still being qualified.
+  automatic_capacity:
+    enabled: "${LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED:-false}"
   # Lets people connect the Kubernetes cluster Loomplane runs in without a
   # kubeconfig. Loomplane deploys there as its own service account, which
   # every organization on this instance then shares, so turn it on only
@@ -164,6 +171,9 @@ clouds:
   # in. Leave both empty to keep token entry only. Keep the secret in the
   # environment.
   oauth:
+    cloudflare:
+      client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_SECRET:-}"
     digitalocean:
       client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
       client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"

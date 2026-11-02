@@ -140,7 +140,7 @@ func TestCloudflareGuardRefusesZoneWrites(t *testing.T) {
 		{http.MethodPost, "/client/v4/zonesx", "", false, false},
 		{http.MethodPost, "/client/v4/accounts/a/registrar-sandbox/registrations", "", false, false},
 	} {
-		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		r := httptest.NewRequestWithContext(t.Context(), tc.method, tc.path, strings.NewReader(tc.body))
 		if got := zoneWrite(r, tc.records); got != tc.refused {
 			t.Errorf("%s %s %s records=%v: refused %v, want %v", tc.method, tc.path, tc.body, tc.records, got, tc.refused)
 		}

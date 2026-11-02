@@ -1,13 +1,94 @@
 package azure
 
 import (
+	"encoding/json"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
 )
+
+func TestRevisionSecretsReadIncludesUnmodeledTemplateReferences(t *testing.T) {
+	var revision Revision
+	if err := json.Unmarshal([]byte(`{"properties":{"template":{"containers":[{"name":"main","image":"api:1","env":[{"name":"TOKEN","secretRef":"env-token"}]}],"volumes":[{"name":"config","storageType":"Secret","secrets":[{"secretRef":"mounted-secret","path":"config"}]}],"scale":{"rules":[{"name":"queue","custom":{"type":"azure-queue","auth":[{"secretRef":"queue-secret","triggerParameter":"connection"}]}}]}}}}`), &revision); err != nil {
+		t.Fatal(err)
+	}
+	if refs := revision.SecretsRead(); !slices.Equal(slices.Sorted(slices.Values(refs)), []string{"env-token", "mounted-secret", "queue-secret"}) {
+		t.Fatalf("template secret references %v", refs)
+	}
+}
+
+func TestCopyRevisionEnvPreservesBaselineTemplateAndSecrets(t *testing.T) {
+	f, s, id := canaryApp(t)
+	raw := f.Revisions("api")["api--1"].Template
+	raw["revisionSuffix"] = "custom"
+	raw["terminationGracePeriodSeconds"] = 45
+	container := raw["containers"].([]any)[0].(map[string]any)
+	container["command"] = []string{"serve", "--safe"}
+	container["env"] = append(container["env"].([]any), map[string]any{"name": "OLD_TOKEN", "secretRef": "env-token-abc123"})
+	if _, err := s.do(t.Context(), http.MethodPatch, id, appsVersion, map[string]any{"properties": map[string]any{"template": raw}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WaitApp(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTraffic(t.Context(), id, MultipleRevisions, []TrafficWeight{{RevisionName: "api--custom", Weight: 100}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CopyRevisionEnv(t.Context(), id, "api--custom", "recovery", "main", []string{"TOKEN", "OLD_TOKEN"}, []EnvVar{{Name: "TOKEN", SecretRef: "approved-token"}}, []Secret{{Name: "approved-token", Value: "approved"}}); err != nil {
+		t.Fatal(err)
+	}
+	recovery := f.Revisions("api")["api--recovery"]
+	cs := recovery.Template["containers"].([]any)
+	got := cs[0].(map[string]any)
+	if recovery.Image != "registry.azurecr.io/api:1" || recovery.Template["terminationGracePeriodSeconds"] != float64(45) || !slices.Equal(got["command"].([]any), []any{"serve", "--safe"}) {
+		t.Fatalf("baseline template lost fields: %v", recovery.Template)
+	}
+	env := got["env"].([]any)
+	if len(env) != 2 || env[0].(map[string]any)["name"] != "MODE" || env[1].(map[string]any)["secretRef"] != "approved-token" {
+		t.Fatalf("environment %v", env)
+	}
+	if secrets := f.Secrets("api"); secrets["approved-token"] != "approved" || secrets["env-token-abc123"] != "s3cret" || secrets["registry-password"] != "registry-pw" {
+		t.Fatalf("secrets %v", secrets)
+	}
+	if split := f.Split("api"); !maps.Equal(split, map[string]int{"api--custom": 100}) {
+		t.Fatalf("recovery moved traffic before readiness: %v", split)
+	}
+	if err := s.CopyRevisionEnv(t.Context(), id, "api--custom", "recovery", "main", []string{"MODE"}, []EnvVar{{Name: "MODE", Value: "different"}}, nil); err == nil {
+		t.Fatal("an existing recovery suffix accepted a different environment")
+	}
+}
+
+func TestCopyRevisionEnvUpdatesMainContainerWhenSidecarComesFirst(t *testing.T) {
+	f, s, id := canaryApp(t)
+	raw := f.Revisions("api")["api--1"].Template
+	raw["revisionSuffix"] = "sidecar"
+	main := raw["containers"].([]any)[0]
+	raw["containers"] = []any{map[string]any{"name": "metrics", "image": "registry.azurecr.io/metrics:1", "env": []any{map[string]any{"name": "MODE", "value": "sidecar"}}}, main}
+	if _, err := s.do(t.Context(), http.MethodPatch, id, appsVersion, map[string]any{"properties": map[string]any{"template": raw}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WaitApp(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTraffic(t.Context(), id, MultipleRevisions, []TrafficWeight{{RevisionName: "api--sidecar", Weight: 100}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CopyRevisionEnv(t.Context(), id, "api--sidecar", "recovery", "main", []string{"TOKEN"}, []EnvVar{{Name: "TOKEN", SecretRef: "approved-token"}}, []Secret{{Name: "approved-token", Value: "approved"}}); err != nil {
+		t.Fatal(err)
+	}
+	containers := f.Revisions("api")["api--recovery"].Template["containers"].([]any)
+	if env := containers[0].(map[string]any)["env"].([]any); len(env) != 1 || env[0].(map[string]any)["value"] != "sidecar" {
+		t.Fatalf("sidecar variables changed: %v", env)
+	}
+	mainEnv := containers[1].(map[string]any)["env"].([]any)
+	if len(mainEnv) != 2 || mainEnv[1].(map[string]any)["secretRef"] != "approved-token" {
+		t.Fatalf("main container kept stale credentials: %v", mainEnv)
+	}
+}
 
 // canaryApp is a container app on the fake that runs one revision,
 // api--1, in single revision mode, with a secret and a registry login.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -23,8 +24,14 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	ProjectID string
-	Routes    []cloudinfra.Route
+	// Server-derived applied actions for explicit unconstrained pool moves.
+	appliedMoves           map[string]Action
+	appliedMoveProblems    []Finding
+	ResourceEndpoints      map[string]EndpointPin
+	ExistingResources      map[string]ExistingResourceCheck
+	ExistingResourceChecks map[string]EndpointCheck
+	ProjectID              string
+	Routes                 []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
@@ -181,6 +188,7 @@ func Compute(in Input) *Result {
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
 	}
+	p.problems = append(p.problems, in.appliedMoveProblems...)
 	p.planResources()
 	p.planLinks()
 	p.planServices()
@@ -506,6 +514,14 @@ func (p *planner) planResources() {
 		if !p.resourceOn(name) || p.noLinkKind(name, base, r) {
 			continue
 		}
+		if r.ExistingResource != "" {
+			p.planExistingResource(name, base, r)
+			continue
+		}
+		if ExistingResourceBinding(p.bindings[actionID(ResourceSubject, name)]) {
+			p.problem(Finding{Code: "resource-ownership-change", Subject: ResourceSubject, Name: name, Path: base, Message: "Create a separate managed resource. An external attachment cannot take lifecycle ownership in place."})
+			continue
+		}
 		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
 			p.problem(Finding{Code: "managed-profile-invalid", Subject: ResourceSubject, Name: name, Path: base + ".cloud_sql_psc", Message: "PSC requires PostgreSQL 17 on Cloud SQL and a manual endpoint in the database region."})
 			continue
@@ -513,14 +529,6 @@ func (p *planner) planResources() {
 		if p.kinds().Composed(r.Kind) {
 			composed = append(composed, name)
 			continue
-		}
-		// Only composed catalog kinds take settings, so every one here is
-		// unknown, as on a catalog kind without settings.
-		for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
-			p.problem(Finding{
-				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: overridePath(r, name, p.in.Environment, "settings."+key),
-				Message: fmt.Sprintf("%s has no setting %s.", name, key),
-			})
 		}
 		if set.GPU != nil {
 			title := r.Kind
@@ -568,12 +576,14 @@ func (p *planner) planResources() {
 		cfg := &ResourceConfig{
 			Provider: prov.Name, Region: p.place(ResourceSubject, name, base+".region", prov, set.Region),
 			Kind: r.Kind, Version: version,
+			Settings: p.providerResourceSettings(name, base, r, offer),
 		}
 		a := &Action{
 			ID: actionID(ResourceSubject, name), Subject: ResourceSubject, Name: name,
 			Provider: prov.Name, Region: cfg.Region, Engine: provider.ResourceEngine, Creates: offer.Creates,
 			Resource: cfg, Step: 1,
 		}
+		p.configureEdgeResource(name, base, r, cfg, a, prov)
 		p.configureCatalog(name, base, r, cfg, a)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
 		p.resources[name] = a
@@ -600,6 +610,14 @@ func (p *planner) planServices() {
 		if alias, ok := p.heldBinding(b); ok {
 			p.keep(name, alias, b)
 			held = append(held, name)
+			continue
+		}
+		if move, ok := p.in.appliedMoves[name]; ok {
+			if prov, err := p.in.Providers.Get(move.Provider); err == nil {
+				p.use(prov)
+			}
+			p.services[name] = &move
+			p.actions = append(p.actions, &move)
 			continue
 		}
 		repo, ok := p.repoOf(name, base, s)
@@ -663,6 +681,8 @@ func (p *planner) planServices() {
 		case a == nil:
 		case isHeld:
 			p.linkHeld(a)
+		case p.in.appliedMoves[name].Service != nil:
+			p.linkAppliedMove(a)
 		default:
 			p.link(name, a)
 		}
@@ -707,6 +727,13 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
+	if prov.Name == "cloudflare-workers" {
+		cfg.Source = gs.Path
+		if cfg.Source == "" {
+			cfg.Source = "."
+		}
+		cfg.Build, cfg.Image, cfg.Context = "", "", ""
+	}
 	cfg.CapacityIntent = p.in.CapacityIntents[name]
 	p.configureTarget(name, base, prov, set, cfg)
 	if placement, ok := p.in.CloudPlacements[name]; ok {
@@ -758,6 +785,7 @@ func (p *planner) readdress() {
 			continue
 		}
 		var moved []string
+		accessChanged := false
 		for _, e := range a.Service.Env {
 			for _, dep := range p.linkTargets(e) {
 				if slices.Contains(moved, dep.Name) {
@@ -765,8 +793,13 @@ func (p *planner) readdress() {
 				}
 				if _, ok := p.readdressed(dep, e, a.Provider); ok {
 					moved = append(moved, dep.Name)
+					accessChanged = accessChanged || (dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil)
 				}
 			}
+		}
+		if len(moved) > 0 && accessChanged {
+			a.Op, a.Reason = Update, fmt.Sprintf("%s gets newly reviewed resource access from %s.", name, strings.Join(moved, ", "))
+			continue
 		}
 		switch len(moved) {
 		case 0:
@@ -787,6 +820,8 @@ func (p *planner) readdress() {
 func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bool) {
 	var how string
 	switch {
+	case dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil:
+		how = "updates the approved access to " + dep.Name
 	case dep.Op == Replace:
 		how = "replaces " + dep.Name
 	case dep.Op == Create && p.bindings[dep.ID] != nil:
@@ -1571,7 +1606,9 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
 		Public:     runs.Workload != provider.Worker,
 		HealthPath: set.HealthPath,
+		Worker:     p.workerSettings(name, base, set, prov),
 	}
+	p.podGroupSettings(name, base, set, prov, cfg)
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
 	}
@@ -1747,7 +1784,7 @@ func (p *planner) link(name string, a *Action) {
 			if dep == nil {
 				switch {
 				case p.resourceOn(need):
-				case p.kinds().EnvironmentOptIn(r.Kind):
+				case r.ExistingResource != "" || p.kinds().EnvironmentOptIn(r.Kind):
 					// It runs only where it's enabled, so a service that
 					// needs it elsewhere runs without it, and the other
 					// environments keep deploying.
@@ -1784,6 +1821,13 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if p.linkEdgeResource(name, a, need, base, dep) {
+				continue
+			}
+			if dep.Resource != nil && dep.Resource.ExistingResource != nil {
+				p.linkExistingResource(name, a, need, key, base, dep)
+				continue
 			}
 			if r.GatewayIn(p.in.Environment) {
 				// The service reaches it through the database gateway's
@@ -2009,7 +2053,7 @@ func (p *planner) order() {
 // needs, or for a held service, what it was deployed against. Those can
 // form a cycle validation never saw, which order cuts at step 2.
 func (p *planner) needs(name string, a *Action) []string {
-	if _, held := p.held[name]; !held {
+	if _, held := p.held[name]; !held && p.in.appliedMoves[name].Service == nil {
 		return p.in.Manifest.Services[name].Needs
 	}
 	var out []string
@@ -2084,7 +2128,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Service != nil && a.Service.CloudPlacement != nil {
 			var previous ServiceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Service.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Service.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2095,7 +2139,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Resource != nil && a.Resource.CloudPlacement != nil {
 			var previous ResourceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Resource.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Resource.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2255,7 +2299,7 @@ func (p *planner) checkFindings() {
 	for _, name := range m.ServiceNames() {
 		// A held service's manifest entry waits, so what it says about
 		// its needs isn't worth a warning in this plan.
-		if _, held := p.held[name]; p.services[name] == nil || held {
+		if _, held := p.held[name]; p.services[name] == nil || held || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		gs := p.graphServices[name]
@@ -2403,17 +2447,29 @@ func (p *planner) planDeletes() {
 			if of.last {
 				step = last + 3
 			}
-			if !of.stateless {
+			if !of.stateless && !ExistingResourceBinding(b) {
 				p.warn(Finding{
 					Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
 					Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 				})
 			}
 		}
-		connectionID := p.deleteThrough(b)
+		connectionID := b.ConnectionID
+		if !ExistingResourceBinding(b) {
+			connectionID = p.deleteThrough(b)
+		}
+		var resource *ResourceConfig
+		if ExistingResourceBinding(b) {
+			resource = &ResourceConfig{}
+			if err := json.Unmarshal(b.Config, resource); err != nil {
+				p.problem(Finding{Code: "existing-resource-invalid", Subject: b.Subject, Name: b.Name, Path: "resources", Message: "The saved external attachment cannot be read. Its cloud resource remains unchanged."})
+				continue
+			}
+			reason += " Disconnect the attachment; the resource remains in its provider account."
+		}
 		p.actions = append(p.actions, &Action{
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region, ConnectionID: connectionID,
-			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
+			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step, Resource: resource,
 		})
 	}
 }

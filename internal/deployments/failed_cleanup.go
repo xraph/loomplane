@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -75,6 +76,9 @@ func (s *FailedCleanups) candidate(ctx context.Context, org, id string, accepted
 	plan, err := s.runner.plans.GetPlan(ctx, org, d.PlanID)
 	if err != nil {
 		return nil, nil, planning.Action{}, "", err
+	}
+	if plan.ManagedInstanceID != "" || plan.Kind == planning.KindInstance {
+		return nil, nil, planning.Action{}, "", projects.ErrFleetManaged
 	}
 	status := StatusFailed
 	if accepted {

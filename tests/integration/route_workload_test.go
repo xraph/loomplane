@@ -19,9 +19,9 @@ func routeAttemptFixture(t *testing.T) (*poolFixture, *cloudinfra.RouteOperation
 	f := newPoolFixture(t)
 	ctx := t.Context()
 	for _, q := range []string{
-		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT NOT NULL DEFAULT 'docker.runtime-1')`,
 		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
-		`INSERT INTO cp_instances VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
 		`UPDATE loomplane_cloud_connections SET details=details||'{"host":"192.0.2.42"}'::jsonb WHERE id='runtime-1'`,
 		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime-1',revision=revision+1 WHERE id='target'`,
 		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES('binding','org','proj','env','service','web','server','http','instance','runtime-1','{"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"server-1"},"port":8080}',now(),now())`,
@@ -117,6 +117,7 @@ func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 	if err = f.store.AcceptRoute(ctx, op); err != nil {
 		t.Fatal("quiescent direct runtime refused route", err)
 	}
+	approvedWorkloadPlan(t, f, "new-plan")
 	in.Plan = "new-plan"
 	in.Deployment = "new-deployment"
 	if _, err = reopened.BeginWorkloadAttempt(ctx, in, nil, false); !errors.Is(err, cloudinfra.ErrConflict) {
@@ -130,6 +131,7 @@ func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 func TestRouteWorkloadAttachmentWaitsForOrganizationAcceptance(t *testing.T) {
 	f, op := routeAttemptFixture(t)
 	ctx := t.Context()
+	approvedWorkloadPlan(t, f, "accepted")
 	// Shared acceptance holds this lock through comparison and commit, including
 	// when the accepted route set is empty. Pause at that exact empty-set boundary.
 	tx, err := f.db.BeginTx(ctx, nil)

@@ -11,6 +11,8 @@ import (
 
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	store "github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -157,6 +159,17 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			grants[key] = allowed
 		}
 		if allowed {
+			if strings.HasPrefix(event.Type, "plan.") && len(event.Data) > 0 {
+				var plan planning.Plan
+				if err := json.Unmarshal(event.Data, &plan); err != nil {
+					return nil, err
+				}
+				data, err := json.Marshal(publicplan.Project(&plan))
+				if err != nil {
+					return nil, err
+				}
+				event.Data = data
+			}
 			if event.Type == "cloud_sync.updated" && len(event.Data) > 0 {
 				managerErr := e.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 				if managerErr != nil && !errors.Is(managerErr, security.ErrForbidden) {

@@ -25,6 +25,9 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
+	// groupIngress is installed by NewGroupRuntimeClient after journal admission.
+	// ParseConfig and connection details cannot grant this ownership mode.
+	groupIngress bool
 	// ManagedWorkload is set only after resolving a persisted managed attachment.
 	ManagedWorkload    bool
 	ManagedProfile     ManagedRuntimeProfile

@@ -51,7 +51,9 @@ Open [localhost:8780](http://localhost:8780), create an account, and name your o
 
 No Go or Node on your machine? `make stack` builds the image and runs everything in Docker on the same port. It runs in development mode with the development secret key, which is fine on a laptop and nowhere else: set `LOOMPLANE_ENVIRONMENT=production`, `LOOMPLANE_SECRET_KEY` and an https `LOOMPLANE_PUBLIC_URL`, and production refuses to start without them.
 
-For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To run it highly available on Kubernetes, use the [Helm chart](docs/kubernetes.md), and to run on Miget, follow the [Miget guide](docs/miget.md).
+For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To run it highly available on Kubernetes, use the [Helm chart](docs/kubernetes.md), to run on Miget, follow the [Miget guide](docs/miget.md), and to host it on DigitalOcean, follow the [DigitalOcean guide](docs/digitalocean-hosting.md).
+
+[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/xraph/loomplane/tree/main)
 
 For hot reload while you work on Loomplane itself, `make dev` serves the dashboard on [localhost:5173](http://localhost:5173) and reloads the API as you edit.
 

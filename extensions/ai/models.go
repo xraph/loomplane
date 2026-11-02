@@ -173,7 +173,7 @@ func mountModels(r forge.Router, guard identity.Guard, m modelsAPI, s settingsAP
 			forge.WithSummary("What deploying a model in this environment would do, what it costs and what stops it"),
 			forge.WithDescription(previewDescription),
 			forge.WithRequestSchema(DeployInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The preview", models.DeployPreview{}),
+			forge.WithResponseSchema(http.StatusOK, "The preview", DeployPreview{}),
 		}},
 		{http.MethodPost, env, h.deploy, []forge.RouteOption{
 			forge.WithName("aiModels.deploy"),
@@ -199,7 +199,7 @@ func mountModels(r forge.Router, guard identity.Guard, m modelsAPI, s settingsAP
 			forge.WithSummary("What moving a model to another server, cluster or new GPU server would do"),
 			forge.WithDescription(moveDescription),
 			forge.WithRequestSchema(models.MoveInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The preview", models.DeployPreview{}),
+			forge.WithResponseSchema(http.StatusOK, "The preview", DeployPreview{}),
 		}},
 		{http.MethodPost, env + "/:resource/move", h.move, []forge.RouteOption{
 			forge.WithName("aiModelDeployments.move"),
@@ -425,7 +425,7 @@ func (h modelHandlers) preview(c forge.Context) error {
 	}
 	w := where(c)
 	out, err := h.models.Preview(c.Request().Context(), p, w.project, w.environment, in)
-	return answer(c, http.StatusOK, out, err)
+	return answer(c, http.StatusOK, publicDeployPreview(out), err)
 }
 
 func (h modelHandlers) deploy(c forge.Context) error {
@@ -477,7 +477,7 @@ func (h modelHandlers) movePreview(c forge.Context) error {
 	}
 	w := where(c)
 	out, err := h.models.MovePreview(c.Request().Context(), p, w.project, w.environment, w.resource, in)
-	return answer(c, http.StatusOK, out, err)
+	return answer(c, http.StatusOK, publicDeployPreview(out), err)
 }
 
 func (h modelHandlers) move(c forge.Context) error {

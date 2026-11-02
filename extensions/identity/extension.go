@@ -59,6 +59,7 @@ import (
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/setuptoken"
 	"github.com/xraph/loomplane/internal/teams"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
@@ -172,7 +173,11 @@ func (e *Extension) register(fapp forge.App) error {
 	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
-	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
+	if e.warden, err = warden.NewEngine(
+		warden.WithStore(wstore),
+		warden.WithCache(warden.NewMemoryCache()),
+		warden.WithLogger(e.Logger()),
+	); err != nil {
 		return fmt.Errorf("warden: %w", err)
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
@@ -289,8 +294,23 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
+	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
+}
+
+// logSetupLink tells the operator, in production while setup is pending,
+// where to open setup. A failure is logged; it never stops the start.
+func (e *Extension) logSetupLink(ctx context.Context) {
+	if e.cfg.IsDevelopment() || !e.setupPending(ctx) {
+		return
+	}
+	token, err := setuptoken.Derive(e.cfg.SecretKey)
+	if err != nil {
+		e.Logger().Error("derive the setup token", forge.F("error", err.Error()))
+		return
+	}
+	e.Logger().Warn("setup is waiting", forge.F("url", setuptoken.Link(e.cfg.PublicURL, token)))
 }
 
 // setting sets one of authsome's settings for the whole engine.

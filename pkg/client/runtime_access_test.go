@@ -15,7 +15,7 @@ func TestRuntimeAccessOmittedJSON(t *testing.T) {
 			t.Fatal("historical omission changed", err)
 		}
 	}
-	in := ClusterInput{Kind: "runtime-access-upgrade", RuntimeAccess: &provider.RuntimeAccessInput{AttachmentID: "attachment", Profile: provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true}}}
+	in := ClusterInput{Kind: "runtime-access-upgrade", RuntimeAccess: &RuntimeAccessReview{AttachmentID: "attachment", Profile: provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true}}}
 	raw, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)

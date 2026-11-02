@@ -28,3 +28,12 @@ have to share files.
 [docs/kubernetes.md](https://github.com/xraph/loomplane/blob/main/docs/kubernetes.md)
 covers what you need, upgrades and rollbacks, what survives which failure,
 and the settings worth knowing. `values.yaml` documents every value.
+
+To run the push gateway in the same release, set `push.gateway.enabled=true`,
+`push.gatewayUrl` to a separate HTTPS hostname, and supply its image version,
+sealing key ID and `push.gateway.existingSecret`. The gateway mounts its own
+keys separately from Loomplane's credentials. Enable its Ingress or HTTPRoute
+when you want the chart to publish the two push routes. The
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+covers secret files, TLS and key rotation. You need push credentials for the
+mobile app you ship; the store app uses XRaph's gateway.

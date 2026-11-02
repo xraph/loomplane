@@ -187,7 +187,8 @@ func (h *History) ReleasedImages(ctx context.Context, orgID, environmentID strin
 				Service: s.Name, Provider: a.Provider, ConnectionID: h.connection(plan, a), Region: a.Region,
 				CommitSHA: a.Service.CommitSHA, Architecture: a.Service.BuildArchitecture(), Inputs: a.Service.BuildInputs(),
 				Image: s.Image, Revision: s.Revision,
-				DeploymentID: r.DeploymentID, PlanID: r.PlanID, FinishedAt: r.FinishedAt,
+				ExternalResources: a.Service.TargetAccountIdentity != "",
+				DeploymentID:      r.DeploymentID, PlanID: r.PlanID, FinishedAt: r.FinishedAt,
 			}
 			img.Registry = a.Service.ImageRegistry()
 			out[s.Name] = img

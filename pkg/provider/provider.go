@@ -82,6 +82,8 @@ type Runs struct {
 // Provisions is one resource kind a target can provision. Loomplane
 // provisions it, whatever the target's model.
 type Provisions struct {
+	ImportOnly bool              `json:"import_only,omitempty"`
+	Settings   []ResourceSetting `json:"settings,omitempty"`
 	// Kind is a resource kind as repository analysis names it: postgres,
 	// redis and so on.
 	Kind string `json:"kind"`
@@ -97,6 +99,7 @@ type Provisions struct {
 
 // Provider describes one deployment target.
 type Provider struct {
+	Workloads *WorkloadCapabilities `json:"workloads,omitempty"`
 	// Name is how a manifest names it, such as "cloud-run".
 	Name  string `json:"name"`
 	Title string `json:"title"`

@@ -51,7 +51,7 @@ func (p *planner) planFarp() {
 	gateways := p.octopusResources()
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if _, held := p.held[name]; held || a == nil || a.Service == nil {
+		if _, held := p.held[name]; held || a == nil || a.Service == nil || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		set := m.Services[name].For(p.in.Environment, m.Defaults)

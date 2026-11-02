@@ -98,9 +98,9 @@ func newDomainsRuntime(t *testing.T) *domainsRuntime {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
-		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT NOT NULL DEFAULT 'docker.runtime')`,
 		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
-		`INSERT INTO cp_instances VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
 		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
 		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES('binding','org','proj','env','service','web','server','http','instance','runtime','{"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"},"port":8080}',now(),now())`,
 	} {
@@ -356,7 +356,7 @@ func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...st
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
-		`INSERT INTO cp_instances VALUES('destination','org',NULL,'{"main":"destination-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('destination','org',NULL,'{"main":"destination-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
 		`UPDATE loomplane_bindings SET external_id='destination',connection_id='runtime2',config=jsonb_set(config,'{cloud_placement,server_id}','"host2"') WHERE id='binding'`,
 	} {
 		if _, err = sql.Exec(ctx, statement); err != nil {
@@ -580,7 +580,7 @@ func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...st
 
 	// A same-server candidate can be abandoned after either failed or successful
 	// preparation, without restoring its Cloud grant or changing the source.
-	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
+	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, prepareStatus := range []string{"failed", "succeeded"} {
@@ -952,11 +952,11 @@ func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
 	}
 	placement := `"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"}`
 	for _, statement := range []string{
-		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT NOT NULL DEFAULT 'docker.runtime')`,
 		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
 		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
-		`INSERT INTO cp_instances VALUES('api','org',NULL,'{"main":"api-container"}','[{"name":"main","ports":[{"container":8080},{"container":9090}]}]','{"loomplane.revision":"deployment/api"}','running')`,
-		`INSERT INTO cp_instances VALUES('db','org',NULL,'{"main":"db-container"}','[{"name":"main","ports":[{"container":5432}]}]','{"loomplane.revision":"deployment/db"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('api','org',NULL,'{"main":"api-container"}','[{"name":"main","ports":[{"container":8080},{"container":9090}]}]','{"loomplane.revision":"deployment/api"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('db','org',NULL,'{"main":"db-container"}','[{"name":"main","ports":[{"container":5432}]}]','{"loomplane.revision":"deployment/db"}','running')`,
 		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES
 		('api','org','proj','env','resource','app--api','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"api","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now()),
 		('parent','org','proj','env','resource','app','server','resource','api','runtime','{"provider":"server","kind":"sample","composition":{"kind":"sample","version":"1","revision":"r"},"routable_ports":[8080],` + placement + `}',now(),now()),

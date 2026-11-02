@@ -113,6 +113,14 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 
 func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState) error {
 	route := &op.Route
+	if err := st.GuardRouteOwnership(ctx, *route); err != nil {
+		return err
+	}
+	if op.Source != nil {
+		if err := st.GuardRouteOwnership(ctx, *op.Source); err != nil {
+			return err
+		}
+	}
 	// Accepted removal retains exact cleanup authority after a grant is revoked.
 	if op.Kind != "remove" {
 		if err := s.domainScope(ctx, op.executionPrincipal(), route.ProjectID, true); err != nil {

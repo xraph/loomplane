@@ -1,0 +1,33 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$LOOMPLANE_DOMAIN} {
+	# Health and metrics are available inside the Docker network only.
+	@internal path /_/health /_/health/* /_/metrics /_/metrics/* /debug/*
+	respond @internal 404
+
+	reverse_proxy loomplane:8780 {
+		# Flush events immediately; WebSocket upgrades are automatic.
+		flush_interval -1
+	}
+}
+
+# No log directive on purpose: Caddy writes no access log, because request
+# metadata isn't wanted here. The gateway logs what it needs.
+{$PUSH_GATEWAY_DOMAIN} {
+	request_body {
+		max_size 64KB
+	}
+
+	# Only the two public routes reach the gateway. Its health check stays
+	# inside the Docker network.
+	@api path /v1/registrations /v1/send
+	handle @api {
+		reverse_proxy push-gateway:8790
+	}
+
+	handle {
+		respond 404
+	}
+}

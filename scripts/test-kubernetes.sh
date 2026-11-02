@@ -117,6 +117,8 @@ leader_pod=$(k get pods -l app.kubernetes.io/component=api -o jsonpath="{range .
 echo "$leader_pod leads"
 
 step "Probe through the Service"
+setup_token=$(k exec deploy/"$release" -- loomplane setup-token --raw | tr -d '\r\n')
+[[ "$setup_token" =~ ^[a-z2-7]{32}$ ]] || fail "loomplane setup-token --raw didn't print a setup token (got: ${setup_token:0:40})"
 k delete pod prober --ignore-not-found --wait >/dev/null
 # shellcheck disable=SC2016 # The prober's shell expands these, not this one.
 # On the control plane with the fixtures, so the drain below never moves the
@@ -125,6 +127,7 @@ k run prober --image="$image" --image-pull-policy=Never --restart=Never \
 	--overrides='{"spec":{"nodeSelector":{"node-role.kubernetes.io/control-plane":""},"tolerations":[{"key":"node-role.kubernetes.io/control-plane","effect":"NoSchedule"}]}}' \
 	--command -- /bin/sh -c '
 	set -u
+	setup_token='"$setup_token"'
 	base=http://'"$release"':8780
 	json="Content-Type: application/json"
 	# authsome wants the app'"'"'s publishable key; the chart keeps the default.
@@ -132,7 +135,7 @@ k run prober --image="$image" --image-pull-policy=Never --restart=Never \
 	# A fresh instance takes its first account through setup, which also
 	# makes the organization and leaves the session in it. The session
 	# comes back as a cookie, and its token works as a bearer token too.
-	setup=$(wget -S -O /dev/null --header "$json" --header "$pk" --post-data "{\"name\":\"Ha\",\"email\":\"ha@loomplane.test\",\"password\":\"Correct-horse-battery-9\",\"organization_name\":\"HA\"}" $base/api/v1/setup 2>&1) || { echo setup-failed setup; sleep 600; exit 1; }
+	setup=$(wget -S -O /dev/null --header "$json" --header "$pk" --post-data "{\"name\":\"Ha\",\"email\":\"ha@loomplane.test\",\"password\":\"Correct-horse-battery-9\",\"organization_name\":\"HA\",\"token\":\"$setup_token\"}" $base/api/v1/setup 2>&1) || { echo setup-failed setup; sleep 600; exit 1; }
 	token=$(echo "$setup" | sed -n "s/.*[Ss]et-[Cc]ookie: loomplane_session=\([^;]*\).*/\1/p" | head -1)
 	[ -n "$token" ] || { echo setup-failed no session cookie; sleep 600; exit 1; }
 	auth="Authorization: Bearer $token"

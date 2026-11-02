@@ -9,7 +9,7 @@ import (
 
 func TestTeamsMigration(t *testing.T) {
 	// Databases record the version and name, so the filename can't drift.
-	if m := migration(t, "teams"); m.Version != "20261207000700" {
+	if m := migration(t, "teams"); m.Version != "20261208000900" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, db := scratch(t)

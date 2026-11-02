@@ -76,6 +76,9 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 	if aerr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); aerr != nil {
 		return nil, aerr
 	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	if d.Status == StatusFailed && d.Error == StaleRollback {
 		return nil, ErrStaleRollback
 	}

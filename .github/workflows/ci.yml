@@ -134,6 +134,20 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Production Docker smoke test
         run: bash scripts/test-production.sh loomplane:ci
+      - name: Build optional push gateway
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          load: true
+          tags: loomplane-push-gateway:ci
+          cache-from: type=gha,scope=push-gateway
+          cache-to: type=gha,mode=max,scope=push-gateway
+      - run: bash scripts/check-push-deployment.sh
+      - name: Combined Docker smoke test
+        run: bash scripts/test-push-gateway.sh loomplane-push-gateway:ci loomplane:ci
+      - name: DigitalOcean installer and bundled gateway
+        run: bash deployments/digitalocean/test-install.sh loomplane:ci loomplane-push-gateway:ci
 
   helm:
     name: Helm chart
@@ -163,6 +177,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       - uses: azure/setup-helm@v4
         with:
           # The committed Kubernetes manifest is rendered with this version; a
@@ -183,3 +200,14 @@ jobs:
           build-args: VERSION=k8s-test
           cache-from: type=gha
       - run: bash scripts/test-kubernetes.sh loomplane:k8s-test
+      - name: Build the gateway image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          load: true
+          tags: loomplane-push-gateway:k8s-test
+          build-args: VERSION=k8s-test
+          cache-from: type=gha,scope=push-gateway
+      - name: Helm push gateway with Ingress and Gateway API
+        run: python3 tests/kubernetes/push_gateway.py loomplane:k8s-test loomplane-push-gateway:k8s-test

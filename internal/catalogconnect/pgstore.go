@@ -87,7 +87,8 @@ func (s *PgStore) List(ctx context.Context, orgID string) ([]*Endpoint, error) {
 // inUse finds a binding in the organization whose composition connects a
 // dependency to the endpoint $2.
 const inUse = `EXISTS (SELECT 1 FROM loomplane_bindings b WHERE b.org_id = $1
-	AND jsonb_path_exists(b.config, '$.composition.dependencies.*.external ? (@ == $id)', jsonb_build_object('id', $2::text)))`
+	AND (jsonb_path_exists(b.config, '$.composition.dependencies.*.external ? (@ == $id)', jsonb_build_object('id', $2::text))
+	OR b.config #>> '{existing_resource,endpoint_id}' = $2))`
 
 // Delete implements Store. The use check and the delete are one statement;
 // its existence check sees the table as it was before the delete.

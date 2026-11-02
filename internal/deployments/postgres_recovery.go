@@ -8,10 +8,12 @@ import (
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -29,8 +31,12 @@ func (e *OwnedTarget) BackupDatabase(ctx context.Context, p security.Principal, 
 	if err := e.checkDatabaseBinding(b, &cfg); err != nil {
 		return backupfiles.Object{}, err
 	}
-	if _, err := databaseService(&cfg); err != nil {
+	descriptor, err := recovery.Describe(&cfg, e.kinds())
+	if err != nil {
 		return backupfiles.Object{}, err
+	}
+	if descriptor.Component != nil && (cfg.Provider != "server" || descriptor.Component.Resource != b.Name) {
+		return backupfiles.Object{}, recovery.ErrNotOnKubernetes
 	}
 	iid, err := id.Parse(b.ExternalID)
 	if err != nil {
@@ -43,8 +49,11 @@ func (e *OwnedTarget) BackupDatabase(ctx context.Context, p security.Principal, 
 	if inst.TenantID != b.OrgID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID || inst.Labels[owned.LabelConnection] != b.ConnectionID || inst.Labels[owned.LabelService] != b.Name || inst.Labels[server.LabelRecovery] != "" {
 		return backupfiles.Object{}, errors.New("database instance no longer matches its binding")
 	}
-	if len(inst.Services) != 1 || inst.Services[0].Image != cfg.Catalog.Image {
+	if len(inst.Services) != 1 || inst.Services[0].Image != descriptor.Image {
 		return backupfiles.Object{}, errors.New("database image changed since qualification")
+	}
+	if descriptor.Component != nil && (inst.Labels[enginebackup.LabelEngine] != descriptor.Engine || inst.Labels[enginebackup.LabelRevision] != descriptor.Revision) {
+		return backupfiles.Object{}, errors.New("component recovery identity changed")
 	}
 	backend, err := e.registeredBackend(e.Register(b.OrgID, b.ConnectionID))
 	if err != nil {

@@ -42,20 +42,20 @@ func TestManagedFailedCleanupTaskClaims(t *testing.T) {
 	if route.Request.BuildID != ManagedCleanupBuild {
 		t.Fatal("wrong managed build")
 	}
-	for _, worker := range []*drt.Worker{r.w3, r.w4, r.w5} {
+	for _, worker := range []*drt.Worker{r.w3, r.w4, r.w5, r.w6} {
 		if worked, e := worker.RunOnce(t.Context(), durable.TaskWorkflow); e != nil || worked {
 			t.Fatalf("old workflow claim: %v %v", worked, e)
 		}
 	}
-	if worked, e := r.w6.RunOnce(t.Context(), durable.TaskWorkflow); e != nil || !worked {
+	if worked, e := r.w7.RunOnce(t.Context(), durable.TaskWorkflow); e != nil || !worked {
 		t.Fatalf("managed workflow claim: %v %v", worked, e)
 	}
-	for _, worker := range []*drt.Worker{r.w3, r.w4, r.w5} {
+	for _, worker := range []*drt.Worker{r.w3, r.w4, r.w5, r.w6} {
 		if worked, e := worker.RunOnce(t.Context(), durable.TaskActivity); e != nil || worked {
 			t.Fatalf("old activity claim: %v %v", worked, e)
 		}
 	}
-	if worked, e := r.w6.RunOnce(t.Context(), durable.TaskActivity); e != nil || !worked {
+	if worked, e := r.w7.RunOnce(t.Context(), durable.TaskActivity); e != nil || !worked {
 		t.Fatalf("managed activity claim: %v %v", worked, e)
 	}
 	if probe.calls != 1 || !probe.compatible || probe.review != "review" {

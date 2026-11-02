@@ -134,6 +134,8 @@ func TestGPUTargets_listCreatableSizesAndUnreachableAccounts(t *testing.T) {
 		case token == limited:
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"id":"too_many_requests","message":"API rate limit exceeded."}`))
+		case r.URL.Path == "/v2/databases" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
 		case r.URL.Path == "/v2/regions":
 			_, _ = w.Write([]byte(`{"regions":[{"slug":"tor1","name":"Toronto 1","available":true},{"slug":"nyc2","name":"New York 2","available":true}],"links":{}}`))
 		case r.URL.Path == "/v2/sizes":

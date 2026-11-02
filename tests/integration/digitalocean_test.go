@@ -106,7 +106,7 @@ func (f *fakeDigitalOcean) serve(w http.ResponseWriter, r *http.Request) {
 			phase = "CANCELED"
 		}
 		comp := []any{map[string]any{"name": "x", "source_commit_hash": hash}}
-		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "services": comp}})
+		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "services": comp, "spec": f.apps[parts[2]]}})
 	case len(parts) == 6 && parts[5] == "cancel":
 		f.canceled, f.stopped[parts[4]] = append(f.canceled, parts[4]), true
 		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": "CANCELED"}})

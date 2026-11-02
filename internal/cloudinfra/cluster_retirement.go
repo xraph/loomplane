@@ -247,3 +247,80 @@ func checkRetirementResourcePins(r *ManagedResource, cloud string, in ClusterInp
 	}
 	return nil
 }
+
+// ResolveClusterRetirementInput loads the private attachment under current scope.
+// Public callers select its revision; they cannot supply the execution snapshot.
+func (s *Service) ResolveClusterRetirementInput(ctx context.Context, p security.Principal, cloud, resource, digest, attachment string, revision int64) (*ClusterRetirementInput, error) {
+	if err := s.clusterEnabled(); err != nil {
+		return nil, err
+	}
+	if err := s.Authz.Require(ctx, p, security.ClusterDelete, ""); err != nil {
+		return nil, err
+	}
+	if _, err := s.authorize(ctx, p, cloud); err != nil {
+		return nil, err
+	}
+	r, err := s.Clusters.GetManagedResource(ctx, p.OrgID, resource)
+	if err != nil {
+		return nil, err
+	}
+	if r.CloudID != cloud || r.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	out := &ClusterRetirementInput{ReviewDigest: digest}
+	if attachment == "" {
+		if revision != 0 {
+			return nil, ErrInvalid
+		}
+		return out, nil
+	}
+	if revision < 1 {
+		return nil, ErrInvalid
+	}
+	a, err := s.Clusters.GetRuntimeAttachment(ctx, p.OrgID, attachment)
+	if err != nil {
+		return nil, err
+	}
+	if a.CloudID != cloud || a.ClusterID != resource || a.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	if a.Revision != revision {
+		return nil, ErrConflict
+	}
+	out.Attachment = a
+	return out, nil
+}
+
+// PreviewClusterDetach captures the current private attachment for a scoped review.
+func (s *Service) PreviewClusterDetach(ctx context.Context, p security.Principal, cloud, resource, attachment string, revision int64) (*ClusterRetirementReview, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	selected, err := s.ResolveClusterRetirementInput(ctx, p, cloud, resource, "", attachment, revision)
+	if err != nil {
+		return nil, err
+	}
+	if selected.Attachment == nil {
+		return nil, ErrInvalid
+	}
+	r, err := s.GetCluster(ctx, p, cloud, resource)
+	if err != nil {
+		return nil, err
+	}
+	if r.Observation == nil {
+		return nil, ErrConflict
+	}
+	profile, err := s.authorize(ctx, p, cloud)
+	if err != nil {
+		return nil, err
+	}
+	_, access, err := s.clusterAccount(ctx, p, r.ConnectionID, provider.ClusterDiscovery)
+	if err != nil {
+		return nil, err
+	}
+	in := ClusterInput{Kind: "detach-runtime", Provider: r.Provider, AccountID: r.AccountID, ConnectionID: r.ConnectionID, ConnectionGeneration: access.Generation, CloudRevision: profile.Revision, ResourceID: r.ID, ResourceRevision: r.Revision, Ref: r.Observation.Ref, Retirement: selected}
+	reader, access, err := s.clusterAuthority(ctx, p, cloud, in)
+	if err != nil {
+		return nil, err
+	}
+	return s.prepareClusterRetirement(ctx, p, cloud, in, reader, access, "")
+}

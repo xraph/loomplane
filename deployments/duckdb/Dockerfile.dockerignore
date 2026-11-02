@@ -1,0 +1,7 @@
+**
+!cmd/
+!cmd/duckdb-runtime/
+!cmd/duckdb-runtime/main.go
+!deployments/
+!deployments/duckdb/
+!deployments/duckdb/Dockerfile

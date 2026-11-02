@@ -220,3 +220,28 @@ func TestSoakRoute(t *testing.T) {
 		}
 	}
 }
+
+type privateReleaseFixture struct {
+	fakeReleases
+	plan planning.Plan
+}
+
+func (f *privateReleaseFixture) Create(context.Context, security.Principal, string, planning.CreatePlanInput) (*planning.Plan, error) {
+	return &f.plan, nil
+}
+func (f *privateReleaseFixture) CreateRollback(context.Context, security.Principal, string, planning.RollbackInput) (*planning.Plan, error) {
+	return &f.plan, nil
+}
+func TestReleaseRoutesProjectPrivateCleanupTargets(t *testing.T) {
+	svc := &privateReleaseFixture{plan: planning.Plan{ID: "plan", Revision: "original", Actions: []planning.Action{{ID: "service:api", CleanupTargets: []planning.ManagedCleanupTarget{{AttachmentID: "private-attachment", Unresolved: []string{"private-issuance"}}}}}}}
+	r := releaseRouter(t, svc)
+	for _, route := range []string{"plans", "rollbacks"} {
+		out := send(t, r, http.MethodPost, "/api/v1/projects/p/"+route, `{"environment":"production"}`, true)
+		if out.Code != http.StatusCreated || strings.Contains(out.Body.String(), "private-") || !strings.Contains(out.Body.String(), `"revision":"original"`) {
+			t.Fatalf("%s: %d %s", route, out.Code, out.Body)
+		}
+	}
+	if svc.plan.Actions[0].CleanupTargets[0].AttachmentID != "private-attachment" {
+		t.Fatal("mutated signed private target")
+	}
+}

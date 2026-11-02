@@ -140,7 +140,8 @@ func doBranchFor(job *Job) string {
 }
 
 // Apply implements Executor.
-func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	if job.Action.Resource != nil {
 		return d.applyDatabase(ctx, job)
 	}
@@ -185,6 +186,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 			if app.ActiveDeployment != nil {
 				state.Previous = app.ActiveDeployment.ID
 			}
+			if proofErr := prepareDORollbackProof(ctx, job, spec, app); proofErr != nil {
+				return proofErr
+			}
 			dep, derr := d.Client.CreateDeployment(ctx, token, app.ID)
 			if derr != nil {
 				return fmt.Errorf("deploy %s on app platform: %w", spec.Name, derr)
@@ -217,7 +221,10 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	url := doAddress(cfg, app)
-	if err := d.waitForDNS(ctx, job, url); err != nil {
+	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
+		return nil, dnsErr
+	}
+	if err := d.keepRollbackProof(ctx, token, job, spec, app.ID, dep.ID); err != nil {
 		return nil, err
 	}
 	return &Outcome{ExternalID: app.ID, URL: url, Revision: dep.ID}, nil
@@ -230,9 +237,15 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 // deploy does, so a hostname change can't write the spec in between.
 func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg *planning.ServiceConfig, state *doState, save func()) (*Outcome, error) {
 	app := job.Binding.ExternalID
+	if err := d.checkRollbackProof(ctx, token, job, app, cfg.Artifact.Revision); err != nil {
+		return nil, err
+	}
 	if state.AppID != app || state.DeploymentID == "" {
 		job.Progress(StepDeploying, "Rolling App Platform back to deployment "+cfg.Artifact.Revision)
 		err := d.Client.WithApp(ctx, app, func(ctx context.Context) error {
+			if err := d.checkRollbackProof(ctx, token, job, app, cfg.Artifact.Revision); err != nil {
+				return err
+			}
 			dep, rollbackErr := d.Client.Rollback(ctx, token, app, cfg.Artifact.Revision)
 			if rollbackErr != nil {
 				return rollbackErr
@@ -254,7 +267,14 @@ func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg
 		return nil, err
 	}
 	url := doAddress(cfg, live)
-	if err := d.waitForDNS(ctx, job, url); err != nil {
+	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
+		return nil, dnsErr
+	}
+	repo, err := repositoryFor(job)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.keepRollbackProof(ctx, token, job, doAppSpec(job, cfg, repo, doBranchFor(job)), app, dep.ID); err != nil {
 		return nil, err
 	}
 	return &Outcome{ExternalID: live.ID, URL: url, Revision: dep.ID}, nil
@@ -389,8 +409,23 @@ func (d *DigitalOcean) refuse(ctx context.Context, token string, job *Job, state
 	}
 	switch {
 	case state.Previous != "":
-		if _, err := d.Client.Rollback(ctx, token, state.AppID, state.Previous); err != nil {
-			return fmt.Errorf("%w. It went live, and rolling back failed: %w. Roll the app back in DigitalOcean", mm, err)
+		if err := d.Client.WithApp(ctx, state.AppID, func(ctx context.Context) error {
+			previous := *job
+			if doHasResourceAccess(job) || job.Recall != nil {
+				if job.Binding == nil || job.Binding.ExternalID != state.AppID || job.Binding.Revision != state.Previous || job.Binding.CommitSHA == "" {
+					return doRollbackProofError()
+				}
+			}
+			if job.Binding != nil {
+				previous.CommitSHA = job.Binding.CommitSHA
+			}
+			if err := d.checkRollbackProof(ctx, token, &previous, state.AppID, state.Previous); err != nil {
+				return err
+			}
+			_, err := d.Client.Rollback(ctx, token, state.AppID, state.Previous)
+			return err
+		}); err != nil {
+			return fmt.Errorf("%w. It went live, and safe recovery could not restore the previous deployment: %w. Deploy reviewed source with the current attachments", mm, err)
 		}
 		return fmt.Errorf("%w. It went live, so Loomplane rolled the app back to what ran before. %s", mm, hint)
 	case job.Binding == nil:
@@ -437,7 +472,7 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 		if comp.OutputDir == "" {
 			comp.OutputDir = "dist"
 		}
-		comp.Envs = doEnvs(env, job.Secrets)
+		comp.Envs = doServiceEnvs(env, job.Secrets, cfg.Env)
 		spec.StaticSites = []digitalocean.Component{comp}
 		return spec
 	}
@@ -454,7 +489,7 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 		comp.SourceDir, comp.RunCommand = "/"+root, cfg.Start
 	}
 	if cfg.Workload == provider.Worker {
-		comp.Envs = doEnvs(env, job.Secrets)
+		comp.Envs = doServiceEnvs(env, job.Secrets, cfg.Env)
 		spec.Workers = []digitalocean.Component{comp}
 		return spec
 	}
@@ -468,7 +503,7 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 			comp.InternalPorts = []int{cfg.Port}
 		}
 	}
-	comp.Envs = doEnvs(env, job.Secrets)
+	comp.Envs = doServiceEnvs(env, job.Secrets, cfg.Env)
 	spec.Services = []digitalocean.Component{comp}
 	return spec
 }
@@ -489,6 +524,21 @@ func doEnvs(env map[string]string, secret map[string]bool) []digitalocean.Env {
 			e.Type = "SECRET"
 		}
 		out = append(out, e)
+	}
+	return out
+}
+
+// doServiceEnvs keeps resource access out of source builds while preserving
+// explicitly configured build variables and their existing scopes.
+func doServiceEnvs(env map[string]string, secret map[string]bool, links []planning.EnvLink) []digitalocean.Env {
+	out := doEnvs(env, secret)
+	out = slices.DeleteFunc(out, func(item digitalocean.Env) bool { return omitEmptyResourceToken(item.Key, env, links) })
+	for i := range out {
+		if slices.ContainsFunc(links, func(link planning.EnvLink) bool {
+			return link.Subject == planning.ResourceSubject && link.Key == out[i].Key
+		}) {
+			out[i].Scope = "RUN_TIME"
+		}
 	}
 	return out
 }

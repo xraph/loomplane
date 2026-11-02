@@ -79,6 +79,9 @@ export function cloudHealth(connections: Connection[]): CloudHealth {
   }
 }
 
+/** Servers you run yourself; every other connection form is a cloud. */
+export const serverKinds = new Set(["server", "kubernetes", "registry"])
+
 /** What Loomplane runs or provisions on each built-in cloud. */
 export const cloudPurposes: Record<string, string> = {
   gcp: "Cloud Run, Cloud SQL, Memorystore and Cloud Storage",

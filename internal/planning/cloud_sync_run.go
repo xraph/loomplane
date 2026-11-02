@@ -396,6 +396,9 @@ func validateSyncGrants(ctx context.Context, st cloudprofiles.SyncStore, org str
 }
 
 func (s *Service) authorizeStoredCloudSync(ctx context.Context, p security.Principal, sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snapshot) error {
+	if err := s.requireUnmanagedSnapshot(ctx, sync.OrgID, sync.ProjectID, snapshot); err != nil {
+		return err
+	}
 	if p.KeyID != "" {
 		if s.capacityPrincipal == nil {
 			return security.ErrForbidden

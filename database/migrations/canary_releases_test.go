@@ -15,10 +15,12 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	// Everything else goes first, so canary_releases is the last one applied
 	// and one rollback undoes exactly it, whatever sorts after it. The
 	// release notices trigger watches the canary column, so it waits for
-	// canary_releases and comes off first.
+	// canary_releases and comes off first. Stop at release_notices so future
+	// workflow protocols cannot change this historical schema.
+	last := migration(t, "release_notices").Version
 	historical := migrate.NewGroup(GroupName)
 	for _, step := range Group().Migrations() {
-		if step.Name != "managed_workload_protocol" {
+		if step.Version <= last && step.Name != "managed_workload_protocol" {
 			historical.MustRegister(step)
 		}
 	}

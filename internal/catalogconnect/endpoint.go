@@ -19,6 +19,7 @@ import (
 // Engines Loomplane connects.
 const (
 	EnginePostgres = "postgres"
+	EngineMySQL    = "mysql"
 	EngineRedis    = "redis"
 )
 
@@ -38,12 +39,12 @@ var (
 	ErrNameTaken = fmt.Errorf("%w: this organization already has an endpoint with that name", ErrInvalid)
 )
 
-// Endpoint is a database or cache outside Loomplane. Its DSN isn't here.
+// Endpoint is a database, cache or bucket outside Loomplane. Its credentials are not here.
 type Endpoint struct {
 	ID        string    `json:"id"`
 	OrgID     string    `json:"org_id"`
 	Name      string    `json:"name"`
-	Engine    string    `json:"engine"` // "postgres" or "redis"
+	Engine    string    `json:"engine"` // postgres, mysql, redis, s3 or gcs
 	Host      string    `json:"host"`
 	Port      int       `json:"port"`
 	Database  string    `json:"database,omitempty"`
@@ -57,11 +58,13 @@ type Endpoint struct {
 // CreateInput registers an endpoint.
 type CreateInput struct {
 	Name string `json:"name"`
-	// Engine is postgres or redis.
+	// Engine is postgres, mysql, redis, s3 or gcs.
 	Engine string `json:"engine"`
 	// DSN is a postgres:// or postgresql:// URL with a user and sslmode
-	// disable, require or verify-full, or a redis:// or rediss:// URL.
-	// It's stored in Vault and never returned.
+	// disable, require or verify-full, a mysql:// URL with sslmode=require or
+	// verify-full, or a redis:// or rediss:// URL.
+	// Bucket engines use the encoded BucketAccess contract instead of a URL.
+	// Access material is stored in Vault and never returned.
 	DSN string `json:"dsn"`
 }
 
@@ -85,6 +88,15 @@ var postgresParams = map[string]bool{
 // parseDSN reads the parts of a DSN that aren't secret into e. Its errors
 // never repeat the DSN.
 func parseDSN(e *Endpoint, dsn string) error {
+	if IsAPIEngine(e.Engine) {
+		return parseAPIEndpoint(e, dsn)
+	}
+	if e.Engine == EngineS3 || e.Engine == EngineGCS || e.Engine == EngineR2 {
+		return parseBucketEndpoint(e, dsn)
+	}
+	if e.Engine == EngineMySQL {
+		return parseMySQLDSN(e, dsn)
+	}
 	u, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil || u.Opaque != "" || u.Scheme == "" {
 		return fmt.Errorf("%w: the DSN must be a URL, such as %s", ErrInvalid, example(e.Engine))

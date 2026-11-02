@@ -15,7 +15,9 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -51,7 +53,7 @@ type BindingQuery struct {
 
 // PlanList is the body of GET /api/v1/projects/:id/plans.
 type PlanList struct {
-	Plans []planning.Plan `json:"plans"`
+	Plans []publicplan.Plan `json:"plans"`
 	// Next reads the page after this one, as ?before=. It's empty on the
 	// last page.
 	Next string `json:"next,omitempty"`
@@ -173,19 +175,19 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/plans/:id", e.getPlan, []forge.RouteOption{
 			forge.WithName("plans.get"),
 			forge.WithSummary("One plan, with its actions and findings"),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodPost, "/plans/:id/approve", e.approvePlan, []forge.RouteOption{
 			forge.WithName("plans.approve"),
 			forge.WithSummary("Approve a ready plan, naming the revision you reviewed"),
 			forge.WithRequestSchema(planning.DecideInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodPost, "/plans/:id/reject", e.rejectPlan, []forge.RouteOption{
 			forge.WithName("plans.reject"),
 			forge.WithSummary("Reject a ready plan"),
 			forge.WithRequestSchema(planning.DecideInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodGet, "/projects/:id/environments/:environment/deployed", e.listDeployed, []forge.RouteOption{
 			forge.WithName("deployed.list"),
@@ -214,10 +216,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("One deployment, with each step's progress"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
 		}},
-		{http.MethodPost, "/deployments/:id/cleanup/preview", e.previewFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupPreview"), forge.WithResponseSchema(http.StatusOK, "The cleanup review", deployments.CleanupReview{})}},
-		{http.MethodPost, "/deployments/:id/cleanup/apply", e.applyFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupApply"), forge.WithRequestSchema(FailedCleanupInput{}), forge.WithResponseSchema(http.StatusAccepted, "The accepted cleanup", deployments.FailedCleanup{})}},
-		{http.MethodGet, "/deployments/:id/cleanup", e.getFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanup"), forge.WithResponseSchema(http.StatusOK, "Cleanup progress", deployments.FailedCleanup{})}},
-		{http.MethodPost, "/deployments/:id/cleanup/retry", e.retryFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupRetry"), forge.WithResponseSchema(http.StatusAccepted, "Cleanup retry", deployments.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/preview", e.previewFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupPreview"), forge.WithResponseSchema(http.StatusOK, "The cleanup review", CleanupReview{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/apply", e.applyFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupApply"), forge.WithRequestSchema(FailedCleanupInput{}), forge.WithResponseSchema(http.StatusAccepted, "The accepted cleanup", client.FailedCleanup{})}},
+		{http.MethodGet, "/deployments/:id/cleanup", e.getFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanup"), forge.WithResponseSchema(http.StatusOK, "Cleanup progress", client.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/cancel", e.cancelFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupCancel"), forge.WithRequestSchema(FailedCleanupCancelInput{}), forge.WithResponseSchema(http.StatusOK, "Cleanup issuance fenced", client.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/retry", e.retryFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupRetry"), forge.WithResponseSchema(http.StatusAccepted, "Cleanup retry", client.FailedCleanup{})}},
 		{http.MethodGet, "/deployments/:id/canary", e.getCanary, []forge.RouteOption{
 			forge.WithName("deployments.canary"),
 			forge.WithSummary("The deployment's canary: where traffic is and every step's verdict"),
@@ -435,9 +438,9 @@ func (e *Extension) listPlans(c forge.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	out := PlanList{Plans: make([]planning.Plan, 0, len(plans)), Next: next.String()}
+	out := PlanList{Plans: make([]publicplan.Plan, 0, len(plans)), Next: next.String()}
 	for _, pl := range plans {
-		out.Plans = append(out.Plans, *pl)
+		out.Plans = append(out.Plans, *publicplan.Project(pl))
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -451,7 +454,7 @@ func (e *Extension) getPlan(c forge.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	return c.JSON(http.StatusOK, plan)
+	return c.JSON(http.StatusOK, publicplan.Project(plan))
 }
 
 func (e *Extension) approvePlan(c forge.Context) error {
@@ -479,9 +482,12 @@ func (e *Extension) decide(c forge.Context, approve bool) error {
 		plan, err = e.plans.Reject(ctx, p, c.Param("id"), in)
 	}
 	if err != nil {
+		if handled, result := cleanupProblem(c, err); handled {
+			return result
+		}
 		return fail(err)
 	}
-	return c.JSON(http.StatusOK, plan)
+	return c.JSON(http.StatusOK, publicplan.Project(plan))
 }
 
 func (e *Extension) listBindings(c forge.Context) error {

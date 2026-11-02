@@ -398,7 +398,7 @@ The test requires an existing managed registry. It executes a Dockerfile command
 
 ## Review Kubernetes cluster setup
 
-Use Infrastructure, Clusters inside an organization Cloud. The existing `servers` tab URL still opens Infrastructure. Project members use their granted targets; cluster discovery, account details and lifecycle operations require organization Cloud management permission.
+Use Infrastructure, Clusters inside an organization Cloud. The existing `servers` tab URL still opens Infrastructure. Project members use their granted targets; cluster discovery and account details require organization Cloud management permission. Lifecycle actions also require their specific cluster permission.
 
 The CLI follows the existing `cloud-servers` naming convention:
 
@@ -423,3 +423,21 @@ The optional qualification runner is `tests/acceptance/managed-clusters/run.py`.
 The qualification runner requires known positive node prices before acceptance, even though manual review can acknowledge itemized unknown charges. It reloads the saved review and checks its input and estimate against the configured bounds before applying. Saved state is bound to the API endpoint, account, Cloud, project, region, input, node limit and node-hour ceiling. Changed configurations and older state files without that fingerprint are refused. Recover those operations by their saved ID; starting a new state file can create another review. Already accepted operations resume without another preview or apply.
 
 Changes pages cluster history separately from placement changes. Use Next cluster changes to reach later pages and First cluster changes to return. Saved cluster reviews retain each pool's name, count, size and autoscaling setting.
+
+## Review cluster capacity and lifecycle changes
+
+Open a cluster under Infrastructure to review node pools, maintenance, capacity observations and namespace access. The page reloads the selected cluster by ID. Operation links preserve the saved review and progress when you reload.
+
+Organization Cloud management grants inventory visibility. Pool changes, maintenance and namespace access upgrades also require `cluster:manage`; retirement and runtime detachment require `cluster:delete`. Completed lifecycle history is not a standing grant. Every new action checks current permissions and its reviewed scope.
+
+You can review fixed node changes or provider-native bounds. In native mode, the provider owns additions and removals within those bounds. Loomplane's ten-minute growth cooldown applies to its own growth or increased bounds, not to the provider's internal additions. Native growth requires current known costs and quota. DigitalOcean's required non-node prices remain unknown, so real native growth is blocked and unqualified. Manual unknown-cost acknowledgement cannot enable it.
+
+Cost reviews show the known hourly subtotal, the budget horizon and itemized unknown categories. Budget input accepts up to six decimal places and preserves integer micro-USD exactly. A manual acknowledgement covers only the pinned review; changed cost scope needs a fresh review. Unknown metrics, quota and prices are not zero. Workload requests and observed usage do not themselves establish a guaranteed reservation. Best-effort workloads receive no guaranteed reservation or fleet expansion authority.
+
+Review retained resources before retirement. Volumes and other retained items may continue to incur charges. DigitalOcean manual shrink, pool removal, upgrade and complete-owned-child deletion remain unavailable without qualified no-force and ownership support. The dashboard offers no bypass.
+
+Namespace access lists current attachments and their revisions. You can review dependent cleanup permissions for an existing attachment and optionally include horizontal scaling. Existing enabled permissions stay enabled. This is not credential renewal or a change of physical cluster trust. Detachment uses the current attachment revision and checks dependencies again before acceptance.
+
+Failed managed deployments use the existing cleanup review on the deployment page. It shows owned objects, unresolved writes and blockers. Cancel the current review to stop new attempts, then obtain a fresh review when reconciliation permits it. Cancellation is not proof that objects were removed or that a capacity hold was released. Historical uncertain cleanup effects retain their affected scope until reconciled; a worker cancellation or expired lease alone is insufficient.
+
+Cluster capacity remains off by default until live qualification passes. With capacity disabled, the existing basic managed deployment path has no guaranteed capacity reservation. Once enabled, old managed writes need a fresh compatible review; recovery of already accepted guarded work retains its fencing. Fixture checks and local Kubernetes tests do not qualify paid provider operations or enable rollout.

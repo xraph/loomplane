@@ -9,7 +9,11 @@ import {
   useBackupPoliciesSet as setPolicy,
   useEnvironmentConnectionsChoose as chooseConnection,
 } from "@/client/forge/loomplane/hooks"
-import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
+import {
+  databaseRecipes,
+  isComposedDatabase,
+  type DatabaseKind,
+} from "@/lib/catalog-recipes"
 import {
   isKubernetesPostgresRecipe,
   sameDatabasePlacement,
@@ -146,7 +150,8 @@ export async function deployDatabase(
     managed?: ManagedDatabaseReview
   },
   progress: (message: string) => void,
-  created: (project: string) => void
+  created: (project: string) => void,
+  review?: (plan: string) => void
 ) {
   const recipe = databaseRecipes[input.kind]
   const provider = input.provider ?? "server"
@@ -186,7 +191,11 @@ export async function deployDatabase(
         "Choose a canonical VPC and regional manual endpoint for the PSC profile."
       )
   }
-  if (provider === "kubernetes" && input.kind !== "postgres")
+  if (
+    provider === "kubernetes" &&
+    input.kind !== "postgres" &&
+    !isComposedDatabase(input.kind)
+  )
     throw new Error("Kubernetes currently supports PostgreSQL only.")
   progress("Creating the service project…")
   const project = await createProject({
@@ -243,6 +252,13 @@ export async function deployDatabase(
     (p) => p.status !== "planning",
     "Planning"
   )
+  if (isComposedDatabase(input.kind)) {
+    progress(
+      "The service plan is ready. Review its target, storage and recovery scope before deploying."
+    )
+    review?.(plan.id)
+    return project.id
+  }
   assertDatabasePlan(
     plan,
     project.id,

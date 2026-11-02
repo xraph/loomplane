@@ -31,7 +31,7 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	if (o.Kind == RuntimeAccessUpgrade) != (ctx.Value(runtimeAccessContextKey{}) == true) {
 		return ErrInvalid
 	}
-	if o.Kind != "create" && o.Kind != "adopt-external" && o.Kind != "adopt-managed" && o.Kind != RuntimeAccessUpgrade && !retirementKind(o.Kind) && !maintenanceKind(o.Kind) {
+	if o.Kind != "create" && o.Kind != "adopt-external" && o.Kind != "adopt-managed" && o.Kind != RuntimeAccessUpgrade && o.Kind != InstanceNamespaceKind && !retirementKind(o.Kind) && !maintenanceKind(o.Kind) {
 		return ErrInvalid
 	}
 	if heartbeat != nil {
@@ -44,6 +44,8 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	var reader provider.ClusterReader
 	var access provider.AccountAccess
 	switch {
+	case o.Kind == InstanceNamespaceKind:
+		reader, access, err = s.instanceNamespaceAuthority(call, o)
 	case clusterObservationOnly(o):
 		reader, access, err = s.clusterRecoveryAccount(call, o)
 	case o.Kind == "node-pool-scaling" && !s.ClusterCapacity.Enabled:

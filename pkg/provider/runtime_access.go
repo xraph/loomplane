@@ -3,6 +3,7 @@ package provider
 // RuntimeAccessProfile selects additional namespaced runtime permissions.
 // An omitted profile retains the original enrollment permissions.
 type RuntimeAccessProfile struct {
+	LifecycleJobs     bool `json:"lifecycle_jobs,omitempty"`
 	SchemaVersion     int  `json:"schema_version"`
 	CleanupDependents bool `json:"cleanup_dependents"`
 	HPA               bool `json:"hpa"`
@@ -13,7 +14,7 @@ func (p RuntimeAccessProfile) Valid() bool {
 }
 
 func (p RuntimeAccessProfile) Includes(old RuntimeAccessProfile) bool {
-	return p.Valid() && (!old.CleanupDependents || p.CleanupDependents) && (!old.HPA || p.HPA)
+	return p.Valid() && (!old.CleanupDependents || p.CleanupDependents) && (!old.HPA || p.HPA) && (!old.LifecycleJobs || p.LifecycleJobs)
 }
 
 // RuntimeAccessInput pins the identities and configuration shown in the review.

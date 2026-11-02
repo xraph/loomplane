@@ -14,9 +14,9 @@ import (
 // read-only: a save never takes it. CloudID names the Cloud, so the
 // dashboard's cached view refreshes when that Cloud's capacity changes.
 type CapacityPolicyView struct {
-	CloudID            string                `json:"cloud_id" forge:"id"`
-	Policy             *infra.CapacityPolicy `json:"policy"`
-	AutomaticExpansion bool                  `json:"automatic_expansion"`
+	CloudID            string          `json:"cloud_id" forge:"id"`
+	Policy             *CapacityPolicy `json:"policy"`
+	AutomaticExpansion bool            `json:"automatic_expansion"`
 }
 
 // ExpansionList is a Cloud's expansions, newest first, without cancelled ones.
@@ -37,7 +37,7 @@ type ApproveExpansionInput struct {
 }
 
 func (e *Extension) policyView(cloudID string, v *infra.CapacityPolicy) CapacityPolicyView {
-	return CapacityPolicyView{CloudID: cloudID, Policy: v, AutomaticExpansion: e.svc.AutomaticExpansion()}
+	return CapacityPolicyView{CloudID: cloudID, Policy: publicPolicy(v), AutomaticExpansion: e.svc.AutomaticExpansion()}
 }
 
 func (e *Extension) capacityPolicy(c forge.Context) error {
@@ -54,11 +54,15 @@ func (e *Extension) saveCapacityPolicy(c forge.Context) error {
 	if err != nil {
 		return result(c, 0, nil, err)
 	}
-	var in infra.CapacityPolicyInput
+	var in CapacityPolicyInput
 	if err = c.BindJSON(&in); err != nil {
 		return result(c, 0, nil, infra.ErrInvalid)
 	}
-	v, err := e.svc.SaveCapacityPolicy(c.Request().Context(), p, c.Param("cloudId"), in)
+	policy, err := privatePolicy(in.Policy)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.SaveCapacityPolicy(c.Request().Context(), p, c.Param("cloudId"), infra.CapacityPolicyInput{ExpectedRevision: in.ExpectedRevision, Policy: policy})
 	return result(c, http.StatusOK, e.policyView(c.Param("cloudId"), v), err)
 }
 
@@ -69,12 +73,19 @@ func (e *Extension) createScalingPool(c forge.Context) error {
 	if err != nil {
 		return result(c, 0, nil, err)
 	}
-	var in infra.ScalingPoolInput
+	var in ScalingPoolInput
 	if err = c.BindJSON(&in); err != nil {
 		return result(c, 0, nil, infra.ErrInvalid)
 	}
-	v, err := e.svc.CreateScalingPool(c.Request().Context(), p, c.Param("cloudId"), in)
-	return result(c, http.StatusOK, v, err)
+	policy, err := privatePolicy(in.Policy)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.CreateScalingPool(c.Request().Context(), p, c.Param("cloudId"), infra.ScalingPoolInput{Name: in.Name, AcceleratorKind: in.AcceleratorKind, ExpectedRevision: in.ExpectedRevision, Policy: policy, Template: in.Template})
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	return result(c, http.StatusOK, ScalingPool{Pool: v.Pool, Policy: publicPolicy(v.Policy)}, nil)
 }
 
 func (e *Extension) capacityUsage(c forge.Context) error {

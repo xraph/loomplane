@@ -40,7 +40,7 @@ func (s *PgStore) GetRuntimeAccess(ctx context.Context, org, attachment string) 
 		return nil, err
 	}
 	var out RuntimeAccessRecord
-	if err = json.Unmarshal(raw, &out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -93,8 +93,8 @@ func (s *PgStore) PublishRuntimeAccess(ctx context.Context, o *ClusterOperation)
 	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
 		return protocolErr
 	}
-	if err = lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); err != nil {
-		return err
+	if lockErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); lockErr != nil {
+		return lockErr
 	}
 	saved, err := clusterOperationTx(ctx, tx, o.OrgID, o.CloudID, o.ID)
 	if err != nil {
@@ -103,10 +103,10 @@ func (s *PgStore) PublishRuntimeAccess(ctx context.Context, o *ClusterOperation)
 	if saved.Revision != o.Revision || saved.FencingEpoch != o.FencingEpoch || saved.LeaseOwner != o.LeaseOwner || saved.LeaseExpiresAt == nil || !saved.LeaseExpiresAt.After(time.Now()) || saved.CancelRequested {
 		return ErrConflict
 	}
-	if err = clusterPinsTx(ctx, tx, o); err != nil {
+	if err := clusterPinsTx(ctx, tx, o); err != nil {
 		return err
 	}
-	if err = runtimeAccessPinsTx(ctx, tx, o); err != nil {
+	if err := runtimeAccessPinsTx(ctx, tx, o); err != nil {
 		return err
 	}
 	prior := o.Revision
@@ -116,10 +116,10 @@ func (s *PgStore) PublishRuntimeAccess(ctx context.Context, o *ClusterOperation)
 	o.UpdatedAt = time.Now().UTC()
 	o.Steps[0].State = "completed"
 	o.Steps[0].CompletedAt = &o.UpdatedAt
-	if err = checkpointClusterTx(ctx, tx, o, prior); err != nil {
+	if err := checkpointClusterTx(ctx, tx, o, prior); err != nil {
 		return err
 	}
-	if err = insertRuntimeAccessTx(ctx, tx, o, *o.Input.RuntimeAccess, o.RuntimeAccess.Receipt); err != nil {
+	if err := insertRuntimeAccessTx(ctx, tx, o, *o.Input.RuntimeAccess, o.RuntimeAccess.Receipt); err != nil {
 		return err
 	}
 	return tx.Commit()

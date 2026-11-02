@@ -147,3 +147,27 @@ it("backs up the Postgres a Fabriq provisions as TimescaleDB on a server", () =>
     ).live
   ).toBe(true)
 })
+
+it("offers native component recovery only on Docker and retains legacy protection", () => {
+  for (const kind of ["falkordb", "elasticsearch", "opensearch", "duckdb"]) {
+    const binding = {
+      subject: "resource",
+      name: "database",
+      environmentId: "production",
+      provider: "server",
+      config: { kind, component: { kind, protection: "native" } },
+    } as unknown as Binding
+    expect(protectionOf(binding)?.protection).toBe("native")
+    expect(recoverySelection([binding], [], [], "production", "").live).toBe(
+      true
+    )
+    expect(protectionOf({ ...binding, provider: "kubernetes" })?.label).toMatch(
+      /Kubernetes/
+    )
+    const legacy = {
+      ...binding,
+      config: { kind, component: { kind, protection: "rebuildable" } },
+    } as unknown as Binding
+    expect(protectionOf(legacy)?.protection).toBe("rebuildable")
+  }
+})

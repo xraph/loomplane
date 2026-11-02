@@ -17,7 +17,7 @@ import {
 import type { GitHubInstallation } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
-import { ConnectDialog, statusLabels } from "@/components/cloud-connections"
+import { statusLabels } from "@/components/cloud-connections"
 import { IntegrationCatalog } from "@/components/integration-catalog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import { Page, PageHeading } from "@/components/page"
@@ -56,7 +56,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { cloudHealth, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
-import { Link } from "@/lib/router"
+import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 export type IntegrationsTab = "catalog" | "connected"
@@ -68,8 +68,10 @@ export function Integrations({
   tab?: IntegrationsTab
   onTab?: (tab: IntegrationsTab) => void
 } = {}) {
-  const [connecting, setConnecting] = useState(false)
-  const [connectCloud, setConnectCloud] = useState<string | undefined>()
+  const navigate = useNavigate()
+  // Each integration connects on a page of its own.
+  const connect = (cloud: string) =>
+    void navigate({ to: "/integrations/connect/$cloud", params: { cloud } })
   const [shown, setShown] = useState<IntegrationsTab>(tab)
   const current = onTab ? tab : shown
   const go = (t: IntegrationsTab) => (onTab ? onTab(t) : setShown(t))
@@ -112,10 +114,7 @@ export function Integrations({
           </TabsList>
           <TabsContent value="catalog">
             <IntegrationCatalog
-              onConnect={(cloud) => {
-                setConnectCloud(cloud)
-                setConnecting(true)
-              }}
+              onConnect={connect}
               onManage={() => go("connected")}
             />
           </TabsContent>
@@ -123,24 +122,11 @@ export function Integrations({
             <ConnectedStats />
             <div className="grid items-start gap-3 lg:grid-cols-2">
               <GitHubPanel onStart={setStarting} />
-              <CloudsPanel
-                onConnect={(cloud) => {
-                  setConnectCloud(cloud)
-                  setConnecting(true)
-                }}
-              />
+              <CloudsPanel onConnect={connect} />
             </div>
           </TabsContent>
         </Tabs>
       </Page>
-      <ConnectDialog
-        open={connecting}
-        onOpenChange={(open) => {
-          setConnecting(open)
-          if (!open) setConnectCloud(undefined)
-        }}
-        cloud={connectCloud}
-      />
       <NewProjectDialog
         open={starting !== null}
         repository={starting ?? undefined}

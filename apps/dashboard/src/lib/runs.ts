@@ -269,7 +269,21 @@ function phaseOf(
 }
 
 /** toRun joins a plan with its deployment, if it has one. */
+export function normalizePlan(plan: Plan): Plan {
+  return {
+    ...plan,
+    leftovers: plan.leftovers ?? [],
+    artifacts: plan.artifacts ?? [],
+    actions: plan.actions ?? [],
+    sources: plan.sources ?? [],
+    problems: plan.problems ?? [],
+    warnings: plan.warnings ?? [],
+    connections: plan.connections ?? {},
+  }
+}
+
 export function toRun(plan: Plan, d?: Deployment, project?: Project): Run {
+  plan = normalizePlan(plan)
   const status = statusOf(plan, d)
   const steps = thread(plan, d)
   return {

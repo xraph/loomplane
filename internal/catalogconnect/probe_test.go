@@ -244,7 +244,7 @@ func TestCheckerUsesTheGivenDialer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"db.example:5432 isn't reachable from the target: connect: connection refused"}
+	want := []string{"db.example:5432 isn't reachable through this connection check: connect: connection refused"}
 	if !slices.Equal(got.Problems, want) || got.Version != "" {
 		t.Fatalf("report: %+v", got)
 	}
@@ -543,7 +543,7 @@ func TestCheckDSNNeverStores(t *testing.T) {
 		return nil, errors.New("dial " + address + " for postgres://app:hunter2-Secret@db.example: connection refused")
 	}
 	got, err := checker.CheckDSN(t.Context(), dsn, recipes.Requirement{Engine: "postgres", MinVersion: "16"}, dial)
-	if err != nil || len(got.Problems) != 1 || !strings.HasPrefix(got.Problems[0], "db.example:5432 isn't reachable from the target") || leaks(got) {
+	if err != nil || len(got.Problems) != 1 || !strings.HasPrefix(got.Problems[0], "db.example:5432 isn't reachable through this connection check") || leaks(got) {
 		t.Fatalf("unreachable: %+v %v", got, err)
 	}
 	if len(dialed) == 0 || dialed[0] != "tcp db.example:5432" {
@@ -607,7 +607,7 @@ func TestReportResult(t *testing.T) {
 	}{
 		{Report{Version: "16.4"}, CheckResult{OK: true, Version: "16.4"}},
 		{Report{Version: "16.4", Missing: []string{"vector"}}, CheckResult{Version: "16.4", Missing: []string{"vector"}}},
-		{Report{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}, CheckResult{Problems: []string{"db.example:5432 isn't reachable from the target: i/o timeout"}}},
+		{Report{Problems: []string{"db.example:5432 isn't reachable through this connection check: i/o timeout"}}, CheckResult{Problems: []string{"db.example:5432 isn't reachable through this connection check: i/o timeout"}}},
 		// A check that found nothing at all didn't reach a usable endpoint.
 		{Report{}, CheckResult{Problems: []string{"the endpoint didn't say which version it runs"}}},
 	} {

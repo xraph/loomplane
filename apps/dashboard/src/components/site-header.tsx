@@ -29,6 +29,8 @@ import { useNow, useRuns } from "@/lib/use-runs"
 
 export type Crumb = {
   label: string
+  /** A link the fixed routes below can't name, such as a Cloud's own page. */
+  link?: React.ReactElement
   to?:
     | "/"
     | "/projects"
@@ -56,7 +58,7 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
         ...(org ? [{ label: org.name, link: <Link to="/" /> }] : []),
         ...crumbs.map((c) => ({
           label: c.label,
-          link: c.to ? <Link to={c.to} /> : undefined,
+          link: c.link ?? (c.to ? <Link to={c.to} /> : undefined),
         })),
       ]}
       before={<InFlight />}

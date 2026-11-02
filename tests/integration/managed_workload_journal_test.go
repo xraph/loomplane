@@ -58,10 +58,9 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 				t.Fatal(err)
 			}
 			saveManagedDemandPlan(t, f, plan, result)
-			err = svc.ResolveCapacityIntents(ctx, "org", plan.ID)
-			var blocked *cloudinfra.CapacityAdmissionError
-			if !errors.As(err, &blocked) || blocked.Block.Reason != "managed_workload_execution_unqualified" {
-				t.Fatalf("activation gate changed: %v", err)
+			svc.BindManagedRuntime(ledgerRuntimeFixture{})
+			if err = svc.ResolveCapacityIntents(ctx, "org", plan.ID); err != nil {
+				t.Fatal(err)
 			}
 			if _, err = f.sql.Exec(ctx, `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,environment,plan_id,commit_sha,status,started_by,started_at) VALUES('journal-deployment','org','proj','env','production',$1,'reviewed','running','usr',now())`, plan.ID); err != nil {
 				t.Fatal(err)
@@ -79,7 +78,7 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 			iid := id.New(id.PrefixInstance)
 			scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: iid.String(), RuntimeRef: "org/env/api/runtime_journal", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: namespace, NamespaceUID: string(ns.UID), ClusterCA: ca, Epoch: attempt.Generation}
 			scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-			journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
+			journal := kube.NewControllerStore(f.db).WithClusterCapacity(true).WithManagedDemandGuard(managedFixtureDemandGuard(f.db))
 			if err = journal.OpenManagedScope(ctx, scope); err != nil {
 				t.Fatal(err)
 			}

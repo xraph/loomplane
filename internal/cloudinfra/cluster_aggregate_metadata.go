@@ -1,6 +1,9 @@
 package cloudinfra
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // Aggregate versions describe mutable persistence bodies. Approved reviews and
 // workload inputs retain their original JSON and economic fingerprints.
@@ -11,7 +14,7 @@ func (e *ClusterCapacityEnvelope) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	if value.SchemaVersion != 1 {
-		return ErrConflict
+		return errors.Join(ErrConflict, ErrClusterAggregateUnsupported)
 	}
 	*e = ClusterCapacityEnvelope(value)
 	return nil
@@ -24,7 +27,7 @@ func (h *ClusterWorkloadHold) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	if value.SchemaVersion != 1 || value.Revision < 1 || value.UpdatedAt.IsZero() {
-		return ErrConflict
+		return errors.Join(ErrConflict, ErrClusterAggregateUnsupported)
 	}
 	*h = ClusterWorkloadHold(value)
 	return nil

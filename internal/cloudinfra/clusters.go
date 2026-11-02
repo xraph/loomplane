@@ -43,6 +43,9 @@ func (s *Service) clusterEnabled() error {
 }
 func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (provider.ClusterReader, provider.AccountAccess, error) {
 	var access provider.AccountAccess
+	if in.Kind == InstanceNamespaceKind || in.Attachment != nil && (in.Attachment.Instance != nil || in.Attachment.InstancePolicy != nil) {
+		return nil, access, security.ErrForbidden
+	}
 	if p.ReadOnly {
 		return nil, access, security.ErrForbidden
 	}
@@ -222,8 +225,8 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		if in.RuntimeAccess == nil || in.RuntimeAccess.AttachmentID == "" || *in.RuntimeAccess != (provider.RuntimeAccessInput{AttachmentID: in.RuntimeAccess.AttachmentID, Profile: in.RuntimeAccess.Profile}) {
 			return nil, ErrInvalid
 		}
-		if err = s.prepareRuntimeAccess(ctx, p, cloud, &in, reader, access); err != nil {
-			return nil, err
+		if prepareErr := s.prepareRuntimeAccess(ctx, p, cloud, &in, reader, access); prepareErr != nil {
+			return nil, prepareErr
 		}
 	case "retire-cluster", "detach-runtime":
 		if in.Retirement == nil || in.Retirement.ReviewDigest == "" || in.Attachment != nil || in.Maintenance != nil || !reflect.DeepEqual(in.Spec, provider.ClusterSpec{}) {
@@ -441,7 +444,7 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 		}
 	} else if o.Kind == RuntimeAccessUpgrade {
 		reviewed := *o.Input.RuntimeAccess
-		if err = s.prepareRuntimeAccess(ctx, p, cloud, &o.Input, reader, access); err != nil {
+		if err := s.prepareRuntimeAccess(ctx, p, cloud, &o.Input, reader, access); err != nil {
 			return nil, err
 		}
 		if reviewed != *o.Input.RuntimeAccess {
@@ -514,6 +517,9 @@ func (s *Service) controlCluster(ctx context.Context, p security.Principal, clou
 	o, err := s.Clusters.GetClusterOperation(ctx, p.OrgID, cloud, id)
 	if err != nil {
 		return nil, err
+	}
+	if o.Kind == InstanceNamespaceKind {
+		return nil, security.ErrForbidden
 	}
 	if _, _, err = s.clusterAuthority(ctx, p, cloud, o.Input); err != nil {
 		return nil, err

@@ -17,6 +17,11 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 	if !ok {
 		return nil, fmt.Errorf("%s is not a composed catalog kind", kind)
 	}
+	return resolveKind(k, version, architecture, target)
+}
+
+func resolveKind(k Kind, version, architecture, target string) (*Composition, error) {
+	kind := k.Name
 	if !slices.Contains(k.Targets, target) {
 		return nil, fmt.Errorf("%s doesn't run on %s targets", kind, target)
 	}
@@ -193,4 +198,10 @@ func (w WeightCache) SizeMB(settings map[string]string) int {
 		return w.KubernetesSizeMB
 	}
 	return max(w.KubernetesSizeMB, mb)
+}
+
+// DirectService reports whether the kind runs as one directly bound process.
+// Legacy dependency-only kinds retain their existing binding identity.
+func (k Kind) DirectService() bool {
+	return k.Placement == PlacementDependency || (k.Service != nil && len(serviceFindings(k)) == 0)
 }

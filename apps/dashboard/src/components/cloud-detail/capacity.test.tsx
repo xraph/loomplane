@@ -289,19 +289,33 @@ function show(pools: Pool[] = [pool("pool_l4", "l4", "nvidia-l4")]) {
 const usageRegion = () =>
   screen.findByRole("region", { name: "Capacity usage" })
 
+// A usage row's cells, found by the resource it names: Resource, Reserved,
+// Headroom, Provisioned, then any note under it.
+async function usageRow(label: string) {
+  const region = await usageRegion()
+  const row = await waitFor(() => {
+    const found = within(region)
+      .getAllByRole("row")
+      .find((r) => r.querySelector('[role="cell"]')?.textContent === label)
+    if (!found) throw new Error(`no usage row ${label}`)
+    return found
+  })
+  return { row, cells: within(row).getAllByRole("cell") }
+}
+
 it("counts pending inside reserved and leads with what the limit counts", async () => {
   stub()
   show()
-  const region = await usageRegion()
-  await waitFor(() =>
-    expect(region).toHaveTextContent(
-      "2 used of 2 (1 reserved, 0 starting)Headroom: 0"
-    )
-  )
-  expect(region).toHaveTextContent(
-    "6 vCPU used of 8 vCPU (4 vCPU reserved, 2 vCPU starting)"
-  )
-  expect(region).toHaveTextContent("Storage50 GB used of 100 GB")
+  const servers = await usageRow("Servers")
+  await waitFor(() => expect(servers.cells[1]).toHaveTextContent("2 used of 2"))
+  expect(servers.cells[1]).toHaveTextContent("1 reserved, 0 starting")
+  expect(servers.cells[2]).toHaveTextContent(/^0$/)
+  expect(servers.cells[3]).toHaveTextContent(/^1$/)
+  const cpu = await usageRow("CPU")
+  expect(cpu.cells[1]).toHaveTextContent("6 vCPU used of 8 vCPU")
+  expect(cpu.cells[1]).toHaveTextContent("4 vCPU reserved, 2 vCPU starting")
+  const storage = await usageRow("Storage")
+  expect(storage.cells[1]).toHaveTextContent("50 GB used of 100 GB")
 })
 
 it("treats a saved ceiling of 0 as a real limit", async () => {
@@ -309,17 +323,19 @@ it("treats a saved ceiling of 0 as a real limit", async () => {
     views: [view({ ...policy, limits: { ...policy.limits, servers: 0 } })],
   })
   show()
-  const region = await usageRegion()
-  await waitFor(() => expect(region).toHaveTextContent("used of 0 ("))
-  expect(region).toHaveTextContent("Can't grow: set a ceiling above zero.")
+  const servers = await usageRow("Servers")
+  await waitFor(() => expect(servers.cells[1]).toHaveTextContent("used of 0"))
+  expect(servers.row).toHaveTextContent("Can't grow: set a ceiling above zero.")
 })
 
 it("reads no ceiling only for a policy never saved", async () => {
   stub({ views: [view({ ...policy, revision: 0, enabled: false })] })
   show()
-  const region = await usageRegion()
-  await waitFor(() => expect(region).toHaveTextContent("used of no ceiling"))
-  expect(region).not.toHaveTextContent("Headroom")
+  const servers = await usageRow("Servers")
+  await waitFor(() =>
+    expect(servers.cells[1]).toHaveTextContent("used of no ceiling")
+  )
+  expect(servers.cells[2]).toHaveTextContent("No ceiling")
 })
 
 it("reads unknown usage as unknown, never 0", async () => {
@@ -338,12 +354,14 @@ it("reads unknown usage as unknown, never 0", async () => {
     }),
   })
   show()
-  const region = await usageRegion()
+  const servers = await usageRow("Servers")
   await waitFor(() =>
-    expect(region).toHaveTextContent("unknown used of 2 (1 reserved")
+    expect(servers.cells[1]).toHaveTextContent("unknown used of 2")
   )
-  expect(region).toHaveTextContent("NVIDIA L4: unknown used of no ceiling")
-  expect(region).toHaveTextContent(
+  expect(servers.cells[1]).toHaveTextContent("1 reserved")
+  const gpus = await usageRow("NVIDIA L4 GPUs")
+  expect(gpus.cells[1]).toHaveTextContent("unknown used of no ceiling")
+  expect(gpus.row).toHaveTextContent(
     "Can't grow: set a GPU ceiling for this kind."
   )
 })
@@ -371,7 +389,7 @@ it("shows GPU kind, count and monthly cost on an approval", async () => {
   show()
   const region = await waitingRegion()
   await waitFor(() => expect(region).toHaveTextContent("1× NVIDIA L4"))
-  expect(region).toHaveTextContent("about $621 a month")
+  expect(region).toHaveTextContent("$0.85/hr · about $621/mo")
   expect(within(region).getByRole("button", { name: "Approve" })).toBeEnabled()
 })
 
@@ -383,7 +401,7 @@ it("never prices an unknown expansion at $0", async () => {
   })
   show()
   const region = await waitingRegion()
-  await waitFor(() => expect(region).toHaveTextContent("price unknown"))
+  await waitFor(() => expect(region).toHaveTextContent("Price unknown"))
   expect(region).not.toHaveTextContent("$0")
 })
 
@@ -698,7 +716,7 @@ it("creates an empty GPU pool and its rule in one request", async () => {
     </ClientProvider>
   )
   await user.click(
-    await screen.findByRole("button", { name: "New scaling pool" })
+    (await screen.findAllByRole("button", { name: "Add pool" }))[0]!
   )
   const dialog = await screen.findByRole("dialog")
   await user.type(
@@ -716,7 +734,7 @@ it("creates an empty GPU pool and its rule in one request", async () => {
   await user.click(within(dialog).getByRole("combobox", { name: "Image" }))
   await user.click(await screen.findByRole("option", { name: "GPU base" }))
   await user.click(within(dialog).getByRole("checkbox", { name: /gpu-l4x1/ }))
-  await user.click(within(dialog).getByRole("button", { name: "Create pool" }))
+  await user.click(within(dialog).getByRole("button", { name: "Add pool" }))
   await waitFor(() => expect(onPools).toHaveBeenCalled())
   expect(
     calls.find((c) => c.path.endsWith("/scaling-pools"))?.body
@@ -739,7 +757,7 @@ it("asks for a GPU ceiling of the new pool's kind, apart from the Cloud limits",
   stub()
   show([])
   await user.click(
-    await screen.findByRole("button", { name: "New scaling pool" })
+    (await screen.findAllByRole("button", { name: "Add pool" }))[0]!
   )
   const dialog = await screen.findByRole("dialog")
   await user.click(within(dialog).getByRole("combobox", { name: "GPU kind" }))
@@ -751,7 +769,7 @@ it("asks for a GPU ceiling of the new pool's kind, apart from the Cloud limits",
   )
   expect(dialog).not.toHaveTextContent("needs saved limits above zero")
   expect(
-    within(dialog).getByRole("button", { name: "Create pool" })
+    within(dialog).getByRole("button", { name: "Add pool" })
   ).toBeDisabled()
 })
 
@@ -760,14 +778,14 @@ it("says the new pool stays empty while automatic expansion is off", async () =>
   stub({ views: [view(policy, false)] })
   show([])
   await user.click(
-    await screen.findByRole("button", { name: "New scaling pool" })
+    (await screen.findAllByRole("button", { name: "Add pool" }))[0]!
   )
   expect(await screen.findByRole("dialog")).toHaveTextContent(
     "this pool stays empty until you add a server to it"
   )
 })
 
-it("says creating a scaling pool also turns on the grow switch", async () => {
+it("says adding a scaling pool also turns on the grow switch", async () => {
   const user = userEvent.setup()
   stub({ views: [view({ ...policy, enabled: false })] })
   show([])
@@ -775,9 +793,12 @@ it("says creating a scaling pool also turns on the grow switch", async () => {
   expect(
     await screen.findByRole("switch", { name: "Let pools on this Cloud grow" })
   ).not.toBeChecked()
-  await user.click(screen.getByRole("button", { name: "New scaling pool" }))
+  // The head and the empty state offer the same action.
+  const add = screen.getAllByRole("button", { name: "Add pool" })
+  expect(add).toHaveLength(2)
+  await user.click(add[0]!)
   expect(await screen.findByRole("dialog")).toHaveTextContent(
-    "Creating it also turns on Let pools on this Cloud grow."
+    "Adding it also turns on Let pools on this Cloud grow."
   )
 })
 

@@ -1,0 +1,22 @@
+version: 1
+resources:
+  db:
+    kind: cloudflare-d1
+    provider: cloudflare-workers
+  assets:
+    kind: object-storage
+    provider: cloudflare-workers
+    settings:
+      jurisdiction: default
+services:
+  app:
+    source: .
+    kind: http-service
+    provider: cloudflare-workers
+    worker:
+      main: worker.js
+      compatibility_date: "2026-11-01"
+      durable_objects:
+        - name: COUNTER
+          class_name: Counter
+    needs: [db, assets]

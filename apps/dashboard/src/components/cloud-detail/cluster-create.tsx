@@ -15,6 +15,7 @@ import {
   SetupReads,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { CloudSelect } from "@/components/cloud-targets/cloud-select"
+import { hourlyCost } from "@/components/cloud-targets/cloud-page"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -30,6 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog"
 
 export function ClusterChoice({
@@ -62,6 +64,17 @@ export function ClusterChoice({
 }
 const choices = (values: string[]) =>
   values.map((value) => ({ value, label: value }))
+
+const setupModes: Record<string, string> = {
+  create: "Create managed cluster",
+  "adopt-external": "Connect external cluster",
+  "adopt-managed": "Connect existing managed cluster",
+}
+
+/**
+ * ClusterCreate saves a review that creates a cluster in a connected
+ * account, or connects one that already runs there.
+ */
 export function ClusterCreate({
   cloud,
   onClose,
@@ -94,10 +107,10 @@ export function ClusterCreate({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Set up Kubernetes cluster</DialogTitle>
+          <DialogTitle>Create or connect a Kubernetes cluster</DialogTitle>
           <DialogDescription>
-            Review account, fixed node capacity and runtime access before
-            applying.
+            Choose the account, the nodes and the namespace Loomplane runs in.
+            You review the cost and access before anything is applied.
           </DialogDescription>
         </DialogHeader>
         <SetupReads
@@ -358,14 +371,10 @@ function ClusterSetup({
               label="Setup mode"
               value={kind}
               onChange={setKind}
-              items={[
-                { value: "create", label: "Create managed cluster" },
-                { value: "adopt-external", label: "Adopt external cluster" },
-                {
-                  value: "adopt-managed",
-                  label: "Adopt existing managed cluster",
-                },
-              ]}
+              items={Object.entries(setupModes).map(([value, label]) => ({
+                value,
+                label,
+              }))}
             />
             {create ? (
               <ClusterChoice
@@ -444,7 +453,7 @@ function ClusterSetup({
               </Field>
               <p className="text-xs text-muted-foreground">
                 {node
-                  ? `${node.cpus} CPUs, ${node.memoryMib} MiB RAM, ${node.diskGb} GB disk per node.`
+                  ? `${node.cpus} vCPU, ${Number((node.memoryMib / 1024).toFixed(1))} GiB memory, ${node.diskGb} GB disk per node.`
                   : "Choose a size for live capacity facts."}{" "}
                 Native autoscaling is unavailable in this release.
               </p>
@@ -527,7 +536,7 @@ function ClusterSetup({
             <p>
               {create ? name : selected?.name} ·{" "}
               {create ? region : selected?.ref.region} ·{" "}
-              {create ? `${count} fixed ${size} nodes` : kind}
+              {create ? `${count} fixed ${size} nodes` : setupModes[kind]}
             </p>
             <p>
               Account {connection.name}. Kubernetes{" "}
@@ -550,7 +559,7 @@ function ClusterSetup({
             <p>
               Nodes:{" "}
               {create && node?.hourlyUsd != null
-                ? `$${(node.hourlyUsd * count).toFixed(4)} / hour`
+                ? hourlyCost(node.hourlyUsd * count)
                 : "Price unknown"}
               . Additional provider charges are not estimated. Quota is checked
               during apply; unknown quota is not zero.
@@ -573,9 +582,8 @@ function ClusterSetup({
             </label>
           </div>
         )}
-        <div className="flex flex-wrap justify-between gap-2">
+        <DialogFooter className="sm:justify-between">
           <Button
-            size="sm"
             variant="outline"
             disabled={stage === 0 || busy}
             onClick={() => setStage(stage - 1)}
@@ -583,23 +591,18 @@ function ClusterSetup({
             Back
           </Button>
           {stage < 3 ? (
-            <Button
-              size="sm"
-              disabled={!valid}
-              onClick={() => setStage(stage + 1)}
-            >
+            <Button disabled={!valid} onClick={() => setStage(stage + 1)}>
               Continue
             </Button>
           ) : (
             <Button
-              size="sm"
               disabled={!valid || busy || stale}
               onClick={() => void submit()}
             >
               Save review
             </Button>
           )}
-        </div>
+        </DialogFooter>
       </SetupReads>
     </div>
   )

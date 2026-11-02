@@ -37,7 +37,7 @@ func endpointFingerprint(endpoint string) string {
 }
 func enrollmentRequest(o *ClusterOperation) kubernetes.EnrollmentRequest {
 	in := o.Input.Attachment
-	return kubernetes.EnrollmentRequest{RuntimeAccess: in.RuntimeAccess, OperationID: o.ID, RequestDigest: o.Digest, AttachmentID: o.Enrollment.AttachmentID, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: in.NamespaceUID, ServiceAccountName: in.ServiceAccountName, AdoptNamespace: in.AdoptNamespace, RequireIngress: in.Prerequisites.RequireIngress || in.Prerequisites.RequireTLS, RequireTLS: in.Prerequisites.RequireTLS}
+	return kubernetes.EnrollmentRequest{InstancePolicy: in.InstancePolicy, RuntimeAccess: in.RuntimeAccess, OperationID: o.ID, RequestDigest: o.Digest, AttachmentID: o.Enrollment.AttachmentID, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: in.NamespaceUID, ServiceAccountName: in.ServiceAccountName, AdoptNamespace: in.AdoptNamespace, RequireIngress: in.Prerequisites.RequireIngress || in.Prerequisites.RequireTLS, RequireTLS: in.Prerequisites.RequireTLS}
 }
 func (s *Service) enrollmentAuthority(ctx context.Context, o *ClusterOperation) (provider.ClusterReader, provider.AccountAccess, error) {
 	if checkErr := s.clusterEnabled(); checkErr != nil {
@@ -62,6 +62,9 @@ func (s *Service) enrollmentAuthority(ctx context.Context, o *ClusterOperation) 
 			return nil, provider.AccountAccess{}, ErrConflict
 		}
 	}
+	if o.Kind == InstanceNamespaceKind {
+		return s.instanceNamespaceAuthority(ctx, o)
+	}
 	return s.clusterAuthority(ctx, o.Principal, o.CloudID, o.Input)
 }
 
@@ -83,6 +86,9 @@ func (s *Service) enrollmentCheckpoint(ctx context.Context, o *ClusterOperation)
 	}
 	if o.LeaseExpiresAt == nil || !o.LeaseExpiresAt.After(s.now().Add(15*time.Second)) {
 		return ErrConflict
+	}
+	if o.Kind == InstanceNamespaceKind {
+		return s.saveInstanceNamespaceCheckpoint(ctx, o)
 	}
 	return s.saveCluster(ctx, o)
 }
@@ -261,11 +267,18 @@ func (s *Service) enrollClusterOperation(ctx context.Context, o *ClusterOperatio
 	result.Details["managed_attachment_id"] = a.ID
 	result.Details["managed_project_id"] = a.ProjectID
 	result.Details["managed_resource_id"] = a.ClusterID
+	if in.Instance != nil {
+		result.Details["managed_instance_id"] = in.Instance.InstanceID
+		result.Details["managed_environment_id"] = in.Instance.EnvironmentID
+	}
 	c := &connections.Connection{ID: a.RuntimeConnectionID, OrgID: o.OrgID, Cloud: connections.Kubernetes, Name: "Managed " + a.ID, Method: connections.MethodManagedKubernetes, Generation: a.TrustRevision, Account: cfg.Context + "/" + in.Namespace, Details: result.Details, Status: connections.StatusReady, Missing: []string{}, CheckedAt: &now, CreatedBy: o.Principal.UserID, CreatedAt: now, UpdatedAt: now}
 	o.Steps[1].State = "completed"
 	o.Steps[1].CompletedAt = &now
 	o.Status = "succeeded"
 	o.Error = ""
+	if o.Kind == InstanceNamespaceKind {
+		return s.publishInstanceNamespace(ctx, o, a, c)
+	}
 	return store.PublishClusterEnrollment(ctx, o, a, c)
 }
 func (s *Service) enrollmentToken(ctx context.Context, o *ClusterOperation, client *kubernetes.Client) ([]byte, time.Time, error) {

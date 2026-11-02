@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -201,6 +202,9 @@ func (s *Service) ResolveApprovedCapacityDemand(ctx context.Context, org, plan, 
 	if err = s.authz.Require(ctx, p, security.DeploymentApprove, saved.Intent.Demand.ProjectID); err != nil {
 		return nil, capacityReview(saved.Intent.Demand)
 	}
+	if checkErr := cloudprofiles.NewPgStore(st.db).ValidateLocationReview(ctx, org, saved.Intent.Demand.ProjectID, saved.Intent.Demand.LocationReview, s.now()); checkErr != nil {
+		return nil, checkErr
+	}
 	return &saved.Intent.Demand, nil
 }
 
@@ -226,7 +230,19 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 		var checkErr error
 		switch {
 		case a.Service.ClusterDemand != nil:
-			checkErr = s.resolveClusterWorkload(ctx, st, plan, a)
+			var resolver cloudinfra.ClusterDemandResolver = s
+			if authority, ok := s.capacity.(cloudinfra.ClusterDemandResolver); ok {
+				resolver = authority
+			}
+			d := a.Service.ClusterDemand.Input
+			var decision cloudinfra.CapacityDecision
+			decision, checkErr = resolver.ReconcileClusterDemand(ctx, org, d.CloudID, d.ID)
+			if checkErr == nil && decision.Block != nil {
+				checkErr = &cloudinfra.CapacityAdmissionError{Block: *decision.Block}
+			}
+			if checkErr == nil && (decision.ClusterPlacement == nil || decision.ClusterPlacement.DemandID != d.ID || decision.ClusterPlacement.ResourceID != d.ResourceID || decision.ClusterPlacement.TargetID != d.TargetID || decision.ClusterPlacement.Mode != a.Service.ClusterDemand.Mode) {
+				return ErrConflict
+			}
 		case !HasCapacityIntent(a):
 			connection := s.frontendConnection(a, plan.Connections)
 			if a.Op == Delete || a.Op == Keep || connection == "" || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
@@ -331,6 +347,9 @@ func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Acti
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, plan.OrgID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, plan.OrgID, plan.ProjectID, d.LocationReview, time.Now()); checkErr != nil {
+		return checkErr
+	}
 	var cancelled bool
 	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_deployments WHERE org_id=$1 AND plan_id=$2 AND status='cancelled')`, plan.OrgID, plan.ID).Scan(&cancelled); checkErr != nil {
 		return checkErr
@@ -377,7 +396,14 @@ func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Acti
 	if identity == "" || details["architecture"] != d.Architecture {
 		return capacityReview(d)
 	}
-	pin := CloudPlacement{Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, GPUKind: candidate.GPUKind, GPUs: candidate.GPUs, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, AssignmentRevision: intent.AssignmentRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
+	pin := CloudPlacement{LocationReview: d.LocationReview, Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, GPUKind: candidate.GPUKind, GPUs: candidate.GPUs, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, AssignmentRevision: intent.AssignmentRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
+	if d.LocationReview != nil {
+		for _, reviewed := range d.LocationReview.Candidates {
+			if reviewed.TargetID == d.TargetID {
+				pin.LocationID = reviewed.LocationID
+			}
+		}
+	}
 	var portConflict bool
 	if cfgPort := a.Service.Endpoint; a.Service.Public && cfgPort != nil && cfgPort.HostPort > 0 {
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_capacity_reservations r JOIN loomplane_plans p ON p.id=r.plan_id CROSS JOIN LATERAL jsonb_array_elements(p.result->'actions') other WHERE r.org_id=$1 AND r.server_id=$2 AND other->>'name'=r.service AND (r.environment_id<>$3 OR r.service<>$4) AND (other->'service'->'endpoint'->>'host_port')::int=$5)`, plan.OrgID, candidate.ServerID, plan.EnvironmentID, a.Name, cfgPort.HostPort).Scan(&portConflict)

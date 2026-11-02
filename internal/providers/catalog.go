@@ -277,6 +277,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 		},
 		{
 			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
+			Workloads:   &provider.WorkloadCapabilities{Revision: provider.PodGroupCapabilityRevision, PodGroups: true, ScratchVolumes: true},
 			BuildLogs:   "streamed",
 			Description: "Runs service containers in the namespace of the cluster you choose.",
 			Model:       provider.Instance, Scaling: true,
@@ -295,7 +296,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, features, all[i].Cloud)...)
 		}
 	}
-	return all
+	return edgeResourceProviders(all)
 }
 
 // registeredProvisions describes the registered kinds, other than the five

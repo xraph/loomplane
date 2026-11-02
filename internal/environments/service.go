@@ -159,6 +159,9 @@ func (s *Service) CreateProject(ctx context.Context, p security.Principal, proje
 		if err != nil {
 			return nil, err
 		}
+		if env.InstanceID != "" {
+			return nil, projects.ErrFleetManaged
+		}
 		v.environmentID = env.ID
 	}
 	return s.create(ctx, p, v, in.Value)
@@ -192,18 +195,34 @@ func (s *Service) build(p security.Principal, scope, projectID string, in Create
 // first so a secret is never stored for a variable that doesn't exist; if
 // Vault then fails, the row is taken out again.
 func (s *Service) create(ctx context.Context, p security.Principal, v *Variable, value string) (*Variable, error) {
+	var out *Variable
+	err := s.withSourceTransaction(ctx, p.OrgID, func(ctx context.Context) error { var e error; out, e = s.createSource(ctx, v, value); return e })
+	if err != nil {
+		return nil, err
+	}
+	s.record(ctx, "variable.create", p, out)
+	return out, nil
+}
+func (s *Service) createSource(ctx context.Context, v *Variable, value string) (*Variable, error) {
+	if err := s.validateSourceScope(ctx, v); err != nil {
+		return nil, err
+	}
 	if err := s.store.CreateVariable(ctx, v); err != nil {
 		return nil, err
 	}
 	if v.Secret {
-		if err := s.secrets.Put(ctx, v.OrgID, v.ID, []byte(value)); err != nil {
+		if err := s.putSource(ctx, v, []byte(value)); err != nil {
 			if derr := s.store.DeleteVariable(context.WithoutCancel(ctx), v.OrgID, v.ID); derr != nil {
 				err = errors.Join(err, fmt.Errorf("remove the variable again: %w", derr))
 			}
 			return nil, err
 		}
 	}
-	s.record(ctx, "variable.create", p, v)
+	if store, ok := s.store.(sourceTransactions); ok && v.Secret {
+		if err := store.PublishSecretVersion(ctx, v, SecretVersion{Identity: v.secretIdentity, Version: v.secretVersion}); err != nil {
+			return nil, err
+		}
+	}
 	return v, nil
 }
 
@@ -226,82 +245,126 @@ func (s *Service) manage(ctx context.Context, p security.Principal, v *Variable)
 	if v.Scope == ScopeOrganization {
 		return s.authz.Require(ctx, p, security.OrganizationVariableManage, "")
 	}
-	return s.authz.Require(ctx, p, security.VariableManage, v.ProjectID)
+	if err := s.authz.Require(ctx, p, security.VariableManage, v.ProjectID); err != nil {
+		return err
+	}
+	if v.Environment != "" {
+		env, err := s.environment(ctx, p.OrgID, v.ProjectID, v.Environment)
+		if err != nil {
+			return err
+		}
+		if env.InstanceID != "" {
+			return projects.ErrFleetManaged
+		}
+	}
+	return nil
 }
 
 // Update changes a variable's value, and whether it's secret.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateVariableInput) (*Variable, error) {
-	v, err := s.store.GetVariable(ctx, p.OrgID, id)
+	prior, err := s.store.GetVariable(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
 	}
 	// The variable's project, so a team's grant there counts; an
 	// organization variable has none and checks the whole workspace.
-	if aerr := s.authz.Require(ctx, p, security.VariableRead, v.ProjectID); aerr != nil {
+	if aerr := s.authz.Require(ctx, p, security.VariableRead, prior.ProjectID); aerr != nil {
 		return nil, aerr
 	}
-	err = s.manage(ctx, p, v)
+	if manageErr := s.manage(ctx, p, prior); manageErr != nil {
+		return nil, manageErr
+	}
+	if enrollErr := s.enrollBeforeMutation(ctx, p.OrgID, id); enrollErr != nil {
+		return nil, enrollErr
+	}
+	var out *Variable
+	err = s.withSourceTransaction(ctx, p.OrgID, func(ctx context.Context) error { var e error; out, e = s.updateSource(ctx, p, prior, in); return e })
 	if err != nil {
 		return nil, err
+	}
+	if !out.Secret && s.secrets != nil {
+		if e := s.cleanupSource(ctx, p.OrgID, id); e != nil {
+			s.logf("delete a variable's old secret", e)
+		}
+	}
+	s.record(ctx, "variable.update", p, out)
+	return out, nil
+}
+func (s *Service) updateSource(ctx context.Context, p security.Principal, prior *Variable, in UpdateVariableInput) (*Variable, error) {
+	v, err := s.store.GetVariable(ctx, p.OrgID, prior.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !sameSourceScope(prior, v) {
+		return nil, ErrSourceSelection
+	}
+	if scopeErr := s.validateSourceScope(ctx, v); scopeErr != nil {
+		return nil, scopeErr
 	}
 	if len(in.Value) > maxValueLength {
 		return nil, fmt.Errorf("%w: a value can be at most 64 KiB", ErrInvalid)
 	}
-	wasSecret := v.Secret
 	if in.Secret != nil {
 		v.Secret = *in.Secret
 	}
 	if v.Secret {
-		err = s.secrets.Put(ctx, v.OrgID, v.ID, []byte(in.Value))
+		err = s.putSource(ctx, v, []byte(in.Value))
 		if err != nil {
 			return nil, err
 		}
 		v.Value = ""
 	} else {
 		v.Value = in.Value
+		v.secretIdentity, v.secretVersion = "", 0
 	}
 	v.UpdatedBy, v.UpdatedAt = p.UserID, s.now().UTC()
 	err = s.store.UpdateVariable(ctx, v)
 	if err != nil {
 		return nil, err
 	}
-	if wasSecret && !v.Secret {
-		// No longer secret: the stored value is the plain one now.
-		err = s.secrets.Delete(ctx, v.OrgID, v.ID)
-		if err != nil {
-			s.logf("delete a variable's old secret", err)
-		}
-	}
-	s.record(ctx, "variable.update", p, v)
 	return v, nil
 }
 
 // Delete removes a variable, and its secret.
 func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
-	v, err := s.store.GetVariable(ctx, p.OrgID, id)
+	prior, err := s.store.GetVariable(ctx, p.OrgID, id)
 	if err != nil {
 		return err
 	}
-	if aerr := s.authz.Require(ctx, p, security.VariableRead, v.ProjectID); aerr != nil {
+	if aerr := s.authz.Require(ctx, p, security.VariableRead, prior.ProjectID); aerr != nil {
 		return aerr
 	}
-	err = s.manage(ctx, p, v)
+	if manageErr := s.manage(ctx, p, prior); manageErr != nil {
+		return manageErr
+	}
+	var removed *Variable
+	err = s.withSourceTransaction(ctx, p.OrgID, func(ctx context.Context) error { var e error; removed, e = s.deleteSource(ctx, p, prior); return e })
 	if err != nil {
 		return err
 	}
-	err = s.store.DeleteVariable(ctx, p.OrgID, id)
-	if err != nil {
-		return err
-	}
-	if v.Secret {
-		err = s.secrets.Delete(ctx, v.OrgID, v.ID)
-		if err != nil {
-			// Unreachable without its variable; the next sweep removes it.
-			s.logf("delete a variable's secret", err)
+	if removed.Secret {
+		if e := s.cleanupSource(ctx, p.OrgID, id); e != nil {
+			s.logf("delete a variable's secret", e)
 		}
 	}
-	s.record(ctx, "variable.delete", p, v)
+	s.record(ctx, "variable.delete", p, removed)
 	return nil
+}
+func (s *Service) deleteSource(ctx context.Context, p security.Principal, prior *Variable) (*Variable, error) {
+	v, err := s.store.GetVariable(ctx, p.OrgID, prior.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !sameSourceScope(prior, v) {
+		return nil, ErrSourceSelection
+	}
+	if scopeErr := s.validateSourceScope(ctx, v); scopeErr != nil {
+		return nil, scopeErr
+	}
+	if deleteErr := s.store.DeleteVariable(ctx, p.OrgID, v.ID); deleteErr != nil {
+		return nil, deleteErr
+	}
+	return v, nil
 }
 
 // ResolvedVariable is one key as a service sees it in an environment.
@@ -371,6 +434,11 @@ func resolve(candidates []*Variable, service string) []ResolvedVariable {
 // database, which can't reach Vault; this is what does. It implements
 // projects.Cleaner.
 func (s *Service) Sweep(ctx context.Context, orgID string) {
+	if err := s.withSourceTransaction(ctx, orgID, func(ctx context.Context) error { s.sweepSources(ctx, orgID); return nil }); err != nil {
+		s.logf("sweep variable secrets", err)
+	}
+}
+func (s *Service) sweepSources(ctx context.Context, orgID string) {
 	live, err := s.store.SecretIDs(ctx, orgID)
 	if err != nil {
 		s.logf("sweep variable secrets", err)
@@ -408,6 +476,17 @@ func (s *Service) Values(ctx context.Context, orgID, projectID, environment, ser
 	if err != nil {
 		return nil, nil, err
 	}
+	err = s.withSourceTransaction(ctx, orgID, func(ctx context.Context) error {
+		var e error
+		values, secret, e = s.sourceValues(ctx, orgID, projectID, env, service)
+		return e
+	})
+	return values, secret, err
+}
+func (s *Service) sourceValues(ctx context.Context, orgID, projectID string, env *projects.Environment, service string) (values map[string]string, secret map[string]bool, err error) {
+	if scopeErr := s.validateSourceScope(ctx, &Variable{OrgID: orgID, ProjectID: projectID, environmentID: env.ID, Environment: env.Name}); scopeErr != nil {
+		return nil, nil, scopeErr
+	}
 	candidates, err := s.store.ForEnvironment(ctx, orgID, projectID, env.ID, env.Name)
 	if err != nil {
 		return nil, nil, err
@@ -419,7 +498,12 @@ func (s *Service) Values(ctx context.Context, orgID, projectID, environment, ser
 			values[r.Key] = v.Value
 			continue
 		}
-		value, err := s.secrets.Reveal(ctx, orgID, v.ID)
+		if _, ok := s.store.(sourceTransactions); ok {
+			if e := s.enrollSource(ctx, &v); e != nil {
+				return nil, nil, e
+			}
+		}
+		value, err := s.revealSource(ctx, &v)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reveal %s: %w", r.Key, err)
 		}

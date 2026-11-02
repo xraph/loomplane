@@ -3,6 +3,8 @@ package cloudinfra
 import (
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
+
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -69,20 +71,21 @@ type CapacityPolicyInput struct {
 }
 
 type CapacityDemand struct {
-	OrgID          string         `json:"org_id"`
-	CloudID        string         `json:"cloud_id"`
-	PoolID         string         `json:"pool_id"`
-	TargetID       string         `json:"target_id"`
-	ProjectID      string         `json:"project_id"`
-	EnvironmentID  string         `json:"environment_id"`
-	PlanID         string         `json:"plan_id"`
-	Service        string         `json:"service"`
-	Architecture   string         `json:"architecture"`
-	StickyServerID string         `json:"sticky_server_id"`
-	Resources      ResourceVector `json:"resources"`
-	LocalData      bool           `json:"local_data"`
-	PolicyRevision int64          `json:"policy_revision"`
-	IntentHash     string         `json:"intent_hash"`
+	LocationReview *cloudprofiles.LocationReview `json:"location_review,omitempty"`
+	OrgID          string                        `json:"org_id"`
+	CloudID        string                        `json:"cloud_id"`
+	PoolID         string                        `json:"pool_id"`
+	TargetID       string                        `json:"target_id"`
+	ProjectID      string                        `json:"project_id"`
+	EnvironmentID  string                        `json:"environment_id"`
+	PlanID         string                        `json:"plan_id"`
+	Service        string                        `json:"service"`
+	Architecture   string                        `json:"architecture"`
+	StickyServerID string                        `json:"sticky_server_id"`
+	Resources      ResourceVector                `json:"resources"`
+	LocalData      bool                          `json:"local_data"`
+	PolicyRevision int64                         `json:"policy_revision"`
+	IntentHash     string                        `json:"intent_hash"`
 }
 
 type CapacityBlock struct {
@@ -99,9 +102,12 @@ type CapacityBlock struct {
 }
 
 type CapacityDecision struct {
-	Placement   *Placement     `json:"placement,omitempty"`
-	ExpansionID string         `json:"expansion_id,omitempty"`
-	Block       *CapacityBlock `json:"block,omitempty"`
+	ClusterCohortID    string                  `json:"-"`
+	ClusterDemandState string                  `json:"-"`
+	ClusterPlacement   *ClusterDemandPlacement `json:"-"`
+	Placement          *Placement              `json:"placement,omitempty"`
+	ExpansionID        string                  `json:"expansion_id,omitempty"`
+	Block              *CapacityBlock          `json:"block,omitempty"`
 }
 
 type Expansion struct {

@@ -552,6 +552,17 @@ func (d *Deployments) Start(ctx context.Context, orgID, planID string, window ti
 	interval := time.Duration(0)
 	if d.runs != nil {
 		build = CurrentBuild
+		if source, ok := d.runs.(interface {
+			NeedsCleanupExecutor(context.Context, string, string) (bool, error)
+		}); ok {
+			needed, readErr := source.NeedsCleanupExecutor(ctx, orgID, planID)
+			if readErr != nil {
+				return readErr
+			}
+			if needed {
+				build = ManagedCleanupBuild
+			}
+		}
 		interval = capacityInterval
 	}
 	raw, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window, ReconcileInterval: interval})

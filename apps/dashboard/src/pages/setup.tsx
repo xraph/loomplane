@@ -8,12 +8,14 @@ import { useMutation } from "@/client/hooks"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Field,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
+import { useInstance } from "@/lib/instance"
 
 /**
  * SetupPage creates the first account and its organization on a fresh
@@ -21,6 +23,16 @@ import { Spinner } from "@/components/ui/spinner"
  */
 export function SetupPage() {
   const complete = useMutation(useSetupComplete)
+  const { setupTokenRequired } = useInstance()
+  // The link the API logs carries the token; read it once.
+  const [linkToken] = useState(
+    () => new URLSearchParams(window.location.search).get("token") ?? ""
+  )
+  const [typedToken, setTypedToken] = useState("")
+  // A stale link must not be a dead end: after a refusal, ask for the token.
+  const [tokenRefused, setTokenRefused] = useState(false)
+  const askForToken = setupTokenRequired && (!linkToken || tokenRefused)
+  const token = typedToken.trim() || linkToken.trim()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -40,6 +52,7 @@ export function SetupPage() {
       return
     }
     setError("")
+    setTokenRefused(false)
     try {
       // The response has no identity for the client to type it by.
       const result = (await complete.mutateAsync({
@@ -48,6 +61,7 @@ export function SetupPage() {
           email: email.trim(),
           password,
           organizationName: organization.trim(),
+          ...(token && { token }),
         },
       })) as SetupResponse
       setDone(true)
@@ -59,9 +73,15 @@ export function SetupPage() {
           : "/"
       )
     } catch (err) {
-      if (statusOf(err) === 403) {
+      // Matches the refusal in extensions/identity/setup.go ("a valid setup
+      // token is required..."). Any other 403 means setup already ran.
+      const refusedToken = /setup token/i.test(messageOf(err, ""))
+      if (statusOf(err) === 403 && !refusedToken) {
         setTaken(true)
         return
+      }
+      if (statusOf(err) === 403 && refusedToken) {
+        setTokenRefused(true)
       }
       setError(messageOf(err, "Setup didn't finish. Try again."))
     }
@@ -153,6 +173,24 @@ export function SetupPage() {
                 required
               />
             </Field>
+            {askForToken && (
+              <Field>
+                <FieldLabel htmlFor="setup-token">Setup token</FieldLabel>
+                <Input
+                  id="setup-token"
+                  value={typedToken}
+                  onChange={(e) => setTypedToken(e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  required
+                  aria-describedby="setup-token-hint"
+                />
+                <FieldDescription id="setup-token-hint">
+                  Find it in the API's log, or run loomplane setup-token on the
+                  server.
+                </FieldDescription>
+              </Field>
+            )}
             <Field>
               {error && <FieldError>{error}</FieldError>}
               <Button type="submit" disabled={busy}>

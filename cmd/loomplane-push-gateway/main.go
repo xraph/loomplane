@@ -225,7 +225,9 @@ func gatewayConfig(c config, logger *slog.Logger) pushgateway.Config {
 }
 
 // newHandler routes the health check and the gateway's /v1/ API, and
-// nothing else. Request bodies are capped at maxBody.
+// nothing else. Request bodies are capped at maxBody; any unread tail is
+// drained up to that cap before the response flushes so a front proxy's
+// body-size limit sees the full upload instead of an early 400.
 func newHandler(gateway http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /_/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -234,7 +236,12 @@ func newHandler(gateway http.Handler) http.Handler {
 			return
 		}
 	})
-	mux.Handle("/v1/", http.MaxBytesHandler(gateway, maxBody))
+	mux.Handle("/v1/", http.MaxBytesHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gateway.ServeHTTP(w, r)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+	}), maxBody))
 	return mux
 }
 

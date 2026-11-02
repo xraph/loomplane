@@ -2,6 +2,7 @@ package planning
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -303,6 +304,9 @@ func (s *Service) CreateAutomaticRollback(ctx context.Context, orgID, deployment
 // restored release's plan pinned, every repository moving, with that
 // plan's manifest revision.
 func (s *Service) rollbackPlan(ctx context.Context, orgID, projectID string, env *projects.Environment, deploymentID string, rb Rollback) (*Plan, error) {
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
+	}
 	target, err := s.rollbackTarget(ctx, orgID, env, deploymentID)
 	if err != nil {
 		return nil, err
@@ -407,9 +411,27 @@ func systemDecision(d orchestration.Decision) bool {
 // It updates result in place, with its summary, and returns the leftovers.
 func rollbackFilter(result *Result, bindings []*Binding) []Leftover {
 	leftovers := []Leftover{}
+	var pinProblems []Finding
+	current := map[string]*Binding{}
+	for _, binding := range bindings {
+		if binding.Subject == ResourceSubject {
+			current[binding.Name] = binding
+		}
+	}
 	left := map[Subject]map[string]bool{ServiceSubject: {}, ResourceSubject: {}}
 	for i := range result.Actions {
 		a := &result.Actions[i]
+		// Resources stay as they are during rollback. Review and verify the
+		// current external pin, including a credential rotation since release.
+		if binding := current[a.Name]; a.Subject == ResourceSubject && binding != nil &&
+			(ExistingResourceBinding(binding) || (a.Resource != nil && a.Resource.ExistingResource != nil)) {
+			var cfg ResourceConfig
+			if json.Unmarshal(binding.Config, &cfg) != nil || cfg.Kind == "" {
+				pinProblems = append(pinProblems, Finding{Code: codeRollbackNeedsResource, Subject: ResourceSubject, Name: a.Name, Message: "The current resource attachment cannot be read. Review its connection before rolling back."})
+			} else {
+				a.Resource, a.Provider, a.ConnectionID, a.Region = &cfg, binding.Provider, binding.ConnectionID, binding.Region
+			}
+		}
 		if a.Op == Keep || a.AdoptCloudPlacement {
 			continue
 		}
@@ -427,6 +449,7 @@ func rollbackFilter(result *Result, bindings []*Binding) []Leftover {
 	}
 	about := func(f Finding) bool { return left[f.Subject][f.Name] || canaryFinding(f.Code) }
 	result.Problems = slices.DeleteFunc(result.Problems, about)
+	result.Problems = append(result.Problems, pinProblems...)
 	result.Warnings = slices.DeleteFunc(result.Warnings, about)
 	running := map[string]bool{}
 	for _, b := range bindings {
@@ -521,6 +544,8 @@ func appPlatformRollback(a Action, img ReleasedImage, from string) (ArtifactChoi
 	}
 	const recorded = "App Platform can only roll back to a deployment Loomplane recorded; "
 	switch {
+	case img.ExternalResources && (a.Service == nil || a.Service.TargetAccountIdentity == ""):
+		return refuse("This historical App Platform deployment contains external resource access that this review removed. Deploy reviewed source with the current attachments to avoid reconnecting that access.")
 	// The runner moves a replaced service onto a new app, which has no
 	// deployment of the restored release to go back to.
 	case a.Op == Replace:
@@ -533,5 +558,8 @@ func appPlatformRollback(a Action, img ReleasedImage, from string) (ArtifactChoi
 		return refuse(recorded + "the deployment it recorded ran " + shortCommit(img.CommitSHA) + ", not " + shortCommit(a.Service.CommitSHA))
 	}
 	choice.Reused, choice.Revision, choice.From = true, img.Revision, from
+	if a.Service.TargetAccountIdentity != "" || img.ExternalResources {
+		choice.Reason = "The recorded App Platform configuration and resource credentials are verified against this review before rollback. Changed credentials require a source deployment."
+	}
 	return choice, &ReusedArtifact{Revision: img.Revision, CommitSHA: img.CommitSHA, FromEnvironment: from, FromDeploymentID: img.DeploymentID}, nil
 }

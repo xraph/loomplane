@@ -7,6 +7,7 @@ import { useId } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Connection, ServerOptions } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { monthlyCost } from "@/components/cloud-targets/cloud-page"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { Field } from "@/components/cloud-targets/infrastructure-ui"
 import { QueryError } from "@/components/query-error"
@@ -41,14 +42,13 @@ export function TextAmount({
 }) {
   const n = read(value, whole)
   return (
-    <FormField className="w-auto gap-1 text-xs">
+    <FormField className="min-w-0 gap-1 text-xs">
       <FieldLabel className="contents">
         {label}
         <Input
           type="number"
           min={0}
           step={whole ? 1 : "any"}
-          className="w-28"
           value={value}
           aria-invalid={Number.isNaN(n) || undefined}
           onChange={(e) => onChange(e.target.value)}
@@ -71,14 +71,13 @@ function ReserveAmount({
   onChange: (next: number) => void
 }) {
   return (
-    <FormField className="w-auto gap-1 text-xs">
+    <FormField className="min-w-0 gap-1 text-xs">
       <FieldLabel className="contents">
         {label}
         <Input
           type="number"
           min={0}
           step={0.25}
-          className="w-28"
           value={value ? Number((value / scale).toFixed(2)) : ""}
           placeholder="0"
           onChange={(e) =>
@@ -146,7 +145,7 @@ export function RuleFields({
           set={set}
         />
       )}
-      <div className="flex flex-wrap gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <TextAmount
           label="Fewest servers"
           value={value.minServers}
@@ -192,7 +191,7 @@ export function RuleFields({
         </span>
       </div>
       {value.limits && (
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {ceilings.map((c) => (
             <TextAmount
               key={c.key}
@@ -380,8 +379,8 @@ function CatalogFields({
                           : ""}
                         {s.cpus} vCPU ·{" "}
                         {Number((s.memoryMib / 1024).toFixed(1))} GiB
-                        {s.hourlyPriceKnown !== false && s.monthlyUsd
-                          ? ` · $${Math.round(s.monthlyUsd)} a month`
+                        {s.hourlyPriceKnown !== false && s.hourlyUsd > 0
+                          ? ` · ${monthlyCost(s.hourlyUsd)}`
                           : " · price unknown"}
                       </span>
                     </FieldLabel>

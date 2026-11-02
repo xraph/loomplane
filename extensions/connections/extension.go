@@ -127,6 +127,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint).WithMinter(e.issuer), vercel.New(e.cfg.Clouds.VercelEndpoint)
 	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint).WithMinter(e.issuer)
 	awsClient := aws.New(e.cfg.Clouds.AWSEndpoint).WithMinter(e.issuer)
+	cfClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)
 	checkers := map[string]connections.Checker{
 		connections.GCP:          connections.GCPChecker{Client: gcpClient},
 		connections.Vercel:       connections.VercelChecker{Client: vercelClient},
@@ -134,7 +135,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
-		connections.Cloudflare:   connections.CloudflareChecker{Client: cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)},
+		connections.Cloudflare:   connections.CloudflareChecker{Client: cfClient},
 		connections.Server:       connections.ServerChecker{},
 		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
@@ -167,6 +168,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Vercel:       vercelClient,
 		connections.GCP:          gcpClient,
 		connections.Azure:        azureClient,
+		connections.Cloudflare:   cfClient,
 	}
 	e.svc.ConfigApps = map[string]oauth.App{}
 	for cloud, app := range e.cfg.Clouds.OAuth {

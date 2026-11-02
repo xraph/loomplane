@@ -839,6 +839,66 @@ export class RESTClient extends Client {
 
   public readonly cloudClusters = {
     /**
+     * cloudClusters.attachments
+     */
+    attachments: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RuntimeAttachmentPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/attachments`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RuntimeAttachmentPage"],
+      };
+
+      return this.request<types.RuntimeAttachmentPage>(config);
+    },
+
+    /**
+     * cloudClusters.capacity
+     */
+    capacity: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
      * cloudClusters.get
      */
     get: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudCluster> => {
@@ -944,6 +1004,40 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * cloudClusters.refreshCapacity
+     */
+    refreshCapacity: async (cloudId: string, clusterId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
+     * cloudClusters.retirementPreview
+     */
+    retirementPreview: async (cloudId: string, clusterId: string, body: types.ClusterRetirementPreviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterRetirementReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/retirement/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterRetirementPreviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterRetirementReview"],
+      };
+
+      return this.request<types.ClusterRetirementReview>(config);
     },
 
   };
@@ -2137,6 +2231,23 @@ export class RESTClient extends Client {
         url: __path,
         body,
         bodyCodec: CODECS["FailedCleanupInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupCancel: async (id: string, body: types.FailedCleanupCancelInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupCancelInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["FailedCleanup"],
@@ -5073,6 +5184,75 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly providerResources = {
+    /**
+     * Store an application DSN for a verified provider resource
+     */
+    connect: async (resourceId: string, body: types.ProviderResourceConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}/connection`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderResourceConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * Read a provider resource without its credentials
+     */
+    get: async (resourceId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * List your provider resource inventory and sync attempts
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceList> => {
+      let __path = `/api/v1/provider-resources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceList"],
+      };
+
+      return this.request<types.ProviderResourceList>(config);
+    },
+
+    /**
+     * Refresh a connected account's resource inventory
+     */
+    sync: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceSync> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/resource-syncs`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceSync"],
+      };
+
+      return this.request<types.ProviderResourceSync>(config);
+    },
+
+  };
+
   public readonly providers = {
     /**
      * The deployment targets a manifest can name, and what each runs and provisions
@@ -5777,15 +5957,15 @@ export class RESTClient extends Client {
 
   public readonly setup = {
     /**
-     * Create the first account and organization
+     * Create the first account, make it the platform owner, and create its organization
      */
-    complete: async (body: types.SetupRequest, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
+    complete: async (body: types.SetupRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
       let __path = `/api/v1/setup`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["SetupRequest"],
+        bodyCodec: CODECS["SetupRequestBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["SetupResponse"],
@@ -5795,7 +5975,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Whether first-run setup is still waiting
+     * Whether this instance still waits for its first account
      */
     status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {
       let __path = `/api/v1/setup`;

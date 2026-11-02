@@ -46,6 +46,13 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	if p.Revision == 0 || p.Revision != o.Input.PolicyRevision {
 		return blocked("review_required", "policy")
 	}
+	unknown, err := unresolvedLegacyCapacity(ctx, tx, o.OrgID, o.Input.Provider, o.Input.AccountID)
+	if err != nil {
+		return err
+	}
+	if unknown {
+		return blocked("stale_inventory", "account")
+	}
 	v := o.CapacityTarget
 	if !nonnegativeCapacity(v) || v.Servers <= 0 || v.CPUMillis <= 0 || v.MemoryBytes <= 0 || v.StorageBytes <= 0 {
 		return ErrInvalid
@@ -152,7 +159,7 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_reservations(org_id,cloud_id,id,policy_revision,intent_hash,servers,cpu_millis,memory_bytes,storage_bytes,status,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`, o.OrgID, o.CloudID, o.ID, p.Revision, o.Digest, v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes, raw)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_reservations(org_id,cloud_id,id,policy_revision,intent_hash,servers,cpu_millis,memory_bytes,storage_bytes,status,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`, o.OrgID, o.CloudID, o.ID, p.Revision, o.ID, v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes, raw)
 	if err != nil {
 		return storeError(err)
 	}
@@ -193,6 +200,9 @@ func (s *PgStore) AttemptClusterCreate(ctx context.Context, o *ClusterOperation)
 		if checkErr := s.reserveClusterCapacity(ctx, tx, o); checkErr != nil {
 			return checkErr
 		}
+	}
+	if checkErr := recordClusterGrowthTx(ctx, tx, o); checkErr != nil {
+		return checkErr
 	}
 	now := time.Now().UTC()
 	o.Steps[0].State = "attempted"
@@ -293,6 +303,7 @@ type ClusterNodeCapacity struct {
 }
 
 type ClusterCapacitySnapshot struct {
+	CleanupInventory    *ClusterCleanupInventory    `json:"cleanup_inventory,omitempty"`
 	SchedulingProfiles  []ClusterSchedulingProfile  `json:"scheduling_profiles,omitempty"`
 	Workloads           []ClusterObservedWorkload   `json:"workloads,omitempty"`
 	WorkloadsComplete   bool                        `json:"workloads_complete,omitempty"`
@@ -414,12 +425,8 @@ func MergeClusterCapacity(p provider.ProviderClusterCapacity, k KubernetesCluste
 				missing("pod_level_accounting_unknown")
 			}
 			// Resizing and restartable init containers need scheduler accounting we do not infer.
-			if len(pod.Status.ContainerStatuses) > 0 {
-				for _, status := range pod.Status.ContainerStatuses {
-					if status.AllocatedResources != nil {
-						missing("pod_resize_accounting_unknown")
-					}
-				}
+			if !podAllocationsCurrent(&pod) {
+				missing("pod_resize_accounting_unknown")
 			}
 			requests := corev1.ResourceList{}
 			for _, container := range pod.Spec.Containers {

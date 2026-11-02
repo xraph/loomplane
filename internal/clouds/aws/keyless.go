@@ -71,7 +71,7 @@ func keylessKey(h keyless.Handout) (*Key, error) {
 // webIdentity assumes key's role with a token minted for its handout. STS
 // takes the token unsigned, so its client has no credentials.
 func (c *Client) webIdentity(key *Key, region string) sdk.CredentialsProvider {
-	cfg := sdk.Config{Region: region, Credentials: sdk.AnonymousCredentials{}}
+	cfg := sdk.Config{Region: region, Credentials: sdk.AnonymousCredentials{}, HTTPClient: c.newHTTPClient()}
 	if c.endpoint != "" {
 		cfg.BaseEndpoint = sdk.String(c.endpoint)
 	}
