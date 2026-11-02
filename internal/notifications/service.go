@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xraph/authsome/bridge"
+	"github.com/xraph/authsome/bridge/heraldadapter"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/herald"
@@ -234,9 +235,22 @@ func (s *Service) recordAudit(ctx context.Context, p security.Principal, action,
 		s.audit(ctx, p, action, id)
 	}
 }
-func (s *Service) AuthBridge() bridge.Herald { return authBridge{s: s} }
+func (s *Service) AuthBridge() bridge.Herald {
+	return authBridge{Adapter: heraldadapter.New(s.herald), s: s}
+}
 
-type authBridge struct{ s *Service }
+// authBridge is how authsome sends mail. The embedded adapter manages
+// Herald's templates for the console's Notification page; Send and
+// Notify below are narrower than the adapter's, and win over them.
+type authBridge struct {
+	*heraldadapter.Adapter
+	s *Service
+}
+
+// TestSend is the console's test button. It keeps to Send's rules.
+func (b authBridge) TestSend(ctx context.Context, req *bridge.HeraldSendRequest) error {
+	return b.Send(ctx, req)
+}
 
 func (b authBridge) Send(ctx context.Context, req *bridge.HeraldSendRequest) error {
 	if !b.s.MailEnabled() {

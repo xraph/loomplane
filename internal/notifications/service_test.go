@@ -58,6 +58,40 @@ func TestAuthBridgeDisabledMailDoesNotPretendDelivery(t *testing.T) {
 	}
 }
 
+func TestAuthBridgeManagesTemplatesForTheConsole(t *testing.T) {
+	ctx := context.Background()
+	store := heraldmem.New()
+	sink := &capturingDriver{}
+	engine, err := herald.New(herald.WithStore(privateHeraldStore{Store: store}), herald.WithDriver(sink))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.CreateProvider(ctx, &provider.Provider{AppID: "app", Name: "capture", Channel: "email", Driver: "capture", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: config.Config{Identity: config.IdentityConfig{AppID: "app"}, Notifications: config.NotificationsConfig{SMTPHost: "localhost"}}, herald: engine}
+	// authsome's notification plugin finds its console's templates this way.
+	tm, ok := svc.AuthBridge().(bridge.HeraldTemplateManager)
+	if !ok {
+		t.Fatal("the auth bridge can't manage templates, so the console says the notification service isn't configured")
+	}
+	if err = tm.SeedDefaultTemplates(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	templates, err := tm.ListTemplates(ctx, "app")
+	if err != nil || len(templates) == 0 {
+		t.Fatalf("templates: %d, %v", len(templates), err)
+	}
+	// A test send keeps to what the bridge sends at all: auth mail only.
+	if err = tm.TestSend(ctx, &bridge.HeraldSendRequest{Channel: "email", Template: "deploy.failed", To: []string{"test@example.com"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("test send of a non-auth template: %v", err)
+	}
+	req := &bridge.HeraldSendRequest{Channel: "email", Template: "auth.password-changed", To: []string{"test@example.com"}}
+	if err = tm.TestSend(ctx, req); err != nil || len(sink.got) != 1 {
+		t.Fatalf("test send: %v, %d sent", err, len(sink.got))
+	}
+}
+
 type capturingDriver struct{ got []*driver.OutboundMessage }
 
 func (*capturingDriver) Name() string                                        { return "capture" }
