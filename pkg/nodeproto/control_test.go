@@ -84,3 +84,26 @@ func TestDecodeErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryControlTypeRoundTrips(t *testing.T) {
+	for name, mk := range controlTypes {
+		msg := reflect.ValueOf(mk()).Elem().Interface()
+		if got := typeName(msg); got != name {
+			t.Errorf("%s: typeName(%T) = %q", name, msg, got)
+			continue
+		}
+		var buf bytes.Buffer
+		if err := EncodeControl(&buf, msg); err != nil {
+			t.Errorf("%s: encode: %v", name, err)
+			continue
+		}
+		got, err := DecodeControl(bytes.TrimSpace(buf.Bytes()))
+		if err != nil {
+			t.Errorf("%s: decode: %v", name, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, msg) {
+			t.Errorf("%s: got %+v, want %+v", name, got, msg)
+		}
+	}
+}
