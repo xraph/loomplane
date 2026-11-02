@@ -98,6 +98,19 @@ var workspaceChecks = map[string]int{
 	"internal/teams/service.go:RemoveMember": 1,
 	"internal/teams/service.go:SetGrant":     1,
 	"internal/teams/service.go:RemoveGrant":  1,
+	// The AI agent is the workspace's: its settings, provider keys and
+	// budget are ai:manage at the root, and whether a person may use it at
+	// all (its status, and the codec that rebuilds a run's principal) is
+	// agent:use there. Each operation it runs then checks its own project.
+	// Live request events reach ai:manage holders across the workspace.
+	"internal/agentsettings/service.go:Get":               1,
+	"internal/agentsettings/service.go:Update":            1,
+	"internal/agentsettings/service.go:SetBudget":         1,
+	"internal/agentsettings/service.go:PutProviderKey":    1,
+	"internal/agentsettings/service.go:DeleteProviderKey": 1,
+	"internal/agentsettings/service.go:Status":            1,
+	"internal/agentauthz/codec.go:DecodePrincipal":        1,
+	"extensions/realtime/handlers.go:agentRequestReaches": 1,
 }
 
 // rootChecks walks every non-test Go file under internal and extensions
@@ -183,8 +196,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 78 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls and the 6 workspace checks main added", total)
+	if total != 86 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the agent's 8", total)
 	}
 
 	var models []string
