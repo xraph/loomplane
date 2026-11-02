@@ -196,20 +196,27 @@ describe("planStatus", () => {
 
 describe("deployment statuses", () => {
   it("names every status the API sends", () => {
-    for (const s of ["running", "succeeded", "failed"]) {
+    for (const s of ["running", "paused", "succeeded", "failed", "cancelled"]) {
       expect(deploymentStatus(s).label).not.toBe(s)
     }
+    expect(deploymentStatus("paused").label).toBe("Paused for capacity")
+    expect(deploymentStatus("cancelled").label).toBe("Cancelled")
+    expect(planStatus("ready").label).toBe("Waiting for you")
     for (const s of [
       "pending",
       "building",
       "deploying",
       "verifying",
+      "ramping",
       "succeeded",
       "failed",
       "skipped",
     ]) {
       expect(stepStatus(s).label).not.toBe(s)
     }
+    expect(stepStatus("succeeded").label).toBe("Done")
+    // A status nobody mapped still reads as words, never its key.
+    expect(stepStatus("rolling_back").label).toBe("Rolling back")
   })
 
   it("names each repository a deployment moved at its commit", () => {

@@ -129,3 +129,29 @@ test("nothing deployed shows nothing once every environment answered", async () 
     screen.queryByRole("region", { name: "Resources" })
   ).not.toBeInTheDocument()
 })
+
+test("a resource shows its state in every environment", async () => {
+  serve({})
+  await screen.findByRole("link", { name: /db/ })
+  const table = screen.getByRole("table", { name: "Resources" })
+  expect(table).toHaveTextContent("Live")
+  expect(table).toHaveTextContent("Not deployed")
+  expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+    "href",
+    "/projects/$id/catalog/$resource"
+  )
+})
+
+test("old and unknown tabs open the page somewhere it has", async () => {
+  const { Route } = await import("@/routes/projects.$id")
+  const validate = Route.options.validateSearch as (
+    search: Record<string, unknown>
+  ) => Record<string, unknown>
+  expect(validate({ tab: "graph" })).toEqual({ tab: "overview" })
+  expect(validate({ tab: "deploy" })).toEqual({ tab: "deployments" })
+  expect(validate({ tab: "variables", environment: "staging" })).toEqual({
+    tab: "variables",
+    environment: "staging",
+  })
+  expect(validate({ tab: "nonsense" })).toEqual({})
+})

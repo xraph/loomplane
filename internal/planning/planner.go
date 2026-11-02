@@ -66,6 +66,10 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Only are the manifest services this plan moves, by name. Nil or
+	// empty moves every one. A service it leaves out is kept as it runs, like a held
+	// one, and one that runs nowhere yet isn't created.
+	Only map[string]bool
 	// Excluded are the graph services the project excludes, by ID, each
 	// true when what's deployed of it stays running as it is. An excluded
 	// service is never created or changed; one that's deployed and not
@@ -177,6 +181,7 @@ func Compute(in Input) *Result {
 		bindings:  map[string]*Binding{},
 		heldNew:   map[string]string{},
 		held:      map[string]string{},
+		unpicked:  map[string]bool{},
 		excluded:  map[string]bool{},
 		retained:  map[string]*Action{},
 		keptFor:   map[string][]string{},
@@ -244,6 +249,10 @@ type planner struct {
 	// held are the held services kept as they're deployed, by manifest
 	// name, with the alias of the repository that holds them.
 	held map[string]string
+	// unpicked are the services in held and heldNew that are there because
+	// the plan doesn't name them, not because their repository is held, so
+	// what's said about them names the service rather than the repository.
+	unpicked map[string]bool
 	// excluded are the manifest services the project excludes, by name.
 	excluded map[string]bool
 	// retained are keep actions, by action ID, for what held services use
@@ -620,6 +629,12 @@ func (p *planner) planServices() {
 			p.actions = append(p.actions, &move)
 			continue
 		}
+		if len(p.in.Only) > 0 && !p.in.Only[name] {
+			if p.leaveOut(name, base, s, set, b) {
+				held = append(held, name)
+			}
+			continue
+		}
 		repo, ok := p.repoOf(name, base, s)
 		if !ok {
 			continue
@@ -770,6 +785,49 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.actions = append(p.actions, a)
 }
 
+// leaveOut plans a service this plan doesn't name, and reports whether it
+// runs on as it's deployed. One that runs here gets a keep action, as a
+// held service does, so nothing deletes it and whatever needs it still
+// gets its address. One that runs nowhere yet isn't created, and a warning
+// says so. Nothing the manifest says about it is checked, so a problem
+// with it can't block a plan that leaves it out, but the graph service it
+// names is the manifest's and isn't reported as left out.
+func (p *planner) leaveOut(name, base string, s manifest.Service, set manifest.Settings, b *Binding) bool {
+	problems, warnings := p.problems, p.warnings
+	repo, ok := p.repoOf(name, base, s)
+	var gs *graph.Service
+	if ok {
+		gs = p.match(name, base, repo, s)
+	}
+	p.problems, p.warnings = problems, warnings
+	excluded := false
+	if gs != nil {
+		p.matched[gs.ID] = true
+		_, excluded = p.in.Excluded[gs.ID]
+	}
+	p.unpicked[name] = true
+	if b != nil {
+		if repo == "" {
+			repo = p.deployedRepo(b)
+		}
+		a := p.kept(b, "Not part of this deploy.")
+		p.held[name] = repo
+		p.services[name] = a
+		p.actions = append(p.actions, a)
+		return true
+	}
+	// An excluded service that runs nowhere has nothing to say.
+	if excluded || !manifest.On(set.Enabled) {
+		return false
+	}
+	p.heldNew[name] = repo
+	p.warn(Finding{
+		Code: "not-in-deploy", Subject: ServiceSubject, Name: name, Path: base,
+		Message: fmt.Sprintf("%s isn't part of this deploy, and nothing runs it in %s yet, so it isn't created.", name, p.in.Environment),
+	})
+	return false
+}
+
 // readdress deploys again what this plan moves and leaves unchanged but
 // uses something that gets a new address: what it replaces, or creates
 // again over a binding. A service's variables name what it uses, not the
@@ -915,12 +973,15 @@ func (p *planner) heldAddresses() {
 		// kept is true for a service retained for a held service rather
 		// than held itself.
 		kept bool
-		env  []EnvLink
+		// unpicked is true for a service kept because the plan doesn't
+		// name it, rather than because its repository is held.
+		unpicked bool
+		env      []EnvLink
 	}
 	var users []user
 	for name, alias := range p.held {
 		a := p.services[name]
-		users = append(users, user{name: name, provider: a.Provider, aliases: []string{alias}, env: a.Service.Env})
+		users = append(users, user{name: name, provider: a.Provider, aliases: []string{alias}, unpicked: p.unpicked[name], env: a.Service.Env})
 	}
 	for id, a := range p.retained {
 		if a.Service != nil {
@@ -944,6 +1005,8 @@ func (p *planner) heldAddresses() {
 		unknown := len(u.aliases) == 0 || slices.Contains(u.aliases, "")
 		var who string
 		switch {
+		case u.unpicked:
+			who, scope = u.name+", which isn't part of this deploy", fmt.Sprintf("Add %s to this deploy.", u.name)
 		case !u.kept:
 			who = heldLabel(u.name, u.aliases[0]) + ", which this plan holds back"
 		case unknown:
@@ -1482,13 +1545,18 @@ func (p *planner) waits(name string) {
 	if !changed && len(found) == 0 {
 		return
 	}
+	code := "held"
 	msg := fmt.Sprintf("%s is in %s, which this plan holds back, so its manifest changes wait for a plan that moves %s.", name, alias, alias)
-	if from := p.deployedRepo(p.bindings[actionID(ServiceSubject, name)]); from != "" && alias != "" && from != alias {
+	switch from := p.deployedRepo(p.bindings[actionID(ServiceSubject, name)]); {
+	case p.unpicked[name]:
+		code, moved = "not-in-deploy", false
+		msg = fmt.Sprintf("%s isn't part of this deploy, so its manifest changes wait for a deploy that includes it.", name)
+	case from != "" && alias != "" && from != alias:
 		// It was deployed from a repository this plan moves, and the
 		// manifest now puts it in one that the plan holds back.
 		msg = movedIntoHeld(name, from, alias)
 	}
-	if alias == "" {
+	if alias == "" && !p.unpicked[name] {
 		msg = fmt.Sprintf("Nothing records which repository %s was deployed from, and this plan holds some back, so its manifest changes wait for a plan that moves every repository.", name)
 	}
 	if moved && alias != "" {
@@ -1497,7 +1565,7 @@ func (p *planner) waits(name string) {
 	if len(found) > 0 {
 		msg += " Its manifest also has a problem to fix first: " + found[0].Message
 	}
-	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: name, Path: base, Message: msg})
+	p.warn(Finding{Code: code, Subject: ServiceSubject, Name: name, Path: base, Message: msg})
 }
 
 // match finds the graph service a manifest service names: in repo, which
@@ -1868,10 +1936,11 @@ func (p *planner) link(name string, a *Action) {
 		dep := p.services[need]
 		if dep == nil {
 			if alias, held := p.heldNew[need]; held {
-				p.problem(Finding{
-					Code: "need-held", Subject: ServiceSubject, Name: name, Path: base,
-					Message: fmt.Sprintf("%s needs %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, need, alias, alias, need, p.in.Environment, alias),
-				})
+				msg := fmt.Sprintf("%s needs %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, need, alias, alias, need, p.in.Environment, alias)
+				if p.unpicked[need] {
+					msg = fmt.Sprintf("%s needs %s, which isn't part of this deploy and doesn't run in %s yet, so add %s to this deploy.", name, need, p.in.Environment, need)
+				}
+				p.problem(Finding{Code: "need-held", Subject: ServiceSubject, Name: name, Path: base, Message: msg})
 				continue
 			}
 			if s, ok := m.Services[need]; ok && !manifest.On(s.For(p.in.Environment, m.Defaults).Enabled) {

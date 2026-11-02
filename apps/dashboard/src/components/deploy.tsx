@@ -1,39 +1,29 @@
-// The Deploy tab: a project's manifest, and the plans made from it. A plan
-// says what deploying an environment would do; nothing here touches a
-// cloud. Approving a plan records the decision against the exact revision
-// that was reviewed.
-import { FileCodeIcon, RotateCcwIcon, WorkflowIcon } from "lucide-react"
+// A project's Deployments tab and its loomplane.yaml setting. The tab lists
+// every plan made for the project and where each service runs; a plan is
+// approved or rejected on its own deployment page, never here.
+import { BoxIcon, DatabaseIcon, GlobeIcon, RotateCcwIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsList,
-  useDeploymentsForPlan,
   useDeploymentsList,
-  useDeploymentsRetry,
   useEnvironmentConnectionsChoose,
+  useEnvironmentsList,
   useManifestsCurrent,
   useManifestsDraft,
   useManifestsEdit,
   useManifestsSave,
-  usePlansApprove,
-  usePlansCreate,
-  usePlansGet,
   usePlansList,
-  usePlansReject,
+  useProjectsGraph,
   useProvidersList,
 } from "@/client/forge/loomplane/hooks"
 import type {
-  Action,
   EditInputBody,
-  Analysis,
-  Deployment,
-  Environment,
   Finding,
   Manifest,
   Plan,
-  PlanSource,
   Project,
   Provider,
 } from "@/client/forge/loomplane/types"
@@ -43,27 +33,28 @@ import {
   useQuery,
   useRefetchWhile,
 } from "@/client/hooks"
-import { EvidenceList } from "@/components/architecture"
-import { StatusPill as RunPill, type Tone as RunTone } from "@/components/runs"
-import { ServiceAddress } from "@/components/service-address"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
+import {
+  ActionsCell,
+  Cell,
+  CloudCallout,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  Segments,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
+import {
+  PlacementPanel,
+  RunsOnCell,
+  usePlacementContext,
+} from "@/components/deployment-targets"
+import { ManifestHistory } from "@/components/manifest-history"
+import { QueryError } from "@/components/query-error"
+import { StatusPill, type Tone as RunTone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty"
 import {
   Select,
   SelectContent,
@@ -71,187 +62,573 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  commitURL,
-  lockLabel,
-  resourceLabel,
-  shortSHA,
-  type SourceLink,
-} from "@/lib/architecture"
-import { cloudLabel } from "@/lib/clouds"
-import { formatDate } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
-import { Link } from "@/lib/router"
-import {
-  changeCount,
-  deployedCommits,
-  deploymentStatus,
-  isDeploying,
-  isOpen,
-  isPlanning,
-  opLabel,
-  planStatus,
-  planConnections,
-  scopeBody,
-  stepStatus,
-  steps,
-  type Tone,
-  withResource,
-} from "@/lib/plans"
-import { cn } from "@/lib/utils"
-import { ManifestHistory } from "@/components/manifest-history"
-import { DeploymentTargets } from "@/components/deployment-targets"
-import { useDeploymentScope } from "@/lib/deployment-scope"
+import { lockLabel, resourceLabel } from "@/lib/architecture"
 import {
   useDeploymentDraft,
   useDeploymentWrites,
 } from "@/lib/deployment-writes"
+import { cloudLabel } from "@/lib/clouds"
+import { formatDate, relative } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
+import {
+  placementRows,
+  placementSettings,
+  runsOn,
+  type PlacementRow,
+} from "@/lib/placement"
+import {
+  changeCount,
+  deploymentStatus,
+  isDeploying,
+  isPlanning,
+  planServices,
+  planStatus,
+  type Tone,
+  withResource,
+} from "@/lib/plans"
+import { useNow } from "@/lib/use-runs"
+import { Link } from "@/lib/router"
 
-export function DeployTab({
-  project,
-  environments,
-  analysis,
-}: {
-  project: Project
-  environments: Environment[]
-  /** analysis is the latest succeeded analysis, if there is one. */
-  analysis?: Analysis
-}) {
-  const [planID, setPlanID] = useState<string | null>(null)
-  const [selectedEnvironment, setEnvironment] = useState("")
-  const { busy, onPendingChange } = useDeploymentWrites(project.id)
-  const environment = environments.some((e) => e.name === selectedEnvironment)
-    ? selectedEnvironment
-    : (environments[0]?.name ?? "")
+/**
+ * DeployTab is a project's Deployments tab: its plans and deployments,
+ * newest first, and where each service runs in each environment.
+ */
+export function DeployTab({ project }: { project: Project }) {
   return (
     <div className="grid gap-6">
-      <ManifestCard
-        project={project}
-        analysis={analysis}
-        environments={environments}
-        environment={environment}
-        onEnvironment={setEnvironment}
-        onPendingChange={onPendingChange}
-      />
-      <PlansCard
-        project={project}
-        environments={environments}
-        environment={environment}
-        onEnvironment={setEnvironment}
-        busy={busy}
-        onOpen={setPlanID}
-      />
-      <DeploymentsCard project={project} onOpen={setPlanID} />
-      <Sheet
-        open={!!planID}
-        onOpenChange={(open) => {
-          if (!open) setPlanID(null)
-        }}
-      >
-        <SheetContent className="w-full gap-0 sm:max-w-xl">
-          {planID && (
-            <PlanReview id={planID} project={project} onPlanned={setPlanID} />
-          )}
-        </SheetContent>
-      </Sheet>
+      <DeploymentHistory project={project} />
+      <WhereServicesRun project={project} />
     </div>
   )
 }
 
-function ManifestCard({
-  project,
-  analysis,
-  environments,
-  environment,
-  onEnvironment,
-  onPendingChange,
-}: {
-  project: Project
-  analysis?: Analysis
-  environments: Environment[]
-  environment: string
-  onEnvironment: (value: string) => void
-  onPendingChange: (pending: boolean) => void
-}) {
+// A plan's tones in the run colors: waiting is amber, done is green.
+const tones: Record<Tone, RunTone> = {
+  ok: "live",
+  wait: "waiting",
+  bad: "failed",
+  quiet: "quiet",
+}
+
+const pageSize = 10
+
+function DeploymentHistory({ project }: { project: Project }) {
+  const plans = useQuery(usePlansList, { path: { id: project.id } })
+  const deployments = useQuery(useDeploymentsList, {
+    path: { id: project.id },
+  })
+  const [page, setPage] = useState(0)
+  const list = [...(plans.data?.plans ?? [])].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt)
+  )
+  const runs = deployments.data?.deployments ?? []
+  useRefetchWhile(
+    list.some((p) => isPlanning(p.status)),
+    plans.refetch
+  )
+  useRefetchWhile(
+    runs.some((d) => isDeploying(d.status)),
+    deployments.refetch,
+    2000
+  )
+  const pages = Math.max(1, Math.ceil(list.length / pageSize))
+  const at = Math.min(page, pages - 1)
+  const shown = list.slice(at * pageSize, (at + 1) * pageSize)
+  const now = useNow(60000)
+
+  return (
+    <section className="grid gap-2.5" aria-label="Deployments">
+      <CloudSectionHead
+        title="Deployments"
+        count={plans.data ? list.length : undefined}
+        description="Every plan for this project. Open one to approve it, follow it, or roll it back."
+      />
+      {plans.status === "error" ? (
+        <QueryError
+          error={plans.error}
+          fallback="Deployments couldn't be loaded."
+          retry={plans.refetch}
+        />
+      ) : !plans.data ? (
+        <Skeleton className="h-32 rounded-xl" />
+      ) : list.length === 0 ? (
+        <CloudEmpty
+          kind="list"
+          title="No deployments yet"
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              nativeButton={false}
+              render={
+                <Link to="/deployments/new" search={{ project: project.id }} />
+              }
+            >
+              Deploy
+            </Button>
+          }
+        >
+          Each plan you make for {project.name} shows here, with what it
+          changed.
+        </CloudEmpty>
+      ) : (
+        <>
+          {deployments.status === "error" && (
+            <QueryError
+              error={deployments.error}
+              fallback="Deployment progress couldn't be loaded."
+              retry={deployments.refetch}
+            />
+          )}
+          <CloudTable
+            label="Deployments"
+            columns="minmax(0,1.2fr) 150px minmax(0,1fr) 120px 80px"
+            head={["Deployment", "Status", "Changes", "Started", ""]}
+            footer={
+              list.length > pageSize ? (
+                <>
+                  <span>
+                    Showing {shown.length} of {list.length}
+                  </span>
+                  <span className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={at === 0}
+                      onClick={() => setPage(at - 1)}
+                    >
+                      Newer
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={at >= pages - 1}
+                      onClick={() => setPage(at + 1)}
+                    >
+                      Older
+                    </Button>
+                  </span>
+                </>
+              ) : undefined
+            }
+          >
+            {shown.map((p) => {
+              const run = runs
+                .filter((d) => d.planId === p.id)
+                .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
+              const status = run
+                ? deploymentStatus(run.status)
+                : planStatus(p.status)
+              const started = run?.startedAt ?? p.createdAt
+              return (
+                <CloudTableRow key={p.id}>
+                  <NameCell
+                    name={
+                      <Link
+                        to="/deployments/$id"
+                        params={{ id: p.id }}
+                        className="text-foreground underline-offset-2 hover:underline"
+                      >
+                        {planTitle(p)}
+                      </Link>
+                    }
+                    meta={[
+                      lockLabel(p.sources),
+                      `loomplane.yaml revision ${p.manifestRevision}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  />
+                  <Cell>
+                    <StatusPill tone={tones[status.tone]}>
+                      {status.label}
+                    </StatusPill>
+                  </Cell>
+                  <Cell className="text-muted-foreground tabular-nums">
+                    {changesLine(p)}
+                  </Cell>
+                  <Cell className="text-muted-foreground">
+                    <time dateTime={started} title={formatDate(started)}>
+                      {relative(Date.parse(started), now)}
+                    </time>
+                  </Cell>
+                  <ActionsCell>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      nativeButton={false}
+                      render={
+                        <Link to="/deployments/$id" params={{ id: p.id }} />
+                      }
+                    >
+                      Open
+                    </Button>
+                  </ActionsCell>
+                </CloudTableRow>
+              )
+            })}
+          </CloudTable>
+        </>
+      )}
+    </section>
+  )
+}
+
+/** planTitle names a plan by where it goes and what it moves. */
+function planTitle(p: Plan): string {
+  if (p.rollback) return `${p.environment} · rollback`
+  const n = planServices(p).length
+  return n
+    ? `${p.environment} · ${n} ${n === 1 ? "service" : "services"}`
+    : p.environment
+}
+
+/** changesLine says what a plan does, as short counts. */
+function changesLine(p: Plan): string {
+  if (isPlanning(p.status)) return "Working it out"
+  if (p.status === "failed") return "None"
+  if (p.problems.length > 0)
+    return `${p.problems.length} ${p.problems.length === 1 ? "problem" : "problems"}`
+  if (changeCount(p) === 0) return "Nothing to change"
+  const s = p.summary
+  return [
+    s.replace && `${s.replace} replace`,
+    s.create && `${s.create} create`,
+    s.update && `${s.update} update`,
+    s.delete && `${s.delete} delete`,
+    s.keep && `${s.keep} kept`,
+  ]
+    .filter(Boolean)
+    .join(", ")
+}
+
+const kinds: Record<string, string> = {
+  "http-service": "HTTP service",
+  "web-app": "Web app",
+  "static-site": "Static site",
+  worker: "Worker",
+  job: "Job",
+  cron: "Scheduled job",
+}
+
+/** kindLabel names what a placement row is. */
+export function kindLabel(row: PlacementRow): string {
+  if (row.section === "gateways") return "Gateway"
+  if (row.section === "resources") return resourceLabel(row.kind)
+  if (!row.kind) return "Service"
+  return kinds[row.kind] ?? row.kind.replace(/-/g, " ")
+}
+
+/** RowGlyph is a placement row's tile icon. */
+export function RowGlyph({ row }: { row: PlacementRow }) {
+  if (row.section === "resources") return <DatabaseIcon />
+  if (row.kind === "static-site" || row.kind === "web-app") return <GlobeIcon />
+  return <BoxIcon />
+}
+
+function WhereServicesRun({ project }: { project: Project }) {
+  const environments = useQuery(useEnvironmentsList, {
+    path: { id: project.id },
+  })
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
-  if (current.data) {
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const { onPendingChange } = useDeploymentWrites(project.id)
+  const [picked, setPicked] = useState("")
+  const [open, setOpen] = useState<PlacementRow | null>(null)
+  const list = environments.data?.environments ?? []
+  const environment = list.some((e) => e.name === picked)
+    ? picked
+    : (list[0]?.name ?? "")
+  const ctx = usePlacementContext(
+    project.id,
+    list.find((e) => e.name === environment)?.id
+  )
+  const manifest = current.data?.manifest
+  const rows =
+    manifest && view.data?.graph
+      ? placementRows(manifest, view.data.graph, view.data.excluded ?? [])
+      : []
+
+  const body = () => {
+    if (environments.status === "error")
+      return (
+        <QueryError
+          error={environments.error}
+          fallback="Environments couldn't be loaded."
+          retry={environments.refetch}
+        />
+      )
+    if (current.status === "error" && statusOf(current.error) === 404)
+      return (
+        <SuggestedConfiguration
+          projectId={project.id}
+          onPendingChange={onPendingChange}
+        />
+      )
+    for (const [q, what] of [
+      [current, "loomplane.yaml"],
+      [view, "The service graph"],
+      [ctx.providers, "Targets"],
+    ] as const)
+      if (q.status === "error")
+        return (
+          <QueryError
+            error={q.error}
+            fallback={`${what} couldn't be loaded.`}
+            retry={q.refetch}
+          />
+        )
+    if (
+      !environments.data ||
+      !current.data ||
+      !view.data ||
+      !ctx.providers.data
+    )
+      return <Skeleton className="h-32 rounded-xl" />
+    if (list.length === 0)
+      return (
+        <CloudEmpty kind="list" title="No environments yet">
+          Add an environment on the Overview tab, then choose where its services
+          run.
+        </CloudEmpty>
+      )
+    if (!view.data.graph)
+      return (
+        <CloudEmpty kind="notice" title="Analyze your repositories first">
+          Where a service runs is chosen once an analysis has found it.
+        </CloudEmpty>
+      )
+    if (!manifest || rows.length === 0)
+      return (
+        <CloudEmpty kind="list" title="No services to place yet">
+          Add services or resources to loomplane.yaml, then choose where they
+          run.
+        </CloudEmpty>
+      )
     return (
-      <>
-        {current.data.manifest && environment && (
-          <DeploymentTargets
-            projectId={project.id}
-            manifest={current.data.manifest}
-            environments={environments}
-            environment={environment}
-            onEnvironment={onEnvironment}
-            onPendingChange={onPendingChange}
+      <CloudTable
+        label={`Where services run in ${environment}`}
+        columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr) 100px"
+        head={["Service", "Runs on", "Tags", ""]}
+      >
+        {rows.map((row) => {
+          const value = placementSettings(manifest, row, environment)
+          return (
+            <CloudTableRow key={`${row.section}:${row.name}`}>
+              <NameCell
+                tile={<RowGlyph row={row} />}
+                name={row.name}
+                meta={kindLabel(row)}
+              />
+              <RunsOnCell
+                runs={runsOn(
+                  value,
+                  environment,
+                  ctx.catalog,
+                  ctx.cloudTargets,
+                  ctx.connections
+                )}
+              />
+              <Cell className="flex flex-wrap gap-1">
+                {(value.cloudTags ?? []).map((t) => (
+                  <span
+                    key={t}
+                    className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11.5px]"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </Cell>
+              <ActionsCell>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label={`Change where ${row.name} runs`}
+                  onClick={() => setOpen(row)}
+                >
+                  Change
+                </Button>
+              </ActionsCell>
+            </CloudTableRow>
+          )
+        })}
+      </CloudTable>
+    )
+  }
+
+  return (
+    <section className="grid gap-2.5" aria-label="Where services run">
+      <CloudSectionHead
+        title="Where services run"
+        description="Each environment's standing placement. A change saves a new revision of loomplane.yaml; nothing moves until the next deploy."
+      >
+        {list.length > 0 && (
+          <Segments
+            label="Environment"
+            value={environment}
+            onChange={setPicked}
+            items={list.map((e) => ({ id: e.name, label: e.name }))}
           />
         )}
-        <details className="rounded-xl bg-card px-4 py-3 ring-1 ring-border">
-          <summary className="cursor-pointer text-[13px] font-semibold">
-            Edit loomplane.yaml · Revision {current.data.revision}
-          </summary>
-          <div className="pt-3">
-            <ManifestEditor
-              key={project.id}
-              project={project}
-              yaml={current.data.yaml}
-              revision={current.data.revision}
-              savedAt={current.data.createdAt}
-              onPendingChange={onPendingChange}
-            />
-          </div>
-        </details>
-      </>
-    )
-  }
-  if (current.status === "error" && statusOf(current.error) === 404) {
-    if (!analysis) {
-      return (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No manifest yet</EmptyTitle>
-            <EmptyDescription>
-              The manifest says where each service runs. Analyze the repository
-              first, and Loomplane drafts one from what it finds.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      )
+      </CloudSectionHead>
+      {body()}
+      {manifest && current.data && (
+        <PlacementPanel
+          projectId={project.id}
+          manifest={manifest}
+          revision={current.data.revision}
+          row={open}
+          environment={environment}
+          environments={list}
+          mode="save"
+          onClose={() => setOpen(null)}
+          onPendingChange={onPendingChange}
+        />
+      )}
+    </section>
+  )
+}
+
+/**
+ * SuggestedConfiguration starts a project's loomplane.yaml from the draft
+ * its latest analysis suggests.
+ */
+export function SuggestedConfiguration({
+  projectId,
+  onPendingChange,
+}: {
+  projectId: string
+  onPendingChange: (pending: boolean) => void
+}) {
+  const draft = useQuery(useManifestsDraft, { path: { id: projectId } })
+  const save = useMutation(useManifestsSave)
+  const invalidate = useInvalidate()
+  const { can } = useOrganization()
+  const [error, setError] = useState("")
+  const initialize = async () => {
+    if (!draft.data) return
+    setError("")
+    onPendingChange(true)
+    try {
+      await save.mutateAsync({
+        path: { id: projectId },
+        body: { yaml: draft.data.yaml, baseRevision: 0 },
+      })
+      invalidate(useManifestsCurrent)
+    } catch (err) {
+      setError(messageOf(err, "The suggested configuration couldn't be saved."))
+      if (statusOf(err) === 409) invalidate(useManifestsCurrent)
+    } finally {
+      onPendingChange(false)
     }
+  }
+  if (draft.status === "error")
     return (
-      <DraftedManifest project={project} onPendingChange={onPendingChange} />
+      <QueryError
+        error={draft.error}
+        fallback="Suggested configuration couldn't be loaded. Analyze the repositories first."
+        retry={draft.refetch}
+      />
+    )
+  if (!draft.data) return <Skeleton className="h-32 rounded-xl" />
+  return (
+    <div className="grid gap-2.5">
+      <CloudEmpty
+        kind="notice"
+        title="Start with your repository"
+        action={
+          <Button
+            type="button"
+            disabled={save.isPending || !can("project:update")}
+            onClick={() => void initialize()}
+          >
+            {save.isPending && <Spinner />}
+            Use suggested configuration
+          </Button>
+        }
+      >
+        We suggested services and infrastructure from your latest analysis. You
+        can change where each one runs before planning.
+      </CloudEmpty>
+      {error && (
+        <CloudCallout tone="error" title="The configuration wasn't saved">
+          {error}
+        </CloudCallout>
+      )}
+    </div>
+  )
+}
+
+/**
+ * ManifestSettings is loomplane.yaml in a project's Settings: its revision,
+ * its history, and the editor, opened on request.
+ */
+export function ManifestSettings({ project }: { project: Project }) {
+  const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
+  const { onPendingChange } = useDeploymentWrites(project.id)
+  const [editing, setEditing] = useState(false)
+  if (current.data) {
+    const { revision } = current.data
+    return (
+      <section className="grid gap-2.5" aria-label="loomplane.yaml">
+        <CloudSectionHead
+          title={
+            <>
+              loomplane.yaml{" "}
+              <span className="font-mono text-xs font-normal text-muted-foreground tabular-nums">
+                revision {revision}
+              </span>
+            </>
+          }
+          description="Where each service runs and what it needs. Every save adds a revision, and each plan names the one it was made from."
+        >
+          {revision > 1 && <ManifestHistory projectId={project.id} />}
+          <Button
+            size="sm"
+            variant="outline"
+            aria-expanded={editing}
+            onClick={() => setEditing(!editing)}
+          >
+            {editing ? "Close editor" : "Edit loomplane.yaml"}
+          </Button>
+        </CloudSectionHead>
+        {/* Hidden, not unmounted, so closing keeps an unsaved draft. */}
+        <div hidden={!editing}>
+          <ManifestEditor
+            key={project.id}
+            project={project}
+            yaml={current.data.yaml}
+            revision={revision}
+            savedAt={current.data.createdAt}
+            onPendingChange={onPendingChange}
+          />
+        </div>
+      </section>
     )
   }
-  if (current.status === "error") {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          {messageOf(current.error, "The manifest couldn't be loaded.")}
-        </AlertDescription>
-      </Alert>
-    )
-  }
-  return <Skeleton className="h-80 w-full rounded-xl" />
+  return (
+    <section className="grid gap-2.5" aria-label="loomplane.yaml">
+      {current.status === "error" && statusOf(current.error) === 404 ? (
+        <DraftedManifest project={project} onPendingChange={onPendingChange} />
+      ) : (
+        <>
+          <CloudSectionHead title="loomplane.yaml" />
+          {current.status === "error" ? (
+            <QueryError
+              error={current.error}
+              fallback="loomplane.yaml couldn't be loaded."
+              retry={current.refetch}
+            />
+          ) : (
+            <Skeleton className="h-32 rounded-xl" />
+          )}
+        </>
+      )}
+    </section>
+  )
 }
 
 function DraftedManifest({
@@ -262,23 +639,35 @@ function DraftedManifest({
   onPendingChange: (pending: boolean) => void
 }) {
   const draft = useQuery(useManifestsDraft, { path: { id: project.id } })
-  if (draft.status === "error") {
+  if (draft.status === "error")
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          {messageOf(draft.error, "No manifest could be drafted.")}
-        </AlertDescription>
-      </Alert>
+      <>
+        <CloudSectionHead title="loomplane.yaml" />
+        <CloudEmpty kind="notice" title="No loomplane.yaml yet">
+          It says where each service runs. Analyze the repository first, and
+          Loomplane drafts one from what it finds.
+        </CloudEmpty>
+      </>
     )
-  }
-  if (!draft.data) return <Skeleton className="h-80 w-full rounded-xl" />
+  if (!draft.data) return <Skeleton className="h-32 rounded-xl" />
+  const from = lockLabel(draft.data.sources)
   return (
-    <ManifestEditor
-      project={project}
-      yaml={draft.data.yaml}
-      draftedFrom={lockLabel(draft.data.sources)}
-      onPendingChange={onPendingChange}
-    />
+    <>
+      <CloudSectionHead
+        title={
+          <span className="inline-flex items-center gap-2">
+            loomplane.yaml <StatusPill tone="waiting">Draft</StatusPill>
+          </span>
+        }
+        description={`A draft from ${from || "the latest analysis"}: every service on the first target that runs it, and every resource found with good evidence. Check it, then save it as the first revision.`}
+      />
+      <ManifestEditor
+        project={project}
+        yaml={draft.data.yaml}
+        draftedFrom={from}
+        onPendingChange={onPendingChange}
+      />
+    </>
   )
 }
 
@@ -350,44 +739,17 @@ export function ManifestEditor({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FileCodeIcon className="size-4 text-muted-foreground" />
-          loomplane.yaml
-        </CardTitle>
-        <CardDescription>
-          {drafted
-            ? `A draft from ${draftedFrom}: every service on the first target that runs it, and every resource found with good evidence. Check it, then save it as the first revision.`
-            : "Where each service runs and what it needs. Every save adds a revision, and each plan names the one it was made from."}
-        </CardDescription>
-        <CardAction>
-          {drafted ? (
-            <Badge variant="outline" className="border-weld/60">
-              Draft
-            </Badge>
-          ) : (
-            <div className="flex items-center gap-2">
-              {revision !== undefined && revision > 1 && (
-                <ManifestHistory projectId={project.id} />
-              )}
-              <Badge variant="secondary" className="tabular-nums">
-                Revision {revision}
-              </Badge>
-            </div>
-          )}
-        </CardAction>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {conflict && (
-          <Alert>
-            <AlertDescription>
-              A newer manifest revision was saved. Your unsaved YAML is
-              preserved. Copy your changes, then undo to load the latest
-              revision before saving.
-            </AlertDescription>
-          </Alert>
-        )}
+    <div className="grid gap-2.5">
+      {conflict && (
+        <div role="alert">
+          <CloudCallout title="A newer revision was saved">
+            A newer manifest revision was saved. Your unsaved YAML is preserved.
+            Copy your changes, then undo to load the latest revision before
+            saving.
+          </CloudCallout>
+        </div>
+      )}
+      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
         <Textarea
           aria-label="Manifest"
           value={text}
@@ -395,56 +757,54 @@ export function ManifestEditor({
           readOnly={!mayEdit}
           spellCheck={false}
           aria-invalid={problems.length > 0}
-          className="max-h-[32rem] min-h-64 font-mono text-xs leading-relaxed md:text-xs"
+          className="max-h-[32rem] min-h-64 rounded-none border-0 bg-transparent font-mono text-xs leading-relaxed shadow-none focus-visible:ring-0 md:text-xs"
         />
-        {problems.length > 0 && (
-          <Alert variant="destructive">
-            <AlertTitle>The manifest wasn&apos;t saved</AlertTitle>
-            <AlertDescription>
-              <ul className="grid gap-1">
-                {problems.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
-            </AlertDescription>
-          </Alert>
-        )}
-      </CardContent>
-      {mayEdit && (
-        <CardFooter className="justify-between gap-3">
-          <span className="text-xs text-muted-foreground">
-            {savedAt && (
-              <>
-                Saved <time dateTime={savedAt}>{formatDate(savedAt)}</time>
-              </>
-            )}
-          </span>
-          <div className="flex gap-2">
-            {dirty && (
+        {mayEdit && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+            <span>
+              {savedAt && (
+                <>
+                  Saved <time dateTime={savedAt}>{formatDate(savedAt)}</time>
+                </>
+              )}
+            </span>
+            <span className="flex gap-2">
+              {dirty && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setText(yaml)
+                    setConflict(false)
+                    setProblems([])
+                  }}
+                >
+                  <RotateCcwIcon />
+                  Undo changes
+                </Button>
+              )}
               <Button
-                variant="ghost"
-
-                onClick={() => {
-                  setText(yaml)
-                  setConflict(false)
-                  setProblems([])
-                }}
+                size="sm"
+                disabled={(!dirty && !drafted) || save.isPending || conflict}
+                onClick={() => void submit()}
               >
-                <RotateCcwIcon />
-                Undo changes
+                {save.isPending && <Spinner />}
+                {drafted ? "Save manifest" : "Save revision"}
               </Button>
-            )}
-            <Button
-              disabled={(!dirty && !drafted) || save.isPending || conflict}
-              onClick={() => void submit()}
-            >
-              {save.isPending && <Spinner />}
-              {drafted ? "Save manifest" : "Save revision"}
-            </Button>
+            </span>
           </div>
-        </CardFooter>
+        )}
+      </div>
+      {problems.length > 0 && (
+        <CloudCallout tone="error" title="The manifest wasn't saved">
+          <ul className="grid gap-1">
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </CloudCallout>
       )}
-    </Card>
+    </div>
   )
 }
 
@@ -461,580 +821,50 @@ function manifestProblems(message: string): string[] {
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
 }
 
-function PlansCard({
-  project,
-  environments,
-  environment,
-  onEnvironment,
-  busy,
-  onOpen,
-}: {
-  project: Project
-  environments: Environment[]
-  environment: string
-  onEnvironment: (value: string) => void
-  busy: boolean
-  onOpen: (id: string) => void
-}) {
-  const { can } = useOrganization()
-  const plans = useQuery(usePlansList, { path: { id: project.id } })
-  const list = plans.data?.plans ?? []
-  useRefetchWhile(
-    list.some((p) => isPlanning(p.status)),
-    plans.refetch
-  )
-
-  return (
-    <Card size="sm" className="gap-0 py-0">
-      <CardHeader className="border-b px-4 pt-3">
-        <CardTitle>Plans</CardTitle>
-        <CardDescription className="text-[12.5px]">
-          What deploying an environment would do, worked out from the manifest
-          and one commit of each repository. Planning never touches a cloud.
-        </CardDescription>
-        {can("deployment:create") && environments.length > 0 && (
-          <PlanControls
-            project={project}
-            environments={environments}
-            environment={environment}
-            onEnvironment={onEnvironment}
-            busy={busy}
-            onPlanned={(id) => {
-              void plans.refetch()
-              onOpen(id)
-            }}
-          />
-        )}
-      </CardHeader>
-      <div>
-        {plans.status === "error" ? (
-          <Alert variant="destructive" className="m-4 w-auto">
-            <AlertDescription>
-              {messageOf(plans.error, "Plans couldn't be loaded.")}
-            </AlertDescription>
-          </Alert>
-        ) : !plans.data ? (
-          <div className="p-4">
-            <Skeleton className="h-24 w-full" />
-          </div>
-        ) : list.length === 0 ? (
-          <p className="px-4 py-3.5 text-[13px] text-muted-foreground">
-            No plans yet. Save a manifest, then plan an environment.
-          </p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead>Environment</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Changes</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>Planned</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((p) => (
-                <TableRow
-                  key={p.id}
-                  className="cursor-pointer"
-                  onClick={() => onOpen(p.id)}
-                >
-                  <TableCell className="font-medium">
-                    <button
-                      type="button"
-                      className="outline-none focus-visible:underline"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onOpen(p.id)
-                      }}
-                    >
-                      {p.environment}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <PlanStatus status={p.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">
-                    {summaryLine(p)}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {lockLabel(p.sources)} · r{p.manifestRevision}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <time dateTime={p.createdAt}>
-                      {formatDate(p.createdAt)}
-                    </time>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </div>
-    </Card>
-  )
-}
-
-// PlanControls plans an environment, moving the repositories the scope
-// picker chose. It's only shown once there's an environment, so what's
-// deployed is always read for a real one.
-function PlanControls({
-  project,
-  environments,
-  environment,
-  onEnvironment,
-  busy,
-  onPlanned,
-}: {
-  project: Project
-  environments: Environment[]
-  environment: string
-  onEnvironment: (value: string) => void
-  busy: boolean
-  onPlanned: (id: string) => void
-}) {
-  const create = useMutation(usePlansCreate)
-  const { aliases, known, locked, chosen, toggle, body } = useDeploymentScope(
-    project.id,
-    environment
-  )
-
-  const plan = async () => {
-    try {
-      const p = await create.mutateAsync({
-        path: { id: project.id },
-        body: { environment, ...body },
-      })
-      onPlanned(p.id)
-    } catch (err) {
-      toast.error(messageOf(err, "The plan couldn't start."))
-    }
-  }
-
-  const title = (alias: string) => {
-    if (locked.has(alias)) {
-      return known
-        ? `Nothing from ${alias} runs in ${environment} yet, so a plan has to include it`
-        : `${alias} moves until Loomplane knows what runs in ${environment}`
-    }
-    return chosen.includes(alias)
-      ? `${alias} moves in this plan`
-      : `${alias} is held at what's deployed`
-  }
-
-  return (
-    <CardAction className="flex flex-wrap items-center justify-end gap-2">
-      {aliases.length > 1 &&
-        aliases.map((alias) => (
-          <Button
-            key={alias}
-            type="button"
-            size="sm"
-            variant={chosen.includes(alias) ? "secondary" : "outline"}
-            aria-pressed={chosen.includes(alias)}
-            // A locked toggle stays focusable, so its title still says why
-            // it can't be turned off.
-            aria-disabled={locked.has(alias) || undefined}
-            className={cn(locked.has(alias) && "cursor-not-allowed")}
-            title={title(alias)}
-            onClick={() => toggle(alias)}
-          >
-            {alias}
-          </Button>
-        ))}
-      <Select
-        value={environment}
-        onValueChange={(v) => onEnvironment(v ?? environment)}
-      >
-        <SelectTrigger size="sm" aria-label="Environment" className="min-w-32">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {environments.map((e) => (
-            <SelectItem key={e.id} value={e.name}>
-              {e.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Button
-        size="sm"
-
-        disabled={
-          !environment ||
-          busy ||
-          create.isPending ||
-          (aliases.length > 0 && chosen.length === 0)
-        }
-        onClick={() => void plan()}
-      >
-        {create.isPending ? <Spinner /> : <WorkflowIcon />}
-        Plan
-      </Button>
-    </CardAction>
-  )
-}
-
-function summaryLine(p: Plan): string {
-  if (isPlanning(p.status)) return "Working it out"
-  if (p.status === "failed") return "None"
-  if (p.problems.length > 0)
-    return `${p.problems.length} ${p.problems.length === 1 ? "problem" : "problems"}`
-  const n = changeCount(p)
-  return n === 0
-    ? "Nothing to change"
-    : `${n} ${n === 1 ? "change" : "changes"}`
-}
-
-function PlanStatus({ status }: { status: string }) {
-  return <StatusPill {...planStatus(status)} />
-}
-
-// A plan's tones in the run colors: waiting is amber, done is green.
-const pillTones: Record<Tone, RunTone> = {
-  ok: "live",
-  wait: "waiting",
-  bad: "failed",
-  quiet: "quiet",
-}
-
-/** StatusPill is a status in the tinted pill the rest of the app uses. */
-function StatusPill({ label, tone }: { label: string; tone: Tone }) {
-  return <RunPill tone={pillTones[tone]}>{label}</RunPill>
-}
-
-function PlanReview({
-  id,
-  project,
-  onPlanned,
-}: {
-  id: string
-  project: Project
-  onPlanned: (id: string) => void
-}) {
-  const plan = useQuery(usePlansGet, { path: { id } })
-  useRefetchWhile(!!plan.data && isPlanning(plan.data.status), plan.refetch)
-  if (plan.status === "error") {
-    return (
-      <div className="p-4">
-        <Alert variant="destructive">
-          <AlertDescription>
-            {messageOf(plan.error, "The plan couldn't be loaded.")}
-          </AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-  if (!plan.data) {
-    return (
-      <div className="grid gap-3 p-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-40 w-full" />
-      </div>
-    )
-  }
-  return <PlanBody plan={plan.data} project={project} onPlanned={onPlanned} />
-}
-
-function PlanBody({
-  plan,
-  project,
-  onPlanned,
-}: {
-  plan: Plan
-  project: Project
-  onPlanned: (id: string) => void
-}) {
-  const { can } = useOrganization()
-  const create = useMutation(usePlansCreate)
-  const invalidate = useInvalidate()
-  const planned = !isPlanning(plan.status) && plan.status !== "failed"
-
-  const replan = async () => {
-    try {
-      const p = await create.mutateAsync({
-        path: { id: project.id },
-        body: {
-          environment: plan.environment,
-          // Planning again moves what this plan moved and holds what it held.
-          ...scopeBody(
-            plan.sources.map((s) => s.alias),
-            plan.sources.filter((s) => s.inScope).map((s) => s.alias)
-          ),
-        },
-      })
-      invalidate(usePlansList)
-      onPlanned(p.id)
-    } catch (err) {
-      toast.error(messageOf(err, "The plan couldn't start."))
-    }
-  }
-
-  return (
-    <>
-      <SheetHeader className="border-b">
-        <SheetTitle className="flex items-center gap-3">
-          Plan for {plan.environment}
-          <Badge variant="outline" className="font-normal">
-            <PlanStatus status={plan.status} />
-          </Badge>
-        </SheetTitle>
-        <SheetDescription>
-          Made from manifest revision {plan.manifestRevision}.{" "}
-          {plan.status === "ready" && plan.expiresAt && (
-            <>
-              It waits for a decision until{" "}
-              <time dateTime={plan.expiresAt}>
-                {formatDate(plan.expiresAt)}
-              </time>
-              .
-            </>
-          )}
-          <DeploysWith plan={plan} />
-          {plan.decidedAt && plan.status !== "superseded" && (
-            <>
-              Settled{" "}
-              <time dateTime={plan.decidedAt}>
-                {formatDate(plan.decidedAt)}
-              </time>
-              {plan.decisionNote ? `: ${plan.decisionNote}` : "."}
-            </>
-          )}
-        </SheetDescription>
-      </SheetHeader>
-
-      <div className="flex-1 divide-y overflow-y-auto">
-        {plan.sources.length > 0 && (
-          <Section title="Built from">
-            <Lockset sources={plan.sources} />
-          </Section>
-        )}
-        {isPlanning(plan.status) && (
-          <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
-            <Spinner />
-            Working out what this environment needs
-          </div>
-        )}
-        {plan.status === "failed" && (
-          <div className="px-4 py-4">
-            <Alert variant="destructive">
-              <AlertTitle>Planning failed</AlertTitle>
-              <AlertDescription>{plan.error}</AlertDescription>
-            </Alert>
-          </div>
-        )}
-        {plan.problems.length > 0 && (
-          <Section title="Problems to fix before this can be approved">
-            <Findings
-              findings={plan.problems}
-              tone="bad"
-              project={project}
-              environment={plan.environment}
-              sources={plan.sources}
-            />
-          </Section>
-        )}
-        {plan.warnings.length > 0 && (
-          <Section title="Worth a look">
-            <Findings
-              findings={plan.warnings}
-              tone="warn"
-              project={project}
-              environment={plan.environment}
-              sources={plan.sources}
-            />
-          </Section>
-        )}
-        {plan.status === "approved" && plan.executable && (
-          <Section title="Deployment">
-            <DeploymentProgress planId={plan.id} />
-          </Section>
-        )}
-        {planned && (
-          <Section
-            title={
-              plan.status === "approved" ? "What it does" : "What it would do"
-            }
-          >
-            {plan.actions.length === 0 ? (
-              <p className="text-[13px] text-muted-foreground">
-                Nothing: what&apos;s deployed already matches the manifest.
-              </p>
-            ) : (
-              <Steps actions={plan.actions} />
-            )}
-          </Section>
-        )}
-      </div>
-
-      <SheetFooter className="border-t">
-        {plan.status === "ready" && can("deployment:approve") ? (
-          <Decide plan={plan} />
-        ) : (
-          !isOpen(plan.status) &&
-          can("deployment:create") && (
-            <Button
-              variant="outline"
-
-              disabled={create.isPending}
-              onClick={() => void replan()}
-            >
-              {create.isPending ? <Spinner /> : <WorkflowIcon />}
-              Plan {plan.environment} again
-            </Button>
-          )
-        )}
-      </SheetFooter>
-    </>
-  )
-}
-
-/**
- * Lockset lists the commit a plan pinned in each repository, and whether
- * the plan moves that repository or holds it at what's deployed.
- */
-function Lockset({ sources }: { sources: PlanSource[] }) {
-  return (
-    <ul className="grid gap-2">
-      {sources.map((s) => (
-        <li
-          key={s.sourceId}
-          className={cn(
-            "flex items-center gap-3 text-[13px]",
-            !s.inScope && "text-muted-foreground"
-          )}
-        >
-          <span className="min-w-16 font-medium">{s.alias}</span>
-          <a
-            className="font-mono text-xs underline-offset-4 hover:underline"
-            href={commitURL(s.repository, s.commitSha)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {shortSHA(s.commitSha)}
-          </a>
-          <Badge variant={s.inScope ? "secondary" : "outline"}>
-            {s.inScope ? "moves" : "held"}
-          </Badge>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className="grid grid-cols-[minmax(0,1fr)] gap-3 px-4 py-4">
-      <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
-      {children}
-    </section>
-  )
-}
-
-// A finding can rest on dozens of lines; the first few make the case.
-const evidenceShown = 3
-
-/** DeploysWith names the cloud connections a plan deploys with. */
-function DeploysWith({ plan }: { plan: Plan }) {
-  const list = useQuery(useConnectionsList)
-  const names = planConnections(plan).map(({ cloud, id }) => {
-    const c = list.data?.connections.find((x) => x.id === id)
-    return `${c?.name ?? "a removed connection"} (${cloudLabel(cloud)})`
-  })
-  if (names.length === 0) return null
-  return <>Deploys with {names.join(" and ")}. </>
-}
-
 // Findings about which cloud connection to deploy with carry the cloud
 // in their path, connections.<cloud>, which isn't a manifest path.
 const connectionPath = "connections."
 
 /**
- * Findings lists a plan's problems or warnings. A resource analysis found
- * that the manifest doesn't provision can be added or ignored from here,
- * and the connection an environment deploys with chosen.
+ * FindingActions are the fixes a plan's finding offers, for the deployment
+ * page to show beside it: connect a cloud, pick the account an environment
+ * deploys it with, or add or ignore a resource the manifest doesn't
+ * provision. Each saves a setting; planning again shows the result.
  */
-function Findings({
-  findings,
-  tone,
+export function FindingActions({
+  finding: f,
   project,
   environment,
-  sources,
 }: {
-  findings: Finding[]
-  tone: "bad" | "warn"
+  finding: Finding
   project: Project
   environment: string
-  sources: SourceLink[]
 }) {
   const { can } = useOrganization()
-  const mayEdit = can("project:update")
-  const mayConnect = can("cloud_account:manage")
-  return (
-    <ul className="grid grid-cols-[minmax(0,1fr)] gap-3">
-      {findings.map((f, i) => (
-        <li key={`${f.code}:${f.name ?? ""}:${i}`} className="flex gap-2.5">
-          <span
-            aria-hidden="true"
-            className={cn(
-              "mt-1.5 size-1.5 shrink-0 rounded-full",
-              tone === "bad" ? "bg-destructive" : "bg-weld"
-            )}
-          />
-          <div className="grid min-w-0 gap-1.5">
-            <p className="text-[13px]">{f.message}</p>
-            {f.path && !f.path.startsWith(connectionPath) && (
-              <code className="font-mono text-xs text-muted-foreground">
-                {f.path}
-              </code>
-            )}
-            {f.code === "no-connection" && (
-              <Link
-                to="/integrations"
-                className="text-[13px] underline-offset-4 hover:underline"
-              >
-                Connect one under Integrations
-              </Link>
-            )}
-            {mayConnect &&
-              f.path?.startsWith(connectionPath) &&
-              f.code !== "no-connection" && (
-                <ConnectionPicker
-                  project={project}
-                  environment={environment}
-                  cloud={f.path.slice(connectionPath.length)}
-                />
-              )}
-            {f.evidence && f.evidence.length > 0 && (
-              <>
-                <EvidenceList
-                  sources={sources}
-                  evidence={f.evidence.slice(0, evidenceShown)}
-                />
-                {f.evidence.length > evidenceShown && (
-                  <p className="text-xs text-muted-foreground">
-                    And {f.evidence.length - evidenceShown} more places.
-                  </p>
-                )}
-              </>
-            )}
-            {mayEdit &&
-              f.name &&
-              (f.code === "unconfirmed-resource" ||
-                f.code === "unprovided-resource") && (
-                <ResourceChoice project={project} kind={f.name} />
-              )}
-          </div>
-        </li>
-      ))}
-    </ul>
+  if (f.code === "no-connection")
+    return (
+      <Link
+        to="/integrations"
+        className="text-[13px] underline-offset-4 hover:underline"
+      >
+        Connect one under Integrations
+      </Link>
+    )
+  if (can("cloud_account:manage") && f.path?.startsWith(connectionPath))
+    return (
+      <ConnectionPicker
+        project={project}
+        environment={environment}
+        cloud={f.path.slice(connectionPath.length)}
+      />
+    )
+  if (
+    can("project:update") &&
+    f.name &&
+    (f.code === "unconfirmed-resource" || f.code === "unprovided-resource")
   )
+    return <ResourceChoice project={project} kind={f.name} />
+  return null
 }
 
 /**
@@ -1057,13 +887,12 @@ function ConnectionPicker({
       (c) => c.cloud === cloud && c.status === "ready"
     ) ?? []
   if (ready.length === 0) return null
-
   const pick = async (id: string | null) => {
     if (!id) return
     try {
       await choose.mutateAsync({
         path: { id: project.id, environment, cloud },
-        body: { connection_id: id },
+        body: { connectionId: id },
       })
       const name = ready.find((c) => c.id === id)?.name ?? "it"
       toast.success(
@@ -1073,38 +902,30 @@ function ConnectionPicker({
       toast.error(messageOf(err, "The connection wasn't chosen."))
     }
   }
-
   return (
-    <div className="pt-1">
-      <Select
-        onValueChange={(v) => void pick(typeof v === "string" ? v : null)}
+    <Select onValueChange={(v) => void pick(typeof v === "string" ? v : null)}>
+      <SelectTrigger
+        size="sm"
+        className="w-fit min-w-48"
+        aria-label={`Connection for ${cloudLabel(cloud)}`}
+        disabled={choose.isPending}
       >
-        <SelectTrigger
-          size="sm"
-          className="w-fit min-w-48"
-          aria-label={`Connection for ${cloudLabel(cloud)}`}
-          disabled={choose.isPending}
-        >
-          <SelectValue
-            placeholder={`Choose a ${cloudLabel(cloud)} connection`}
-          />
-        </SelectTrigger>
-        <SelectContent>
-          {ready.map((c) => (
-            <SelectItem key={c.id} value={c.id}>
-              {c.name} · {c.account}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+        <SelectValue placeholder={`Choose a ${cloudLabel(cloud)} connection`} />
+      </SelectTrigger>
+      <SelectContent>
+        {ready.map((c) => (
+          <SelectItem key={c.id} value={c.id}>
+            {c.name} · {c.account}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 
 /**
  * ResourceChoice answers a finding about a resource the manifest doesn't
- * provision: add one, or ignore the kind. Either saves a new manifest
- * revision; planning again shows the result.
+ * provision: add one, or ignore the kind. Either saves a new revision.
  */
 function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
@@ -1118,7 +939,6 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
   const provisionable = catalog.some((p) =>
     p.provisions?.some((v) => v.kind === kind)
   )
-
   // The edit is made to the saved YAML, on the server, so its comments
   // survive.
   const apply = async (body: EditInputBody, done: string) => {
@@ -1130,14 +950,12 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       toast.error(messageOf(err, "The manifest wasn't saved."))
     }
   }
-
   return (
-    <div className="flex flex-wrap gap-2 pt-1">
+    <span className="flex flex-wrap gap-2">
       {provisionable && (
         <Button
           size="sm"
           variant="outline"
-
           disabled={save.isPending}
           onClick={() =>
             void apply(
@@ -1151,8 +969,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       )}
       <Button
         size="sm"
-        variant="ghost"
-
+        variant="outline"
         disabled={save.isPending}
         onClick={() =>
           void apply(
@@ -1163,7 +980,7 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       >
         It doesn&apos;t use {resourceLabel(kind)}
       </Button>
-    </div>
+    </span>
   )
 }
 
@@ -1176,370 +993,4 @@ function added(m: Manifest, kind: string, catalog: Provider[]) {
     ) ?? kind
   const r = (next.resources ?? {})[name] as { provider?: string }
   return { name, kind, provider: r?.provider }
-}
-
-function Steps({ actions }: { actions: Action[] }) {
-  const grouped = steps(actions)
-  return (
-    <ol className="grid gap-4">
-      {grouped.map((group, i) => (
-        <li key={group[0].step} className="grid gap-2">
-          {grouped.length > 1 && (
-            <p className="text-xs text-muted-foreground">
-              {i === 0 ? "First" : "Then"}
-            </p>
-          )}
-          <ul className="grid gap-2">
-            {group.map((a) => (
-              <ActionRow key={a.id} action={a} />
-            ))}
-          </ul>
-        </li>
-      ))}
-    </ol>
-  )
-}
-
-function ActionRow({ action: a }: { action: Action }) {
-  const connections = useQuery(useConnectionsList)
-  const target = a.connectionId
-    ? connections.data?.connections.find(
-        (connection) => connection.id === a.connectionId
-      )
-    : undefined
-  const env = a.service?.env ?? []
-  const routes = a.service?.gateway ?? []
-  return (
-    <li className="grid gap-1.5 rounded-xl bg-card px-3 py-2.5 ring-1 ring-border">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          variant={a.op === "delete" ? "destructive" : "secondary"}
-          className="font-normal"
-        >
-          {opLabel(a.op)}
-        </Badge>
-        <span className="font-medium">{a.name}</span>
-        <span className="text-[13px] text-muted-foreground">
-          {a.creates} on {a.provider}
-          {a.connectionId ? `, ${target?.name ?? a.connectionId}` : ""}
-          {a.region ? `, ${a.region}` : ""}
-        </span>
-      </div>
-      {a.reason && <p className="text-xs text-muted-foreground">{a.reason}</p>}
-      {a.changes && a.changes.length > 0 && (
-        <ul className="grid gap-0.5 font-mono text-xs">
-          {a.changes.map((c) => (
-            <li key={c.field}>
-              {c.field}: <span className="text-muted-foreground">{c.from}</span>{" "}
-              → {c.to}
-            </li>
-          ))}
-        </ul>
-      )}
-      {routes.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          A gateway Loomplane builds, routing{" "}
-          {routes.map((r, i) => (
-            <span key={r.path}>
-              {i > 0 && ", "}
-              <code className="font-mono">{r.path}</code> to {r.to}
-              {r.stripPrefix && " without the prefix"}
-            </span>
-          ))}
-        </p>
-      )}
-      {env.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          Gets{" "}
-          {env.map((e, i) => (
-            <span key={e.key}>
-              {i > 0 && ", "}
-              <code className="font-mono">{e.key}</code> from {e.from}
-              {e.address && (
-                <>
-                  {" "}
-                  at <code className="font-mono">{e.address}</code>, privately
-                </>
-              )}
-            </span>
-          ))}
-        </p>
-      )}
-    </li>
-  )
-}
-
-/** Decide approves or rejects a ready plan, naming its revision. */
-function Decide({ plan }: { plan: Plan }) {
-  const approve = useMutation(usePlansApprove)
-  const reject = useMutation(usePlansReject)
-  const invalidate = useInvalidate()
-  const [note, setNote] = useState("")
-  const busy = approve.isPending || reject.isPending
-
-  const decide = async (yes: boolean) => {
-    try {
-      const body = { revision: plan.revision, note: note.trim() || undefined }
-      const p = yes
-        ? await approve.mutateAsync({ path: { id: plan.id }, body })
-        : await reject.mutateAsync({ path: { id: plan.id }, body })
-      invalidate(usePlansList)
-      invalidate(usePlansGet)
-      toast.success(
-        p.status === "stale"
-          ? "What's deployed changed since this plan was made. Plan again."
-          : yes
-            ? plan.executable
-              ? "Approved. Deploying now."
-              : "Approved"
-            : "Rejected"
-      )
-    } catch (err) {
-      toast.error(messageOf(err, "The decision wasn't recorded."))
-    }
-  }
-
-  return (
-    <div className="grid w-full gap-2">
-      <Textarea
-        aria-label="Note"
-        placeholder="A note for the record (optional)"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        maxLength={2000}
-        className="min-h-12"
-      />
-      <div className="flex justify-end gap-2">
-        <Button
-          variant="ghost"
-
-          disabled={busy}
-          onClick={() => void decide(false)}
-        >
-          {reject.isPending && <Spinner />}
-          Reject
-        </Button>
-        <Button
-          disabled={busy || plan.problems.length > 0}
-          onClick={() => void decide(true)}
-        >
-          {approve.isPending && <Spinner />}
-          Approve
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-/**
- * DeploymentProgress shows an approved plan's deployment, step by step,
- * as it goes.
- */
-function DeploymentProgress({ planId }: { planId: string }) {
-  const deployment = useQuery(useDeploymentsForPlan, { path: { id: planId } })
-  const missing =
-    deployment.status === "error" && statusOf(deployment.error) === 404
-  // It starts a moment after approval, then runs for a while.
-  useRefetchWhile(
-    missing || (!!deployment.data && isDeploying(deployment.data.status)),
-    deployment.refetch,
-    2000
-  )
-  if (missing || !deployment.data) {
-    return (
-      <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
-        <Spinner />
-        Starting the deployment
-      </p>
-    )
-  }
-  return <DeploymentSteps deployment={deployment.data} />
-}
-
-function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
-  return (
-    <div className="grid gap-3">
-      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
-        <StatusPill {...deploymentStatus(d.status)} />
-        <span className="text-muted-foreground">
-          Started <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
-          {d.finishedAt && (
-            <>
-              , finished{" "}
-              <time dateTime={d.finishedAt}>{formatDate(d.finishedAt)}</time>
-            </>
-          )}
-        </span>
-      </p>
-      {d.error && (
-        <Alert variant="destructive">
-          <AlertDescription className="wrap-anywhere">
-            {d.error}
-          </AlertDescription>
-        </Alert>
-      )}
-      {d.status === "failed" && <RetryDeployment deployment={d} />}
-      {d.steps.length === 0 ? (
-        <p className="text-[13px] text-muted-foreground">
-          Nothing to change: everything was already deployed.
-        </p>
-      ) : (
-        <ul className="grid gap-2">
-          {d.steps.map((s) => (
-            <li
-              key={s.actionId}
-              className="grid gap-1 rounded-xl bg-card px-3 py-2.5 ring-1 ring-border"
-            >
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="font-medium">{s.name}</span>
-                <span className="text-[13px]">
-                  <StatusPill {...stepStatus(s.status)} />
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {opLabel(s.op)} on {s.provider}
-                </span>
-              </div>
-              {s.message && (
-                <p className="text-xs wrap-anywhere text-muted-foreground">
-                  {s.message}
-                </p>
-              )}
-              {s.warnings?.map((w, i) => (
-                <p key={i} className="flex gap-2 text-xs wrap-anywhere">
-                  <span
-                    aria-hidden="true"
-                    className="mt-1 size-1.5 shrink-0 rounded-full bg-weld"
-                  />
-                  <span>
-                    <span className="sr-only">Warning: </span>
-                    {w}
-                  </span>
-                </p>
-              ))}
-              {s.url && s.status === "succeeded" && (
-                <ServiceAddress address={s.url} className="w-fit text-[13px]" />
-              )}
-              {s.image && (
-                <code className="font-mono text-xs wrap-anywhere text-muted-foreground">
-                  {s.image}
-                </code>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-/** DeploymentsCard lists the project's latest deployments. */
-function DeploymentsCard({
-  project,
-  onOpen,
-}: {
-  project: Project
-  onOpen: (planId: string) => void
-}) {
-  const list = useQuery(useDeploymentsList, { path: { id: project.id } })
-  const deployments = list.data?.deployments ?? []
-  useRefetchWhile(
-    deployments.some((d) => isDeploying(d.status)),
-    list.refetch,
-    2000
-  )
-  if (list.status === "error" || deployments.length === 0) return null
-  return (
-    <Card size="sm" className="gap-0 py-0">
-      <CardHeader className="border-b px-4 pt-3">
-        <CardTitle>Deployments</CardTitle>
-        <CardDescription className="text-[12.5px]">
-          Each approved plan, carried out. Open one to see its steps.
-        </CardDescription>
-      </CardHeader>
-      <div>
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Environment</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Commit</TableHead>
-              <TableHead>Started</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {deployments.map((d) => (
-              <TableRow
-                key={d.id}
-                className="cursor-pointer"
-                onClick={() => onOpen(d.planId)}
-              >
-                <TableCell className="font-medium">
-                  <button
-                    type="button"
-                    className="outline-none focus-visible:underline"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onOpen(d.planId)
-                    }}
-                  >
-                    {d.environment}
-                  </button>
-                </TableCell>
-                <TableCell>
-                  <StatusPill {...deploymentStatus(d.status)} />
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  {deployedCommits(d)}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </Card>
-  )
-}
-
-/**
- * RetryDeployment runs a failed deployment's failed and skipped steps
- * again, with the plan that was approved.
- */
-function RetryDeployment({ deployment: d }: { deployment: Deployment }) {
-  const { can } = useOrganization()
-  const retry = useMutation(useDeploymentsRetry)
-  const invalidate = useInvalidate()
-  if (!can("deployment:approve")) return null
-
-  const run = async () => {
-    try {
-      await retry.mutateAsync({ path: { id: d.id } })
-      invalidate(useDeploymentsForPlan)
-      invalidate(useDeploymentsList)
-      toast.success("Retrying from the step that failed")
-    } catch (err) {
-      toast.error(messageOf(err, "The deployment couldn't be retried."))
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-3">
-      <Button
-        variant="outline"
-
-        disabled={retry.isPending}
-        onClick={() => void run()}
-      >
-        {retry.isPending ? <Spinner /> : <RotateCcwIcon />}
-        Retry from the failed step
-      </Button>
-      <span className="text-xs text-muted-foreground">
-        Steps that succeeded stay as they are.
-        {d.retries > 0 &&
-          ` Retried ${d.retries} ${d.retries === 1 ? "time" : "times"} so far.`}
-      </span>
-    </div>
-  )
 }

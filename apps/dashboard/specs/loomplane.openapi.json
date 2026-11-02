@@ -18109,6 +18109,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -24550,6 +24556,12 @@
           },
           "rollback": {
             "$ref": "#/components/schemas/Rollback"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "sources": {
             "type": "array",

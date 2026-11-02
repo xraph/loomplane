@@ -10,7 +10,7 @@ import type {
   Project,
   Step,
 } from "@/client/forge/loomplane/types"
-import { opLabel } from "@/lib/plans"
+import { opLabel, planStatus, stepStatus } from "@/lib/plans"
 
 /** How a run is doing, in the words the deployment views use. */
 export type RunStatus =
@@ -61,15 +61,28 @@ export interface Run {
   thread: ThreadStep[]
 }
 
+/**
+ * runStatusText names a run's status in the words the cloud pages use
+ * (statusWord): "Waiting for you", "Deployed", "Cancelled".
+ */
 export const runStatusText: Record<RunStatus, string> = {
   running: "In progress",
-  waiting: "Needs approval",
+  waiting: "Waiting for you",
   paused: "Paused for capacity",
   blocked: "Blocked",
   approved: "Approved",
-  succeeded: "Succeeded",
+  succeeded: "Deployed",
   failed: "Failed",
-  canceled: "Canceled",
+  canceled: "Cancelled",
+}
+
+/**
+ * runStatusWord is runStatusText with "In progress" said exactly: a plan
+ * still being worked out is planning, an approved one is deploying.
+ */
+export function runStatusWord(r: Run): string {
+  if (r.status !== "running") return runStatusText[r.status]
+  return r.plan.status === "planning" ? "Planning" : "Deploying"
 }
 
 /** isLive reports whether a run is still moving or waiting on someone. */
@@ -86,17 +99,6 @@ const stepProgress: Record<string, number> = {
   deploying: 0.65,
   verifying: 0.9,
   ramping: 0.8,
-}
-
-const stepDetail: Record<string, string> = {
-  pending: "Not started",
-  building: "Building",
-  deploying: "Deploying",
-  verifying: "Verifying",
-  ramping: "Taking a share of traffic",
-  succeeded: "Done",
-  failed: "Failed",
-  skipped: "Skipped",
 }
 
 function stepState(status: string): ThreadState {
@@ -187,11 +189,11 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
     detail: decided
       ? "Approved"
       : plan.status === "ready"
-        ? "Waiting for approval"
+        ? "Waiting for you"
         : plan.status === "blocked"
           ? "Blocked by problems in the plan"
           : closed.has(plan.status)
-            ? plan.status[0]?.toUpperCase() + plan.status.slice(1)
+            ? planStatus(plan.status).label
             : "Not started",
     finishedAt: plan.decidedAt,
   }
@@ -226,7 +228,7 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
       state,
       progress: s ? stepProgress[s.status] : undefined,
       detail: s
-        ? stepDetail[s.status]
+        ? stepStatus(s.status).label
         : state === "canceled"
           ? "Not run"
           : "Not started",
@@ -245,9 +247,9 @@ function phaseOf(
   steps: ThreadStep[],
   d?: Deployment
 ): string {
-  if (status === "waiting") return "Waiting for approval"
+  if (status === "waiting") return "Waiting for you"
   if (status === "paused") return "Paused for capacity"
-  if (d?.status === "cancelled") return "Deployment canceled"
+  if (d?.status === "cancelled") return "Deployment cancelled"
   if (status === "blocked") return "Blocked by problems in the plan"
   if (status === "canceled") {
     return plan.status === "superseded"
@@ -268,7 +270,7 @@ function phaseOf(
   return now ? `${now.detail ?? "Running"}: ${now.name}` : "Starting"
 }
 
-/** toRun joins a plan with its deployment, if it has one. */
+/** normalizePlan fills the collections an older plan sends as null. */
 export function normalizePlan(plan: Plan): Plan {
   return {
     ...plan,
@@ -282,6 +284,7 @@ export function normalizePlan(plan: Plan): Plan {
   }
 }
 
+/** toRun joins a plan with its deployment, if it has one. */
 export function toRun(plan: Plan, d?: Deployment, project?: Project): Run {
   plan = normalizePlan(plan)
   const status = statusOf(plan, d)
@@ -407,7 +410,7 @@ export function runLog(
     p.createdAt,
     "info",
     "plan",
-    `${nameOf(p.createdBy)} asked for a plan of ${r.environment} from manifest revision ${p.manifestRevision}`,
+    `${nameOf(p.createdBy)} asked for a plan of ${r.environment} from loomplane.yaml revision ${p.manifestRevision}`,
     "plan"
   )
   for (const s of p.sources) {
@@ -525,7 +528,7 @@ export function runLog(
     if (d.status === "paused" && d.capacityWait)
       add(d.capacityWait.createdAt, "warn", "deploy", "Paused for capacity")
     if (d.status === "cancelled")
-      add(d.finishedAt, "warn", "deploy", "Deployment canceled")
+      add(d.finishedAt, "warn", "deploy", "Deployment cancelled")
   }
   return out.sort((a, b) => a.ts - b.ts)
 }

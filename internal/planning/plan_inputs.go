@@ -12,8 +12,11 @@ import (
 type planInputs struct {
 	graph          *graph.Graph
 	held, excluded map[string]bool
-	exclusions     []string
-	revision       *manifests.Revision
+	// only are the services the plan names, or nil when it names none and
+	// moves them all.
+	only       map[string]bool
+	exclusions []string
+	revision   *manifests.Revision
 }
 
 func (s *Service) loadPlanInputs(ctx context.Context, plan *Plan) (*planInputs, error) {
@@ -56,5 +59,12 @@ func (s *Service) loadPlanInputs(ctx context.Context, plan *Plan) (*planInputs, 
 		return nil, fmt.Errorf("%w: manifest revision %d no longer parses", ErrInvalid, rev.Revision)
 	}
 
-	return &planInputs{graph: g, held: held, excluded: excluded, exclusions: exclusions, revision: rev}, nil
+	var only map[string]bool
+	if len(plan.Services) > 0 {
+		only = map[string]bool{}
+		for _, name := range plan.Services {
+			only[name] = true
+		}
+	}
+	return &planInputs{graph: g, held: held, excluded: excluded, only: only, exclusions: exclusions, revision: rev}, nil
 }

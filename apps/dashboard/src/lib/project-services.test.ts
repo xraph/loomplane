@@ -14,11 +14,14 @@ import {
   covering,
   deployedConfig,
   enabledIn,
+  filterExcluded,
   sizeLabel,
   filterRows,
   locationOf,
   matchesPath,
   serviceRows,
+  serviceStatus,
+  serviceTabOf,
   stateOf,
   suggestedRule,
 } from "./project-services"
@@ -203,7 +206,8 @@ describe("deployedConfig", () => {
       { key: "DATABASE_URL", from: "db", subject: "resource" },
     ])
     expect(c.port).toBe(8780)
-    expect(sizeLabel(c)).toBe("1 vCPU, 1 GB")
+    expect(sizeLabel(c)).toBe("1 vCPU, 1 GiB")
+    expect(sizeLabel({ env: [], memoryMB: 512 })).toBe("0.5 GiB")
     expect(c.healthPath).toBe("/_/health")
   })
 
@@ -253,5 +257,50 @@ describe("enabledIn", () => {
     expect(enabledIn(svc, "staging")).toBe(true)
     expect(enabledIn(svc, "production")).toBe(true)
     expect(enabledIn(undefined, "production")).toBe(true)
+  })
+})
+
+describe("serviceStatus", () => {
+  it("names each state, shorter in a table", () => {
+    expect(serviceStatus(undefined)).toEqual({
+      tone: "quiet",
+      label: "Not deployed",
+    })
+    expect(serviceStatus(bind("web"))).toEqual({ tone: "live", label: "Live" })
+    expect(serviceStatus(bind("web", { drift: "changed" }))).toEqual({
+      tone: "waiting",
+      label: "Changed outside Loomplane",
+    })
+    expect(serviceStatus(bind("web", { drift: "missing" }), true)).toEqual({
+      tone: "waiting",
+      label: "Deleted outside",
+    })
+  })
+})
+
+describe("serviceTabOf", () => {
+  it("keeps a known tab and drops anything else", () => {
+    expect(serviceTabOf("variables")).toBe("variables")
+    expect(serviceTabOf("graph")).toBeUndefined()
+    expect(serviceTabOf(3)).toBeUndefined()
+  })
+})
+
+describe("filterExcluded", () => {
+  const excluded = [
+    { service: svc("svc:x", "build", "deployments/build"), rule: {} },
+    { service: svc("svc:y", "seed", "cmd/seed"), rule: {} },
+  ] as unknown as Parameters<typeof filterExcluded>[0]
+  it("matches a name or a path", () => {
+    expect(filterExcluded(excluded, " ").map((x) => x.service.name)).toEqual([
+      "build",
+      "seed",
+    ])
+    expect(
+      filterExcluded(excluded, "DEPLOY").map((x) => x.service.name)
+    ).toEqual(["build"])
+    expect(filterExcluded(excluded, "seed").map((x) => x.service.name)).toEqual(
+      ["seed"]
+    )
   })
 })

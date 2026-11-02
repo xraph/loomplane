@@ -139,14 +139,12 @@ export function useAnalyses(projectID: string) {
   }
 }
 
-/** AnalyzeActions start an analysis of the default branch or another ref. */
-export function AnalyzeActions({
-  project,
-  running,
-}: {
-  project: Project
-  running: boolean
-}) {
+/**
+ * useAnalyze starts analyses of a project: run("") reads the default
+ * branch, choose() opens a dialog that asks for a branch, tag or commit.
+ * Render dialog wherever the trigger lives, so a menu item can open it.
+ */
+export function useAnalyze(project: Project, running: boolean) {
   const start = useMutation(useAnalysesCreate)
   const invalidate = useInvalidate()
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
@@ -176,62 +174,92 @@ export function AnalyzeActions({
     void run(ref.trim())
   }
 
+  const dialog = (
+    <Dialog open={choosing} onOpenChange={setChoosing}>
+      <DialogContent className="sm:max-w-md">
+        <form onSubmit={submit} className="grid gap-5">
+          <DialogHeader>
+            <DialogTitle>Analyze a branch, tag or commit</DialogTitle>
+            <DialogDescription>
+              Loomplane analyzes the exact commit the name points at now.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="analysis-ref">Ref</FieldLabel>
+              <Input
+                id="analysis-ref"
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+                placeholder="main, v1.4.0 or a commit SHA"
+                className="font-mono"
+                autoFocus
+                required
+              />
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setChoosing(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={start.isPending || !ref.trim()}>
+              {start.isPending && <Spinner />}
+              Analyze
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+
+  return {
+    single,
+    busy,
+    running,
+    run: (target = "") => void run(target),
+    choose: () => setChoosing(true),
+    dialog,
+  }
+}
+
+/** AnalyzeActions start an analysis of the default branch or another ref. */
+export function AnalyzeActions({
+  project,
+  running,
+  size = "default",
+}: {
+  project: Project
+  running: boolean
+  size?: "default" | "sm"
+}) {
+  const analyze = useAnalyze(project, running)
   return (
     <>
-      {single && (
+      {analyze.single && (
         <Button
           variant="outline"
-
-          onClick={() => setChoosing(true)}
-          disabled={busy}
+          size={size}
+          onClick={analyze.choose}
+          disabled={analyze.busy}
         >
           <GitBranchIcon />
           Another branch
         </Button>
       )}
-      <Button variant="outline" onClick={() => void run("")} disabled={busy}>
-        {busy ? <Spinner /> : <ScanSearchIcon />}
+      <Button
+        variant="outline"
+        size={size}
+        onClick={() => analyze.run()}
+        disabled={analyze.busy}
+      >
+        {analyze.busy ? <Spinner /> : <ScanSearchIcon />}
         {running ? "Analyzing" : "Analyze"}
       </Button>
-      <Dialog open={choosing} onOpenChange={setChoosing}>
-        <DialogContent className="sm:max-w-md">
-          <form onSubmit={submit} className="grid gap-5">
-            <DialogHeader>
-              <DialogTitle>Analyze a branch, tag or commit</DialogTitle>
-              <DialogDescription>
-                Loomplane analyzes the exact commit the name points at now.
-              </DialogDescription>
-            </DialogHeader>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="analysis-ref">Ref</FieldLabel>
-                <Input
-                  id="analysis-ref"
-                  value={ref}
-                  onChange={(e) => setRef(e.target.value)}
-                  placeholder="main, v1.4.0 or a commit SHA"
-                  className="font-mono"
-                  autoFocus
-                  required
-                />
-              </Field>
-            </FieldGroup>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setChoosing(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={start.isPending || !ref.trim()}>
-                {start.isPending && <Spinner />}
-                Analyze
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {analyze.dialog}
     </>
   )
 }

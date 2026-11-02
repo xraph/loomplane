@@ -4,7 +4,7 @@
 // connected cloud's own billing and monitoring: one card sums them up,
 // and the traffic and slowest services cards beneath it show the detail.
 import { useAuth } from "@authsome/ui-react"
-import { CheckIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
+import { PlusIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useCallback, useMemo } from "react"
 
 import {
@@ -13,7 +13,6 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Binding } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { useDecision } from "@/components/approval"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { DotBarChart, GlowBarChart } from "@/components/dots"
 import { Page, PageHeading } from "@/components/page"
@@ -26,7 +25,6 @@ import { LatencyCard, TrafficCard, UsageSummary } from "@/components/usage"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Spinner } from "@/components/ui/spinner"
 import { cloudLabel } from "@/lib/clouds"
 import { duration, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -232,8 +230,6 @@ function Waiting({
   count: number
   now: number
 }) {
-  const { can } = useOrganization()
-  const { decide, busy, approving } = useDecision(run)
   const who = useWho()
   const p = run.plan
   return (
@@ -277,20 +273,14 @@ function Waiting({
           </span>
         </div>
       </div>
+      {/* Plans are approved on the deployment page, where the whole plan is. */}
       <div className="mt-auto flex flex-wrap gap-2">
         <Button
-          variant="outline"
           nativeButton={false}
           render={<Link to="/deployments/$id" params={{ id: run.id }} />}
         >
           Review plan
         </Button>
-        {can("deployment:approve") && (
-          <Button disabled={busy} onClick={() => void decide(true)}>
-            {approving ? <Spinner /> : <CheckIcon />}
-            {p.executable ? "Approve and deploy" : "Approve"}
-          </Button>
-        )}
       </div>
     </Panel>
   )

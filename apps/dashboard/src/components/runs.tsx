@@ -55,9 +55,9 @@ import { cn } from "@/lib/utils"
 export const stateLabel: Record<ThreadState, string> = {
   done: "Done",
   running: "Running",
-  waiting: "Waiting for approval",
+  waiting: "Waiting for you",
   failed: "Failed",
-  canceled: "Canceled",
+  canceled: "Cancelled",
   pending: "Not started",
   skipped: "Skipped",
 }

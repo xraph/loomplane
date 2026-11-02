@@ -1430,6 +1430,7 @@ export interface CreatePlanInputBody {
   environment: string;
   from?: string;
   scope?: string[];
+  services?: string[];
 }
 
 export interface CreateProjectInputBody {
@@ -3274,6 +3275,7 @@ export interface Plan {
   release?: Release;
   revision: string;
   rollback?: Rollback;
+  services?: string[];
   sources: PlanSource[];
   status: string;
   summary: PlanningSummary;

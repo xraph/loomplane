@@ -7,6 +7,8 @@ import {
   matches,
   runKindLabel,
   runLog,
+  runStatusText,
+  runStatusWord,
   toRun,
 } from "@/lib/runs"
 
@@ -130,7 +132,7 @@ describe("toRun", () => {
     expect(isLive(paused)).toBe(true)
     const cancelled = toRun(p, deployment("cancelled", []))
     expect(cancelled.status).toBe("canceled")
-    expect(cancelled.phase).toBe("Deployment canceled")
+    expect(cancelled.phase).toBe("Deployment cancelled")
     expect(isLive(cancelled)).toBe(false)
     expect(cancelled.thread.slice(2).map((s) => s.state)).toEqual([
       "canceled",
@@ -295,5 +297,26 @@ describe("runKindLabel", () => {
     expect(runKindLabel(rollback("canary"))).toBe("Automatic rollback")
     expect(runKindLabel(rollback("manual"))).toBe("Rollback")
     expect(runKindLabel(plan("ready"))).toBe("")
+  })
+})
+
+describe("status words", () => {
+  it("say each run status the way the cloud pages do", () => {
+    expect(runStatusText.waiting).toBe("Waiting for you")
+    expect(runStatusText.succeeded).toBe("Deployed")
+    expect(runStatusText.canceled).toBe("Cancelled")
+    expect(runStatusText.paused).toBe("Paused for capacity")
+  })
+
+  it("say whether a run in progress is planning or deploying", () => {
+    expect(runStatusWord(toRun(plan("planning")))).toBe("Planning")
+    expect(runStatusWord(toRun(plan("approved")))).toBe("Deploying")
+    expect(runStatusWord(toRun(plan("ready")))).toBe("Waiting for you")
+  })
+
+  it("name a closed plan's approval in plan words", () => {
+    const r = toRun(plan("superseded"))
+    expect(r.thread[1].detail).toBe("Replaced")
+    expect(toRun(plan("ready")).thread[1].detail).toBe("Waiting for you")
   })
 })

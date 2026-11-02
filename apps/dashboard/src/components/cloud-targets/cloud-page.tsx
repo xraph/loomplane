@@ -172,8 +172,11 @@ export function CloudTable({
 }: {
   label: string
   columns: string
-  /** Column names; an empty string leaves a column (actions) unnamed. */
-  head?: string[]
+  /**
+   * Column names; an empty last entry is the unnamed actions column. A
+   * cell may be a node, such as a select-all checkbox.
+   */
+  head?: ReactNode[]
   children: ReactNode
   footer?: ReactNode
   minWidth?: number
@@ -194,9 +197,9 @@ export function CloudTable({
               <span
                 key={i}
                 role="columnheader"
-                className={cn(i === head.length - 1 && !h && "sr-only")}
+                className={cn(i === head.length - 1 && h === "" && "sr-only")}
               >
-                {h || "Actions"}
+                {i === head.length - 1 && h === "" ? "Actions" : h}
               </span>
             ))}
           </div>

@@ -13,13 +13,22 @@ vi.mock("@/lib/router", () => ({
   Link: ({
     children,
     to,
+    search,
     className,
   }: {
     children: React.ReactNode
     to: string
+    search?: Record<string, string>
     className?: string
   }) => (
-    <a href={to} className={className}>
+    <a
+      href={
+        search && typeof search === "object"
+          ? `${to}?${new URLSearchParams(search)}`
+          : to
+      }
+      className={className}
+    >
       {children}
     </a>
   ),
@@ -114,6 +123,8 @@ const verified = [
 ]
 
 type Fixture = {
+  tab?: "overview" | "deployments" | "variables" | "settings"
+  environments?: Json[]
   ports?: number[]
   deployed?: boolean
   domains?: Json[]
@@ -150,7 +161,7 @@ function serve(fixture: Fixture = {}) {
         return json({ id: "p", name: "acme-shop", status: "ready" })
       if (path === "/api/v1/projects/p/environments")
         return json({
-          environments: [
+          environments: fixture.environments ?? [
             { id: "env_prod", name: "production", kind: "production" },
           ],
         })
@@ -210,7 +221,12 @@ function serve(fixture: Fixture = {}) {
   )
   render(
     <ClientProvider client={forgeClient}>
-      <ProjectService projectId="p" name="web" environment="production" />
+      <ProjectService
+        projectId="p"
+        name="web"
+        environment="production"
+        tab={fixture.tab}
+      />
     </ClientProvider>
   )
   return writes
@@ -342,8 +358,9 @@ test("removes a hostname from the service", async () => {
   const card = await screen.findByRole("region", { name: "Domains" })
   expect(await within(card).findByText("api.acme.dev")).toBeVisible()
   await userEvent.click(
-    within(card).getByRole("button", { name: "Remove api.acme.dev" })
+    within(card).getByRole("button", { name: "More actions for api.acme.dev" })
   )
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Remove" }))
   const confirm = await screen.findByRole("alertdialog", {
     name: "Remove api.acme.dev?",
   })
@@ -539,4 +556,52 @@ test("reopening the dialog starts from a fresh preview", async () => {
     await within(dialog).findByRole("button", { name: "Preview" })
   ).toBeVisible()
   expect(within(dialog).queryByRole("group", { name: "DNS record" })).toBeNull()
+})
+
+test("the header says where the service stands and deploys only it", async () => {
+  serve()
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "web" })
+  ).toBeVisible()
+  expect(screen.getByRole("button", { name: "acme-shop" })).toBeVisible()
+  const header = screen.getByRole("banner")
+  expect(await within(header).findByText("Live")).toBeVisible()
+  expect(
+    within(header).getByRole("link", { name: "Deploy to production" })
+  ).toHaveAttribute(
+    "href",
+    "/deployments/new?project=p&environment=production&service=web"
+  )
+  expect(
+    screen.getByRole("tablist", { name: "Environment" })
+  ).toBeInTheDocument()
+  await userEvent.click(
+    within(header).getByRole("button", { name: "More service actions" })
+  )
+  expect(
+    await screen.findByRole("menuitem", { name: "Copy service ID" })
+  ).toBeVisible()
+  expect(
+    screen.getByRole("menuitem", { name: "Exclude from project" })
+  ).toBeVisible()
+})
+
+test("opens on the tab in the URL", async () => {
+  serve({ tab: "settings" })
+  expect(
+    await screen.findByRole("heading", { name: "Build and run" })
+  ).toBeVisible()
+  expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+})
+
+test("a project with no environment still shows the service", async () => {
+  serve({ environments: [] })
+  expect(await screen.findByText("No environments yet")).toBeVisible()
+  expect(screen.getByRole("heading", { level: 1, name: "web" })).toBeVisible()
+  expect(
+    screen.queryByRole("link", { name: /Deploy to/ })
+  ).not.toBeInTheDocument()
 })
