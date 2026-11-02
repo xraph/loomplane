@@ -180,7 +180,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("keysmith: %w", err)
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
-	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, apikeys.WithPlatformAdmins(e))
 	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}

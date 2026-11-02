@@ -103,14 +103,26 @@ type Service struct {
 	appID  string
 	authz  Authorizer
 	audit  Auditor
+	admins PlatformAdmins
 	now    func() time.Time
 }
+
+// Option adjusts a Service.
+type Option func(*Service)
+
+// WithPlatformAdmins sets how the Service tells platform admins, who alone
+// may mint instance-wide edge join tokens. Without it nobody is one.
+func WithPlatformAdmins(a PlatformAdmins) Option { return func(s *Service) { s.admins = a } }
 
 // New returns a Service over a Keysmith engine. appID is the authsome app
 // Loomplane runs as; keys are kept under it, and under each organization
 // as Keysmith's tenant.
-func New(engine *keysmith.Engine, appID string, authz Authorizer, audit Auditor) *Service {
-	return &Service{engine: engine, appID: appID, authz: authz, audit: audit, now: time.Now}
+func New(engine *keysmith.Engine, appID string, authz Authorizer, audit Auditor, opts ...Option) *Service {
+	s := &Service{engine: engine, appID: appID, authz: authz, audit: audit, now: time.Now}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Service) tenant(ctx context.Context, orgID string) context.Context {

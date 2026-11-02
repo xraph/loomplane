@@ -134,6 +134,15 @@ func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.
 	return roles, true
 }
 
+// IsPlatformAdmin reports whether a user holds a platform role now, read
+// live from Warden. It is what the instance console checks, offered to
+// apikeys so it can gate instance-wide node join tokens. A failure to read
+// roles says no.
+func (e *Extension) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
+	roles, ok := e.appRoles(ctx, userID)
+	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID), nil
+}
+
 func (e *Extension) getSession(c forge.Context) error {
 	ctx := c.Request().Context()
 	p, ok := security.PrincipalFrom(ctx)
