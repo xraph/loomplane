@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -135,5 +136,54 @@ func TestPgStoreAutonomy(t *testing.T) {
 	tooLong := int64(604860)
 	if _, _, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{MinStagingSoakSeconds: &tooLong}, later); err == nil {
 		t.Fatal("a soak beyond a week was stored")
+	}
+}
+
+// Each change's before and after come from its own statement: a field it
+// didn't send reads the same before and after, even while another change
+// to that field lands at the same time.
+func TestPgStoreAutonomyBeforeAndAfterAreOneChange(t *testing.T) {
+	ctx := context.Background()
+	s := scratchStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	p := &projects.Project{ID: "proj_a", OrgID: "org_a", Name: "Engine", Slug: "engine", Icon: "box", Color: "blue",
+		Status: projects.StatusReady, CreatedBy: "usr_ada", CreatedAt: now, UpdatedAt: now}
+	if err := s.CreateProject(ctx, p, []*projects.Environment{{ID: "env_a", OrgID: "org_a", ProjectID: "proj_a", Name: "production", Kind: projects.KindProduction, CreatedAt: now, UpdatedAt: now}}); err != nil {
+		t.Fatal(err)
+	}
+	const rounds = 60
+	errs := make(chan error, 2*rounds)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			on := i%2 == 0
+			got, before, err := s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &on}, now)
+			switch {
+			case err != nil:
+				errs <- err
+			case got.AutonomousPromotion != on || got.MinStagingSoakSeconds != before.MinStagingSoakSeconds:
+				errs <- fmt.Errorf("promotion change: before %+v, after promotion %v soak %d", before, got.AutonomousPromotion, got.MinStagingSoakSeconds)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			soak := int64(60 * (i + 1))
+			got, before, err := s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{MinStagingSoakSeconds: &soak}, now)
+			switch {
+			case err != nil:
+				errs <- err
+			case got.MinStagingSoakSeconds != soak || got.AutonomousPromotion != before.AutonomousPromotion:
+				errs <- fmt.Errorf("soak change: before %+v, after promotion %v soak %d", before, got.AutonomousPromotion, got.MinStagingSoakSeconds)
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }

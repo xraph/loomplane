@@ -190,10 +190,11 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 
 // SetAutonomy implements Store. A nil field keeps the column's value, in
 // the same statement, so two changes to different fields can't lose each
-// other. The values before come from the row the statement locked, so
-// they're the ones this change replaced.
+// other. The values before and after both come from that statement, under
+// its row lock, so they're the ones this change replaced and wrote; a
+// change that lands after it can't show up in its result.
 func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error) {
-	var before Autonomy
+	var before, after Autonomy
 	err := s.db.QueryRow(ctx, `WITH old AS (
 			SELECT autonomous_promotion, min_staging_soak_seconds FROM loomplane_projects
 			WHERE org_id = $1 AND id = $2 FOR UPDATE
@@ -204,16 +205,23 @@ func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in Autonomy
 			updated_at = $5
 		FROM old
 		WHERE p.org_id = $1 AND p.id = $2
-		RETURNING old.autonomous_promotion, old.min_staging_soak_seconds`,
-		orgID, id, in.AutonomousPromotion, in.MinStagingSoakSeconds, at).Scan(&before.AutonomousPromotion, &before.MinStagingSoakSeconds)
+		RETURNING old.autonomous_promotion, old.min_staging_soak_seconds, p.autonomous_promotion, p.min_staging_soak_seconds`,
+		orgID, id, in.AutonomousPromotion, in.MinStagingSoakSeconds, at).
+		Scan(&before.AutonomousPromotion, &before.MinStagingSoakSeconds, &after.AutonomousPromotion, &after.MinStagingSoakSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, Autonomy{}, ErrNotFound
 	}
 	if err != nil {
 		return nil, Autonomy{}, fmt.Errorf("update autonomy: %w", err)
 	}
+	// The rest of the project is read after; its autonomy is what this
+	// statement wrote.
 	p, err := s.GetProject(ctx, orgID, id)
-	return p, before, err
+	if err != nil {
+		return nil, Autonomy{}, err
+	}
+	p.AutonomousPromotion, p.MinStagingSoakSeconds = after.AutonomousPromotion, after.MinStagingSoakSeconds
+	return p, before, nil
 }
 
 // DeleteProject removes the project; its environments go with it.

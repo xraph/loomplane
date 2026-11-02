@@ -20,8 +20,9 @@ type Store interface {
 	UpdateExclusions(ctx context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error)
 	DeleteProject(ctx context.Context, orgID, id string) error
 	// SetAutonomy writes the fields of in that aren't nil, and updated_at,
-	// in one statement, and returns the project as it is afterwards and
-	// its autonomy as it was just before, read under the same row lock.
+	// in one statement, and returns the project with the autonomy that
+	// statement wrote, and the autonomy it replaced, both read under its
+	// row lock.
 	// UpdateProject never writes them.
 	SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error)
 
