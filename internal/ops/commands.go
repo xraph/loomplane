@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/xraph/forge/cli"
 	"github.com/xraph/grove/migrate"
+
+	"github.com/xraph/loomplane/internal/platformadmin"
 )
 
 // Settings are what the commands need: the database, the schema this
@@ -16,6 +19,11 @@ type Settings struct {
 	DatabaseURL string
 	Groups      []*migrate.Group
 	Version     string
+	// AuthAppID is Loomplane's authsome app, where platform roles live.
+	AuthAppID string
+	// SecretKey and PublicURL give the one-time setup link.
+	SecretKey string
+	PublicURL string
 }
 
 // Commands are loomplane's operational commands. settings is called when
@@ -112,8 +120,16 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if len(st.Unknown) > 0 {
 				return fmt.Errorf("%w: %s", ErrNewerSchema, strings.Join(st.Unknown, ", "))
 			}
+			if ctx.Bool("check") && len(st.Pending) > 0 {
+				return fmt.Errorf("%w: %d pending", ErrPendingMigrations, len(st.Pending))
+			}
 			return nil
-		}),
+		},
+			cli.WithUsage("loomplane migrations [--check]"),
+			// The Kubernetes chart's worker waits on this, since only the
+			// API migrates: until loomplane migrations --check; do sleep 5; done
+			cli.WithFlag(cli.NewBoolFlag("check", "", "Exit non-zero while any migration is still pending", false)),
+		),
 		cli.NewCommand("migrate", "Apply pending migrations; starting Loomplane does this too", func(ctx cli.CommandContext) error {
 			s, err := settings()
 			if err != nil {
@@ -128,5 +144,53 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			fmt.Println("The database is up to date.")
 			return nil
 		}),
+		cli.NewCommand("setup-token", "Print the link that finishes first-run setup", func(ctx cli.CommandContext) error {
+			s, err := settings()
+			if err != nil {
+				return err
+			}
+			out, err := SetupTokenOutput(ctx.Context(), s, ctx.Bool("raw"))
+			if err != nil {
+				return err
+			}
+			fmt.Println(out)
+			return nil
+		},
+			cli.WithUsage("loomplane setup-token [--raw]"),
+			cli.WithFlag(cli.NewBoolFlag("raw", "", "Print the token alone, for scripts", false)),
+		),
+		cli.NewCommand("admin", "Manage who runs this Loomplane instance", func(cli.CommandContext) error {
+			return errors.New("use a subcommand: loomplane admin grant-platform-admin <email>")
+		},
+			cli.WithUsage("loomplane admin grant-platform-admin <email>"),
+			cli.WithSubcommand(cli.NewCommand("grant-platform-admin", "Let an existing user open the instance console", func(ctx cli.CommandContext) error {
+				email := strings.TrimSpace(ctx.Arg(0))
+				if email == "" {
+					return errors.New("usage: loomplane admin grant-platform-admin <email>")
+				}
+				s, err := settings()
+				if err != nil {
+					return err
+				}
+				users, roles, closeDB, err := platformadmin.Open(ctx.Context(), s.DatabaseURL, s.AuthAppID)
+				if err != nil {
+					return err
+				}
+				defer closeDB()
+				granted, err := platformadmin.Grant(ctx.Context(), users, roles, s.AuthAppID, email)
+				if errors.Is(err, platformadmin.ErrNoUser) {
+					return fmt.Errorf("no user with email %s", email)
+				}
+				if err != nil {
+					return err
+				}
+				if !granted {
+					fmt.Printf("%s is already a platform admin.\n", email)
+					return nil
+				}
+				fmt.Printf("Granted platform-owner to %s.\n", email)
+				return nil
+			}, cli.WithUsage("loomplane admin grant-platform-admin <email>"))),
+		),
 	}
 }

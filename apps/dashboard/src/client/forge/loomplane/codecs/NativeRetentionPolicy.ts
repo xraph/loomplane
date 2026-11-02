@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_RetentionInput } from './RetentionInput';
+
+export const codec_NativeRetentionPolicy: Codec = {"kind": "object", "fields": {"authorized_by": {"ts": "authorizedBy"}, "created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "enabled": {"ts": "enabled"}, "id": {"ts": "id"}, "last_error": {"ts": "lastError"}, "last_retirement_id": {"ts": "lastRetirementId"}, "next_at": {"ts": "nextAt"}, "org_id": {"ts": "orgId"}, "policy": {"ts": "policy", "codec": () => codec_RetentionInput}, "project_id": {"ts": "projectId"}, "revision": {"ts": "revision"}, "source_id": {"ts": "sourceId"}, "updated_at": {"ts": "updatedAt"}}, "required": ["authorized_by", "created_at", "created_by", "enabled", "id", "next_at", "org_id", "policy", "project_id", "revision", "source_id", "updated_at"]};

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react"
-import { RotateCcwIcon } from "lucide-react"
 import { useQuery } from "@/client/hooks"
 import { useServiceRetirementsList } from "@/client/forge/loomplane/hooks"
 import type { Backup, Retirement } from "@/client/forge/loomplane/types"
 import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { useOrganization } from "@/lib/organization"
+import { ago, agoDay } from "@/lib/relative-time"
+import { useNow } from "@/lib/use-runs"
 import { formatDate } from "@/lib/format"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import { StatusPill, type Tone } from "@/components/runs"
+import { cn } from "@/lib/utils"
 import { TableRow, TableCell } from "@/components/ui/table"
 import {
   Dialog,
@@ -24,7 +26,16 @@ import {
   deletionMessage,
 } from "@/components/backup-retirement/shared"
 
+// What a recovery point's own states read as.
+const pointLabels: Record<string, string> = {
+  queued: "Queued",
+  running: "Backing up",
+  succeeded: "Completed",
+  failed: "Failed",
+}
+
 type Props = {
+  compact?: boolean
   project: string
   backup: Backup
   busy: boolean
@@ -110,6 +121,7 @@ function RetiringPoint(props: Props & { onDetails: (id?: string) => void }) {
 
 function PointView({
   backup: b,
+  compact = false,
   busy,
   onRestore,
   onRetry,
@@ -122,13 +134,26 @@ function PointView({
   onDetails: (id?: string) => void
 }) {
   const { can } = useOrganization()
+  const now = useNow(30_000)
   const deletion = ["retiring", "retired"].includes(b.status)
   const label =
     b.status === "retired"
       ? "Backup file deleted"
       : b.status === "retiring"
         ? deletionStatus(operation?.status ?? "")
-        : b.status
+        : compact
+          ? b.status
+          : (pointLabels[b.status] ?? b.status)
+  // Done is green, under way is blue, a failure red, the rest quiet.
+  const tone: Tone =
+    operation?.status === "failed" || b.status === "failed"
+      ? "failed"
+      : b.status === "succeeded"
+        ? "live"
+        : ["queued", "running", "retiring"].includes(b.status)
+          ? "flight"
+          : "quiet"
+  const pill = <StatusPill tone={tone}>{label}</StatusPill>
   const error = unavailable
     ? "Deletion status is unavailable. Open details to refresh it."
     : deletion
@@ -137,41 +162,75 @@ function PointView({
         : undefined
       : b.error
   const evidence = b.restoredAt
-    ? `${b.status === "retired" ? "Previously verified" : "Restore verified"} ${formatDate(b.restoredAt)}`
+    ? `${b.status === "retired" ? "Previously verified" : compact ? "Verified" : "Restore verified"} ${compact ? agoDay(b.restoredAt, now) : formatDate(b.restoredAt)}`
     : "Not tested"
   return (
     <>
       <TableRow>
         <TableCell className="whitespace-normal">
-          <div>{formatDate(b.createdAt)}</div>
-          <div className="text-xs text-muted-foreground">
-            {b.bytes.toLocaleString()} bytes
-          </div>
-          <div className="mt-1 grid gap-1 text-xs sm:hidden">
-            <Badge
-              variant={
-                operation?.status === "failed" ? "destructive" : "secondary"
+          {compact ? (
+            <code className="text-xs">{b.name}</code>
+          ) : (
+            <>
+              <div className="font-medium">{formatDate(b.createdAt)}</div>
+              <div className="font-mono text-[11.5px] text-muted-foreground">
+                {b.bytes.toLocaleString()} bytes
+              </div>
+            </>
+          )}
+          {(!compact || b.status !== "succeeded" || error) && (
+            <div
+              className={
+                compact
+                  ? "mt-1 grid gap-1 text-xs"
+                  : "mt-1 grid gap-1 text-xs sm:hidden"
               }
             >
-              {label}
-            </Badge>
-            <span>{evidence}</span>
-            {error && <span className="text-destructive">{error}</span>}
-          </div>
-        </TableCell>
-        <TableCell className="hidden sm:table-cell">
-          <Badge
-            variant={
-              operation?.status === "failed" ? "destructive" : "secondary"
-            }
-          >
-            {label}
-          </Badge>
-          {error && (
-            <p className="max-w-xs text-xs text-destructive">{error}</p>
+              {(!compact || b.status !== "succeeded") && pill}
+              {!compact && <span>{evidence}</span>}
+              {error && <span className="text-destructive">{error}</span>}
+            </div>
           )}
         </TableCell>
-        <TableCell className="hidden sm:table-cell">{evidence}</TableCell>
+        {compact ? (
+          <>
+            <TableCell>
+              <time dateTime={b.createdAt} title={formatDate(b.createdAt)}>
+                {ago(b.createdAt, now)}
+              </time>
+            </TableCell>
+            <TableCell>
+              {new Intl.NumberFormat(undefined, {
+                maximumFractionDigits: 1,
+              }).format(
+                b.bytes >= 1_000_000
+                  ? b.bytes / 1_000_000
+                  : b.bytes >= 1000
+                    ? b.bytes / 1000
+                    : b.bytes
+              )}{" "}
+              {b.bytes >= 1_000_000 ? "MB" : b.bytes >= 1000 ? "kB" : "B"}
+            </TableCell>
+          </>
+        ) : (
+          <TableCell className="hidden sm:table-cell">
+            {pill}
+            {error && (
+              <p className="max-w-xs text-xs text-destructive">{error}</p>
+            )}
+          </TableCell>
+        )}
+        <TableCell
+          className={cn(
+            !compact && "hidden text-[12.5px] sm:table-cell",
+            !compact &&
+              (b.restoredAt && b.status !== "retired"
+                ? "text-overdye-ink"
+                : "text-muted-foreground")
+          )}
+        >
+          {evidence}
+        </TableCell>
         <TableCell className="text-right">
           <div className="flex flex-wrap justify-end gap-1">
             {b.status === "succeeded" && can("service_restore:manage") && (
@@ -181,8 +240,7 @@ function PointView({
                 disabled={busy}
                 onClick={() => onRestore(b.id)}
               >
-                <RotateCcwIcon />
-                Test restore
+                {compact ? "Restore copy" : "Test restore"}
               </Button>
             )}
             {b.status === "failed" && can("service_backup:manage") && (

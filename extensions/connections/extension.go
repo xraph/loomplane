@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -18,14 +20,20 @@ import (
 	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/issuer"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -41,7 +49,19 @@ type Extension struct {
 	cfg     config.Config
 	plugins *plugins.Set
 	svc     *connections.Service
+	issuer  *issuer.Service
+	// rotating is closed once the startup key rotation is done, and
+	// stopRotating cuts it short.
+	rotating     chan struct{}
+	stopRotating context.CancelFunc
 }
+
+// startupRotateTimeout bounds the key rotation at startup.
+const startupRotateTimeout = time.Minute
+
+// issuerCheckTimeout bounds each fetch of the daily job's check that the
+// issuer is serving its keys.
+const issuerCheckTimeout = 10 * time.Second
 
 // New returns the extension.
 func New(cfg config.Config, plugs *plugins.Set) *Extension {
@@ -53,7 +73,9 @@ func New(cfg config.Config, plugs *plugins.Set) *Extension {
 }
 
 // Dependencies implements forge.Extension.
-func (e *Extension) Dependencies() []string { return []string{identity.Name} }
+func (e *Extension) Dependencies() []string {
+	return []string{identity.Name, notificationsext.DeliveryName}
+}
 
 // Service is the connection service, once the extension has registered.
 func (e *Extension) Service() *connections.Service { return e.svc }
@@ -93,14 +115,29 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
+	// Loomplane's own OpenID Connect issuer, for keyless connections. Its
+	// private keys share the credentials' key but live under a Vault app
+	// of their own.
+	pg := pgdriver.Unwrap(db)
+	e.issuer = issuer.New(strings.TrimRight(e.cfg.PublicURL, "/"), e.cfg.Environment, issuer.NewPgKeyStore(pg),
+		connections.NewVaultSecretsFor(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(issuer.VaultAppID)), issuer.VaultAppID), time.Now)
+	// The clouds that can be signed in to check and sign in through the
+	// same client, so both reach the same endpoint. Those that connect
+	// keylessly mint their tokens with the issuer.
+	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint).WithMinter(e.issuer), vercel.New(e.cfg.Clouds.VercelEndpoint)
+	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint).WithMinter(e.issuer)
+	awsClient := aws.New(e.cfg.Clouds.AWSEndpoint).WithMinter(e.issuer)
+	cfClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)
 	checkers := map[string]connections.Checker{
-		connections.GCP:          connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		connections.Vercel:       connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
-		connections.AWS:          connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		connections.GCP:          connections.GCPChecker{Client: gcpClient},
+		connections.Vercel:       connections.VercelChecker{Client: vercelClient},
+		connections.AWS:          connections.AWSChecker{Client: awsClient},
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
-		connections.DigitalOcean: connections.DigitalOceanChecker{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
-		connections.Azure:        connections.AzureChecker{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
+		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
+		connections.Azure:        connections.AzureChecker{Client: azureClient},
+		connections.Cloudflare:   connections.CloudflareChecker{Client: cfClient},
 		connections.Server:       connections.ServerChecker{},
+		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
 	}
@@ -114,23 +151,124 @@ func (e *Extension) Register(fapp forge.App) error {
 			checkers[p.Cloud()] = connections.PluginChecker{Client: p.Client}
 		}
 	}
+	store := connections.NewPgStore(pg)
 	e.svc = connections.NewService(
-		connections.NewPgStore(pgdriver.Unwrap(db)), secrets,
+		store, secrets,
 		checkers,
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
+	// Signing in. An org's own sign-in app secrets share the credentials'
+	// key but live under a Vault app of their own.
+	e.svc.Apps = store
+	e.svc.AppSecrets = connections.NewVaultSecretsFor(
+		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.OAuthAppsVaultAppID)), connections.OAuthAppsVaultAppID)
+	e.svc.Providers = map[string]connections.Provider{
+		connections.DigitalOcean: doClient,
+		connections.Vercel:       vercelClient,
+		connections.GCP:          gcpClient,
+		connections.Azure:        azureClient,
+		connections.Cloudflare:   cfClient,
+	}
+	e.svc.ConfigApps = map[string]oauth.App{}
+	for cloud, app := range e.cfg.Clouds.OAuth {
+		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret, Slug: app.Slug}
+	}
+	e.svc.CallbackURL = callbackURL(e.cfg.PublicURL)
+	// Connecting keylessly, and the daily job turning over the issuer's
+	// keys.
+	e.svc.Keyless = e.issuer
+	e.svc.KeylessClouds = map[string]connections.KeylessCloud{
+		connections.AWS:   awsClient,
+		connections.GCP:   gcpClient,
+		connections.Azure: azureClient,
+	}
+	e.svc.Rotate = e.issuer.Rotate
+	// Before the daily job marks a keyless connection failed, it fetches
+	// the issuer's keys from the public URL, as a cloud would, so an outage
+	// of Loomplane's own doesn't fail every one.
+	selfCheck := &http.Client{Timeout: issuerCheckTimeout}
+	e.svc.IssuerServing = func(ctx context.Context) error { return e.issuer.Serving(ctx, selfCheck) }
+	e.useInCluster(log)
+	mail, err := forge.InjectType[*notifications.Service](c)
+	if err != nil {
+		return fmt.Errorf("connections needs the notification delivery extension: %w", err)
+	}
+	// Lapsed only queues outbox rows. The drain loop sends them.
+	e.svc.Lapsed = func(ctx context.Context, conn *connections.Connection) {
+		notify, what := mail.ConnectionLapsed, "sign-in lapse"
+		if conn.Method == connections.MethodKeyless {
+			notify, what = mail.ConnectionKeylessRefused, "keyless refusal"
+		}
+		if err := notify(ctx, conn.OrgID, conn.ID, conn.Name, conn.Cloud, conn.CreatedBy, time.Now()); err != nil {
+			log.Warn("queue the "+what+" notice", forge.F("connection", conn.ID), forge.F("error", err.Error()))
+		}
+	}
 	e.svc.Telemetry = telemetry.New(fapp.Metrics())
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the connection service: %w", err)
 	}
+	// Deployments' cloud clients mint keyless tokens with the same issuer.
+	if err := forge.ProvideValue(c, e.issuer); err != nil {
+		return fmt.Errorf("provide the keyless issuer: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 
-// Start has nothing to start.
+// useInCluster turns on connecting the cluster Loomplane runs in, when the
+// operator asked for it and the pod has its service account token. One
+// without the token stays off and says why, so a chart that forgot to
+// mount it doesn't fail the whole API.
+func (e *Extension) useInCluster(log forge.Logger) {
+	if !e.cfg.Clouds.KubernetesInCluster {
+		kubernetes.UseInCluster(nil)
+		return
+	}
+	ic, err := kubernetes.DetectInCluster()
+	if err != nil {
+		kubernetes.UseInCluster(nil)
+		log.Warn("kubernetes_in_cluster is on, but the cluster Loomplane runs in can't be connected", forge.F("error", err.Error()))
+		return
+	}
+	kubernetes.UseInCluster(ic)
+	log.Info("organizations may connect the cluster Loomplane runs in", forge.F("endpoint", ic.Host), forge.F("namespace", ic.Namespace))
+}
+
+// Start rotates the issuer's keys once, so the JWKS has a key before any
+// cloud asks for it. It runs in the background, after the migrations,
+// and a failure is only warned about: the daily job and the first token
+// try again.
 func (e *Extension) Start(context.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), startupRotateTimeout)
+	e.rotating, e.stopRotating = make(chan struct{}), cancel
+	go func() {
+		defer close(e.rotating)
+		defer cancel()
+		if err := e.issuer.Rotate(ctx); err != nil {
+			e.Logger().Warn("rotate the keyless issuer's keys at startup", forge.F("error", err.Error()))
+		}
+	}()
 	e.MarkStarted()
 	return nil
+}
+
+// Stop cuts the startup rotation short and waits for it.
+func (e *Extension) Stop(ctx context.Context) error {
+	if e.stopRotating != nil {
+		e.stopRotating()
+		select {
+		case <-e.rotating:
+		case <-ctx.Done():
+		}
+	}
+	e.MarkStopped()
+	return nil
+}
+
+// callbackURL is where every cloud sends people back to after they sign
+// in. The dashboard serves it.
+func callbackURL(publicURL string) string {
+	return strings.TrimRight(publicURL, "/") + "/integrations/oauth/callback"
 }
 
 // fail maps a service error to its HTTP response.
@@ -138,9 +276,10 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, connections.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged):
+	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged),
+		errors.Is(err, connections.ErrAppLocked):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, connections.ErrInvalid):
+	case errors.Is(err, connections.ErrInvalid), errors.Is(err, connections.ErrNoApp):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, connections.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
@@ -168,3 +307,16 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
 	}
 }
+
+// RecordApp implements connections.AppAuditor. It records the cloud and the
+// client ID, never the secret.
+func (a auditor) RecordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string) {
+	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
+		Category("cloud_connections").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Meta("cloud", cloud).Meta("client_id", clientID)
+	if err := b.Record(); err != nil {
+		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
+	}
+}
+
+var _ connections.AppAuditor = auditor{}

@@ -9,11 +9,15 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/activity"
+	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/catalogproxy"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -49,7 +53,7 @@ type BindingQuery struct {
 
 // PlanList is the body of GET /api/v1/projects/:id/plans.
 type PlanList struct {
-	Plans []planning.Plan `json:"plans"`
+	Plans []publicplan.Plan `json:"plans"`
 	// Next reads the page after this one, as ?before=. It's empty on the
 	// last page.
 	Next string `json:"next,omitempty"`
@@ -162,12 +166,6 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("The deployment targets a manifest can name, and what each runs and provisions"),
 			forge.WithResponseSchema(http.StatusOK, "Providers", ProviderList{}),
 		}},
-		{http.MethodPost, "/projects/:id/plans", e.createPlan, []forge.RouteOption{
-			forge.WithName("plans.create"),
-			forge.WithSummary("Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them"),
-			forge.WithRequestSchema(planning.CreatePlanInput{}),
-			forge.WithResponseSchema(http.StatusCreated, "The plan", planning.Plan{}),
-		}},
 		{http.MethodGet, "/projects/:id/plans", e.listPlans, []forge.RouteOption{
 			forge.WithName("plans.list"),
 			forge.WithSummary("The project's latest plans, newest first"),
@@ -177,19 +175,19 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/plans/:id", e.getPlan, []forge.RouteOption{
 			forge.WithName("plans.get"),
 			forge.WithSummary("One plan, with its actions and findings"),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodPost, "/plans/:id/approve", e.approvePlan, []forge.RouteOption{
 			forge.WithName("plans.approve"),
 			forge.WithSummary("Approve a ready plan, naming the revision you reviewed"),
 			forge.WithRequestSchema(planning.DecideInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodPost, "/plans/:id/reject", e.rejectPlan, []forge.RouteOption{
 			forge.WithName("plans.reject"),
 			forge.WithSummary("Reject a ready plan"),
 			forge.WithRequestSchema(planning.DecideInput{}),
-			forge.WithResponseSchema(http.StatusOK, "The plan", planning.Plan{}),
+			forge.WithResponseSchema(http.StatusOK, "The plan", publicplan.Plan{}),
 		}},
 		{http.MethodGet, "/projects/:id/environments/:environment/deployed", e.listDeployed, []forge.RouteOption{
 			forge.WithName("deployed.list"),
@@ -218,10 +216,32 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("One deployment, with each step's progress"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
 		}},
+		{http.MethodPost, "/deployments/:id/cleanup/preview", e.previewFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupPreview"), forge.WithResponseSchema(http.StatusOK, "The cleanup review", CleanupReview{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/apply", e.applyFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupApply"), forge.WithRequestSchema(FailedCleanupInput{}), forge.WithResponseSchema(http.StatusAccepted, "The accepted cleanup", client.FailedCleanup{})}},
+		{http.MethodGet, "/deployments/:id/cleanup", e.getFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanup"), forge.WithResponseSchema(http.StatusOK, "Cleanup progress", client.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/cancel", e.cancelFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupCancel"), forge.WithRequestSchema(FailedCleanupCancelInput{}), forge.WithResponseSchema(http.StatusOK, "Cleanup issuance fenced", client.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/retry", e.retryFailedCleanup, []forge.RouteOption{forge.WithResponseSchema(http.StatusConflict, "Review changed", CleanupProblem{}), forge.WithName("deployments.cleanupRetry"), forge.WithResponseSchema(http.StatusAccepted, "Cleanup retry", client.FailedCleanup{})}},
+		{http.MethodGet, "/deployments/:id/canary", e.getCanary, []forge.RouteOption{
+			forge.WithName("deployments.canary"),
+			forge.WithSummary("The deployment's canary: where traffic is and every step's verdict"),
+			forge.WithResponseSchema(http.StatusOK, "The canary and its verdicts", deployments.CanaryReport{}),
+		}},
 		{http.MethodPost, "/deployments/:id/retry", e.retryDeployment, []forge.RouteOption{
 			forge.WithName("deployments.retry"),
 			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
+		{http.MethodPost, "/deployments/:id/capacity/resume", e.resumeCapacity, []forge.RouteOption{
+			forge.WithName("deployments.resumeCapacity"),
+			forge.WithSummary("Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
+		{http.MethodPost, "/deployments/:id/capacity/cancel", e.cancelCapacity, []forge.RouteOption{
+			forge.WithName("deployments.cancelCapacity"),
+			forge.WithSummary("Cancel a deployment paused waiting for capacity; steps that finished stay as they are"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The cancelled deployment", deployments.Deployment{}),
 		}},
 		{http.MethodGet, "/plans/:id/deployment", e.planDeployment, []forge.RouteOption{
 			forge.WithName("deployments.forPlan"),
@@ -243,10 +263,43 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "Activity", activity.ActivitySummary{}),
 		}},
 	}
+	catalogRoutes := []route{
+		{http.MethodGet, "/catalog/kinds", e.listCatalogKinds, []forge.RouteOption{
+			forge.WithName("catalogKinds.list"),
+			forge.WithSummary("The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run"),
+			forge.WithResponseSchema(http.StatusOK, "Kinds", CatalogKindList{}),
+		}},
+		{http.MethodGet, "/catalog/endpoints", e.listCatalogEndpoints, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.list"),
+			forge.WithSummary("The external databases and caches a catalog service can connect to, without their DSNs"),
+			forge.WithResponseSchema(http.StatusOK, "Endpoints", EndpointList{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints", e.createCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.create"),
+			forge.WithSummary("Register an external Postgres or Redis; its DSN is kept in Vault and never returned"),
+			forge.WithRequestSchema(catalogconnect.CreateInput{}),
+			forge.WithResponseSchema(http.StatusCreated, "The endpoint", catalogconnect.Endpoint{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints/checks", e.checkCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.check"),
+			forge.WithSummary("Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned"),
+			forge.WithRequestSchema(catalogconnect.CheckInput{}),
+			forge.WithResponseSchema(http.StatusOK, "What the check found", catalogconnect.CheckResult{}),
+		}},
+		{http.MethodDelete, "/catalog/endpoints/:id", e.deleteCatalogEndpoint, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.delete"),
+			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
+		}},
+		{http.MethodPost, "/projects/:projectId/environments/:environmentId/catalog/:resource/admin-sessions", e.openCatalogAdmin, []forge.RouteOption{
+			forge.WithName("catalogAdmin.open"),
+			forge.WithSummary("Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure"),
+			forge.WithResponseSchema(http.StatusCreated, "The session: open its URL on this origin", catalogproxy.Session{}),
+		}},
+	}
 	groups := []struct {
 		tag    string
 		routes []route
-	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}}
+	}{{"Manifests", manifestRoutes}, {"Plans", planRoutes}, {"Activity", activityRoutes}, {"Catalog", catalogRoutes}}
 	for _, grp := range groups {
 		g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags(grp.tag))
 		for _, rt := range grp.routes {
@@ -258,13 +311,20 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 				err = g.POST(rt.path, rt.handler, rt.opts...)
 			case http.MethodPut:
 				err = g.PUT(rt.path, rt.handler, rt.opts...)
+			case http.MethodDelete:
+				err = g.DELETE(rt.path, rt.handler, rt.opts...)
 			}
 			if err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+	// Plans, promotions and rollbacks go through releaseService, so their
+	// handlers are tested on a fake.
+	if err := releaseRoutes(r, guard, e.plans); err != nil {
+		return err
+	}
+	return e.fabriqRoutes(r, guard)
 }
 
 func principal(c forge.Context) (security.Principal, error) {
@@ -365,22 +425,6 @@ func (e *Extension) listProviders(c forge.Context) error {
 	return c.JSON(http.StatusOK, out)
 }
 
-func (e *Extension) createPlan(c forge.Context) error {
-	p, err := principal(c)
-	if err != nil {
-		return err
-	}
-	var in planning.CreatePlanInput
-	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"environment": "production"}`)
-	}
-	plan, err := e.plans.Create(c.Request().Context(), p, c.Param("id"), in)
-	if err != nil {
-		return fail(err)
-	}
-	return c.JSON(http.StatusCreated, plan)
-}
-
 func (e *Extension) listPlans(c forge.Context) error {
 	p, err := principal(c)
 	if err != nil {
@@ -394,9 +438,9 @@ func (e *Extension) listPlans(c forge.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	out := PlanList{Plans: make([]planning.Plan, 0, len(plans)), Next: next.String()}
+	out := PlanList{Plans: make([]publicplan.Plan, 0, len(plans)), Next: next.String()}
 	for _, pl := range plans {
-		out.Plans = append(out.Plans, *pl)
+		out.Plans = append(out.Plans, *publicplan.Project(pl))
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -410,7 +454,7 @@ func (e *Extension) getPlan(c forge.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	return c.JSON(http.StatusOK, plan)
+	return c.JSON(http.StatusOK, publicplan.Project(plan))
 }
 
 func (e *Extension) approvePlan(c forge.Context) error {
@@ -438,9 +482,12 @@ func (e *Extension) decide(c forge.Context, approve bool) error {
 		plan, err = e.plans.Reject(ctx, p, c.Param("id"), in)
 	}
 	if err != nil {
+		if handled, result := cleanupProblem(c, err); handled {
+			return result
+		}
 		return fail(err)
 	}
-	return c.JSON(http.StatusOK, plan)
+	return c.JSON(http.StatusOK, publicplan.Project(plan))
 }
 
 func (e *Extension) listBindings(c forge.Context) error {
@@ -557,6 +604,18 @@ func (e *Extension) getDeployment(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) getCanary(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	report, err := e.deploys.Canary(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, report)
 }
 
 func (e *Extension) planDeployment(c forge.Context) error {

@@ -3,9 +3,11 @@ package planning
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -15,14 +17,20 @@ type ManagedDatabaseConfig struct {
 	Profile         provider.ManagedDatabaseProfile `json:"profile"`
 	ConnectionID    string                          `json:"connection_id"`
 	AccountIdentity string                          `json:"account_identity"`
+	CloudSQLPSC     provider.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty,omitzero"`
 }
 
-func (p *planner) configureManagedCatalog(name, base string, cfg *ResourceConfig, action *Action) {
+func (p *planner) configureManagedCatalog(name, base string, resource manifest.Resource, cfg *ResourceConfig, action *Action) {
+	// Other installed native adapters keep their existing reviewed creation
+	// contract. Their provider defaults do not imply native recovery support.
+	if cfg.Provider != "rds" && cfg.Provider != "cloud-sql" {
+		return
+	}
 	binding := p.bindings[action.ID]
 	var old ResourceConfig
 	if binding != nil {
 		if err := json.Unmarshal(binding.Config, &old); err != nil {
-			if p.in.Catalog {
+			if p.in.Catalog || resource.CloudSQLPSC != nil {
 				p.problem(Finding{Code: "managed-profile-invalid", Subject: ResourceSubject, Name: name, Path: base, Message: "The existing database configuration cannot be reviewed. Its data will remain in place."})
 			}
 			return
@@ -30,15 +38,26 @@ func (p *planner) configureManagedCatalog(name, base string, cfg *ResourceConfig
 		// Live legacy bindings keep their original request contract. A missing
 		// legacy database can receive a reviewed profile on standalone creation.
 		if old.Managed == nil && (binding.Drift != DriftMissing || !p.in.Catalog) {
+			if resource.CloudSQLPSC != nil {
+				p.problem(Finding{Code: "database-migration-required", Subject: ResourceSubject, Name: name, Path: base, Message: "A legacy database cannot switch to PSC in place. Create a separate reviewed source."})
+			}
 			return
 		}
-	} else if !p.in.Catalog {
+	} else if !p.in.Catalog && resource.CloudSQLPSC == nil {
 		return
 	}
 	if cfg.Kind != "postgres" && old.Managed == nil {
 		return
 	}
-	profile, err := manageddb.Postgres(cfg.Provider, cfg.Version)
+	var endpoint provider.CloudSQLSourceEndpoint
+	if resource.CloudSQLPSC != nil {
+		endpoint = *resource.CloudSQLPSC
+		if !endpoint.Valid(cfg.Region) {
+			p.problem(Finding{Code: "managed-profile-invalid", Subject: ResourceSubject, Name: name, Path: base + ".cloud_sql_psc", Message: "Choose a canonical manual PSC endpoint in the database region."})
+			return
+		}
+	}
+	profile, err := manageddb.PostgresSource(cfg.Provider, cfg.Version, cfg.Region, endpoint)
 	if err != nil || cfg.Kind != "postgres" {
 		p.problem(Finding{Code: "managed-profile-unavailable", Subject: ResourceSubject, Name: name, Path: base, Message: "This database has no reviewed managed profile. Moving or upgrading it needs a tested restore into a fresh service."})
 		return
@@ -48,6 +67,14 @@ func (p *planner) configureManagedCatalog(name, base string, cfg *ResourceConfig
 		return
 	}
 	conn, ok := p.connection(prov.Cloud)
+	if action.ConnectionID != "" {
+		i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == action.ConnectionID && c.Cloud == prov.Cloud && c.Ready })
+		if i >= 0 {
+			conn, ok = p.in.Connections[i], true
+		} else {
+			ok = false
+		}
+	}
 	if !ok {
 		return // Connection selection reports its own blocking finding.
 	}
@@ -60,7 +87,7 @@ func (p *planner) configureManagedCatalog(name, base string, cfg *ResourceConfig
 		p.problem(Finding{Code: "managed-account-unverified", Subject: ResourceSubject, Name: name, Path: base, Message: "Check this cloud connection's account identity before creating a managed database."})
 		return
 	}
-	cfg.Managed = &ManagedDatabaseConfig{Profile: *profile, ConnectionID: conn.ID, AccountIdentity: identity}
+	cfg.Managed = &ManagedDatabaseConfig{Profile: *profile, ConnectionID: conn.ID, AccountIdentity: identity, CloudSQLPSC: endpoint}
 	if old.Managed != nil && (binding.Provider != cfg.Provider || binding.Region != cfg.Region || binding.ConnectionID != conn.ID || old.Kind != cfg.Kind || old.Version != cfg.Version || old.Region != cfg.Region || !reflect.DeepEqual(old.Managed, cfg.Managed)) {
 		p.problem(Finding{Code: "database-migration-required", Subject: ResourceSubject, Name: name, Path: base, Message: "Moving or upgrading a persistent database needs a tested restore into a fresh service. Its existing data will remain in place."})
 	}

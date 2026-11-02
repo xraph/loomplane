@@ -13,6 +13,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
@@ -27,10 +28,15 @@ import {
   usePlansCreate,
   usePlansGet,
   usePlansList,
+  useRollbacksTarget,
 } from "@/client/forge/loomplane/hooks"
 import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
+import { CanaryPanel } from "@/components/canary"
+import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
+import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
 import {
   Code,
@@ -43,8 +49,13 @@ import {
   Thread,
   currentStep,
 } from "@/components/runs"
+import { Artifacts, Leftovers, ReleaseKind } from "@/components/release-plan"
+import { ReleaseWatchPanel } from "@/components/release-watch"
+import { RollbackDialog } from "@/components/rollback-dialog"
+import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
@@ -99,7 +110,9 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import {
   isLive,
+  normalizePlan,
   type Run,
+  runKindLabel,
   runLog,
   runStatusText,
   type ThreadStep,
@@ -110,7 +123,8 @@ import { cn } from "@/lib/utils"
 
 export function DeploymentPage({ id }: { id: string }) {
   const plan = useQuery(usePlansGet, { path: { id } })
-  if (plan.data) return <Loaded plan={plan.data} refetch={plan.refetch} />
+  if (plan.data)
+    return <Loaded plan={normalizePlan(plan.data)} refetch={plan.refetch} />
   const missing = plan.status === "error" && statusOf(plan.error) === 404
   return (
     <>
@@ -124,7 +138,7 @@ export function DeploymentPage({ id }: { id: string }) {
               <EmptyHeader>
                 <EmptyTitle>No deployment here by that ID</EmptyTitle>
                 <EmptyDescription>
-                  It may belong to another organization, or the link is wrong.
+                  It may belong to another workspace, or the link is wrong.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -160,6 +174,7 @@ function Loaded({
   refetch: () => Promise<unknown>
 }) {
   const run = useRunFor(plan, refetch)
+  const { can } = useOrganization()
   const now = useNow()
   const person = usePeople()
   const lines = useMemo(() => runLog(run, (u) => person(u).name), [run, person])
@@ -182,6 +197,22 @@ function Loaded({
       />
       <Page>
         <Heading run={run} now={now} />
+        {((plan.catalog &&
+          plan.actions.length === 1 &&
+          plan.actions[0].provider === "cloud-sql" &&
+          plan.actions[0].op === "create") ||
+          plan.actions.some(
+            (action) =>
+              !!action.service?.clusterDemand || !!action.cleanupTargets?.length
+          )) &&
+          run.deployment &&
+          ["failed", "cancelled"].includes(run.deployment.status) && (
+            <FailedDeploymentCleanup
+              id={run.deployment.id}
+              canApprove={can("deployment:approve")}
+              onChanged={refetch}
+            />
+          )}
         <Progression
           run={run}
           now={now}
@@ -191,7 +222,19 @@ function Loaded({
             setTab("logs")
           }}
         />
+        {run.deployment?.status === "succeeded" && (
+          <ReleaseWatchPanel deploymentId={run.deployment.id} />
+        )}
+        {showsCanary(run) && (
+          <CanaryPanel
+            deploymentId={run.deployment?.id}
+            release={run.plan.release}
+          />
+        )}
         {run.status === "waiting" && <ApprovalCard run={run} />}
+        {run.deployment && (
+          <DeploymentCapacityWait deployment={run.deployment} />
+        )}
         {run.status === "blocked" && <BlockedAlert run={run} />}
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
           <Tabs
@@ -259,6 +302,8 @@ function Heading({ run, now }: { run: Run; now: number }) {
   const style = run.project ? projectStyle(run.project) : null
   const d = run.deployment
   const moving = run.plan.sources.filter((s) => s.inScope)
+  const kind = runKindLabel(run.plan)
+  const rollback = mayOfferRollback(run, can("deployment:create"))
 
   const planAgain = async () => {
     try {
@@ -316,11 +361,21 @@ function Heading({ run, now }: { run: Run; now: number }) {
             </Link>
           )}
           <EnvBadge env={run.environment} />
+          {kind && (
+            <Badge
+              variant="secondary"
+              className={cn(
+                run.plan.kind === "rollback" && "bg-weld-tint text-weld-ink"
+              )}
+            >
+              {kind}
+            </Badge>
+          )}
         </div>
         <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
           {run.project?.name ?? "Deploy"} to {run.environment}
         </h1>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px] text-muted-foreground">
           <span className="flex items-center gap-2">
             <PersonAvatar initials={author.initials} name={author.name} />
             <span>
@@ -362,6 +417,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
             Retry
           </Button>
         )}
+        {rollback && d && <RollbackOffer run={run} deploymentId={d.id} />}
         {!isLive(run) && can("deployment:create") && (
           <Button
             variant="outline"
@@ -415,6 +471,60 @@ function Heading({ run, now }: { run: Run; now: number }) {
         </DropdownMenu>
       </div>
     </header>
+  )
+}
+
+// A deployment that has finished, one way or another. Rolling back waits
+// for a running one to end.
+const finishedStatuses = new Set(["succeeded", "failed", "cancelled"])
+
+/**
+ * mayOfferRollback reports whether the run's deployment could be rolled
+ * back from here at all: it's finished, it isn't a rollback itself, and
+ * the person may deploy. RollbackOffer asks the server the rest.
+ */
+function mayOfferRollback(run: Run, canDeploy: boolean): boolean {
+  const d = run.deployment
+  return (
+    !!d &&
+    canDeploy &&
+    finishedStatuses.has(d.status) &&
+    run.plan.kind !== "rollback"
+  )
+}
+
+/**
+ * RollbackOffer shows Roll back when the server would roll the deployment
+ * back: it's the environment's newest release. Cloud sync and catalog
+ * deployments after it don't count, as they don't for the server.
+ */
+function RollbackOffer({
+  run,
+  deploymentId,
+}: {
+  run: Run
+  deploymentId: string
+}) {
+  const [open, setOpen] = useState(false)
+  const target = useQuery(useRollbacksTarget, {
+    path: { id: run.projectId, environment: run.environment },
+    query: { deployment_id: deploymentId },
+  })
+  if (target.data === undefined) return null
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        <Undo2Icon />
+        Roll back
+      </Button>
+      <RollbackDialog
+        open={open}
+        onOpenChange={setOpen}
+        projectId={run.projectId}
+        environment={run.environment}
+        deploymentId={deploymentId}
+      />
+    </>
   )
 }
 
@@ -516,7 +626,7 @@ function Progression({
                 {g}
                 {inGroup.length > 1 && ` · ${inGroup.length} steps`}
               </span>
-              <span className="truncate text-sm font-medium">
+              <span className="truncate text-[13px] font-medium">
                 {head?.name ?? g}
               </span>
               <span className={cn("text-[12.5px]", groupTone[state])}>
@@ -756,7 +866,7 @@ const opStyle: Record<
   create: {
     icon: PlusIcon,
     label: "Create",
-    tone: "text-overdye bg-overdye/12",
+    tone: "text-overdye-ink bg-overdye-tint",
   },
   update: {
     icon: PencilIcon,
@@ -766,12 +876,12 @@ const opStyle: Record<
   replace: {
     icon: RefreshCwIcon,
     label: "Replace",
-    tone: "text-weld-ink bg-weld/15",
+    tone: "text-weld-ink bg-weld-tint",
   },
   delete: {
     icon: MinusIcon,
     label: "Delete",
-    tone: "text-destructive bg-destructive/12",
+    tone: "text-destructive bg-failed-tint",
   },
   keep: {
     icon: CheckIcon,
@@ -786,7 +896,7 @@ function PlanTab({ run }: { run: Run }) {
   if (p.status === "planning") {
     return (
       <Card className="py-10">
-        <p className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+        <p className="flex items-center justify-center gap-2 text-[13px] text-muted-foreground">
           <Spinner />
           Working out what {run.environment} needs
         </p>
@@ -803,12 +913,13 @@ function PlanTab({ run }: { run: Run }) {
   }
   return (
     <div className="grid gap-4">
+      <ReleaseKind plan={p} />
       <Card className="gap-0 py-0">
         <CardHeader className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b py-4">
           {(["create", "update", "replace", "delete"] as const).map((op) => {
             const Icon = opStyle[op]?.icon ?? CircleIcon
             return (
-              <span key={op} className="flex items-center gap-2 text-sm">
+              <span key={op} className="flex items-center gap-2 text-[13px]">
                 <span
                   className={cn(
                     "flex size-5 items-center justify-center rounded-md",
@@ -817,17 +928,17 @@ function PlanTab({ run }: { run: Run }) {
                 >
                   <Icon className="size-3" strokeWidth={2.5} />
                 </span>
-                <span className="tabular-nums">{s[op]}</span>
+                <span className="font-mono tabular-nums">{s[op]}</span>
                 <span className="text-muted-foreground">to {op}</span>
               </span>
             )
           })}
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto text-[13px] text-muted-foreground">
             {s.keep} kept as they are
           </span>
         </CardHeader>
         {p.actions.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+          <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
             Nothing to do: what&apos;s deployed already matches the manifest.
           </p>
         ) : (
@@ -840,6 +951,8 @@ function PlanTab({ run }: { run: Run }) {
           </div>
         )}
       </Card>
+      <Artifacts artifacts={p.artifacts ?? []} />
+      <Leftovers leftovers={p.leftovers ?? []} />
       {(p.problems.length > 0 || p.warnings.length > 0) && (
         <Card className="gap-3">
           <CardHeader>
@@ -882,7 +995,7 @@ function FindingRow({
         )}
       />
       <div className="grid min-w-0 gap-1">
-        <p className="text-sm">{f.message}</p>
+        <p className="text-[13px]">{f.message}</p>
         {f.path && (
           <code className="font-mono text-xs text-muted-foreground">
             {f.path}
@@ -911,7 +1024,7 @@ function ActionRow({ action: a }: { action: Action }) {
   ]
   return (
     <Collapsible defaultOpen={a.op !== "keep" && a.op !== "update"}>
-      <CollapsibleTrigger className="group/change flex w-full items-center gap-3 px-5 py-3.5 text-left text-sm outline-none hover:bg-muted/50 focus-visible:bg-muted/50">
+      <CollapsibleTrigger className="group/change flex w-full items-center gap-3 px-5 py-3.5 text-left text-[13px] outline-none hover:bg-muted/50 focus-visible:bg-muted/50">
         <span
           className={cn(
             "flex size-5 shrink-0 items-center justify-center rounded-md",
@@ -970,7 +1083,7 @@ function Services({ run }: { run: Run }) {
   if (deploy.length === 0) {
     return (
       <Card className="py-0">
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+        <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
           This plan changes nothing, so no service moves.
         </p>
       </Card>
@@ -1007,14 +1120,10 @@ function Services({ run }: { run: Run }) {
                     {a.region ? `, ${a.region}` : ""}
                   </ItemDescription>
                   {s.step?.url && s.state === "done" && (
-                    <a
-                      href={s.step.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-fit text-xs underline-offset-4 hover:underline"
-                    >
-                      {s.step.url.replace(/^https?:\/\//, "")}
-                    </a>
+                    <ServiceAddress
+                      address={s.step.url}
+                      className="w-fit text-xs"
+                    />
                   )}
                 </ItemContent>
                 <ItemActions

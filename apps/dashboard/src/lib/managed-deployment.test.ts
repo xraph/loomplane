@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { deployDatabase } from "@/lib/catalog"
+import type { ManagedDatabaseReview } from "@/lib/managed-catalog"
 import {
   managedDatabaseFixture,
   managedWire,
@@ -60,6 +61,109 @@ function managedServer(
   )
   return { fixture, calls }
 }
+
+const pscEndpoint = {
+  consumerProject: "project-a",
+  network: "projects/project-a/global/networks/apps",
+  forwardingRule:
+    "projects/project-a/regions/us-central1/forwardingRules/database",
+}
+
+it("saves and approves only the requested PSC source endpoint", async () => {
+  const { fixture, calls } = managedServer("cloud-sql")
+  const managed: ManagedDatabaseReview = {
+    ...fixture.review,
+    profile: {
+      ...fixture.profile,
+      id: "postgresql-17-cloud-sql-psc",
+      access: "cloud-sql-psc-connector",
+    },
+    cloudSqlPsc: {
+      ...pscEndpoint,
+      provisionSubnetwork:
+        "projects/project-a/regions/us-central1/subnetworks/psc",
+    },
+  }
+  fixture.plan.actions[0].resource!.managed!.profile = managed.profile
+  fixture.plan.actions[0].resource!.managed!.cloudSqlPsc = {
+    ...managed.cloudSqlPsc!,
+  }
+  await deployDatabase(
+    {
+      name: "Private orders",
+      kind: "postgres",
+      provider: "cloud-sql",
+      target: "selected",
+      daily: false,
+      managed,
+    },
+    vi.fn(),
+    vi.fn()
+  )
+  const yaml = String(
+    calls.find((call) => call.path.endsWith("/manifest"))?.body.yaml
+  )
+  expect(yaml).toContain("    cloud_sql_psc:\n")
+  expect(yaml).toContain(
+    '      provision_subnetwork: "projects/project-a/regions/us-central1/subnetworks/psc"'
+  )
+  expect(yaml).toContain(
+    `      consumer_project: "${pscEndpoint.consumerProject}"`
+  )
+  expect(yaml).toContain(`      network: "${pscEndpoint.network}"`)
+  expect(yaml).toContain(
+    `      forwarding_rule: "${pscEndpoint.forwardingRule}"`
+  )
+  expect(calls.filter((call) => call.path.endsWith("/approve"))).toHaveLength(1)
+})
+
+it("rejects missing, cross-region and malformed PSC routes before creating a project", async () => {
+  const fetcher = vi.fn(async () => {
+    throw new Error("unexpected request")
+  })
+  vi.stubGlobal("fetch", fetcher)
+  const { review } = managedDatabaseFixture("cloud-sql")
+  for (const cloudSqlPsc of [
+    undefined,
+    { ...pscEndpoint, network: `${pscEndpoint.network}/extra` },
+    { ...pscEndpoint, consumerProject: "other-project" },
+    {
+      ...pscEndpoint,
+      forwardingRule: pscEndpoint.forwardingRule.replace(
+        "us-central1",
+        "europe-west1"
+      ),
+    },
+    {
+      ...pscEndpoint,
+      forwardingRule: `https://www.googleapis.com/compute/v1/${pscEndpoint.forwardingRule}`,
+    },
+  ]) {
+    await expect(
+      deployDatabase(
+        {
+          name: "Orders",
+          kind: "postgres",
+          provider: "cloud-sql",
+          target: "selected",
+          daily: false,
+          managed: {
+            ...review,
+            profile: {
+              ...review.profile,
+              id: "postgresql-17-cloud-sql-psc",
+              access: "cloud-sql-psc-connector",
+            },
+            cloudSqlPsc,
+          },
+        },
+        vi.fn(),
+        vi.fn()
+      )
+    ).rejects.toThrow(/PSC/)
+  }
+  expect(fetcher).not.toHaveBeenCalled()
+})
 
 for (const target of ["rds", "cloud-sql"] as const) {
   it(`deploys ${target} through its selected account without container manifests or backup schedules`, async () => {

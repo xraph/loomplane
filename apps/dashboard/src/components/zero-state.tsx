@@ -6,10 +6,10 @@ import {
   type ReactNode,
   useContext,
 } from "react"
-import { LayersIcon } from "lucide-react"
+import { EmptyIcon } from "@/components/icons"
 import { cn } from "@/lib/utils"
 
-type Variant = "panel" | "inline"
+type Variant = "panel" | "inline" | "compact"
 
 // The header draws the preview on the page and only the icon inside a card.
 const VariantContext = createContext<{ variant: Variant; preview: boolean }>({
@@ -23,10 +23,13 @@ const zeroStateVariants = cva(
     variants: {
       variant: {
         // On the page: centred under a faded preview of the list that will
-        // fill this space. No border, no fill.
-        panel: "items-center px-4 py-12 text-center",
+        // fill this space, on a soft surface that sets it apart from the
+        // sections around it. Never a border.
+        panel: "items-center rounded-[14px] px-6 py-10 text-center",
         // Already inside a card, so just the content.
         inline: "items-start p-5 text-left",
+        // Centred like a panel, with less room, for a section or a dialog.
+        compact: "items-center gap-3 px-5 py-6 text-center",
       },
     },
     defaultVariants: { variant: "panel" },
@@ -37,6 +40,7 @@ function ZeroState({
   className,
   variant = "panel",
   preview = true,
+  surface = true,
   ...props
 }: React.ComponentProps<"div"> &
   VariantProps<typeof zeroStateVariants> & {
@@ -45,6 +49,11 @@ function ZeroState({
      * error, a missing permission or a page that isn't there.
      */
     preview?: boolean
+    /**
+     * The soft surface behind a panel. Turn it off when the panel already
+     * sits inside a bordered card, so there's no box inside a box.
+     */
+    surface?: boolean
   }) {
   const v = variant ?? "panel"
   return (
@@ -53,7 +62,12 @@ function ZeroState({
         data-slot="empty"
         data-variant={v}
         data-preview={preview}
-        className={cn(zeroStateVariants({ variant: v }), className)}
+        data-surface={v === "panel" && surface}
+        className={cn(
+          zeroStateVariants({ variant: v }),
+          v === "panel" && surface && "bg-subtle",
+          className
+        )}
         {...props}
       />
     </VariantContext.Provider>
@@ -71,7 +85,7 @@ function ZeroStateHeader({
     (child) => isValidElement(child) && child.type === ZeroStateMedia
   ) ?? (
     <ZeroStateMedia variant="icon">
-      <LayersIcon />
+      <EmptyIcon />
     </ZeroStateMedia>
   )
   const rest = items.filter((child) => child !== media)
@@ -80,12 +94,16 @@ function ZeroStateHeader({
       data-slot="empty-header"
       className={cn(
         "flex max-w-md flex-col gap-1.5",
-        variant === "panel" ? "items-center" : "items-start",
+        variant === "inline" ? "items-start" : "items-center",
         className
       )}
       {...props}
     >
-      {variant === "panel" && preview ? <Preview>{media}</Preview> : media}
+      {(variant === "panel" || variant === "compact") && preview ? (
+        <Preview>{media}</Preview>
+      ) : (
+        media
+      )}
       {rest}
     </div>
   )
@@ -116,7 +134,7 @@ function GhostRow({
   return (
     <div
       className={cn(
-        "flex h-12 items-center gap-3 rounded-xl bg-card px-2.5 shadow-[0_1px_2px_oklch(0.2_0.01_50/0.05)] ring-1 ring-border",
+        "flex h-12 items-center gap-3 rounded-xl bg-card px-2.5 shadow-[0_1px_2px_oklch(0.2_0.01_50/0.06)] in-data-[surface=false]:bg-muted/60 in-data-[surface=false]:shadow-none",
         className
       )}
     >

@@ -22,6 +22,8 @@ type Cloud struct {
 
 // CloudPlacement is a Cloud's single default provider, account and region.
 type CloudPlacement struct {
+	Runtime      string `json:"runtime,omitempty"`
+	PoolID       string `json:"pool_id,omitempty"`
 	Provider     string `json:"provider"`
 	ConnectionID string `json:"connection_id"`
 	Region       string `json:"region"`
@@ -29,6 +31,8 @@ type CloudPlacement struct {
 
 // CloudTarget is the public Cloud API record.
 type CloudTarget struct {
+	Runtime      string    `json:"runtime,omitempty"`
+	PoolID       string    `json:"pool_id,omitempty"`
 	ID           string    `json:"id" forge:"id"`
 	OrgID        string    `json:"org_id"`
 	ProjectID    string    `json:"project_id"`
@@ -60,6 +64,8 @@ type CloudAssignment struct {
 
 // CloudChangeInput is the public Cloud API record.
 type CloudChangeInput struct {
+	Runtime       string `json:"runtime,omitempty"`
+	PoolID        string `json:"pool_id,omitempty"`
 	Revision      int64  `json:"revision"`
 	CloudID       string `json:"cloud_id"`
 	TargetID      string `json:"target_id,omitempty"`
@@ -83,17 +89,36 @@ type CloudPlanSummary struct {
 
 // CloudEnvironmentChange is the public Cloud API record.
 type CloudEnvironmentChange struct {
-	ProjectID       string           `json:"project_id,omitempty"`
-	EnvironmentID   string           `json:"environment_id"`
-	Environment     string           `json:"environment"`
-	Services        []string         `json:"services"`
-	Summary         CloudPlanSummary `json:"summary"`
-	PlanID          string           `json:"plan_id,omitempty"`
-	DeploymentID    string           `json:"deployment_id,omitempty"`
-	Status          string           `json:"status"`
-	Error           string           `json:"error,omitempty"`
-	ExternalRouting bool             `json:"external_routing"`
-	RoutingEvidence string           `json:"routing_evidence,omitempty"`
+	CompensationMode    string           `json:"compensation_mode,omitempty"`
+	CompensationMessage string           `json:"compensation_message,omitempty"`
+	ProjectID           string           `json:"project_id,omitempty"`
+	EnvironmentID       string           `json:"environment_id"`
+	Environment         string           `json:"environment"`
+	Services            []string         `json:"services"`
+	Summary             CloudPlanSummary `json:"summary"`
+	PlanID              string           `json:"plan_id,omitempty"`
+	DeploymentID        string           `json:"deployment_id,omitempty"`
+	Status              string           `json:"status"`
+	Error               string           `json:"error,omitempty"`
+	ExternalRouting     bool             `json:"external_routing"`
+	RoutingEvidence     string           `json:"routing_evidence,omitempty"`
+	RoutingStatus       string           `json:"routing_status,omitempty"`
+	Routes              []CloudSyncRoute `json:"routes,omitempty"`
+}
+
+// CloudSyncRoute records the accepted route operations and pending DNS instructions.
+type CloudSyncRoute struct {
+	RouteID    string    `json:"route_id"`
+	PrepareID  string    `json:"prepare_id"`
+	CutoverID  string    `json:"cutover_id,omitempty"`
+	ReleaseID  string    `json:"release_id,omitempty"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message,omitempty"`
+	Hostname   string    `json:"hostname"`
+	RecordType string    `json:"record_type,omitempty"`
+	Value      string    `json:"value,omitempty"`
+	TTL        int       `json:"ttl,omitempty"`
+	NotBefore  time.Time `json:"not_before"`
 }
 
 // CloudPreview is the public Cloud API record.
@@ -155,6 +180,8 @@ type CloudUpdateInput struct {
 }
 
 type CloudCreateTargetInput struct {
+	Runtime      string   `json:"runtime,omitempty"`
+	PoolID       string   `json:"pool_id,omitempty"`
 	Name         string   `json:"name"`
 	DisplayName  string   `json:"display_name"`
 	Provider     string   `json:"provider"`
@@ -344,6 +371,11 @@ func (c *Client) CloudPreview(ctx context.Context, project, id string) (*CloudPr
 	return &out, err
 }
 
+// CloudProjectGrantInput selects allowed targets; an empty list grants the whole Cloud.
+type CloudProjectGrantInput struct {
+	TargetIDs []string `json:"target_ids"`
+}
+
 // CloudProjectGrant controls fresh placement on a Cloud's allowed targets.
 type CloudProjectGrant struct {
 	OrgID     string   `json:"org_id"`
@@ -370,7 +402,7 @@ func (c *Client) CloudProjectGrants(ctx context.Context, cloud string) ([]CloudP
 }
 func (c *Client) GrantCloudProject(ctx context.Context, cloud, project string, targets []string) (*CloudProjectGrant, error) {
 	var out CloudProjectGrant
-	err := c.do(ctx, http.MethodPut, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), map[string]any{"target_ids": targets}, &out)
+	err := c.do(ctx, http.MethodPut, "/api/v1/clouds/"+esc(cloud)+"/projects/"+esc(project), CloudProjectGrantInput{TargetIDs: targets}, &out)
 	return &out, err
 }
 func (c *Client) RevokeCloudProject(ctx context.Context, cloud, project string) (*CloudProjectGrant, error) {

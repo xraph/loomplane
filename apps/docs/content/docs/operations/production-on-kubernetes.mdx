@@ -1,0 +1,134 @@
+---
+title: Production on Kubernetes
+description: Run Loomplane highly available with its Helm chart, on your PostgreSQL and S3-compatible storage.
+---
+
+The Helm chart runs Loomplane with no single pod you can't lose: two API replicas and two analysis workers, spread across nodes and zones, with disruption budgets and rolling updates that never drop below the replicas you asked for. Migrations run once, before any new pod serves. You bring PostgreSQL and object storage.
+
+## Requirements
+
+- Kubernetes 1.27 or newer, with nodes in two zones if you want to survive losing one.
+- Helm 3.8 or newer, or Helm 4.
+- PostgreSQL 17 that the cluster can reach. The chart doesn't make the database highly available, so a managed or replicated one (CloudNativePG, for example) decides how available Loomplane is.
+- S3-compatible storage with two buckets you create first: `loomplane-artifacts` and `loomplane-backups`. AWS S3, GCS interoperability, R2, Spaces and MinIO all work. A ReadWriteMany volume works too.
+- An ingress controller or a Gateway API implementation, and a hostname.
+
+## Install
+
+Put the credentials in a Secret, so none of them sits in a values file or Helm's history:
+
+```bash
+kubectl create namespace loomplane
+kubectl -n loomplane create secret generic loomplane \
+  --from-literal=LOOMPLANE_SECRET_KEY="$(openssl rand -base64 32)" \
+  --from-literal=LOOMPLANE_DATABASE_URL='postgres://loomplane:PASSWORD@db.internal:5432/loomplane?sslmode=verify-full' \
+  --from-literal=LOOMPLANE_STORAGE_URL='s3://us-east-1/loomplane-artifacts'
+```
+
+Keep that secret key in your secret manager. Loomplane derives the keys that encrypt stored credentials from it, and a database backup can't recover them without it.
+
+Write a `values.yaml`:
+
+```yaml
+publicURL: https://loomplane.example.com
+secrets:
+  existingSecret: loomplane
+serviceAccount:
+  # An S3 URL without keys uses the pod's cloud identity.
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/loomplane
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+  tls:
+    - secretName: loomplane-tls
+      hosts: [loomplane.example.com]
+```
+
+Install the chart from the release you want, then check it:
+
+```bash
+helm install loomplane oci://ghcr.io/xraph/charts/loomplane --version 1.2.3 \
+  --namespace loomplane -f values.yaml
+kubectl -n loomplane rollout status deploy/loomplane
+helm test loomplane -n loomplane
+```
+
+Setup needs a one-time token. The first API pod logs it as a `setup is waiting` warning with a `url` field, and you can print the link again from any API pod:
+
+```bash
+kubectl -n loomplane exec deploy/loomplane -- loomplane setup-token
+# Finish setup at https://loomplane.example.com/setup?token=...
+```
+
+Open that link and create the first account. It owns the instance.
+
+The proxy buffering and timeout annotations matter: the dashboard streams live events over server-sent events and a WebSocket. The chart also sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods, so the public ingress refuses them. Prefer the Gateway API? Set `httpRoute.enabled` and `httpRoute.parentRefs` instead of `ingress`.
+
+`publicURL` is also the OpenID Connect issuer that AWS, Google Cloud and Azure trust for [keyless connections](/docs/clouds/keyless). They fetch `/.well-known/openid-configuration` and `/.well-known/jwks.json` from it over the internet, so keep it HTTPS on a hostname they can reach, and let `/.well-known/` through to the API if you put anything in front of the ingress. Every replica serves the same keys from the database.
+
+## What survives what
+
+| Event | What happens |
+|---|---|
+| An API pod crashes | The other replica serves while it's replaced. |
+| A worker dies mid-analysis | Its job goes back on the queue after 30 seconds and another worker takes it, without using a retry. |
+| A node drains | Disruption budgets let one API pod and one worker go at a time. |
+| A zone fails | Spread constraints keep a replica in each zone you have. |
+| An upgrade | New pods migrate under a lock, then replace old ones one at a time. A failed migration stops the rollout and the old pods keep serving. |
+| PostgreSQL goes down | Loomplane goes down with it. |
+
+Replicas share everything through PostgreSQL. Jobs are leased to one worker at a time, Ctrl Plane's scheduler runs on one elected API pod, sessions and rate limits live in the database, and live events reach every pod through `pg_notify`. You don't need sticky sessions.
+
+## Upgrades
+
+Take a [backup](/docs/operations/backing-up-loomplane) first, then upgrade:
+
+```bash
+helm upgrade loomplane oci://ghcr.io/xraph/charts/loomplane --version 1.2.4 \
+  -n loomplane -f values.yaml
+```
+
+Migrations only go forward, and an older Loomplane refuses a database a newer one migrated. After an upgrade that migrated, `helm rollback` won't start the old version: restore your backup instead. When a release's notes ask for downtime, set `api.strategy.type` and `worker.strategy.type` to `Recreate` for that upgrade.
+
+## Sizing
+
+Each API pod opens a little over 20 database connections and each worker about 16, so set PostgreSQL's `max_connections` for your replicas plus one extra of each during a rollout. Workers unpack repositories into an 8 GiB scratch volume by default (`worker.tmpSize`), because one analysis can take 2 GiB and a worker runs two at once. Turn on `api.autoscaling` and `worker.autoscaling` to scale on CPU.
+
+Set `metrics.serviceMonitor.enabled` to have the Prometheus Operator scrape `/_/metrics` on both processes.
+
+## Deploying into the same cluster
+
+You can let people deploy to the cluster Loomplane runs in, with no kubeconfig to paste. List the namespaces it may use:
+
+```yaml
+inCluster:
+  enabled: true
+  namespaces: [apps, preview]
+  createNamespaces: true
+```
+
+The chart mounts the service account token in the API pods only, and binds a Role in each namespace with what a [Kubernetes connection](/docs/clouds/your-own-servers#the-cluster-loomplane-runs-in) checks for. The Kubernetes dialog under **Integrations** then opens on this cluster.
+
+Every organization on your instance shares that service account, so any of them can deploy into any namespace you list. That's right for a single-team install. On a shared one, leave it off and hand out kubeconfigs scoped per team. Loomplane always refuses its own namespace, where its database password and secret key live, and `kube-system`, `kube-public` and `kube-node-lease` too.
+
+`inCluster.clusterPermissions` (on by default) adds the cluster-wide reads that GPU inventory and retained storage need, plus updating persistent volumes so a database's volume survives recovery. Without it, those show as unavailable and plain deployments still work.
+
+## Without Helm
+
+Each release attaches `loomplane-VERSION-kubernetes.yaml`, the chart rendered for `kubectl apply` with an ingress-nginx Ingress. Create the Secret above, replace `loomplane.example.com`, and apply it.
+
+## Optional push gateway
+
+Set `push.gateway.enabled=true` to deploy a gateway alongside the API and
+workers. Supply its own Secret, a published gateway image version and a
+public HTTPS hostname in `push.gatewayUrl`. The chart can create an Ingress
+or HTTPRoute that publishes only the two push routes. See the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+for a configuration example, TLS and key rotation. Hosting a gateway requires
+push credentials for the mobile app you ship.

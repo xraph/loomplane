@@ -31,6 +31,7 @@ import {
   ZeroStateMedia,
 } from "@/components/zero-state"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
 import { cn } from "@/lib/utils"
@@ -68,7 +69,11 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { databaseTargetProvider } from "@/lib/catalog-targets"
 import { deployDatabase } from "@/lib/catalog"
-import { databaseRecipes, type DatabaseKind } from "@/lib/catalog-recipes"
+import {
+  databaseRecipes,
+  isComposedDatabase,
+  type DatabaseKind,
+} from "@/lib/catalog-recipes"
 import { Link } from "@/lib/router"
 import { formatDate } from "@/lib/format"
 import { recoverySelection } from "@/lib/service-recovery"
@@ -80,7 +85,11 @@ import { useDeploymentWrites } from "@/lib/deployment-writes"
 import {
   isManagedDatabaseProvider,
   managedDatabaseProfile,
+  managedDatabaseProfiles,
+  cloudSQLSourceEndpointValid,
+  managedDatabaseAccessLabel,
 } from "@/lib/managed-catalog"
+import { CloudSQLSourceFields } from "@/components/cloudsql-source-fields"
 import { NativeRecovery } from "@/components/native-recovery"
 import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 
@@ -119,7 +128,7 @@ export function ServiceCatalog({
           <div className="grid min-w-0 flex-1 gap-1">
             <h1 className="flex flex-wrap items-baseline gap-2 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
               {recipe.title}
-              <span className="font-mono text-sm font-normal text-muted-foreground">
+              <span className="font-mono text-[13px] font-normal text-muted-foreground">
                 {recipe.version}
               </span>
             </h1>
@@ -141,18 +150,28 @@ export function ServiceCatalog({
 function WhatYouGet({ kind }: { kind: DatabaseKind }) {
   const recipe = databaseRecipes[kind]
   const entry = catalog.find((e) => e.kind === kind)
+  const features =
+    kind === "postgres"
+      ? [
+          "Persistent storage",
+          "Backups and recovery copies",
+          "Restricted application role",
+        ]
+      : entry?.features
   return (
     <aside
       aria-label="What you get"
-      className="grid gap-3 rounded-[14px] bg-subtle p-4 ring-1 ring-border"
+      className="grid gap-3 rounded-xl bg-subtle p-4 ring-1 ring-border"
     >
       <h2 className="text-[13px] font-semibold">What you get</h2>
       <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-        {recipe.description}
+        {kind === "postgres"
+          ? "Docker and Kubernetes retain database volumes. RDS and Cloud SQL use provider storage and backups. Review the selected target's settings before deploying."
+          : recipe.description}
       </p>
       {entry && (
         <ul className="grid gap-1.5 text-[12.5px]">
-          {entry.features.map((f) => (
+          {features?.map((f) => (
             <li key={f} className="flex items-center gap-2">
               <CheckIcon className="size-3.5 text-overdye" />
               {f}
@@ -165,9 +184,9 @@ function WhatYouGet({ kind }: { kind: DatabaseKind }) {
         </ul>
       )}
       <p className="border-t pt-3 text-[12px] leading-relaxed text-muted-foreground">
-        Point-in-time recovery isn&apos;t available yet. Once it&apos;s
-        deployed, backups, test restores and recovery copies are on the
-        service&apos;s project page, under Backups.
+        Once deployed, you can find backups and recovery copies on the
+        service&apos;s project page, under Backups. Point-in-time recovery
+        requires an eligible managed source and an available recovery window.
       </p>
     </aside>
   )
@@ -188,6 +207,11 @@ function targetMode(
 
 // The accounts that can run each engine, for the empty state.
 const runsOnClouds: Record<DatabaseKind, string[]> = {
+  falkordb: ["server", "kubernetes"],
+  elasticsearch: ["server", "kubernetes"],
+  opensearch: ["server", "kubernetes"],
+  rabbitmq: ["server"],
+  nats: ["server"],
   postgres: ["aws", "gcp", "server", "kubernetes"],
   mysql: ["server"],
   mariadb: ["server"],
@@ -220,7 +244,13 @@ function DatabaseDeployment({
   const [name, setName] = useState<string>(recipe.title)
   const [target, setTarget] = useState("")
   const [regionChoice, setRegionChoice] = useState({ target: "", value: "" })
+  const [profileChoice, setProfileChoice] = useState({ target: "", value: "" })
+  const [endpointChoice, setEndpointChoice] = useState({
+    target: "",
+    value: { consumerProject: "", network: "", forwardingRule: "" },
+  })
   const [daily, setDaily] = useState(true)
+  const [reviewPlan, setReviewPlan] = useState("")
   const [pending, setPending] = useState(false)
   const [progress, setProgress] = useState("")
   const [error, setError] = useState("")
@@ -253,8 +283,22 @@ function DatabaseDeployment({
     : undefined
   const managed = isManagedDatabaseProvider(targetProvider)
   const profile = targetProvider
-    ? managedDatabaseProfile(offers, targetProvider)
+    ? managedDatabaseProfile(
+        offers,
+        targetProvider,
+        profileChoice.target === selected
+          ? profileChoice.value || undefined
+          : undefined
+      )
     : undefined
+  const profiles = targetProvider
+    ? managedDatabaseProfiles(offers, targetProvider)
+    : []
+  const psc = profile?.access === "cloud-sql-psc-connector"
+  const sourceEndpoint =
+    endpointChoice.target === selected
+      ? endpointChoice.value
+      : { consumerProject: "", network: "", forwardingRule: "" }
   const selectedProvider = offers.find((offer) => offer.name === targetProvider)
   const regions = managed
     ? targetProvider === "rds"
@@ -265,8 +309,13 @@ function DatabaseDeployment({
     regionChoice.target === selected && regions.includes(regionChoice.value)
       ? regionChoice.value
       : (regions[0] ?? "")
+  const managedReady =
+    !managed ||
+    (!!profile &&
+      !!region &&
+      (!psc || cloudSQLSourceEndpointValid(sourceEndpoint, region)))
   async function deploy() {
-    if (locked || !targetProvider) return
+    if (locked || !targetProvider || !managedReady) return
     setPending(true)
     setError("")
     try {
@@ -277,13 +326,18 @@ function DatabaseDeployment({
           target: selected,
           provider: targetProvider,
           targetSettings: selectedTarget?.details,
-          daily: !managed && daily && can("service_backup:manage"),
+          daily:
+            !isComposedDatabase(kind) &&
+            !managed &&
+            daily &&
+            can("service_backup:manage"),
           managed:
             managed && profile
               ? {
                   profile,
                   accountIdentity: selectedTarget!.accountIdentity!,
                   region,
+                  ...(psc ? { cloudSqlPsc: sourceEndpoint } : {}),
                 }
               : undefined,
         },
@@ -291,9 +345,14 @@ function DatabaseDeployment({
         (id) => {
           setCreated(id)
           onCreated?.(id)
-        }
+        },
+        setReviewPlan
       )
-      toast.success(`${recipe.title} deployed`)
+      toast.success(
+        isComposedDatabase(kind)
+          ? `${recipe.title} plan ready for review`
+          : `${recipe.title} deployed`
+      )
     } catch (cause) {
       setError(messageOf(cause, "Deployment could not finish"))
     } finally {
@@ -303,7 +362,7 @@ function DatabaseDeployment({
   return (
     <section
       aria-label="Deploy database"
-      className="grid gap-5 rounded-[14px] bg-card p-5 ring-1 ring-border"
+      className="grid gap-5 rounded-xl bg-card p-5 ring-1 ring-border"
     >
       {providers.status === "error" && connections.status !== "error" && (
         <QueryError
@@ -403,6 +462,33 @@ function DatabaseDeployment({
               Connect another account
             </Link>
           </fieldset>
+          {targetProvider === "cloud-sql" && profiles.length > 1 && (
+            <div className="grid gap-1.5 sm:max-w-sm">
+              <Label htmlFor="database-profile">Connection mode</Label>
+              <Select
+                value={profile?.id ?? ""}
+                onValueChange={(value) =>
+                  setProfileChoice({ target: selected, value: value ?? "" })
+                }
+                disabled={locked || !allowed}
+              >
+                <SelectTrigger id="database-profile" className="w-full">
+                  <SelectValue>
+                    {profile
+                      ? managedDatabaseAccessLabel(profile.access)
+                      : "Choose a profile"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {profiles.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {managedDatabaseAccessLabel(option.access)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {managed && profile ? (
             <ManagedDatabaseSettings profile={profile} />
           ) : targetProvider === "kubernetes" ? (
@@ -457,8 +543,19 @@ function DatabaseDeployment({
               </div>
             )}
           </div>
+          {psc && (
+            <CloudSQLSourceFields
+              value={sourceEndpoint}
+              onChange={(value) =>
+                setEndpointChoice({ target: selected, value })
+              }
+              disabled={locked || !allowed}
+            />
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-            {!managed && can("service_backup:manage") ? (
+            {!managed &&
+            !isComposedDatabase(kind) &&
+            can("service_backup:manage") ? (
               <label className="flex items-center gap-2 text-[13px]">
                 <Checkbox
                   checked={daily}
@@ -477,14 +574,12 @@ function DatabaseDeployment({
             <Button
               type="submit"
               disabled={
-                locked ||
-                !allowed ||
-                !name.trim() ||
-                !selected ||
-                (managed && !region)
+                locked || !allowed || !name.trim() || !selected || !managedReady
               }
             >
-              {pending ? "Deploying…" : `Deploy ${recipe.title}`}
+              {pending
+                ? "Preparing…"
+                : `${isComposedDatabase(kind) ? "Review" : "Deploy"} ${recipe.title}`}
             </Button>
           </div>
         </form>
@@ -508,9 +603,19 @@ function DatabaseDeployment({
       {created && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl bg-overdye-tint px-4 py-3">
           <span className="flex-1 text-[13px]">
-            {recipe.title} is on its own project now, with its backups under
-            Backups.
+            {reviewPlan
+              ? "Your service project is ready. Review the deployment plan to start the service."
+              : `${recipe.title} is on its own project now, with its backups under Backups.`}
           </span>
+          {reviewPlan && (
+            <Link
+              to="/deployments/$id"
+              params={{ id: reviewPlan }}
+              className={buttonVariants({ size: "sm" })}
+            >
+              Review deployment
+            </Link>
+          )}
           <Link
             to="/projects/$id"
             params={{ id: created }}
@@ -524,6 +629,7 @@ function DatabaseDeployment({
             disabled={pending}
             onClick={() => {
               setCreated("")
+              setReviewPlan("")
               setError("")
               setProgress("")
               setName("")
@@ -537,11 +643,104 @@ function DatabaseDeployment({
   )
 }
 
-export function ServiceRecovery({ project }: { project: string }) {
+/**
+ * ServiceRecovery is a project's database recovery. It opens on production
+ * and the first database there, unless environment (an environment ID) and
+ * resource choose where it starts; both can still be changed. A chosen
+ * environment or resource that isn't there says so rather than opening on
+ * another one.
+ */
+export function ServiceRecovery({
+  project,
+  environment,
+  resource,
+  embeddedTitle,
+}: {
+  project: string
+  environment?: string
+  resource?: string
+  embeddedTitle?: string
+}) {
+  if (!environment)
+    return (
+      <Recovery
+        key={`${project}:${resource ?? ""}`}
+        project={project}
+        embeddedTitle={embeddedTitle}
+        initialEnvironment="production"
+        initialResource={resource ?? ""}
+      />
+    )
+  return (
+    <PreselectedRecovery
+      project={project}
+      embeddedTitle={embeddedTitle}
+      environment={environment}
+      resource={resource ?? ""}
+    />
+  )
+}
+
+// The recovery controls key environments by name, so a preselected ID waits
+// for the environments to say which name it is.
+function PreselectedRecovery({
+  project,
+  environment,
+  resource,
+  embeddedTitle,
+}: {
+  project: string
+  environment: string
+  resource: string
+  embeddedTitle?: string
+}) {
+  const environments = useQuery(useEnvironmentsList, { path: { id: project } })
+  if (environments.status === "error")
+    return (
+      <QueryError
+        error={environments.error}
+        fallback="Could not load recovery state"
+        retry={environments.refetch}
+      />
+    )
+  if (!environments.data) return <p role="status">Loading recovery state…</p>
+  const name = environments.data.environments.find(
+    (e) => e.id === environment
+  )?.name
+  if (!name)
+    return (
+      <CatalogEmpty
+        title="This environment isn't in the project"
+        description="It may have been deleted, so there is no recovery to show for it."
+      />
+    )
+  return (
+    <Recovery
+      key={`${environment}:${resource}`}
+      project={project}
+      embeddedTitle={embeddedTitle}
+      initialEnvironment={name}
+      initialResource={resource}
+    />
+  )
+}
+
+function Recovery({
+  project,
+  initialEnvironment,
+  initialResource,
+  embeddedTitle,
+}: {
+  project: string
+  initialEnvironment: string
+  initialResource: string
+  embeddedTitle?: string
+}) {
+  const CopiesContainer = embeddedTitle ? "details" : "div"
   const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
-  const [environment, setEnvironment] = useState("production")
+  const [environment, setEnvironment] = useState(initialEnvironment)
   const bindings = useQuery(useBindingsList, {
     path: { id: project },
     query: { environment },
@@ -557,7 +756,7 @@ export function ServiceRecovery({ project }: { project: string }) {
   const [deleting, setDeleting] = useState<Restore | null>(null)
   const { busy, onPendingChange } = useDeploymentWrites(project)
   const requests = useRef<Record<string, string>>({})
-  const [resource, setResource] = useState("")
+  const [resource, setResource] = useState(initialResource)
   const environmentID = environments.data?.environments.find(
     (e) => e.name === environment
   )?.id
@@ -582,6 +781,15 @@ export function ServiceRecovery({ project }: { project: string }) {
   const active =
     points.some((b) => ["queued", "running", "retiring"].includes(b.status)) ||
     copies.some((r) => ["queued", "running", "deleting"].includes(r.status))
+  // The copies list opens when a copy starts working and stays as the
+  // reader leaves it, so it doesn't fold shut under them when the copy
+  // finishes.
+  const [copiesOpen, setCopiesOpen] = useState(false)
+  const [wasActive, setWasActive] = useState(false)
+  if (active !== wasActive) {
+    setWasActive(active)
+    if (active) setCopiesOpen(true)
+  }
   const { refetch: refreshBackups } = backups
   const { refetch: refreshRestores } = restores
   const { refetch: refreshBindings } = bindings
@@ -645,96 +853,137 @@ export function ServiceRecovery({ project }: { project: string }) {
     )
   )
     return <p role="status">Loading recovery state…</p>
+  const environmentSelect = (
+    <Select
+      value={environment}
+      disabled={busy}
+      onValueChange={(value) => setEnvironment(value ?? "production")}
+    >
+      <SelectTrigger aria-label="Recovery environment" className="w-44">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {environments.data?.environments.map((e) => (
+          <SelectItem key={e.id} value={e.name}>
+            {e.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+  // A resource chosen by the caller that has no recovery here isn't
+  // swapped for another database.
+  if (initialResource && !resources.includes(resource))
+    return (
+      <div className="grid min-w-0 gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {!embeddedTitle && environmentSelect}
+        </div>
+        <NativeRecovery
+          key={`${project}:${environmentID}:${resource}`}
+          project={project}
+          environment={environmentID}
+          resource={resource}
+        />
+      </div>
+    )
   return (
-    <div className="grid min-w-0 gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={environment}
-          disabled={busy}
-          onValueChange={(value) => setEnvironment(value ?? "production")}
-        >
-          <SelectTrigger aria-label="Recovery environment" className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {environments.data?.environments.map((e) => (
-              <SelectItem key={e.id} value={e.name}>
-                {e.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          size="sm"
-          variant="outline"
-          aria-expanded={showNative}
-          onClick={() => setShowNative((current) => !current)}
-        >
-          Cloud snapshots
-        </Button>
-        {resources.length > 0 && (
-          <Select
-            value={selected}
-            disabled={busy}
-            onValueChange={(value) => setResource(value ?? "")}
-          >
-            <SelectTrigger aria-label="Database" className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {resources.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+    <div className={cn("grid min-w-0", embeddedTitle ? "gap-3" : "gap-4")}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {embeddedTitle && (
+          <div>
+            <h2 className="text-[15px] font-semibold">{embeddedTitle}</h2>
+            <p className="text-[12.5px] text-muted-foreground">
+              {selected || resource} ·{" "}
+              {policy?.enabled
+                ? policy.everyHours === 24
+                  ? "Daily backups"
+                  : `Backups every ${policy.everyHours} hours`
+                : policy
+                  ? "Backups paused"
+                  : "Manual backups"}
+            </p>
+          </div>
         )}
-        {selected && live && can("service_backup:manage") && (
-          <>
-            <Button size="sm" disabled={busy} onClick={backupNow}>
-              Back up now
+        <div className="flex flex-wrap items-center gap-2">
+          {!embeddedTitle && environmentSelect}
+          {!embeddedTitle && (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-expanded={showNative}
+              onClick={() => setShowNative((current) => !current)}
+            >
+              Cloud snapshots
             </Button>
-            <BackupSchedule
-              key={`${environment}:${selected}:${policy?.everyHours}:${policy?.enabled}`}
-              policy={policy}
+          )}
+          {!embeddedTitle && resources.length > 0 && (
+            <Select
+              value={selected}
               disabled={busy}
-              save={(everyHours, enabled) =>
-                void action("policy", () =>
-                  policySet.mutateAsync({
-                    path: { id: project },
-                    body: {
-                      environment,
-                      resource: selected,
-                      everyHours,
-                      enabled,
-                    },
-                  })
-                )
-              }
+              onValueChange={(value) => setResource(value ?? "")}
+            >
+              <SelectTrigger aria-label="Database" className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {resources.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {selected && live && can("service_backup:manage") && (
+            <>
+              <Button size="sm" disabled={busy} onClick={backupNow}>
+                Back up now
+              </Button>
+              <BackupSchedule
+                compact={!!embeddedTitle}
+                key={`${environment}:${selected}:${policy?.everyHours}:${policy?.enabled}`}
+                policy={policy}
+                disabled={busy}
+                save={(everyHours, enabled) =>
+                  void action("policy", () =>
+                    policySet.mutateAsync({
+                      path: { id: project },
+                      body: {
+                        environment,
+                        resource: selected,
+                        everyHours,
+                        enabled,
+                      },
+                    })
+                  )
+                }
+              />
+            </>
+          )}
+          {selected && points.length > 0 && (
+            <BackupRetentionReview
+              compact={!!embeddedTitle}
+              key={`${environment}:${selected}`}
+              project={project}
+              points={points}
+              onChanged={refreshBackups}
             />
-          </>
-        )}
-        {selected && points.length > 0 && (
-          <BackupRetentionReview
-            key={`${environment}:${selected}`}
-            project={project}
-            points={points}
-            onChanged={refreshBackups}
-          />
-        )}
+          )}
+        </div>
       </div>
       {showNative && (
         <NativeRecovery
           key={`${project}:${environmentID}`}
           project={project}
           environment={environmentID}
+          resource={initialResource ? resource : undefined}
         />
       )}
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Open Cloud snapshots to inspect captured RDS history. Restore and PITR controls remain in your cloud account."
+          description="Open Cloud snapshots for captured RDS and Cloud SQL history, temporary PostgreSQL 17 copies and point-in-time recovery. Available actions depend on the source profile and recovery target."
         >
           <Button
             variant="outline"
@@ -752,20 +1001,27 @@ export function ServiceRecovery({ project }: { project: string }) {
       ) : (
         <>
           {!live && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-[13px] text-muted-foreground">
               The source service has been removed. Recovery points and test
               copies remain available.
             </p>
           )}
-          <div className="text-sm text-muted-foreground">
-            {policy?.enabled
-              ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
-              : "Backups run when requested."}{" "}
-            Manage deletion separately in Review retention.{" "}
-            {policy?.lastError && (
-              <span className="text-destructive">{policy.lastError}</span>
-            )}
-          </div>
+          {!embeddedTitle && (
+            <div className="text-[13px] text-muted-foreground">
+              {policy?.enabled
+                ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
+                : "Backups run when requested."}{" "}
+              Manage deletion separately in Review retention.{" "}
+              {policy?.lastError && (
+                <span className="text-destructive">{policy.lastError}</span>
+              )}
+            </div>
+          )}
+          {embeddedTitle && policy?.lastError && (
+            <p role="alert" className="text-xs text-destructive">
+              {policy.lastError}
+            </p>
+          )}
           {!points.length ? (
             <CatalogEmpty
               title="No recovery points yet"
@@ -778,15 +1034,26 @@ export function ServiceRecovery({ project }: { project: string }) {
               )}
             </CatalogEmpty>
           ) : (
-            <div className="min-w-0 overflow-x-auto rounded-lg border">
-              <Table>
+            <Card className="min-w-0 py-0">
+              <Table className={embeddedTitle ? "min-w-[640px]" : undefined}>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Backup</TableHead>
-                    <TableHead className="hidden sm:table-cell">
-                      Status
-                    </TableHead>
-                    <TableHead className="hidden sm:table-cell">
+                    {embeddedTitle ? (
+                      <>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Size</TableHead>
+                      </>
+                    ) : (
+                      <TableHead className="hidden sm:table-cell">
+                        Status
+                      </TableHead>
+                    )}
+                    <TableHead
+                      className={
+                        embeddedTitle ? undefined : "hidden sm:table-cell"
+                      }
+                    >
                       Restore evidence
                     </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -795,6 +1062,7 @@ export function ServiceRecovery({ project }: { project: string }) {
                 <TableBody>
                   {points.map((b) => (
                     <RecoveryPointRow
+                      compact={!!embeddedTitle}
                       key={b.id}
                       project={project}
                       backup={b}
@@ -817,16 +1085,34 @@ export function ServiceRecovery({ project }: { project: string }) {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </Card>
           )}
         </>
       )}
-      {!managedRecovery && (
-        <div className="min-w-0">
-          <h3 className="mb-2 text-sm font-semibold">
-            Isolated recovery copies
-          </h3>
-          <p className="mb-3 text-sm text-muted-foreground">
+      {!managedRecovery && (!embeddedTitle || copies.length > 0) && (
+        <CopiesContainer
+          className="min-w-0"
+          {...(embeddedTitle
+            ? {
+                open: copiesOpen,
+                onToggle: (event: { currentTarget: Element }) =>
+                  setCopiesOpen(
+                    (event.currentTarget as HTMLDetailsElement).open
+                  ),
+              }
+            : {})}
+        >
+          {embeddedTitle ? (
+            <summary className="cursor-pointer text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">
+              Isolated recovery copies ({copies.length})
+              {active ? " · In progress" : ""}
+            </summary>
+          ) : (
+            <h3 className="mb-1 text-[14px] font-semibold">
+              Isolated recovery copies
+            </h3>
+          )}
+          <p className="mb-3 text-[12.5px] text-muted-foreground">
             Copies use a private network, never replace a live database, and are
             scheduled for removal after 24 hours. Database checks do not test
             your application.
@@ -837,10 +1123,10 @@ export function ServiceRecovery({ project }: { project: string }) {
               description="Use Test restore on a completed backup to verify it in a temporary database."
             />
           ) : (
-            <div className="min-w-0 overflow-x-auto rounded-lg border">
+            <Card className="min-w-0 py-0">
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Copy</TableHead>
                     <TableHead className="hidden sm:table-cell">
                       Status
@@ -906,9 +1192,9 @@ export function ServiceRecovery({ project }: { project: string }) {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </Card>
           )}
-        </div>
+        </CopiesContainer>
       )}
       <AlertDialog
         open={!!deleting}

@@ -27,11 +27,12 @@ var ErrOwned = errors.New("the matching Kubernetes resource is not owned by this
 
 type Session func(context.Context, map[string]string) (*Client, error)
 type Runtime struct {
-	Session          Session
-	Values           owned.Values
-	WaitReady        func(context.Context, *Client, string) error
-	RecordController func(context.Context, ControllerReceipt) error
-	Wait             time.Duration
+	Session            Session
+	Values             owned.Values
+	WaitReady          func(context.Context, *Client, string) error
+	RecordController   func(context.Context, ControllerReceipt) error
+	CompleteRetirement func(context.Context, id.ID, map[string]string) (bool, error)
+	Wait               time.Duration
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -112,7 +113,7 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 	if err != nil {
 		o.pull = nil
 	}
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		o.ingress, err = c.Kube.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
 		if checkErr := accept(o.ingress, err); checkErr != nil {
 			return nil, checkErr
@@ -134,13 +135,24 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 }
 
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+	start, err := owned.StartTimeout(labels)
+	if err != nil {
+		return nil, err
+	}
+	if len(spec.Volumes) > 0 && labels[owned.LabelPodGroup] != "" {
+		return nil, ErrInvalid
+	}
 	if len(spec.Volumes) > 0 {
-		return r.applyPersistent(ctx, iid, spec, labels)
+		return r.applyPersistent(ctx, iid, spec, labels, start)
 	}
 	if labels[owned.LabelStateful] == "true" {
 		return nil, errors.New("a stateful workload cannot drop its persistent volumes")
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, "apply"))
+	farp, err := farpFromLabels(labels)
+	if err != nil {
+		return nil, err
+	}
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "apply"))
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +169,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	mutated := false
 	defer func() {
-		if err == nil || !mutated {
+		// Managed rollback needs separate cleanup authority. Keep its accepted
+		// and uncertain effects for that protocol instead of replaying snapshots.
+		if err == nil || !mutated || c.Config.journalRequired() {
 			return
 		}
 		rollback, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -166,7 +180,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}()
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -178,10 +192,23 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	meta := func(name string) metav1.ObjectMeta {
 		return metav1.ObjectMeta{Name: name, Namespace: ns, Labels: maps.Clone(identity)}
 	}
-	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: map[string][]byte{}}
-	for key, value := range values.Env {
-		runtimeSecret.Data[key] = []byte(value)
+	data, err := runtimeSecretData(values)
+	if err != nil {
+		return nil, err
 	}
+	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := preflightPodGroup(spec, labels, values); checkErr != nil {
+		return nil, checkErr
+	}
+	// The account comes first so a refused rule changes nothing else.
+	account, err := r.applyAccess(ctx, c, iid, labels)
+	if err != nil {
+		return nil, err
+	}
+	runtimeSecret := &corev1.Secret{ObjectMeta: meta(name + "-runtime"), Type: corev1.SecretTypeOpaque, Data: data}
 	mutated = true
 	if old.runtime != nil {
 		runtimeSecret.ResourceVersion = old.runtime.ResourceVersion
@@ -196,17 +223,41 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if selected := c.Config.Details["image_pull_secret"]; selected != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: selected})
 	}
-	if old.pull != nil {
+	if pullSecret != nil {
+		if pullErr := c.applyManagedPull(ctx, pullSecret, old.pull); pullErr != nil {
+			return nil, pullErr
+		}
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
+	} else if old.pull != nil {
 		if checkErr := c.Kube.CoreV1().Secrets(ns).Delete(ctx, old.pull.Name, deleteOwnedOptions(old.pull)); checkErr != nil {
 			return nil, checkErr
 		}
 	}
 
-	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls)
+	template, servicePorts, err := runtimePod(spec, labels, values, runtimeSecret, pulls, account)
 	if err != nil {
 		return nil, err
 	}
+	if arch := labels[owned.LabelSchedulingArchitecture]; arch != "" {
+		if !c.Config.journalRequired() || arch != "amd64" && arch != "arm64" || labels[owned.LabelArchitecture] != "" && labels[owned.LabelArchitecture] != arch {
+			return nil, ErrManagedAuthority
+		}
+		if template.Spec.NodeSelector == nil {
+			template.Spec.NodeSelector = map[string]string{}
+		}
+		template.Spec.NodeSelector[corev1.LabelArchStable] = arch
+	}
 	template.Labels = maps.Clone(identity)
+	if c.Config.journalRequired() {
+		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
+		if release == "" {
+			return nil, ErrOwned
+		}
+		if template.Annotations == nil {
+			template.Annotations = map[string]string{}
+		}
+		template.Annotations[WorkloadReleaseAnnotation] = release
+	}
 
 	replicas := int32(1)
 	if raw := labels[owned.LabelReplicas]; raw != "" {
@@ -217,9 +268,26 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		replicas = int32(n)
 	}
 	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: *template}}
+	if strategyErr := podGroupStrategy(deployment, labels); strategyErr != nil {
+		return nil, strategyErr
+	}
+	if labels[owned.LabelGPU] != "" {
+		// A surge pod would wait for a GPU the old pod still holds.
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
+	if start > 0 {
+		// Kubernetes calls a rollout failed once it makes no progress for
+		// this long, so it gets a minute more than the readiness wait.
+		deadline := int32((start + time.Minute) / time.Second)
+		deployment.Spec.ProgressDeadlineSeconds = &deadline
+	}
 
 	if len(servicePorts) > 0 {
-		service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
+		// The Service is rebuilt from the labels on every Apply, so a
+		// service that stopped opting in loses its FARP labels and annotations.
+		serviceMeta := meta(name)
+		farp.decorate(&serviceMeta)
+		service := &corev1.Service{ObjectMeta: serviceMeta, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
 		if old.service != nil {
 			service.ResourceVersion = old.service.ResourceVersion
 			service.Spec.ClusterIP = old.service.Spec.ClusterIP
@@ -247,7 +315,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	if labels[owned.LabelPublic] == "true" {
+	if c.Config.journalRequired() {
+		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+			return nil, recordErr
+		}
+	}
+	if ordinaryIngress(c) && labels[owned.LabelPublic] == "true" {
 		if len(servicePorts) == 0 || labels[owned.LabelHostname] == "" {
 			return nil, errors.New("a public Kubernetes service needs a hostname and port")
 		}
@@ -297,17 +370,24 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	wait := r.WaitReady
 	if wait == nil {
-		wait = func(ctx context.Context, c *Client, _ string) error { return r.waitReady(ctx, c, deployment) }
+		wait = func(ctx context.Context, c *Client, _ string) error {
+			return r.waitReady(ctx, c, deployment, r.readyWait(start))
+		}
 	}
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
 	}
-	if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
-		return nil, recordErr
+	if !c.Config.journalRequired() {
+		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+			return nil, recordErr
+		}
+	}
+	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
+		return nil, dropErr
 	}
 	endpoints := []cpprovider.Endpoint{}
 	for _, port := range servicePorts {
-		public := labels[owned.LabelPublic] == "true"
+		public := ordinaryIngress(c) && labels[owned.LabelPublic] == "true"
 		address := "http://" + name + "." + ns + ".svc:" + strconv.Itoa(int(port.Port))
 		if public {
 			scheme := "http"
@@ -321,12 +401,20 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: spec.Name}, Endpoints: endpoints}, nil
 }
 
-func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Deployment) error {
-	name := applied.Name
-	wait := r.Wait
-	if wait <= 0 {
-		wait = 3 * time.Minute
+// readyWait is how long a workload gets to become ready: its start
+// timeout when it has one, else Wait, else three minutes.
+func (r *Runtime) readyWait(start time.Duration) time.Duration {
+	switch {
+	case start > 0:
+		return start
+	case r.Wait > 0:
+		return r.Wait
 	}
+	return 3 * time.Minute
+}
+
+func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Deployment, wait time.Duration) error {
+	name := applied.Name
 	deadline := time.Now().Add(wait)
 	for {
 		deployment, err := c.Kube.AppsV1().Deployments(c.Config.Namespace).Get(ctx, name, metav1.GetOptions{})
@@ -344,6 +432,9 @@ func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Depl
 				return fmt.Errorf("kubernetes rollout failed: %s", condition.Message)
 			}
 		}
+		if gpuErr := unschedulableGPU(ctx, c, applied.Spec.Template, applied.Spec.Selector); gpuErr != nil {
+			return gpuErr
+		}
 		if time.Now().After(deadline) {
 			return errors.New("kubernetes rollout did not become ready")
 		}
@@ -359,7 +450,7 @@ func deploymentReady(d *appsv1.Deployment) bool {
 }
 
 func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]string) (*cpprovider.InstanceStatus, error) {
-	c, err := r.Session(ctx, owned.ForOperation(labels, "read"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "read"))
 	if err != nil {
 		return nil, err
 	}
@@ -397,9 +488,17 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 }
 
 func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
-	c, err := r.Session(ctx, owned.ForOperation(labels, "remove"))
+	if r.CompleteRetirement != nil {
+		if handled, err := r.CompleteRetirement(ctx, iid, labels); handled || err != nil {
+			return err
+		}
+	}
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "remove"))
 	if err != nil {
 		return err
+	}
+	if c.Config.journalRequired() {
+		return ErrManagedAuthority
 	}
 	objects, err := r.objects(ctx, c, iid, labels)
 	if err != nil {
@@ -453,7 +552,7 @@ func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]strin
 			}
 		}
 	}
-	return nil
+	return r.removeAccess(ctx, c, iid, labels)
 }
 func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) error {
 	replicas := 0
@@ -475,7 +574,7 @@ func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]s
 	if running {
 		operation = "start"
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, operation))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, operation))
 	if err != nil {
 		return err
 	}
@@ -518,7 +617,7 @@ func (r *Runtime) Scale(ctx context.Context, iid id.ID, labels map[string]string
 	if spec.Replicas < 0 || spec.Replicas > 10000 {
 		return errors.New("invalid Kubernetes replica count")
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, "scale"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "scale"))
 	if err != nil {
 		return err
 	}
@@ -584,6 +683,16 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 		if err := r.restorePersistent(ctx, c, iid, labels, old.stateful); err != nil {
 			return err
 		}
+	}
+	// A rollback snapshot may predate credential rotation. Restore the current
+	// managed credential while retaining the workload's original secret identity.
+	if old.pull != nil && c.Config.Details["registry_hostname"] != "" && old.pull.Labels[owned.LabelConnection] != "" {
+		auth, err := c.registrySecret(ctx, labels[owned.LabelOrg], old.pull.Labels[owned.LabelConnection], false)
+		if err != nil {
+			return err
+		}
+		old.pull = old.pull.DeepCopy()
+		old.pull.Data[corev1.DockerConfigJsonKey] = auth.Data["config.json"]
 	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	var failures error
@@ -665,7 +774,7 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 			return c.Kube.AppsV1().Deployments(ns).Delete(ctx, name, deleteOwnedOptions(o))
 		},
 	}))
-	if labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true" {
+	if ordinaryIngress(c) && (labels[owned.LabelPublic] == "true" || labels[owned.LabelManageIngress] == "true") {
 		original = nil
 		if old.ingress != nil {
 			original = old.ingress
@@ -737,4 +846,10 @@ func runtimeAutoscaler(iid id.ID, labels map[string]string, ns string) (*autosca
 	minimum, utilization := int32(minCount), int32(80)
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: WorkloadName(iid), Namespace: ns, Labels: objectLabels(iid, labels)}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: WorkloadName(iid)}, MinReplicas: &minimum, MaxReplicas: int32(maxCount), Metrics: []autoscalingv2.MetricSpec{{Type: autoscalingv2.ResourceMetricSourceType, Resource: &autoscalingv2.ResourceMetricSource{Name: corev1.ResourceCPU, Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: &utilization}}}}}}
 	return hpa, nil
+}
+
+func (r *Runtime) session(ctx context.Context, iid id.ID, labels map[string]string) (*Client, error) {
+	labels = maps.Clone(labels)
+	labels[owned.LabelInstance] = iid.String()
+	return r.Session(ctx, labels)
 }

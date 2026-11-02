@@ -32,7 +32,7 @@ func TestSnapshotRecoversAfterARestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(s, urls, priv, plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}, time.Now)
+	svc := NewService(s, urls, []SigningKey{{Private: priv, Trust: plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}}, time.Now)
 	if first, ferr := snapshotOf(t, svc, &gw, 0, time.Now()); ferr != nil || first.Version != 1 {
 		t.Fatalf("first: %+v %v", first, ferr)
 	}
@@ -87,7 +87,7 @@ func TestServiceOverTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(s, urls, priv, plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}, time.Now)
+	svc := NewService(s, urls, []SigningKey{{Private: priv, Trust: plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}}, time.Now)
 
 	first, err := snapshotOf(t, svc, &gw, 0, time.Now())
 	if err != nil || first == nil || first.Version != 1 || len(first.Routes) != 1 || first.Routes[0].ID != route.ID {

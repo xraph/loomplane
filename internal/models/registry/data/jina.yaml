@@ -1,0 +1,172 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: jina
+entries:
+  - id: jinaai/jina-embeddings-v2-small-en
+    title: Jina Embeddings v2 small en
+    publisher: Jina AI
+    summary: A small English embedding model with an 8192 token input.
+    revision: 44e7d1d6caec8c883c2d4b207588504d519788d0
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 32690688
+    context_length: 8192
+    architecture:
+      name: JinaBertForMaskedLM
+      layers: 4
+      attention_heads: 8
+      kv_heads: 8
+      head_dim: 64
+    embedding:
+      dimensions: 512
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 65388544
+        min_memory_gib: 1
+  - id: jinaai/jina-embeddings-v2-base-en
+    title: Jina Embeddings v2 base en
+    publisher: Jina AI
+    summary: An English embedding model with an 8192 token input.
+    revision: 322d4d7e2f35e84137961a65af894fda0385eb7a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 137368320
+    context_length: 8192
+    architecture:
+      name: JinaBertForMaskedLM
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 274757256
+        min_memory_gib: 1
+  - id: jinaai/jina-embeddings-v2-base-code
+    title: Jina Embeddings v2 base code
+    publisher: Jina AI
+    summary: An embedding model for searching code and its documentation.
+    revision: 516f4baf13dec4ddddda8631e019b5737c8bc250
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 160869120
+    context_length: 8192
+    architecture:
+      name: JinaBertForMaskedLM
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 321767312
+        min_memory_gib: 1
+  - id: jinaai/jina-embeddings-v2-base-de
+    title: Jina Embeddings v2 base de
+    publisher: Jina AI
+    summary: A German and English embedding model, also for search across the two.
+    revision: 3f9eede875721714945b6a99a3198299243cf2be
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 160813824
+    context_length: 8192
+    architecture:
+      name: JinaBertForMaskedLM
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 321648328
+        min_memory_gib: 1
+  - id: jinaai/jina-embeddings-v2-base-es
+    title: Jina Embeddings v2 base es
+    publisher: Jina AI
+    summary: A Spanish and English embedding model, also for search across the two.
+    revision: 8e2d780d8fd38f81ca9123ee28e4c5a968aaf21e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 160850688
+    context_length: 8192
+    architecture:
+      name: JinaBertForMaskedLM
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 321727768
+        min_memory_gib: 1
+  - id: jinaai/jina-embeddings-v2-base-zh
+    title: Jina Embeddings v2 base zh
+    publisher: Jina AI
+    summary: A Chinese and English embedding model, also for search across the two.
+    revision: c1ff9086a89a1123d7b5eff58055a665db4fb4b9
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 160813824
+    context_length: 8192
+    architecture:
+      name: JinaBertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 321648328
+        min_memory_gib: 1

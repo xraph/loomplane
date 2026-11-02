@@ -3,6 +3,7 @@ package planning
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -67,5 +68,38 @@ func TestRoutedReplacementAllowsDistinctPortsOnSameDaemon(t *testing.T) {
 	route := cloudinfra.Route{Status: "ready", Input: cloudinfra.RouteInput{ExternalTTLSeconds: 60}, Binding: cloudinfra.RouteBinding{BindingID: bound.ID, InstanceID: bound.ExternalID}}
 	if err = routedReplacementAllowed(&a, bound, route); err != nil {
 		t.Fatal("distinct explicit port denied", err)
+	}
+}
+
+func TestKubernetesRoutesStayOutOfReleaseHandoffs(t *testing.T) {
+	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{Service: "api", Hostname: "api.example.com"}, Binding: cloudinfra.RouteBinding{Backend: cloudinfra.RouteBackendKubernetes, BindingID: "binding", InstanceID: "source"}}
+	update := &Action{ID: "service:api", Name: "api", Op: Update, Provider: "kubernetes", Service: &ServiceConfig{}}
+	p := planner{in: Input{Routes: []cloudinfra.Route{route}}, services: map[string]*Action{"api": update}}
+	if p.routedReplacements() || update.Op != Update || len(update.Routes) != 0 || len(p.problems) != 0 {
+		t.Fatalf("an in-place Kubernetes update: %+v %+v", update, p.problems)
+	}
+	replace := &Action{ID: "service:api", Name: "api", Op: Replace, Provider: "kubernetes", Service: &ServiceConfig{}}
+	p = planner{in: Input{Routes: []cloudinfra.Route{route}}, services: map[string]*Action{"api": replace}}
+	if p.routedReplacements() || len(replace.Routes) != 0 || len(p.problems) != 1 || p.problems[0].Code != "route-release" || !strings.Contains(p.problems[0].Message, "api.example.com") {
+		t.Fatalf("a replaced Kubernetes runtime: %+v %+v", replace, p.problems)
+	}
+}
+
+func TestPlatformRouteUpdateNeedsNoHandoff(t *testing.T) {
+	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{Service: "web", Hostname: "web.example.com"}, Binding: cloudinfra.RouteBinding{Backend: cloudinfra.RouteBackendPlatform, Provider: "digitalocean", BindingID: "binding", ExternalID: "app-1"}}
+	update := &Action{ID: "service:web", Name: "web", Op: Update, Provider: "digitalocean", Service: &ServiceConfig{}}
+	p := planner{in: Input{Routes: []cloudinfra.Route{route}}, services: map[string]*Action{"web": update}}
+	if p.routedReplacements() || update.Op != Update || len(update.Routes) != 0 || len(p.problems) != 0 {
+		t.Fatalf("an in-place App Platform update: %+v %+v", update, p.problems)
+	}
+}
+
+func TestPlatformRouteRefusesANewApp(t *testing.T) {
+	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{Service: "web", Hostname: "web.example.com"}, Binding: cloudinfra.RouteBinding{Backend: cloudinfra.RouteBackendPlatform, Provider: "digitalocean", BindingID: "binding", ExternalID: "app-1"}}
+	replace := &Action{ID: "service:web", Name: "web", Op: Replace, Provider: "digitalocean", Service: &ServiceConfig{}}
+	p := planner{in: Input{Routes: []cloudinfra.Route{route}}, services: map[string]*Action{"web": replace}}
+	want := "web would get a new App Platform app, which web.example.com doesn't follow. Remove that route, then plan again."
+	if p.routedReplacements() || len(replace.Routes) != 0 || replace.Op != Replace || len(p.problems) != 1 || p.problems[0].Code != "route-release" || p.problems[0].Message != want {
+		t.Fatalf("a replaced App Platform app: %+v %+v", replace, p.problems)
 	}
 }

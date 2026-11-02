@@ -1,0 +1,203 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: olmo
+entries:
+  - id: allenai/OLMo-2-0425-1B-Instruct
+    title: OLMo 2 1B Instruct
+    publisher: Ai2
+    summary: A small fully open chat model, with its training data and code published.
+    revision: 48d788eca847d4d7548f375ad03d3c9312f6139e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 1484916736
+    context_length: 4096
+    architecture:
+      name: Olmo2ForCausalLM
+      layers: 16
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 2969854224
+        min_gpu_memory_gib: 6
+  - id: allenai/OLMo-2-1124-7B-Instruct
+    title: OLMo 2 7B Instruct
+    publisher: Ai2
+    summary: A fully open 7B chat model from Ai2.
+    revision: 470b1fba1ae01581f270116362ee4aa1b97f4c84
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 7298617344
+    context_length: 4096
+    architecture:
+      name: Olmo2ForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 14597276128
+        min_gpu_memory_gib: 21
+  - id: allenai/OLMo-2-1124-13B-Instruct
+    title: OLMo 2 13B Instruct
+    publisher: Ai2
+    summary: A fully open 13B chat model from Ai2.
+    revision: 3a5c85baefbb1896a54d56fe2e76c0395627ddf4
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 13716198400
+    context_length: 4096
+    architecture:
+      name: Olmo2ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 40
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 27432448592
+        min_gpu_memory_gib: 36
+  - id: allenai/OLMo-2-0325-32B-Instruct
+    title: OLMo 2 32B Instruct
+    publisher: Ai2
+    summary: The largest OLMo 2 chat model, fully open down to its training data.
+    revision: b96024342a77a69aa0dda815c3454a671f477463
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 32234279936
+    context_length: 4096
+    architecture:
+      name: Olmo2ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 64468642816
+        min_gpu_memory_gib: 75
+  - id: allenai/OLMoE-1B-7B-0125-Instruct
+    title: OLMoE 1B 7B Instruct
+    publisher: Ai2
+    summary: A fully open mixture of experts chat model with 1B parameters active per token.
+    revision: b89a7c4bc24fb9e55ce2543c9458ce0ca5c4650e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 6919161856
+    active_parameters: 1300000000
+    context_length: 4096
+    architecture:
+      name: OlmoeForCausalLM
+      layers: 16
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 13838721960
+        min_gpu_memory_gib: 18
+  - id: allenai/Olmo-3-7B-Instruct
+    title: Olmo 3 7B Instruct
+    publisher: Ai2
+    summary: A fully open 7B chat model with tool calling.
+    revision: 6e5971d9eba42665f5bd5a0fcf047f299ce1dccc
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 7298011136
+    context_length: 65536
+    architecture:
+      name: Olmo3ForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 14596063712
+        min_gpu_memory_gib: 21
+  - id: allenai/Olmo-3-7B-Think
+    title: Olmo 3 7B Think
+    publisher: Ai2
+    summary: A fully open 7B reasoning model that thinks before it answers.
+    revision: d97e442d7cc678210054dbcc9b440894d62c89a4
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 7298011136
+    context_length: 65536
+    architecture:
+      name: Olmo3ForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 14596063712
+        min_gpu_memory_gib: 21
+  - id: allenai/Olmo-3-32B-Think
+    title: Olmo 3 32B Think
+    publisher: Ai2
+    summary: A fully open 32B reasoning model, strong at math and code.
+    revision: f2edda15216e738ef2bb73771e11890e152b2112
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 32233522176
+    context_length: 65536
+    architecture:
+      name: Olmo3ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 64467127296
+        min_gpu_memory_gib: 75

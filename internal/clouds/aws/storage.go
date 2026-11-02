@@ -119,7 +119,7 @@ func (s *Session) GetCache(ctx context.Context, id string) (*Cache, error) {
 		return nil, err
 	}
 	if len(out.ReplicationGroups) == 0 {
-		return nil, fmt.Errorf("cache %s: %w", id, errNotFound)
+		return nil, fmt.Errorf("cache %s: %w", id, ErrNotFound)
 	}
 	g := out.ReplicationGroups[0]
 	c := &Cache{ID: sdk.ToString(g.ReplicationGroupId), Status: sdk.ToString(g.Status)}

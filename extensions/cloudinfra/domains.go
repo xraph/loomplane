@@ -1,12 +1,15 @@
 package cloudinfra
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
 	infra "github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type ZoneList struct {
@@ -39,9 +42,29 @@ type RemoveRouteInput struct {
 	Revision int64 `json:"revision"`
 }
 
+// ZoneRemovalRefusal is the 409 for removing a zone that hostnames still
+// use, with those hostnames for the page to list.
+type ZoneRemovalRefusal struct {
+	Code    string                    `json:"code"` // "zone_in_use"
+	Message string                    `json:"message"`
+	Details ZoneRemovalRefusalDetails `json:"details"`
+}
+
+type ZoneRemovalRefusalDetails struct {
+	Hostnames []infra.BlockingHostname `json:"hostnames"`
+}
+
+type DiscoverZonesQuery struct {
+	ConnectionID string `query:"connection_id"`
+}
+
 func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 	group := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Domains"))
 	routes := []route{
+		{http.MethodGet, "/projects/:projectId/domain-routes/:routeId/edge", "domainEdge.get", e.getDomainEdge, nil, infra.EdgeState{}, http.StatusOK},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge", "domainEdge.update", e.updateDomainEdge, infra.EdgeInput{}, infra.EdgeState{}, http.StatusAccepted},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge/purge", "domainEdge.purge", e.purgeDomainEdge, infra.EdgePurgeInput{}, infra.EdgeState{}, http.StatusAccepted},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge/retry", "domainEdge.retry", e.retryDomainEdge, RemoveRouteInput{}, infra.EdgeState{}, http.StatusAccepted},
 		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/ttl", "domainRoutes.updateTTL", e.updateDomainRouteTTL, infra.RouteTTLInput{}, infra.Route{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/domain-routes/:routeId/operations", "domainRoutes.history", e.domainRouteHistory, nil, DomainOperationList{}, http.StatusOK},
 		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/prepare-handoff", "domainRoutes.prepareHandoff", e.prepareDomainHandoff, infra.HandoffInput{}, infra.RouteOperation{}, http.StatusAccepted},
@@ -50,10 +73,12 @@ func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/projects/:projectId/route-operations/:operationId/release-handoff", "domainRoutes.releaseHandoff", e.releaseDomainHandoff, HandoffReleaseInput{}, infra.RouteOperation{}, http.StatusAccepted},
 		{http.MethodPost, "/dns-zones/:zoneId/update", "dnsZones.update", e.updateDomainZone, infra.ZoneUpdate{}, infra.Zone{}, http.StatusOK},
 		{http.MethodPost, "/dns-zones/:zoneId/remove", "dnsZones.remove", e.removeDomainZone, RemoveRouteInput{}, nil, http.StatusNoContent},
+		{http.MethodGet, "/dns-zones/:zoneId", "dnsZones.get", e.domainZone, nil, infra.DomainDetail{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/dns-zones", "dnsZones.project", e.projectDomainZones, nil, ProjectZoneList{}, http.StatusOK},
 		{http.MethodGet, "/dns-zones", "dnsZones.list", e.domainZones, nil, ZoneList{}, http.StatusOK},
 		{http.MethodPost, "/dns-zones", "dnsZones.create", e.createDomainZone, infra.ZoneInput{}, infra.Zone{}, http.StatusCreated},
 		{http.MethodPost, "/dns-zones/:zoneId/verify", "dnsZones.verify", e.verifyDomainZone, nil, infra.Zone{}, http.StatusOK},
+		{http.MethodPost, "/dns-zones/:zoneId/challenge-credential", "dnsZones.setChallengeCredential", e.setZoneChallengeCredential, infra.ChallengeCredentialInput{}, infra.Zone{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/domain-routes", "domainRoutes.list", e.listDomainRoutes, nil, DomainRouteList{}, http.StatusOK},
 		{http.MethodPost, "/projects/:projectId/domain-routes/preview", "domainRoutes.preview", e.previewDomainRoute, infra.RouteInput{}, infra.RouteOperation{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/route-operations/:operationId", "domainRoutes.operation", e.domainRouteOperation, nil, infra.RouteOperation{}, http.StatusOK},
@@ -77,7 +102,19 @@ func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 			return err
 		}
 	}
-	return nil
+	if err := group.GET("/dns-zones/discover", e.discoverDomainZones, forge.WithName("dnsZones.discover"), forge.WithSummary("dnsZones.discover"), forge.WithQuerySchema(DiscoverZonesQuery{}), forge.WithResponseSchema(http.StatusOK, "Result", infra.ProviderZoneList{})); err != nil {
+		return err
+	}
+	return e.overviewRoutes(group)
+}
+
+func (e *Extension) discoverDomainZones(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.DiscoverProviderZones(c.Request().Context(), p, c.Query("connection_id"))
+	return result(c, http.StatusOK, v, err)
 }
 
 func (e *Extension) domainZones(c forge.Context) error {
@@ -108,6 +145,19 @@ func (e *Extension) verifyDomainZone(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.VerifyZone(c.Request().Context(), p, c.Param("zoneId"))
+	return result(c, http.StatusOK, v, err)
+}
+
+func (e *Extension) setZoneChallengeCredential(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	var in infra.ChallengeCredentialInput
+	if err = c.BindJSON(&in); err != nil {
+		return result(c, 0, nil, infra.ErrInvalid)
+	}
+	v, err := e.svc.SetZoneChallengeCredential(c.Request().Context(), p, c.Param("zoneId"), in)
 	return result(c, http.StatusOK, v, err)
 }
 
@@ -208,7 +258,22 @@ func (e *Extension) removeDomainZone(c forge.Context) error {
 		return result(c, 0, nil, infra.ErrInvalid)
 	}
 	err = e.svc.RemoveZone(c.Request().Context(), p, c.Param("zoneId"), in.Revision)
+	var inUse *infra.ZoneInUseError
+	if errors.As(err, &inUse) && !errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+		sentence := inUse.Error()
+		sentence = strings.ToUpper(sentence[:1]) + sentence[1:] + "."
+		return c.JSON(http.StatusConflict, ZoneRemovalRefusal{Code: "zone_in_use", Message: sentence, Details: ZoneRemovalRefusalDetails{Hostnames: inUse.Hostnames}})
+	}
 	return result(c, http.StatusNoContent, nil, err)
+}
+
+func (e *Extension) domainZone(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	v, err := e.svc.DomainDetail(c.Request().Context(), p, c.Param("zoneId"))
+	return result(c, http.StatusOK, v, err)
 }
 func (e *Extension) projectDomainZones(c forge.Context) error {
 	p, err := caller(c)

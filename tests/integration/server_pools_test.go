@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type poolFixture struct {
@@ -34,9 +36,9 @@ type poolFixture struct {
 	pool   *cloudinfra.Pool
 }
 
-func newPoolFixture(t *testing.T) *poolFixture {
+func newPoolFixture(t *testing.T, through ...string) *poolFixture {
 	t.Helper()
-	clouds, sql, db := cloudSyncDatabase(t)
+	clouds, sql, db := cloudSyncDatabase(t, through...)
 	st := cloudinfra.NewPgStore(db)
 	now := time.Now().UTC()
 	cs := connections.NewPgStore(db)
@@ -78,8 +80,12 @@ func (f *poolFixture) request(env, name string) cloudinfra.PlacementRequest {
 }
 func (f *poolFixture) plan(t *testing.T, id string, r cloudinfra.PlacementRequest, p *cloudinfra.Placement) *planning.CloudPlacement {
 	t.Helper()
-	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, AssignmentRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
-	result := planning.Result{Executable: true, Connections: map[string]string{}, Actions: []planning.Action{{ID: "service:" + r.Service, Subject: planning.ServiceSubject, Name: r.Service, Op: planning.Create, Provider: "server", ConnectionID: p.ConnectionID, Service: &planning.ServiceConfig{Provider: "server", Target: p.ConnectionID, TargetSettings: map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}, Size: &manifest.Size{CPU: float64(r.CPUMillis) / 1000, Memory: int(r.MemoryBytes >> 20)}, CloudPlacement: pin}}}}
+	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, AssignmentRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
+	size := &manifest.Size{CPU: float64(r.CPUMillis) / 1000, Memory: int(r.MemoryBytes >> 20)}
+	if r.GPUs > 0 {
+		size.GPU = &manifest.GPU{Kind: r.GPUKind, Count: int(r.GPUs)}
+	}
+	result := planning.Result{Executable: true, Connections: map[string]string{}, Actions: []planning.Action{{ID: "service:" + r.Service, Subject: planning.ServiceSubject, Name: r.Service, Op: planning.Create, Provider: "server", ConnectionID: p.ConnectionID, Service: &planning.ServiceConfig{Provider: "server", Target: p.ConnectionID, TargetSettings: map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}, Size: size, CloudPlacement: pin}}}}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -634,9 +640,15 @@ type blockingDirectPoolExecutor struct {
 	entered, release chan struct{}
 }
 
+// Apply also gives up when the test ends, so a failed test rolls back the
+// admission it holds instead of hanging its cleanup.
 func (e *blockingDirectPoolExecutor) Apply(ctx context.Context, j *deployments.Job) (*deployments.Outcome, error) {
 	close(e.entered)
-	<-e.release
+	select {
+	case <-e.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return e.poolExecutor.Apply(ctx, j)
 }
 func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
@@ -661,16 +673,90 @@ func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("ordinary unclaimed host did not execute")
 	}
+	// Enrollment refuses while the direct apply runs. Waiting would hold the
+	// organization lock the apply needs for its binding.
 	enrolled := make(chan error, 1)
 	next := *f.pool
 	next.Revision++
 	go func() { enrolled <- f.store.SavePool(t.Context(), &next, 1) }()
-	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT c.id FROM loomplane_cloud_connections%')`)
+	select {
+	case err = <-enrolled:
+		if !errors.Is(err, cloudinfra.ErrBusy) {
+			close(executor.release)
+			t.Fatalf("enrollment beside a running direct apply: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		close(executor.release)
+		t.Fatalf("enrollment waited on a running direct apply\n%s", lockReport(f))
+	}
 	close(executor.release)
-	if err = <-ran; err != nil {
+	select {
+	case err = <-ran:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("direct apply never finished\n%s", lockReport(f))
+	}
+	if err = f.store.SavePool(t.Context(), &next, 1); err == nil {
+		t.Fatal("enrollment ignored direct effects and binding")
+	}
+}
+
+func TestServerPoolsOrdinaryApprovalStillNeedsConcretePlacement(t *testing.T) {
+	f := newPoolFixture(t)
+	req := f.request("env", "api")
+	candidate, err := f.store.PreviewPlacement(t.Context(), req)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = <-enrolled; err == nil {
-		t.Fatal("enrollment ignored direct effects and binding")
+	candidate.ServerID = ""
+	f.plan(t, "missing-host", req, candidate)
+	if accepted, approveErr := f.plans.Decide(t.Context(), "org", "missing-host", "approved", "usr", "", time.Now()); approveErr == nil || accepted {
+		t.Fatal("ordinary approval omitted its concrete host reservation")
+	}
+}
+
+func TestServerPoolsGPUMembers(t *testing.T) {
+	f := newPoolFixture(t)
+	now := time.Now().UTC()
+	if err := connections.NewPgStore(f.db).CreateConnection(t.Context(), &connections.Connection{ID: "runtime-gpu", OrgID: "org", Cloud: "server", Name: "runtime-gpu", Account: "runtime-gpu", Details: map[string]string{"docker_id": "runtime-gpu", "architecture": "amd64"}, Status: "ready", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	server := &cloudinfra.Server{ID: "server-gpu", OrgID: "org", CloudID: "cloud", ConnectionID: "runtime-gpu", RuntimeConnectionID: "runtime-gpu", Ownership: "adopted", Provider: "generic", AccountID: "runtime-gpu", Status: "ready", Revision: 1, CreatedAt: now, UpdatedAt: now, Health: cloudinfra.RuntimeHealth{DockerID: "runtime-gpu", Architecture: "amd64", CPUs: 16, MemoryBytes: 64 << 30, EffectiveCPUMillis: 16000, EffectiveMemoryBytes: 64 << 30, GPURuntime: "ready", GPUs: []provider.GPUDevice{{Index: 0, UUID: "GPU-0", Kind: "nvidia-l4"}, {Index: 1, UUID: "GPU-1", Kind: "nvidia-l4"}}, CheckedAt: now}}
+	if err := f.store.SaveServer(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	member := cloudinfra.PoolMember{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30, GPUs: 3}
+	gpuPool := &cloudinfra.Pool{ID: "gpu-pool", OrgID: "org", CloudID: "cloud", Name: "L4", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{member}}
+	if err := f.store.SavePool(t.Context(), gpuPool, 0); !errors.Is(err, cloudinfra.ErrInvalid) {
+		t.Fatalf("three L4s on a two-L4 server: %v", err)
+	}
+	gpuPool.Members[0].GPUs = 2
+	if err := f.store.SavePool(t.Context(), gpuPool, 0); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.store.GetPool(t.Context(), "org", "cloud", "gpu-pool")
+	if err != nil || saved.AcceleratorKind != "nvidia-l4" || saved.Members[0].GPUs != 2 {
+		t.Fatalf("saved GPU pool: %+v %v", saved, err)
+	}
+	// The same server can't give a different GPU budget to another pool, GPU or CPU.
+	other := &cloudinfra.Pool{ID: "gpu-pool-2", OrgID: "org", CloudID: "cloud", Name: "L4 half", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30, GPUs: 1}}}
+	if err = f.store.SavePool(t.Context(), other, 0); err == nil || !strings.Contains(err.Error(), "same budget in every pool") {
+		t.Fatalf("second GPU budget: %v", err)
+	}
+	cpu := &cloudinfra.Pool{ID: "cpu-pool", OrgID: "org", CloudID: "cloud", Name: "CPU", Revision: 1, Members: []cloudinfra.PoolMember{{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30}}}
+	if err = f.store.SavePool(t.Context(), cpu, 0); err == nil || !strings.Contains(err.Error(), "same budget in every pool") {
+		t.Fatalf("GPU server in a CPU pool with no GPU budget: %v", err)
+	}
+	// A server whose container runtime can't use its GPUs can't join a GPU pool.
+	server.Health.GPURuntime = "toolkit_missing"
+	server.Revision = 2
+	if err = f.store.SaveServer(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	gpuPool.Revision = 2
+	if err = f.store.SavePool(t.Context(), gpuPool, 1); !errors.Is(err, cloudinfra.ErrConflict) || !strings.Contains(err.Error(), "GPU runtime") {
+		t.Fatalf("toolkit missing: %v", err)
 	}
 }

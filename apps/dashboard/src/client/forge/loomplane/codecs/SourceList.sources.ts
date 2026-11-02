@@ -1,4 +1,4 @@
 import type { Codec } from '../codec-runtime';
-import { codec_Source } from './Source';
+import { codec_DiscoverySource } from './DiscoverySource';
 
-export const codec_SourceList_sources: Codec = {"kind": "array", "items": () => codec_Source};
+export const codec_SourceList_sources: Codec = {"kind": "array", "items": () => codec_DiscoverySource};

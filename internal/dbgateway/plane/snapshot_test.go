@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -180,6 +181,68 @@ func TestVerifySnapshot(t *testing.T) {
 				t.Fatalf("VerifySnapshot = %v, want ErrSnapshot", err)
 			}
 		})
+	}
+}
+
+// A key renewed with a later window appears twice under one ID. The
+// snapshot verifies while either window is open, whichever comes first in
+// the list, and not once both have closed.
+func TestVerifySnapshotRenewedWindow(t *testing.T) {
+	old, priv := newTrustKey(t)
+	renewed := old
+	renewed.NotBefore, renewed.NotAfter = old.NotAfter.Add(-time.Minute), old.NotAfter.Add(time.Hour)
+	good := signed(t, sampleSnapshot(1), old, priv)
+	for _, keys := range [][]TrustKey{{old, renewed}, {renewed, old}} {
+		for _, now := range []time.Time{snapshotNow, old.NotAfter, renewed.NotAfter.Add(-time.Nanosecond)} {
+			if _, err := VerifySnapshot(good, keys, "gw-1", now); err != nil {
+				t.Errorf("at %s with %d keys: %v", now, len(keys), err)
+			}
+		}
+		if _, err := VerifySnapshot(good, keys, "gw-1", renewed.NotAfter); !errors.Is(err, ErrSnapshot) {
+			t.Errorf("after both windows: %v", err)
+		}
+	}
+}
+
+// Two control-plane keys overlap while one replaces the other, and a
+// gateway that trusts both takes a snapshot from either.
+func TestVerifySnapshotDuringRotation(t *testing.T) {
+	a, aPriv := newTrustKey(t)
+	b, bPriv := newTrustKey(t)
+	b.NotBefore, b.NotAfter = snapshotNow.Add(-time.Minute), snapshotNow.Add(30*24*time.Hour)
+	for _, env := range []SignedSnapshot{signed(t, sampleSnapshot(1), a, aPriv), signed(t, sampleSnapshot(2), b, bPriv)} {
+		if _, err := VerifySnapshot(env, []TrustKey{a, b}, "gw-1", snapshotNow); err != nil {
+			t.Fatalf("snapshot signed by %s: %v", env.KeyID, err)
+		}
+	}
+}
+
+func TestTrustDigest(t *testing.T) {
+	a, _ := newTrustKey(t)
+	b, _ := newTrustKey(t)
+	d := TrustDigest([]TrustKey{a, b})
+	if !strings.HasPrefix(d, "tk") || len(d) != 2+trustDigestLen {
+		t.Fatalf("TrustDigest = %q", d)
+	}
+	if TrustDigest([]TrustKey{b, a}) != d || TrustDigest([]TrustKey{a, b, a}) != d {
+		t.Fatal("the digest depends on order or repeats")
+	}
+	if TrustDigest([]TrustKey{a}) == d {
+		t.Fatal("dropping a key kept the digest")
+	}
+	renewed := a
+	renewed.NotAfter = a.NotAfter.Add(time.Hour)
+	if TrustDigest([]TrustKey{renewed, b}) == d {
+		t.Fatal("a new window under the same ID kept the digest")
+	}
+	// The same instant in another zone is the same window.
+	moved := a
+	moved.NotBefore = a.NotBefore.In(time.FixedZone("x", 3600))
+	if TrustDigest([]TrustKey{moved, b}) != d {
+		t.Fatal("the zone a time is written in changed the digest")
+	}
+	if TrustDigest(nil) != "" {
+		t.Fatal("no keys gave a digest")
 	}
 }
 

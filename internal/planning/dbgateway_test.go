@@ -1,14 +1,18 @@
 package planning
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/providers"
 )
 
@@ -201,6 +205,62 @@ func TestPlanDatabaseGatewayFollowsAnUpgrade(t *testing.T) {
 	}
 }
 
+// The gateway's configuration records the keys it trusts, so a signing
+// key added, renewed or expired redeploys it with the keys it needs, and
+// the apps behind it stay as they are.
+func TestPlanDatabaseGatewayFollowsItsTrustKeys(t *testing.T) {
+	plan := func(trust string, bindings ...*Binding) *Result {
+		t.Helper()
+		in := dbgwInput(t, dbgwManifest, exampleZone, bindings...)
+		in.DatabaseGatewayTrust = trust
+		r := Compute(in)
+		if len(r.Problems) > 0 {
+			t.Fatalf("problems: %+v", r.Problems)
+		}
+		return r
+	}
+	first := plan("tkaaaaaaaaaaaaaaaa")
+	if got := action(t, first, "service:db-gateway").Service.DatabaseGateway.Trust; got != "tkaaaaaaaaaaaaaaaa" {
+		t.Fatalf("trust %q", got)
+	}
+	live := deployed(t, first)
+	if gw := action(t, plan("tkaaaaaaaaaaaaaaaa", live...), "service:db-gateway"); gw.Op != Keep {
+		t.Fatalf("the same keys planned %s (%s)", gw.Op, gw.Reason)
+	}
+	r := plan("tkbbbbbbbbbbbbbbbb", live...)
+	if gw := action(t, r, "service:db-gateway"); gw.Op != Update || gw.Service.DatabaseGateway.Trust != "tkbbbbbbbbbbbbbbbb" {
+		t.Fatalf("new keys planned db-gateway as %s (%s)", gw.Op, gw.Reason)
+	}
+	for _, name := range []string{"api", "web"} {
+		if a := action(t, r, "service:"+name); a.Op != Keep {
+			t.Fatalf("%s is %s (%s) when only the gateway's trust keys changed", name, a.Op, a.Reason)
+		}
+	}
+}
+
+// A plan records the digest of the keys the gateway would trust, and none
+// when they can't be had, which the deploy then explains.
+func TestServiceDatabaseGatewayTrust(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := plane.TrustKey{PublicKey: pub, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	for name, tc := range map[string]struct {
+		trust func() ([]plane.TrustKey, error)
+		want  string
+	}{
+		"no lookup": {nil, ""},
+		"a failure": {func() ([]plane.TrustKey, error) { return nil, dbgateway.ErrSigningKeyExpired }, ""},
+		"no keys":   {func() ([]plane.TrustKey, error) { return []plane.TrustKey{}, nil }, ""},
+		"a key":     {func() ([]plane.TrustKey, error) { return []plane.TrustKey{key}, nil }, plane.TrustDigest([]plane.TrustKey{key})},
+	} {
+		if got := NewService(Deps{DatabaseGatewayTrust: tc.trust}).databaseGatewayTrust(); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 // A deployed gateway the plan can't plan this time, here for want of a
 // zone, isn't deleted: the problem says why.
 func TestPlanDatabaseGatewayProblemKeepsDeployedGateway(t *testing.T) {
@@ -302,6 +362,38 @@ func TestDatabaseGatewayDomainNarrowsToRouteZones(t *testing.T) {
 	f := finding(t, Compute(in).Problems, "db-gateway-domain-ambiguous")
 	if !strings.Contains(f.Message, "a.com, b.com") {
 		t.Fatalf("ambiguous finding doesn't name the zones: %+v", f)
+	}
+}
+
+// A subdomain reads verified through its domain, so a project granted
+// both sees both. The gateway stays on the domain, as it did when the
+// subdomain's own proof was never verified.
+func TestDatabaseGatewayDomainPrefersTheDomainOverItsSubdomains(t *testing.T) {
+	zones := []cloudinfra.ProjectZone{{ID: "zone_app", Name: "app.example.com", Verified: true}, {ID: "zone_root", Name: "Example.com.", Verified: true}, {ID: "zone_eu", Name: "x.eu.example.com", Verified: true}}
+	r := dbgwCompute(t, dbgwManifest, zones)
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems: %+v", r.Problems)
+	}
+	if gw := action(t, r, "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.example.com" {
+		t.Fatalf("suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	}
+	// Two separate domains are still ambiguous, subdomain or not.
+	f := finding(t, dbgwCompute(t, dbgwManifest, slices.Concat(zones, []cloudinfra.ProjectZone{{ID: "zone_org", Name: "example.org", Verified: true}})).Problems, "db-gateway-domain-ambiguous")
+	if !strings.Contains(f.Message, "app.example.com, example.com, example.org, x.eu.example.com") {
+		t.Fatalf("ambiguous finding: %+v", f)
+	}
+	// A lookalike isn't under example.com.
+	finding(t, dbgwCompute(t, dbgwManifest, []cloudinfra.ProjectZone{{ID: "zone_root", Name: "example.com", Verified: true}, {ID: "zone_like", Name: "notexample.com", Verified: true}}).Problems, "db-gateway-domain-ambiguous")
+	// Routes still pick first: routing only through the subdomain keeps the gateway there.
+	in := dbgwInput(t, dbgwManifest, zones)
+	in.Routes = []cloudinfra.Route{{ID: "route", Input: cloudinfra.RouteInput{ZoneID: "zone_app", Service: "api", Hostname: "api.app.example.com"}}}
+	if gw := action(t, Compute(in), "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.app.example.com" {
+		t.Fatalf("routed suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	}
+	// Routes through the domain and a subdomain collapse to the domain.
+	in.Routes = append(in.Routes, cloudinfra.Route{ID: "route2", Input: cloudinfra.RouteInput{ZoneID: "zone_root", Service: "web", Hostname: "example.com"}})
+	if gw := action(t, Compute(in), "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.example.com" {
+		t.Fatalf("routed through both, suffix = %s", gw.Service.DatabaseGateway.Suffix)
 	}
 }
 
@@ -727,5 +819,39 @@ func TestDatabaseGatewayMarkingClearsAdoption(t *testing.T) {
 	in.Manifest = parse(t, dbgwSameCloud)
 	if api := action(t, Compute(in), "service:api"); api.Op != Keep || !api.AdoptCloudPlacement {
 		t.Fatalf("control: api is %s, adopt %v", api.Op, api.AdoptCloudPlacement)
+	}
+}
+
+// Marking a service's gateway links compares it with what's deployed again,
+// and that comparison still names a consumer option that changed rather
+// than reporting one change to all its variables.
+func TestDatabaseGatewayMarkingKeepsNamedOptionChanges(t *testing.T) {
+	doc := func(tenant string) string {
+		return `version: 1
+services:
+  api: {source: services/api, provider: server, target: ` + targetA + `, public: false, needs: [db, app], need_options: {app: {tenant: ` + tenant + `}}}
+resources:
+  db: {kind: postgres, provider: digitalocean, gateway: true}
+  app: {kind: sample, provider: server, target: ` + targetA + `}
+database_gateway: {provider: cloud-run, region: us-east1}
+`
+	}
+	input := func(tenant string, bindings ...*Binding) Input {
+		in := dbgwInput(t, doc(tenant), exampleZone, bindings...)
+		in.Kinds = tenanted(t)
+		in.Connections = append(slices.Clone(in.Connections), composedConnections(t)...)
+		return in
+	}
+	first := Compute(input("acme"))
+	if !first.Executable {
+		t.Fatalf("plan blocked: %+v", first.Problems)
+	}
+	live := deployed(t, first)
+	if api := action(t, Compute(input("acme", live...)), "service:api"); api.Op != Keep {
+		t.Fatalf("unchanged api is %s: %+v", api.Op, api.Changes)
+	}
+	api := action(t, Compute(input("beta", live...)), "service:api")
+	if api.Op != Update || !slices.Equal(api.Changes, []Change{{Field: "app tenant", From: "acme", To: "beta"}}) {
+		t.Fatalf("api is %s with %+v", api.Op, api.Changes)
 	}
 }

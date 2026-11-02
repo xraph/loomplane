@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/dispatch/engine"
 
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // The deployment workflow runs on Dispatch's durable runtime: history
@@ -80,12 +81,14 @@ type DeploymentInput struct {
 	// Window is how long a ready plan waits for a decision. It's part of
 	// the input rather than read from configuration, so a replay waits
 	// exactly as long as the first run did.
-	Window time.Duration `json:"window"`
+	Window            time.Duration `json:"window"`
+	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
 }
 
 // Decision is an approval or a rejection, as the signal carries it.
 type Decision struct {
-	Approve bool `json:"approve"`
+	Actor   *security.Principal `json:"actor,omitempty"`
+	Approve bool                `json:"approve"`
 	// Revision is the plan revision the decider reviewed.
 	Revision string `json:"revision"`
 	By       string `json:"by"`
@@ -125,6 +128,32 @@ type Deployer interface {
 type deployStarted struct {
 	DeploymentID string     `json:"deployment_id"`
 	Steps        [][]string `json:"steps"`
+	// Timeouts are the actions that get longer than actionTimeout, by
+	// action ID. A run started before they existed has none.
+	Timeouts map[string]time.Duration `json:"timeouts,omitempty"`
+}
+
+// timeout is how long an action's step may run: actionTimeout, or longer
+// when the deployer says the action needs it.
+func (s deployStarted) timeout(actionID string) time.Duration {
+	return max(actionTimeout, s.Timeouts[actionID])
+}
+
+// ActionTimeouts is a Deployer that knows which of a deployment's actions
+// need longer than a step usually gets, such as a catalog component that
+// takes hours to become ready.
+type ActionTimeouts interface {
+	ActionTimeouts(ctx context.Context, orgID, deploymentID string) (map[string]time.Duration, error)
+}
+
+// actionTimeouts asks dep for a deployment's longer action timeouts, when
+// it knows any.
+func actionTimeouts(ctx context.Context, dep Deployer, orgID, deploymentID string) (map[string]time.Duration, error) {
+	t, ok := dep.(ActionTimeouts)
+	if !ok || deploymentID == "" {
+		return nil, nil
+	}
+	return t.ActionTimeouts(ctx, orgID, deploymentID)
 }
 
 type deployInput struct {
@@ -162,12 +191,16 @@ var ErrNotRunning = errors.New("the plan's workflow has finished")
 // registers. Nothing runs before then: Dispatch only takes work once every
 // extension has started.
 type Deployments struct {
+	failedCleanups FailedCleanupRunner
 	cloudSync      CloudReconciler
 	infrastructure InfrastructureReconciler
+	cluster        ClusterReconciler
 	mu             sync.RWMutex
 	planner        Planner
 	deployer       Deployer
 	engineOf       func() *engine.Engine
+	workers        map[string]*drt.Worker
+	runs           RunStore
 }
 
 // NewDeployments returns the workflow, unbound.
@@ -205,10 +238,11 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 	return drt.Options{
 		Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: owner,
 		Concurrency: concurrency,
-		Workflows:   map[string]drt.WorkflowFunc{WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun},
+		Workflows:   map[string]drt.WorkflowFunc{failedCleanupWorkflow: d.cleanupWorkflow, WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, clusterWorkflow: d.clusterRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun, registrationWorkflow: d.registrationRun},
 		Activities: map[string]drt.ActivityFunc{
-			ActivityPlan:      d.plan,
-			cloudSyncActivity: d.syncActivity, infrastructureActivity: d.infrastructureReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile,
+			failedCleanupActivity: d.cleanupActivity,
+			ActivityPlan:          d.plan,
+			cloudSyncActivity:     d.syncActivity, infrastructureActivity: d.infrastructureReconcile, clusterActivity: d.clusterReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile, registrationActivity: d.registrationReconcile,
 			ActivityDecide: d.decide,
 			ActivityExpire: d.expire,
 			ActivityFail:   d.fail,
@@ -313,7 +347,7 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 		for _, id := range group {
 			step := dep
 			step.ActionID = id
-			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts, nil); err != nil {
+			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts, nil); err != nil {
 				reason = err.Error()
 				break
 			}
@@ -326,9 +360,11 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 
 // retryInput restarts a failed deployment's remaining steps.
 type retryInput struct {
-	OrgID        string     `json:"org_id"`
-	DeploymentID string     `json:"deployment_id"`
-	Steps        [][]string `json:"steps"`
+	OrgID             string                   `json:"org_id"`
+	DeploymentID      string                   `json:"deployment_id"`
+	Steps             [][]string               `json:"steps"`
+	Timeouts          map[string]time.Duration `json:"timeouts,omitempty"`
+	ReconcileInterval time.Duration            `json:"reconcile_interval,omitempty"`
 }
 
 // retry is the retry workflow: the deployment was reopened before it
@@ -339,7 +375,7 @@ func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("decode retry input: %w", err)
 	}
-	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}); err != nil {
+	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})
@@ -348,23 +384,37 @@ func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
 // Retry starts a reopened deployment's steps again. retryID names this
 // retry, so a repeated request starts it once.
 func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID string, steps [][]string) error {
-	eng, err := d.engine()
+	build, plan := DeploymentBuild, ""
+	if d.runs != nil {
+		r, err := d.runs.ForDeployment(ctx, orgID, deploymentID)
+		if err != nil {
+			return err
+		}
+		plan = r.PlanID
+		e, err := d.planRun(ctx, r.PlanID)
+		if err != nil {
+			return err
+		}
+		build = e.BuildID
+	}
+	// A retry keeps its plan's build: the steps it runs again are that
+	// build's.
+	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
+	dep, err := d.boundDeployer()
 	if err != nil {
 		return err
 	}
-	input, err := json.Marshal(retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps})
-	if err != nil {
-		return fmt.Errorf("encode retry input: %w", err)
+	if in.Timeouts, err = actionTimeouts(ctx, dep, orgID, deploymentID); err != nil {
+		return err
 	}
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: retryID, RunID: runID},
-		RequestID: "start:" + retryID, WorkflowType: WorkflowRetry, BuildID: DeploymentBuild,
-		Queue: DurableQueue, Input: input,
-	})
-	if err != nil {
-		return fmt.Errorf("start retry workflow: %w", err)
+	if build != DeploymentBuild {
+		in.ReconcileInterval = capacityInterval
 	}
-	return nil
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: plan, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: retryID, RunID: runID}, RequestID: "start:" + retryID, WorkflowType: WorkflowRetry, BuildID: build, Queue: DurableQueue, Input: raw}})
 }
 
 // callInto runs an activity and decodes its output into out, if out isn't
@@ -488,66 +538,87 @@ func (d *Deployments) engine() (*engine.Engine, error) {
 // Start starts a plan's workflow. Starting one twice is harmless: the
 // request ID is the plan's, so Dispatch returns the first start's receipt.
 func (d *Deployments) Start(ctx context.Context, orgID, planID string, window time.Duration) error {
-	eng, err := d.engine()
+	// Existing executions supply their immutable request input and build.
+	e, err := d.currentExecution(ctx, durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID})
+	if err == nil {
+		return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID}, RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: e.BuildID, Queue: DurableQueue, Input: e.Input}})
+	}
+	if !errors.Is(err, durable.ErrNotFound) {
+		return err
+	}
+	// Only a run store routes later builds, so without one the engine's
+	// build runs the plan.
+	build := DeploymentBuild
+	interval := time.Duration(0)
+	if d.runs != nil {
+		build = CurrentBuild
+		if source, ok := d.runs.(interface {
+			NeedsCleanupExecutor(context.Context, string, string) (bool, error)
+		}); ok {
+			needed, readErr := source.NeedsCleanupExecutor(ctx, orgID, planID)
+			if readErr != nil {
+				return readErr
+			}
+			if needed {
+				build = ManagedCleanupBuild
+			}
+		}
+		interval = capacityInterval
+	}
+	raw, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window, ReconcileInterval: interval})
 	if err != nil {
 		return err
 	}
-	input, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window})
-	if err != nil {
-		return fmt.Errorf("encode deployment input: %w", err)
-	}
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: DeploymentBuild,
-		Queue: DurableQueue, Input: input,
-	})
-	if err != nil {
-		return fmt.Errorf("start deployment workflow: %w", err)
-	}
-	return nil
+	return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID}, RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: build, Queue: DurableQueue, Input: raw}})
 }
 
-// Decide signals a plan's workflow with a decision. requestID makes a
-// retried request safe: Dispatch accepts each ID once.
+// Decide delivers approval to the build and run stored for this plan.
 func (d *Deployments) Decide(ctx context.Context, planID, requestID string, dec Decision) error {
-	eng, err := d.engine()
-	if err != nil {
-		return err
-	}
-	input, err := json.Marshal(dec)
-	if err != nil {
-		return fmt.Errorf("encode decision: %w", err)
-	}
-	_, err = eng.SignalDurableWorkflow(ctx, durable.SignalRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: requestID, BuildID: DeploymentBuild, Name: SignalDecision, Input: input,
-	})
-	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+	e, err := d.planRun(ctx, planID)
+	if errors.Is(err, durable.ErrNotFound) {
 		return ErrNotRunning
 	}
 	if err != nil {
-		return fmt.Errorf("signal deployment workflow: %w", err)
+		return err
 	}
-	return nil
-}
-
-// Cancel stops a plan's workflow, for a plan another one superseded.
-func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
-	eng, err := d.engine()
+	raw, err := json.Marshal(dec)
 	if err != nil {
 		return err
 	}
-	_, err = eng.RequestCancelDurableWorkflow(ctx, durable.CancelExecutionRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: "cancel:" + planID, BuildID: DeploymentBuild, Reason: reason,
-	})
+	err = d.signalRun(ctx, durable.SignalRequest{Key: e.Key, RequestID: requestID, BuildID: e.BuildID, Name: SignalDecision, Input: raw})
 	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+		return ErrNotRunning
+	}
+	return err
+}
+
+// Cancel routes supersession to the current durable run.
+func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
+	e, err := d.planRun(ctx, planID)
+	if errors.Is(err, durable.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("cancel deployment workflow: %w", err)
+		return err
 	}
-	return nil
+	req := durable.CancelExecutionRequest{Key: e.Key, RequestID: "cancel:" + e.WorkflowID + ":" + e.RunID, BuildID: e.BuildID, Reason: reason}
+	if e.BuildID == DeploymentBuild {
+		eng, eerr := d.engine()
+		if eerr != nil {
+			return eerr
+		}
+		_, err = eng.RequestCancelDurableWorkflow(ctx, req)
+	} else {
+		w, werr := d.worker(e.BuildID)
+		if werr != nil {
+			return werr
+		}
+		_, err = w.RequestCancelExecution(ctx, req)
+	}
+	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
@@ -563,7 +634,11 @@ func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps})
+	timeouts, err := actionTimeouts(ctx, dep, in.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps, Timeouts: timeouts})
 }
 
 func (d *Deployments) deploySource(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
@@ -592,7 +667,7 @@ func (d *Deployments) deployAction(ctx context.Context, info drt.ActivityInfo, i
 	return []byte("{}"), dep.Run(ctx, in.OrgID, in.DeploymentID, in.ActionID, info.HeartbeatDetails(), heartbeat)
 }
 
-func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+func (d *Deployments) deployFinish(ctx context.Context, info drt.ActivityInfo, input []byte) ([]byte, error) {
 	var in deployInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
@@ -600,6 +675,9 @@ func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, inpu
 	dep, err := d.boundDeployer()
 	if err != nil {
 		return nil, err
+	}
+	if info.Key.Namespace != "" && info.Key.WorkflowID != "" && info.Key.RunID != "" && info.CommandID != "" {
+		ctx = context.WithValue(ctx, finalizationKey{}, finalizationIdentity{key: info.IdempotencyKey(), workflow: info.Key.WorkflowID})
 	}
 	return []byte("{}"), dep.Finish(ctx, in.OrgID, in.DeploymentID, in.Reason)
 }

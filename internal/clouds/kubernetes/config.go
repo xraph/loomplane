@@ -25,14 +25,30 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
-	REST      *rest.Config
-	Namespace string
-	Context   string
-	Details   map[string]string
+	// groupIngress is installed by NewGroupRuntimeClient after journal admission.
+	// ParseConfig and connection details cannot grant this ownership mode.
+	groupIngress bool
+	// ManagedWorkload is set only after resolving a persisted managed attachment.
+	ManagedWorkload    bool
+	ManagedProfile     ManagedRuntimeProfile
+	ManagedIdentity    ManagedRuntimeIdentity
+	ManagedLegacyGuard ManagedLegacyGuard
+	ManagedJournal     ManagedJournal
+	ManagedScope       ManagedScope
+	REST               *rest.Config
+	Namespace          string
+	Context            string
+	Details            map[string]string
 }
 
-// ParseConfig accepts embedded credentials only, with no ambient loading rules.
+// ParseConfig accepts embedded credentials only, with no ambient loading
+// rules. The one exception is the in-cluster credential, which stands for
+// Loomplane's own service account and works only where the operator
+// turned that on (UseInCluster).
 func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
+	if IsInClusterCredential(raw) {
+		return parseInCluster(settings)
+	}
 	if len(raw) == 0 || len(raw) > 256<<10 {
 		return nil, fmt.Errorf("%w: provide a self-contained kubeconfig of at most 256 KiB", ErrInvalid)
 	}
@@ -111,8 +127,17 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	// Even HTTP_PROXY must not change the connection the person selected.
 	rc.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	rc.UserAgent = "loomplane"
-	ca := sha256.Sum256(config.Clusters[chosen.Cluster].CertificateAuthorityData)
+	return configFor(rc, contextName, namespace, config.Clusters[chosen.Cluster].CertificateAuthorityData, settings)
+}
+
+// configFor finishes a Config for rc: the details anyone may see, and the
+// optional placement settings, checked.
+func configFor(rc *rest.Config, contextName, namespace string, caData []byte, settings map[string]string) (*Config, error) {
+	ca := sha256.Sum256(caData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
+	if err := buildIsolationSettings(settings, details); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
 		if architecture != "amd64" && architecture != "arm64" {
 			return nil, fmt.Errorf("%w: architecture must be amd64 or arm64", ErrInvalid)
@@ -125,6 +150,19 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 		}
 		details["storage_class"] = class
 	}
+	if class := strings.TrimSpace(settings["ingress_class"]); class != "" {
+		if len(validation.IsDNS1123Subdomain(class)) != 0 {
+			return nil, fmt.Errorf("%w: ingress_class must be a Kubernetes ingress class name", ErrInvalid)
+		}
+		details["ingress_class"] = class
+	}
+	if address := strings.TrimSpace(settings["ingress_address"]); address != "" {
+		normalized, ok := ingressAddress(address)
+		if !ok {
+			return nil, fmt.Errorf("%w: ingress_address must be an IP address or a hostname", ErrInvalid)
+		}
+		details["ingress_address"] = normalized
+	}
 	if rc.ServerName != "" {
 		details["tls_server_name"] = rc.ServerName
 	}
@@ -134,5 +172,37 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 		}
 		details["image_pull_secret"] = name
 	}
+	if host := strings.TrimSpace(settings["registry_hostname"]); host != "" {
+		if len(validation.IsDNS1123Subdomain(host)) != 0 || !strings.Contains(host, ".") {
+			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
+		}
+		details["registry_hostname"] = host
+		if optionErr := registrySetupOptions(settings, details); optionErr != nil {
+			return nil, optionErr
+		}
+		mode := strings.TrimSpace(settings["registry_setup"])
+		if mode == "" {
+			mode = "automatic"
+			if details["storage_class"] != "" && details["architecture"] != "" && details["ingress_address"] != "" {
+				mode = "existing"
+			}
+		}
+		if mode != "automatic" && mode != "existing" {
+			return nil, fmt.Errorf("%w: registry_setup must be automatic or existing", ErrInvalid)
+		}
+		details["registry_setup"] = mode
+		for _, key := range []string{"registry_cert_manager", "registry_ingress"} {
+			if value := settings[key]; value == "managed" || value == "existing" {
+				details[key] = value
+			}
+		}
+		if settings["registry_ingress_address"] == "automatic" {
+			details["registry_ingress_address"] = "automatic"
+		}
+	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
+}
+
+func (c *Config) journalRequired() bool {
+	return c.ManagedWorkload && c.ManagedProfile != ManagedProfileLegacy
 }

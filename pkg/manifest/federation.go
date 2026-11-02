@@ -15,11 +15,12 @@ const FederationVersion = 2
 
 // Federation is optional version 2 intent. Declaring it grants no runtime access.
 type Federation struct {
-	Destinations   map[string]DestinationRef      `json:"destinations,omitempty" yaml:"destinations,omitempty"`
-	NetworkLinks   map[string]FederationLink      `json:"network_links,omitempty" yaml:"network_links,omitempty"`
-	ServiceExports map[string]FederationExport    `json:"service_exports,omitempty" yaml:"service_exports,omitempty"`
-	AccessGrants   map[string]FederationGrant     `json:"access_grants,omitempty" yaml:"access_grants,omitempty"`
-	Placements     map[string]FederationPlacement `json:"placements,omitempty" yaml:"placements,omitempty"`
+	PlacementGroups map[string]FederationPlacementGroup `json:"placement_groups,omitempty" yaml:"placement_groups,omitempty"`
+	Destinations    map[string]DestinationRef           `json:"destinations,omitempty" yaml:"destinations,omitempty"`
+	NetworkLinks    map[string]FederationLink           `json:"network_links,omitempty" yaml:"network_links,omitempty"`
+	ServiceExports  map[string]FederationExport         `json:"service_exports,omitempty" yaml:"service_exports,omitempty"`
+	AccessGrants    map[string]FederationGrant          `json:"access_grants,omitempty" yaml:"access_grants,omitempty"`
+	Placements      map[string]FederationPlacement      `json:"placements,omitempty" yaml:"placements,omitempty"`
 }
 
 // DestinationRef names an existing authorized destination, with explicit per-environment IDs.
@@ -95,7 +96,7 @@ func ValidateFederation(m *Manifest) Problems {
 		name  string
 		names []string
 	}{
-		{"destinations", sortedKeys(f.Destinations)}, {"network_links", sortedKeys(f.NetworkLinks)}, {"service_exports", sortedKeys(f.ServiceExports)}, {"access_grants", sortedKeys(f.AccessGrants)}, {"placements", sortedKeys(f.Placements)},
+		{"destinations", sortedKeys(f.Destinations)}, {"network_links", sortedKeys(f.NetworkLinks)}, {"service_exports", sortedKeys(f.ServiceExports)}, {"access_grants", sortedKeys(f.AccessGrants)}, {"placements", sortedKeys(f.Placements)}, {"placement_groups", sortedKeys(f.PlacementGroups)},
 	} {
 		if len(section.names) > 100 {
 			add("federation."+section.name, "at most 100 entries are allowed")
@@ -246,5 +247,6 @@ func ValidateFederation(m *Manifest) Problems {
 			add("federation.access_grants."+name, "requires a matching source placement")
 		}
 	}
+	ps = append(ps, validatePlacementGroups(m)...)
 	return ps
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
@@ -236,7 +237,7 @@ func TestSharedCloudCleanupSurvivesGrantRevocation(t *testing.T) {
 	f := newSyncFixture(t)
 	f.executor.failStage = false
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
 	if err != nil {
 		t.Fatal(err)
@@ -457,12 +458,12 @@ func TestSharedCloudParticipantHistoryAndPagination(t *testing.T) {
 	if _, err := service.CloudSync(ctx, security.Principal{OrgID: "other"}, "second", "organization-shared"); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Errorf("cross-org operation discovered: %v", err)
 	}
-	if _, _, err := service.CloudSyncPage(ctx, actor, "third", page.Cursor{}, 1); !errors.Is(err, security.ErrForbidden) {
+	if _, _, err := service.CloudSyncPage(ctx, actor, "third", "", page.Cursor{}, 1); !errors.Is(err, security.ErrForbidden) {
 		t.Errorf("unauthorized project history: %v", err)
 	}
 	var cursor page.Cursor
 	for i, id := range []string{"organization-shared", "compat-shared", "old-legacy"} {
-		rows, next, err := service.CloudSyncPage(ctx, actor, "second", cursor, 1)
+		rows, next, err := service.CloudSyncPage(ctx, actor, "second", "", cursor, 1)
 		if err != nil || len(rows) != 1 || rows[0].ID != id {
 			t.Errorf("eligible page %d: %+v %v", i, rows, err)
 			break
@@ -542,7 +543,7 @@ func TestSharedCloudHistoryTargetGrantProjection(t *testing.T) {
 		if listErr != nil || len(list) != 1 {
 			t.Fatalf("history list: %+v %v", list, listErr)
 		}
-		paged, next, pageErr := service.CloudSyncPage(ctx, actor, "proj", page.Cursor{}, 1)
+		paged, next, pageErr := service.CloudSyncPage(ctx, actor, "proj", "", page.Cursor{}, 1)
 		if pageErr != nil || len(paged) != 1 || !next.IsZero() {
 			t.Fatalf("history page: %+v %+v %v", paged, next, pageErr)
 		}
@@ -579,5 +580,78 @@ func TestSharedCloudHistoryTargetGrantProjection(t *testing.T) {
 	}
 	if body != originalBody || snapshot != originalSnapshot {
 		t.Fatal("public history projection changed private operation state")
+	}
+}
+
+func TestSharedCloudPreviewDefaultFollowsCurrentGrant(t *testing.T) {
+	st, conn, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	if _, err := conn.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider='vercel',default_connection_id='old',default_region='private-region',revision=revision+1 WHERE id='cloud'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+		t.Fatal(err)
+	}
+	assignment, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := &cloudprofiles.Preview{ID: "default-review", OrgID: "org", ProjectID: "proj", Revision: "immutable-review", BeforeAssignment: assignment, AfterAssignment: assignment, Input: cloudprofiles.ChangeInput{EnvironmentID: "env"}, CreatedAt: time.Now().UTC()}
+	snapshot := &cloudprofiles.Snapshot{Connections: []string{"old"}}
+	if err = st.SavePreview(ctx, preview, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	before, beforeSnapshot, err := st.GetPreview(ctx, "org", "proj", preview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, _ := json.Marshal([]any{before, beforeSnapshot})
+	service := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry(), Authz: sharedProjectAuthorizer{}})
+	actor := security.Principal{OrgID: "org", UserID: "developer"}
+	for _, tc := range []struct {
+		name        string
+		targets     []string
+		revoked     bool
+		wantDefault bool
+		wantTargets int
+	}{
+		{"whole", nil, false, true, 1}, {"restricted", []string{"target"}, false, false, 1}, {"revoked", nil, true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, grantErr := st.SetProjectGrant(ctx, "org", "cloud", "proj", tc.targets, tc.revoked); grantErr != nil {
+				t.Fatal(grantErr)
+			}
+			public, readErr := service.CloudPreview(ctx, actor, "proj", preview.ID)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, a := range []*cloudprofiles.Assignment{public.BeforeAssignment, public.AfterAssignment} {
+				if a == nil || (a.DefaultPlacement != nil) != tc.wantDefault || len(a.Targets) != tc.wantTargets {
+					t.Fatalf("grant leaked placement: %+v", a)
+				}
+			}
+			if tc.revoked {
+				removal, removalErr := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
+				if removalErr != nil {
+					t.Fatal(removalErr)
+				}
+				if removal.BeforeAssignment == nil || removal.BeforeAssignment.DefaultPlacement != nil || len(removal.BeforeAssignment.Targets) != 0 {
+					t.Fatalf("removal leaked retained placement: %+v", removal.BeforeAssignment)
+				}
+			}
+		})
+	}
+	manager := planning.NewService(planning.Deps{Projects: projects.NewPgStore(db), CloudProfiles: st, Authz: &syncAuth{}})
+	public, err := manager.CloudPreview(ctx, security.Principal{OrgID: "org", UserID: "manager"}, "proj", preview.ID)
+	if err != nil || public.BeforeAssignment.DefaultPlacement == nil || public.AfterAssignment.DefaultPlacement == nil {
+		t.Fatalf("manager lost full view: %+v %v", public, err)
+	}
+	after, afterSnapshot, err := st.GetPreview(ctx, "org", "proj", preview.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, _ := json.Marshal([]any{after, afterSnapshot})
+	if string(original) != string(unchanged) {
+		t.Fatal("public filtering changed persisted review or private snapshot")
 	}
 }

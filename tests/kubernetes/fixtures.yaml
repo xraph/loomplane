@@ -1,0 +1,106 @@
+# Throwaway backing services for the chart test, both loaded into kind from
+# the host so a cold cluster doesn't wait on registries. Production uses a managed
+# or replicated PostgreSQL and real object storage; see docs/kubernetes.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      # On the control plane, so draining a worker node never takes the
+      # database or storage with it.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          # Throwaway data on memory with fsync off: a busy kind node's disk
+          # otherwise stalls every query long enough to fail the test.
+          args: [-c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          env:
+            - {name: POSTGRES_USER, value: loomplane}
+            - {name: POSTGRES_PASSWORD, value: loomplane-test-only}
+            - {name: POSTGRES_DB, value: loomplane}
+          ports:
+            - containerPort: 5432
+          # Over TCP: the image's first-boot setup server only listens on the
+          # socket, and a probe that passes then would let clients in before
+          # the real server restarts. Generous timeouts, because a busy kind
+          # node is slow, and a flapping probe drops Postgres from its Service.
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, loomplane, -d, loomplane]
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - port: 5432
+---
+# S3Mock stands in for object storage and creates both buckets on start.
+# MinIO stopped publishing container images, so it can't be pulled here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: s3}
+  template:
+    metadata:
+      labels: {app: s3}
+    spec:
+      # On the control plane, so draining a worker node never takes the
+      # database or storage with it.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+        - name: s3
+          image: adobe/s3mock:5.2.3
+          env:
+            - {name: COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS, value: "loomplane-artifacts,loomplane-backups"}
+          ports:
+            - containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9090
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3
+spec:
+  selector: {app: s3}
+  ports:
+    - port: 9090

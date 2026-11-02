@@ -1,0 +1,118 @@
+---
+title: Google Cloud
+description: Connect a Google Cloud project and run services on Cloud Run with Cloud SQL, Memorystore and Cloud Storage.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Loomplane builds a service with Cloud Build, stores its image in Artifact Registry and runs it on Cloud Run. It also provisions Cloud SQL (Postgres and MySQL), Memorystore (Redis) and Cloud Storage buckets. Everything happens in your project.
+
+## Connect a project
+
+You connect a service account key.
+
+<Steps>
+<Step>
+
+In the Google Cloud console, create a service account in the project you'll deploy to.
+
+</Step>
+<Step>
+
+Grant it roles that cover the permissions in the table below.
+
+</Step>
+<Step>
+
+Create a JSON key for it and download it.
+
+</Step>
+<Step>
+
+In Loomplane, open **Integrations**, choose Google Cloud, and paste the key.
+
+</Step>
+</Steps>
+
+Loomplane parses the key, then asks Google which permissions the account holds on the project (`testIamPermissions`). A key that isn't a service account key, or that Google has deleted, disabled or revoked, is refused. A key that's missing permissions makes the connection incomplete, and Loomplane lists each one.
+
+The project ID comes from the key. Only the project and the service account's email are ever shown back to you.
+
+| Used for | Permissions Loomplane checks |
+|---|---|
+| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get`. Recommended, not checked: `artifactregistry.tags.get` |
+| Cloud Run | `run.services.create`, `run.services.get`, `run.services.update`, `run.services.setIamPolicy`, `run.operations.get`, `iam.serviceAccounts.actAs` |
+| Canary releases only | `run.revisions.get`, `run.revisions.delete` |
+| Secrets | `secretmanager.secrets.create`, `secretmanager.secrets.setIamPolicy`, `secretmanager.versions.add` |
+| Cloud SQL | `cloudsql.instances.create`, `cloudsql.instances.delete`, `cloudsql.instances.get`, `cloudsql.databases.create`, `cloudsql.users.create`, `cloudsql.users.update` |
+| Memorystore | `redis.instances.create`, `redis.instances.delete`, `redis.instances.get`, `redis.instances.getAuthString` |
+| Cloud Storage | `storage.buckets.create`, `storage.buckets.delete`, `storage.buckets.get`, `storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.list` |
+| Project | `resourcemanager.projects.get` |
+
+Loomplane deploys each image by the digest its build pushed and records it with the release, so a promotion can deploy the exact image staging ran and a rollback the image the previous release ran. Cloud Build reports the digest of an image built from a Dockerfile. A service without one is built with buildpacks, which push the image themselves, and Loomplane reads its digest from Artifact Registry with `artifactregistry.tags.get`. Without that permission you can still deploy: the service runs its image by tag, the step warns you, and promoting or rolling back that service builds it again.
+
+Build logs come from Cloud Logging, so the account also needs permission to read there. Without it the deployment still works and the logs show as unavailable.
+
+Joining a Cloud Run service to AWS through a link needs Compute Network Admin (`roles/compute.networkAdmin`) as well. See [Gateways and networking](/docs/concepts/gateways-and-networking#links).
+
+## Sign in instead of a key
+
+If your organization has registered a Google OAuth client, the connect dialog offers **Sign in with Google Cloud** first and **Use a token instead** underneath. Type the project ID, then sign in to Google and approve. Loomplane asks for `openid`, `email` and `https://www.googleapis.com/auth/cloud-platform`.
+
+The connection acts as you, so your own IAM roles in the project are what it can do. Loomplane checks them against the table above, the same as it checks a key, and lists anything you're missing. You also need `serviceusage.services.use` on the project (Owner, Editor and Service Usage Consumer have it), because your API calls are billed to the project you deploy to, not the one the OAuth client is in. The connection shows the Google account it signed in as and who in Loomplane did it. If that person leaves your organization, the connection asks for a new sign-in within 6 hours and anyone who manages cloud accounts can sign in again as themselves.
+
+Publish the OAuth app. While it's in testing, Google ends every sign-in after 7 days. Once it's published as an **External** app, people see Google's unverified-app warning and no more than 100 of them can sign in until Google verifies it, because `cloud-platform` is a sensitive scope. An **Internal** app, for a Google Workspace, needs neither. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the client and what happens if Google stops accepting the sign-in.
+
+## Connect keylessly
+
+With workload identity federation you don't need a key or a sign-in. When Loomplane's public URL is HTTPS and reachable from the internet, the connect dialog offers **Connect keylessly** (or **Connect keylessly instead**, under the sign-in button). Its four steps make a workload identity pool called `loomplane`, add Loomplane's issuer as an OIDC provider in it, named after the connection's ID, with a condition that lets in this connection's subject alone, let that subject act as a service account through `roles/iam.workloadIdentityUser`, and grant the account a custom role with the permissions in the table above. You copy each `gcloud` command from the dialog.
+
+Paste the project ID, the provider's full name and the service account's email, then choose **Check and connect**. Loomplane trades a 10-minute token it signs itself at Google's security token service, impersonates the service account with what comes back, and checks the account's permissions on the project like a key's. The audience is `//iam.googleapis.com/` followed by the provider's full name, which is the provider's default.
+
+A second keyless connection in the same project skips the pool and the role, which are there already, and its commands make a provider of its own. Loomplane asks Google once a day whether it still trusts each connection, and a refusal marks the connection failed and sends a notice. [Connect a cloud keylessly](/docs/clouds/keyless) has every command and what to do when the trust breaks.
+
+## Use it in a manifest
+
+```yaml
+version: 1
+defaults:
+  provider: cloud-run
+  region: us-central1
+services:
+  api:
+    source: go:services/api
+    needs: [db, cache, uploads]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+    version: "17"
+  cache:
+    kind: redis
+    provider: memorystore
+  uploads:
+    kind: object-storage
+    provider: cloud-storage
+```
+
+Regions Loomplane lists are `us-central1`, `us-east1`, `us-east4`, `us-west1`, `northamerica-northeast1`, `southamerica-east1`, `europe-west1`, `europe-west2`, `europe-west3`, `europe-west4`, `asia-east1`, `asia-northeast1`, `asia-south1`, `asia-southeast1` and `australia-southeast1`. You can name any region, but the planner warns about one it doesn't know, since a typo would otherwise only show up as a failed deployment.
+
+## How things behave
+
+A private Cloud Run service only takes calls from the project's own services, which must send a Google ID token. Services that need a private one get its address in a variable.
+
+Cloud SQL is reached through the Cloud SQL connector. Memorystore only has an address on the project's default network, so Cloud Run services that need it send their private traffic there with direct VPC egress. Buckets are private, and services reach them as the Cloud Run runtime account, so `STORAGE_URL` carries no credentials (`gs://bucket`).
+
+A canary runs the new release as a second revision of the same Cloud Run service, named after the service and the deployment, and splits the service's traffic between that revision and the one that served before. Promoting it sends all of the traffic to the latest revision, so your next deploy takes everything again. A rollback gives the old revision all of the traffic, puts its template back and deletes the new one. Putting the template back makes one more revision with the old configuration, which takes no traffic.
+
+If an earlier canary couldn't roll back and left the traffic split, a new canary on that service won't start, since it can't tell which revision is the real baseline. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+
+The canary releases only permissions aren't needed for anything else, so a service account without them still deploys. The connection lists what's missing, and a canary on Cloud Run refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
+
+Each revision reads its secrets at the Secret Manager version it was started with, never `latest`. The candidate stores new versions, so an instance the old revision starts mid-canary still reads its own values.
+
+On Google Cloud you pick the region per service or resource. Moving one starts the new copy first. Cloud SQL instances and Cloud Storage buckets carry their region in their names, so the new one never collides with the one it replaces.
+
+<Callout type="warn">
+  Managed Cloud SQL creation and recovery are checked against controlled Google endpoints. Live Google Cloud creation, SQL persistence and restore aren't qualified yet. [Database services](/docs/services/database-services) has the details.
+</Callout>

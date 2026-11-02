@@ -1,6 +1,8 @@
 package connections
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/xraph/forge"
@@ -8,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
@@ -31,6 +34,41 @@ type CloudForm struct {
 	Credential string        `json:"credential,omitempty"`
 	Help       string        `json:"help,omitempty"`
 	Settings   []sdk.Setting `json:"settings,omitempty"`
+	// SignInSettings are what signing in asks for first, such as the
+	// Google Cloud project. A cloud that asks nothing has none.
+	SignInSettings []sdk.Setting `json:"sign_in_settings,omitempty"`
+	// KeylessSettings are what connecting keylessly asks for, such as the
+	// role the cloud's trust lets Loomplane assume. A cloud that can't be
+	// connected keylessly has none.
+	KeylessSettings []sdk.Setting `json:"keyless_settings,omitempty"`
+	// InClusterSettings are what connecting the cluster Loomplane runs in
+	// asks for, starting with the namespace. Only Kubernetes has them.
+	InClusterSettings []sdk.Setting `json:"in_cluster_settings,omitempty"`
+	// Methods are the ways to connect it, in this order: oauth when the
+	// organization can sign in to the cloud, keyless when the cloud can
+	// trust Loomplane's issuer, in_cluster when Loomplane runs in a
+	// Kubernetes cluster it may deploy to, and token always.
+	Methods []string `json:"methods"`
+}
+
+// kubernetesPlacement are the settings a Kubernetes connection takes
+// besides its kubeconfig, whichever way it's connected.
+var kubernetesPlacement = []sdk.Setting{
+	{Key: "build_workers", Label: "Build workers (shared by default, or dedicated)"},
+	{Key: "build_runtime_class", Label: "Kata build RuntimeClass (required for shared workers)"},
+	{Key: "registry_hostname", Label: "Managed build registry hostname (optional, enables in-cluster builds)"},
+	{Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"},
+	{Key: "storage_class", Label: "Storage class (optional, defaults to the cluster's default)"},
+	{Key: "architecture", Label: "Architecture override (optional, amd64 or arm64)"},
+	{Key: "ingress_class", Label: "Ingress class for routes (optional)"},
+	{Key: "ingress_address", Label: "Ingress address override (optional, IP or hostname)"},
+	{Key: "registry_setup", Label: "Registry setup (automatic or existing, optional)"},
+	{Key: "registry_storage", Label: "Storage driver (existing, local-path or longhorn)"},
+	{Key: "registry_network", Label: "Ingress network (load-balancer, node or metallb)"},
+	{Key: "ingress_node", Label: "Ingress node (optional for a single-node cluster)"},
+	{Key: "load_balancer_addresses", Label: "MetalLB pool (unused CIDRs or IP ranges, comma separated)"},
+	{Key: "registry_dns", Label: "Registry DNS (automatic or manual)"},
+	{Key: "registry_maintenance", Label: "Registry maintenance (automatic or manual)"},
 }
 
 // CloudList is the body of GET /api/v1/connection-clouds.
@@ -38,17 +76,30 @@ type CloudList struct {
 	Clouds []CloudForm `json:"clouds"`
 }
 
-func (e *Extension) clouds() (CloudList, error) {
+func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
-		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
+		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true,
+			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}},
+			KeylessSettings: []sdk.Setting{
+				{Key: "project_id", Label: "Project ID", Required: true},
+				{Key: "workload_provider", Label: "Workload identity provider", Required: true},
+				{Key: "service_account", Label: "Service account email", Required: true},
+				{Key: "billing_export", Label: "Billing export table (optional)"},
+			}},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
-		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
+		{Cloud: connections.AWS, Title: "AWS", Builtin: true,
+			KeylessSettings: []sdk.Setting{
+				{Key: "role_arn", Label: "Role ARN", Required: true}, {Key: "region", Label: "Region", Required: true},
+				{Key: "certificate_arn", Label: "Certificate ARN (optional)"},
+			}},
+		{Cloud: connections.Firecracker, Title: "Firecracker host", Credential: "Client certificate JSON", Help: "Use JSON with ca, certificate and key PEM strings. Install the Go host agent on a Linux/KVM host and authorize the client certificate for enrollment. Bind the new connection ID on the host before deploying.", Settings: []sdk.Setting{{Key: "endpoint", Label: "Host agent HTTPS endpoint", Required: true}, {Key: "host_id", Label: "Expected host ID", Required: true}}}, //nolint:gosec // This describes credential fields; it contains no credential.
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
-			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
+			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}, {Key: "build_workers", Label: "Build workers (set dedicated to allow source builds)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:     "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
-			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}, {Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"}, {Key: "storage_class", Label: "Retained storage class (optional)"}, {Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"}}},
+			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. Set a registry hostname to create a missing namespace and install ingress and cert-manager. Existing storage and load balancers are reused by default. For bare clusters, choose local-path storage and node ingress, or Longhorn storage and MetalLB with an unused address pool. Longhorn needs three Linux nodes with its host prerequisites. Automatic setup needs cluster-admin permissions and may create a billable load balancer. Connect a verified organization DNS zone for automatic records. Backups use Loomplane backup storage. Maintenance briefly pauses registry access. Use registry_setup=existing, registry_dns=manual or registry_maintenance=manual to manage those parts yourself.",
+			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),
+			InClusterSettings: append([]sdk.Setting{{Key: "namespace", Label: "Namespace", Required: true}}, kubernetesPlacement...)},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.
 			Help:     "Use username/password or token JSON, with optional ca PEM. Use {} for anonymous access. HTTPS is required outside loopback. A separate token service needs an approved auth endpoint. Docker publishing and server pulls use bearer tokens; Basic-only registries need a token service. Kubernetes pulls use your existing namespace Secret.",
 			Settings: []sdk.Setting{{Key: "endpoint", Label: "Registry endpoint", Required: true}, {Key: "repository", Label: "Repository prefix", Required: true}, {Key: "auth_endpoint", Label: "Token service endpoint (optional)"}}},
@@ -63,9 +114,26 @@ func (e *Extension) clouds() (CloudList, error) {
 			Help: "Create a personal access token in DigitalOcean under API, Tokens, with read and write access to App Platform and Databases. App Platform builds from your repositories through DigitalOcean's own GitHub connection, so give it access to them under Settings, GitHub. The token's team is where everything is made.",
 		},
 		{
+			Cloud: connections.Cloudflare, Title: "Cloudflare", Credential: "API token",
+			Help:           "Sign in when a Cloudflare OAuth app is set up, or create an API token under My Profile, API Tokens. Choose DNS, R2 storage or both. DNS needs Zone Read and DNS Edit. R2 needs Account Settings Read and Workers R2 Storage Read to sync, plus Write to create buckets. Add Registrar edit only to register domains. Application uploads use separate R2 S3 credentials. Loomplane checks access without creating resources.",
+			Settings:       []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}, {Key: "services", Label: "What to connect"}},
+			SignInSettings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}, {Key: "services", Label: "What to connect"}},
+		},
+		{
 			Cloud: connections.Azure, Title: "Microsoft Azure", Credential: "Client secret",
 			Help: "Register an application in Microsoft Entra ID, add a client secret under Certificates & secrets, and give it the Contributor role on the subscription, or on the resource group to deploy into. Loomplane makes the resource group if it isn't there, then a container registry and a Container Apps environment in it. The check lists any action the role leaves out.",
 			Settings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
+				{Key: "client_id", Label: "Application (client) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
+			SignInSettings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
+			KeylessSettings: []sdk.Setting{
 				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
 				{Key: "client_id", Label: "Application (client) ID", Required: true},
 				{Key: "subscription_id", Label: "Subscription ID", Required: true},
@@ -91,15 +159,57 @@ func (e *Extension) clouds() (CloudList, error) {
 			Cloud: p.Cloud(), Title: f.Title, Credential: f.Credential, Help: f.Help, Settings: f.Settings,
 		})
 	}
+	signIn, err := e.signInClouds(ctx, p)
+	if err != nil {
+		return out, err
+	}
+	keylessOK, _ := e.keylessState()
+	for i := range out.Clouds {
+		cloud := out.Clouds[i].Cloud
+		methods := []string{}
+		if signIn[cloud] {
+			methods = append(methods, connections.MethodOAuth)
+		}
+		if _, ok := e.svc.KeylessClouds[cloud]; ok && keylessOK {
+			methods = append(methods, connections.MethodKeyless)
+		}
+		if cloud == connections.Kubernetes && connections.InClusterAvailable() {
+			methods = append(methods, connections.MethodInCluster)
+		}
+		methods = append(methods, connections.MethodToken)
+		out.Clouds[i].Methods = methods
+	}
+	return out, nil
+}
+
+// signInClouds are the clouds the principal's organization can sign in
+// to: those with an app, from configuration or the organization's own.
+// Someone who may not read the apps just isn't offered sign-in.
+func (e *Extension) signInClouds(ctx context.Context, p security.Principal) (map[string]bool, error) {
+	apps, err := e.svc.SignInApps(ctx, p)
+	if errors.Is(err, security.ErrForbidden) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, a := range apps {
+		out[a.Cloud] = a.Source != connections.AppFromNone
+	}
 	return out, nil
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud connections"))
 	if err := g.GET("/connection-clouds", func(c forge.Context) error {
-		list, err := e.clouds()
+		p, err := principal(c)
 		if err != nil {
 			return err
+		}
+		list, err := e.clouds(c.Request().Context(), p)
+		if err != nil {
+			return fail(err)
 		}
 		return c.JSON(http.StatusOK, list)
 	},
@@ -120,6 +230,14 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("connections.create"),
 		forge.WithSummary("Connect a Google Cloud project or a Vercel account, checking the credential with the cloud first"),
 		forge.WithRequestSchema(connections.CreateInput{}),
+		forge.WithResponseSchema(http.StatusCreated, "The connection", connections.Connection{}),
+	); err != nil {
+		return err
+	}
+	if err := g.POST("/connections/in-cluster", e.createInCluster,
+		forge.WithName("connectionInCluster.create"),
+		forge.WithSummary("Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first"),
+		forge.WithRequestSchema(connections.InClusterInput{}),
 		forge.WithResponseSchema(http.StatusCreated, "The connection", connections.Connection{}),
 	); err != nil {
 		return err
@@ -145,12 +263,25 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	); err != nil {
 		return err
 	}
+	if err := g.GET("/connections/:id/gpus", e.gpus,
+		forge.WithName("connectionGpus.get"),
+		forge.WithSummary("GPUs a server or cluster connection can see, read live"),
+		forge.WithResponseSchema(http.StatusOK, "GPU inventory", provider.GPUInventory{}),
+	); err != nil {
+		return err
+	}
 	if err := g.PUT("/connections/:id/credential", e.replace,
 		forge.WithName("connections.replace"),
 		forge.WithSummary("Replace the connection's credential, such as with a rotated key"),
 		forge.WithRequestSchema(connections.ReplaceInput{}),
 		forge.WithResponseSchema(http.StatusOK, "The connection", connections.Connection{}),
 	); err != nil {
+		return err
+	}
+	if err := e.signInRoutes(r, guard); err != nil {
+		return err
+	}
+	if err := e.keylessRoutes(r, guard); err != nil {
 		return err
 	}
 	return g.DELETE("/connections/:id", e.delete,
@@ -195,6 +326,22 @@ func (e *Extension) create(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"cloud": "gcp", "name": "...", "credential": "..."}`)
 	}
 	conn, err := e.svc.Create(c.Request().Context(), p, in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusCreated, conn)
+}
+
+func (e *Extension) createInCluster(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in connections.InClusterInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"name": "...", "settings": {"namespace": "..."}}`)
+	}
+	conn, err := e.svc.CreateInCluster(c.Request().Context(), p, in)
 	if err != nil {
 		return fail(err)
 	}

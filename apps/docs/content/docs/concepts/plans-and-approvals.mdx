@@ -1,0 +1,70 @@
+---
+title: Plans and approvals
+description: A plan lists exactly what a deployment would do, and only an admin's approval of that exact revision changes a cloud.
+---
+
+A plan is Loomplane's answer to "what would happen if I deployed this?" Making one never touches a cloud. Approving one starts the deployment.
+
+## Make a plan
+
+```bash
+loomctl plan my-project --env production
+loomctl plan my-project --env production --scope web
+loomctl show <plan-id>
+```
+
+`--scope` names the repositories the plan moves, by alias. The rest stay at the commits that are already deployed, and their services are kept as they run. Without it, every source moves.
+
+A plan pins a lockset: one analysis and commit for each source. It composes its graph from those, so it always sees the graph it was made from, even if you push or re-analyze afterward.
+
+## Kinds of plan
+
+Most plans are releases: the current manifest and a commit of each repository you move. Two other kinds exist, and `loomctl show` says which one you're looking at.
+
+A promotion is made with `loomctl promote` (or `plan --from staging`). It pins the commits and manifest revision another environment runs, and reuses that environment's images where it can. A rollback is made with `loomctl rollback`. It restores the previous successful release's commits and manifest revision, and lists as left in place anything it won't touch, such as a resource that holds data. Both wait for approval like a release does. [Promotion and rollback](/docs/concepts/promotion-and-rollback) has the details.
+
+There's one exception to "a person approves". When a [post-deploy watch](/docs/concepts/promotion-and-rollback#watch-a-release-after-it-deploys) sees a release breach its thresholds, Loomplane plans the rollback and approves it itself, as Loomplane automation. It's marked automatic in the audit trail, and it can approve only a rollback that a watch started. Every other plan still needs a person.
+
+## What a plan shows
+
+Every action, step by step, with its operation, name, provider and the reason it's there. Beside the actions you get two lists.
+
+Problems block the plan. A Vercel app that needs a Cloud SQL database is a problem, because a managed resource is only reachable from services on its own cloud. So is a private service needed from another cloud. A plan with problems can't be approved.
+
+Warnings don't block, but you should read them. Expect them for a service that falls back to port 8080 because it didn't declare one, for a service still using a legacy variable name, and for old resources a move left behind that you'll need to delete yourself.
+
+Some plans are for review only: something in them has no adapter yet, or they use a [paused target](/docs/operations/monitoring#pausing-a-target). You can approve those, but approving deploys nothing.
+
+## Releases
+
+When the environment declares a `release` block in `loomplane.yaml`, the plan shows the release it pinned: the strategy, the canary's steps and hold, the thresholds it's judged against, and which services ramp. All of that is part of the revision you approve. Change the hold from 10 minutes to 15 and you get a new revision, so you never approve one release and get another.
+
+A release with a canary is still one decision. You approve the plan once, and the [canary](/docs/concepts/canary-releases) ramps, holds and judges each step by itself. Nobody approves individual steps.
+
+Only an update of something already running can ramp: an HTTP service on Cloud Run, a service behind the load balancer on ECS, or an app with ingress or a static site on Azure Container Apps. Every other service in a canary environment gets a `canary-unavailable` warning that says why (it's new, it's moving, it's a worker, its target has no traffic weighting Loomplane can drive) and deploys all at once. In a `blue_green` environment, a service with no route release to switch over gets a `blue-green-unavailable` warning and deploys the way it does today.
+
+While a canary ramps in an environment, a new plan for it is blocked with a `canary-in-progress` problem that names the deployment. Plan again once it finishes. A plan that was ready before the ramp started comes back stale if you approve it during the ramp, so two deployments never fight over one service's traffic.
+
+An environment without a `release` block plans exactly as it did before, with no release on the plan.
+
+## Approve, reject or let it expire
+
+```bash
+loomctl approve <plan-id>            # asks first; --yes skips the question
+loomctl approve <plan-id> --note "Release 14" --no-wait
+loomctl reject <plan-id> --note "Wrong environment"
+```
+
+An approval names the revision of the plan you reviewed. If what's deployed changed since the plan was made, it comes back stale and nothing happens: you plan again. A plan that nobody decides expires after the approval window, 168 hours by default. You can set it between one minute and 90 days with `LOOMPLANE_PLANNING_APPROVAL_WINDOW`.
+
+Developers plan and admins approve. See [Organizations and roles](/docs/concepts/organizations-and-roles).
+
+## Moves and replacements
+
+A service or resource that moves to another provider, region or connection is replaced. The new one starts first, and the old one goes once the new one is up and answering. A resource never moves between connections, because its data would stay behind. A plan that would provision one through another connection than the one that provisioned it has a problem until you choose the old connection again.
+
+Turning an existing service off can produce a deletion in the next plan, so read that one carefully.
+
+## Standalone resources
+
+A project can hold only resources, with no repository. `loomctl plan PROJECT --catalog --env production` plans those. [Database services](/docs/services/database-services) shows how it fits together.

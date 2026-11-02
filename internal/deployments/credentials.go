@@ -29,9 +29,19 @@ type ResourceSecrets interface {
 	Delete(ctx context.Context, key string) error
 }
 
-// resourceKey scopes a resource's credential to its organization,
-// environment and name, all from Loomplane's records.
-func resourceKey(orgID, environmentID, resource, field string) string {
+// VersionedResourceSecrets keeps an immutable credential handle in a durable
+// operation checkpoint. Later writers cannot change the referenced version.
+type VersionedResourceSecrets interface {
+	ResourceSecrets
+	PutVersion(context.Context, string, []byte) (int64, error)
+	GetVersion(context.Context, string, int64) ([]byte, error)
+}
+
+// ResourceKey scopes a resource's credential to its organization,
+// environment and name, all from Loomplane's records: where one field
+// kept for an action, such as a database's "url" or a composed
+// resource's "secret:<name>", lives in ResourceSecrets.
+func ResourceKey(orgID, environmentID, resource, field string) string {
 	return orgID + "/" + environmentID + "/" + resource + "/" + field
 }
 
@@ -45,6 +55,10 @@ func environmentKeys(orgID, environmentID string) (string, error) {
 		}
 	}
 	return orgID + "/" + environmentID + "/", nil
+}
+
+func resourceKey(orgID, environmentID, resource, field string) string {
+	return ResourceKey(orgID, environmentID, resource, field)
 }
 
 // ResourceURLKey is the key a resource's address is kept under, so code
@@ -65,12 +79,47 @@ func NewVaultResourceSecrets(svc *secret.Service) *VaultResourceSecrets {
 
 var _ ResourceSecrets = (*VaultResourceSecrets)(nil)
 
+func (v *VaultResourceSecrets) SnapshotMetadata(ctx context.Context, key string) (identity string, version int64, err error) {
+	meta, err := v.svc.GetMeta(ctx, key, ResourceVaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return "", 0, ErrNoCredential
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return meta.ID.String(), meta.Version, nil
+}
+
 // Put implements ResourceSecrets.
 func (v *VaultResourceSecrets) Put(ctx context.Context, key string, value []byte) error {
-	if _, err := v.svc.Set(ctx, key, value, ResourceVaultAppID); err != nil {
-		return fmt.Errorf("store resource credential: %w", err)
+	_, err := v.PutVersion(ctx, key, value)
+	return err
+}
+
+func (v *VaultResourceSecrets) PutVersion(ctx context.Context, key string, value []byte) (int64, error) {
+	return v.putVersion(ctx, key, value)
+}
+
+func (v *VaultResourceSecrets) putVersion(ctx context.Context, key string, value []byte, options ...secret.SetOption) (int64, error) {
+	meta, err := v.svc.Set(ctx, key, value, ResourceVaultAppID, options...)
+	if err != nil {
+		return 0, fmt.Errorf("store resource credential: %w", err)
 	}
-	return nil
+	return meta.Version, nil
+}
+
+func (v *VaultResourceSecrets) GetVersion(ctx context.Context, key string, version int64) ([]byte, error) {
+	if version <= 0 {
+		return nil, ErrNoCredential
+	}
+	s, err := v.svc.GetVersion(ctx, key, ResourceVaultAppID, version)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNoCredential
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read resource credential version: %w", err)
+	}
+	return s.Value, nil
 }
 
 // Get implements ResourceSecrets.

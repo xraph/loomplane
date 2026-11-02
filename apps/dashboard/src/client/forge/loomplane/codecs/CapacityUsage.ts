@@ -1,0 +1,8 @@
+import type { Codec } from '../codec-runtime';
+import { codec_CapacityResources } from './CapacityResources';
+import { codec_CapacityUsage_accounts } from './CapacityUsage.accounts';
+import { codec_CapacityUsage_frontends } from './CapacityUsage.frontends';
+import { codec_CapacityUsage_gpus } from './CapacityUsage.gpus';
+import { codec_CapacityUsage_records } from './CapacityUsage.records';
+
+export const codec_CapacityUsage: Codec = {"kind": "object", "fields": {"accounts": {"ts": "accounts", "codec": () => codec_CapacityUsage_accounts}, "allocatable": {"ts": "allocatable", "codec": () => codec_CapacityResources}, "checked_at": {"ts": "checkedAt"}, "cloud_id": {"ts": "cloudId"}, "fresh": {"ts": "fresh"}, "frontends": {"ts": "frontends", "codec": () => codec_CapacityUsage_frontends}, "gpus": {"ts": "gpus", "codec": () => codec_CapacityUsage_gpus}, "headroom": {"ts": "headroom", "codec": () => codec_CapacityResources}, "observed": {"ts": "observed", "codec": () => codec_CapacityResources}, "observed_storage_bytes": {"ts": "observedStorageBytes"}, "pending": {"ts": "pending", "codec": () => codec_CapacityResources}, "provisioned": {"ts": "provisioned", "codec": () => codec_CapacityResources}, "records": {"ts": "records", "codec": () => codec_CapacityUsage_records}, "reserved": {"ts": "reserved", "codec": () => codec_CapacityResources}, "system_reserve": {"ts": "systemReserve", "codec": () => codec_CapacityResources}}, "required": ["accounts", "allocatable", "checked_at", "cloud_id", "fresh", "frontends", "gpus", "headroom", "observed", "observed_storage_bytes", "pending", "provisioned", "records", "reserved", "system_reserve"]};

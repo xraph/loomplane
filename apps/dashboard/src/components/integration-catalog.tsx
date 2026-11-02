@@ -22,7 +22,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cloudPurposes } from "@/lib/integrations"
+import { cloudPurposes, serverKinds } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -44,9 +44,6 @@ const groups: { value: Group | "all"; label: string; note?: string }[] = [
   },
   { value: "notify", label: "Notifications", note: "Where results go" },
 ]
-
-// Servers you run yourself; every other connection form is a cloud.
-const serverKinds = new Set(["server", "kubernetes", "registry"])
 
 const serverPurposes: Record<string, string> = {
   server:
@@ -171,7 +168,7 @@ export function IntegrationCatalog({
         "Signed deployment results sent to a public HTTPS endpoint, with retries.",
       icon: <ProductIcon fallback={WebhookIcon} label="Webhooks" size="md" />,
       connected: false,
-      detail: "Organization-wide",
+      detail: "Workspace-wide",
       action: (
         <Button
           size="sm"
@@ -309,7 +306,12 @@ export function IntegrationCatalog({
                         {c.connected ? "Connected" : "Not connected"}
                       </StatusPill>
                     </div>
-                    <p className="flex-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                    {/* Two lines, always, so every card in the catalog is the
+                        same height; the full text is on hover. */}
+                    <p
+                      title={c.purpose}
+                      className="line-clamp-2 min-h-[2lh] flex-1 text-[12.5px] leading-relaxed text-muted-foreground"
+                    >
                       {c.purpose}
                     </p>
                     <div className="flex items-center justify-between gap-2">

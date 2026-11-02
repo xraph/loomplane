@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
+import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 
@@ -30,6 +31,42 @@ export function PageNotFound() {
         Back to projects
       </Link>
     </div>
+  )
+}
+
+/**
+ * WorkspaceNotFound answers an address in a workspace the person isn't in.
+ * It's a full page, outside the shell: the sidebar belongs to a workspace,
+ * and this address doesn't open one.
+ */
+export function WorkspaceNotFound({
+  slug,
+  path,
+  current,
+}: {
+  slug: string
+  /** The rest of the address, after the slug. */
+  path: string
+  /** The name of the workspace the person is signed in to. */
+  current: string
+}) {
+  return (
+    <SystemPage
+      tone="problem"
+      title="Workspace not found"
+      lede="You're not a member of a workspace at this address. Ask its owner for an invitation, or go back to your own."
+      actions={
+        <Link to="/" className={buttonVariants()}>
+          Go to {current}
+        </Link>
+      }
+    >
+      <SystemAddress
+        before={`${window.location.host}/`}
+        marked={slug}
+        after={path === "/" ? "" : path}
+      />
+    </SystemPage>
   )
 }
 

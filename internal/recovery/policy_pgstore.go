@@ -20,9 +20,28 @@ func scanPolicy(row pgx.Row) (*Policy, error) {
 	return &p, nil
 }
 func (s *PgStore) PutPolicy(ctx context.Context, p *Policy) (*Policy, error) {
-	return scanPolicy(s.db.QueryRow(ctx, `INSERT INTO loomplane_backup_policies(id,org_id,project_id,environment_id,environment,resource,every_hours,enabled,next_at,created_by)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(org_id,environment_id,resource) DO UPDATE SET every_hours=EXCLUDED.every_hours,enabled=EXCLUDED.enabled,next_at=EXCLUDED.next_at,created_by=EXCLUDED.created_by,last_error='' RETURNING `+policyColumns, p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Resource, p.EveryHours, p.Enabled, p.NextAt, p.CreatedBy))
+	return s.writePolicy(ctx, p, `DO UPDATE SET every_hours=EXCLUDED.every_hours,enabled=EXCLUDED.enabled,next_at=EXCLUDED.next_at,created_by=EXCLUDED.created_by,last_error=''`)
 }
+
+// EnsurePolicy returns the row that won the unique resource constraint. The
+// conflict path never updates it, including its scheduling or authority fields.
+func (s *PgStore) EnsurePolicy(ctx context.Context, p *Policy) (*Policy, bool, error) {
+	r, err := s.writePolicy(ctx, p, `DO NOTHING`)
+	if err == nil {
+		return r, true, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, false, err
+	}
+	r, err = scanPolicy(s.db.QueryRow(ctx, `SELECT `+policyColumns+` FROM loomplane_backup_policies WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND resource=$4`, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource))
+	return r, false, err
+}
+
+func (s *PgStore) writePolicy(ctx context.Context, p *Policy, conflict string) (*Policy, error) {
+	return scanPolicy(s.db.QueryRow(ctx, `INSERT INTO loomplane_backup_policies(id,org_id,project_id,environment_id,environment,resource,every_hours,enabled,next_at,created_by)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(org_id,environment_id,resource) `+conflict+` RETURNING `+policyColumns, p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Resource, p.EveryHours, p.Enabled, p.NextAt, p.CreatedBy))
+}
+
 func (s *PgStore) queryPolicies(ctx context.Context, query string, args ...any) ([]Policy, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {

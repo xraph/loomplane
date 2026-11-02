@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -26,4 +27,25 @@ func (in *SQLInstance) Incarnation(project, region, name string) (string, error)
 		return "", err
 	}
 	return fmt.Sprintf("cloud-sql:%x", sha256.Sum256(raw)), nil
+}
+
+// validSQLPathID accepts opaque native IDs without URL/path interpretation.
+func validSQLPathID(id string) bool {
+	if id == "" || id == "." || id == ".." || len(id) > 256 {
+		return false
+	}
+	return strings.IndexFunc(id, func(r rune) bool {
+		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
+		return !valid
+	}) < 0
+}
+
+func sqlNativeName(name string) bool {
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	return strings.IndexFunc(name, func(r rune) bool {
+		valid := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-'
+		return !valid
+	}) < 0
 }

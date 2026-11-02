@@ -9,6 +9,7 @@ export const Route = createFileRoute("/invitations/accept")({
     <Problem
       title="This invitation link is incomplete"
       message="Open the full link from your invitation email, including its token."
+      retry={false}
     />
   ),
 })

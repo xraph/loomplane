@@ -36,9 +36,10 @@ func (c *Client) EffectiveCapacity(ctx context.Context, cpus int, memory int64) 
 }
 
 const effectiveCapacityCommand = `python3 - <<'PY'
-import glob,json,os,pathlib
+import glob,json,os,pathlib,re
 root=pathlib.Path('/sys/fs/cgroup')
-assert (root/'cgroup.controllers').exists(), 'cgroup v2 required'
+available=set((root/'cgroup.controllers').read_text().split())
+assert {'cpu','memory','cpuset'} <= available, 'required cgroup v2 controllers unavailable'
 pids=[]
 for f in glob.glob('/proc/[0-9]*/comm'):
  try:
@@ -49,26 +50,47 @@ paths=[]
 for pid in [pids[0],str(os.getpid())]:
  entries=pathlib.Path('/proc/'+pid+'/cgroup').read_text().splitlines()
  entry=next(x[3:] for x in entries if x.startswith('0::'))
- assert '..' not in pathlib.PurePosixPath(entry).parts
+ assert entry.startswith('/') and '..' not in pathlib.PurePosixPath(entry).parts
  current=root/entry.lstrip('/')
  assert current.is_dir(), 'hidden cgroup hierarchy'
  while True:
   paths.append(current)
   if current==root: break
   current=current.parent
+# Controller files belong to the parent's enabled subtree. A missing file
+# inherits only when the readable parent configuration proves it is disabled.
+def limit_file(p,controller,name):
+ file=p/name
+ if file.exists(): return file.read_text().strip()
+ if p==root:
+  assert controller!='cpuset', 'root effective CPU set unavailable'
+  return None
+ enabled=set((p.parent/'cgroup.subtree_control').read_text().split())
+ assert enabled <= available, 'unknown enabled controller'
+ assert controller not in enabled, 'enabled controller limit unavailable'
+ return None
 cpu=2**60;memory=2**60
 for p in paths:
- assert (p/'cpu.max').exists() or p==root
- quota,period=(p/'cpu.max').read_text().split() if (p/'cpu.max').exists() else ['max','100000']
- if quota!='max': cpu=min(cpu,int(quota)*1000//int(period))
- assert (p/'memory.max').exists() or p==root
- limit=(p/'memory.max').read_text().strip() if (p/'memory.max').exists() else 'max'
- if limit!='max': memory=min(memory,int(limit))
- cpuset=(p/'cpuset.cpus.effective').read_text().strip()
- assert cpuset, 'unknown effective CPU set'
- count=0
- for part in cpuset.split(','):
-  bounds=part.split('-');count+=int(bounds[-1])-int(bounds[0])+1
- cpu=min(cpu,count*1000)
+ value=limit_file(p,'cpu','cpu.max')
+ if value is not None:
+  quota,period=value.split()
+  assert period.isdigit() and int(period)>0, 'invalid CPU period'
+  if quota!='max':
+   assert quota.isdigit() and int(quota)>0, 'invalid CPU quota'
+   cpu=min(cpu,int(quota)*1000//int(period))
+ value=limit_file(p,'memory','memory.max')
+ if value is not None and value!='max':
+  assert value.isdigit() and int(value)>0, 'invalid memory limit'
+  memory=min(memory,int(value))
+ cpuset=limit_file(p,'cpuset','cpuset.cpus.effective')
+ if cpuset is not None:
+  assert cpuset, 'unknown effective CPU set'
+  count=0;previous=-1
+  for part in cpuset.split(','):
+   assert re.fullmatch(r'[0-9]+(?:-[0-9]+)?',part), 'invalid CPU set'
+   bounds=part.split('-');low=int(bounds[0]);high=int(bounds[-1])
+   assert high>=low and low>previous, 'invalid CPU range'
+   count+=high-low+1;previous=high
+  cpu=min(cpu,count*1000)
 print(json.dumps({'cpu':cpu,'memory':memory}))
 PY`

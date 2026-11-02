@@ -80,10 +80,18 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	for _, q := range []string{
-		`CREATE TABLE authsome_users(id TEXT PRIMARY KEY,app_id TEXT NOT NULL,email TEXT NOT NULL,banned BOOLEAN NOT NULL DEFAULT false,deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE authsome_users(id TEXT PRIMARY KEY,app_id TEXT NOT NULL,email TEXT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',display_username TEXT NOT NULL DEFAULT '',banned BOOLEAN NOT NULL DEFAULT false,deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE authsome_members(org_id TEXT NOT NULL,user_id TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'admin')`,
-		`CREATE TABLE loomplane_projects(id TEXT PRIMARY KEY,org_id TEXT NOT NULL)`,
-		`CREATE TABLE loomplane_deployments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,plan_id TEXT NOT NULL,started_by TEXT NOT NULL,status TEXT NOT NULL,retries INT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE loomplane_projects(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE loomplane_environments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL DEFAULT 'staging')`,
+		`CREATE TABLE authsome_organizations(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE loomplane_deployments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,plan_id TEXT NOT NULL,started_by TEXT NOT NULL,status TEXT NOT NULL,retries INT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',canary JSONB)`,
+		// loomplane_append_event stands in for the realtime migration's
+		// function: same arguments, rows land in test_events.
+		`CREATE TABLE test_events(org_id TEXT NOT NULL,project_id TEXT NOT NULL DEFAULT '',type TEXT NOT NULL,entity_id TEXT NOT NULL DEFAULT '',data JSONB NOT NULL)`,
+		`CREATE FUNCTION loomplane_append_event(org TEXT,project TEXT,event_type TEXT,entity TEXT,payload JSONB) RETURNS BIGINT LANGUAGE plpgsql AS $$ BEGIN
+			IF org IS NULL OR org='' THEN RAISE EXCEPTION 'invalid realtime event'; END IF;
+			INSERT INTO test_events(org_id,project_id,type,entity_id,data) VALUES (org,project,event_type,entity,payload); RETURN 1; END $$`,
 		`INSERT INTO authsome_users(id,app_id,email)VALUES('user-a','app','user-a@example.com'),('user-b','app','user-b@example.com')`,
 		`INSERT INTO authsome_members(org_id,user_id)VALUES('org-a','user-a'),('org-b','user-b')`,
 		`INSERT INTO loomplane_projects(id,org_id)VALUES('project-a','org-a'),('project-b','org-b')`,
@@ -99,7 +107,30 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	if err = migrations.NotificationsMigration().Up(ctx, executor); err != nil {
 		t.Fatal(err)
 	}
+	// The cloud_sign_in and notification_kinds migrations both add the
+	// outbox's kind column. This helper only runs the notifications
+	// migration, so it runs notification_kinds as well, then
+	// generic_notices, which adds the subject and the agent email switch,
+	// then push_outbox, which adds the push columns.
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "notification_kinds" || m.Name == "generic_notices" || m.Name == "push_outbox" {
+			if err = m.Up(ctx, executor); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	return db
+}
+
+// cloudManagers grants organization cloud management to the listed users
+// only, and everything else to everyone.
+type cloudManagers map[string]bool
+
+func (c cloudManagers) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
+	if permission == security.OrganizationCloudManage && (!c[p.UserID] || resource != p.OrgID) {
+		return security.ErrForbidden
+	}
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -476,7 +507,8 @@ func TestPostgresEmailExhaustionRecoveryAndDeliveryTimeOptOut(t *testing.T) {
 	if err = svc.Health(ctx); err != nil {
 		t.Fatalf("health did not recover: %v", err)
 	}
-	if _, err = svc.SetPreferences(ctx, p, PreferenceInput{DeploymentEmail: false}); err != nil {
+	off := false
+	if _, err = svc.SetPreferences(ctx, p, PreferenceInput{DeploymentEmail: &off}); err != nil {
 		t.Fatal(err)
 	}
 	insert("deployment-opt-out")
@@ -501,5 +533,352 @@ func TestPostgresEmailExhaustionRecoveryAndDeliveryTimeOptOut(t *testing.T) {
 	case <-messages:
 		t.Fatal("opted-out or removed member received email")
 	default:
+	}
+}
+
+func domainNoticeService(t *testing.T) (*Service, <-chan string) {
+	t.Helper()
+	db := notificationDatabase(t)
+	ctx := t.Context()
+	host, port, messages := smtpSink(t)
+	cfg := config.Config{PublicURL: "https://loomplane.example.com/", SecretKey: base64.StdEncoding.EncodeToString(make([]byte, 32)), Identity: config.IdentityConfig{AppID: "app"}, Notifications: config.NotificationsConfig{SMTPHost: host, SMTPPort: port, From: "loomplane@example.com"}}
+	svc, err := New(cfg, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.mailStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.relayStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.registerEventTypes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAuthorizer(cloudManagers{"user-a": true})
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('user-c','app','user-c@example.com')`,
+		`INSERT INTO authsome_members(org_id,user_id)VALUES('org-a','user-c')`,
+	} {
+		if _, err = svc.pg.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return svc, messages
+}
+
+func TestRenewalOutboxDeliversToCloudManagersOnly(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	manager := security.Principal{OrgID: "org-a", UserID: "user-a"}
+	// The renewal email is about the user's money, so it ignores the
+	// deployment email preference.
+	off := false
+	if _, err := svc.SetPreferences(ctx, manager, PreferenceInput{DeploymentEmail: &off}); err != nil {
+		t.Fatal(err)
+	}
+	notice := RenewalNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", RenewsOn: time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), Currency: "USD", RenewalCost: "10.11"}
+	for range 2 {
+		if err := svc.EnqueueRenewalNotice(ctx, notice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := []string{}
+	rows, err := svc.pg.Query(ctx, `SELECT id FROM loomplane_notification_outbox WHERE kind='domain.renewal' AND project_id='' AND attempt=0 AND id=deployment_id ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) != 2 || ids[0] != "renewal:reg_1:2026-11-30:user-a" || ids[1] != "renewal:reg_1:2026-11-30:user-c" {
+		t.Fatalf("outbox rows: %v", ids)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v", list)
+	}
+	item := list.Items[0]
+	if item.ActionURL != "https://loomplane.example.com/domains?registration=reg_1&action=auto-renew-off" || item.Title != "acme.dev renews on Nov 30, 2026" ||
+		item.Body != "Cloudflare renews acme.dev on Nov 30, 2026 for USD 10.11. Turn auto-renew off before then if you don't want to keep it." || item.EmailStatus != "sent" {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	if err = svc.MarkRead(ctx, manager, item.ID); err != nil {
+		t.Fatal("mark read", err)
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: acme.dev renews on Nov 30, 2026") || !strings.Contains(body, "user-a@example.com") {
+			t.Fatalf("renewal email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("renewal email was not delivered")
+	}
+	var inboxDone, complete bool
+	var emailState string
+	if err = svc.pg.QueryRow(ctx, `SELECT inbox_done,email_state,completed_at IS NOT NULL FROM loomplane_notification_outbox WHERE user_id='user-c'`).Scan(&inboxDone, &emailState, &complete); err != nil {
+		t.Fatal(err)
+	}
+	if !inboxDone || emailState != "skipped" || !complete {
+		t.Fatalf("member without cloud management: inbox_done=%t email=%s complete=%t", inboxDone, emailState, complete)
+	}
+	other, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-c"})
+	if err != nil || len(other.Items) != 0 {
+		t.Fatalf("member without cloud management sees: %+v %v", other, err)
+	}
+	var count int
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM herald_inbox`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("inbox rows: %d %v", count, err)
+	}
+	// One webhook per notice, however many members the organization has.
+	types := []string{}
+	rows, err = svc.pg.Query(ctx, `SELECT type FROM relay_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var eventType string
+		if err = rows.Scan(&eventType); err != nil {
+			t.Fatal(err)
+		}
+		types = append(types, eventType)
+	}
+	rows.Close()
+	if len(types) != 1 || types[0] != "domain.renewal_upcoming" {
+		t.Fatalf("webhook events: %v", types)
+	}
+	select {
+	case <-messages:
+		t.Fatal("a member without cloud management received email")
+	default:
+	}
+}
+
+func TestRegistrationResultOutboxNotifiesCloudManagers(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	for range 2 {
+		if err := svc.EnqueueRegistrationResult(ctx, RegistrationResultNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", Status: "succeeded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if item := list.Items[0]; item.Title != "acme.dev is registered" || item.ActionURL != "https://loomplane.example.com/domains?registration=reg_1" || item.Body != "acme.dev is registered in your Cloudflare account, and Loomplane manages its DNS." {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	var eventType string
+	if err = svc.pg.QueryRow(ctx, `SELECT type FROM relay_events`).Scan(&eventType); err != nil || eventType != "domain.registration_succeeded" {
+		t.Fatalf("webhook: %s %v", eventType, err)
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: acme.dev is registered") {
+			t.Fatalf("registration email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registration email was not delivered")
+	}
+}
+
+// aiAdmins grants ai:manage to the listed users only, and everything else
+// to everyone. It can take the grant away again.
+type aiAdmins struct {
+	mu    sync.Mutex
+	users map[string]bool
+}
+
+func (a *aiAdmins) Require(_ context.Context, p security.Principal, permission security.Permission, _ string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if permission == security.AIManage && !a.users[p.UserID] {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+func (a *aiAdmins) revoke(user string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.users, user)
+}
+
+// TestModelBudgetNoticesAreForAdmins: Rulings M8 and M24. A budget notice
+// queued inside its caller's transaction goes to admins, who hold
+// ai:manage, in the inbox and by email. A developer gets no inbox row
+// and no email, and the organization gets one webhook. An admin who loses
+// ai:manage no longer sees it, and a transaction that rolls back queues
+// nothing.
+func TestModelBudgetNoticesAreForAdmins(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	authz := &aiAdmins{users: map[string]bool{"user-a": true}}
+	svc.SetAuthorizer(authz)
+	notice := ModelBudgetNotice{
+		OrgID: "org-a", ProjectID: "project-a", EnvironmentID: "env-prod", DeploymentID: "aimodel_1", Resource: "llama",
+		Month: "2026-11", Kind: ModelBudgetProjected, ProjectedUSD: "676.80", BudgetUSD: "500.00",
+	}
+	enqueue := func(commit bool) {
+		tx, err := svc.pg.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.EnqueueModelBudgetNoticeIn(ctx, tx, notice); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if !commit {
+			if err = tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin, developer := security.Principal{OrgID: "org-a", UserID: "user-a"}, security.Principal{OrgID: "org-a", UserID: "user-c"}
+	// An endpoint made now hears the budget events.
+	hook, err := svc.CreateEndpoint(ctx, admin, WebhookEndpointInput{URL: "https://8.8.8.8/hook", Description: "Budgets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueue(false)
+	var count int
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("a rolled back notice queued %d rows: %v", count, err)
+	}
+	enqueue(true)
+	enqueue(true) // the same notice again adds nothing
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget' AND project_id='project-a'`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("outbox rows: %d %v", count, err)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := svc.List(ctx, admin)
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("admin's inbox: %+v %v", list, err)
+	}
+	item := list.Items[0]
+	if item.Title != "llama is on track to cost $676.80 this month" ||
+		item.Body != "Its budget is $500.00. Loomplane won't stop it. Open the model to change where it runs or remove it." ||
+		item.ActionURL != "https://loomplane.example.com/projects/project-a/ai/models/llama?environment=env-prod" || item.ProjectID != "project-a" ||
+		item.EmailStatus != "sent" {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	for _, text := range []string{item.Title, item.Body} {
+		if strings.ContainsAny(text, "\u2014\u2013") {
+			t.Errorf("a dash in %q", text)
+		}
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: llama is on track to cost $676.80 this month") || !strings.Contains(body, "user-a@example.com") {
+			t.Fatalf("budget email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the admin's budget email was not delivered")
+	}
+
+	// The developer gets no inbox row and no email.
+	var inboxDone, complete bool
+	var emailState string
+	if err = svc.pg.QueryRow(ctx, `SELECT inbox_done,email_state,completed_at IS NOT NULL FROM loomplane_notification_outbox WHERE user_id='user-c'`).Scan(&inboxDone, &emailState, &complete); err != nil {
+		t.Fatal(err)
+	}
+	if !inboxDone || emailState != "skipped" || !complete {
+		t.Fatalf("developer: inbox_done=%t email=%s complete=%t", inboxDone, emailState, complete)
+	}
+	if other, lerr := svc.List(ctx, developer); lerr != nil || len(other.Items) != 0 {
+		t.Fatalf("the developer sees: %+v %v", other, lerr)
+	}
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM herald_inbox`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("inbox rows: %d %v", count, err)
+	}
+	select {
+	case <-messages:
+		t.Fatal("the developer received budget email")
+	default:
+	}
+
+	// One webhook for the organization, of the model group's type, and the
+	// endpoint has it to deliver.
+	var eventType string
+	if err = svc.pg.QueryRow(ctx, `SELECT type FROM relay_events`).Scan(&eventType); err != nil || eventType != "model.budget_projected" {
+		t.Fatalf("webhook: %s %v", eventType, err)
+	}
+	deliveries, err := svc.Deliveries(ctx, admin, hook.Endpoint.ID)
+	if err != nil || len(deliveries.Items) != 1 || deliveries.Items[0].EventType != "model.budget_projected" {
+		t.Fatalf("endpoint deliveries: %+v %v", deliveries, err)
+	}
+
+	// Ruling M32: the same notice for a new budget is a new notice; for
+	// the same budget it queues nothing.
+	notice.BudgetUSD = "1000.00"
+	enqueue(true)
+	enqueue(true)
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget'`).Scan(&count); err != nil || count != 4 {
+		t.Fatalf("outbox rows after a new budget: %d %v", count, err)
+	}
+	var keys []string
+	rows, err := svc.pg.Query(ctx, `SELECT id FROM loomplane_notification_outbox WHERE user_id='user-a' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	rows.Close()
+	if len(keys) != 2 || keys[0] != "model-budget:aimodel_1:2026-11:projected:1000.00:user-a" || keys[1] != "model-budget:aimodel_1:2026-11:projected:500.00:user-a" {
+		t.Fatalf("outbox keys %v", keys)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = svc.List(ctx, admin); err != nil || len(list.Items) != 2 {
+		t.Fatalf("admin's inbox after a new budget: %+v %v", list, err)
+	}
+	select {
+	case <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("the new budget's email was not delivered")
+	}
+	item = list.Items[0]
+	if item.Title != "llama is on track to cost $676.80 this month" || !strings.Contains(item.Body, "$1000.00") {
+		t.Errorf("new budget's item: %+v", item)
+	}
+
+	// An admin who loses ai:manage no longer sees it.
+	authz.revoke("user-a")
+	if list, err = svc.List(ctx, admin); err != nil || len(list.Items) != 0 {
+		t.Errorf("former admin's inbox: %+v %v", list, err)
+	}
+	if err = svc.MarkRead(ctx, admin, item.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("former admin marks it read: %v", err)
 	}
 }

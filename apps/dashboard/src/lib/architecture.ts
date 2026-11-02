@@ -220,6 +220,15 @@ export function connections(graph: Graph, serviceID: string): Connections {
   return out
 }
 
+/**
+ * unpinned leaves out the analyses a promotion pinned to an older commit.
+ * Those serve that promotion only, so they are never a source's latest
+ * analysis, never what's running for it and never the graph shown.
+ */
+export function unpinned(analyses: Analysis[]): Analysis[] {
+  return analyses.filter((a) => !a.pinned)
+}
+
 /** latestBySource is each source's newest analysis, from a list newest first. */
 export function latestBySource(analyses: Analysis[]): Map<string, Analysis> {
   const out = new Map<string, Analysis>()

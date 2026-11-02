@@ -2,6 +2,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,22 +10,68 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/manageddb"
 )
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
-	Name            string `json:"name"`
-	Project         string `json:"project"`
-	Region          string `json:"region"`
-	CreateTime      string `json:"createTime"`
-	ConnectionName  string `json:"connectionName"`
-	DatabaseVersion string `json:"databaseVersion"`
-	State           string `json:"state"`
-	Settings        struct {
-		UserLabels map[string]string `json:"userLabels"`
+	Kind                 string            `json:"kind"`
+	Name                 string            `json:"name"`
+	Project              string            `json:"project"`
+	Region               string            `json:"region"`
+	CreateTime           string            `json:"createTime"`
+	ConnectionName       string            `json:"connectionName"`
+	DatabaseVersion      string            `json:"databaseVersion"`
+	State                string            `json:"state"`
+	MasterInstance       string            `json:"masterInstanceName"`
+	PSCServiceAttachment string            `json:"pscServiceAttachmentLink"`
+	DNSName              string            `json:"dnsName"`
+	IPAddresses          []json.RawMessage `json:"ipAddresses"`
+	Settings             struct {
+		Version              string              `json:"settingsVersion"`
+		DeletionProtection   bool                `json:"deletionProtectionEnabled"`
+		Edition              string              `json:"edition"`
+		Availability         string              `json:"availabilityType"`
+		DataAPIAccess        string              `json:"dataApiAccess"`
+		Backup               *SQLBackupSettings  `json:"backupConfiguration"`
+		UserLabels           map[string]string   `json:"userLabels"`
+		Tier                 string              `json:"tier"`
+		DataDiskSizeGB       int64               `json:"dataDiskSizeGb,string"`
+		DataDiskType         string              `json:"dataDiskType"`
+		StorageAutoResize    *bool               `json:"storageAutoResize"`
+		ConnectorEnforcement string              `json:"connectorEnforcement"`
+		IPConfiguration      *SQLIPConfiguration `json:"ipConfiguration"`
 	} `json:"settings"`
+}
+
+// SQLIPConfiguration is observed network metadata for native recovery copies.
+type SQLIPConfiguration struct {
+	IPv4Enabled        *bool             `json:"ipv4Enabled"`
+	AuthorizedNetworks []json.RawMessage `json:"authorizedNetworks"`
+	PrivateNetwork     string            `json:"privateNetwork"`
+	PrivateGooglePath  bool              `json:"enablePrivatePathForGoogleCloudServices"`
+	PSC                *SQLPSCSettings   `json:"pscConfig"`
+}
+
+// SQLPSCSettings includes inherited ingress automation and outbound access.
+// A PSC-enabled instance alone does not establish clone isolation.
+type SQLPSCSettings struct {
+	Enabled           bool              `json:"pscEnabled"`
+	AllowedProjects   []string          `json:"allowedConsumerProjects"`
+	NetworkAttachment string            `json:"networkAttachmentUri"`
+	AutoConnections   []json.RawMessage `json:"pscAutoConnections"`
+	AutoPolicy        bool              `json:"pscAutoConnectionPolicyEnabled"`
+	AutoDNS           bool              `json:"pscAutoDnsEnabled"`
+	WriteEndpointDNS  bool              `json:"pscWriteEndpointDnsEnabled"`
+}
+
+// SQLBackupSettings records the effective standard log recovery configuration.
+type SQLBackupSettings struct {
+	Enabled      bool  `json:"enabled"`
+	PITREnabled  bool  `json:"pointInTimeRecoveryEnabled"`
+	RecoveryDays int32 `json:"transactionLogRetentionDays"`
 }
 
 // SQLInstanceSpec is what Loomplane creates an instance from.
@@ -41,6 +88,8 @@ type SQLInstanceSpec struct {
 	Intent string
 	// Inspect validates and durably captures each observed incarnation.
 	Inspect func(*SQLInstance) error
+	// Set only by EnsureSQLPITRSource after checking the isolated source contract.
+	pscConsumerProject string
 }
 
 // SQLStorageSettings are the native disk and recovery settings requested at creation.
@@ -63,7 +112,8 @@ type SQLMutation struct {
 	Before  func() error
 	Started func(string) error
 	// Check guards name-addressed writes and operation polling with a fresh read.
-	Check func(context.Context) error
+	Check          func(context.Context) error
+	strictIdentity bool
 }
 
 func (m SQLMutation) check(ctx context.Context) error {
@@ -74,11 +124,17 @@ func (m SQLMutation) check(ctx context.Context) error {
 }
 
 type sqlOperation struct {
-	Name          string `json:"name"`
-	Status        string `json:"status"`
-	TargetID      string `json:"targetId"`
-	TargetProject string `json:"targetProject"`
-	Type          string `json:"operationType"`
+	Kind          string    `json:"kind"`
+	User          string    `json:"user"`
+	InsertedAt    time.Time `json:"insertTime"`
+	StartedAt     time.Time `json:"startTime"`
+	EndedAt       time.Time `json:"endTime"`
+	Warning       *struct{} `json:"apiWarning"`
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	TargetID      string    `json:"targetId"`
+	TargetProject string    `json:"targetProject"`
+	Type          string    `json:"operationType"`
 	Error         *struct {
 		Errors []struct {
 			Message string `json:"message"`
@@ -86,13 +142,16 @@ type sqlOperation struct {
 	} `json:"error"`
 }
 
-func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, types []string) error {
-	if op.Name == "" || strings.ContainsAny(op.Name, "/\\?#") || (name != "" && name != op.Name) ||
+func (s *Session) validateSQLOperation(op sqlOperation, name, instance string, types []string, strict bool) error {
+	if !validSQLPathID(op.Name) || (name != "" && name != op.Name) ||
 		!slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) ||
 		(op.TargetProject != "" && op.TargetProject != s.key.ProjectID) ||
 		(op.TargetID != "" && op.TargetID != instance) ||
 		(op.Type != "" && !slices.Contains(types, op.Type)) {
 		return errors.New("cloud sql operation does not match the requested instance and mutation")
+	}
+	if strict && (op.Kind != "sql#operation" || op.TargetProject != s.key.ProjectID || op.TargetID != instance || !slices.Contains(types, op.Type)) {
+		return errors.New("cloud sql recovery operation has no complete target and mutation identity")
 	}
 	return nil
 }
@@ -105,7 +164,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 	}
 	var op sqlOperation
 	if track.Resume != "" {
-		if strings.ContainsAny(track.Resume, "/\\?#") {
+		if !validSQLPathID(track.Resume) {
 			return errors.New("invalid cloud sql operation identity")
 		}
 		if err := s.do(ctx, http.MethodGet, s.sqlPath("/operations/"+url.PathEscape(track.Resume)), nil, &op); err != nil {
@@ -130,7 +189,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 			return nil
 		}
 	}
-	if err := s.validateSQLOperation(op, track.Resume, instance, types); err != nil {
+	if err := s.validateSQLOperation(op, track.Resume, instance, types, track.strictIdentity); err != nil {
 		return err
 	}
 	if track.Resume == "" {
@@ -153,7 +212,7 @@ func (s *Session) mutateSQL(ctx context.Context, instance, message string, track
 		if err := s.do(ctx, http.MethodGet, s.sqlPath("/operations/"+url.PathEscape(op.Name)), nil, &next); err != nil {
 			return err
 		}
-		if err := s.validateSQLOperation(next, op.Name, instance, types); err != nil {
+		if err := s.validateSQLOperation(next, op.Name, instance, types, track.strictIdentity); err != nil {
 			return err
 		}
 		op = next
@@ -213,6 +272,10 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 				"enabled": true, "pointInTimeRecoveryEnabled": true, "transactionLogRetentionDays": disk.RecoveryDays,
 				"backupRetentionSettings": map[string]any{"retentionUnit": "COUNT", "retainedBackups": disk.RetainedBackups},
 			}
+		}
+		if spec.pscConsumerProject != "" {
+			settings["connectorEnforcement"], settings["dataApiAccess"] = "REQUIRED", "DISALLOW_DATA_API"
+			settings["ipConfiguration"] = sqlPSCIPConfiguration(spec.pscConsumerProject)
 		}
 		err = s.mutateSQL(ctx, spec.Name, "Creating the database instance", track, func(op *sqlOperation) (bool, error) {
 			createErr := s.do(ctx, http.MethodPost, s.sqlPath("/instances"), map[string]any{
@@ -283,4 +346,18 @@ func (s *Session) DeleteSQLInstance(ctx context.Context, name string, track SQLM
 		err := s.do(ctx, http.MethodDelete, s.sqlPath("/instances/"+url.PathEscape(name))+"?"+query.Encode(), nil, op)
 		return false, err
 	}, "DELETE")
+}
+
+// AwaitSQLMutation observes a captured operation without issuing another write.
+func (s *Session) AwaitSQLMutation(ctx context.Context, instance, operation, kind string, check func(context.Context) error) error {
+	if !validSQLPathID(operation) || !slices.Contains([]string{"CREATE", "CREATE_DATABASE", "CREATE_USER"}, kind) || check == nil {
+		return errors.New("original Cloud SQL mutation identity is required")
+	}
+	types := []string{kind}
+	if kind == "CREATE_USER" {
+		types = append(types, "UPDATE_USER")
+	}
+	return s.mutateSQL(ctx, instance, "Waiting for the original database operation", SQLMutation{Resume: operation, Check: check, strictIdentity: true}, func(*sqlOperation) (bool, error) {
+		return false, errors.New("recovery cannot start a Cloud SQL mutation")
+	}, types...)
 }

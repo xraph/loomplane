@@ -16,8 +16,6 @@ images = {
     "node": "kindest/node@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5",
     "server": "ghcr.io/spiffe/spire-server:1.15.4@sha256:a728418a76e5054e977680a7c70a291f93389294e4bef00e2aaad65324f39357",
     "agent": "ghcr.io/spiffe/spire-agent:1.15.4@sha256:adc9e89e171af5764b29f9ffc9d3296b8033ba8c6ca11bcadbb56099170d526e",
-    "csi": "ghcr.io/spiffe/spiffe-csi-driver:0.2.13@sha256:6f1ba5d635ba9bf55ae69ba11d71bf169c8fa3e0139a5063738cbc227c8b5546",
-    "registrar": "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.15.0@sha256:11f199f6bec47403b03cb49c79a41f445884b213b382582a60710b8c6fdc316a",
     "postgres": "postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24",
 }
 
@@ -92,10 +90,7 @@ plugins {
 }
 """
     docs = [object_("Namespace", ns, None) for ns in ("spire", "apps")]
-    docs += [
-        object_("ServiceAccount", sa)
-        for sa in ("spire-server", "spire-agent", "spiffe-csi")
-    ]
+    docs += [object_("ServiceAccount", sa) for sa in ("spire-server", "spire-agent")]
     roles = {
         "spire-server": [
             {
@@ -149,12 +144,33 @@ plugins {
                         "resources": resources,
                         "verbs": ["get", "list", "create", "delete", "patch"],
                     }
-                ] + ([
-                    {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "create", "update", "delete"]},
-                    {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["get"]},
-                    {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "create", "update", "delete"]},
-                    {"apiGroups": [""], "resources": ["services"], "verbs": ["get"]},
-                ] if ns == "apps" else []),
+                ]
+                + (
+                    [
+                        {
+                            "apiGroups": ["apps"],
+                            "resources": ["deployments"],
+                            "verbs": ["get", "create", "update", "delete"],
+                        },
+                        {
+                            "apiGroups": ["apps"],
+                            "resources": ["replicasets"],
+                            "verbs": ["get"],
+                        },
+                        {
+                            "apiGroups": [""],
+                            "resources": ["secrets"],
+                            "verbs": ["get", "create", "update", "delete"],
+                        },
+                        {
+                            "apiGroups": [""],
+                            "resources": ["services"],
+                            "verbs": ["get"],
+                        },
+                    ]
+                    if ns == "apps"
+                    else []
+                ),
             )
         )
         docs.append(
@@ -259,81 +275,6 @@ plugins {
             },
         )
     )
-    docs.append(
-        object_(
-            "CSIDriver",
-            "csi.spiffe.io",
-            None,
-            spec={
-                "attachRequired": False,
-                "podInfoOnMount": True,
-                "fsGroupPolicy": "None",
-                "volumeLifecycleModes": ["Ephemeral"],
-            },
-        )
-    )
-    docs.append(
-        daemon(
-            "spiffe-csi",
-            {
-                "serviceAccountName": "spiffe-csi",
-                "automountServiceAccountToken": False,
-                "containers": [
-                    {
-                        "name": "driver",
-                        "image": images["csi"],
-                        "args": [
-                            "-workload-api-socket-dir",
-                            "/spire-agent-socket",
-                            "-csi-socket-path",
-                            "/spiffe-csi/csi.sock",
-                        ],
-                        "env": [
-                            {
-                                "name": "MY_NODE_NAME",
-                                "valueFrom": {
-                                    "fieldRef": {"fieldPath": "spec.nodeName"}
-                                },
-                            }
-                        ],
-                        "securityContext": {
-                            "privileged": True,
-                            "readOnlyRootFilesystem": True,
-                        },
-                        "volumeMounts": [
-                            mount("socket", "/spire-agent-socket", readOnly=True),
-                            mount("csi", "/spiffe-csi"),
-                            mount(
-                                "pods",
-                                "/var/lib/kubelet/pods",
-                                mountPropagation="Bidirectional",
-                            ),
-                        ],
-                    },
-                    {
-                        "name": "registrar",
-                        "image": images["registrar"],
-                        "args": [
-                            "-csi-address",
-                            "/spiffe-csi/csi.sock",
-                            "-kubelet-registration-path",
-                            "/var/lib/kubelet/plugins/csi.spiffe.io/csi.sock",
-                        ],
-                        "volumeMounts": [
-                            mount("csi", "/spiffe-csi"),
-                            mount("registration", "/registration"),
-                        ],
-                    },
-                ],
-                "volumes": [
-                    host_volume("socket", "/run/spire/agent-sockets"),
-                    host_volume("csi", "/var/lib/kubelet/plugins/csi.spiffe.io"),
-                    host_volume("pods", "/var/lib/kubelet/pods"),
-                    host_volume("registration", "/var/lib/kubelet/plugins_registry"),
-                ],
-            },
-        )
-    )
     for name, port in (("spire-server", 8081), ("control", 9443)):
         docs.append(
             object_(
@@ -428,8 +369,8 @@ def command(args, **options):
     )
 
 
-def output(args):
-    return command(args, stdout=subprocess.PIPE).stdout.strip()
+def output(args, **options):
+    return command(args, stdout=subprocess.PIPE, **options).stdout.strip()
 
 
 def assert_qualified(logs, exit_code):
@@ -488,6 +429,23 @@ def run():
                 cwd=ROOT,
                 env=env,
             )
+            csi = json.loads(
+                output(
+                    [
+                        "go",
+                        "run",
+                        "./cmd/loomctl",
+                        "federation",
+                        "csi-manifest",
+                        "--namespace",
+                        "spire",
+                    ],
+                    cwd=ROOT,
+                    timeout=600,
+                )
+            )
+            if csi.get("kind") != "List" or len(csi.get("items", [])) != 3:
+                raise RuntimeError("CSI installation manifest missing")
             (path / "Dockerfile").write_text(
                 "FROM scratch\nCOPY qualification /qualification\nCOPY loomplane-agent /usr/local/bin/loomplane-agent\n"
             )
@@ -539,20 +497,37 @@ def run():
             ca = output(
                 ["docker", "exec", node, "cat", "/var/lib/kubelet/pki/kubelet.crt"]
             )
-            runtime_image = json.loads(output(["docker", "exec", node, "crictl", "inspecti", imported[0]]))["status"]
+            runtime_image = json.loads(
+                output(["docker", "exec", node, "crictl", "inspecti", imported[0]])
+            )["status"]
             digests = {imported[2]}
-            digests.update(ref.rsplit("@", 1)[1] for ref in runtime_image["repoDigests"])
+            digests.update(
+                ref.rsplit("@", 1)[1] for ref in runtime_image["repoDigests"]
+            )
             if len(digests) > 4:
                 raise RuntimeError("Too many runtime image proofs")
             image_indexes = []
             for digest in sorted(digests):
                 raw = subprocess.check_output(
-                    ["docker", "exec", node, "ctr", "-n", "k8s.io", "content", "get", digest], timeout=30
+                    [
+                        "docker",
+                        "exec",
+                        node,
+                        "ctr",
+                        "-n",
+                        "k8s.io",
+                        "content",
+                        "get",
+                        digest,
+                    ],
+                    timeout=30,
                 )
                 if not raw or len(raw) > 256 * 1024:
                     raise RuntimeError("Invalid runtime image proof size")
                 image_indexes.append(base64.b64encode(raw).decode("ascii"))
             docs = manifests(image, ca, json.dumps(image_indexes))
+            docs.extend(csi["items"])
+
             docs.insert(
                 2,
                 object_(

@@ -103,13 +103,14 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 		id := ingressDocker(t, "exec", host, "docker", "run", "-d", "--network", envnet, "--name", "app-"+project,
 			"--label", "loomplane.org=org", "--label", "loomplane.project="+project, "--label", "loomplane.environment=env-"+project,
 			"--label", "loomplane.instance=instance-"+project, "--label", "loomplane.revision=release-"+project, "--label", "loomplane.service=web",
-			IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo project-"+project+"-release-"+project+" > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+			LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www/admin && echo project-"+project+"-release-"+project+" > /tmp/www/index.html && echo admin-"+project+" > /tmp/www/admin/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 		backend, connectErr := ConnectIngressBackend(ctx, c, "org", "server", IngressBackend{OrgID: "org", ProjectID: project, EnvironmentID: "env-" + project, Service: "web", InstanceID: "instance-" + project, ReleaseID: "release-" + project, ContainerID: id, Port: 8080})
 		if connectErr != nil {
 			t.Fatal(connectErr)
 		}
 		config.Routes = append(config.Routes, IngressRoute{ID: "route-" + project, Hostname: project + ".ingress.test", Backend: backend})
 	}
+	config.Routes[1].BlockedPathPrefixes = []string{"/admin"}
 	applied, err := ApplyIngress(ctx, c, snapshot, config)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +156,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 
 	// Same-server preparation changes only the private probe upstream. The old
 	// HTTPS app remains available even when the new exact instance fails.
-	candidateID := ingressDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-a-next", "--label", "loomplane.org=org", "--label", "loomplane.project=a", "--label", "loomplane.environment=env-a", "--label", "loomplane.instance=next-instance", "--label", "loomplane.revision=next-release", IngressImage, "sh", "-c", "mkdir -p /tmp/www && echo next-instance-next-release > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
+	candidateID := ingressDocker(t, "exec", host, "docker", "run", "-d", "--name", "app-a-next", "--label", "loomplane.org=org", "--label", "loomplane.project=a", "--label", "loomplane.environment=env-a", "--label", "loomplane.instance=next-instance", "--label", "loomplane.revision=next-release", LegacyIngressImage, "sh", "-c", "mkdir -p /tmp/www && echo next-instance-next-release > /tmp/www/index.html && exec caddy file-server --listen :8080 --root /tmp/www")
 	next := config.Routes[0].Backend
 	next.ContainerID = candidateID
 	next.InstanceID = "next-instance"
@@ -186,6 +187,33 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 		body, readErr := io.ReadAll(response.Body)
 		if readErr != nil || strings.TrimSpace(string(body)) != want {
 			t.Fatalf("public backend %q: %v", body, readErr)
+		}
+	}
+	// Route b keeps /admin off its hostname; route a still serves it.
+	for hostname, want := range map[string]string{"a.ingress.test": "admin-a", "b.ingress.test": ""} {
+		for _, path := range []string{"/admin", "/admin/", "/admin/index.html"} {
+			response, getErr := ingressGet(t, ingressHTTPS(c, "127.0.0.1:443", hostname, roots), "https://"+hostname+path)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			body, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if readErr != nil || strings.TrimSpace(string(body)) != want || (want == "" && response.StatusCode != 404) {
+				t.Fatalf("%s%s: %d %q %v", hostname, path, response.StatusCode, body, readErr)
+			}
+		}
+	}
+	// Caddy matches the cleaned, unescaped, case-folded path, so spellings of
+	// /admin can't slip past the block.
+	for _, path := range []string{"//admin/", "/ADMIN/", "/%61dmin/", "/x/../admin/"} {
+		response, getErr := ingressGet(t, ingressHTTPS(c, "127.0.0.1:443", "b.ingress.test", roots), "https://b.ingress.test"+path)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != 404 || strings.Contains(string(body), "admin-b") {
+			t.Fatalf("b.ingress.test%s: %d %q", path, response.StatusCode, body)
 		}
 	}
 	ingressDocker(t, "exec", host, "docker", "stop", candidateID)
@@ -248,5 +276,5 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 	if err = ProbeIngressBackend(newctx, c, remaining, last, "route-b"); err != nil {
 		t.Fatal("removal broke unrelated route", err)
 	}
-	t.Log("real pinned SSH/Docker, Caddy native CAS, stale worker rejection, two-project private network isolation, loopback admin and exact release request checks passed")
+	t.Log("real pinned SSH/Docker, Caddy native CAS, stale worker rejection, two-project private network isolation, loopback admin, blocked path and exact release request checks passed")
 }

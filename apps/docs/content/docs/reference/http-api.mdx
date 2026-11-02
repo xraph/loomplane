@@ -1,0 +1,114 @@
+---
+title: HTTP API
+description: How to authenticate to Loomplane's API, where its OpenAPI document lives, and what each route group does.
+---
+
+Everything the dashboard and `loomctl` do goes through one HTTP API. The OpenAPI document is served at `/openapi.json`, and `/swagger` in development. `pkg/client` is a typed Go client for it.
+
+## Authentication
+
+Every route under `/api/v1` except `/api/v1/public-config` sits behind a guard. It accepts an authsome session or a Loomplane API key as a bearer token:
+
+```bash
+curl -H "Authorization: Bearer $LOOMPLANE_API_KEY" \
+  https://loomplane.example.com/api/v1/projects
+```
+
+Session cookies also work (authsome sets an HttpOnly, SameSite=Lax cookie), and that's what the dashboard uses. The organization comes from the session or key. The dashboard sends `X-Loomplane-Org` with the organization it believes it's in, and a mismatch returns 409. Make an API key under **Settings, API keys**. API keys can only be created and revoked from a signed-in session, and not with another key.
+
+`GET /api/v1/session` returns who you are, your organization and your permissions.
+
+## Route groups
+
+All paths are under `/api/v1`.
+
+| Group | What it covers |
+|---|---|
+| `/projects` | Projects and their sources, environments, analyses, manifest (get, put, draft, edits, revisions), plans, rollbacks, release watches, deployments, bindings, graph, variables, backup policies and recovery |
+| `/projects/{id}/clouds`, `/cloud-changes`, `/cloud-syncs` | Project views of Clouds, targets, placement previews and syncs |
+| `/projects/{id}/domain-routes`, `/route-operations` | Domain routes and their operations |
+| `/analyses` | One analysis and its graph |
+| `/plans` | Get a plan, approve it, reject it, read its deployment, read a promotion's soak |
+| `/deployments` | Get a deployment, read its logs, its canary and its release watch, retry it |
+| `/variables` | Organization-wide variables |
+| `/connections` | Cloud connections: create, check, replace a credential, delete, read storage |
+| `/connection-clouds`, `/providers` | The cloud types you can connect, and the provider catalog |
+| `/clouds` | Organization Clouds: targets, grants, servers, pools, changes and syncs |
+| `/dns-zones` | Organization DNS zones |
+| `/catalog` | Catalog endpoints and kinds |
+| `/github` | GitHub installations and the repositories they can read, plus the webhook |
+| `/api-keys` | List, create and revoke API keys |
+| `/members`, `/invitations` | People |
+| `/notifications` | Notifications, preferences, retry and signed webhooks |
+| `/service-backups`, `/service-restores`, `/service-backup-retirements` | Database recovery |
+| `/native-recovery-sources`, `/native-recovery-copies` | Native cloud snapshots and copies |
+| `/infrastructure` | Ctrl Plane's status, and the server enrollment callback |
+| `/activity` | The audit trail |
+| `/usage` | Spend this month, and requests and latency, read from each connected cloud ([what each reports](/docs/clouds/spend-and-traffic)) |
+| `/realtime` | Live events |
+| `/session`, `/public-config` | Who you are, and what the sign-in page needs |
+
+The document at `/openapi.json` has every operation, its parameters and its schemas. It's the source for the dashboard's generated clients (`make gen-client`).
+
+## Key flows
+
+Analyze, plan and approve with `curl`:
+
+```bash
+# Analyze
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{}' "$URL/api/v1/projects/$PROJECT/analyses"
+
+# Plan an environment
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"environment":"production"}' "$URL/api/v1/projects/$PROJECT/plans"
+
+# Approve the revision you read
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"revision":"..."}' "$URL/api/v1/plans/$PLAN/approve"
+```
+
+Planning runs in the background. The create call returns the plan at once, so read `GET /api/v1/plans/{id}` until it's done planning. An approval carries the plan's `revision` (and an optional `note`). If the plan's world changed, it comes back stale and nothing happens. The OpenAPI document has the full shapes.
+
+## Promote, roll back and watch
+
+A promotion is a plan with `from`:
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"environment":"production","from":"staging","scope":["web"]}' "$URL/api/v1/projects/$PROJECT/plans"
+```
+
+`from` pins the commits and manifest revision that environment runs. `scope` still names the repositories that move. The plan comes back with `kind` set to `promotion`, and its `artifacts` say which images it reuses.
+
+| Route | What it does | Needs |
+|---|---|---|
+| `GET /projects/{id}/environments/{environment}/rollback-target` | What a rollback would undo and restore, and each repository's commits. Takes an optional `deployment_id`, which has to be the newest. Changes nothing | `deployment:read` |
+| `POST /projects/{id}/rollbacks` | Plans the environment back to its previous successful release. The body is `{"environment", "reason", "deployment_id"}`, and `reason` is required. Returns the plan with `kind` set to `rollback`, and a person approves it | `deployment:create` |
+| `GET /deployments/{id}/watch` | The deployment's post-deploy watch: its status and verdict, the services it judges and those it can't, and any rollback plan. 404 when it has none | `deployment:read` |
+| `GET /projects/{id}/environments/{environment}/watch-coverage` | How long a release there would be watched, which services a canary would ramp, and whether each other service can be watched | `deployment:read` |
+| `GET /projects/{id}/environments/{environment}/release-evidence` | What the watch says about the environment's current release. `unverified` means missing evidence | `deployment:read` |
+| `GET /plans/{id}/soak` | How long a promotion's source has run exactly the commits the plan moves, and whether healthily. A plan that isn't a promotion returns 422 | `deployment:read` |
+
+A rollback that can't go ahead returns 409 (a deployment is running, there's no earlier release, or the canary already dealt with the release) or 422 (the newest deployment isn't the one you named, or the current release is a rollback), with a message that says what to do. A promotion from an environment that runs nothing returns 409, and one that holds back a repository never deployed to the target returns 412. Watch updates arrive on the realtime stream as `release_watch.updated` events. See [Promotion and rollback](/docs/concepts/promotion-and-rollback).
+
+## Live events
+
+`/api/v1/realtime/ws` upgrades to a WebSocket, `/api/v1/realtime/events` serves server-sent events, and `/api/v1/realtime/snapshot` returns the current state for REST recovery. All three use the same authenticated contract and an organization-scoped cursor.
+
+`GET /api/v1/deployments/{id}/canary` returns where a canary release has put traffic and the verdict of every step it judged: the weights, the error rate and latency it read, the verdict and the reason. It needs `deployment:read`. A deployment that deployed everything at once returns `canary: null` and no verdicts. A retry ramps again and judges afresh, so the verdicts are the current retry's; each carries its `retry`. The same verdicts arrive on the stream as `canary_verdict.updated` events, to a subscription that names the deployment (like build output), and in the snapshot for the deployments it names. The dashboard falls back from WebSocket to SSE, then to REST recovery when the stream goes stale.
+
+Proxy the WebSocket route with upgrades and keep the SSE route unbuffered. See [Monitoring](/docs/operations/monitoring).
+
+## Status codes
+
+Stale, busy and referenced-resource conflicts return 409, and invalid or blocked changes return 422. Placement reviews and syncs accept work with 202 and a persisted ID, and they take an idempotency key, so a lost response can be recovered by repeating the same request. Another organization's resources return 404.
+
+## Go client
+
+`pkg/client` wraps the API with the same transport `loomctl` uses:
+
+```go
+c := client.New("https://loomplane.example.com", apiKey)
+who, err := c.Session(ctx)
+```

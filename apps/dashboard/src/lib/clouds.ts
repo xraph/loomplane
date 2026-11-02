@@ -27,6 +27,11 @@ export const clouds = {
     credential: "Access token",
     account: "Account",
   },
+  azure: {
+    label: "Azure",
+    credential: "Service principal",
+    account: "Subscription",
+  },
   aws: {
     label: "AWS",
     credential: "Access key",
@@ -41,6 +46,11 @@ export const clouds = {
     label: "DigitalOcean",
     credential: "API token",
     account: "Team",
+  },
+  cloudflare: {
+    label: "Cloudflare",
+    credential: "API token",
+    account: "Account",
   },
 } as const
 

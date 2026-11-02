@@ -83,3 +83,84 @@ func TestWithPrincipal(t *testing.T) {
 		t.Fatalf("tenant %q", got)
 	}
 }
+
+func TestAuthProvider_refusesSessionsForTheAutomation(t *testing.T) {
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "loomplane:aorg_1", "aorg_1", nil }, &fakeAuthz{})
+	if _, err := a.Authenticate(context.Background(), "Bearer tok"); !errors.Is(err, cpauth.ErrUnauthorized) {
+		t.Fatalf("a session resolved to the automation: %v", err)
+	}
+}
+
+func TestAuthProvider_authorizesTheAutomationAsItself(t *testing.T) {
+	authz := &fakeAuthz{allow: map[security.Permission]bool{security.InfrastructureModify: true}}
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
+	ctx := context.Background()
+	// A deployment the automation approved calls Ctrl Plane with its claims.
+	for _, sub := range []string{security.SystemSubject("aorg_1"), security.SystemSubject("aorg_other"), "ausr_1"} {
+		if _, err := a.Authorize(ctx, cpauth.AuthzRequest{SubjectID: sub, TenantID: "aorg_1", Action: "create"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := authz.calls[0]; got != security.SystemPrincipal("aorg_1") {
+		t.Fatalf("the automation was authorized as %+v", got)
+	}
+	// Another organization's automation is never the automation here.
+	if got := authz.calls[1]; got.IsServiceAccount() {
+		t.Fatalf("another org's automation was authorized as %+v", got)
+	}
+	if got := authz.calls[2]; got != (security.Principal{UserID: "ausr_1", OrgID: "aorg_1"}) {
+		t.Fatalf("a person was authorized as %+v", got)
+	}
+}
+
+func TestAuthProvider_allowsConsoleReads(t *testing.T) {
+	authz := &fakeAuthz{}
+	a := NewAuthProvider()
+	admin := &cpauth.Claims{SubjectID: "ausr_1", Roles: []string{"system:admin"}}
+	read := cpauth.WithClaims(security.WithConsoleRead(context.Background()), admin)
+	req := cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}
+	// Unbound, nothing is allowed, a console read included.
+	if ok, err := a.Authorize(read, req); ok || err != nil {
+		t.Fatalf("an unbound provider allowed a console read: %v %v", ok, err)
+	}
+	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
+	// The console gate admitted the read, for a platform admin, as a system
+	// admin with no organization to check it in.
+	if ok, err := a.Authorize(read, req); !ok || err != nil {
+		t.Fatalf("a console read: %v %v, want allowed", ok, err)
+	}
+	if len(authz.calls) != 0 {
+		t.Fatalf("a console read asked Warden: %+v", authz.calls)
+	}
+	for name, tc := range map[string]struct {
+		ctx context.Context
+		req cpauth.AuthzRequest
+	}{
+		"no console mark":        {cpauth.WithClaims(context.Background(), admin), req},
+		"no claims":              {security.WithConsoleRead(context.Background()), req},
+		"not a system admin":     {cpauth.WithClaims(security.WithConsoleRead(context.Background()), &cpauth.Claims{SubjectID: "ausr_1"}), req},
+		"claims name a tenant":   {cpauth.WithClaims(security.WithConsoleRead(context.Background()), &cpauth.Claims{SubjectID: "ausr_1", TenantID: "aorg_1", Roles: []string{"system:admin"}}), req},
+		"request names a tenant": {read, cpauth.AuthzRequest{SubjectID: "ausr_1", TenantID: "aorg_1", Action: "system.stats"}},
+		"a tenant's read":        {read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "workloads.list"}},
+		"a write":                {read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "tenants.delete"}},
+	} {
+		if ok, err := a.Authorize(tc.ctx, tc.req); ok || err != nil {
+			t.Errorf("%s: %v %v, want refused", name, ok, err)
+		}
+	}
+}
+
+func TestConsoleRead(t *testing.T) {
+	for intent, want := range map[string]bool{
+		"session.detail": true, "system.stats": true, "tenants.list": true, "tenants.detail": true, "tenants.quota": true,
+		"providers.list": true, "workers.list": true, "workers.detail": true, "events.list": true, "config.detail": true, "audit.list": true,
+		"workloads.list": false, "workloads.detail": false, "instances.list": false, "secrets.list": false, "deployments.list": false,
+		"tenants.delete": false, "": false,
+	} {
+		if got := ConsoleRead(intent); got != want {
+			t.Errorf("ConsoleRead(%q) = %v, want %v", intent, got, want)
+		}
+	}
+}

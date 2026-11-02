@@ -20,16 +20,38 @@ func (NativeRecoverySources) ForgeEnvelope() forge.EnvelopeDef {
 }
 
 func (e *Extension) nativeBackupRoutes(group forge.Router) error {
+	if err := group.GET("/native-recovery-sources/:id/pitr-window", e.nativePITRWindow, forge.WithName("nativeRecoverySources.pitrWindow"), forge.WithResponseSchema(http.StatusOK, "Current provider PITR window for the captured source", recovery.NativePITRWindow{})); err != nil {
+		return err
+	}
 	if err := group.GET("/projects/:id/native-recovery-sources", e.listNativeSources, forge.WithName("nativeRecoverySources.list"), forge.WithQuerySchema(recovery.NativePageInput{}), forge.WithResponseSchema(http.StatusOK, "Captured native database histories", NativeRecoverySources{})); err != nil {
 		return err
 	}
 	if err := group.GET("/native-recovery-sources/:id", e.getNativeInventory, forge.WithName("nativeRecoverySources.inventory"), forge.WithQuerySchema(recovery.NativePageInput{}), forge.WithResponseSchema(http.StatusOK, "Provider snapshot observations", recovery.NativeInventory{})); err != nil {
 		return err
 	}
-	return group.POST("/native-recovery-sources/:id/refresh", e.refreshNativeInventory, forge.WithName("nativeRecoverySources.refresh"), forge.WithResponseSchema(http.StatusOK, "Refreshed provider snapshot observations", recovery.NativeInventory{}))
+	if err := group.POST("/native-recovery-sources/:id/refresh", e.refreshNativeInventory, forge.WithName("nativeRecoverySources.refresh"), forge.WithResponseSchema(http.StatusOK, "Refreshed provider snapshot observations", recovery.NativeInventory{})); err != nil {
+		return err
+	}
+	if err := e.nativeRetirementRoutes(group); err != nil {
+		return err
+	}
+	return e.nativeCopyRoutes(group)
+}
+
+func (e *Extension) nativePITRWindow(c forge.Context) error {
+	c.Response().Header().Set("Cache-Control", "no-store, private")
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	window, err := e.nativeBackups.PITRWindow(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return nativeCopyError(err)
+	}
+	return c.JSON(http.StatusOK, window)
 }
 func nativePage(c forge.Context) (recovery.NativePageInput, error) {
-	page := recovery.NativePageInput{Before: c.Query("before"), EnvironmentID: c.Query("environment_id")}
+	page := recovery.NativePageInput{Before: c.Query("before"), EnvironmentID: c.Query("environment_id"), Resource: c.Query("resource")}
 	if raw := c.Query("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {

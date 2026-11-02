@@ -23,9 +23,10 @@ const vaultPage = 500
 // VaultSecrets keeps secret values in Vault, encrypted with AES-256-GCM
 // and versioned on every write.
 //
-// Vault's secrets are unique by key and app, with no tenant in the key:
-// its tenant scoping doesn't reach them. So every key here is built from
-// the organization and the variable's own ID, both from Loomplane's
+// Vault scopes a secret by tenant only when the context carries one
+// (its own scope.WithTenantID), and Loomplane never sets it, so every
+// secret here is an app-level one. Every key is built from the
+// organization and the variable's own ID, both from Loomplane's
 // records and never from anything a caller sent, and one organization's
 // key can't name another's secret.
 type VaultSecrets struct {
@@ -36,6 +37,58 @@ type VaultSecrets struct {
 func NewVaultSecrets(svc *secret.Service) *VaultSecrets { return &VaultSecrets{svc: svc} }
 
 var _ Secrets = (*VaultSecrets)(nil)
+
+func (v *VaultSecrets) PutPinned(ctx context.Context, orgID, variableID string, value []byte) (SecretVersion, error) {
+	meta, err := v.svc.Set(ctx, vaultKey(orgID, variableID), value, VaultAppID)
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	// Set returns a candidate ID on updates. Read the persisted incarnation
+	// under the caller's source lock and compare the actual returned version.
+	persisted, err := v.Metadata(ctx, orgID, variableID)
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	if persisted.Version != meta.Version {
+		return SecretVersion{}, ErrInvalid
+	}
+	return persisted, nil
+}
+
+func (v *VaultSecrets) Metadata(ctx context.Context, orgID, variableID string) (SecretVersion, error) {
+	meta, err := v.svc.GetMeta(ctx, vaultKey(orgID, variableID), VaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return SecretVersion{}, ErrNotFound
+	}
+	if err != nil {
+		return SecretVersion{}, err
+	}
+	return SecretVersion{Identity: meta.ID.String(), Version: meta.Version}, nil
+}
+
+func (v *VaultSecrets) RevealPinned(ctx context.Context, orgID, variableID string, pin SecretVersion) ([]byte, error) {
+	if pin.Identity == "" || pin.Version < 1 {
+		return nil, ErrNotFound
+	}
+	meta, err := v.Metadata(ctx, orgID, variableID)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Identity != pin.Identity || meta.Version < pin.Version {
+		return nil, ErrNotFound
+	}
+	sec, err := v.svc.GetVersion(ctx, vaultKey(orgID, variableID), VaultAppID, pin.Version)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if sec.ID.String() != pin.Identity {
+		return nil, ErrNotFound
+	}
+	return sec.Value, nil
+}
 
 func vaultKey(orgID, variableID string) string { return orgID + "/" + variableID }
 
@@ -55,6 +108,21 @@ func (v *VaultSecrets) Reveal(ctx context.Context, orgID, variableID string) ([]
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read secret: %w", err)
+	}
+	return sec.Value, nil
+}
+
+// RevealVersion returns the reviewed version, without falling back to the latest.
+func (v *VaultSecrets) RevealVersion(ctx context.Context, orgID, variableID string, version int64) ([]byte, error) {
+	if version < 1 {
+		return nil, ErrNotFound
+	}
+	sec, err := v.svc.GetVersion(ctx, vaultKey(orgID, variableID), VaultAppID, version)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read secret version: %w", err)
 	}
 	return sec.Value, nil
 }

@@ -89,6 +89,9 @@ func (s *PgStore) Events(ctx context.Context, org, after string, limit int) ([]E
 }
 
 func hydrateEvent(event *Event) error {
+	if event.Type == "deployment.updated" || event.Type == "deployment.deleted" {
+		return withoutCanaryRefs(event)
+	}
 	if event.Type != "manifest.updated" {
 		return nil
 	}
@@ -109,6 +112,48 @@ func hydrateEvent(event *Event) error {
 		return err
 	}
 	fields["manifest"] = body
+	event.Data, err = json.Marshal(fields)
+	return err
+}
+
+// withoutCanaryRefs drops each canary service's provider handles from a
+// deployment event, as the API leaves them out. The row stores them for
+// the executors; ALB and target group ARNs, Azure resource IDs and secret
+// versions are no one else's to read.
+func withoutCanaryRefs(event *Event) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(event.Data, &fields); err != nil {
+		return err
+	}
+	var canary map[string]json.RawMessage
+	if raw := fields["canary"]; len(raw) == 0 || string(raw) == "null" {
+		return nil
+	} else if err := json.Unmarshal(raw, &canary); err != nil {
+		return err
+	}
+	var services []map[string]json.RawMessage
+	if raw := canary["services"]; len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &services); err != nil {
+			return err
+		}
+	}
+	changed := false
+	for _, svc := range services {
+		if _, ok := svc["refs"]; ok {
+			delete(svc, "refs")
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	var err error
+	if canary["services"], err = json.Marshal(services); err != nil {
+		return err
+	}
+	if fields["canary"], err = json.Marshal(canary); err != nil {
+		return err
+	}
 	event.Data, err = json.Marshal(fields)
 	return err
 }

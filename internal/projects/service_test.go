@@ -82,6 +82,22 @@ func (m *memStore) UpdateProject(_ context.Context, p *Project) error {
 	return nil
 }
 
+func (m *memStore) UpdateExclusions(_ context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, ErrNotFound
+	}
+	list, err := change(slices.Clone(p.Exclusions))
+	if err != nil {
+		return nil, err
+	}
+	p.Exclusions = list
+	c := *p
+	return &c, nil
+}
+
 func (m *memStore) DeleteProject(_ context.Context, orgID, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

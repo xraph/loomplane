@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { CloudIcon } from "lucide-react"
 
 import { useMutation, useQuery } from "@/client/hooks"
 import {
@@ -11,67 +10,68 @@ import type { NativeSource } from "@/client/forge/loomplane/types"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { QueryError } from "@/components/query-error"
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
-  Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  ZeroState,
-  ZeroStateDescription,
-  ZeroStateHeader,
-  ZeroStateMedia,
-  ZeroStateTitle,
-} from "@/components/zero-state"
+import { NativeEmpty } from "@/components/native-recovery-empty"
+import { NativeCopyButton } from "@/components/native-copy-review"
+import { NativeCopyHistory } from "@/components/native-copies"
+import { NativePITR } from "@/components/native-pitr"
+import { NativeRetention } from "@/components/native-retention"
+import { useOrganization } from "@/lib/organization"
 import { formatDate } from "@/lib/format"
 
-function NativeEmpty({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
+export function NativeRecovery(props: {
+  project: string
+  environment?: string
+  resource?: string
 }) {
+  const { session } = useOrganization()
   return (
-    <ZeroState variant="inline" className="p-3">
-      <ZeroStateHeader>
-        <ZeroStateMedia variant="icon">
-          <CloudIcon />
-        </ZeroStateMedia>
-        <ZeroStateTitle>{title}</ZeroStateTitle>
-        <ZeroStateDescription>{children}</ZeroStateDescription>
-      </ZeroStateHeader>
-    </ZeroState>
+    <NativeRecoveryContent
+      key={`${session?.orgId ?? ""}:${props.project}:${props.environment ?? ""}:${props.resource ?? ""}`}
+      {...props}
+    />
   )
 }
 
-export function NativeRecovery({
+function NativeRecoveryContent({
   project,
   environment,
+  resource,
 }: {
   project: string
   environment?: string
+  resource?: string
 }) {
   const [pages, setPages] = useState<string[]>([""])
   const [chosen, setChosen] = useState("")
+  const [copyVersion, setCopyVersion] = useState(0)
   const sources = useQuery(useNativeRecoverySourcesList, {
     path: { id: project },
     query: {
       before: pages.at(-1) || undefined,
       limit: 50,
       environment_id: environment,
+      resource: resource || undefined,
     },
   })
   const visible = (sources.data?.sources ?? []).filter(
-    (source) => source.environmentId === environment
+    (source) =>
+      (!environment || source.environmentId === environment) &&
+      (!resource || source.name === resource)
   )
   const selected = visible.find((source) => source.id === chosen) ?? visible[0]
   return (
     <section aria-label="Cloud snapshots" className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Cloud snapshots</h3>
+        <h3 className="text-[15px] font-semibold">
+          Cloud snapshots{resource ? ` for ${resource}` : ""}
+        </h3>
         <Button
           size="sm"
           variant="ghost"
@@ -80,11 +80,20 @@ export function NativeRecovery({
           Reload histories
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[12.5px] leading-normal text-muted-foreground">
         Saved provider observations, separate from Trove exports. A snapshot
-        listed here has not been restore-tested. Isolated native restore and
-        PITR controls remain unavailable.
+        listed here has not been restore-tested. You can review temporary Cloud
+        SQL and RDS PostgreSQL 17 copies below. Native retention has a separate
+        review. PITR copies use an explicit UTC time from the current provider
+        window. Cloud SQL PITR requires an isolated PSC source and a separate
+        recovery network in the source project and region.
       </p>
+      <NativeCopyHistory
+        key={copyVersion}
+        project={project}
+        environment={environment}
+        resource={resource}
+      />
       {sources.status === "error" && (
         <QueryError
           error={sources.error}
@@ -118,13 +127,14 @@ export function NativeRecovery({
             key={selected.id}
             source={selected}
             reloadSources={sources.refetch}
+            onCopyAccepted={() => setCopyVersion((version) => version + 1)}
           />
         </>
       ) : sources.status !== "error" ? (
         <NativeEmpty title="No captured cloud database history">
-          Pinned RDS histories appear after deployment. Older unpinned databases
-          and Cloud SQL inventory still need qualification. You can deploy a
-          managed database in Services.
+          Pinned RDS and Cloud SQL histories appear after deployment. Older
+          unpinned databases need an explicit identity check first. You can
+          deploy a managed database in Services.
         </NativeEmpty>
       ) : null}
       {(pages.length > 1 || sources.data?.nextBefore) && (
@@ -156,9 +166,11 @@ export function NativeRecovery({
 function NativePoints({
   source,
   reloadSources,
+  onCopyAccepted,
 }: {
   source: NativeSource
   reloadSources: () => Promise<unknown>
+  onCopyAccepted: () => void
 }) {
   const [pages, setPages] = useState<string[]>([""])
   const [failure, setFailure] = useState(false)
@@ -189,15 +201,25 @@ function NativePoints({
         <p className="min-w-0 text-xs break-all text-muted-foreground">
           {source.provider} · {source.region} · {source.physicalId}
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => void refreshCloud()}
-        >
-          {busy ? "Reading cloud snapshots…" : "Refresh cloud snapshots"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <NativeRetention
+            source={source.id}
+            project={source.projectId}
+            onChanged={async () => {
+              await Promise.allSettled([inventory.refetch(), reloadSources()])
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void refreshCloud()}
+          >
+            {busy ? "Reading cloud snapshots…" : "Refresh cloud snapshots"}
+          </Button>
+        </div>
       </div>
+      <NativePITR source={source} onAccepted={onCopyAccepted} />
       <p className="text-xs text-muted-foreground">
         {observed.observedAt
           ? `Saved ${formatDate(observed.observedAt)}`
@@ -205,6 +227,13 @@ function NativePoints({
         · {observed.complete ? "complete scan" : "partial scan or not checked"}
         {observed.state === "failed" ? " · last refresh failed" : ""}
       </p>
+      {source.provider === "cloud-sql" && !observed.complete && (
+        <p className="text-xs text-muted-foreground">
+          Cloud SQL points need matching source creation metadata. Missing
+          proof, provider warnings or a scan limit leave this scan partial.
+          Earlier observations stay visible.
+        </p>
+      )}
       {failure && (
         <Alert variant="destructive">
           <AlertDescription>
@@ -223,9 +252,15 @@ function NativePoints({
       {inventory.status === "pending" && !inventory.data ? (
         <p role="status">Loading saved snapshots…</p>
       ) : inventory.data?.points.length ? (
-        <ul aria-label="Native snapshot observations" className="divide-y">
+        <ul
+          aria-label="Native snapshot observations"
+          className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border"
+        >
           {inventory.data.points.map((point) => (
-            <li key={point.id} className="grid min-w-0 gap-1 py-2 text-sm">
+            <li
+              key={point.id}
+              className="grid min-w-0 gap-1 px-4 py-2.5 text-[13px]"
+            >
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <span className="min-w-0 font-medium break-all">
                   {point.name}
@@ -236,9 +271,21 @@ function NativePoints({
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Created {formatDate(point.createdAt)} · {point.engine}{" "}
-                {point.version}
+                {source.provider === "cloud-sql" ? "Point time" : "Created"}{" "}
+                {formatDate(point.createdAt)} · {point.engine} {point.version}
+                {" · "}
+                <span>
+                  {point.expiresAt
+                    ? `Provider expiry ${formatDate(point.expiresAt)}`
+                    : "Expiry not reported"}
+                </span>
               </p>
+              <NativeCopyButton
+                source={source}
+                point={point}
+                onAccepted={onCopyAccepted}
+                disabled={busy || inventory.status !== "success"}
+              />
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">
                   Snapshot identity

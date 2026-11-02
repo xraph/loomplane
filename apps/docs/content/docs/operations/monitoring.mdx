@@ -1,0 +1,55 @@
+---
+title: Monitoring
+description: Health checks, Prometheus metrics, live deployment state, and how to pause a target during an incident.
+---
+
+## Health
+
+`/_/health` reports each part of Loomplane, provider plugins included. A plugin that stops answering makes it unhealthy within one check interval. `/_/health/live` and `/_/health/ready` are for your orchestrator's probes. The worker serves the same checks on its own port (`:8781` by default). Public proxies shouldn't expose these routes, and the Docker stack's Caddy blocks them.
+
+If a database timeout stops Dispatch's durable worker, the API starts a replacement on its own: one second later at first, doubling up to thirty seconds while the database stays down. Until a replacement is polling, `/_/health` reports the dispatch extension as unhealthy and the log has a `durable workflow worker stopped` warning for each attempt. A replacement only claims tasks whose lease has run out, so a plan the failed worker had claimed picks up again once that lease expires. If the extension stays unhealthy after the database is back, restart the API.
+
+Watch this health result in your process supervisor. A running HTTP listener doesn't tell you deployment work is moving.
+
+## Metrics
+
+`/_/metrics` serves Prometheus metrics: the Go runtime's, Dispatch's jobs and workflows, and Loomplane's own, prefixed `forge_loomplane_`.
+
+| Metric | Labels | What it counts |
+|---|---|---|
+| `deployments_total`, `deployment_duration_seconds` | `status` | Deployments that finished, and how long they took |
+| `deployment_steps_total` | `provider`, `op`, `status` | Each action of a deployment |
+| `deployment_step_duration_seconds` | `provider`, `status` | How long each provider takes |
+| `plans_total` | `status` | Plans worked out: ready, blocked or failed |
+| `plan_decisions_total` | `decision` | Approved, rejected, stale or expired |
+| `drift_findings_total` | `provider`, `state` | Bindings found missing or changed |
+| `analyses_total`, `analysis_duration_seconds` | `status` | Repository analyses, from `loomplane-worker` |
+| `api_key_authentications_total` | `result` | Requests with an API key, accepted or rejected |
+| `connection_checks_total` | `cloud`, `result` | Credential checks: ready, incomplete, rejected or unavailable |
+
+Alerts worth having:
+
+- `deployment_steps_total{status="failed"}` rising for one provider, which usually means its connection lost a permission.
+- `api_key_authentications_total{result="rejected"}` climbing, which is a revoked key still in a pipeline, or someone guessing.
+- `drift_findings_total`, which means something changed in a cloud outside Loomplane.
+
+## Live deployment state
+
+Proxy `/api/v1/realtime/ws` with WebSocket upgrades and leave `/api/v1/realtime/events` unbuffered for SSE. Both use the same authenticated contracts and an organization-scoped cursor. The dashboard falls back to SSE after a WebSocket failure, then to REST recovery when the stream is stale. A **Live** badge confirms a recent status heartbeat. A page that's disconnected must not be treated as current.
+
+Events and build output are committed in PostgreSQL before delivery. Conduit notifications wake other API replicas, which read the durable sequence. You can restart an API or deployment worker without relying on its memory for status or checkpoints. An interrupted Docker build may need rebuilding, and its earlier attempt stays visible as incomplete.
+
+Build output is retained for seven days, with 16 KiB per line and 10 MiB per action attempt. The deployment log endpoint pages retained output. A cursor older than the retention produces a gap and a current snapshot. Collector checkpoints and cloud credentials are excluded from public events, and runtime variables stay out of Docker build arguments.
+
+Keep a connection while a plan, build, binding or deployment references it. Changing a host key, namespace UID, CA or reviewed registry endpoint needs another connection check and plan. Rotating a credential can keep the same destination. Removal uses each binding's recorded connection and ownership labels, including resources left pending cleanup after a replacement.
+
+## Pausing a target
+
+To stop Loomplane deploying to a target, during an incident on a cloud for instance, name it in `providers.paused`:
+
+```yaml
+providers:
+  paused: [render, cloud-run]
+```
+
+or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused target are still made, and can be reviewed and approved, but they say they're for review only, and approving one deploys nothing. What already runs there keeps running, and drift checks still read it. A name that isn't a target stops Loomplane from starting, so a typo can't leave a target running that you meant to pause. Restart Loomplane to pause or unpause one.

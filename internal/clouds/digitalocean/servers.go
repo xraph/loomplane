@@ -39,7 +39,7 @@ func infrastructureError(err error, permission string) error {
 		case http.StatusNotFound:
 			return provider.ErrInfrastructureNotFound
 		default:
-			return &provider.InfrastructureAPIError{Provider: "digitalocean", Status: api.Status}
+			return &provider.InfrastructureAPIError{Provider: "digitalocean", Status: api.Status, RetryAfter: api.RetryAfter}
 		}
 	}
 	return &provider.InfrastructureAPIError{Provider: "digitalocean"}
@@ -351,8 +351,9 @@ func (c *Client) DeleteServer(ctx context.Context, credential provider.Infrastru
 // InfrastructureCapabilities lists the implemented account APIs.
 func InfrastructureCapabilities() []provider.InfrastructureCapability {
 	return []provider.InfrastructureCapability{
+		provider.ClusterBootstrapAccess, provider.ClusterCapacityObservation, provider.ClusterCreation, provider.ClusterDiscovery, provider.ClusterMutationObservation, provider.ClusterOptionsRead, provider.ClusterConfigurationUpdate,
 		provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery,
-		provider.ServerDeletion, provider.ServerDiscovery, provider.ServerProvisioning, provider.ServerResize,
+		provider.NodePoolAutoscaling, provider.NodePoolCreation, provider.NodePoolUpdate, provider.ServerDeletion, provider.ServerDiscovery, provider.ServerProvisioning, provider.ServerResize,
 	}
 }
 

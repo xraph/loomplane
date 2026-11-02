@@ -67,6 +67,57 @@ func TestFromSource_emptyValuesKeepDefaults(t *testing.T) {
 	}
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+func TestFromSource_waitlist(t *testing.T) {
+	tests := []struct {
+		name string
+		src  mapGetter
+		want *bool
+	}{
+		{"unset", mapGetter{"database.url": testDSN}, nil},
+		{"empty", mapGetter{"database.url": testDSN, "identity.waitlist": ""}, nil},
+		{"true", mapGetter{"database.url": testDSN, "identity.waitlist": "true"}, boolPtr(true)},
+		{"off", mapGetter{"database.url": testDSN, "identity.waitlist": "off"}, boolPtr(false)},
+		{"native bool", mapGetter{"database.url": testDSN, "identity.waitlist": false}, boolPtr(false)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := FromSource(tt.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := c.Identity.Waitlist
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Fatalf("waitlist = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	_, err := FromSource(mapGetter{"database.url": testDSN, "identity.waitlist": "maybe"})
+	if err == nil || !strings.Contains(err.Error(), "identity.waitlist") {
+		t.Fatalf("error %v, want it to mention identity.waitlist", err)
+	}
+}
+
+func TestFromSource_consolePath(t *testing.T) {
+	if got := Defaults().Console.Path; got != "/__console" {
+		t.Fatalf("default console path = %q", got)
+	}
+	for _, p := range []string{"/api/x", "/", "/__a/b", "__console", "/console"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, "console.path": p})
+		if err == nil || !strings.Contains(err.Error(), "console.path") {
+			t.Errorf("console.path %q: error %v, want it to mention console.path", p, err)
+		}
+	}
+	c, err := FromSource(mapGetter{"database.url": testDSN, "console.path": "/__ops-7f3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Console.Path != "/__ops-7f3" {
+		t.Fatalf("console path = %q", c.Console.Path)
+	}
+}
+
 func TestFromSource_rejects(t *testing.T) {
 	tests := []struct {
 		name string
@@ -121,6 +172,85 @@ func TestLoad_readsFilesAndEnvironment(t *testing.T) {
 	}
 }
 
+// The repository's config.yaml takes the pool size from the environment, so
+// the Kubernetes chart can set it without a config file.
+func TestLoad_poolSizeFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 16},
+		{"set", "40", 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_DATABASE_POOL_SIZE", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Database.PoolSize != tt.want {
+				t.Fatalf("pool size %d, want %d", c.Database.PoolSize, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_analysisConcurrencyFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 2},
+		{"set", "1", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Analysis.Concurrency != tt.want {
+				t.Fatalf("analysis concurrency %d, want %d", c.Analysis.Concurrency, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_analysisConcurrencyZeroFailsValidation(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+	t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", "0")
+	_, err = Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "analysis.concurrency must be at least 1") {
+		t.Fatalf("Load error %v, want analysis.concurrency must be at least 1", err)
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")
@@ -167,6 +297,31 @@ func TestFromSource_dbGatewaySigningKeyFile(t *testing.T) {
 		_, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": path})
 		if err == nil || !strings.Contains(err.Error(), "dbgateway.signing_key_file") {
 			t.Fatalf("%q: error %v, want it to name dbgateway.signing_key_file", path, err)
+		}
+	}
+}
+
+func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if len(c.Planning.EndpointDeniedCIDRs) != 0 {
+		t.Fatalf("denied by default: %v", c.Planning.EndpointDeniedCIDRs)
+	}
+	for _, v := range []any{"10.9.0.0/16, 192.0.2.7", []any{"10.9.0.0/16", "192.0.2.7"}} {
+		c, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v})
+		if err != nil {
+			t.Fatalf("FromSource: %v", err)
+		}
+		got := c.Planning.EndpointDeniedCIDRs
+		if len(got) != 2 || got[0].String() != "10.9.0.0/16" || got[1].String() != "192.0.2.7/32" {
+			t.Fatalf("denied from %#v: %v", v, got)
+		}
+	}
+	for _, v := range []any{"10.9.0.0/33", "db.internal", 3} {
+		if _, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v}); err == nil || !strings.Contains(err.Error(), "planning.endpoint_denied_cidrs") {
+			t.Fatalf("%#v: %v", v, err)
 		}
 	}
 }

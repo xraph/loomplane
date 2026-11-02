@@ -1,11 +1,5 @@
-import {
-  BellIcon,
-  CheckIcon,
-  CopyIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  WebhookIcon,
-} from "lucide-react"
+import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
+import { NotificationsIcon, WebhooksIcon } from "@/components/icons"
 import type { UseQueryResult } from "@forge-go/client-react"
 import { type FormEvent, type ReactNode, useEffect, useState } from "react"
 
@@ -173,9 +167,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
     setNotice("")
     try {
       await retry.mutateAsync({})
-      setNotice(
-        "Failed notification processing is queued for this organization."
-      )
+      setNotice("Failed notification processing is queued for this workspace.")
       invalidate(useNotificationsList)
     } catch (err) {
       setError(messageOf(err, "Notification processing couldn't be retried."))
@@ -185,10 +177,10 @@ function NotificationContent({ admin }: { admin: boolean }) {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Notifications" }]} />
-      <Page className="gap-5">
+      <Page className="max-w-[980px]">
         <PageHeading
           title="Notifications"
-          description="Deployment results for you, and webhooks for this organization."
+          description="Deployment results for you, and webhooks for this workspace."
           actions={
             <>
               <Button
@@ -201,18 +193,18 @@ function NotificationContent({ admin }: { admin: boolean }) {
             </>
           }
         />
-        <Card className="gap-3 p-4">
+        <Card className="gap-3 px-4 py-3">
           {preferences.data && !preferencesDenied ? (
             <>
               <div className="flex items-center justify-between gap-4">
                 <div className="grid gap-1">
                   <label
                     htmlFor="deployment-email"
-                    className="text-sm font-medium"
+                    className="text-[14px] font-semibold"
                   >
                     Deployment email
                   </label>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[12.5px] text-muted-foreground">
                     Email results for deployments you started. Account recovery
                     is separate.
                   </p>
@@ -248,7 +240,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
           </Alert>
         )}
         {notice && (
-          <p role="status" className="text-sm text-muted-foreground">
+          <p role="status" className="text-[13px] text-muted-foreground">
             {notice}
           </p>
         )}
@@ -258,7 +250,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
             <div className="grid gap-0.5">
-              <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <h2 className="flex items-center gap-2 text-[14px] font-semibold">
                 Your inbox
                 {unread.length > 0 && (
                   <span className="rounded-full bg-brand-tint px-2 py-px text-[11.5px] font-medium text-brand-ink">
@@ -278,7 +270,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
                     variant="ghost"
                     size="sm"
                     disabled={retry.isPending}
-                    title="Retry exhausted email and event processing for this organization. Webhook delivery retries are handled by Relay."
+                    title="Retry exhausted email and event processing for this workspace. Webhook delivery retries are handled by Relay."
                     onClick={() => void retryProcessing()}
                   >
                     {retry.isPending && <Spinner />}Retry notification
@@ -317,10 +309,10 @@ function NotificationContent({ admin }: { admin: boolean }) {
           {inbox.data &&
             inbox.data.items.length === 0 &&
             inbox.status !== "error" && (
-              <ZeroState className="py-8">
+              <ZeroState surface={false} className="py-8">
                 <ZeroStateHeader>
                   <ZeroStateMedia variant="icon">
-                    <BellIcon />
+                    <NotificationsIcon />
                   </ZeroStateMedia>
                   <ZeroStateTitle>No notifications yet</ZeroStateTitle>
                   <ZeroStateDescription>
@@ -341,7 +333,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
                     title={item.body}
                     className={cn(
                       "flex flex-wrap items-center gap-x-3.5 gap-y-2 px-4 py-3",
-                      !item.read && "bg-subtle/60"
+                      !item.read && "bg-brand-soft"
                     )}
                   >
                     <span
@@ -523,12 +515,12 @@ function WebhookContent({
 
   return (
     <section
-      aria-label="Organization webhooks"
+      aria-label="Workspace webhooks"
       className="overflow-hidden rounded-[14px] bg-card ring-1 ring-border"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
         <div className="grid gap-0.5">
-          <h2 className="text-sm font-semibold">Organization webhooks</h2>
+          <h2 className="text-[14px] font-semibold">Workspace webhooks</h2>
           <span className="text-[12.5px] text-muted-foreground">
             Relay signs deployment events and retries delivery failures.
           </span>
@@ -564,15 +556,15 @@ function WebhookContent({
         endpoints.data.items.length === 0 &&
         endpoints.status !== "error" && (
           <>
-            <ZeroState className="py-8">
+            <ZeroState surface={false} className="py-8">
               <ZeroStateHeader>
                 <ZeroStateMedia variant="icon">
-                  <WebhookIcon />
+                  <WebhooksIcon />
                 </ZeroStateMedia>
                 <ZeroStateTitle>No webhooks configured</ZeroStateTitle>
                 <ZeroStateDescription>
                   Add a public HTTPS endpoint to receive deployment results for
-                  this organization.
+                  this workspace.
                 </ZeroStateDescription>
               </ZeroStateHeader>
             </ZeroState>
@@ -655,7 +647,7 @@ function WebhookContent({
                         <Button
                           variant="outline"
                           size="sm"
-                          className="text-destructive"
+                          className="text-destructive hover:text-destructive"
                           disabled={remove.isPending}
                         >
                           Delete
@@ -733,7 +725,7 @@ function CreateWebhook({ onClose }: { onClose: () => void }) {
         if (!open) onClose()
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[520px]">
         <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
           <DialogHeader>
             <DialogTitle>Add webhook</DialogTitle>
@@ -807,7 +799,7 @@ function SigningSecret({
         if (!open) onClose()
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle>Copy your signing secret</DialogTitle>
           <DialogDescription>
@@ -815,10 +807,10 @@ function SigningSecret({
             store to verify Relay signatures.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex min-w-0 gap-2">
+        <div className="flex min-w-0 gap-1.5">
           <Input
             aria-label="Signing secret"
-            className="min-w-0 font-mono text-xs"
+            className="h-9 min-w-0 border-transparent bg-muted font-mono text-[12.5px]"
             readOnly
             value={secret}
             autoComplete="off"
@@ -826,11 +818,12 @@ function SigningSecret({
           />
           <Button
             variant="outline"
-            size="icon"
+            className="h-9"
             onClick={() => void copy()}
             aria-label="Copy signing secret"
           >
             {copied ? <CheckIcon /> : <CopyIcon />}
+            {copied ? "Copied" : "Copy"}
           </Button>
         </div>
         {error && (
@@ -893,7 +886,7 @@ function DeliveryHistory({
             <ZeroState>
               <ZeroStateHeader>
                 <ZeroStateMedia variant="icon">
-                  <WebhookIcon />
+                  <WebhooksIcon />
                 </ZeroStateMedia>
                 <ZeroStateTitle>No deliveries yet</ZeroStateTitle>
                 <ZeroStateDescription>
@@ -908,7 +901,7 @@ function DeliveryHistory({
             {deliveries.data.items.map((item) => (
               <li key={item.id} className="grid gap-1 px-3 py-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-medium break-all">
+                  <span className="font-mono text-[12.5px] font-medium break-all">
                     {item.eventType}
                   </span>
                   <Badge variant="outline">

@@ -1,0 +1,58 @@
+---
+title: Gateways and networking
+description: How services find and reach each other, how a gateway fronts them, and how to join Google Cloud and AWS networks.
+---
+
+How one service reaches another depends on where both run. The planner checks every `needs` relationship against the placements, so a path that can't work shows up as a problem on the plan, before you approve anything.
+
+## Reaching other services
+
+| Where the target runs | How it's reached |
+|---|---|
+| ECS on Fargate | Services in the same environment reach each other inside the VPC, at `http://name:port`, whether or not the one they need is public |
+| Cloud Run, private | Only calls from the project's own services, which must send a Google ID token |
+| Render, private | On Render's private network, by other services on Render, at `http://` plus its name and port |
+| Azure Container Apps, private | Only from apps in the same Container Apps environment (same connection, same region) |
+| DigitalOcean App Platform, private | Nothing can call one, because each service is its own app. Make it public |
+
+A private service needed from another cloud is a problem on the plan, unless a [link](#links) joins the two networks and the caller is on Google Cloud.
+
+A managed resource is only reachable from services on its own cloud. Postgres and Key Value on Render are reachable from services on Render only, and RDS and ElastiCache from the environment's ECS tasks.
+
+## Gateways
+
+A gateway is one public address in front of several services, routing each request by path. Loomplane builds each one on Bastion and runs it on Cloud Run or ECS, like a service. Your traffic never passes through Loomplane.
+
+```yaml
+gateways:
+  edge:
+    provider: cloud-run
+    routes:
+      - { path: /api, to: api, strip_prefix: true }
+      - { path: /, to: web }
+```
+
+A path prefix like `/api` matches `/api` and anything under `/api/`. The longest matching path wins, so `/` catches the rest. With `strip_prefix: true`, `/api/users` reaches the service as `/users`.
+
+A gateway gets the addresses it routes to and none of the project's variables. On ECS it can reach private services inside the environment. Anywhere else, a route to a private service is a problem on the plan, since a gateway can't present Cloud Run's ID token.
+
+## Links
+
+A link joins an environment's Google Cloud network to its AWS VPC, so a Cloud Run service can need a private ECS service, an RDS database or an ElastiCache cache.
+
+```yaml
+links:
+  vpn:
+    between: [gcp, aws]
+    region: us-central1
+```
+
+Each environment gets its own link: an HA VPN gateway and a Cloud Router on the project's default network, a virtual private gateway on the account's default VPC, and four IPsec tunnels with a BGP session each. Losing an endpoint on either side keeps the link up.
+
+Both clouds bill a VPN by the hour, whether or not anything uses it, so turn the link off in environments that don't need it. It works one way: a service on ECS can't call a private Cloud Run service, which checks Google identity tokens and not addresses. Make that service public or move the caller.
+
+Links need more than a connection check asks for. The Google Cloud key needs Compute Network Admin (`roles/compute.networkAdmin`). The AWS key needs the VPN and route actions listed in the [manifest reference](/docs/reference/loomplane-yaml#links). Removing a link takes it down on both clouds, Google's side first.
+
+## Custom domains and routes
+
+DNS zones belong to the organization, apart from any Cloud. You grant them to projects, then preview and apply a domain route for a service. Managed mode uses a supported DNS account. External mode gives you a TXT ownership proof to publish yourself. This configures DNS for a domain you already own, and doesn't buy domains or change registrar nameservers. The commands are in [Your own servers](/docs/clouds/your-own-servers#domains-and-routes).

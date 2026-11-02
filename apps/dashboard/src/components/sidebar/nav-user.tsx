@@ -40,9 +40,9 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar()
   const avatar = (
-    <Avatar className="size-8 rounded-lg">
+    <Avatar className="size-8">
       {user.image && <AvatarImage src={user.image} alt="" />}
-      <AvatarFallback className="rounded-lg text-xs font-medium">
+      <AvatarFallback className="text-xs font-medium">
         {user.initials}
       </AvatarFallback>
     </Avatar>
@@ -55,12 +55,12 @@ export function NavUser({
             render={
               <SidebarMenuButton
                 size="lg"
-                className="border bg-background shadow-xs group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:shadow-none aria-expanded:bg-muted"
+                className="aria-expanded:bg-sidebar-accent"
               />
             }
           >
             {avatar}
-            <div className="grid flex-1 text-left text-sm leading-tight">
+            <div className="grid flex-1 text-left text-[13.5px] leading-tight">
               <span className="truncate font-medium">{user.name}</span>
               <span className="truncate text-xs text-muted-foreground">
                 {user.email}
@@ -76,9 +76,9 @@ export function NavUser({
           >
             <DropdownMenuGroup>
               <DropdownMenuLabel className="p-0 font-normal">
-                <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                <div className="flex items-center gap-2 px-1 py-1.5 text-left">
                   {avatar}
-                  <div className="grid flex-1 text-left text-sm leading-tight">
+                  <div className="grid flex-1 text-left leading-tight">
                     <span className="truncate font-medium">{user.name}</span>
                     <span className="truncate text-xs text-muted-foreground">
                       {user.email}

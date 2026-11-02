@@ -33,3 +33,23 @@ func TestNotificationConfigLoadsSMTPAndRejectsUnsafeSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestNotificationConfigResend(t *testing.T) {
+	cfg := NotificationsConfig{ResendAPIKey: "re_test", From: "accounts@example.com"}
+	if !cfg.MailEnabled() {
+		t.Fatal("Resend key should enable mail")
+	}
+	if err := cfg.Validate(EnvProduction); err != nil {
+		t.Fatalf("Resend needs no TLS setting in production: %v", err)
+	}
+	both := cfg
+	both.SMTPHost = "mail.example.com"
+	if err := both.Validate(EnvDevelopment); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("expected rejection of Resend plus SMTP: %v", err)
+	}
+	noFrom := cfg
+	noFrom.From = ""
+	if err := noFrom.Validate(EnvDevelopment); err == nil || !strings.Contains(err.Error(), "from") {
+		t.Fatalf("expected rejection without from: %v", err)
+	}
+}

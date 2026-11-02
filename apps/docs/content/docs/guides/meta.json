@@ -1,0 +1,9 @@
+{
+  "title": "Guides",
+  "pages": [
+    "deploy-a-monorepo",
+    "private-repositories",
+    "ci-with-loomctl",
+    "notifications-and-webhooks"
+  ]
+}

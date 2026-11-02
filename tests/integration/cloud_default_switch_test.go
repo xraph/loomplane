@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -67,7 +68,7 @@ func cloudDefault(t *testing.T, f *syncFixture) (string, int64) {
 
 func TestCloudDefaultSwitchMovesOnlyDefaultPlacedServices(t *testing.T) {
 	f := defaultSwitchFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	service := f.service
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	heartbeat := func([]byte) error { return nil }

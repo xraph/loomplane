@@ -117,10 +117,10 @@ export function SourcesCard({ project }: { project: Project }) {
       )
 
   return (
-    <Card className="pb-0">
-      <CardHeader>
+    <Card size="sm" className="gap-0 py-0">
+      <CardHeader className="border-b px-4 pt-3">
         <CardTitle>Repositories</CardTitle>
-        <CardDescription>
+        <CardDescription className="text-[12.5px]">
           Everything this project builds from. Each one is analyzed on its own.
         </CardDescription>
         <CardAction className="flex items-center gap-2">
@@ -151,10 +151,12 @@ export function SourcesCard({ project }: { project: Project }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="pl-6">Alias</TableHead>
+            <TableHead>Alias</TableHead>
             <TableHead>Repository</TableHead>
             <TableHead>Last read</TableHead>
-            <TableHead className="pr-6" />
+            <TableHead>
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -163,9 +165,7 @@ export function SourcesCard({ project }: { project: Project }) {
             const running = !!state?.latest && isActive(state.latest.status)
             return (
               <TableRow key={s.id}>
-                <TableCell className="pl-6 font-mono text-xs">
-                  {s.alias}
-                </TableCell>
+                <TableCell className="font-mono text-xs">{s.alias}</TableCell>
                 <TableCell>
                   <a
                     className="font-mono text-xs underline-offset-4 hover:underline"
@@ -186,7 +186,7 @@ export function SourcesCard({ project }: { project: Project }) {
                 <TableCell className="text-xs text-muted-foreground">
                   {lastRead(state)}
                 </TableCell>
-                <TableCell className="pr-6 text-right">
+                <TableCell className="text-right">
                   {mayRun && (
                     <Button
                       size="sm"

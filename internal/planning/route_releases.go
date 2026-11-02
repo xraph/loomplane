@@ -5,27 +5,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
-// ReleaseRoutes returns the exact route review used by a release plan.
-func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment string) ([]cloudinfra.Route, error) {
+// ReleaseRoutes returns the exact route review used by a release plan. A
+// route whose handoff a release still holds blocks it, unless the handoff
+// is one plan allowHeldBy prepared: a rollback of that plan may plan while
+// it holds them. "" allows none.
+func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error) {
 	routes, err := cloudinfra.NewPgStore(s.db).Routes(ctx, org, project)
 	if err != nil {
 		return nil, err
+	}
+	allowed := map[string]bool{}
+	if allowHeldBy != "" {
+		held, getErr := s.GetPlan(ctx, org, allowHeldBy)
+		if getErr != nil {
+			return nil, fmt.Errorf("read the plan of the release to roll back: %w", getErr)
+		}
+		allowed = heldBy(held)
 	}
 	out := []cloudinfra.Route{}
 	for _, route := range routes {
 		if route.Input.EnvironmentID != environment || route.Status == "removed" {
 			continue
 		}
-		var held bool
-		if checkErr := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released)`, org, route.ID).Scan(&held); checkErr != nil {
+		var handoff string
+		if checkErr := s.db.QueryRow(ctx, `SELECT coalesce((SELECT id FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released LIMIT 1), '')`, org, route.ID).Scan(&handoff); checkErr != nil {
 			return nil, checkErr
 		}
-		if held {
+		if handoff != "" && !allowed[handoff] {
 			return nil, fmt.Errorf("finish the retained route handoff for %s before another release", route.Input.Hostname)
 		}
 		out = append(out, *route)
@@ -33,14 +45,28 @@ func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment s
 	return out, nil
 }
 
+// heldBy returns the route handoffs plan's routed releases prepare, by ID.
+func heldBy(plan *Plan) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range plan.Actions {
+		for _, r := range a.Routes {
+			out[cloudinfra.ReleasePrepareID(plan.ID+"/"+a.ID, r.ID)] = true
+		}
+	}
+	return out
+}
+
 func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.Route, error) {
 	reader, ok := s.store.(interface {
-		ReleaseRoutes(context.Context, string, string, string) ([]cloudinfra.Route, error)
+		ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error)
 	})
 	if !ok {
 		return nil, nil
 	}
-	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	// A rollback waits for the handoffs the release it undoes holds, like
+	// any plan, until a rollback can restore a held route release; it
+	// passes Rollback.TargetPlanID then.
+	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, "")
 }
 
 // ProjectZones returns the verified DNS zones granted to a project, which
@@ -50,13 +76,7 @@ func (s *PgStore) ProjectZones(ctx context.Context, org, project string) ([]clou
 	if err != nil {
 		return nil, err
 	}
-	out := []cloudinfra.ProjectZone{}
-	for _, z := range zones {
-		if slices.Contains(z.ProjectIDs, project) && !z.VerifiedAt.IsZero() {
-			out = append(out, cloudinfra.ProjectZone{ID: z.ID, Name: z.Name, Mode: z.Mode, Verified: true})
-		}
-	}
-	return out, nil
+	return cloudinfra.VerifiedProjectZones(zones, project), nil
 }
 
 func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.ProjectZone, error) {
@@ -74,8 +94,27 @@ func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.Pr
 func (p *planner) routedReplacements() bool {
 	changed := false
 	for _, route := range p.in.Routes {
+		p.refuseRoutedComponent(route)
 		a := p.services[route.Input.Service]
 		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
+			continue
+		}
+		// A Kubernetes route reaches its Service by name, so an update in
+		// place keeps serving it with no handoff. A new runtime would leave
+		// the route on a Service that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes || route.Binding.BackendName() == cloudinfra.RouteBackendFirecracker {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on this connection. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
+			continue
+		}
+		// An App Platform route reaches the service's app by its address, and
+		// an update in place keeps that app and its domains. A new app would
+		// leave the route on one that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendPlatform {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new App Platform app, which %s doesn't follow. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
 			continue
 		}
 		a.Routes = append(a.Routes, route)
@@ -88,6 +127,57 @@ func (p *planner) routedReplacements() bool {
 		changed = true
 	}
 	return changed
+}
+
+// refuseRoutedComponent refuses a change to a composed component that has
+// a domain route, whatever caused it: an edit, drift or its resource's
+// version. A routed release retains the serving instance on reviewed pool
+// capacity, and components run only on direct targets, so changing one
+// would fail at apply until its routes were removed. Deletes are planned
+// later; refuseRoutedDeletes covers them.
+func (p *planner) refuseRoutedComponent(route cloudinfra.Route) {
+	a := p.resources[route.Input.Service]
+	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Op == Keep {
+		return
+	}
+	if slices.ContainsFunc(p.problems, func(f Finding) bool {
+		return f.Code == "route-release" && f.Subject == ResourceSubject && f.Name == a.Name
+	}) {
+		return
+	}
+	reason := strings.TrimSpace(a.Reason)
+	if reason != "" && !strings.HasSuffix(reason, ".") {
+		reason += "."
+	}
+	p.problem(Finding{
+		Code: "route-release", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Resource.Component.Resource,
+		Message: strings.TrimSpace(fmt.Sprintf("%s has domain routes, and this plan changes it: %s", a.Name, reason)) +
+			" Routed component releases aren't supported yet, so remove its routes or undo the change, then plan again.",
+	})
+}
+
+// refuseRoutedDeletes refuses deleting anything a domain route points at:
+// a service, a composed resource's component, or the composed resource
+// it's part of, whose components are deleted with it. Apply would refuse
+// it only once earlier delete steps had already run.
+func (p *planner) refuseRoutedDeletes() {
+	if len(p.in.Routes) == 0 {
+		return
+	}
+	composed := p.composedBindings()
+	for _, a := range p.actions {
+		if a.Op != Delete || !slices.ContainsFunc(p.in.Routes, func(r cloudinfra.Route) bool { return r.Input.Service == a.Name }) {
+			continue
+		}
+		path := "services." + a.Name
+		if a.Subject == ResourceSubject {
+			path = "resources." + a.Name
+			if of, part := composed[a.ID]; part {
+				path = "resources." + of.parent
+			}
+		}
+		p.problem(Finding{Code: "route-release", Subject: a.Subject, Name: a.Name, Path: path, Message: a.Name + " has domain routes. Remove them before deleting it."})
+	}
 }
 
 func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {
@@ -142,14 +232,14 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 			if !ok {
 				return fmt.Errorf("routed overlap capacity resolver is unavailable")
 			}
-			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, Replicas: 1, DestinationServerID: pin.ServerID}
+			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, DestinationServerID: pin.ServerID}
 			for _, b := range bindings {
 				if b.Subject == ServiceSubject && b.Name == a.Name {
 					var old ServiceConfig
 					if err := json.Unmarshal(b.Config, &old); err != nil {
 						return err
 					}
-					if old.CloudPlacement != nil {
+					if old.CloudPlacement != nil && old.CloudPlacement.PoolID != "" {
 						req.StickyServerID = old.CloudPlacement.ServerID
 					}
 				}
@@ -176,7 +266,9 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	}
 	var out []cloudinfra.Route
 	for _, r := range routes {
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" {
+		// Releases only carry server routes; Kubernetes and App Platform
+		// routes stay with their service. See routedReplacements.
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() == cloudinfra.RouteBackendServer {
 			out = append(out, *r)
 		}
 	}

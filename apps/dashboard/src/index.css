@@ -137,44 +137,46 @@
 }
 
 .dark {
-  --background: oklch(0.194 0.006 56);
-  --foreground: oklch(0.954 0.005 67.8);
-  --card: oklch(0.226 0.007 48.4);
-  --card-foreground: oklch(0.954 0.005 67.8);
-  --popover: oklch(0.226 0.007 48.4);
-  --popover-foreground: oklch(0.954 0.005 67.8);
-  --secondary: oklch(0.256 0.009 53.1);
-  --secondary-foreground: oklch(0.954 0.005 67.8);
-  --muted: oklch(0.256 0.009 53.1);
-  --muted-foreground: oklch(0.692 0.015 60.5);
-  --subtle: oklch(0.21 0.007 55);
-  --accent: oklch(0.27 0.009 53);
-  --accent-foreground: oklch(0.954 0.005 67.8);
+  /* Near-black and neutral, like a terminal: the page and sidebar share
+     one black, cards sit a step above it, and greys carry no warm hue. */
+  --background: oklch(0.12 0 0);
+  --foreground: oklch(0.965 0 0);
+  --card: oklch(0.155 0 0);
+  --card-foreground: oklch(0.965 0 0);
+  --popover: oklch(0.17 0 0);
+  --popover-foreground: oklch(0.965 0 0);
+  --secondary: oklch(0.205 0 0);
+  --secondary-foreground: oklch(0.965 0 0);
+  --muted: oklch(0.205 0 0);
+  --muted-foreground: oklch(0.68 0 0);
+  --subtle: oklch(0.14 0 0);
+  --accent: oklch(0.215 0 0);
+  --accent-foreground: oklch(0.965 0 0);
   --destructive: oklch(0.7 0.14 33);
-  --border: oklch(1 0 0 / 9%);
+  --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
-  --chart-1: oklch(0.7 0.09 156);
+  --chart-1: oklch(0.72 0.11 156);
   --chart-2: oklch(0.68 0.14 33);
-  --chart-3: oklch(0.7 0.08 237);
-  --chart-4: oklch(0.75 0.1 58);
-  --chart-5: oklch(0.65 0.015 60);
-  --weld: oklch(0.74 0.1 58);
-  --weld-ink: oklch(0.8 0.09 60);
-  --weld-tint: oklch(0.32 0.04 58);
-  --overdye: oklch(0.7 0.09 156);
-  --overdye-ink: oklch(0.8 0.08 156);
-  --overdye-tint: oklch(0.3 0.035 156);
-  --flight: oklch(0.7 0.08 237);
-  --flight-ink: oklch(0.8 0.07 237);
-  --flight-tint: oklch(0.3 0.035 237);
-  --failed: oklch(0.68 0.14 33);
-  --failed-tint: oklch(0.31 0.05 33);
-  --warp: oklch(0.32 0.008 56);
-  --sidebar: oklch(0.18 0.004 48.5);
-  --sidebar-foreground: oklch(0.82 0.008 62);
-  --sidebar-accent: oklch(0.25 0.008 53);
-  --sidebar-accent-foreground: oklch(0.954 0.005 67.8);
-  --sidebar-border: oklch(1 0 0 / 8%);
+  --chart-3: oklch(0.72 0.09 237);
+  --chart-4: oklch(0.76 0.11 70);
+  --chart-5: oklch(0.6 0 0);
+  --weld: oklch(0.78 0.12 75);
+  --weld-ink: oklch(0.82 0.11 75);
+  --weld-tint: oklch(0.26 0.045 75);
+  --overdye: oklch(0.74 0.13 156);
+  --overdye-ink: oklch(0.8 0.11 156);
+  --overdye-tint: oklch(0.25 0.04 156);
+  --flight: oklch(0.72 0.1 237);
+  --flight-ink: oklch(0.8 0.08 237);
+  --flight-tint: oklch(0.25 0.04 237);
+  --failed: oklch(0.68 0.15 30);
+  --failed-tint: oklch(0.26 0.055 30);
+  --warp: oklch(0.27 0 0);
+  --sidebar: oklch(0.12 0 0);
+  --sidebar-foreground: oklch(0.8 0 0);
+  --sidebar-accent: oklch(0.2 0 0);
+  --sidebar-accent-foreground: oklch(0.965 0 0);
+  --sidebar-border: oklch(1 0 0 / 9%);
 }
 
 /*
@@ -226,11 +228,11 @@
 .dark[data-accent="graphite"],
 [data-accent="graphite"] .dark {
   --brand: oklch(0.939 0.005 67.8);
-  --brand-foreground: oklch(0.204 0.008 48.3);
-  --brand-ink: oklch(0.9 0.006 67.8);
-  --brand-tint: oklch(0.3 0.008 56);
-  --brand-soft: oklch(0.24 0.007 56);
-  --brand-line: oklch(0.45 0.01 60);
+  --brand-foreground: oklch(0.14 0 0);
+  --brand-ink: oklch(0.92 0 0);
+  --brand-tint: oklch(0.24 0 0);
+  --brand-soft: oklch(0.18 0 0);
+  --brand-line: oklch(0.42 0 0);
 }
 
 .dark[data-accent="ocean"],
@@ -238,8 +240,8 @@
   --brand: oklch(0.734 0.07 237.6);
   --brand-foreground: oklch(0.2 0.02 238);
   --brand-ink: oklch(0.78 0.065 237.6);
-  --brand-tint: oklch(0.31 0.035 238);
-  --brand-soft: oklch(0.245 0.02 238);
+  --brand-tint: oklch(0.26 0.045 238);
+  --brand-soft: oklch(0.19 0.025 238);
   --brand-line: oklch(0.5 0.05 238);
 }
 
@@ -248,8 +250,8 @@
   --brand: oklch(0.767 0.085 316.3);
   --brand-foreground: oklch(0.2 0.03 317);
   --brand-ink: oklch(0.8 0.08 316.3);
-  --brand-tint: oklch(0.31 0.05 317);
-  --brand-soft: oklch(0.245 0.03 317);
+  --brand-tint: oklch(0.26 0.055 317);
+  --brand-soft: oklch(0.19 0.03 317);
   --brand-line: oklch(0.5 0.07 317);
 }
 

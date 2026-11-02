@@ -32,6 +32,11 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			}
 			keys = []string{"user_id"}
 		}
+	case Cloudflare:
+		if strings.TrimSpace(details["account_id"]) == "" {
+			return ""
+		}
+		keys = []string{"account_id"}
 	case Render:
 		if strings.TrimSpace(details["owner_id"]) == "" {
 			return ""
@@ -70,6 +75,11 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			return ""
 		}
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "docker_id", "advertise_host"}
+	case Firecracker:
+		if details["host_id"] == "" {
+			return ""
+		}
+		keys = []string{"endpoint", "host_id", "host_ca"}
 	case Registry:
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
@@ -86,6 +96,8 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 		// The verified project ID identifies this account.
 	case Vercel:
 		// User and team IDs already identify their scopes, including renames.
+	case Cloudflare:
+		// The verified account ID identifies this account.
 	case Render:
 		// The verified owner ID identifies this workspace.
 	case DigitalOcean:
@@ -139,6 +151,8 @@ func recordedOwnedIdentity(c *Connection) error {
 		key = "namespace_uid"
 	case Server:
 		key = "docker_id"
+	case Firecracker:
+		key = "host_id"
 	}
 	if key != "" && strings.TrimSpace(c.Details[key]) == "" {
 		return fmt.Errorf("%w: this connection has no recorded %s; create a new connection to verify the resource identity", ErrInvalid, key)

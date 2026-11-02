@@ -2,10 +2,14 @@ package deployments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -16,12 +20,43 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type memStore struct {
-	mu sync.Mutex
-	d  map[string]*Deployment
+	mu             sync.Mutex
+	d              map[string]*Deployment
+	capacityEvents []CapacityTransition
+	capacityAcks   map[string]bool
+	verdicts       map[string]CanaryVerdict
+	// afterGet runs once, after the next GetDeployment read, as a change
+	// made between a read and a later write would.
+	afterGet func()
+}
+
+var _ CanaryStore = (*memStore)(nil)
+
+// copyDeployment is d without anything it shares with the stored one.
+func copyDeployment(d *Deployment) *Deployment {
+	c := *d
+	c.Steps = slices.Clone(d.Steps)
+	c.Sources = slices.Clone(d.Sources)
+	c.Canary = copyCanary(d.Canary)
+	return &c
+}
+
+func copyCanary(c *Canary) *Canary {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Steps = slices.Clone(c.Steps)
+	out.Services = slices.Clone(c.Services)
+	for i := range out.Services {
+		out.Services[i].Refs = maps.Clone(c.Services[i].Refs)
+	}
+	return &out
 }
 
 func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployment, error) {
@@ -29,29 +64,27 @@ func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployme
 	defer m.mu.Unlock()
 	for _, x := range m.d {
 		if x.PlanID == d.PlanID {
-			c := *x
-			return &c, nil
+			return copyDeployment(x), nil
 		}
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	m.d[d.ID] = &c
-	out := c
-	return &out, nil
+	m.d[d.ID] = copyDeployment(d)
+	return copyDeployment(d), nil
 }
 
 func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	d, ok := m.d[id]
 	if !ok {
+		m.mu.Unlock()
 		return nil, ErrNotFound
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	return &c, nil
+	out, after := copyDeployment(d), m.afterGet
+	m.afterGet = nil
+	m.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return out, nil
 }
 
 func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, error) {
@@ -59,8 +92,7 @@ func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, er
 	defer m.mu.Unlock()
 	for _, d := range m.d {
 		if d.PlanID == planID {
-			c := *d
-			return &c, nil
+			return copyDeployment(d), nil
 		}
 	}
 	return nil, ErrNotFound
@@ -80,6 +112,9 @@ func (m *memStore) SetSources(_ context.Context, _, id string, sources []SourceA
 func (m *memStore) UpdateStep(_ context.Context, _, id string, s Step) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s.Status == StepSkipped && (m.d[id].Status == StatusPaused || m.d[id].Status == StatusCancelled) {
+		return nil
+	}
 	for i := range m.d[id].Steps {
 		if m.d[id].Steps[i].ActionID == s.ActionID {
 			m.d[id].Steps[i] = s
@@ -106,12 +141,135 @@ func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
 	}
 	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
 	for i := range d.Steps {
-		if d.Steps[i].Status == StepFailed || d.Steps[i].Status == StepSkipped {
+		if retried(d.Steps[i].Status) {
 			d.Steps[i].Status = StepPending
 		}
 	}
+	if d.Canary != nil {
+		d.Canary.reopen()
+	}
 	d.Retries++
 	return true, nil
+}
+
+func (m *memStore) SetCanary(_ context.Context, _, id string, c *Canary) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.d[id]
+	if !ok {
+		return ErrNotFound
+	}
+	d.Canary = copyCanary(c)
+	return nil
+}
+
+func (m *memStore) UpdateCanary(_ context.Context, _, id string, change func(*Deployment) error) (*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stored, ok := m.d[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if stored.Canary == nil {
+		return nil, fmt.Errorf("deployment %s has no canary", id)
+	}
+	d := copyDeployment(stored)
+	if err := change(d); err != nil {
+		return nil, err
+	}
+	stored.Canary = copyCanary(d.Canary)
+	return d, nil
+}
+
+func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.d[v.DeploymentID]
+	if !ok || d.OrgID != v.OrgID {
+		return ErrNotFound
+	}
+	v.ID, v.ProjectID = VerdictID(v.DeploymentID, v.Retry, v.ActionID, v.Step, v.Attempt), d.ProjectID
+	if m.verdicts == nil {
+		m.verdicts = map[string]CanaryVerdict{}
+	}
+	if _, ok := m.verdicts[v.ID]; !ok {
+		m.verdicts[v.ID] = *v
+	}
+	return nil
+}
+
+func (m *memStore) Verdicts(_ context.Context, org, id string) ([]CanaryVerdict, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []CanaryVerdict{}
+	for _, v := range m.verdicts {
+		if v.OrgID == org && v.DeploymentID == id {
+			out = append(out, v)
+		}
+	}
+	slices.SortFunc(out, func(a, b CanaryVerdict) int {
+		if a.Retry != b.Retry {
+			return a.Retry - b.Retry
+		}
+		if a.Step != b.Step {
+			return a.Step - b.Step
+		}
+		if a.Attempt != b.Attempt {
+			return a.Attempt - b.Attempt
+		}
+		return strings.Compare(a.ActionID, b.ActionID)
+	})
+	return out, nil
+}
+
+func (m *memStore) RecentCanaries(_ context.Context, org, project, environment string, limit int) ([]*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Deployment{}
+	for _, d := range m.d {
+		if d.OrgID == org && d.ProjectID == project && d.EnvironmentID == environment && d.Canary != nil {
+			out = append(out, copyDeployment(d))
+		}
+	}
+	slices.SortFunc(out, func(a, b *Deployment) int {
+		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	return out[:min(limit, len(out))], nil
+}
+
+// holdsCanary is a running or paused deployment whose canary still holds
+// its environment.
+func holdsCanary(d *Deployment) bool {
+	return (d.Status == StatusRunning || d.Status == StatusPaused) && d.Canary != nil && slices.Contains(canaryActive, d.Canary.Status)
+}
+
+func (m *memStore) RampingCanary(_ context.Context, org, environment string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var found *Deployment
+	for _, d := range m.d {
+		if d.OrgID == org && d.EnvironmentID == environment && holdsCanary(d) && (found == nil || d.StartedAt.After(found.StartedAt)) {
+			found = d
+		}
+	}
+	if found == nil {
+		return "", nil
+	}
+	return found.ID, nil
+}
+
+func (m *memStore) CanaryBinding(_ context.Context, org, binding string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.d {
+		if d.OrgID == org && holdsCanary(d) && slices.ContainsFunc(d.Canary.Services, func(s CanaryService) bool { return s.BindingID == binding }) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type fakePlans struct {
@@ -119,16 +277,40 @@ type fakePlans struct {
 	plan     *planning.Plan
 	bindings map[string]*planning.Binding
 	deployed []planning.DeployedSource
+	// releases are the RecordRelease writes, and single counts the
+	// RecordDeployed ones.
+	releases []planning.DeployedRelease
+	single   int
+	// onGetPlan runs once, inside the next GetPlan.
+	onGetPlan func()
 }
 
 func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.single++
 	f.deployed = append(f.deployed, *d)
 	return nil
 }
 
+func (f *fakePlans) RecordRelease(_ context.Context, _ string, r *planning.DeployedRelease) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, *r)
+	for _, d := range r.Sources {
+		f.deployed = append(f.deployed, *d)
+	}
+	return nil
+}
+
 func (f *fakePlans) GetPlan(context.Context, string, string) (*planning.Plan, error) {
+	f.mu.Lock()
+	hook := f.onGetPlan
+	f.onGetPlan = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return f.plan, nil
 }
 
@@ -633,6 +815,52 @@ func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
 	}
 	if len(plans.deployed) != 0 {
 		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
+	}
+}
+
+func TestRunner_recordsEveryMovedSourceInOneWrite(t *testing.T) {
+	ctx := t.Context()
+	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	plan := threeRepos()
+	plan.ManifestID, plan.ManifestRevision = "man_5", 5
+	r, _, plans := newRunner(t, plan, &recorder{}, fakeVariables{})
+	r.now = func() time.Time { return at }
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if plans.single != 0 || len(plans.releases) != 1 {
+		t.Fatalf("RecordDeployed %d times, RecordRelease %d times", plans.single, len(plans.releases))
+	}
+	got := plans.releases[0]
+	if got.EnvironmentID != "env_1" || got.PlanID != "plan_1" || got.ManifestID != "man_5" || got.ManifestRevision != 5 || !got.DeployedAt.Equal(at) {
+		t.Fatalf("release %+v", got)
+	}
+	moved := make([]string, 0, len(got.Sources))
+	for _, d := range got.Sources {
+		moved = append(moved, d.SourceID+"@"+d.CommitSHA)
+	}
+	if !slices.Equal(moved, []string{"src_web@" + shaWeb, "src_api@" + shaAPI}) {
+		t.Fatalf("moved %v", moved)
+	}
+
+	// A catalog plan moves no repository and isn't a release of the
+	// environment's manifest, so it records nothing.
+	catalog := webAndAPI()
+	catalog.Catalog, catalog.Sources = true, nil
+	r, _, plans = newRunner(t, catalog, &recorder{}, fakeVariables{})
+	id, _, err = r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.releases) != 0 || plans.single != 0 {
+		t.Fatalf("a catalog plan recorded %+v", plans.releases)
 	}
 }
 
@@ -1475,5 +1703,399 @@ func TestRunner_aServiceDeletedOnAnotherConnectionIsCreatedAgain(t *testing.T) {
 	}
 	if got := log2.list(); len(got) != 0 {
 		t.Fatalf("events %v", got)
+	}
+}
+
+// binderHooks is a kind's hooks that issue a value per consuming service.
+type binderHooks struct {
+	NoHooks
+	mu         sync.Mutex
+	bound      []Consumer
+	released   []Consumer
+	releaseErr error
+}
+
+func (h *binderHooks) BindConsumer(_ context.Context, c Consumer) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.bound = append(h.bound, c)
+	return "key-for-" + c.Service, nil
+}
+
+func (h *binderHooks) ReleaseConsumer(_ context.Context, c Consumer) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.released = append(h.released, c)
+	return h.releaseErr
+}
+
+// consumerLink is the variable a service gets from the per-consumer
+// output "key" of the composed resource app.
+var consumerLink = planning.EnvLink{Key: "SAMPLE_KEY", From: "app", Subject: planning.ResourceSubject, Field: "consumer:key"}
+
+// consumerApp is the composed resource app, of a test kind with a
+// per-consumer output.
+func consumerApp(t *testing.T) *planning.Binding {
+	t.Helper()
+	raw, err := json.Marshal(planning.ResourceConfig{Provider: "server", Kind: "sample", Composition: &planning.CompositionConfig{
+		Kind: "sample", Outputs: []recipes.Output{{Name: "url", EnvKey: "SAMPLE_URL"}, {Name: "key", EnvKey: "SAMPLE_KEY", PerConsumer: true}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &planning.Binding{ID: "bind_app", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ResourceSubject,
+		Name: "app", Provider: "server", ExternalID: "catalog/app", Config: raw}
+}
+
+// consumerService is a private service on Cloud Run with env.
+func consumerService(op planning.Op, name string, env ...planning.EnvLink) planning.Action {
+	a := planning.Action{ID: "service:" + name, Op: op, Subject: planning.ServiceSubject, Name: name, Provider: "cloud-run", Step: 1}
+	if op != planning.Delete {
+		a.Service = &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/" + name, Env: env}
+	}
+	return a
+}
+
+// consumerRunner is a runner for plan, with the composed resource app and
+// any other bindings bound, and hooks serving the kind sample.
+func consumerRunner(t *testing.T, plan *planning.Plan, hooks CatalogHooks, others ...*planning.Binding) (*Runner, *memStore, *fakePlans, *recorder) {
+	t.Helper()
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, store, plans, _ := moveRunner(t, plan, consumerApp(t), map[string]Executor{"cloud-run": exec})
+	for _, b := range others {
+		plans.bindings[string(b.Subject)+":"+b.Name] = b
+	}
+	r.catalogHooks = map[string]CatalogHooks{"sample": hooks}
+	return r, store, plans, exec
+}
+
+// boundService is a service already deployed with env.
+func boundService(t *testing.T, name string, env ...planning.EnvLink) *planning.Binding {
+	t.Helper()
+	raw, err := json.Marshal(planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/" + name, Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &planning.Binding{ID: "bind_" + name, OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: name, Provider: "cloud-run", ExternalID: "ext-" + name, ConnectionID: "conn_g", Config: raw}
+}
+
+func consumerPlan(actions ...planning.Action) *planning.Plan {
+	plan := webAndAPI()
+	plan.Actions = actions
+	return plan
+}
+
+func TestPerConsumerOutputIsIssuedPerService(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink), consumerService(planning.Create, "jobs", consumerLink))
+	plan.Actions[1].Step = 2
+	hooks := &binderHooks{}
+	r, store, _, exec := consumerRunner(t, plan, hooks)
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if len(hooks.bound) != 2 {
+		t.Fatalf("bound %d consumers: %+v", len(hooks.bound), hooks.bound)
+	}
+	for i, service := range []string{"web", "jobs"} {
+		c := hooks.bound[i]
+		channel, address := c.Channel, c.Address
+		c.Channel, c.Address = nil, nil
+		want := Consumer{OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production", Resource: "app", Kind: "sample", Output: "key", Service: service}
+		if !reflect.DeepEqual(c, want) || channel == nil || address == nil {
+			t.Fatalf("consumer %d is %+v, channel %v; want %+v with a channel", i, c, channel != nil, want)
+		}
+		job := exec.jobs[i]
+		if job.Action.Name != service || job.Env["SAMPLE_KEY"] != "key-for-"+service || !job.Secrets["SAMPLE_KEY"] {
+			t.Fatalf("%s got %q, secret %v", service, job.Env["SAMPLE_KEY"], job.Secrets["SAMPLE_KEY"])
+		}
+	}
+}
+
+func TestPerConsumerOutputWithoutBinderFails(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink))
+	r, store, plans, exec := consumerRunner(t, plan, NoHooks{})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusFailed || !strings.Contains(d.Error, "sample has no consumer binder for output key") {
+		t.Fatalf("deployment %s: %q", d.Status, d.Error)
+	}
+	if len(exec.jobs) != 0 || plans.bindings["service:web"] != nil {
+		t.Fatalf("web was deployed anyway: %d jobs", len(exec.jobs))
+	}
+}
+
+// runStep runs one action of plan the way the workflow does, without the
+// checkpoint an executor that deploys nothing never saves.
+func runStep(t *testing.T, r *Runner, plan *planning.Plan, store *memStore, action string) *Step {
+	t.Helper()
+	ctx := t.Context()
+	id := startMove(t, r, plan)
+	if err := r.Run(ctx, plan.OrgID, id, action, nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Finish(ctx, plan.OrgID, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(ctx, plan.OrgID, id)
+	return d.Step(action)
+}
+
+func TestRemovingConsumerReleasesItsValue(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"))
+	hooks := &binderHooks{}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink), boundService(t, "jobs", consumerLink))
+
+	step := runStep(t, r, plan, store, "service:web")
+	if len(hooks.released) != 1 || hooks.released[0].Service != "web" || hooks.released[0].Resource != "app" || hooks.released[0].Output != "key" || hooks.released[0].Kind != "sample" {
+		t.Fatalf("released %+v", hooks.released)
+	}
+	if len(step.Warnings) != 0 || len(hooks.bound) != 0 {
+		t.Fatalf("warnings %q, bound %+v", step.Warnings, hooks.bound)
+	}
+	if plans.bindings["service:web"] != nil || plans.bindings["service:jobs"] == nil {
+		t.Fatalf("bindings %v", plans.bindings)
+	}
+}
+
+func TestDroppingTheNeedReleasesItsValue(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Update, "web"), consumerService(planning.Update, "jobs", consumerLink))
+	plan.Actions[1].Step = 2
+	hooks := &binderHooks{}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink), boundService(t, "jobs", consumerLink))
+
+	runStep(t, r, plan, store, "service:web")
+	if len(hooks.released) != 1 || hooks.released[0].Service != "web" {
+		t.Fatalf("released %+v", hooks.released)
+	}
+	if plans.bindings["service:web"] == nil {
+		t.Fatal("web is gone")
+	}
+	// A service that still needs it keeps its value.
+	hooks.released = nil
+	runStep(t, r, plan, store, "service:jobs")
+	if len(hooks.released) != 0 || len(hooks.bound) != 1 || hooks.bound[0].Service != "jobs" {
+		t.Fatalf("released %+v, bound %+v", hooks.released, hooks.bound)
+	}
+}
+
+func TestFailingToReleaseAConsumerWarns(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"))
+	hooks := &binderHooks{releaseErr: errors.New("fabriq is down")}
+	r, store, plans, _ := consumerRunner(t, plan, hooks, boundService(t, "web", consumerLink))
+
+	step := runStep(t, r, plan, store, "service:web")
+	if len(step.Warnings) != 1 || !strings.Contains(step.Warnings[0], "web") || !strings.Contains(step.Warnings[0], "fabriq is down") {
+		t.Fatalf("warnings %q", step.Warnings)
+	}
+	if plans.bindings["service:web"] != nil {
+		t.Fatal("the binding is still there")
+	}
+}
+
+// releaseLog is a release observer that records each release, with how
+// long it had, and fails with err.
+type releaseLog struct {
+	mu       sync.Mutex
+	releases []Release
+	budgets  []time.Duration
+	err      error
+}
+
+func (l *releaseLog) Released(ctx context.Context, r Release) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.releases = append(l.releases, r)
+	if deadline, ok := ctx.Deadline(); ok {
+		l.budgets = append(l.budgets, time.Until(deadline))
+	}
+	return l.err
+}
+
+func (l *releaseLog) all() []Release {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.releases)
+}
+
+// observerFunc is a ReleaseObserver from a function.
+type observerFunc func(ctx context.Context, r Release) error
+
+func (f observerFunc) Released(ctx context.Context, r Release) error { return f(ctx, r) }
+
+// cacheAction is the resource cache on Cloud Run, as a plan has it.
+func cacheAction(op planning.Op) planning.Action {
+	a := planning.Action{ID: "resource:cache", Op: op, Subject: planning.ResourceSubject, Name: "cache", Provider: "cloud-run", Step: 1}
+	if op != planning.Delete {
+		a.Resource = &planning.ResourceConfig{Provider: "cloud-run", Kind: "redis"}
+	}
+	return a
+}
+
+func TestReleaseObserverNeverFailsTheDeployment(t *testing.T) {
+	plan := consumerPlan(cacheAction(planning.Create), consumerService(planning.Create, "web"))
+	plan.Actions[1].Step = 2
+	failing := &releaseLog{err: errors.New("the catalog is down")}
+	fine := &releaseLog{}
+	r, store, plans, _ := consumerRunner(t, plan, NoHooks{})
+	// What an observer does with its binding changes nothing else.
+	scribbler := observerFunc(func(_ context.Context, rel Release) error {
+		for i := range rel.Binding.Config {
+			rel.Binding.Config[i] = 'x'
+		}
+		rel.Binding.Name = "scribbled"
+		return nil
+	})
+	r.observers = []ReleaseObserver{scribbler, failing, fine}
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	if d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	web := d.Step("service:web")
+	if web.Status != StepSucceeded || !slices.Equal(web.Warnings, []string{"web: the catalog is down"}) {
+		t.Fatalf("web step %s, warnings %q", web.Status, web.Warnings)
+	}
+	if b := plans.bindings["service:web"]; b.Name != "web" || !json.Valid(b.Config) {
+		t.Fatalf("an observer changed the bound web: %s %q", b.Name, b.Config)
+	}
+	if cache := d.Step("resource:cache"); len(cache.Warnings) != 0 {
+		t.Fatalf("cache warnings %q", cache.Warnings)
+	}
+	for _, observer := range []*releaseLog{failing, fine} {
+		releases := observer.all()
+		if len(releases) != 1 {
+			t.Fatalf("released %d times: %+v", len(releases), releases)
+		}
+		got := releases[0]
+		if got.OrgID != "org_1" || got.ProjectID != "proj_1" || got.EnvironmentID != "env_1" || got.Removed || got.Binding == nil || got.Binding.Name != "web" || got.Binding.Subject != planning.ServiceSubject || got.Binding.ExternalID != "ext-web" {
+			t.Fatalf("release %+v", got)
+		}
+		if got.Binding.ID != plans.bindings["service:web"].ID {
+			t.Fatalf("released binding %s, bound %s", got.Binding.ID, plans.bindings["service:web"].ID)
+		}
+		if len(observer.budgets) != 1 || observer.budgets[0] > 10*time.Second || observer.budgets[0] < 9*time.Second {
+			t.Fatalf("observer had %v", observer.budgets)
+		}
+	}
+}
+
+func TestRemovedServiceNotifiesObservers(t *testing.T) {
+	plan := consumerPlan(consumerService(planning.Delete, "web"), cacheAction(planning.Delete))
+	observer := &releaseLog{}
+	cache := &planning.Binding{ID: "bind_cache", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ResourceSubject, Name: "cache", Provider: "cloud-run", ExternalID: "ext-cache", ConnectionID: "conn_g", Config: json.RawMessage(`{}`)}
+	r, store, plans, _ := consumerRunner(t, plan, NoHooks{}, boundService(t, "web"), cache)
+	r.observers = []ReleaseObserver{observerFunc(func(ctx context.Context, rel Release) error {
+		// The binding is gone by the time observers hear of it.
+		if b := plans.bindings["service:web"]; b != nil {
+			t.Error("observers ran before the binding was deleted")
+		}
+		return observer.Released(ctx, rel)
+	})}
+
+	step := runStep(t, r, plan, store, "service:web")
+	releases := observer.all()
+	if len(releases) != 1 || !releases[0].Removed || releases[0].Binding == nil || releases[0].Binding.ID != "bind_web" || releases[0].OrgID != "org_1" || releases[0].EnvironmentID != "env_1" {
+		t.Fatalf("releases %+v", releases)
+	}
+	if len(step.Warnings) != 0 {
+		t.Fatalf("warnings %q", step.Warnings)
+	}
+	runStep(t, r, plan, store, "resource:cache")
+	if plans.bindings["resource:cache"] != nil || len(observer.all()) != 1 {
+		t.Fatalf("removing a resource: %d releases", len(observer.all()))
+	}
+}
+
+func TestConsumerCarriesOptionsAndAddress(t *testing.T) {
+	link := consumerLink
+	link.Options = map[string]string{"tenant": "acme"}
+	plan := consumerPlan(consumerService(planning.Create, "web", link))
+	hooks := &binderHooks{}
+	r, store, _, _ := consumerRunner(t, plan, hooks)
+	if err := r.resources.Put(t.Context(), ResourceKey("org_1", "env_1", "app--server", "address"), []byte(`{"api":"http://lp-inst-server:8080","admin":"http://lp-inst-server:9090"}`)); err != nil {
+		t.Fatal(err)
+	}
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	if len(hooks.bound) != 1 || !maps.Equal(hooks.bound[0].Options, map[string]string{"tenant": "acme"}) {
+		t.Fatalf("bound %+v", hooks.bound)
+	}
+	c := hooks.bound[0]
+	// The consumer gets its own copy of the options.
+	c.Options["tenant"] = "changed"
+	if plan.Actions[0].Service.Env[0].Options["tenant"] != "acme" {
+		t.Fatal("a binder can change the plan's options")
+	}
+	address, err := c.Address("server", "api")
+	if err != nil || address.String() != "http://lp-inst-server:8080" {
+		t.Fatalf("address %v: %v", address, err)
+	}
+	if _, err = c.Address("server", "metrics"); err == nil {
+		t.Fatal("an undeclared port has an address")
+	}
+	if _, err = c.Address("worker", "api"); err == nil {
+		t.Fatal("a component that hasn't started has an address")
+	}
+}
+
+func TestReleaseCopiesTheBinding(t *testing.T) {
+	at := time.Now()
+	b := &planning.Binding{Name: "web", Config: json.RawMessage(`{"a":1}`), ObservedAt: &at,
+		Replaced: []planning.Binding{{Name: "web", ExternalID: "old", Config: json.RawMessage(`{"b":2}`)}}}
+	c := cloneBinding(b)
+	c.Config[2] = 'z'
+	c.Replaced[0].Config[2] = 'z'
+	c.Replaced[0].ExternalID = "changed"
+	*c.ObservedAt = at.Add(time.Hour)
+	if string(b.Config) != `{"a":1}` || string(b.Replaced[0].Config) != `{"b":2}` || b.Replaced[0].ExternalID != "old" || !b.ObservedAt.Equal(at) {
+		t.Fatalf("the copy shares with the binding: %+v", b)
+	}
+}
+
+// revisioned is an executor whose outcome names a digest reference and a
+// provider revision, as DigitalOcean's deployment ID is.
+type revisioned struct{ *recorder }
+
+func (r revisioned) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+	out, err := r.recorder.Apply(ctx, job)
+	if out != nil {
+		out.Image, out.Revision = "i@sha256:"+strings.Repeat("0", 64), "dep_do_9"
+		job.Warn(errors.New(job.Action.Name + " warned while it deployed"))
+	}
+	return out, err
+}
+
+// The step keeps what the executor deployed, and what it warned about.
+func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
+	exec := revisioned{&recorder{url: answering(t, http.StatusOK)}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, nil)
+	id, err := runAll(t, r, webAndAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	api := d.Step("service:api")
+	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" ||
+		!slices.Contains(api.Warnings, "api warned while it deployed") {
+		t.Fatalf("api step %+v", api)
 	}
 }

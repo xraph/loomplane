@@ -1,0 +1,8 @@
+# Files on a ReadWriteMany volume instead of S3, with a Secret you manage.
+publicURL: https://loomplane.example.com
+secrets:
+  existingSecret: loomplane
+storage:
+  persistence:
+    enabled: true
+    storageClass: efs

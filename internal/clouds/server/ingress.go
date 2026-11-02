@@ -11,8 +11,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
@@ -38,14 +41,33 @@ func ingressFence(ctx context.Context, c *Client) error {
 }
 
 func ingressContainer(ctx context.Context, c *Client, org, server string) (*containerInfo, error) {
+	return ingressContainerNamed(ctx, c, org, server, IngressName(org, server))
+}
+
+func ingressContainerNamed(ctx context.Context, c *Client, org, server, name string) (*containerInfo, error) {
 	var out containerInfo
-	if err := dockerJSON(ctx, c, http.MethodGet, "/containers/"+IngressName(org, server)+"/json", nil, &out); err != nil {
+	if err := dockerJSON(ctx, c, http.MethodGet, "/containers/"+name+"/json", nil, &out); err != nil {
 		return nil, err
 	}
-	if out.Config.Labels[owned.LabelOrg] != org || out.Config.Labels[ingressOwner] != server || out.Config.Image != IngressImage {
+	if out.Config.Labels[owned.LabelOrg] != org || out.Config.Labels[ingressOwner] != server || !slices.Contains(ingressImages(), out.Config.Image) {
 		return nil, ErrOwned
 	}
 	return &out, nil
+}
+
+// createIngress makes the proxy container on its durable volumes and the
+// public ports. Docker refuses occupied listeners when it starts.
+func createIngress(ctx context.Context, c *Client, org, server, image string) error {
+	name := IngressName(org, server)
+	return dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, map[string]any{
+		"Image": image, "Labels": ingressLabels(org, server),
+		"Cmd":          []string{"caddy", "run", "--resume", "--config", "/config/bootstrap.json"},
+		"ExposedPorts": map[string]any{"80/tcp": map[string]any{}, "443/tcp": map[string]any{}},
+		"HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": "unless-stopped"}, "Memory": 256 << 20, "NanoCpus": 500000000,
+			"CapDrop": []string{"ALL"}, "CapAdd": []string{"NET_BIND_SERVICE"}, "Sysctls": map[string]string{"net.ipv4.ip_forward": "0"},
+			"Binds":        []string{name + "-data:/data", name + "-config:/config"},
+			"PortBindings": map[string]any{"80/tcp": []any{map[string]string{"HostIp": "0.0.0.0", "HostPort": "80"}}, "443/tcp": []any{map[string]string{"HostIp": "0.0.0.0", "HostPort": "443"}}}},
+	}, nil)
 }
 
 // EnsureIngress starts the exact owned proxy with durable certificate and
@@ -58,7 +80,8 @@ func EnsureIngress(ctx context.Context, c *Client, org, server string) (*Ingress
 	labels := ingressLabels(org, server)
 	container, err := ingressContainer(ctx, c, org, server)
 	if errors.Is(err, ErrMissing) {
-		if checkErr := (&Runtime{}).pull(ctx, c, IngressImage, ""); checkErr != nil {
+		image := ingressCreateImage()
+		if checkErr := (&Runtime{}).pull(ctx, c, image, ""); checkErr != nil {
 			return nil, checkErr
 		}
 		for _, volume := range []string{name + "-data", name + "-config"} {
@@ -73,18 +96,8 @@ func EnsureIngress(ctx context.Context, c *Client, org, server string) (*Ingress
 				return nil, err
 			}
 		}
-		var created struct{ ID string }
-		err = dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, map[string]any{
-			"Image": IngressImage, "Labels": labels,
-			"Cmd":          []string{"caddy", "run", "--resume", "--config", "/config/bootstrap.json"},
-			"ExposedPorts": map[string]any{"80/tcp": map[string]any{}, "443/tcp": map[string]any{}},
-			"HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": "unless-stopped"}, "Memory": 256 << 20, "NanoCpus": 500000000,
-				"CapDrop": []string{"ALL"}, "CapAdd": []string{"NET_BIND_SERVICE"}, "Sysctls": map[string]string{"net.ipv4.ip_forward": "0"},
-				"Binds":        []string{name + "-data:/data", name + "-config:/config"},
-				"PortBindings": map[string]any{"80/tcp": []any{map[string]string{"HostIp": "0.0.0.0", "HostPort": "80"}}, "443/tcp": []any{map[string]string{"HostIp": "0.0.0.0", "HostPort": "443"}}}},
-		}, &created)
-		if err != nil {
-			return nil, err
+		if createErr := createIngress(ctx, c, org, server, image); createErr != nil {
+			return nil, createErr
 		}
 		container, err = ingressContainer(ctx, c, org, server)
 	}
@@ -118,7 +131,12 @@ func ingressFile(ctx context.Context, c *Client, container, name string, raw []b
 	if err := w.Close(); err != nil {
 		return err
 	}
-	resp, err := c.RequestHeaders(ctx, http.MethodPut, "/containers/"+url.PathEscape(container)+"/archive?path=/config", &body, http.Header{"Content-Type": []string{"application/x-tar"}})
+	return ingressArchive(ctx, c, container, &body)
+}
+
+// ingressArchive unpacks a tar into the proxy's /config volume.
+func ingressArchive(ctx context.Context, c *Client, container string, body io.Reader) error {
+	resp, err := c.RequestHeaders(ctx, http.MethodPut, "/containers/"+url.PathEscape(container)+"/archive?path=/config", body, http.Header{"Content-Type": []string{"application/x-tar"}})
 	if err != nil {
 		return err
 	}
@@ -138,6 +156,10 @@ trap 'rm -rf "$d"' EXIT
 if [ "$1" = apply ]; then
  printf '%s' "$3" | base64 -d > "$d/new.json"
  wget -q -T 20 --header='Content-Type: application/json' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
+fi
+if [ "$1" = reload ]; then
+ printf '%s' "$3" | base64 -d > "$d/new.json"
+ wget -q -T 20 --header='Content-Type: application/json' --header='Cache-Control: must-revalidate' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
 fi
 wget -S -T 20 -O "$d/config" http://127.0.0.1:2019/config/ 2> "$d/headers"
 awk 'tolower($1)=="etag:" {sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); print}' "$d/headers"
@@ -191,6 +213,32 @@ func ApplyIngress(ctx context.Context, c *Client, expected *IngressSnapshot, v I
 		return nil, err
 	}
 	if !sameIngressJSON(raw, out.Config) {
+		return nil, errors.New("ingress config changed during readback")
+	}
+	return out, nil
+}
+
+// ReloadIngress has Caddy load its unchanged config again, which reads a
+// rewritten DNS token file. The config and its ETag stay as they were.
+func ReloadIngress(ctx context.Context, c *Client, org, server string, expected *IngressSnapshot) (*IngressSnapshot, error) {
+	if expected == nil || expected.ETag == "" {
+		return nil, ErrInvalid
+	}
+	if err := ingressFence(ctx, c); err != nil {
+		return nil, err
+	}
+	container, err := ingressContainer(ctx, c, org, server)
+	if err != nil {
+		return nil, err
+	}
+	if container.ID != expected.ContainerID {
+		return nil, ErrOwned
+	}
+	out, err := ingressAdmin(ctx, c, container.ID, "reload", expected.ETag, expected.Config)
+	if err != nil {
+		return nil, err
+	}
+	if !sameIngressJSON(expected.Config, out.Config) {
 		return nil, errors.New("ingress config changed during readback")
 	}
 	return out, nil
@@ -306,7 +354,7 @@ func probeIngress(ctx context.Context, c *Client, v IngressConfig, expected *Ing
 			route = &v.Routes[i]
 		}
 	}
-	if route == nil || !validIngressHost(route.Hostname) || expected == nil {
+	if route == nil || !validIngressRoute(*route) || expected == nil {
 		return ErrInvalid
 	}
 	backend := route.Backend
@@ -331,7 +379,7 @@ func probeIngress(ctx context.Context, c *Client, v IngressConfig, expected *Ing
 		return ErrOwned
 	}
 	var out bytes.Buffer
-	err = execIngressOutput(ctx, c, before.ContainerID, []string{"sh", "-c", ingressProbeScript, "probe", route.Hostname}, &out)
+	err = execIngressOutput(ctx, c, before.ContainerID, []string{"sh", "-c", ingressProbeScript, "probe", IngressProbeHostname(route.ID, route.Hostname)}, &out)
 	if err != nil {
 		return err
 	}
@@ -409,4 +457,316 @@ func DisconnectIngressBackend(ctx context.Context, c *Client, v IngressConfig, b
 		}
 	}
 	return dockerJSON(ctx, c, http.MethodDelete, path, nil, nil)
+}
+
+// IngressNeedsUpgrade reports whether the server's proxy can't answer DNS-01
+// challenges. A server without a proxy needs none once the DNS-capable image
+// is published, since EnsureIngress starts that image.
+func IngressNeedsUpgrade(ctx context.Context, c *Client, org, server string) (bool, error) {
+	container, err := ingressContainer(ctx, c, org, server)
+	if errors.Is(err, ErrMissing) {
+		if !IngressImagePinned() {
+			return true, nil
+		}
+		// An upgrade that stopped halfway leaves only the stopped proxy.
+		_, err = ingressContainerNamed(ctx, c, org, server, previousIngressName(org, server))
+		if errors.Is(err, ErrMissing) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	if err != nil {
+		return false, err
+	}
+	if container.Config.Image != dnsIngressImage {
+		return true, nil
+	}
+	// An upgrade that stopped before removing the old proxy, or before
+	// starting the new one, left the old one under its previous name.
+	_, err = ingressContainerNamed(ctx, c, org, server, previousIngressName(org, server))
+	if errors.Is(err, ErrMissing) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func previousIngressName(org, server string) string { return IngressName(org, server) + "-previous" }
+
+// UpgradeIngress moves the proxy to the DNS-capable image: it stops and
+// renames the old container, starts the new one on the same volumes, ports
+// and route networks with --resume, and checks Caddy came back with current.
+// Any failure restarts the old proxy. Every HTTPS hostname on the server is
+// down while the new proxy starts.
+func UpgradeIngress(ctx context.Context, c *Client, org, server string, current *IngressSnapshot) (*IngressSnapshot, error) {
+	if !IngressImagePinned() || current == nil || current.ETag == "" {
+		return nil, ErrInvalid
+	}
+	if err := ingressFence(ctx, c); err != nil {
+		return nil, err
+	}
+	image, previous := dnsIngressImage, previousIngressName(org, server)
+	proxy, err := ingressContainer(ctx, c, org, server)
+	if err == nil && proxy.Config.Image == image {
+		if proxy.State.Running {
+			// An earlier attempt finished; only its stopped proxy can be left.
+			return finishIngressUpgrade(ctx, c, org, server, current)
+		}
+		// An earlier attempt made the new proxy and never started it. The
+		// old one waits stopped under its previous name.
+		if _, err = ingressContainerNamed(ctx, c, org, server, previous); err != nil {
+			return nil, err
+		}
+		if removeErr := dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(proxy.ID), nil, nil); removeErr != nil {
+			return nil, removeErr
+		}
+		err = ErrMissing
+	}
+	var old *containerInfo
+	renamed := false
+	switch {
+	case err == nil:
+		old = proxy
+		// A stop that failed or was cut off leaves the old proxy stopped.
+		// The new one must still resume current, which waitIngressConfig checks.
+		if old.State.Running {
+			actual, readErr := ingressAdmin(ctx, c, old.ID, "read", "", nil)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if !sameIngressJSON(actual.Config, current.Config) {
+				return nil, ErrOwned
+			}
+		}
+	case errors.Is(err, ErrMissing):
+		if old, err = ingressContainerNamed(ctx, c, org, server, previous); err != nil {
+			return nil, err
+		}
+		renamed = true
+	default:
+		return nil, err
+	}
+	networks, err := ingressRouteNetworks(ctx, c, old.ID)
+	if err != nil {
+		return nil, err
+	}
+	if pullErr := (&Runtime{}).pull(ctx, c, image, ""); pullErr != nil {
+		return nil, pullErr
+	}
+	if old.State.Running {
+		err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil)
+		if err == nil {
+			err = upgradeStep("stop")
+		}
+		// Docker may stop the proxy even when the answer is lost.
+		if err != nil {
+			return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, ""))
+		}
+	}
+	if !renamed {
+		if err = dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/rename?name="+previous, nil, nil); err != nil {
+			return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, ""))
+		}
+	}
+	snapshot, err := startUpgradedIngress(ctx, c, org, server, image, networks, current)
+	if err != nil {
+		var created string
+		if proxy, lookupErr := ingressContainer(ctx, c, org, server); lookupErr == nil && proxy.ID != old.ID {
+			created = proxy.ID
+		}
+		return nil, errors.Join(err, restoreIngress(ctx, c, org, server, old.ID, created))
+	}
+	// The new proxy serves from here; a retry removes an old one left behind.
+	if stepErr := upgradeStep("started"); stepErr != nil {
+		return nil, stepErr
+	}
+	if err = dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(old.ID), nil, nil); err != nil && !errors.Is(err, ErrMissing) {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+// upgradeFault lets tests fail UpgradeIngress after a step, as a lost
+// Docker answer or a crash would. It is nil outside tests.
+var upgradeFault func(step string) error
+
+func upgradeStep(step string) error {
+	if upgradeFault == nil {
+		return nil
+	}
+	return upgradeFault(step)
+}
+
+// ingressRouteNetworks are the route bridges a proxy is attached to.
+func ingressRouteNetworks(ctx context.Context, c *Client, container string) ([]string, error) {
+	var info struct {
+		NetworkSettings struct{ Networks map[string]json.RawMessage }
+	}
+	if err := dockerJSON(ctx, c, http.MethodGet, "/containers/"+url.PathEscape(container)+"/json", nil, &info); err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for network := range info.NetworkSettings.Networks {
+		if strings.HasPrefix(network, "lp-route-") {
+			out = append(out, network)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func startUpgradedIngress(ctx context.Context, c *Client, org, server, image string, networks []string, current *IngressSnapshot) (*IngressSnapshot, error) {
+	if err := createIngress(ctx, c, org, server, image); err != nil {
+		return nil, err
+	}
+	proxy, err := ingressContainer(ctx, c, org, server)
+	if err != nil {
+		return nil, err
+	}
+	if proxy.Config.Image != image {
+		return nil, ErrOwned
+	}
+	for _, network := range networks {
+		if connectErr := dockerJSON(ctx, c, http.MethodPost, "/networks/"+network+"/connect", map[string]any{"Container": proxy.ID}, nil); connectErr != nil {
+			return nil, connectErr
+		}
+	}
+	if startErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(proxy.ID)+"/start", nil, nil); startErr != nil {
+		return nil, startErr
+	}
+	return waitIngressConfig(ctx, c, proxy.ID, current)
+}
+
+// waitIngressConfig reads the admin config once Caddy listens, and accepts
+// only the config the old proxy served.
+func waitIngressConfig(ctx context.Context, c *Client, container string, current *IngressSnapshot) (*IngressSnapshot, error) {
+	var err error
+	for range 20 {
+		var snapshot *IngressSnapshot
+		if snapshot, err = ingressAdmin(ctx, c, container, "read", "", nil); err == nil {
+			if !sameIngressJSON(snapshot.Config, current.Config) {
+				return nil, errors.New("upgraded ingress resumed a different config")
+			}
+			return snapshot, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return nil, err
+}
+
+// restoreIngress removes a new proxy that failed and brings the old one back
+// under its own name.
+func restoreIngress(ctx context.Context, c *Client, org, server, old, created string) error {
+	// The restore runs even when the caller gave up; the fence stays on ctx.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	if created != "" {
+		if err := dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(created)+"?force=true", nil, nil); err != nil && !errors.Is(err, ErrMissing) {
+			return err
+		}
+	}
+	if err := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old)+"/rename?name="+IngressName(org, server), nil, nil); err != nil {
+		// A rename that failed before the move leaves the old name in place.
+		var info struct{ Name string }
+		if inspectErr := dockerJSON(ctx, c, http.MethodGet, "/containers/"+url.PathEscape(old)+"/json", nil, &info); inspectErr != nil || strings.TrimPrefix(info.Name, "/") != IngressName(org, server) {
+			return err
+		}
+	}
+	return dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old)+"/start", nil, nil)
+}
+
+// finishIngressUpgrade checks a proxy an earlier attempt already upgraded
+// and removes the stopped one it replaced.
+func finishIngressUpgrade(ctx context.Context, c *Client, org, server string, current *IngressSnapshot) (*IngressSnapshot, error) {
+	snapshot, err := ReadIngress(ctx, c, org, server)
+	if err != nil {
+		return nil, err
+	}
+	if !sameIngressJSON(snapshot.Config, current.Config) {
+		return nil, ErrOwned
+	}
+	old, err := ingressContainerNamed(ctx, c, org, server, previousIngressName(org, server))
+	if errors.Is(err, ErrMissing) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if old.State.Running {
+		return nil, ErrOwned
+	}
+	if err = dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(old.ID), nil, nil); err != nil && !errors.Is(err, ErrMissing) {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+// Cloudflare API tokens, as the Caddy module checks them. A token it
+// refuses would appear in Caddy's error, so Loomplane refuses it first.
+var ingressDNSToken = regexp.MustCompile(`^([A-Za-z0-9_-]{35,50}|cf(ut|at)_[A-Za-z0-9_-]{32,256})$`)
+
+// ValidDNSChallengeToken says whether token has the format Caddy's
+// Cloudflare module accepts. Both backends check it before they write one.
+func ValidDNSChallengeToken(token []byte) bool { return ingressDNSToken.Match(token) }
+
+// WriteIngressDNSToken puts a zone's DNS challenge token in the proxy's
+// config volume, readable only by Caddy. Caddy's config names the file;
+// the token never enters a config, a readback or a log.
+func WriteIngressDNSToken(ctx context.Context, c *Client, org, server, zoneID string, token []byte) error {
+	if !ingressZoneID.MatchString(zoneID) || !ingressDNSToken.Match(token) {
+		return ErrInvalid
+	}
+	if err := ingressFence(ctx, c); err != nil {
+		return err
+	}
+	container, err := ingressContainer(ctx, c, org, server)
+	if err != nil {
+		return err
+	}
+	body, err := dnsTokenArchive(zoneID, token)
+	if err != nil {
+		return err
+	}
+	return ingressArchive(ctx, c, container.ID, body)
+}
+
+// dnsTokenArchive is the tar that puts one zone's token under /config/dns.
+func dnsTokenArchive(zoneID string, token []byte) (*bytes.Buffer, error) {
+	var body bytes.Buffer
+	w := tar.NewWriter(&body)
+	if err := w.WriteHeader(&tar.Header{Name: "dns/", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
+		return nil, err
+	}
+	if err := w.WriteHeader(&tar.Header{Name: "dns/" + zoneID + ".token", Mode: 0o400, Size: int64(len(token))}); err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(token); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+// The fixed script removes one token file; the fence checks the zone ID.
+const ingressTokenScript = `rm -f /config/dns/"$1".token` //nolint:gosec // G101: a shell command naming a token file, not a credential
+
+// RemoveIngressDNSToken deletes a zone's token once no wildcard route on
+// the server needs it.
+func RemoveIngressDNSToken(ctx context.Context, c *Client, org, server, zoneID string) error {
+	if !ingressZoneID.MatchString(zoneID) {
+		return ErrInvalid
+	}
+	if err := ingressFence(ctx, c); err != nil {
+		return err
+	}
+	container, err := ingressContainer(ctx, c, org, server)
+	if err != nil {
+		return err
+	}
+	return execIngressOutput(ctx, c, container.ID, []string{"sh", "-c", ingressTokenScript, "dns", zoneID}, io.Discard)
 }

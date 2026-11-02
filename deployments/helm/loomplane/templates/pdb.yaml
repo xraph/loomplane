@@ -1,0 +1,22 @@
+{{- range $component := list "api" "worker" }}
+{{- $settings := index $.Values $component }}
+{{- if $settings.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ if eq $component "api" }}{{ include "loomplane.fullname" $ }}{{ else }}{{ include "loomplane.workerName" $ }}{{ end }}
+  labels:
+    {{- include "loomplane.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  {{- if $settings.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ $settings.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ $settings.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "loomplane.selectorLabels" (dict "ctx" $ "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -17,6 +17,7 @@ import {
   sourceOf,
   spansSources,
   stepIndex,
+  unpinned,
 } from "@/lib/architecture"
 
 const sha = "0123456789abcdef0123456789abcdef01234567"
@@ -206,6 +207,19 @@ describe("latestSucceeded", () => {
         ?.id
     ).toBe("1")
     expect(latestSucceeded([a("1", "failed")])).toBeUndefined()
+  })
+})
+
+describe("unpinned", () => {
+  it("leaves out a promotion's pinned analyses, so they are never the latest", () => {
+    const list = [
+      { id: "3", source: "web", status: "succeeded", pinned: true },
+      { id: "2", source: "web", status: "succeeded", pinned: false },
+      { id: "1", source: "web", status: "succeeded", pinned: false },
+    ] as Analysis[]
+    expect(unpinned(list).map((a) => a.id)).toEqual(["2", "1"])
+    expect(latestSucceeded(unpinned(list))?.id).toBe("2")
+    expect(latestBySource(unpinned(list)).get("web")?.id).toBe("2")
   })
 })
 

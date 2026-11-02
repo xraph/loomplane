@@ -1,0 +1,65 @@
+# Two acme entries, deliberately not in ID order: Entries() keeps the order
+# of the file.
+family: acme
+entries:
+  - id: acme/Small-1B-Instruct
+    title: Acme Small 1B Instruct
+    publisher: Acme
+    summary: A small chat model for quick replies.
+    revision: 0123456789abcdef0123456789abcdef01234567
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks: [chat, code]
+    parameters: 1235814400
+    context_length: 131072
+    architecture:
+      name: LlamaForCausalLM
+      layers: 16
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: llama3_json
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 2471645608
+        min_gpu_memory_gib: 8
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: acme-community/Small-1B-Instruct-GGUF
+        revision: 89abcdef0123456789abcdef0123456789abcdef
+        file: Small-1B-Instruct-Q4_K_M.gguf
+        weight_bytes: 807690656
+        args: ["--ctx-size=8192"]
+        min_memory_gib: 2
+  - id: acme/Embed-Small
+    title: Acme Embed Small
+    publisher: Acme
+    summary: Turns text into vectors for search.
+    revision: fedcba9876543210fedcba9876543210fedcba98
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks: [embedding]
+    parameters: 33360000
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 0
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+      query_prefix: "query: "
+      document_prefix: "passage: "
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 133462128
+        min_memory_gib: 1

@@ -33,8 +33,9 @@ const Name = "loomplane-environments"
 // Extension serves the variable API.
 type Extension struct {
 	*forge.BaseExtension
-	cfg config.Config
-	svc *environments.Service
+	cfg   config.Config
+	svc   *environments.Service
+	pools *environments.SourcePools
 }
 
 // New returns the extension.
@@ -52,9 +53,14 @@ func (e *Extension) Dependencies() []string {
 }
 
 // Register builds the service over Vault and mounts the routes.
-func (e *Extension) Register(fapp forge.App) error {
-	if err := e.BaseExtension.Register(fapp); err != nil {
-		return err
+func (e *Extension) Register(fapp forge.App) (err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, e.pools.Close())
+		}
+	}()
+	if registerErr := e.BaseExtension.Register(fapp); registerErr != nil {
+		return registerErr
 	}
 	c := fapp.Container()
 	db, err := forge.InjectType[*grove.DB](c)
@@ -88,12 +94,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("vault encryptor: %w", err)
 	}
-	secrets := environments.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(environments.VaultAppID)))
+	e.pools, err = environments.OpenSourcePools(context.Background(), e.cfg.Database.URL)
+	if err != nil {
+		return fmt.Errorf("open variable source pools: %w", err)
+	}
+	secrets := environments.NewVaultSecrets(secret.NewService(vaultpg.New(e.pools.Vault), enc, secret.WithAppID(environments.VaultAppID)))
 
 	pg := pgdriver.Unwrap(db)
 	log := e.Logger()
 	e.svc = environments.NewService(
-		environments.NewPgStore(pg), secrets, projects.NewPgStore(pg),
+		environments.NewPgStoreWithSourcePool(pg, e.pools.SQL), secrets, projects.NewPgStore(pg),
 		discovery.ServiceCatalog{Store: discovery.NewPgStore(pg)}, authz,
 		auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
@@ -112,12 +122,19 @@ func (e *Extension) Start(context.Context) error {
 	return nil
 }
 
+// Stop releases the two bounded source pools after consumers have stopped.
+func (e *Extension) Stop(context.Context) error {
+	err := e.pools.Close()
+	e.MarkStopped()
+	return err
+}
+
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
 	case errors.Is(err, environments.ErrNotFound), errors.Is(err, projects.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, environments.ErrExists):
+	case errors.Is(err, environments.ErrExists), errors.Is(err, projects.ErrFleetManaged):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, environments.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())

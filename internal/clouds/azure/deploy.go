@@ -301,6 +301,14 @@ type Run struct {
 		RunID           string `json:"runId"`
 		Status          string `json:"status"`
 		RunErrorMessage string `json:"runErrorMessage"`
+		// OutputImages are the images a finished run pushed, each with
+		// the digest the registry stored it under.
+		OutputImages []struct {
+			Registry   string `json:"registry"`
+			Repository string `json:"repository"`
+			Tag        string `json:"tag"`
+			Digest     string `json:"digest"`
+		} `json:"outputImages"`
 	} `json:"properties"`
 }
 
@@ -352,27 +360,27 @@ func (s *Session) StartBuild(ctx context.Context, b BuildRequest) (string, error
 }
 
 // WaitBuild polls a run until it finishes, and fails unless it
-// succeeded.
-func (s *Session) WaitBuild(ctx context.Context, runID string) error {
+// succeeded. A run that succeeded names the images it pushed.
+func (s *Session) WaitBuild(ctx context.Context, runID string) (*Run, error) {
 	path := s.registryPath() + "/runs/" + url.PathEscape(runID)
 	for {
 		var run Run
 		if _, err := s.do(ctx, http.MethodGet, path, tasksVersion, nil, &run); err != nil {
-			return err
+			return nil, err
 		}
 		if run.Done() {
 			if run.Properties.Status == "Succeeded" {
-				return nil
+				return &run, nil
 			}
 			detail := strings.TrimSpace(run.Properties.RunErrorMessage)
 			if detail == "" {
 				detail = strings.ToLower(run.Properties.Status)
 			}
-			return fmt.Errorf("ACR Tasks run %s: %s. Its log is under Services, Tasks, Runs in the container registry %s", runID, detail, RegistryName(s.cred.SubscriptionID, s.cred.ResourceGroup))
+			return nil, fmt.Errorf("ACR Tasks run %s: %s. Its log is under Services, Tasks, Runs in the container registry %s", runID, detail, RegistryName(s.cred.SubscriptionID, s.cred.ResourceGroup))
 		}
 		progress(ctx, "Building on ACR Tasks ("+strings.ToLower(run.Properties.Status)+")")
 		if err := s.wait(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 }
@@ -450,6 +458,8 @@ type AppProperties struct {
 
 // Configuration is how an app is reached and what it may read.
 type Configuration struct {
+	// ActiveRevisionsMode is SingleRevision, or MultipleRevisions while a
+	// canary splits the traffic.
 	ActiveRevisionsMode string        `json:"activeRevisionsMode,omitempty"`
 	Ingress             *Ingress      `json:"ingress,omitempty"`
 	Registries          []AppRegistry `json:"registries,omitempty"`
@@ -462,6 +472,9 @@ type Ingress struct {
 	External   bool   `json:"external"`
 	TargetPort int    `json:"targetPort"`
 	Transport  string `json:"transport,omitempty"`
+	// Traffic is how the app's traffic is split between its revisions.
+	// Only multiple revisions mode may name a revision.
+	Traffic []TrafficWeight `json:"traffic,omitempty"`
 	// Read only.
 	FQDN string `json:"fqdn,omitempty"`
 }
@@ -476,10 +489,14 @@ type AppRegistry struct {
 	PasswordSecretRef string `json:"passwordSecretRef,omitempty"`
 }
 
-// Secret is an app secret. Azure never returns its value.
+// Secret is an app secret. Azure returns its value only when it's
+// listed (ListSecrets). One kept in Key Vault has its URL and the
+// identity that reads it instead.
 type Secret struct {
-	Name  string `json:"name"`
-	Value string `json:"value,omitempty"`
+	Name        string `json:"name"`
+	Value       string `json:"value,omitempty"`
+	KeyVaultURL string `json:"keyVaultUrl,omitempty"`
+	Identity    string `json:"identity,omitempty"`
 }
 
 // Template is an app's revision template.

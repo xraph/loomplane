@@ -106,7 +106,7 @@ func (f *fakeDigitalOcean) serve(w http.ResponseWriter, r *http.Request) {
 			phase = "CANCELED"
 		}
 		comp := []any{map[string]any{"name": "x", "source_commit_hash": hash}}
-		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "services": comp}})
+		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "services": comp, "spec": f.apps[parts[2]]}})
 	case len(parts) == 6 && parts[5] == "cancel":
 		f.canceled, f.stopped[parts[4]] = append(f.canceled, parts[4]), true
 		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": "CANCELED"}})
@@ -170,11 +170,7 @@ func digitalOceanProject(t *testing.T, do *fakeDigitalOcean, token string) (*cli
 	r := start(t, cfg)
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

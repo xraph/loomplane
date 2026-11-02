@@ -235,6 +235,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('canary_verdict.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.CanaryVerdict = decode(JSON.parse(event.data), "CanaryVerdict");
+            this.emit('canary_verdict.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('canary_verdict.updated', (event: MessageEvent) => {
+          try {
+            const data: types.CanaryVerdict = decode(JSON.parse(event.data), "CanaryVerdict");
+            this.emit('canary_verdict.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('cloud.deleted', (event: MessageEvent) => {
           try {
             const data: types.Profile = decode(JSON.parse(event.data), "Profile");
@@ -248,6 +266,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           try {
             const data: types.Profile = decode(JSON.parse(event.data), "Profile");
             this.emit('cloud.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud_capacity.updated', (event: MessageEvent) => {
+          try {
+            const data: types.CapacityChange = decode(JSON.parse(event.data), "CapacityChange");
+            this.emit('cloud_capacity.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('cloud_cluster.updated', (event: MessageEvent) => {
+          try {
+            const data: types.ClusterChange = decode(JSON.parse(event.data), "ClusterChange");
+            this.emit('cloud_cluster.updated', data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -379,6 +415,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('notification.created', (event: MessageEvent) => {
+          try {
+            const data: types.NotificationCreated = decode(JSON.parse(event.data), "NotificationCreated");
+            this.emit('notification.created', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('plan.deleted', (event: MessageEvent) => {
           try {
             const data: types.Plan = decode(JSON.parse(event.data), "Plan");
@@ -428,6 +473,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           try {
             const data: types.RealtimeRealtimeStatus = decode(JSON.parse(event.data), "RealtimeRealtimeStatus");
             this.emit('realtime.status', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('release_watch.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Watch = decode(JSON.parse(event.data), "Watch");
+            this.emit('release_watch.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('release_watch.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Watch = decode(JSON.parse(event.data), "Watch");
+            this.emit('release_watch.updated', data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -560,6 +623,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
   }
 
   /**
+   * Register a handler for canary_verdict.deleted events.
+   * @param handler - Function to call when canary_verdict.deleted event is received
+   */
+  onCanaryVerdictDeleted(handler: (data: types.CanaryVerdict) => void): void {
+    this.on('canary_verdict.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for canary_verdict.deleted events.
+   * @param handler - The handler to remove
+   */
+  offCanaryVerdictDeleted(handler: (data: types.CanaryVerdict) => void): void {
+    this.off('canary_verdict.deleted', handler);
+  }
+
+  /**
+   * Register a handler for canary_verdict.updated events.
+   * @param handler - Function to call when canary_verdict.updated event is received
+   */
+  onCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
+    this.on('canary_verdict.updated', handler);
+  }
+
+  /**
+   * Remove a handler for canary_verdict.updated events.
+   * @param handler - The handler to remove
+   */
+  offCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
+    this.off('canary_verdict.updated', handler);
+  }
+
+  /**
    * Register a handler for cloud.deleted events.
    * @param handler - Function to call when cloud.deleted event is received
    */
@@ -589,6 +684,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offCloudUpdated(handler: (data: types.Profile) => void): void {
     this.off('cloud.updated', handler);
+  }
+
+  /**
+   * Register a handler for cloud_capacity.updated events.
+   * @param handler - Function to call when cloud_capacity.updated event is received
+   */
+  onCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
+    this.on('cloud_capacity.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_capacity.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
+    this.off('cloud_capacity.updated', handler);
+  }
+
+  /**
+   * Register a handler for cloud_cluster.updated events.
+   * @param handler - Function to call when cloud_cluster.updated event is received
+   */
+  onCloudClusterUpdated(handler: (data: types.ClusterChange) => void): void {
+    this.on('cloud_cluster.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_cluster.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudClusterUpdated(handler: (data: types.ClusterChange) => void): void {
+    this.off('cloud_cluster.updated', handler);
   }
 
   /**
@@ -816,6 +943,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
   }
 
   /**
+   * Register a handler for notification.created events.
+   * @param handler - Function to call when notification.created event is received
+   */
+  onNotificationCreated(handler: (data: types.NotificationCreated) => void): void {
+    this.on('notification.created', handler);
+  }
+
+  /**
+   * Remove a handler for notification.created events.
+   * @param handler - The handler to remove
+   */
+  offNotificationCreated(handler: (data: types.NotificationCreated) => void): void {
+    this.off('notification.created', handler);
+  }
+
+  /**
    * Register a handler for plan.deleted events.
    * @param handler - Function to call when plan.deleted event is received
    */
@@ -909,6 +1052,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
     this.off('realtime.status', handler);
+  }
+
+  /**
+   * Register a handler for release_watch.deleted events.
+   * @param handler - Function to call when release_watch.deleted event is received
+   */
+  onReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
+    this.on('release_watch.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for release_watch.deleted events.
+   * @param handler - The handler to remove
+   */
+  offReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
+    this.off('release_watch.deleted', handler);
+  }
+
+  /**
+   * Register a handler for release_watch.updated events.
+   * @param handler - Function to call when release_watch.updated event is received
+   */
+  onReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
+    this.on('release_watch.updated', handler);
+  }
+
+  /**
+   * Remove a handler for release_watch.updated events.
+   * @param handler - The handler to remove
+   */
+  offReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
+    this.off('release_watch.updated', handler);
   }
 
   /**

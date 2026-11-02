@@ -73,14 +73,14 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	cfg.CloudPlacement.Provider = "server"
 	cfg.CloudPlacement.PoolID = "pool"
 	cfg.CloudPlacement.ServerID = "host-old"
-	cfg.BuildTarget = &BuildTarget{Builder: "old", Registry: "registry"}
+	cfg.BuildTarget = &BuildTarget{Builder: "builder", Registry: "registry"}
 	binding.Provider = "server"
 	binding.Config, _ = json.Marshal(cfg)
 	assigned := appliedAssignment("")
 	assigned.Targets[0].Provider = "server"
 	assigned.Targets[0].Runtime = "server"
 	assigned.Targets[0].PoolID = "pool"
-	options := []ConnectionOption{{ID: "old", Cloud: "server", Ready: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
+	options := []ConnectionOption{{ID: "builder", Cloud: "server", Ready: true, Details: map[string]string{"build_workers": "dedicated", "docker_id": "builder", "architecture": "amd64"}}, {ID: "old", Cloud: "server", Ready: true, Pooled: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
 	pin := *cfg.CloudPlacement
 	pin.ConnectionID = "new"
 	pin.ServerID = "host-new"
@@ -95,7 +95,12 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	if len(moved.Routes) != 1 || moved.Routes[0].ID != route.ID || moved.Op != Replace || !reflect.DeepEqual(moved.Service.AppliedInputs, cfg.AppliedInputs) || moved.Service.CommitSHA != "original" {
 		t.Fatal("relocation replaced serving snapshots")
 	}
-	withoutRegistry := append([]ConnectionOption{}, options[:2]...)
+	// In a canary environment a relocated service deploys all at once, as
+	// compute's relocation branch pins it.
+	if planRelease(releaseInput(t, releaseYAML(canaryRelease)), result); warning(result, "canary-unavailable", "api") == nil || result.Release.Ramps("service:api") {
+		t.Fatalf("relocation in a canary environment: %+v, warnings %+v", result.Release, result.Warnings)
+	}
+	withoutRegistry := append([]ConnectionOption{}, options[:3]...)
 	blocked := appliedCloudPlan([]*Binding{binding}, assigned, "", withoutRegistry, providers.Registry(), map[string]CloudPlacement{"api": pin})
 	if blocked.Executable {
 		t.Fatal("remote builder bypassed required registry")
@@ -122,4 +127,109 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	if !found {
 		t.Fatalf("missing boundary finding: %+v", result.Problems)
 	}
+}
+
+// A service a promotion deployed with staging's image keeps nothing of
+// that image in its binding, but a binding written with one still builds
+// its commit again when a pool relocation or Cloud sync move rebuilds its
+// action: the image was chosen for the target it ran on.
+func TestRelocationAfterAPromotionBuildsAgain(t *testing.T) {
+	binding := appliedTestBinding(t, "api", "original")
+	var cfg ServiceConfig
+	if err := json.Unmarshal(binding.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Provider = "server"
+	cfg.Public = false
+	cfg.Execution = provider.Container
+	cfg.Workload = provider.Worker
+	cfg.Image = "Dockerfile"
+	cfg.Target = "old"
+	cfg.TargetSettings = map[string]string{"docker_id": "old", "architecture": "amd64"}
+	cfg.Size = &manifest.Size{CPU: 1, Memory: 512}
+	cfg.CloudPlacement.Provider = "server"
+	cfg.CloudPlacement.PoolID = "pool"
+	cfg.CloudPlacement.ServerID = "host-old"
+	cfg.BuildTarget = &BuildTarget{Builder: "builder", Registry: "registry"}
+	cfg.Artifact = &ReusedArtifact{Reference: "registry.example/app/api@" + artifactDigest, Digest: artifactDigest, CommitSHA: "original", FromEnvironment: "staging"}
+	binding.Provider = "server"
+	binding.Config, _ = json.Marshal(cfg)
+	assigned := appliedAssignment("")
+	assigned.Targets[0].Provider = "server"
+	assigned.Targets[0].Runtime = "server"
+	assigned.Targets[0].PoolID = "pool"
+	options := []ConnectionOption{{ID: "builder", Cloud: "server", Ready: true, Details: map[string]string{"build_workers": "dedicated", "docker_id": "builder", "architecture": "amd64"}}, {ID: "old", Cloud: "server", Ready: true, Pooled: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
+	pin := *cfg.CloudPlacement
+	pin.ConnectionID = "new"
+	pin.ServerID = "host-new"
+	pin.CPUMillis = 1000
+	pin.MemoryBytes = 512 << 20
+	result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin})
+	if !result.Executable {
+		t.Fatalf("relocation blocked: %+v", result.Problems)
+	}
+	moved := action(t, result, "service:api")
+	if moved.Op != Replace || moved.Service.CommitSHA != "original" {
+		t.Fatalf("relocation %s at %s", moved.Op, moved.Service.CommitSHA)
+	}
+	if moved.Service.Artifact != nil {
+		t.Fatalf("the relocated service deploys %s's image instead of building: %+v", moved.Service.Artifact.FromEnvironment, moved.Service.Artifact)
+	}
+}
+
+func TestServerPlanPreservesRuntimeLimitsWithoutAutoscaling(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings      string
+		wantCPU, wantMemory int64
+		blocked             bool
+	}{
+		{name: "nondefault", settings: "size: {cpu: 0.2, memory: 128}", wantCPU: 200, wantMemory: 128 << 20},
+		{name: "default", wantCPU: 1000, wantMemory: 512 << 20},
+		{name: "single replica", settings: "scale: {min: 1, max: 1}", wantCPU: 1000, wantMemory: 512 << 20},
+		{name: "replicas", settings: "scale: {min: 2, max: 2}", blocked: true},
+		{name: "autoscaling", settings: "scale: {min: 1, max: 2}", blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := parse(t, "version: 1\nservices:\n  api:\n    source: cmd/api\n    provider: server\n    target: "+targetA+"\n    public: false\n    "+tc.settings+"\n")
+			r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(), Connections: infrastructureConnections(t)})
+			if tc.blocked {
+				for _, p := range r.Problems {
+					if p.Code == "server-scale" && !r.Executable {
+						return
+					}
+				}
+				t.Fatalf("unsupported server scale accepted: %+v", r)
+			}
+			if !r.Executable {
+				t.Fatalf("supported server limits blocked: %+v", r.Problems)
+			}
+			cfg := action(t, r, "service:api").Service
+			cpu, memory, err := ServerResources(cfg.Size)
+			if err != nil || cpu != tc.wantCPU || memory != tc.wantMemory {
+				t.Fatalf("planned runtime limits = %dm/%d bytes, want %dm/%d bytes: %v", cpu, memory, tc.wantCPU, tc.wantMemory, err)
+			}
+			if !reflect.DeepEqual(cfg.Scale, m.Services["api"].Scale) {
+				t.Fatalf("single-replica scale lost: %+v", cfg.Scale)
+			}
+			for _, warning := range r.Warnings {
+				if warning.Code == "scaling-ignored" {
+					t.Fatalf("supported runtime limits reported as ignored: %+v", warning)
+				}
+			}
+		})
+	}
+}
+
+func TestManagedPlanStillIgnoresUncontrolledSizing(t *testing.T) {
+	r := compute(t, "version: 1\nservices:\n  web:\n    source: apps/web\n    provider: vercel\n    size: {cpu: 0.2, memory: 128}\n    scale: {min: 1, max: 2}\n", "production")
+	cfg := action(t, r, "service:web").Service
+	if cfg.Size != nil || cfg.Scale != nil {
+		t.Fatalf("managed runtime received ignored limits: %+v", cfg)
+	}
+	for _, warning := range r.Warnings {
+		if warning.Code == "scaling-ignored" && warning.Name == "web" {
+			return
+		}
+	}
+	t.Fatal("managed sizing warning missing")
 }

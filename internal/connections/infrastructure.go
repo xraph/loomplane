@@ -3,6 +3,7 @@ package connections
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -10,6 +11,9 @@ import (
 )
 
 type ServerChecker struct{}
+
+// IsGrant implements GrantChecker.
+func (ServerChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
 
 func (ServerChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := server.ParseConfig(raw, settings)
@@ -30,10 +34,25 @@ func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]
 	}
 	defer c.Close()
 	details, missing, err := c.Check(ctx)
+	if err == nil {
+		// GPUs reports a failed read as status unknown, so it never fails the check.
+		if inv, gpuErr := c.GPUs(ctx); gpuErr == nil {
+			if details == nil {
+				details = map[string]string{}
+			}
+			maps.Copy(details, inv.Details())
+		}
+	}
 	return Check{Account: cfg.User + "@" + cfg.Address, Details: details, Missing: missing}, err
 }
 
 type KubernetesChecker struct{}
+
+// IsGrant implements GrantChecker. The in-cluster credential counts, so
+// nobody can paste it to borrow Loomplane's own service account.
+func (KubernetesChecker) IsGrant(raw []byte) bool {
+	return keylessJSON(raw) || kubernetes.IsInClusterCredential(raw)
+}
 
 func (KubernetesChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := kubernetes.ParseConfig(raw, settings)
@@ -63,6 +82,9 @@ func (KubernetesChecker) Check(ctx context.Context, raw []byte, settings map[str
 }
 
 type RegistryChecker struct{}
+
+// IsGrant implements GrantChecker.
+func (RegistryChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
 
 func (RegistryChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := registry.ParseConfig(raw, settings)

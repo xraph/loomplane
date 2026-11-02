@@ -2,7 +2,6 @@ import { AuthCard } from "@authsome/ui-components"
 import { useAuth } from "@authsome/ui-react"
 
 import { AuthLayout } from "@/components/auth-layout"
-import { BrandLogo } from "@/components/brand-logo"
 import { OrganizationForm } from "@/components/organization-form"
 import { Button } from "@/components/ui/button"
 
@@ -14,12 +13,11 @@ export function Onboarding({
 }) {
   const { signOut } = useAuth()
   return (
-    <AuthLayout title="Create your organization">
+    <AuthLayout title="Create your workspace">
       <AuthCard
-        title="Name your organization"
-        description="Give your team's projects a home. You'll be the owner of this organization."
-        logo={<BrandLogo />}
-        align="center"
+        title="Name your workspace"
+        description="Give your team's projects a home. You'll be the owner of this workspace."
+        align="left"
         variant="borderless"
         className="auth-card"
         footer={

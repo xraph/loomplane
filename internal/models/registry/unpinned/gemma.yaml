@@ -1,0 +1,240 @@
+# Entries waiting for their first pin. registry-pin -write moves each one
+# into data/ once it can read the repo; these are gated, so that needs a
+# Hugging Face token whose account accepted the license (-hf-token-env).
+family: gemma
+entries:
+  - id: google/gemma-2-2b-it
+    title: Gemma 2 2B IT
+    publisher: Google
+    summary: A small Gemma 2 chat model from Google.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/gemma-2-9b-it
+    title: Gemma 2 9B IT
+    publisher: Google
+    summary: A 9B Gemma 2 chat model that's strong for its size.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/gemma-2-9b-it-GGUF
+        file: gemma-2-9b-it-Q4_K_M.gguf
+        weight_bytes: 0
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/gemma-2-9b-it-GGUF
+        file: gemma-2-9b-it-Q8_0.gguf
+        weight_bytes: 0
+  - id: google/gemma-2-27b-it
+    title: Gemma 2 27B IT
+    publisher: Google
+    summary: The largest Gemma 2 chat model.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/gemma-3-1b-it
+    title: Gemma 3 1B IT
+    publisher: Google
+    summary: The smallest Gemma 3 model, for text only.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/gemma-3-4b-it
+    title: Gemma 3 4B IT
+    publisher: Google
+    summary: A small Gemma 3 model that reads text and images in over 140 languages.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - vision
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/gemma-3-12b-it
+    title: Gemma 3 12B IT
+    publisher: Google
+    summary: A 12B Gemma 3 model for text and images with a 128K context.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - vision
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/gemma-3-27b-it
+    title: Gemma 3 27B IT
+    publisher: Google
+    summary: The largest Gemma 3 model, for text and images.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - vision
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: fp8
+        engine: vllm
+        repo: RedHatAI/gemma-3-27b-it-FP8-dynamic
+        weight_bytes: 0
+  - id: google/codegemma-7b-it
+    title: CodeGemma 7B IT
+    publisher: Google
+    summary: A 7B Gemma model tuned to write and explain code.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - code
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: google/embeddinggemma-300m
+    title: EmbeddingGemma 300M
+    publisher: Google
+    summary: A small multilingual embedding model from Google that runs well on a CPU.
+    revision: ""
+    license:
+      id: gemma
+      commercial: true
+    gated: true
+    tasks:
+      - embedding
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    embedding:
+      dimensions: 768
+      max_input_tokens: 2048
+      query_prefix: 'task: search result | query: '
+      document_prefix: 'title: none | text: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 0
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+        args:
+          - --runner=pooling

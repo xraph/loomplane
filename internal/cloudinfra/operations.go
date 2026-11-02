@@ -163,21 +163,106 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 					return nil, checkErr
 				}
 				for _, size := range options.Sizes {
-					if size.ID == in.Size {
-						o.EstimatedHourlyUSD = size.HourlyUSD
-						break
+					if size.ID != in.Size {
+						continue
 					}
+
+					if priceErr := priceOperation(o, size); priceErr != nil {
+						return nil, priceErr
+					}
+					resources, sizeErr := sizeResources(size)
+					if sizeErr != nil {
+						return nil, sizeErr
+					}
+					o.CapacityTarget = &resources
+					o.CapacityCheckedAt = now
+					break
 				}
 			}
 		}
-		if in.Kind == "resize" && in.Size == "" {
-			return nil, ErrInvalid
+		if in.Kind == "resize" {
+			if in.Size == "" {
+				return nil, ErrInvalid
+			}
+			if catalog, ok := adapter.(provider.ServerOptionsAdapter); ok {
+				options, optionsErr := catalog.ServerOptions(ctx, credential)
+				if optionsErr != nil {
+					return nil, optionsErr
+				}
+				for _, size := range options.Sizes {
+					if size.ID != in.Size {
+						continue
+					}
+
+					if priceErr := priceOperation(o, size); priceErr != nil {
+						return nil, priceErr
+					}
+					resources, sizeErr := sizeResources(size)
+					if sizeErr != nil {
+						return nil, sizeErr
+					}
+					o.CapacityTarget = &resources
+					o.CapacityCheckedAt = now
+					break
+				}
+			}
+		}
+	}
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	if checkErr := s.Store.CreatePreview(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
 	return o, nil
+}
+
+// priceOperation puts the size's hourly price and GPUs on the review, so the
+// cost is on screen before anyone approves it.
+func priceOperation(o *Operation, size provider.ServerSize) error {
+	o.EstimatedHourlyUSD = size.HourlyUSD
+	o.HourlyPriceKnown = size.HourlyPriceKnown
+	o.Accelerator = cloneAccelerator(size.Accelerator)
+	var price *int64
+	if size.HourlyPriceKnown {
+		value, err := hourlyMicroUSD(size.HourlyUSD)
+		if err != nil {
+			return err
+		}
+		price = number(value)
+	}
+	identity := o.Provider + "/" + o.AccountID + "/" + size.ID
+	estimate, err := moneyEstimate([]MoneyComponent{
+		{Name: "server", Source: "provider_options", Identity: identity, Quantity: 1, HourlyMicroUSD: price},
+		{Name: "network_egress", Source: "provider_options", Identity: identity, Quantity: 1},
+		{Name: "persistent_storage", Source: "provider_options", Identity: identity, Quantity: 1},
+	}, 0, o.CreatedAt)
+	if err != nil {
+		return err
+	}
+	o.MoneyEstimate = &estimate
+	return nil
+}
+
+// priceServer gives a server the price and GPUs of the operation that bought or resized it.
+func priceServer(v *Server, o *Operation) {
+	v.Accelerator = cloneAccelerator(o.Accelerator)
+	v.HourlyUSD = o.EstimatedHourlyUSD
+	v.HourlyPriceKnown = o.HourlyPriceKnown
+	v.PricedSize = o.Input.Size
+	if o.MoneyEstimate != nil {
+		v.PriceCheckedAt = o.MoneyEstimate.CheckedAt
+	}
+}
+
+func cloneAccelerator(a *provider.Accelerator) *provider.Accelerator {
+	if a == nil {
+		return nil
+	}
+	copied := *a
+	return &copied
 }
 
 func connectionMatches(o *Operation, c *connections.Connection) bool {
@@ -224,6 +309,15 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	if err != nil {
 		return nil, err
 	}
+	if store, ok := s.Store.(*PgStore); ok {
+		expansion, checkErr := store.expansionForOperation(ctx, o)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if expansion != nil {
+			return nil, security.ErrForbidden
+		}
+	}
 	if o.Review != in.Review {
 		return nil, ErrConflict
 	}
@@ -239,6 +333,11 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	o.Status = "pending"
 	o.Attempt = 1
 	o.UpdatedAt = s.now().UTC()
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := s.Store.Accept(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
@@ -321,6 +420,11 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 		case errors.Is(err, ErrPending):
 			o.Status = "waiting"
 			o.Message = "Waiting for provider actions, enrollment or verified runtime readiness."
+		case errors.Is(err, ErrDirectApplyRunning):
+			// A claim refused beside a running direct apply retries once it ends.
+			o.Status = "waiting"
+			o.Message = "Waiting for a direct deployment on this server to finish."
+			err = errors.Join(ErrPending, err)
 		case err != nil:
 			o.Status = "failed"
 			o.Message = safeFailure(err)
@@ -338,14 +442,25 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 		return nil
 	})
 }
+
+// CapacityBlockedPrefix starts the failure of an operation the capacity
+// policy stopped in execute; the block's Summary follows it.
+const CapacityBlockedPrefix = "The cloud's capacity policy blocked this server before it was created: "
+
 func safeFailure(err error) string {
+	var blocked *CapacityAdmissionError
 	switch {
+	// Before ErrConflict, which a capacity block also matches.
+	case errors.As(err, &blocked):
+		return CapacityBlockedPrefix + blocked.Block.Summary() + ". Change the policy or free capacity, then retry."
 	case errors.Is(err, provider.ErrInfrastructureAmbiguous):
 		return "The provider outcome is unresolved. Retry reconciles the existing intent without creating a replacement."
 	case errors.Is(err, ErrConflict):
 		return "The reviewed connection or server changed. Resolve the recorded operation before continuing."
 	case errors.Is(err, security.ErrForbidden):
 		return "Organization management access was revoked."
+	case errors.Is(err, ErrDirectApplyRunning):
+		return "A direct deployment is running on this server. Retry once it finishes."
 	default:
 		return "Infrastructure verification failed. Check the connection, provider scope and pinned server runtime before retrying."
 	}
@@ -360,18 +475,34 @@ func (s *Service) RecoverInfrastructure(ctx context.Context) error {
 			return checkErr
 		}
 	}
-	return nil
+	return s.recoverCapacity(ctx)
 }
 
 func (s *Service) execute(ctx context.Context, o *Operation) error {
+	expansion, expansionErr := s.expansionEffect(ctx, o)
+	if expansionErr != nil {
+		return expansionErr
+	}
 	// Accepted cleanup keeps its recorded authority and exact resource target.
 	// New capacity still requires the original manager's current permission.
-	if o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
+	if !expansion && o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
 		if checkErr := s.Authz.Require(ctx, o.Principal, security.OrganizationCloudManage, o.OrgID); checkErr != nil {
 			return checkErr
 		}
 	}
 	if !o.Attempted {
+		if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+			if checkErr := s.refreshBudgetPrices(ctx, o.Principal, o.CloudID); checkErr != nil {
+				return checkErr
+			}
+		}
+		if capacity, ok := s.Store.(interface {
+			EnsureInfrastructureCapacity(context.Context, *Operation) error
+		}); ok {
+			if err := capacity.EnsureInfrastructureCapacity(ctx, o); err != nil {
+				return err
+			}
+		}
 		profile, scopeErr := s.Clouds.GetProfile(ctx, o.OrgID, "", o.CloudID)
 		if scopeErr != nil {
 			return scopeErr
@@ -391,6 +522,8 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 	}
 	if errors.Is(err, ErrNotFound) && o.Input.Kind == "create" {
 		v = &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Region: o.Input.Region, Size: o.Input.Size, Revision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: s.now().UTC()}
+		// The server bills from the moment it exists, so its price shows while it boots.
+		priceServer(v, o)
 		err = s.Store.SaveServer(ctx, v)
 	}
 	if err != nil {
@@ -429,8 +562,7 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 				return err
 			}
 			userData = data
-			o.Attempted = true
-			if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			if checkErr := s.checkpointCreateAttempt(ctx, o); checkErr != nil {
 				return checkErr
 			}
 		}
@@ -556,6 +688,10 @@ func (s *Service) deleteServer(ctx context.Context, o *Operation, v *Server, a p
 	}
 	_, err := a.GetServer(ctx, c, o.ResourceID)
 	if errors.Is(err, provider.ErrInfrastructureNotFound) {
+		o.AbsenceConfirmedAt = s.now().UTC()
+		if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			return checkErr
+		}
 		v.Status = "deleted"
 		v.Revision++
 		v.UpdatedAt = s.now().UTC()

@@ -63,7 +63,10 @@ type Variable struct {
 
 	// environmentID ties a project or service variable to its environment,
 	// so deleting the environment deletes the variable with it.
-	environmentID string
+	environmentID  string
+	sourceRevision int64
+	secretIdentity string
+	secretVersion  int64
 }
 
 // rank orders layers from least to most specific.

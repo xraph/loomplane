@@ -24,11 +24,13 @@ import {
 import { duration } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
-import { elapsed, isLive } from "@/lib/runs"
+import { elapsed, isLive, type Run } from "@/lib/runs"
 import { useNow, useRuns } from "@/lib/use-runs"
 
 export type Crumb = {
   label: string
+  /** A link the fixed routes below can't name, such as a Cloud's own page. */
+  link?: React.ReactElement
   to?:
     | "/"
     | "/projects"
@@ -41,6 +43,8 @@ export type Crumb = {
     | "/services"
     | "/clouds"
     | "/notifications"
+    | "/domains"
+    | "/ai/models"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
@@ -54,7 +58,7 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
         ...(org ? [{ label: org.name, link: <Link to="/" /> }] : []),
         ...crumbs.map((c) => ({
           label: c.label,
-          link: c.to ? <Link to={c.to} /> : undefined,
+          link: c.link ?? (c.to ? <Link to={c.to} /> : undefined),
         })),
       ]}
       before={<InFlight />}
@@ -83,12 +87,21 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
   )
 }
 
+/**
+ * waitingOnYou counts the runs someone has to act on: a plan waiting for
+ * approval, or a deploy paused for capacity.
+ */
+export function waitingOnYou(runs: Run[]): number {
+  return runs.filter((r) => r.status === "waiting" || r.status === "paused")
+    .length
+}
+
 function InFlight() {
   const { runs } = useRuns()
   const now = useNow()
   const live = runs.filter(isLive)
   if (live.length === 0) return null
-  const waiting = live.filter((r) => r.status === "waiting").length
+  const waiting = waitingOnYou(live)
   return (
     <Popover>
       <PopoverTrigger

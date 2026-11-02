@@ -1,0 +1,102 @@
+---
+title: Adopting and moving services
+description: Bring running services under a Cloud target, then move them to another account or provider with a reviewed, recoverable sync.
+---
+
+## Adopt an existing service
+
+Keep your existing manifest until you choose to adopt a Cloud. Create a target with the service's current provider, connection and region, assign that Cloud to its environment, and save a manifest revision that sets `cloud_target` while removing any effective direct `provider` and `target` settings. Check inherited defaults and environment overrides too, because a service can't resolve both forms of placement.
+
+Review the ordinary deployment plan before you approve it. When the resolved placement and configuration match what already serves, the plan records Cloud metadata without a provider deployment. If it proposes a replacement, check the account, region and effective settings first.
+
+Cloud targets currently place services. Resources and gateways keep their direct placement. A Cloud switch doesn't move database or storage contents.
+
+## Replace an account or provider
+
+Connect the destination account under Integrations first. Renewing a token for the same verified account keeps its connection ID and doesn't move services. Replacing the account takes a new connection. Stable provider identities, such as a Vercel user or team ID, tell renewal from replacement. If an older connection lacks its immutable identity, reconnect it before you switch.
+
+```bash
+loomctl cloud-targets show my-project cloud_... target_...
+loomctl cloud-targets switch my-project cloud_... target_... \
+  --provider vercel --connection conn_new --revision 1
+```
+
+Read the preview. It lists the old and proposed placement, affected environments and services, action counts, external routing requirements and blockers. A Cloud shared by production and staging can affect both, so use separate Clouds when their destinations should change independently.
+
+To accept a review you already saved, use its ID and digest:
+
+```bash
+loomctl cloud-syncs apply my-project \
+  --preview cpv_... --revision REVIEW_DIGEST \
+  --request-id switch-frontend-2026-10-20 --yes --wait --timeout 30m
+```
+
+The command fetches and shows that exact preview before it applies it. Or repeat `cloud-targets switch` with `--yes`, which creates and shows a fresh review before accepting it. Previews expire after 24 hours, and a revision change or altered serving inputs need another review.
+
+The idempotency key belongs to acceptance. After a lost response, reuse the same preview, digest and `--request-id` to recover the original sync ID. A new preview is a separate request, even if the destination looks identical.
+
+A switch migrates the release that currently serves, using each binding's saved source artifact and encrypted variable snapshot. It doesn't deploy an unapproved draft, and missing historical inputs block it. Future ordinary releases use the new account.
+
+A service region set in the manifest, in its environment override or in defaults stays pinned when you change a target's default region. Services that inherit the target or provider default follow the new one. Older bindings without recorded region provenance keep their applied region during a sync. Deploy an ordinary release to record that before you rely on a default change to move them.
+
+### Switch a default
+
+```bash
+loomctl clouds switch-default my-project cloud_... \
+  --provider vercel --connection conn_new --revision 3
+loomctl clouds switch-default my-project cloud_... \
+  --provider vercel --connection conn_new --revision 3 \
+  --yes --request-id move-default --wait --timeout 30m
+```
+
+The review covers every environment that uses the Cloud, across projects, and moves only the services the old default placed. Services on a target, or with their own `provider`, keep theirs, though one that depends on a moved service is redeployed to pick up the new address. Leave out the provider and connection (or pass `--clear`) to remove the default. Clearing is blocked while serving services still use it. One default switch runs per Cloud at a time, and no environment can be assigned to or from the Cloud until it settles.
+
+A Cloud reassignment works the same way for default-placed services: they move to the new Cloud's default, and the review blocks if the new Cloud has none your project can use.
+
+## Follow and recover a sync
+
+```bash
+loomctl cloud-syncs my-project
+loomctl cloud-syncs show my-project csync_...
+loomctl cloud-syncs wait my-project csync_... --timeout 30m
+loomctl cloud-syncs retry my-project csync_... --wait --timeout 30m
+```
+
+Use `--json` for scripts. Finish or revert unfinished syncs before renaming a Cloud or target in the same project.
+
+| State | Meaning and next action |
+|---|---|
+| `pending` | Accepted and saved. Dispatch will schedule or recover it |
+| `running` | Services are being reconciled from recorded inputs |
+| `routing_pending` | The managed deployment finished, but you must verify external routing |
+| `cleanup_pending` | Old resources are being removed. An error means cleanup needs recovery or a retry |
+| `failed` | Inspect per-environment errors, restore access or dependencies, then retry |
+| `succeeded` | Every affected environment and its cleanup finished |
+| `reverting` | A compensating operation owns the remaining work. Follow its sync ID |
+| `reverted` | Compensation finished and original ownership was released |
+
+Waits stop at success, failure, external routing or a cleanup error, and keep going through active cleanup. A timeout returns the latest record so you can resume. Restarting Loomplane recovers committed work. Partial completion is kept: a successful environment stays deployed when another fails. Old resources stay until managed consumers and required external routing have finished, and failed operations keep their guards so an ordinary release can't race unfinished cleanup.
+
+## Complete external routing, or revert
+
+If you control DNS or another entry point, update it and check that traffic reaches the new service. Then record that for each affected environment:
+
+```bash
+loomctl cloud-syncs routing my-project csync_... \
+  --environment env_... --evidence 'Production DNS and HTTPS verified' \
+  --wait --timeout 10m
+```
+
+This records your evidence and schedules the remaining cleanup. It doesn't change DNS. Without that evidence, Loomplane keeps the old resources.
+
+```bash
+loomctl cloud-syncs revert my-project csync_...
+loomctl cloud-syncs revert my-project csync_... \
+  --yes --request-id restore-frontend --wait --timeout 30m
+```
+
+Revert reviews compensation from the actual serving state. Read each environment's `compensation_mode` and `compensation_message`. `restore_retained` restores the exact retained original server runtime, `recreate` deploys saved inputs again, and `mixed` does both. A managed platform always recreates from saved inputs. Compensation refuses work that changed outside the original operation, and original credentials must stay available until all cleanup finishes.
+
+<Callout type="warn">
+  Fixture-backed checks verify persisted switching, historical input recovery and next-release account selection. They don't establish access, quotas, DNS propagation or service behavior in your real provider account. Qualify those yourself before a production migration, and move database or storage contents separately.
+</Callout>

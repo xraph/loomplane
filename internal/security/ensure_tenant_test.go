@@ -42,7 +42,7 @@ func (s *gatedCatalogStore) SetRolePermissions(ctx context.Context, tenant strin
 }
 func TestEnsureTenantCoalescesConcurrentCatalogWrites(t *testing.T) {
 	store := &gatedCatalogStore{Store: memory.New(), entered: make(chan struct{}), release: make(chan struct{})}
-	authorizer := NewAuthorizer(nil, store, nil)
+	authorizer := NewAuthorizer(&recordingEngine{}, store, nil)
 	const callers = 24
 	results := make(chan error, callers)
 	go func() { results <- authorizer.EnsureTenant(t.Context(), "org") }()
@@ -63,13 +63,14 @@ func TestEnsureTenantCoalescesConcurrentCatalogWrites(t *testing.T) {
 			t.Errorf("concurrent initialization: %v", err)
 		}
 	}
-	if calls := store.calls.Load(); int(calls) != len(Catalog()) {
-		t.Fatalf("role catalog was replaced %d times, want %d", calls, len(Catalog()))
+	// One replacement per member role, and one for the automation's.
+	if calls := store.calls.Load(); int(calls) != len(Catalog())+1 {
+		t.Fatalf("role catalog was replaced %d times, want %d", calls, len(Catalog())+1)
 	}
 }
 func TestEnsureTenantCancelledWaiterDoesNotRewriteCatalog(t *testing.T) {
 	store := &gatedCatalogStore{Store: memory.New(), entered: make(chan struct{}), release: make(chan struct{})}
-	authorizer := NewAuthorizer(nil, store, nil)
+	authorizer := NewAuthorizer(&recordingEngine{}, store, nil)
 	first := make(chan error, 1)
 	go func() { first <- authorizer.EnsureTenant(t.Context(), "org") }()
 	<-store.entered
@@ -83,7 +84,49 @@ func TestEnsureTenantCancelledWaiterDoesNotRewriteCatalog(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled waiter rewrote an active catalog: %v", err)
 	}
-	if int(store.calls.Load()) != len(Catalog()) {
+	if int(store.calls.Load()) != len(Catalog())+1 {
 		t.Fatal("cancelled waiter accessed role replacement")
+	}
+}
+
+func TestEnsureTenantCancelledInitiatorDoesNotAbortWaiters(t *testing.T) {
+	store := &gatedCatalogStore{Store: memory.New(), entered: make(chan struct{}), release: make(chan struct{})}
+	authorizer := NewAuthorizer(&recordingEngine{}, store, nil)
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() { first <- authorizer.EnsureTenant(firstCtx, "org") }()
+	<-store.entered
+	second := make(chan error, 1)
+	go func() { second <- authorizer.EnsureTenant(t.Context(), "org") }()
+	cancelFirst()
+	if firstErr := <-first; !errors.Is(firstErr, context.Canceled) {
+		t.Fatalf("first caller = %v, want context.Canceled", firstErr)
+	}
+	close(store.release)
+	if secondErr := <-second; secondErr != nil {
+		t.Fatalf("second caller failed after initiator cancelled: %v", secondErr)
+	}
+	if calls := store.calls.Load(); int(calls) != len(Catalog())+1 {
+		t.Fatalf("role catalog was replaced %d times, want %d", calls, len(Catalog())+1)
+	}
+}
+
+func TestEnsureTenantSkipsUnchangedRolePermissionWritesOnNewProcess(t *testing.T) {
+	store := &gatedCatalogStore{Store: memory.New(), entered: make(chan struct{}), release: make(chan struct{})}
+	close(store.release)
+	first := NewAuthorizer(&recordingEngine{}, store, nil)
+	if err := first.EnsureTenant(t.Context(), "org"); err != nil {
+		t.Fatal(err)
+	}
+	initialCalls := store.calls.Load()
+	if int(initialCalls) != len(Catalog())+1 {
+		t.Fatalf("first process replaced %d roles, want %d", initialCalls, len(Catalog())+1)
+	}
+	second := NewAuthorizer(&recordingEngine{}, store, nil)
+	if err := second.EnsureTenant(t.Context(), "org"); err != nil {
+		t.Fatal(err)
+	}
+	if calls := store.calls.Load(); calls != initialCalls {
+		t.Fatalf("second process replaced roles %d times, want %d (no rewrites when catalog already matches)", calls, initialCalls)
 	}
 }

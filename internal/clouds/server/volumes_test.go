@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,5 +102,23 @@ func TestPersistentMountCannotMoveDuringRollout(t *testing.T) {
 	}
 	if err := checkVolumeLayout(old, iid, []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: "/data"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNonRootCatalogVolumeKeepsImageDirectoryOwnership(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	for _, group := range []string{"", "0", "1000"} {
+		labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelConnection: "target", owned.LabelFSGroup: group}
+		c := &Client{HTTP: &http.Client{Transport: runtimeTransport(func(_ *http.Request) (*http.Response, error) {
+			body, _ := json.Marshal(map[string]any{"Name": VolumeName(iid, "data"), "Driver": "local", "Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelVolumeRole: "data", owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelConnection: "target"}})
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}, nil
+		})}}
+		mounts, err := ensureVolumes(t.Context(), c, iid, []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: "/home/postgres/pgdata"}}, labels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mounts[0].VolumeOptions.NoCopy != (group == "" || group == "0") {
+			t.Fatalf("group %q has NoCopy %v", group, mounts[0].VolumeOptions.NoCopy)
+		}
 	}
 }

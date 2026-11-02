@@ -161,7 +161,7 @@ func TestCloudSQLAPIRetryAfterRestartKeepsCapturedOperation(t *testing.T) {
 			if uncertain {
 				wantedOperation = ""
 			}
-			if err = json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Version != 2 || checkpoint.Stage != wantedStage || checkpoint.Operation != wantedOperation || !checkpoint.Uncertain {
+			if err = json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Version != 3 || checkpoint.Stage != wantedStage || checkpoint.Operation != wantedOperation || !checkpoint.Uncertain {
 				t.Fatalf("saved step lost its captured operation: %s %v", checkpointRaw, err)
 			}
 			if !uncertain && checkpoint.ResourceID == "" {

@@ -70,7 +70,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 		t.Fatal(err)
 	}
 	raw := pem.EncodeToMemory(block)
-	config, err := server.ParseConfig(raw, map[string]string{"host": "builder.example.com", "user": "deploy", "host_key": string(ssh.MarshalAuthorizedKey(signer.PublicKey()))})
+	config, err := server.ParseConfig(raw, map[string]string{"build_workers": "dedicated", "host": "builder.example.com", "user": "deploy", "host_key": string(ssh.MarshalAuthorizedKey(signer.PublicKey()))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 	t.Cleanup(registryAPI.Close)
 	registry := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Name: "Registry", Status: connections.StatusReady, Details: map[string]string{"endpoint": registryURL, "repository": "team", "api": "ready", "pull": "ready", "push": "ready"}}
 	sink := &buildLogFixture{}
-	job := &Job{Deployment: &Deployment{ID: "dep_fixture", OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Action: planning.Action{ID: "service:api", Name: "api", Service: &planning.ServiceConfig{Source: "cmd/api", Image: "Dockerfile", Context: ".", BuildTarget: &planning.BuildTarget{Builder: connection.ID, BuilderSettings: planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)}}}, SourceID: strings.Repeat("a", 40), Env: map[string]string{"RUNTIME_TOKEN": "runtime-private-value"}, Secrets: map[string]bool{"RUNTIME_TOKEN": true}, Logs: sink, Attempt: "1.1", Progress: func(string, string) {}}
+	job := &Job{Deployment: &Deployment{ID: "dep_fixture", OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Action: planning.Action{ID: "service:api", Name: "api", Service: &planning.ServiceConfig{Source: "cmd/api", Image: "Dockerfile", Context: ".", BuildTarget: &planning.BuildTarget{Builder: connection.ID, BuilderSettings: planning.ReviewedBuildSettings(connection.Cloud, connection.Details)}}}, SourceID: strings.Repeat("a", 40), Env: map[string]string{"RUNTIME_TOKEN": "runtime-private-value"}, Secrets: map[string]bool{"RUNTIME_TOKEN": true}, Logs: sink, Attempt: "1.1", Progress: func(string, string) {}}
 	job.BuildCredentials = buildCredentialFunc(func(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
 		if org != "org_fixture" {
 			return nil, nil, connections.ErrNotFound
@@ -280,5 +280,47 @@ func TestImageBuildMutationsUsePhysicalFence(t *testing.T) {
 				t.Fatal("builder mutation bypassed SSH fence", calls, err)
 			}
 		})
+	}
+}
+
+func TestImageBuilder_usesAReusedImageInsideTheReviewedRegistry(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("f9", 32)
+	reuse := func(job *Job, reference string) {
+		cfg := *job.Action.Service
+		cfg.Artifact = &planning.ReusedArtifact{Reference: reference, Digest: digest, FromEnvironment: "staging", Architecture: "arm64"}
+		job.Action.Service = &cfg
+	}
+	job, builder, _, builds := imageBuildFixture(t, true)
+	registry, _, err := job.BuildCredentials.Credential(t.Context(), "org_fixture", "conn_registry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse(registry.Details["endpoint"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := endpoint.Host + "/team/loomplane/api-fixture@" + digest
+	reuse(job, inside)
+	var state ImageArtifact
+	ref, err := builder.Build(t.Context(), job, &state, func() error { return nil })
+	// The server labels the instance with the architecture staging's
+	// builder built for, not this builder's.
+	if err != nil || ref != inside || state.Reference != inside || state.Digest != digest || state.Architecture != "arm64" || *builds != 0 {
+		t.Fatalf("reference %q, state %+v, builds %d: %v", ref, state, *builds, err)
+	}
+	if err := builder.PrepareEffects(t.Context(), job); err != nil {
+		t.Fatalf("a reused image needs no builder: %v", err)
+	}
+
+	job, builder, _, builds = imageBuildFixture(t, true)
+	reuse(job, "elsewhere.example.com/team/loomplane/api-fixture@"+digest)
+	if _, err := builder.Build(t.Context(), job, &ImageArtifact{}, func() error { return nil }); err == nil || err.Error() != "the reused image is outside the selected registry prefix" || *builds != 0 {
+		t.Fatalf("outside the prefix: %v, builds %d", err, *builds)
+	}
+
+	job, builder, _, builds = imageBuildFixture(t, false)
+	reuse(job, inside)
+	if _, err := builder.Build(t.Context(), job, &ImageArtifact{}, func() error { return nil }); err == nil || !strings.Contains(err.Error(), "needs the registry") || *builds != 0 {
+		t.Fatalf("without a registry: %v, builds %d", err, *builds)
 	}
 }

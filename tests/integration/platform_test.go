@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platform"
@@ -78,21 +79,54 @@ func freshDatabase(t *testing.T) string {
 
 // running is one started Loomplane app and an HTTP server in front of it.
 type running struct {
-	t   *testing.T
-	srv *httptest.Server
-	app interface{ Stop(context.Context) error }
+	t      *testing.T
+	srv    *httptest.Server
+	app    interface{ Stop(context.Context) error }
+	cancel context.CancelFunc
 }
 
 func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
+	t.Helper()
+	return startApp(t, cfg, nil, configure...)
+}
+
+// startApp is start with a chance to reach into the built app, prepare,
+// before it starts: a test that needs a fault injected sets it there.
+//
+// The waitlist is off unless the test sets it, so a second person can sign
+// up the way most tests need. startStoredWaitlist leaves it unset instead.
+func startApp(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {
+	t.Helper()
+	if cfg.Identity.Waitlist == nil {
+		off := false
+		cfg.Identity.Waitlist = &off
+	}
+	return boot(t, cfg, prepare, configure...)
+}
+
+// startStoredWaitlist is start with no waitlist override, so the instance's
+// stored setting decides, as it does on a deploy that leaves
+// LOOMPLANE_WAITLIST_ENABLED unset.
+func startStoredWaitlist(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
+	t.Helper()
+	return boot(t, cfg, nil, configure...)
+}
+
+func boot(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {
 	t.Helper()
 	app, err := platform.New(cfg)
 	if err != nil {
 		t.Fatalf("build app: %v", err)
 	}
+	if prepare != nil {
+		prepare(app)
+	}
 	// Started the way forge.App.Run starts it, on a context that outlives
 	// Start: Dispatch's durable worker runs on the context Start gets, so a
 	// timeout here would stop it the moment Start returned.
-	if err := app.Start(context.Background()); err != nil {
+	lifetime, cancel := context.WithCancel(context.Background())
+	if err := app.Start(lifetime); err != nil {
+		cancel()
 		t.Fatalf("start app: %v", err)
 	}
 	srv := httptest.NewUnstartedServer(app.Router().Handler())
@@ -100,13 +134,16 @@ func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server))
 		option(srv)
 	}
 	srv.Start()
-	return &running{t: t, srv: srv, app: app}
+	return &running{t: t, srv: srv, app: app, cancel: cancel}
 }
 
 // stop shuts the app down the way a signal would, and fails the test if
 // shutdown fails.
 func (r *running) stop() {
 	r.t.Helper()
+	if r.cancel != nil {
+		defer r.cancel()
+	}
 	r.srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
@@ -116,11 +153,12 @@ func (r *running) stop() {
 }
 
 type client struct {
-	t     *testing.T
-	ctx   context.Context
-	base  string
-	token string
-	key   string
+	observeStatus func(int)
+	t             *testing.T
+	ctx           context.Context
+	base          string
+	token         string
+	key           string
 }
 
 func (c *client) context() context.Context {
@@ -154,6 +192,9 @@ func (c *client) do(method, path string, body any, out any) int {
 		c.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer res.Body.Close()
+	if c.observeStatus != nil {
+		c.observeStatus(res.StatusCode)
+	}
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		c.t.Fatal(err)
@@ -215,19 +256,7 @@ func TestPlatform_projectLifecycleSurvivesRestart(t *testing.T) {
 
 	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/projects", nil, nil)
 
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{
-		"email": "ada@example.com", "password": "Correct-horse-battery-9", "first_name": "Ada",
-	}, &auth)
-	if auth.SessionToken == "" {
-		t.Fatal("sign-up returned no session token")
-	}
-	c.token = auth.SessionToken
-
-	// No organization yet, so nothing org-scoped is allowed.
-	c.must(http.StatusForbidden, http.MethodGet, "/api/v1/session", nil, nil)
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 
 	var org struct {
 		ID string `json:"id"`
@@ -314,11 +343,7 @@ func TestPlatform_membersOnlySeeTheirOrganization(t *testing.T) {
 
 	signUpWithOrg := func(email, orgSlug string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9"}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		var org struct {
 			ID string `json:"id"`
 		}
@@ -398,11 +423,7 @@ func TestPlatform_invitationMakesADeveloper(t *testing.T) {
 
 	signUp := func(email string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9", "first_name": strings.Split(email, "@")[0]}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		return c
 	}
 

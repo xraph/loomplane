@@ -16,6 +16,7 @@ func FuzzParse(f *testing.F) {
 		federationExample,
 		strings.Replace(federationExample, "paths: [/health]", "paths: [/"+strings.Repeat("a", 1025)+"]", 1),
 		"version: 2\nfederation: {destinations: {a: {id: {nested: true}}}}\n",
+		"version: 1\nservices:\n  api:\n    source: x\n    farp: {}\n    environments:\n      staging: {farp: {enabled: false, capabilities: [rest]}}\n",
 		"{}",
 		"version: 1\nservices:\n  api:\n    source: x\n    environments:\n      preview: {enabled: false, scale: {min: 3, max: 1}}\n",
 		"\x00\xff",

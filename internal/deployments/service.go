@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -47,11 +48,20 @@ type Service struct {
 
 // NewService returns a Service. audit may be nil.
 func NewService(store Store, authz Authorizer, retry Retrier, audit Auditor) *Service {
+	if st, ok := store.(*PgStore); ok {
+		if wake, available := retry.(cloudinfra.CapacityCloudWakeup); available {
+			st.frontendWake = wake
+		}
+	}
 	return &Service{store: store, authz: authz, retry: retry, audit: audit, now: time.Now}
 }
 
 // ErrNotFailed is a retry of a deployment that hasn't failed.
 var ErrNotFailed = errors.New("only a failed deployment can be retried")
+
+// ErrStaleRollback is a retry of a rollback refused as stale: it would
+// undo the newer release.
+var ErrStaleRollback = errors.New(StaleRollback)
 
 // Retry runs a failed deployment's failed and skipped steps again, from
 // the first that failed, with the plan that was approved. Steps that
@@ -64,6 +74,12 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	if d.Status == StatusFailed && d.Error == StaleRollback {
+		return nil, ErrStaleRollback
 	}
 	ok, err := s.store.Reopen(ctx, p.OrgID, id)
 	if err != nil {
@@ -124,4 +140,81 @@ func (s *Service) ForPlan(ctx context.Context, p security.Principal, planID stri
 		return nil, err
 	}
 	return s.store.ForPlan(ctx, p.OrgID, planID)
+}
+
+// ErrNoCanaries is a service whose store keeps no canaries.
+var ErrNoCanaries = errors.New("this store keeps no canaries")
+
+// MaxRecentCanaries bounds RecentCanaries.
+const MaxRecentCanaries = 50
+
+// currentVerdicts are the verdicts of the deployment's current retry. A
+// retried deployment ramps again and judges afresh, so earlier retries'
+// verdicts describe a canary that was reset; they stay stored, and the
+// verdicts of one retry stay in step, attempt and action order.
+func currentVerdicts(d *Deployment, all []CanaryVerdict) []CanaryVerdict {
+	out := make([]CanaryVerdict, 0, len(all))
+	for _, v := range all {
+		if v.Retry == d.Retries {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Canary returns the deployment's canary and the verdicts of its current
+// retry: the canary is nil and the verdicts empty for a deployment that
+// deployed everything at once.
+func (s *Service) Canary(ctx context.Context, p security.Principal, deploymentID string) (*CanaryReport, error) {
+	cs, ok := s.store.(CanaryStore)
+	if !ok {
+		return nil, ErrNoCanaries
+	}
+	d, err := s.store.GetDeployment(ctx, p.OrgID, deploymentID)
+	if err != nil {
+		return nil, err
+	}
+	if denied := s.authz.Require(ctx, p, security.DeploymentRead, d.ProjectID); denied != nil {
+		return nil, denied
+	}
+	report := &CanaryReport{Canary: d.Canary, Verdicts: []CanaryVerdict{}}
+	if d.Canary == nil {
+		return report, nil
+	}
+	all, err := cs.Verdicts(ctx, p.OrgID, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	report.Verdicts = currentVerdicts(d, all)
+	return report, nil
+}
+
+// RecentCanaries returns up to limit of an environment's deployments that
+// ran a canary, newest first, each with its canary and its current retry's
+// verdicts. A limit outside 1 to 50 is brought into it.
+func (s *Service) RecentCanaries(ctx context.Context, p security.Principal, projectID, environmentID string, limit int) ([]CanaryRun, error) {
+	cs, ok := s.store.(CanaryStore)
+	if !ok {
+		return nil, ErrNoCanaries
+	}
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
+		return nil, err
+	}
+	limit = min(max(limit, 1), MaxRecentCanaries)
+	list, err := cs.RecentCanaries(ctx, p.OrgID, projectID, environmentID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CanaryRun, 0, len(list))
+	for _, d := range list {
+		all, err := cs.Verdicts(ctx, p.OrgID, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CanaryRun{
+			DeploymentID: d.ID, PlanID: d.PlanID, Environment: d.Environment, Status: d.Status,
+			StartedAt: d.StartedAt, FinishedAt: d.FinishedAt, Canary: d.Canary, Verdicts: currentVerdicts(d, all),
+		})
+	}
+	return out, nil
 }

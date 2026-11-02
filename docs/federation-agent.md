@@ -506,6 +506,145 @@ the local cleanup deadline, make application records eligible for revocation.
 Every journal transition commits with its project event.
 
 This is an internal lifecycle API. The live Kubernetes fixture uses it with a
-fixture-created controller and explicit CSI installation. Production installation,
-artifact proof retrieval, policy withdrawal and gateway assignment remain separate
-work. No public route or agent-launch flag enables application issuance.
+fixture-created controller and explicit CSI installation. The internal application
+coordinator below supplies the production wiring; installation qualification,
+policy withdrawal and gateway assignment remain separate work. No public route or
+agent-launch flag enables application issuance.
+
+## Registry image proofs
+
+`LoadFederationImageProofs` loads proofs through the registry saved in the service
+build target. The current instance must match the committed binding, plan and
+runtime attempt. Its registry ID and reviewed settings must match the binding,
+and the current connection must still have those trust settings and pull access.
+Credential bytes are cleared after use.
+
+The reader uses digest-addressed manifest requests with pull-only token scope.
+It keeps the raw bytes, verifies their SHA-256 hash and refuses redirects,
+responses over 256 KiB, unexpected content types and mismatched digest headers.
+The proof collector makes at most four reads in the deployed image's repository.
+Runtime repository aliases and descriptor URLs cannot select another host.
+The request format follows the
+[OCI Distribution specification](https://github.com/opencontainers/distribution-spec/blob/v1.1.1/spec.md#pulling-manifests).
+
+The collector shares the image verifier used by Kubernetes attestation and the
+registration journal. Identical content digests need no registry read. A platform
+manifest needs its complete index chain; an import wrapper needs an exclusive
+chain back to the deployed digest. If the wrapper exists only in the runtime's
+local content store, registry retrieval fails closed. No proof is fabricated.
+
+You must still authorize and load the records, verify the saved controller and
+live owner chain, and pass the checked proofs to the attestation profile and
+issuance journal. The loader does not install CSI, register an identity or enable
+a service route. The internal application coordinator described below wires this
+loader into the attestation and issuance checks.
+
+The local registry qualification test publishes a small OCI image and index into
+a disposable registry, retrieves the proof through this client, and checks raw
+byte preservation, platform selection and tag rejection. Set
+`LOOMPLANE_TEST_REGISTRY_URL` only to that fixture's literal loopback HTTP address;
+the test refuses external endpoints. Remove the fixture container afterward.
+Authenticated challenge scope and credential redirects are covered by the HTTP
+fixtures. Production registry accounts and runtime-local wrappers still need
+provider qualification.
+
+## Live application image evidence
+
+`VerifyKubernetesWorkloadEvidence` checks the Pod, ReplicaSet and saved Deployment
+identity before it calls the image-proof loader. The loader receives the image
+and platform read from the cluster. It must select registry credentials from the
+committed build target; the runtime image name cannot choose a connection.
+
+After retrieval, the verifier rereads all three workload objects and the node.
+A changed controller, pod version, node identity or platform fails verification.
+The SPIRE parent's certificate must still be valid when verification finishes.
+The complete operation has a 30-second deadline.
+
+The result includes the checked workload binding, runtime platform and copied
+raw image proofs needed by the issuance journal. Each call owns its proof
+buffers. Failed reads and rejected proofs return no usable evidence.
+
+The internal application coordinator uses this verifier and the existing
+journal. You still need a qualified CSI installation and production image proofs
+before enabling application issuance for a destination.
+
+### Application issuance coordination
+
+With federation identity enabled, the platform provides an internal
+`ApplicationService` backed by the durable workload journal and SPIRE cleanup
+runtime. You select an existing binding and pod. The service reloads the current
+binding, instance, installation trust and controller receipt before fetching live
+image evidence with the reviewed registry credentials.
+
+Reservation keeps a durable handle before issuance starts. Each journal guard
+rechecks deployment approval and destination trust permissions, capability
+freshness, pod ownership and image evidence. A failed check after issuance starts
+requests revocation and keeps the journal available for cleanup. Registrations
+use a one-minute certificate TTL and a four-minute cleanup deadline; that deadline
+still requires explicit revocation and does not act as a SPIRE issuance cutoff.
+
+There is no public issuance route or automatic deployment trigger yet. The local
+Kubernetes test exercises the coordinator with the real journal and SPIRE, using
+fixture-supplied image proofs. Production registry proof retrieval is wired but
+has not been qualified against a deployed application registry.
+
+## Install the SPIFFE CSI driver
+
+For a fresh Linux Kubernetes cluster with SPIRE agents already installed, render
+and review the shared CSI manifest:
+
+```sh
+: "${CLUSTER:?Set CLUSTER to the reviewed context}"
+loomctl federation csi-manifest --namespace spire > csi-install.json
+kubectl --context "$CLUSTER" create -f csi-install.json
+kubectl --context "$CLUSTER" -n spire rollout status daemonset/loomplane-spiffe-csi
+```
+
+Set `CLUSTER` to the context you reviewed. The rendering command is offline and
+needs no Loomplane login. It creates no resources by itself. `kubectl create`
+requires your cluster-admin credentials and refuses to overwrite existing
+resources; if creation stops partway through, inspect the returned resources
+before retrying. Do not remove an existing CSI driver to make the command pass.
+You can keep an existing approved `csi.spiffe.io` installation and qualify it.
+
+The manifest contains a service account without an API token, an ephemeral-only
+`CSIDriver`, and a Linux DaemonSet using digest-pinned SPIFFE CSI and registrar
+images. There are no role bindings. The driver is privileged and mounts the
+kubelet directories so it can provide the Workload API socket to pods without
+putting host mounts in those pods. See the
+[SPIFFE CSI installation model](https://github.com/spiffe/spiffe-csi#how-it-works).
+
+The defaults expect the agent socket directory at `/run/spire/agent-sockets` and
+the kubelet root at `/var/lib/kubelet`. Use `--agent-socket-directory` and
+`--kubelet-root-directory` when your nodes differ. Every selected Linux node must
+have the corresponding SPIRE agent socket and allow the driver's host mounts.
+Both image overrides require a digest. An override still needs qualification.
+
+Application pods mount the socket through an inline volume:
+
+```yaml
+volumes:
+  - name: workload-api
+    csi:
+      driver: csi.spiffe.io
+      readOnly: true
+containers:
+  - name: api
+    volumeMounts:
+      - name: workload-api
+        mountPath: /run/spire/workload
+        readOnly: true
+```
+
+Use the filename configured on your SPIRE agent, for example
+`unix:///run/spire/workload/agent.sock`. This mount gives your process access to
+the Workload API; the authorized application coordinator still has to issue its
+identity. Add the mount through the reviewed deployment operation so the saved
+controller receipt matches the resulting Deployment generation.
+
+The local Kubernetes qualification runner installs this generated manifest and
+checks actual identity delivery, neighboring-pod denial and revocation. A ready
+DaemonSet alone does not establish that these checks pass on another cluster.
+Automatic driver upgrades and application mount injection are not wired yet.
+Keep the driver running until every pod that uses its volumes has terminated;
+Kubernetes needs it to unmount those volumes during pod removal.

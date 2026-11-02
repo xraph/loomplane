@@ -19,6 +19,8 @@ const (
 
 // FederationInput pins desired intent and persisted destination observations.
 type FederationInput struct {
+	GroupPlans      []domain.QualifiedGroupPlan
+	GroupFindings   []Finding
 	Graph           *graph.Graph
 	Bindings        []*Binding
 	Providers       *provider.Registry
@@ -169,6 +171,10 @@ func federationResult(in Input) *Result {
 	f.Graph = in.Graph
 	f.Bindings = in.Bindings
 	f.CloudPlacements = in.CloudPlacements
+	if len(f.GroupPlans) > 0 {
+		return &Result{PlacementGroups: f.GroupPlans, Actions: []Action{}, Problems: []Finding{{Code: "placement_group_runtime_unavailable", Message: "Placement group runtime approval is not available yet."}}, Warnings: []Finding{}, Connections: map[string]string{}, Executable: false}
+	}
 	actions, findings := PlanFederation(f)
+	findings = append(findings, f.GroupFindings...)
 	return &Result{Actions: actions, Problems: findings, Warnings: []Finding{}, Executable: false, Connections: map[string]string{}, Summary: Summary{Keep: len(actions)}}
 }

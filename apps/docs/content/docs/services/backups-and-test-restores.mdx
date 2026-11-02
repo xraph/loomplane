@@ -1,0 +1,97 @@
+---
+title: Backups and test restores
+description: Back up a database service on a schedule, prove the backup restores into an isolated copy, and read native cloud snapshot history.
+---
+
+A backup you've never restored is a guess. Loomplane backs up a database with the engine's own client, then restores it into a throwaway copy and checks that the application role can get in.
+
+## Back up now, or on a schedule
+
+In **Service recovery**, pick your project, environment and database. **Back up now** queues an export using that engine's native backup client. Set **Backup interval (hours)** from 1 to 168 and save the schedule. **Enable backups** and **Pause backup schedule** keep that interval.
+
+```bash
+loomctl backups create PROJECT_ID --resource database --request-id nightly-manual-1 --wait --json
+loomctl backups PROJECT_ID
+loomctl backups show BACKUP_ID --wait --json
+loomctl backups policy PROJECT_ID --resource database --every-hours 24
+loomctl backups policies PROJECT_ID --json
+loomctl backups retry BACKUP_ID
+```
+
+Add `--disable` to `policy` to stop a schedule. Reuse a `--request-id` after a lost response to recover the original operation, and use a new one for a new backup or restore.
+
+With `--wait`, the CLI follows the saved operation for up to 45 minutes. Pass `--timeout 10m` to change that (it must be positive). A timeout stops waiting and leaves the server job running. With `--json` the CLI keeps the operation ID and its earlier response, then exits nonzero, and `show --wait` follows that ID. Failed operations also exit nonzero and keep their JSON result.
+
+Backups need a live source to create. If you remove the source service, its backup history and restore controls stay available.
+
+## Test a restore
+
+A successful upload shows **Not tested**. **Test restore** creates an isolated copy with its own volume and credentials, verifies the file before restoring, runs the matching restore client and checks application access.
+
+```bash
+loomctl restores create BACKUP_ID --request-id recovery-test-1 --wait --json
+loomctl restores show RESTORE_ID --wait --json
+loomctl restores delete RESTORE_ID --yes
+```
+
+PostgreSQL imports run in one transaction. MySQL and MariaDB imports can leave a partial copy after an SQL error, which the operation records as a failure. Remove the copy before you start another test. For Redis and Valkey, the restore verifies the saved bytes and the native RDB structure before loading an empty isolated copy with a read-only application role. AOF and automatic snapshots are off in that copy so restarting it keeps the checked RDB. A successful test shows **Restore verified** and records its time and duration.
+
+Copies have no published ports. Docker copies use an internal network, and Kubernetes copies use independently enforced deny-all network policies. They expire after 24 hours. Cleanup failures stay visible and retry after an hour, and an administrator can retry sooner with **Remove copy**. Scheduled cleanup uses the creator's current permissions, so if that access was revoked, another administrator has to finish removal. Removing a copy deletes its temporary volume and keeps the backup and verification record.
+
+If a restore worker disappears, the operation becomes a failure when its lease expires. Remove the copy and request a new restore, since an interrupted command isn't replayed over a database that may have changed.
+
+A verified restore proves database access. It doesn't prove your application can recover correctly, so test that too.
+
+## Where backups go
+
+Loomplane keeps artifacts and backup files with Trove. The development default is local storage. Set `LOOMPLANE_BACKUP_URL` and `LOOMPLANE_BACKUP_BUCKET` to send them to a separate destination. Without a backup URL, backups use the artifact storage backend in a separate bucket.
+
+For an S3-compatible service the URL looks like this:
+
+```text
+s3://ACCESS_KEY:SECRET_KEY@REGION/BUCKET?endpoint=https://storage.example.com&path_style=true
+```
+
+Supply it through your deployment's secret configuration, not a committed file, and URL-encode credential characters. Set `LOOMPLANE_BACKUP_BUCKET` to the same bucket, which must already exist for remote storage and let the identity list, read, write and complete or abort multipart uploads. Local buckets are created at startup. Test your exact provider and endpoint before you rely on it.
+
+Transfers use 8 MiB chunks, bounded retries and a SHA-256 digest, and cap a backup at about 78 GiB. A crash can leave incomplete multipart uploads, so set provider-side cleanup for them. Don't configure expiry of completed recovery objects behind Loomplane's records.
+
+New recovery points record a destination identity derived from the driver, local directory or S3 region and endpoint, and bucket (never credentials, so rotating an access key doesn't change it). Changing the directory, endpoint or bucket doesn't migrate existing points. Reconnect the original destination to read them. S3 endpoints must be absolute HTTP or HTTPS URLs without a query string or fragment. Legacy points without a destination pin stay readable, with checksum verification, but can't be retired.
+
+This setting is for database service backups and recovery objects. It doesn't schedule backups of Loomplane's own database. For that see [Backing up Loomplane](/docs/operations/backing-up-loomplane).
+
+## Native cloud snapshot history
+
+For managed RDS and Cloud SQL databases, open **Cloud snapshots** under **Service recovery**. Choose the physical database history and select **Refresh cloud snapshots**. This reads native recovery points from the original checked account and region and doesn't create or remove a snapshot.
+
+The history stays after you remove a binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan can't prove a point disappeared, and a failed refresh keeps the last successful observations, so check the observation time and completeness.
+
+```bash
+loomctl backups native-sources PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --json
+loomctl backups native-inventory SOURCE_ID --limit 50 --json
+loomctl backups native-refresh SOURCE_ID --json
+```
+
+Pass a response's `next_before` as `--before` to read another page. `--environment-id` and `--resource` filter independently, and resource names match exactly. You need service backup read access, and the saved account review must still match the connection.
+
+RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and leaves out shared and public snapshots. Cloud SQL reads up to ten pages of 100 backups from the saved Google project, and each point must carry source settings matching the original creation pin. A backup from a newer instance that reused the name is excluded. Missing source proof, unavailable point times, provider warnings or more pages make a scan partial.
+
+Cloud SQL points keep Google's absolute expiry when it's reported. Otherwise the dashboard and CLI show it as not reported (same for RDS snapshots without one). Expired observations stay in history. Inventory doesn't establish that a point can still be restored. Your Google account needs permission to list and read the backups, and a failed permission check leaves saved observations in place.
+
+### Native recovery copies (Cloud SQL)
+
+For Cloud SQL PostgreSQL 17, select **Review native copy** on a saved point. Choose a project-granted Cloud and a managed Cloud SQL target in a separate recovery project, review its compute, disk, region and lifetime, and acknowledge the charges. A review lasts ten minutes, and the copy's lifetime can be one to 24 hours. These details don't include a price estimate.
+
+```bash
+loomctl backups native-copies review SOURCE_ID POINT_ID --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out recovery-review.json
+loomctl backups native-copies create --review-file recovery-review.json --acknowledge-charges --wait
+loomctl backups native-copies PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --limit 25 --json
+loomctl backups native-copies show COPY_ID --wait
+loomctl backups native-copies cleanup COPY_ID --yes --wait
+```
+
+The review file is created owner-only and won't overwrite an existing file. Keep it: if admission loses its response, retrying with the same file returns the original copy without extending its expiry (**Retry same request** does that in the dashboard). A queued or available cloud instance isn't SQL proof. The copy needs a recorded verification time. **Clean up copy** asks for confirmation, and charges can continue after expiry until deletion is confirmed. A revoked placement grant blocks new copy work, but an administrator with current recovery permission can still finish cleanup.
+
+<Callout type="warn">
+  Native copy API, CLI and worker checks ran against a real local control plane database with controlled Google endpoints. Live Cloud SQL restore, IAM and TLS, privilege authority and cost aren't qualified, browser rendering of the native-copy UI and credential access for a verified copy are unfinished, and live AWS snapshot recovery is pending. RDS native restore and point-in-time recovery aren't available in Loomplane.
+</Callout>

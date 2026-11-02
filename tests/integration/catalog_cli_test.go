@@ -3,25 +3,16 @@
 package integration
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
-	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
-	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/planning"
 	lpclient "github.com/xraph/loomplane/pkg/client"
 )
@@ -33,62 +24,16 @@ func TestAcceptanceRedisCatalogCLIRecovery(t *testing.T)   { catalogCLIRecovery(
 func TestAcceptanceValkeyCatalogCLIRecovery(t *testing.T)  { catalogCLIRecovery(t, "valkey") }
 
 func catalogCLIRecovery(t *testing.T, kind string) {
-	socket := os.Getenv("LOOMPLANE_TEST_DOCKER_SOCKET")
-	if socket == "" {
-		t.Skip("set LOOMPLANE_TEST_DOCKER_SOCKET for real CLI deployment and recovery")
-	}
-	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	}}
-	t.Cleanup(transport.CloseIdleConnections)
-	docker := httptest.NewServer(&httputil.ReverseProxy{Director: func(r *http.Request) { r.URL.Scheme = "http"; r.URL.Host = "docker" }, Transport: transport})
-	t.Cleanup(docker.Close)
-	address, _ := url.Parse(docker.URL)
-	_, port, _ := net.SplitHostPort(address.Host)
-	number, _ := strconv.Atoi(port)
-	credential, settings := fixtureSSH(t, infrastructureState{DaemonPort: number})
-	cfg := config.Defaults()
-	cfg.Database.URL = freshDatabase(t)
-	cfg.Orchestration.PollInterval = 100 * time.Millisecond
-	cfg.Storage.URL = "file://" + t.TempDir()
-	running := start(t, cfg)
-	t.Cleanup(running.stop)
-	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
-	signedIn(t, c)
-	var connection struct{ ID string }
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections", map[string]any{"cloud": "server", "name": "CLI recovery acceptance", "credential": credential, "settings": settings}, &connection)
-	var key keyBody
-	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]any{"name": "CLI recovery acceptance", "access": "write"}, &key)
-	lc := loomctl{t: t, url: running.srv.URL, key: key.Secret, config: filepath.Join(t.TempDir(), "loomctl.json")}
+	fixture := catalogServer(t)
+	running, c, lc, socket := fixture.running, fixture.client, fixture.cli, fixture.socket
 	previous := lpclient.Every
 	lpclient.Every = 100 * time.Millisecond
 	t.Cleanup(func() { lpclient.Every = previous })
 	var plan lpclient.Plan
-	if err := json.Unmarshal([]byte(lc.must("services", "create", "CLI acceptance", "--kind", kind, "--target", connection.ID, "--json")), &plan); err != nil || !plan.Executable || plan.ProjectID == "" {
+	if err := json.Unmarshal([]byte(lc.must("services", "create", "CLI acceptance", "--kind", kind, "--target", fixture.connection, "--json")), &plan); err != nil || !plan.Executable || plan.ProjectID == "" {
 		t.Fatalf("catalog CLI plan: %+v %v", plan, err)
 	}
-	t.Cleanup(func() {
-		// Only this test's newly created project is eligible for cleanup.
-		ids := strings.Fields(fixtureCommand(t, "docker", "--host", "unix://"+socket, "ps", "-aq", "--filter", "label=loomplane.project="+plan.ProjectID))
-		networks := map[string]bool{}
-		for _, container := range ids {
-			raw := fixtureCommand(t, "docker", "--host", "unix://"+socket, "inspect", container, "--format", `{{json .NetworkSettings.Networks}}`)
-			var attached map[string]any
-			if err := json.Unmarshal([]byte(raw), &attached); err != nil {
-				t.Error(err)
-			}
-			for network := range attached {
-				networks[network] = true
-			}
-			fixtureCommand(t, "docker", "--host", "unix://"+socket, "rm", "-f", container)
-		}
-		for _, volume := range strings.Fields(fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "ls", "-q", "--filter", "label=loomplane.project="+plan.ProjectID)) {
-			fixtureCommand(t, "docker", "--host", "unix://"+socket, "volume", "rm", volume)
-		}
-		for network := range networks {
-			fixtureCommand(t, "docker", "--host", "unix://"+socket, "network", "rm", network)
-		}
-	})
+	t.Cleanup(func() { cleanupCatalogProject(t, socket, plan.ProjectID) })
 	lc.must("approve", plan.ID, "--yes")
 	var bindings struct{ Bindings []planning.Binding }
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+plan.ProjectID+"/bindings?environment=production", nil, &bindings)
@@ -194,5 +139,5 @@ func catalogCLIRecovery(t *testing.T, kind string) {
 		t.Fatalf("copy volume remains: %s", volumes)
 	}
 	t.Logf("CLI catalog plan %s, backup %s and verified restore %s passed, including timeout resumption; temporary copy removed", plan.ID, backup.ID, restored.ID)
-	holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, connection.ID)
+	holdCatalogBrowser(t, running.srv.URL, plan.ProjectID, fixture.connection)
 }

@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	store "github.com/xraph/loomplane/internal/realtime"
@@ -84,5 +85,177 @@ func TestFilterCloudSyncTargetDetailsStayPrivateForProjectSubscribers(t *testing
 	got, err = e.filter(t.Context(), actor, Subscription{ProjectIDs: []string{"proj_a"}}, input)
 	if err != nil || len(got) != 1 || string(got[0].Data) != original {
 		t.Fatalf("manager event details changed: %+v %v", got, err)
+	}
+}
+
+func TestRealtimeCanaryVerdictPermission(t *testing.T) {
+	if got := permission("canary_verdict.updated"); got != security.DeploymentRead {
+		t.Fatalf("canary_verdict.updated needs %s", got)
+	}
+	input := []store.Event{
+		{ProjectID: "proj_a", Type: "canary_verdict.updated", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)},
+		{ProjectID: "proj_a", Type: "canary_verdict.updated", Data: json.RawMessage(`{"deployment_id":"dep_b"}`)},
+	}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}, DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 1 || string(got[0].Data) != `{"deployment_id":"dep_a"}` {
+		t.Fatalf("subscription naming dep_a: %+v %v", got, err)
+	}
+	got, err = e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("subscription without the deployment: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{denied: security.DeploymentRead}
+	got, err = e.filter(t.Context(), p, Subscription{DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("without deployment:read: %+v %v", got, err)
+	}
+}
+
+// A verdict deleted with its deployment is declared, and reaches only a
+// subscription naming that deployment, with deployment:read.
+func TestRealtimeCanaryVerdictDeletion(t *testing.T) {
+	if got := permission("canary_verdict.deleted"); got != security.DeploymentRead {
+		t.Fatalf("canary_verdict.deleted needs %s", got)
+	}
+	input := []store.Event{
+		{ProjectID: "proj_a", Type: "canary_verdict.deleted", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)},
+		{ProjectID: "proj_a", Type: "canary_verdict.deleted", Data: json.RawMessage(`{"deployment_id":"dep_b"}`)},
+	}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}, DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 1 || string(got[0].Data) != `{"deployment_id":"dep_a"}` {
+		t.Fatalf("subscription naming dep_a: %+v %v", got, err)
+	}
+}
+
+func TestCapacityEventsNeedCloudManager(t *testing.T) {
+	input := []store.Event{{Type: "cloud_capacity.updated", EntityID: "cloud", Data: json.RawMessage(`{"org_id":"org","cloud_id":"cloud","kind":"policy","entity_id":"cloud","revision":2}`)}}
+	p := security.Principal{OrgID: "org", UserID: "usr"}
+	e := &Extension{authz: permissionFixture{denied: security.CloudAccountRead}}
+	got, err := e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Cloud manager lost the capacity event: %+v %v", got, err)
+	}
+	// Reading cloud accounts isn't managing the Cloud.
+	e.authz = permissionFixture{denied: security.OrganizationCloudManage}
+	got, err = e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("cloud_account:read holder received a capacity event: %+v %v", got, err)
+	}
+}
+
+// A release watch event reaches anyone who may read the project's
+// deployments.
+func TestRealtimeReleaseWatchPermission(t *testing.T) {
+	for _, event := range []string{"release_watch.updated", "release_watch.deleted"} {
+		if got := permission(event); got != security.DeploymentRead {
+			t.Fatalf("%s needs %s", event, got)
+		}
+	}
+	input := []store.Event{{ProjectID: "proj_a", Type: "release_watch.updated", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{denied: security.DeploymentRead}}
+	if got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input); err != nil || len(got) != 0 {
+		t.Fatalf("without deployment:read: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{}
+	if got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input); err != nil || len(got) != 1 {
+		t.Fatalf("with deployment:read: %+v %v", got, err)
+	}
+}
+
+func TestClusterEventsRequireOrganizationManagement(t *testing.T) {
+	events := []store.Event{{OrgID: "org", Type: "cloud_cluster.updated", Data: json.RawMessage(`{"cloud_id":"cloud","operation_id":"operation","revision":2}`)}}
+	e := &Extension{authz: permissionFixture{denied: security.OrganizationCloudManage}}
+	got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "project-member"}, Subscription{}, events)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("project subscriber saw lifecycle event: %+v %v", got, err)
+	}
+}
+
+func TestNotificationEventsReachOnlyTheirRecipient(t *testing.T) {
+	input := []store.Event{{Type: "notification.created", EntityID: "hinb_1", Data: json.RawMessage(`{"id":"hinb_1","org_id":"org_a","user_id":"usr_b"}`)}}
+	// The permission check is skipped: even a principal denied everything
+	// still gets its own notification.
+	e := &Extension{authz: permissionFixture{denied: security.ProjectRead}}
+	got, err := e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_a"}, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("another user's notification leaked: %+v %v", got, err)
+	}
+	got, err = e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_b"}, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("recipient: %+v %v", got, err)
+	}
+	if string(got[0].Data) != `{"id":"hinb_1","org_id":"org_a"}` {
+		t.Fatalf("data: %s", got[0].Data)
+	}
+	if string(input[0].Data) != `{"id":"hinb_1","org_id":"org_a","user_id":"usr_b"}` {
+		t.Fatal("filter changed the stored event")
+	}
+}
+
+func TestMalformedNotificationEventsAreSkippedNotFatal(t *testing.T) {
+	ordinary := store.Event{ProjectID: "proj_a", Type: "project.updated"}
+	e := &Extension{authz: permissionFixture{}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	for name, data := range map[string]string{"not json": `{`, "user id is a number": `{"id":"hinb_1","user_id":7}`, "empty body": ``, "user id is null-like array": `{"user_id":["usr_a"]}`} {
+		got, err := e.filter(t.Context(), p, Subscription{}, []store.Event{{Type: "notification.created", Data: json.RawMessage(data)}, ordinary})
+		if err != nil || len(got) != 1 || got[0].Type != "project.updated" {
+			t.Fatalf("%s: %+v %v", name, got, err)
+		}
+	}
+}
+
+func TestNotificationEventsWithoutAUserReachNobody(t *testing.T) {
+	e := &Extension{authz: permissionFixture{}}
+	for name, data := range map[string]string{"no user_id": `{"id":"hinb_1","org_id":"org_a"}`, "empty user_id": `{"id":"hinb_1","org_id":"org_a","user_id":""}`} {
+		for _, user := range []string{"", "usr_a"} {
+			got, err := e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: user}, Subscription{}, []store.Event{{Type: "notification.created", Data: json.RawMessage(data)}})
+			if err != nil || len(got) != 0 {
+				t.Fatalf("%s for %q: %+v %v", name, user, got, err)
+			}
+		}
+	}
+}
+
+func TestPlanEgressRedactsHistoricalAuthorityWithoutChangingCursor(t *testing.T) {
+	raw := json.RawMessage(`{"id":"plan","revision":"original","actions":[{"id":"service:api","cleanup_targets":[{"kind":"remove_release","scope":{"Service":"api","Plan":"old","RuntimeRef":"private-runtime"},"unresolved":["private-issuance"],"accepted":[{"id":"private-journal","request":{"Resource":"deployments","Name":"api","CleanupSource":"private-capture"}}]}]}]}`)
+	original := string(raw)
+	e := &Extension{authz: permissionFixture{}}
+	for _, kind := range []string{"plan.updated", "plan.deleted"} {
+		in := []store.Event{{ID: "event", OrgID: "org", ProjectID: "project", Type: kind, Data: raw}}
+		got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, in)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("filter: %+v %v", got, err)
+		}
+		if strings.Contains(string(got[0].Data), "private-") || !strings.Contains(string(got[0].Data), `"revision":"original"`) || !strings.Contains(string(got[0].Data), `"unresolved_writes":1`) || got[0].ID != "event" {
+			t.Fatalf("unsafe event: %+v", got)
+		}
+		if string(in[0].Data) != original {
+			t.Fatal("changed replay storage")
+		}
+		e.authz = permissionFixture{denied: security.DeploymentRead}
+		denied, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, in)
+		if err != nil || len(denied) != 0 {
+			t.Fatalf("denied: %+v %v", denied, err)
+		}
+		e.authz = permissionFixture{}
+	}
+}
+
+func TestPlanEgressExcludesPrivateLocationReview(t *testing.T) {
+	raw := json.RawMessage(`{"id":"p","project_id":"restricted","actions":[{"id":"service:api","service":{"capacity_intent":{"demand":{"target_id":"granted-target","location_review":{"policy":{"preferred_locations":["private-ungranted-location"]},"candidates":[{"runtime_connection_id":"private-runtime-pin"}]}}}}}]}`)
+	e := &Extension{authz: permissionFixture{}}
+	for _, kind := range []string{"plan.created", "plan.updated", "plan.deleted"} {
+		got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "user"}, Subscription{}, []store.Event{{ID: "cursor", OrgID: "org", ProjectID: "restricted", Type: kind, Data: raw}})
+		if err != nil || len(got) != 1 {
+			t.Fatalf("event: %+v %v", got, err)
+		}
+		if strings.Contains(string(got[0].Data), "private-") || strings.Contains(string(got[0].Data), "location_review") || got[0].ID != "cursor" {
+			t.Fatalf("unsafe public event: %+v", got)
+		}
 	}
 }

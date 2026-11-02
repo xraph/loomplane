@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_ProviderResourceConnectInputBody_api_access_values } from './ProviderResourceConnectInputBody.api_access.values';
+
+export const codec_ProviderResourceConnectInputBody_api_access: Codec = {"kind": "object", "fields": {"account_id": {"ts": "accountId"}, "class_name": {"ts": "className"}, "environment": {"ts": "environment"}, "incarnation": {"ts": "incarnation"}, "jurisdiction": {"ts": "jurisdiction"}, "kind": {"ts": "kind"}, "name": {"ts": "name"}, "native": {"ts": "native"}, "project_id": {"ts": "projectId"}, "provider": {"ts": "provider"}, "resource_id": {"ts": "resourceId"}, "script_name": {"ts": "scriptName"}, "token": {"ts": "token"}, "values": {"ts": "values", "codec": () => codec_ProviderResourceConnectInputBody_api_access_values}}};

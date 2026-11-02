@@ -17,9 +17,11 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -27,6 +29,47 @@ const imageOwnerLabel = "loomplane.owner"
 const imageSourceLabel = "loomplane.source"
 
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
+// errNoDigest is a build that pushed its image without saying which
+// digest it got, which a release can't record or a rollback redeploy.
+var errNoDigest = errors.New("the build reported no image digest")
+
+// unpinnedWarning says a service runs its image by tag because the
+// connection may not read the digest its build pushed.
+func unpinnedWarning(name, permission string) error {
+	return fmt.Errorf("%s runs its image by tag: the connection lacks %s, so Loomplane couldn't read the digest the build pushed. Until it has it, promoting or rolling back %s builds it again", name, permission, name)
+}
+
+// reusedImage is the image an earlier release ran that the plan deploys
+// instead of building this step's commit again, or "" when it builds.
+func reusedImage(job *Job) string {
+	ref := reusedReference(job.Action.Service)
+	if ref != "" {
+		job.Progress(StepBuilding, "Using the image "+job.Action.Service.Artifact.FromEnvironment+" ran")
+	}
+	return ref
+}
+
+// reusedReference is the image cfg reuses, or "" when it builds.
+func reusedReference(cfg *planning.ServiceConfig) string {
+	if cfg == nil || cfg.Artifact == nil {
+		return ""
+	}
+	return cfg.Artifact.Reference
+}
+
+// byDigest names image, a repository and tag, by the digest a build
+// pushed it under instead of its tag.
+func byDigest(image, digest string) (string, error) {
+	if !imageDigest.MatchString(digest) {
+		return "", errNoDigest
+	}
+	repo := image
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		repo = image[:i]
+	}
+	return repo + "@" + digest, nil
+}
 
 // ImageArtifact is persisted in the executor checkpoint. Credentials remain
 // in Vault; this records the reviewed source, placement and completed image.
@@ -43,7 +86,8 @@ type ImageArtifact struct {
 }
 
 type ImageBuilder struct {
-	Dial func(context.Context, *server.Config) (*server.Client, error)
+	FirecrackerAuthority fc.Issuer
+	Dial                 func(context.Context, *server.Config) (*server.Client, error)
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -57,7 +101,7 @@ func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud strin
 	if c == nil || c.ID != id || c.OrgID != job.Deployment.OrgID || c.Cloud != cloud || (c.Status != connections.StatusReady && (!pull || !connections.RegistryPullReady(c))) {
 		return nil, nil, errors.New("the reviewed build connection is not ready in this organization")
 	}
-	if !reflect.DeepEqual(settings, planning.ReviewedConnectionSettings(c.Cloud, c.Details)) {
+	if !reflect.DeepEqual(settings, planning.ReviewedBuildSettings(c.Cloud, c.Details)) {
 		return nil, nil, errors.New("build connection settings changed since review; plan again")
 	}
 	return c, raw, nil
@@ -69,17 +113,21 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || state == nil || save == nil {
 		return "", errors.New("the service needs reviewed remote build settings")
 	}
+	if job.Action.Service.ManagedKubernetesBuild() {
+		return b.buildInKubernetes(ctx, job, state, save)
+	}
 	target := job.Action.Service.BuildTarget
+	reused := reusedReference(job.Action.Service) != ""
 	collector := job.Collector("image-build", job.LogAttempt())
 	defer func() { err = collector.safeError(err) }()
 	var registryConfig *registry.Config
 	if target.Registry != "" {
-		connection, raw, credentialErr := b.connection(ctx, job, target.Registry, connections.Registry, target.RegistrySettings, target.Image != "")
+		connection, raw, credentialErr := b.connection(ctx, job, target.Registry, connections.Registry, target.RegistrySettings, target.Image != "" || reused)
 		if credentialErr != nil {
 			return "", credentialErr
 		}
 		collector.addCredential(raw)
-		if target.Image == "" && connection.Details["push"] != "ready" {
+		if target.Image == "" && !reused && connection.Details["push"] != "ready" {
 			return "", errors.New("a source build needs registry push access")
 		}
 		registryConfig, err = registry.ParseConfig(raw, connection.Details)
@@ -90,9 +138,19 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", errors.New("registry trust settings changed since review; plan again")
 		}
 	}
-	if target.Image != "" {
-		state.Reference = target.Image
-		_, state.Digest, _ = strings.Cut(target.Image, "@")
+	if target.Image != "" || reused {
+		image, what := target.Image, "pinned"
+		if image == "" {
+			// A promotion deploys the image its From environment ran,
+			// pulled through the registry this target pushes to.
+			if registryConfig == nil {
+				return "", errors.New("a reused image needs the registry it was pushed to")
+			}
+			image, what = reusedImage(job), "reused"
+			state.Architecture = job.Action.Service.Artifact.Architecture
+		}
+		state.Reference = image
+		_, state.Digest, _ = strings.Cut(image, "@")
 		if !imageDigest.MatchString(state.Digest) {
 			return "", errors.New("choose a digest-pinned existing image")
 		}
@@ -101,8 +159,8 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			if parseErr != nil {
 				return "", parseErr
 			}
-			if !strings.HasPrefix(target.Image, endpoint.Host+"/"+registryConfig.Repository+"/") {
-				return "", errors.New("the pinned image is outside the selected registry prefix")
+			if !strings.HasPrefix(image, endpoint.Host+"/"+registryConfig.Repository+"/") {
+				return "", fmt.Errorf("the %s image is outside the selected registry prefix", what)
 			}
 		}
 		state.Registry = target.Registry
@@ -110,6 +168,9 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", saveErr
 		}
 		return state.Reference, nil
+	}
+	if target.BuilderCloud == connections.Firecracker {
+		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
@@ -304,7 +365,7 @@ func dockerRequest(ctx context.Context, client *server.Client, method, resource 
 // PrepareEffects uses the immutable accepted builder identity, including when
 // the builder and deployment daemon differ. It needs no current target grant.
 func (b *ImageBuilder) PrepareEffects(ctx context.Context, job *Job) error {
-	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || job.Action.Service.BuildTarget.Image != "" {
+	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || job.Action.Service.BuildTarget.Image != "" || reusedReference(job.Action.Service) != "" {
 		return nil
 	}
 	fence, ok := server.EffectFenceFrom(ctx)
@@ -324,10 +385,23 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	pooled := false
+	if reader, ok := job.BuildCredentials.(interface {
+		BuildWorkerShared(context.Context, string, string) (bool, error)
+	}); ok {
+		pooled, err = reader.BuildWorkerShared(ctx, job.Deployment.OrgID, builder.ID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if checkErr := buildpolicy.Check(builder.Details, false, pooled); checkErr != nil {
+		return nil, nil, nil, checkErr
+	}
 	config, err := server.ParseConfig(raw, builder.Details)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	recorded := config.RecordedDetails(builder.Details)
 	dial := b.Dial
 	if dial == nil {
 		dial = server.Dial
@@ -337,7 +411,7 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 		return nil, nil, nil, err
 	}
 	details, missing, err := client.Check(ctx)
-	if err != nil || len(missing) > 0 || !reflect.DeepEqual(target.BuilderSettings, planning.ReviewedConnectionSettings(connections.Server, details)) {
+	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedBuildSettings(connections.Server, recorded), planning.ReviewedBuildSettings(connections.Server, details)) {
 		_ = client.Close()
 		return nil, nil, nil, errors.New("the builder identity or Docker capabilities changed; restore the recorded connection")
 	}

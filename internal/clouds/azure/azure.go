@@ -1,5 +1,6 @@
 // Package azure talks to Microsoft Azure for Loomplane: it signs in as a
-// service principal, checks what the principal may do in a subscription,
+// service principal, a person, or an app that trusts Loomplane's tokens
+// keylessly, checks what the principal may do in a subscription,
 // builds images with ACR Tasks and runs them on Azure Container Apps.
 //
 // It uses Azure Resource Manager's REST API over net/http rather than the
@@ -20,6 +21,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xraph/loomplane/internal/clouds/keyless"
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
 
 // Azure's own hosts.
@@ -43,10 +47,12 @@ const (
 var (
 	// ErrInvalid is a credential or setting that can't be right, found
 	// without asking Azure.
-	ErrInvalid = errors.New("that isn't an Azure service principal")
+	ErrInvalid = errors.New("that isn't an Azure service principal or sign-in")
 	// ErrRejected is a principal Azure refused: a wrong secret, an
-	// expired one, or one with no access to the subscription.
-	ErrRejected = errors.New("azure refused the service principal")
+	// expired one, or one with no access to the subscription. Or a
+	// sign-in whose refresh token Azure no longer takes, or a keyless app
+	// whose federated credential doesn't trust Loomplane's token.
+	ErrRejected = errors.New("azure refused the service principal or sign-in")
 )
 
 var (
@@ -57,44 +63,86 @@ var (
 	groupRE = regexp.MustCompile(`^[A-Za-z0-9_().-]{0,89}[A-Za-z0-9_()-]$`)
 )
 
-// Credential is a service principal and the subscription it deploys to.
-// Only Secret is a secret; the rest is safe to show.
+// Credential is a service principal, a person signed in through
+// Loomplane's sign-in app, or a keyless app, and the subscription it
+// deploys to. Secret, RefreshToken and the handout's ticket are secrets;
+// the rest is safe to show.
 type Credential struct {
-	TenantID       string
+	TenantID string
+	// ClientID is the principal's application, or the sign-in app's.
 	ClientID       string
 	Secret         string
 	SubscriptionID string
 	ResourceGroup  string
+	// RefreshToken is set for a signed-in person, whose session renews
+	// itself from it as Username.
+	RefreshToken string
+	Username     string
+
+	// handout is set for a keyless app, whose session sends a token
+	// minted for it as the app's client assertion.
+	handout *keyless.Handout
+}
+
+// CheckPlacement checks where a connection deploys: tenant_id, a
+// directory ID or domain; subscription_id; and, optionally,
+// resource_group, which defaults to DefaultResourceGroup. GUIDs come back
+// lower-cased. It asks Azure nothing.
+func CheckPlacement(settings map[string]string) (tenant, subscription, group string, err error) {
+	tenant = strings.TrimSpace(settings["tenant_id"])
+	subscription = strings.ToLower(strings.TrimSpace(settings["subscription_id"]))
+	group = strings.TrimSpace(settings["resource_group"])
+	if group == "" {
+		group = DefaultResourceGroup
+	}
+	switch {
+	case !guidRE.MatchString(tenant) && !domainRE.MatchString(tenant):
+		return "", "", "", fmt.Errorf("%w: tenant_id %q is neither a directory ID nor a domain such as contoso.onmicrosoft.com", ErrInvalid, tenant)
+	case !guidRE.MatchString(subscription):
+		return "", "", "", fmt.Errorf("%w: subscription_id %q isn't a subscription ID; they look like 00000000-0000-0000-0000-000000000000", ErrInvalid, subscription)
+	case !groupRE.MatchString(group):
+		return "", "", "", fmt.Errorf("%w: %q isn't a resource group name", ErrInvalid, group)
+	}
+	if guidRE.MatchString(tenant) {
+		tenant = strings.ToLower(tenant)
+	}
+	return tenant, subscription, group, nil
 }
 
 // ParseCredential checks a client secret and the settings that go with
-// it: tenant_id, client_id, subscription_id and, optionally,
-// resource_group. It asks Azure nothing.
+// it: client_id and the placement CheckPlacement checks. A secret that
+// is JSON is the azure_user key a sign-in hands out, which carries its
+// own client, or a keyless handout, whose settings name the app as
+// client_id. It asks Azure nothing.
 func ParseCredential(secret []byte, settings map[string]string) (Credential, error) {
-	c := Credential{
-		TenantID:       strings.TrimSpace(settings["tenant_id"]),
-		ClientID:       strings.ToLower(strings.TrimSpace(settings["client_id"])),
-		Secret:         strings.TrimSpace(string(secret)),
-		SubscriptionID: strings.ToLower(strings.TrimSpace(settings["subscription_id"])),
-		ResourceGroup:  strings.TrimSpace(settings["resource_group"]),
+	var c Credential
+	trimmed := bytes.TrimSpace(secret)
+	if h, ok, err := keyless.Parse(trimmed); ok {
+		if err != nil {
+			return c, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if c, err = keylessCredential(h); err != nil {
+			return c, err
+		}
+	} else if len(trimmed) > 0 && trimmed[0] == '{' {
+		user, err := parseUserKey(trimmed)
+		if err != nil {
+			return c, err
+		}
+		c = user
+	} else {
+		c.ClientID = strings.ToLower(strings.TrimSpace(settings["client_id"]))
+		c.Secret = strings.TrimSpace(string(secret))
+		switch {
+		case c.Secret == "" || len(c.Secret) > maxSecret || strings.ContainsAny(c.Secret, " \t\r\n"):
+			return c, fmt.Errorf("%w: the client secret is empty, too long, or has spaces in it", ErrInvalid)
+		case !guidRE.MatchString(c.ClientID):
+			return c, fmt.Errorf("%w: client_id %q isn't an application (client) ID; they look like 00000000-0000-0000-0000-000000000000", ErrInvalid, c.ClientID)
+		}
 	}
-	if c.ResourceGroup == "" {
-		c.ResourceGroup = DefaultResourceGroup
-	}
-	switch {
-	case c.Secret == "" || len(c.Secret) > maxSecret || strings.ContainsAny(c.Secret, " \t\r\n"):
-		return c, fmt.Errorf("%w: the client secret is empty, too long, or has spaces in it", ErrInvalid)
-	case !guidRE.MatchString(c.TenantID) && !domainRE.MatchString(c.TenantID):
-		return c, fmt.Errorf("%w: tenant_id %q is neither a directory ID nor a domain such as contoso.onmicrosoft.com", ErrInvalid, c.TenantID)
-	case !guidRE.MatchString(c.ClientID):
-		return c, fmt.Errorf("%w: client_id %q isn't an application (client) ID; they look like 00000000-0000-0000-0000-000000000000", ErrInvalid, c.ClientID)
-	case !guidRE.MatchString(c.SubscriptionID):
-		return c, fmt.Errorf("%w: subscription_id %q isn't a subscription ID; they look like 00000000-0000-0000-0000-000000000000", ErrInvalid, c.SubscriptionID)
-	case !groupRE.MatchString(c.ResourceGroup):
-		return c, fmt.Errorf("%w: %q isn't a resource group name", ErrInvalid, c.ResourceGroup)
-	}
-	if guidRE.MatchString(c.TenantID) {
-		c.TenantID = strings.ToLower(c.TenantID)
+	var err error
+	if c.TenantID, c.SubscriptionID, c.ResourceGroup, err = CheckPlacement(settings); err != nil {
+		return c, err
 	}
 	return c, nil
 }
@@ -105,6 +153,9 @@ type Client struct {
 	http              *http.Client
 	// poll is how often a long-running operation is checked.
 	poll time.Duration
+	// minter mints a keyless credential's client assertions. Without one
+	// a keyless credential gets no session.
+	minter keyless.Minter
 }
 
 // New returns a Client. An empty endpoint means Azure's own hosts; any
@@ -132,13 +183,17 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("azure answered %d: %s", e.Status, e.Message)
 }
 
+// IsForbidden reports whether err is Azure's 403: the principal may not
+// do what it asked.
+func IsForbidden(err error) bool { return isForbidden(err) }
+
 // IsNotFound reports whether err is Azure's 404.
 func IsNotFound(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
 }
 
-// Session is a signed-in service principal.
+// Session is a signed-in service principal or person.
 type Session struct {
 	c    *Client
 	cred Credential
@@ -146,12 +201,16 @@ type Session struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// refresh is the refresh token the next renewal spends. Azure may
+	// hand back a new one with each token.
+	refresh string
 }
 
-// Session signs in as cred's service principal. A secret Azure refuses
+// Session signs in as cred's service principal or keyless app, or renews
+// cred's sign-in. A secret, refresh token or keyless trust Azure refuses
 // is ErrRejected.
 func (c *Client) Session(ctx context.Context, cred Credential) (*Session, error) {
-	s := &Session{c: c, cred: cred}
+	s := &Session{c: c, cred: cred, refresh: cred.RefreshToken}
 	if _, err := s.bearer(ctx); err != nil {
 		return nil, err
 	}
@@ -162,7 +221,9 @@ func (c *Client) Session(ctx context.Context, cred Credential) (*Session, error)
 func (s *Session) Credential() Credential { return s.cred }
 
 // bearer returns a Resource Manager token, signing in again when the one
-// it has is about to expire.
+// it has is about to expire. A signed-in person's session renews from its
+// refresh token, and keeps the one Azure hands back for next time. A
+// keyless app's session mints a fresh client assertion for each renewal.
 func (s *Session) bearer(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,7 +236,29 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 		"client_secret": {s.cred.Secret},
 		"scope":         {DefaultManagement + "/.default"},
 	}
-	u := s.c.login + "/" + url.PathEscape(s.cred.TenantID) + "/oauth2/v2.0/token"
+	if s.refresh != "" {
+		form = url.Values{
+			"grant_type":    {"refresh_token"},
+			"client_id":     {s.cred.ClientID},
+			"client_secret": {s.cred.Secret},
+			"refresh_token": {s.refresh},
+			"scope":         {refreshScope},
+		}
+	}
+	if s.cred.handout != nil {
+		assertion, err := s.assertion(ctx)
+		if err != nil {
+			return "", err
+		}
+		form = url.Values{
+			"grant_type":            {"client_credentials"},
+			"client_id":             {s.cred.ClientID},
+			"client_assertion_type": {assertionType},
+			"client_assertion":      {assertion},
+			"scope":                 {DefaultManagement + "/.default"},
+		}
+	}
+	u := s.c.tokenURL(s.cred.TenantID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
@@ -191,13 +274,34 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("azure sign-in: read response: %w", err)
 	}
 	var out struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+		Error        string `json:"error"`
+		Description  string `json:"error_description"`
+		Codes        []int  `json:"error_codes"`
 	}
 	_ = json.Unmarshal(data, &out) //nolint:errcheck // an unreadable answer is judged by its status
 	switch {
+	case s.refresh != "" && res.StatusCode >= 300:
+		// Only the error code is kept: the description of a refused
+		// refresh token is long and says nothing a person can act on. A
+		// refused app is told apart, as a renewal's is, since signing in
+		// again with it won't help.
+		if res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnauthorized {
+			return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
+		}
+		switch out.Error {
+		case "invalid_client", "unauthorized_client":
+			return "", fmt.Errorf("%w: %w (%s)", ErrRejected, oauth.ErrAppRejected, errorCode(out.Error))
+		case "invalid_grant", "interaction_required", "consent_required":
+			// The same codes a renewal counts as refused, so a session
+			// and the background job agree.
+			return "", fmt.Errorf("%w: %w (%s); sign in again", ErrRejected, oauth.ErrRefused, errorCode(out.Error))
+		}
+		return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
+	case s.cred.handout != nil && res.StatusCode >= 300:
+		return "", assertionAnswer(res.StatusCode, out.Error, out.Codes, out.Description)
 	case res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized:
 		// Microsoft Entra ID answers 400 for a wrong secret, an unknown
 		// application or an unknown tenant, with an AADSTS code that
@@ -214,6 +318,9 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 	}
 	s.token = out.AccessToken
 	s.expires = time.Now().Add(time.Duration(out.ExpiresIn)*time.Second - tokenSkew)
+	if s.refresh != "" && out.RefreshToken != "" {
+		s.refresh = out.RefreshToken
+	}
 	return s.token, nil
 }
 

@@ -152,7 +152,7 @@ func TestSnapshotWithoutVersionsCompilesEachPoll(t *testing.T) {
 		t.Fatalf("read %d addresses and bumped %d times, want a full compile", urls, bumps)
 	}
 
-	plain := newService(h.store, onlyURLs{h.urls}, h.svc.key, h.svc.trust, h.svc.now)
+	plain := newService(h.store, onlyURLs{h.urls}, h.svc.keys, h.svc.now)
 	if _, ok := plain.inputs(t.Context(), &h.gw); ok {
 		t.Fatal("inputs without URLVersions")
 	}
@@ -169,7 +169,7 @@ func (o onlyURLs) URL(ctx context.Context, org, env, resource string) (string, e
 // every poll serves, sealed credentials aside, which differ by design.
 func TestSnapshotContentUnchangedByTheCache(t *testing.T) {
 	cached, plain := newServiceHarness(t), newServiceHarness(t)
-	plain.svc = newService(plain.store, onlyURLs{plain.urls}, plain.svc.key, plain.svc.trust, plain.svc.now)
+	plain.svc = newService(plain.store, onlyURLs{plain.urls}, plain.svc.keys, plain.svc.now)
 	for _, h := range []*serviceHarness{cached, plain} {
 		if _, err := h.snapshot(t, 0); err != nil {
 			t.Fatal(err)
@@ -189,11 +189,13 @@ func TestSnapshotContentUnchangedByTheCache(t *testing.T) {
 	if err != nil || b == nil {
 		t.Fatalf("plain: %+v %v", b, err)
 	}
-	da, err := snapshotDigest(*a)
+	// Each harness has its own sealing key, so both digests take the
+	// cached one's: what is compared is the content.
+	da, err := snapshotDigest(*a, cached.gw.SealingPublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := snapshotDigest(*b)
+	db, err := snapshotDigest(*b, cached.gw.SealingPublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

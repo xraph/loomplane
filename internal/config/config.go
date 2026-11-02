@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -58,6 +59,7 @@ type Config struct {
 
 	Database      DatabaseConfig
 	Identity      IdentityConfig
+	Console       ConsoleConfig
 	Notifications NotificationsConfig
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
@@ -69,8 +71,10 @@ type Config struct {
 	Drift         DriftConfig
 	Worker        WorkerConfig
 	Federation    FederationConfig
+	AI            AIConfig
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
+	Push          PushConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -195,6 +199,17 @@ type IdentityConfig struct {
 	// kept in. Cookies are shared by every port on a host, so two authsome
 	// apps on one host need different names, or each replaces the other's.
 	SessionCookie string
+	// Waitlist turns the sign-up waitlist on or off. Nil leaves it to the
+	// instance's stored setting.
+	Waitlist *bool
+}
+
+// ConsoleConfig configures the hidden Forge console.
+type ConsoleConfig struct {
+	// Path is where the console is mounted. It's one segment that starts
+	// with __, so it can't collide with the dashboard's routes, /api/,
+	// /authsome/, /_/, /.well-known/ or /catalog-admin/.
+	Path string
 }
 
 // DashboardConfig is the web dashboard Loomplane serves.
@@ -219,6 +234,10 @@ type PlanningConfig struct {
 	// ApprovalWindow is how long a plan waits for someone to approve or
 	// reject it. After that it expires, and you plan again.
 	ApprovalWindow time.Duration
+	// EndpointDeniedCIDRs are ranges an endpoint check from Loomplane's
+	// own network never connects to, at any port, besides its own host
+	// and the services it depends on. A bare address is one host.
+	EndpointDeniedCIDRs []netip.Prefix
 }
 
 // DriftConfig schedules the drift check.
@@ -246,6 +265,11 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	MultiLocationDelivery bool
+	ManagedClusters       ManagedClustersConfig
+	ClusterCapacity       ClusterCapacityConfig
+	AutomaticCapacity     AutomaticCapacityConfig
+
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
 	EnrollmentURL string
@@ -262,7 +286,36 @@ type CloudsConfig struct {
 	// AzureEndpoint replaces Microsoft Entra ID's sign-in and Azure
 	// Resource Manager.
 	AzureEndpoint string
+	// CloudflareEndpoint replaces Cloudflare's API.
+	CloudflareEndpoint string
+	// CloudflareRegistrarSandbox sends registrar calls to Cloudflare's
+	// sandbox, which never registers or charges for a real domain.
+	CloudflareRegistrarSandbox bool
+	// ACMEDirectory replaces the ACME directory certificates are ordered
+	// from. Empty means Let's Encrypt's production directory.
+	ACMEDirectory string
+	// KubernetesInCluster lets organizations connect the Kubernetes cluster
+	// Loomplane runs in, as Loomplane's own service account. Every
+	// organization on the instance shares that account, so it's off unless
+	// the operator turns it on, and needs the pod's token mounted.
+	KubernetesInCluster bool
+	// OAuth holds the sign-in app Loomplane registered with each cloud,
+	// keyed by connection cloud such as "digitalocean". A cloud appears
+	// only when both its client ID and secret are set.
+	OAuth map[string]OAuthApp
 }
+
+// OAuthApp is Loomplane's OAuth 2 app at one cloud.
+type OAuthApp struct {
+	ClientID     string
+	ClientSecret string
+	// Slug names the app in the cloud's own address, which Vercel's
+	// install page needs. Only Vercel sets it.
+	Slug string
+}
+
+// oauthClouds are the clouds that can connect by signing in.
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure", "cloudflare"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -271,6 +324,10 @@ const (
 	maxApprovalWindow = 90 * 24 * time.Hour
 	approvalWindow    = 7 * 24 * time.Hour
 )
+
+// consolePath is a console mount path (see ConsoleConfig.Path for why it
+// starts with __).
+var consolePath = regexp.MustCompile(`^/__[a-z0-9][a-z0-9-]{2,62}$`)
 
 // cookieName is a cookie name as RFC 6265 allows it: a token.
 var cookieName = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
@@ -289,6 +346,7 @@ func Defaults() Config {
 			PublishableKey: "pk_test_loomplane_dev",
 			SessionCookie:  "loomplane_session",
 		},
+		Console:       ConsoleConfig{Path: "/__console"},
 		Notifications: NotificationsConfig{SMTPPort: 1025},
 		Dashboard:     DashboardConfig{Dir: "apps/dashboard/dist"},
 		Orchestration: OrchestrationConfig{
@@ -300,6 +358,8 @@ func Defaults() Config {
 		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
 		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
+		AI:       AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
+		Push:     PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
 }
 
@@ -362,6 +422,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
 	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
+	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
+	r.str(&c.Console.Path, "console.path")
+	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
@@ -387,6 +450,7 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.prefixes(&c.Planning.EndpointDeniedCIDRs, "planning.endpoint_denied_cidrs")
 	r.str(&c.Storage.URL, "storage.url")
 	r.str(&c.Storage.ArtifactBucket, "storage.artifact_bucket")
 	r.str(&c.Storage.BackupURL, "storage.backup_url")
@@ -398,9 +462,33 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
+	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
+	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
+	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
+	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.boolean(&c.Clouds.AutomaticCapacity.Enabled, "clouds.automatic_capacity.enabled")
+	r.boolean(&c.Clouds.MultiLocationDelivery, "clouds.multi_location_delivery")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.URL, "clouds.managed_clusters.management_probe.url")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.SPKISHA256, "clouds.managed_clusters.management_probe.spki_sha256")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.ExpiresAt, "clouds.managed_clusters.management_probe.expires_at")
+	r.str(&c.Clouds.ManagedClusters.QualificationOrgID, "clouds.managed_clusters.qualification_org_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationOperatorID, "clouds.managed_clusters.qualification_operator_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationAccountID, "clouds.managed_clusters.qualification_account_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationRegion, "clouds.managed_clusters.qualification_region")
+	r.integer(&c.Clouds.ManagedClusters.MaxNodes, "clouds.managed_clusters.max_nodes")
+	r.int64(&c.Clouds.ManagedClusters.MaxNodeHourlyMicroUSD, "clouds.managed_clusters.max_node_hourly_micro_usd")
+	r.integer(&c.Clouds.ManagedClusters.MaxAccountCreates, "clouds.managed_clusters.max_account_creates")
+	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
+	r.boolean(&c.AI.Enabled, "ai.enabled")
+	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
 	r.str(&c.Federation.Runtime.OrganizationID, "federation.runtime.organization_id")
@@ -416,6 +504,8 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
 	r.str(&c.Federation.Identity.AdminSocket, "federation.identity.admin_socket")
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
+	r.boolean(&c.Push.Enabled, "push.enabled")
+	r.str(&c.Push.GatewayURL, "push.gateway_url")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -429,7 +519,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment))
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
@@ -452,6 +542,9 @@ func (c *Config) Validate() error {
 	}
 	if !cookieName.MatchString(c.Identity.SessionCookie) {
 		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
+	}
+	if !consolePath.MatchString(c.Console.Path) {
+		errs = append(errs, fmt.Errorf("console.path must be one segment starting with __ (like /__console), got %q", c.Console.Path))
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("public_url must be an absolute URL, got %q", c.PublicURL))
@@ -590,6 +683,60 @@ func (r *reader) names(dst *[]string, key string) {
 	}
 }
 
+// prefixes reads a list of CIDR ranges, as a list or a comma-separated
+// string. A bare address is a range of one.
+func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
+	var items []string
+	before := len(r.errs)
+	r.names(&items, key)
+	if len(r.errs) > before {
+		return
+	}
+	for _, item := range items {
+		p, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(item)
+			if aerr != nil {
+				r.fail(key, "a list of CIDR ranges, such as 10.20.0.0/16", item)
+				continue
+			}
+			p = netip.PrefixFrom(addr.WithZone(""), addr.BitLen())
+		}
+		*dst = append(*dst, p.Masked())
+	}
+}
+
+// oauthApps reads <key>.<cloud>.client_id and client_secret for each cloud
+// that can sign in, and slug for Vercel. A cloud with only one of the
+// two is an error, and so is a Vercel app without its slug.
+func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuthApp {
+	for _, cloud := range oauthClouds {
+		var app OAuthApp
+		r.str(&app.ClientID, key+"."+cloud+".client_id")
+		r.str(&app.ClientSecret, key+"."+cloud+".client_secret")
+		r.str(&app.Slug, key+"."+cloud+".slug")
+		switch {
+		case app.ClientID == "" && app.ClientSecret == "":
+			continue
+		case app.ClientID == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_id is required when client_secret is set", key, cloud))
+			continue
+		case app.ClientSecret == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_secret is required when client_id is set", key, cloud))
+			continue
+		}
+		if cloud == "vercel" && app.Slug == "" {
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.slug is required when client_id and client_secret are set", key, cloud))
+			continue
+		}
+		if dst == nil {
+			dst = map[string]OAuthApp{}
+		}
+		dst[cloud] = app
+	}
+	return dst
+}
+
 func (r *reader) str(dst *string, key string) {
 	if v, ok := r.raw(key); ok {
 		*dst = strings.TrimSpace(fmt.Sprint(v))
@@ -606,6 +753,9 @@ func (r *reader) integer(dst *int, key string) {
 		*dst = t
 	case int64:
 		*dst = int(t)
+	case bool:
+		// confy turns "1" and "0" variables into bools, so read them as numbers.
+		*dst = map[bool]int{true: 1, false: 0}[t]
 	case float64:
 		if t != float64(int(t)) {
 			r.fail(key, "a whole number", v)
@@ -654,6 +804,20 @@ func (r *reader) boolean(dst *bool, key string) {
 	}
 }
 
+// optionalBool reads a bool that stays nil when it isn't set, so "off" and
+// "not set" differ.
+func (r *reader) optionalBool(dst **bool, key string) {
+	if _, ok := r.raw(key); !ok {
+		return
+	}
+	var b bool
+	n := len(r.errs)
+	r.boolean(&b, key)
+	if len(r.errs) == n {
+		*dst = &b
+	}
+}
+
 func (r *reader) duration(dst *time.Duration, key string) {
 	v, ok := r.raw(key)
 	if !ok {
@@ -666,3 +830,38 @@ func (r *reader) duration(dst *time.Duration, key string) {
 	}
 	*dst = d
 }
+
+// ManagedClustersConfig restricts purchases to explicitly scoped qualification runs.
+// General purchase rollout requires the retirement qualification in the lifecycle plan.
+type ManagedClustersConfig struct {
+	ManagementProbe         ManagedClusterManagementProbeConfig
+	MaxNodeHourlyMicroUSD   int64
+	Enabled                 bool
+	QualificationOrgID      string
+	QualificationOperatorID string
+	QualificationAccountID  string
+	QualificationRegion     string
+	MaxNodes                int
+	MaxAccountCreates       int
+}
+
+// ManagedClusterManagementProbeConfig identifies an operator-qualified existing
+// management path. Its material does not belong in API reviews or logs.
+type ManagedClusterManagementProbeConfig struct {
+	Provider   string `json:"-"`
+	NetworkID  string `json:"-"`
+	EvidenceID string `json:"-"`
+	URL        string `json:"-"`
+	SPKISHA256 string `json:"-"`
+	ExpiresAt  string `json:"-"`
+}
+
+func (ManagedClusterManagementProbeConfig) String() string     { return "[management path qualification]" }
+func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String() }
+
+// ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
+type ClusterCapacityConfig struct{ Enabled bool }
+
+// AutomaticCapacityConfig lets server pools grow on their own from saved
+// capacity policies. It stays off until integrated qualification.
+type AutomaticCapacityConfig struct{ Enabled bool }

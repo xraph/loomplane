@@ -91,8 +91,13 @@ describe("cloudCatalogue", () => {
 
   it("follows the API's list, then adds a cloud only a connection is on", () => {
     const forms = [
-      { cloud: "gcp", title: "Google Cloud", builtin: true },
-      { cloud: "fly", title: "Fly.io", builtin: false },
+      {
+        cloud: "gcp",
+        title: "Google Cloud",
+        builtin: true,
+        methods: ["token"],
+      },
+      { cloud: "fly", title: "Fly.io", builtin: false, methods: ["token"] },
     ]
     expect(
       cloudCatalogue(forms, [conn("fly"), conn("aws")]).map((t) => t.title)

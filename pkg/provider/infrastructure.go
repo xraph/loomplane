@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 )
 
 // InfrastructureCapability describes an account API independently of its runtime.
@@ -17,19 +19,32 @@ type InfrastructureCapability string
 // Infrastructure operations are declared independently. A declaration does not
 // imply an implementation; registries advertise only installed adapter methods.
 const (
-	ServerDiscovery         InfrastructureCapability = "server:discover"
-	ServerAdoption          InfrastructureCapability = "server:adopt"
-	ServerProvisioning      InfrastructureCapability = "server:provision"
-	ServerResize            InfrastructureCapability = "server:resize"
-	ServerDeletion          InfrastructureCapability = "server:delete"
-	DNSZoneDiscovery        InfrastructureCapability = "dns:zones:read"
-	DNSZoneCreation         InfrastructureCapability = "dns:zones:create"
-	DNSRecordDiscovery      InfrastructureCapability = "dns:records:read"
-	DNSRecordUpsert         InfrastructureCapability = "dns:records:upsert"
-	DNSRecordDeletion       InfrastructureCapability = "dns:records:delete"
-	ManagedDomainAttachment InfrastructureCapability = "managed-domain:attach"
-	IngressManagement       InfrastructureCapability = "ingress"
-	TLSManagement           InfrastructureCapability = "tls"
+	ClusterDiscovery           InfrastructureCapability = "cluster:discover"
+	ClusterOptionsRead         InfrastructureCapability = "cluster:options"
+	ClusterCreation            InfrastructureCapability = "cluster:create"
+	ClusterMutationObservation InfrastructureCapability = "cluster:observe"
+	ClusterBootstrapAccess     InfrastructureCapability = "cluster:bootstrap"
+	ClusterConfigurationUpdate InfrastructureCapability = "cluster:update"
+	ClusterUpgrade             InfrastructureCapability = "cluster:upgrade"
+	ClusterDeletion            InfrastructureCapability = "cluster:delete"
+	NodePoolCreation           InfrastructureCapability = "node-pool:create"
+	NodePoolUpdate             InfrastructureCapability = "node-pool:update"
+	NodePoolAutoscaling        InfrastructureCapability = "node-pool:autoscaling"
+	NodePoolDeletion           InfrastructureCapability = "node-pool:delete"
+	ClusterCapacityObservation InfrastructureCapability = "cluster:capacity:observe"
+	ServerDiscovery            InfrastructureCapability = "server:discover"
+	ServerAdoption             InfrastructureCapability = "server:adopt"
+	ServerProvisioning         InfrastructureCapability = "server:provision"
+	ServerResize               InfrastructureCapability = "server:resize"
+	ServerDeletion             InfrastructureCapability = "server:delete"
+	DNSZoneDiscovery           InfrastructureCapability = "dns:zones:read"
+	DNSZoneCreation            InfrastructureCapability = "dns:zones:create"
+	DNSRecordDiscovery         InfrastructureCapability = "dns:records:read"
+	DNSRecordUpsert            InfrastructureCapability = "dns:records:upsert"
+	DNSRecordDeletion          InfrastructureCapability = "dns:records:delete"
+	ManagedDomainAttachment    InfrastructureCapability = "managed-domain:attach"
+	IngressManagement          InfrastructureCapability = "ingress"
+	TLSManagement              InfrastructureCapability = "tls"
 	// DNSManagement identifies the lookup family when no DNS adapter is installed.
 	DNSManagement InfrastructureCapability = "dns"
 )
@@ -80,9 +95,12 @@ func (e *InfrastructureScopeError) Error() string {
 func (*InfrastructureScopeError) Unwrap() error { return ErrInfrastructureScope }
 
 // InfrastructureAPIError is safe to persist. Raw remote bodies are excluded.
+// Codes are the provider's numeric error codes, never its messages.
 type InfrastructureAPIError struct {
-	Provider string
-	Status   int
+	RetryAfter time.Duration
+	Provider   string
+	Status     int
+	Codes      []int
 }
 
 func (e *InfrastructureAPIError) Error() string {
@@ -151,6 +169,7 @@ type ServerAdapter interface {
 
 // DNSZone identifies a zone in its account. Name is also the request locator on
 // APIs that address domains by name. Nameservers are read-only metadata here.
+// Verified describes provider hosting metadata, not public control of the name.
 type DNSZone struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
@@ -172,13 +191,14 @@ type DNSZoneSpec struct {
 // on update, so persist the returned receipt before further mutation or cleanup.
 // An empty Name means the zone apex, and names are relative to the zone.
 type DNSRecord struct {
-	ID     string `json:"id"`
-	ZoneID string `json:"zone_id"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Value  string `json:"value"`
-	TTL    int    `json:"ttl"`
-	Owner  string `json:"owner,omitempty"`
+	Proxied bool   `json:"proxied,omitempty"`
+	ID      string `json:"id"`
+	ZoneID  string `json:"zone_id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	TTL     int    `json:"ttl"`
+	Owner   string `json:"owner,omitempty"`
 }
 
 // DNSUpsertRequest creates only if Expected is nil and the name is unclaimed.
@@ -192,6 +212,9 @@ type DNSUpsertRequest struct {
 	Record        DNSRecord  `json:"record"`
 	Expected      *DNSRecord `json:"expected,omitempty"`
 	ReconcileOnly bool       `json:"-"`
+	// Siblings are records the caller already wrote on this name, such as
+	// an apex's other addresses. While they match, they aren't drift.
+	Siblings []DNSRecord `json:"-"`
 }
 
 // DNSDeleteRequest deletes only the exact recorded prior resource.
@@ -315,6 +338,9 @@ func PlanDNSUpsert(req DNSUpsertRequest, records []DNSRecord, ownerComments bool
 			continue
 		}
 		if r.Type != req.Record.Type && r.Type != "CNAME" && req.Record.Type != "CNAME" {
+			continue
+		}
+		if slices.ContainsFunc(req.Siblings, func(sibling DNSRecord) bool { return sibling.ID == r.ID && MatchDNSPrior(sibling, r) == nil }) {
 			continue
 		}
 		desired := req.Record

@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/version"
+	"k8s.io/client-go/dynamic"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -25,6 +26,8 @@ var ErrRejected = errors.New("the cluster refused the credential")
 type Client struct {
 	Config *Config
 	Kube   kubeclient.Interface
+	// Dynamic reaches cert-manager objects, which have no typed client here.
+	Dynamic dynamic.Interface
 }
 
 // Result contains only safe metadata and missing permissions.
@@ -38,6 +41,10 @@ func New(cfg *Config) (*Client, error) {
 	if cfg == nil || cfg.REST == nil || cfg.Namespace == "" {
 		return nil, ErrInvalid
 	}
+	cleanup, restricted := cfg.ManagedJournal.(interface{ ManagedCleanupScope() ManagedScope })
+	if restricted && (!cfg.journalRequired() || !managedScopeValid(cfg.ManagedScope) || cleanup.ManagedCleanupScope() != cfg.ManagedScope) {
+		return nil, ErrManagedAuthority
+	}
 	rc := rest.CopyConfig(cfg.REST)
 	rc.Timeout, rc.QPS, rc.Burst = 15*time.Second, 20, 40
 	rc.ContentType, rc.AcceptContentTypes = "application/json", "application/json"
@@ -45,8 +52,18 @@ func New(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
 	}
+	if cfg.journalRequired() {
+		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope, cleanup: restricted}
+	} else if cfg.ManagedWorkload {
+		httpClient.Transport = &managedLegacyTransport{next: httpClient.Transport, guard: cfg.ManagedLegacyGuard, identity: cfg.ManagedIdentity}
+	}
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client, err := kubeclient.NewForConfigAndClient(rc, httpClient)
+	if err != nil {
+		httpClient.CloseIdleConnections()
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	dynamicClient, err := dynamic.NewForConfigAndClient(rc, httpClient)
 	if err != nil {
 		httpClient.CloseIdleConnections()
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
@@ -56,7 +73,7 @@ func New(cfg *Config) (*Client, error) {
 	if copyConfig.Details == nil {
 		copyConfig.Details = map[string]string{}
 	}
-	return &Client{Config: &copyConfig, Kube: client}, nil
+	return &Client{Config: &copyConfig, Kube: client, Dynamic: dynamicClient}, nil
 }
 
 // Check validates namespace access and each lifecycle permission. Optional
@@ -88,6 +105,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	default:
 		out.Details["namespace_uid"] = string(ns.UID)
 	}
+	if setupErr := c.discoverManagedSetup(ctx, out); setupErr != nil {
+		return nil, setupErr
+	}
 	for _, resource := range []struct {
 		group, name string
 		verbs       []string
@@ -112,7 +132,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		{"autoscaling", "horizontalpodautoscalers", "hpa"},
 	} {
 		ready := true
-		for _, verb := range []string{"get", "create", "update", "patch", "delete"} {
+		verbs := []string{"get", "create", "update", "patch", "delete"}
+		if optional.detail == "hpa" {
+			verbs = []string{"get", "create", "update", "delete"}
+		}
+		for _, verb := range verbs {
 			allowed, checkErr := c.allowed(ctx, optional.group, optional.resource, verb)
 			if checkErr != nil {
 				return nil, checkErr
@@ -129,15 +153,46 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 			out.Details[optional.detail] = "ready"
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if storageErr := c.checkPersistentStorage(ctx, out); storageErr != nil {
+		return nil, storageErr
+	}
+	if postgresErr := c.checkPostgresPermissions(ctx, out); postgresErr != nil {
+		return nil, postgresErr
+	}
+	// Routes are optional, so what they need is a detail and never Missing.
+	routeClient := *c
+	routeConfig := *c.Config
+	routeConfig.Details = out.Details
+	routeClient.Config = &routeConfig
+	routes, err := routeClient.CheckRoutePrerequisites(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if err := c.checkPersistentStorage(ctx, out); err != nil {
+	out.Details["route_prerequisites"] = "ready"
+	if !routes.Ready {
+		out.Details["route_prerequisites"] = "missing: " + strings.Join(routes.Missing, ", ")
+	}
+	if err := c.checkJobPermissions(ctx, out); err != nil {
 		return nil, err
 	}
-	if err := c.checkPostgresPermissions(ctx, out); err != nil {
+	if err := c.checkServiceProxyPermissions(ctx, out); err != nil {
 		return nil, err
 	}
+	if err := c.checkAccessPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	c.checkBuildIsolation(ctx, out)
+	if err := c.checkManagedBuildPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	inv, gpuErr := c.GPUs(ctx)
+	if gpuErr != nil {
+		return nil, gpuErr
+	}
+	maps.Copy(out.Details, inv.Details())
 	return out, nil
 }
 

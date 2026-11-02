@@ -81,8 +81,10 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `scale`              | `{min, max}` instances, on targets that let you choose.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
+| `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs).                                                                                                                                                                                                                                                                                                         |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`.                                                                                                                                                                                                                                                                                                                                                |
+| `farp`               | Opts the service in to [FARP discovery](#farp-discovery) by an Octopus gateway.                                                                                                                                                                                                                                                                                                                                                                  |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -95,23 +97,57 @@ services:
 
 Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and a `build` on it is ignored with a warning.
 
-A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres and MySQL, `REDIS_URL`, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
+A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres, MySQL and MariaDB, `REDIS_URL` for Redis and Valkey, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. A MariaDB or Valkey resource used to get its name in capitals and `_URL` (`DB_URL`), so a service you deployed that way keeps that variable beside the new one, and the plan warns you to move off it. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
 
 Resource addresses hold credentials, so they're secrets: they reach the service through its cloud's secret store, never as plain variables.
 
 How a service reaches another depends on where both run. Two services on ECS in the same environment reach each other inside the VPC, at `http://name:port`, whether or not the one they need is public. A private Cloud Run service only takes calls from the project's own services, which have to send a Google ID token. A private service needed from another cloud is a problem on the plan, unless a [link](#links) joins the two clouds' networks and the caller is on Google Cloud.
 
+### FARP discovery
+
+A service opts in to FARP route discovery by having a `farp` block. Octopus then reads the service's API description and builds its routes from it, so you don't write those routes by hand. This is the smallest block that says something useful:
+
+```yaml
+services:
+  billing:
+    port: 8080
+    farp:
+      openapi: /openapi.json
+      capabilities: [rest, websocket]
+```
+
+`farp: {}` opts in too, and takes Octopus's defaults, `/openapi.json` and `/health`. Set `enabled: false` to opt out, which is how you turn it off in one environment.
+
+| Key                                                   | What it does                                                                                      |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `gateway`                                             | The Octopus resource the service feeds. Without it, the manifest's only one.                      |
+| `openapi`, `asyncapi`, `graphql`, `health`, `metrics` | Paths on the service, each starting with `/` and with no query string. Left out, Octopus chooses. |
+| `grpc_reflection`                                     | `true` if the service answers gRPC reflection.                                                    |
+| `capabilities`                                        | What the service speaks, such as `rest` or `websocket`. Lower case words, at most eight.          |
+| `port`                                                | The port Octopus reaches the service on. Without it, the service's own `port`.                    |
+| `enabled`                                             | `false` opts the service out.                                                                     |
+
+With two or more Octopus resources in the manifest, set `gateway` on each service, or the plan stops and lists them. The service and its gateway also have to run on the same server or cluster, because Octopus reaches the service by its private address. A service with neither a `port` nor a `farp.port` is a problem on the plan.
+
+An environment's `farp` block replaces the service's whole block. It doesn't merge. A staging block of `{enabled: false}` switches FARP off there, and one of `{health: /ready}` drops the service's `openapi` path in that environment too, so repeat whatever you still want.
+
+Names starting with `lp-` are reserved for the upstreams Loomplane registers with Octopus for manual routes. A service that opts in can't use one.
+
+[octopus.md](octopus.md) covers the rest: adding the gateway, what it does with these schemas, and the routes you add by hand.
+
 ## resources
 
 Backing services the application needs, by name. A resource can't share a service's name.
 
-| Field                | What it does                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
-| `provider`, `region` | Where it's provisioned.                                                               |
-| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).     |
-| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                     |
+| Field                | What it does                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.                |
+| `provider`, `region` | Where it's provisioned.                                                                   |
+| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest.     |
+| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).         |
+| `target`             | The ID of the checked server or Kubernetes connection a catalog resource runs on.         |
+| `uses`               | Where a catalog resource gets each dependency. See [Catalog services](#catalog-services). |
+| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                         |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
 
@@ -127,6 +163,59 @@ resources:
       preview:
         gateway: false
 ```
+
+### Catalog services
+
+For a complete stack with tenants, keys and optional projections, see [Fabriq](fabriq.md).
+
+A catalog resource can depend on other things, a Postgres for its data or a Redis for its cache. By default Loomplane provisions a new one of each, next to the resource, and wires it in. `uses` lets you choose something else, one dependency at a time. The key is the dependency's name, as the catalog lists it for that kind.
+
+| Field      | What it does                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| `resource` | Use another resource in this manifest. It has to be there, and it can't be the resource itself. |
+| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters).     |
+| `enabled`  | Turn an optional dependency on or off. `false` can't go with `resource` or `external`.          |
+
+Set `resource` or `external`, not both. Set nothing and you get a new one.
+
+```yaml
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_your_server
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae
+      falkordb:
+        enabled: true
+```
+
+In this example `sample` stands in for a catalog kind with those three dependencies, and `conn_your_server` for the ID of one of your checked connections. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest checks what it can see on its own: that `db` is a resource in it and isn't `gateway` itself, and that the endpoint ID has the right form. The rest waits until you plan. That's where Loomplane finds out whether `gateway`'s kind has a dependency called `postgres`, whether `db` is a kind it accepts, and whether the endpoint answers from the target.
+
+#### Passing options to what a service needs
+
+A service can hand options to something it needs. Some catalog kinds ask for them, a tenant name for a shared server, say. They go under `need_options` on the service, first by the need's name and then by option name:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+resources:
+  fabriq:
+    kind: sample
+```
+
+The need has to be in `needs`, or the manifest is invalid. Option names are lower case letters, digits and underscores, start with a letter, and run to 32 characters at most. A value is up to 200 characters and can't hold a newline or any other control character. Which options a kind accepts, and whether a value fits, is checked when you plan.
+
+The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service, with options if you give them. Link again with new options and they replace the old ones as a whole; link again with none and they stay. `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
 
 ## gateways
 
@@ -200,6 +289,37 @@ It works one way. AWS has a route back, but a private Cloud Run service checks G
 A link needs more than a connection's check asks for. The Google Cloud key needs Compute Network Admin (`roles/compute.networkAdmin`) for the HA VPN, router and tunnels. The AWS key needs `ec2:CreateVpnGateway`, `ec2:AttachVpnGateway`, `ec2:DetachVpnGateway`, `ec2:DeleteVpnGateway`, `ec2:DescribeVpnGateways`, `ec2:CreateCustomerGateway`, `ec2:DeleteCustomerGateway`, `ec2:CreateVpnConnection`, `ec2:DeleteVpnConnection`, `ec2:DescribeVpnConnections`, `ec2:DescribeRouteTables`, `ec2:EnableVgwRoutePropagation` and `ec2:CreateTags`.
 
 Removing a link from the manifest takes it down on both clouds, Google's side first. A link with a tunnel down shows as drift, and the next plan brings back what's missing.
+
+## environments
+
+`environments.<name>.release` says how that environment's releases go live. An environment without a release block deploys the way it always has. The block is for version 1 manifests: a version 2 manifest that carries one is refused until federation and releases work together.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `strategy` | `direct`, `blue_green` or `canary` | Required. `canary` moves traffic to the new version in steps |
+| `steps` | list of 1 to 10 integers | Canary only. Traffic percentages, strictly increasing, each 1 to 100, ending at 100. Default `[5, 25, 50, 100]` |
+| `hold` | duration | Canary only. How long to watch each step, in whole minutes from `1m` to `24h`, such as `10m` or `1h30m`. Default `10m` |
+| `thresholds.error_rate` | percentage | Highest share of failed requests a step may show. Above 0% and at most 100%. Default `1%` |
+| `thresholds.error_rate_delta` | percentage | How far above the current version's failure share a step may be. Above 0% and at most 100%. Default `0.5%` |
+| `thresholds.p95_latency_ratio` | number | How many times the current version's p95 latency a step may reach, from 1 to 10. Default `1.3` |
+| `min_requests` | integer | The fewest requests a step needs before its health counts, 1 to 1,000,000. Default `200` |
+| `watch` | duration | How long Loomplane watches a release's health after it deploys, in whole minutes up to `24h`, such as `15m` or `1h`. `0` turns it off. Default `15m` for `canary` and `blue_green`, and no watch for `direct`. A breach rolls the release back automatically |
+
+Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, because a canary and the post-deploy watch both read them, and a promotion's staging soak reads the error ceiling and `min_requests`. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
+
+```yaml
+environments:
+  production:
+    release:
+      strategy: canary
+      steps: [5, 25, 50, 100]
+      hold: 10m
+      thresholds:
+        error_rate: 1%
+        error_rate_delta: 0.5%
+        p95_latency_ratio: 1.3
+      min_requests: 200
+```
 
 ## ignore
 

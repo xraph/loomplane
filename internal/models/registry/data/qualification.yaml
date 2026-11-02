@@ -1,0 +1,6 @@
+# Qualification results: each one is a real deployment of one quantization
+# on one GPU kind by the qualification job, which merges its runs in here.
+# A fit shows as tested only when a passed result ran on the engine version
+# Loomplane ships. Load checks every result names an entry, quantization and
+# GPU kind that exist.
+results: []

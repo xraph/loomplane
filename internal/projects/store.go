@@ -11,6 +11,10 @@ type Store interface {
 	GetProject(ctx context.Context, orgID, id string) (*Project, error)
 	ListProjects(ctx context.Context, orgID string) ([]*Project, error)
 	UpdateProject(ctx context.Context, p *Project) error
+	// UpdateExclusions replaces the project's exclusions with what change
+	// returns for the current ones, holding the row so two changes can't
+	// lose each other. An error from change aborts and is returned.
+	UpdateExclusions(ctx context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error)
 	DeleteProject(ctx context.Context, orgID, id string) error
 
 	// CreateEnvironment adds an environment. A name the project already

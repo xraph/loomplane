@@ -40,7 +40,7 @@ export function NewDeploymentPage({ preset }: { preset: DeployPreset }) {
             <EmptyHeader>
               <EmptyTitle>Deployment access required</EmptyTitle>
               <EmptyDescription>
-                Ask your organization administrator for permission to create
+                Ask your workspace administrator for permission to create
                 deployments.
               </EmptyDescription>
             </EmptyHeader>

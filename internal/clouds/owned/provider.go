@@ -2,9 +2,12 @@ package owned
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,34 +18,101 @@ import (
 )
 
 const (
-	LabelOrg                  = "loomplane.org"
-	LabelPlan                 = "loomplane.plan"
-	LabelProject              = "loomplane.project"
-	LabelEnvironment          = "loomplane.environment"
-	LabelAction               = "loomplane.action"
-	LabelService              = "loomplane.service"
-	LabelOperation            = "loomplane.operation"
-	LabelConnection           = "loomplane.connection"
-	LabelSettings             = "loomplane.target.settings"
-	LabelRuntime              = "loomplane.runtime.ref"
-	LabelImage                = "loomplane.image.ref"
-	LabelPublic               = "loomplane.public"
-	LabelHostPort             = "loomplane.host.port"
-	LabelHealth               = "loomplane.health.path"
-	LabelHostname             = "loomplane.hostname"
-	LabelIngressClass         = "loomplane.ingress.class"
-	LabelTLSSecret            = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
-	LabelReplicas             = "loomplane.replicas"
-	LabelScaleMin             = "loomplane.scale.min"
-	LabelScaleMax             = "loomplane.scale.max"
-	LabelArchitecture         = "loomplane.architecture"
-	LabelRevision             = "loomplane.revision"
-	LabelReceiptRelease       = "loomplane.runtime.receipt.release"
-	LabelReceiptServicePrefix = "loomplane.runtime.receipt.service."
-	LabelInstance             = "loomplane.instance"
-	LabelManageIngress        = "loomplane.manage.ingress"
-	LabelManageHPA            = "loomplane.manage.hpa"
+	LabelSchedulingArchitecture = "loomplane.scheduling.architecture"
+	LabelOrg                    = "loomplane.org"
+	LabelPlan                   = "loomplane.plan"
+	LabelProject                = "loomplane.project"
+	LabelEnvironment            = "loomplane.environment"
+	LabelAction                 = "loomplane.action"
+	LabelService                = "loomplane.service"
+	LabelOperation              = "loomplane.operation"
+	LabelConnection             = "loomplane.connection"
+	LabelSettings               = "loomplane.target.settings"
+	LabelRuntime                = "loomplane.runtime.ref"
+	LabelImage                  = "loomplane.image.ref"
+	LabelPublic                 = "loomplane.public"
+	LabelHostPort               = "loomplane.host.port"
+	LabelHealth                 = "loomplane.health.path"
+	LabelHostname               = "loomplane.hostname"
+	LabelIngressClass           = "loomplane.ingress.class"
+	LabelTLSSecret              = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
+	LabelReplicas               = "loomplane.replicas"
+	LabelScaleMin               = "loomplane.scale.min"
+	LabelScaleMax               = "loomplane.scale.max"
+	LabelArchitecture           = "loomplane.architecture"
+	LabelManagedRevisionBase    = "loomplane.managed-revision-base"
+	LabelRevision               = "loomplane.revision"
+	LabelReceiptRelease         = "loomplane.runtime.receipt.release"
+	LabelReceiptServicePrefix   = "loomplane.runtime.receipt.service."
+	LabelInstance               = "loomplane.instance"
+	LabelManageIngress          = "loomplane.manage.ingress"
+	LabelManageHPA              = "loomplane.manage.hpa"
 )
+
+// A composed catalog resource's component carries its kind, its resource's
+// manifest name and its own name. LabelHealthPort is the container port
+// its readiness probe answers on, when it publishes more than one.
+// LabelRuntimeFiles is "true" on a component whose runtime values include
+// rendered files. LabelKubernetesRules is the JSON array of
+// recipes.KubernetesRule a process gets through its own ServiceAccount on
+// Kubernetes. LabelHealthProtocol is "redis" when readiness is a RESP PING;
+// absent, it is HTTP. LabelFSGroup is the group that owns a component's
+// volume on Kubernetes. LabelFarp is the JSON a service that opted in to FARP
+// sends the Kubernetes runtime, {"gateway": "<resource>", "metadata": {...}}.
+// It is transport only: the runtime turns it into FarpEnabledLabel and
+// FarpGatewayLabel on the Service and its metadata into annotations, and it
+// never becomes an object label.
+const (
+	LabelCatalogKind      = "loomplane.catalog.kind"
+	LabelCatalogResource  = "loomplane.catalog.resource"
+	LabelCatalogComponent = "loomplane.catalog.component"
+	LabelHealthPort       = "loomplane.health.port"
+	LabelRuntimeFiles     = "loomplane.runtime.files"
+	LabelKubernetesRules  = "loomplane.kubernetes.rules"
+	LabelHealthProtocol   = "loomplane.health.protocol"
+	LabelHealthChecker    = "loomplane.health.checker"
+	LabelFSGroup          = "loomplane.fs.group"
+	LabelFarp             = "loomplane.farp"
+
+	// FarpEnabledLabel and FarpGatewayLabel are what Octopus selects a
+	// Kubernetes Service by.
+	FarpEnabledLabel = "farp.enabled"
+	FarpGatewayLabel = "loomplane.farp.gateway"
+)
+
+// LabelGPU is the reviewed provider.GPUPlacement, as JSON, of a workload
+// that uses GPUs. LabelShmMB is the size of its /dev/shm in MiB.
+const (
+	LabelGPU   = "loomplane.gpu"    // JSON provider.GPUPlacement
+	LabelShmMB = "loomplane.shm.mb" // decimal MiB
+)
+
+// LabelStartTimeout is how long, in seconds, the runtime waits for a
+// workload to become ready, in place of its default. A catalog component
+// sets it from its recipe's StartTimeout.
+const LabelStartTimeout = "loomplane.start.timeout" // seconds
+
+// Start timeouts a workload's LabelStartTimeout may ask for.
+const (
+	MinStartTimeout = time.Minute
+	MaxStartTimeout = 3 * time.Hour
+)
+
+// StartTimeout reads a workload's LabelStartTimeout: 0 when it has none,
+// and an error for anything but whole seconds from MinStartTimeout to
+// MaxStartTimeout.
+func StartTimeout(labels map[string]string) (time.Duration, error) {
+	raw := labels[LabelStartTimeout]
+	if raw == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	timeout := time.Duration(seconds) * time.Second
+	if err != nil || strings.Trim(raw, "0123456789") != "" || timeout < MinStartTimeout || timeout > MaxStartTimeout {
+		return 0, errors.New("invalid start timeout")
+	}
+	return timeout, nil
+}
 
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
@@ -55,7 +125,24 @@ type instanceUpdater interface {
 type RuntimeValues struct {
 	Env      map[string]string
 	PullAuth string
+	// Files are rendered files by absolute path, and FileModes their
+	// modes; a file without one is 0o444. They're written into the
+	// container before it starts.
+	Files     map[string][]byte
+	FileModes map[string]fs.FileMode
 }
+
+// DefaultFileMode is a rendered file's mode when it has none.
+const DefaultFileMode fs.FileMode = 0o444
+
+// FileMode is the mode a rendered file is written with.
+func (v RuntimeValues) FileMode(path string) fs.FileMode {
+	if mode := v.FileModes[path].Perm(); mode != 0 {
+		return mode
+	}
+	return DefaultFileMode
+}
+
 type Values func(context.Context, map[string]string) (RuntimeValues, error)
 
 // Backend uses an explicitly selected connection for every operation. Its
@@ -66,6 +153,23 @@ type Backend interface {
 	Status(context.Context, id.ID, map[string]string) (*cpprovider.InstanceStatus, error)
 	SetRunning(context.Context, id.ID, map[string]string, bool) error
 	Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error
+}
+
+// JobBackend runs a one-shot container to completion: a composed
+// resource's migration, for one deployment's action. name identifies the
+// run on the target, so a retry finds what an earlier attempt left. A
+// finished run is a JobResult whatever its exit code; an error is a run
+// that couldn't start or didn't finish within timeout. What it created is
+// removed either way.
+type JobBackend interface {
+	RunJob(ctx context.Context, name string, spec cpprovider.ServiceSpec, labels map[string]string, timeout time.Duration) (JobResult, error)
+}
+
+// JobResult is how a job ended: its exit code and the last JobOutputLimit
+// bytes of what it wrote, with every secret value replaced by "[redacted]".
+type JobResult struct {
+	ExitCode int
+	Output   string
 }
 
 type Provider struct {
@@ -128,6 +232,9 @@ func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpp
 		labels = map[string]string{}
 	}
 	labels[LabelRevision] = r.ReleaseID.String()
+	if base := labels[LabelManagedRevisionBase]; base != "" && inst.ProviderName == p.Key && p.Key == "kubernetes."+labels[LabelConnection] {
+		labels[LabelRevision] = base + "/" + r.ReleaseID.String()
+	}
 	result, err := p.Backend.Apply(ctx, r.InstanceID, spec, labels)
 	if err != nil {
 		return nil, err
@@ -213,8 +320,18 @@ func (*Provider) Rollback(context.Context, id.ID, id.ID) error { return ctrlplan
 func (*Provider) Resources(context.Context, id.ID) (*cpprovider.ResourceUsage, error) {
 	return nil, ctrlplane.ErrProviderUnavail
 }
-func (*Provider) Logs(context.Context, id.ID, cpprovider.LogOptions) (io.ReadCloser, error) {
-	return nil, ctrlplane.ErrProviderUnavail
+func (p *Provider) Logs(ctx context.Context, iid id.ID, options cpprovider.LogOptions) (io.ReadCloser, error) {
+	backend, ok := p.Backend.(interface {
+		Logs(context.Context, id.ID, map[string]string, cpprovider.LogOptions) (io.ReadCloser, error)
+	})
+	if !ok {
+		return nil, ctrlplane.ErrProviderUnavail
+	}
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Logs(ctx, iid, inst.Labels, options)
 }
 func (*Provider) Exec(context.Context, id.ID, cpprovider.ExecRequest) (*cpprovider.ExecResult, error) {
 	return nil, ctrlplane.ErrProviderUnavail

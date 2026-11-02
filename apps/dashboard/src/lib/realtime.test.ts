@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from "vitest"
 import { QueryCache, type StreamConnection } from "@forge-go/client-core"
 import { entities } from "@/client/forge/loomplane/entities"
 import {
+  useCloudCapacityListExpansions,
+  useCloudCapacityGetPolicy,
+  useCloudCapacityUsage,
   useProjectsList,
   useProjectsGraph,
   useDeploymentsForPlan,
@@ -395,5 +398,81 @@ it("rejects a delayed snapshot and cursor rollback, and clears protected data af
   await live.synchronize()
   await vi.waitFor(() => expect(live.state().status).toBe("denied"))
   expect(connection.closed).toBe(true)
+  live.stop()
+})
+
+it("refetches a Cloud's capacity policy, usage and expansions when its capacity changes", async () => {
+  const reads: string[] = []
+  const cache = new QueryCache({
+    entities,
+    transport: {
+      execute: async (request) => {
+        const cloud = (request.args.path as { cloudId?: string } | undefined)
+          ?.cloudId
+        reads.push(`${request.meta.path} ${cloud ?? ""}`)
+        if (request.meta.path.endsWith("/capacity-policy"))
+          return {
+            cloudId: cloud,
+            automaticExpansion: false,
+            policy: {
+              cloudId: cloud,
+              orgId: "org_one",
+              revision: 1,
+              pools: [],
+            },
+          }
+        if (request.meta.path.endsWith("/capacity-usage"))
+          return { cloudId: cloud, accounts: [], records: [], gpus: [] }
+        if (request.meta.path.endsWith("/expansions")) return { expansions: [] }
+        return { cursor: "org_one:1", records: [] }
+      },
+    },
+  })
+  const queries = [
+    ...["cloud_a", "cloud_b"].flatMap((cloudId) => [
+      useCloudCapacityGetPolicy({ path: { cloudId } }, { client: cache }),
+      useCloudCapacityUsage({ path: { cloudId } }, { client: cache }),
+    ]),
+    useCloudCapacityListExpansions(
+      { path: { cloudId: "cloud_a" } },
+      { client: cache }
+    ),
+  ]
+  await Promise.all(queries.map((q) => q.fetch()))
+  const releases = queries.map((q) => q.subscribe(() => {}))
+  const connection = new Connection()
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  live.start()
+  const count = (path: string) => reads.filter((r) => r === path).length
+  const policyA = "/api/v1/clouds/{cloudId}/capacity-policy cloud_a"
+  const usageA = "/api/v1/clouds/{cloudId}/capacity-usage cloud_a"
+  const expansionsA = "/api/v1/clouds/{cloudId}/expansions cloud_a"
+  const policyB = "/api/v1/clouds/{cloudId}/capacity-policy cloud_b"
+  const usageB = "/api/v1/clouds/{cloudId}/capacity-usage cloud_b"
+  expect([policyA, usageA, expansionsA, policyB, usageB].map(count)).toEqual([
+    1, 1, 1, 1, 1,
+  ])
+  connection.message({
+    event: "cloud_capacity.updated",
+    cursor: "org_one:2",
+    data: {
+      org_id: "org_one",
+      cloud_id: "cloud_a",
+      kind: "expansion",
+      entity_id: "exp_one",
+      revision: 3,
+      status: "provisioning",
+    },
+  })
+  await vi.waitFor(() =>
+    expect([policyA, usageA, expansionsA].map(count)).toEqual([2, 2, 2])
+  )
+  // Another Cloud's policy and usage stay as they were.
+  expect([policyB, usageB].map(count)).toEqual([1, 1])
+  releases.forEach((release) => release())
   live.stop()
 })

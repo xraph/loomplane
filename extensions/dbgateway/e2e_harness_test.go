@@ -25,9 +25,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -58,14 +60,17 @@ const fakeInstancePrefix = "e2e-peer-"
 // orders route pointed at a throwaway database, and the gateway program
 // built from dbgateway.Source().
 type e2eRig struct {
-	t      *testing.T
-	store  *dbgateway.Store
-	svc    *dbgateway.Service
-	router forge.Router
-	gw     dbgateway.Gateway
-	route  dbgateway.RouteRecord
-	bin    string
-	env    []string
+	t       *testing.T
+	store   *dbgateway.Store
+	svc     *dbgateway.Service
+	router  forge.Router
+	handler swapHandler // serves router, swapped when the control plane restarts
+	secrets memSecrets
+	gw      dbgateway.Gateway
+	route   dbgateway.RouteRecord
+	bin     string
+	env     []string
+	vars    map[string]string // env as a map, before the trust keys change it
 
 	// The backend: a role and a database of their own.
 	user, password, database string
@@ -83,43 +88,12 @@ func newE2ERig(t *testing.T, peers int) *e2eRig {
 	g.backend()
 	ctx := t.Context()
 
-	// The control plane's signing key, read the way the extension reads
-	// dbgateway.signing_key_file.
-	_, cpPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The control plane's signing key, in a version 1 file.
 	now := time.Now().UTC()
-	keyFile := filepath.Join(t.TempDir(), "signing-key.json")
-	raw, err := json.Marshal(map[string]any{
-		"version": 1, "private_key": base64.StdEncoding.EncodeToString(cpPriv.Seed()),
-		"not_before": now.Add(-time.Hour), "not_after": now.Add(24 * time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(keyFile, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	key, trust, err := dbgateway.LoadSigningKey(keyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secrets := memSecrets{deployments.ResourceURLKey("org_1", "env_1", "orders"): []byte(g.direct)}
-	g.svc = dbgateway.NewService(g.store, resourceURLs{secrets: secrets}, key, trust, time.Now)
-	g.svc.Authz = catalogAuthz{"usr_admin": security.RoleAdmin}
-	g.svc.OnSkip = func(_ string, skipped []dbgateway.Skipped) { t.Errorf("routes left out of the snapshot: %+v", skipped) }
-	g.router = forge.NewRouter()
-	// The long-poll waits 2s rather than 25s, and looks every 25ms.
-	if err = mount(g.router, &handlers{svc: g.svc, wait: 2 * time.Second, every: 25 * time.Millisecond, now: time.Now,
-		warn: func(msg string, werr error) { t.Errorf("%s: %v", msg, werr) }}); err != nil {
-		t.Fatal(err)
-	}
-	if err = mountManagement(g.router, nil, g.svc); err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(g.router.Handler())
+	g.secrets = memSecrets{deployments.ResourceURLKey("org_1", "env_1", "orders"): []byte(g.direct)}
+	srv := httptest.NewServer(&g.handler)
 	t.Cleanup(srv.Close)
+	g.restartControlPlane(newE2EKey(t, now.Add(-time.Hour), now.Add(24*time.Hour)).fileV1())
 
 	g.mintGateway(ctx, srv.URL)
 
@@ -148,6 +122,116 @@ func newE2ERig(t *testing.T, peers int) *e2eRig {
 		t.Cleanup(func() { close(stop); wg.Wait() })
 	}
 	return g
+}
+
+// swapHandler serves whichever handler was stored last.
+type swapHandler struct{ h atomic.Pointer[http.Handler] }
+
+func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	(*s.h.Load()).ServeHTTP(w, r)
+}
+
+// e2eKey is a control-plane signing key and the window it's written with.
+type e2eKey struct {
+	seed        []byte
+	from, until time.Time
+}
+
+func newE2EKey(t *testing.T, from, until time.Time) e2eKey {
+	t.Helper()
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	return e2eKey{seed: seed, from: from, until: until}
+}
+
+// id is the key's ID, as snapshots name it.
+func (k e2eKey) id() string {
+	return plane.TrustKey{PublicKey: ed25519.NewKeyFromSeed(k.seed).Public().(ed25519.PublicKey)}.ID()
+}
+
+func (k e2eKey) entry() map[string]any {
+	return map[string]any{"private_key": base64.StdEncoding.EncodeToString(k.seed), "not_before": k.from, "not_after": k.until}
+}
+
+// fileV1 is a version 1 key file holding k.
+func (k e2eKey) fileV1() map[string]any {
+	m := k.entry()
+	m["version"] = 1
+	return m
+}
+
+// e2eKeyFile is a version 2 key file holding keys.
+func e2eKeyFile(keys ...e2eKey) map[string]any {
+	entries := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		entries = append(entries, k.entry())
+	}
+	return map[string]any{"version": 2, "keys": entries}
+}
+
+// restartControlPlane starts the control plane afresh with the signing key
+// file body, read the way the extension reads dbgateway.signing_key_file,
+// as Loomplane does when it restarts. The store, and with it every
+// snapshot version, carries over; requests already in flight finish on the
+// control plane they started on.
+func (g *e2eRig) restartControlPlane(body map[string]any) {
+	t := g.t
+	t.Helper()
+	keyFile := filepath.Join(t.TempDir(), "signing-key.json")
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := dbgateway.LoadSigningKeys(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := dbgateway.NewService(g.store, resourceURLs{secrets: g.secrets}, keys, time.Now)
+	svc.Authz = catalogAuthz{"usr_admin": security.RoleAdmin}
+	svc.OnSkip = func(_ string, skipped []dbgateway.Skipped) { t.Errorf("routes left out of the snapshot: %+v", skipped) }
+	router := forge.NewRouter()
+	// The long-poll waits 2s rather than 25s, and looks every 25ms. A
+	// gateway that stops mid-request cancels it, which is no fault of the
+	// control plane's.
+	if err = mount(router, &handlers{svc: svc, wait: 2 * time.Second, every: 25 * time.Millisecond, now: time.Now,
+		warn: func(msg string, werr error) {
+			if !errors.Is(werr, context.Canceled) {
+				t.Errorf("%s: %v", msg, werr)
+			}
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = mountManagement(router, nil, svc); err != nil {
+		t.Fatal(err)
+	}
+	g.svc, g.router = svc, router
+	h := router.Handler()
+	g.handler.h.Store(&h)
+}
+
+// redeploy gives the gateways started from now on the trust keys the
+// control plane hands out now, as a deploy does. Gateways already running
+// keep the keys they started with.
+func (g *e2eRig) redeploy() {
+	t := g.t
+	t.Helper()
+	trust, err := json.Marshal(g.svc.TrustKeys())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.vars["LOOMPLANE_DBGW_TRUST_KEYS"] = string(trust)
+	if _, err = plane.ConfigFromEnv(func(k string) string { return g.vars[k] }); err != nil {
+		t.Fatalf("the gateway's environment: %v", err)
+	}
+	g.env = g.env[:0]
+	for k, v := range g.vars {
+		g.env = append(g.env, k+"="+v)
+	}
 }
 
 // reportPeer reports one stand-in instance as live.
@@ -243,24 +327,14 @@ func (g *e2eRig) mintGateway(ctx context.Context, controlURL string) {
 	if g.route, err = g.store.EnsureRoute(ctx, "org_1", gw.ID, "orders"); err != nil {
 		t.Fatal(err)
 	}
-	trust, err := json.Marshal(g.svc.TrustKeys())
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := map[string]string{
+	g.vars = map[string]string{
 		"LOOMPLANE_DBGW_ID":          gw.ID,
 		"LOOMPLANE_DBGW_CONTROL_URL": controlURL,
 		"LOOMPLANE_DBGW_SUFFIX":      e2eSuffix,
-		"LOOMPLANE_DBGW_TRUST_KEYS":  string(trust),
 		"LOOMPLANE_DBGW_SIGNING_KEY": base64.StdEncoding.EncodeToString(seed),
 		"LOOMPLANE_DBGW_SEALING_KEY": base64.StdEncoding.EncodeToString(sealing.Bytes()),
 	}
-	if _, err = plane.ConfigFromEnv(func(k string) string { return env[k] }); err != nil {
-		t.Fatalf("the gateway's environment: %v", err)
-	}
-	for k, v := range env {
-		g.env = append(g.env, k+"="+v)
-	}
+	g.redeploy()
 }
 
 // buildGateway unpacks dbgateway.Source() and builds it, as the cloud's
@@ -453,6 +527,28 @@ func (p *gatewayProc) waitApplied(after uint64, within time.Duration) uint64 {
 			p.t.Fatalf("the gateway exited (%v) before applying a snapshot past %d", p.err, after)
 		case <-deadline.C:
 			p.t.Fatalf("the gateway applied nothing past version %d in %s", after, within)
+		}
+	}
+}
+
+// waitLogged reports whether the gateway logs a line containing text
+// within the time given.
+func (p *gatewayProc) waitLogged(text string, within time.Duration) bool {
+	deadline := time.NewTimer(within)
+	defer deadline.Stop()
+	for {
+		p.mu.Lock()
+		grew, found := p.grew, slices.ContainsFunc(p.lines, func(l string) bool { return strings.Contains(l, text) })
+		p.mu.Unlock()
+		if found {
+			return true
+		}
+		select {
+		case <-grew:
+		case <-p.done:
+			return false
+		case <-deadline.C:
+			return false
 		}
 	}
 }

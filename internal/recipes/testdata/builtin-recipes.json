@@ -1,0 +1,366 @@
+[
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "amd64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "postgresql-17",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1"
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "amd64",
+    "Target": "server",
+    "Recipe": {
+      "id": "postgresql-17",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1"
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "arm64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "postgresql-17",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1"
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "arm64",
+    "Target": "server",
+    "Recipe": {
+      "id": "postgresql-17",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1"
+    }
+  },
+  {
+    "Kind": "mysql",
+    "Version": "8.4",
+    "Architecture": "amd64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "mysql-8.4",
+      "revision": "1",
+      "product_version": "8.4.11",
+      "image": "docker.io/library/mysql@sha256:1f8411cc085d2f2f92060fca926746cbf97f87b76c3008e9741ad62e604c4ffa",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mysqldump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mysql",
+    "Version": "8.4",
+    "Architecture": "amd64",
+    "Target": "server",
+    "Recipe": {
+      "id": "mysql-8.4",
+      "revision": "1",
+      "product_version": "8.4.11",
+      "image": "docker.io/library/mysql@sha256:1f8411cc085d2f2f92060fca926746cbf97f87b76c3008e9741ad62e604c4ffa",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mysqldump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mysql",
+    "Version": "8.4",
+    "Architecture": "arm64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "mysql-8.4",
+      "revision": "1",
+      "product_version": "8.4.11",
+      "image": "docker.io/library/mysql@sha256:88b9c60a44c8864787b96e8254cd050c4af5e82fea6edf08225546f447b43a31",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mysqldump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mysql",
+    "Version": "8.4",
+    "Architecture": "arm64",
+    "Target": "server",
+    "Recipe": {
+      "id": "mysql-8.4",
+      "revision": "1",
+      "product_version": "8.4.11",
+      "image": "docker.io/library/mysql@sha256:88b9c60a44c8864787b96e8254cd050c4af5e82fea6edf08225546f447b43a31",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mysqldump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mariadb",
+    "Version": "11.8",
+    "Architecture": "amd64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "mariadb-11.8",
+      "revision": "1",
+      "product_version": "11.8.9",
+      "image": "docker.io/library/mariadb@sha256:d689f65e09e887e96db5c40ca3957dd9f4e3fad3516baec96d7726c78a5fc2ee",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mariadb-dump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mariadb",
+    "Version": "11.8",
+    "Architecture": "amd64",
+    "Target": "server",
+    "Recipe": {
+      "id": "mariadb-11.8",
+      "revision": "1",
+      "product_version": "11.8.9",
+      "image": "docker.io/library/mariadb@sha256:d689f65e09e887e96db5c40ca3957dd9f4e3fad3516baec96d7726c78a5fc2ee",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mariadb-dump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mariadb",
+    "Version": "11.8",
+    "Architecture": "arm64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "mariadb-11.8",
+      "revision": "1",
+      "product_version": "11.8.9",
+      "image": "docker.io/library/mariadb@sha256:3607e75203fd9f69fb7e0829ec2d8fe55c30ec9d8aa266f7580719711bb4a4e1",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mariadb-dump-sql-v1"
+    }
+  },
+  {
+    "Kind": "mariadb",
+    "Version": "11.8",
+    "Architecture": "arm64",
+    "Target": "server",
+    "Recipe": {
+      "id": "mariadb-11.8",
+      "revision": "1",
+      "product_version": "11.8.9",
+      "image": "docker.io/library/mariadb@sha256:3607e75203fd9f69fb7e0829ec2d8fe55c30ec9d8aa266f7580719711bb4a4e1",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/mysql",
+      "backup_format": "mariadb-dump-sql-v1"
+    }
+  },
+  {
+    "Kind": "redis",
+    "Version": "8.2",
+    "Architecture": "amd64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "redis-8.2",
+      "revision": "1",
+      "product_version": "8.2.10",
+      "image": "docker.io/library/redis@sha256:c4206b4e79e4bcc8b30679eeece996d98b27ffb1f0a15fd567338ed4d0880258",
+      "architecture": "amd64",
+      "mount_path": "/data",
+      "backup_format": "redis-rdb-v1"
+    }
+  },
+  {
+    "Kind": "redis",
+    "Version": "8.2",
+    "Architecture": "amd64",
+    "Target": "server",
+    "Recipe": {
+      "id": "redis-8.2",
+      "revision": "1",
+      "product_version": "8.2.10",
+      "image": "docker.io/library/redis@sha256:c4206b4e79e4bcc8b30679eeece996d98b27ffb1f0a15fd567338ed4d0880258",
+      "architecture": "amd64",
+      "mount_path": "/data",
+      "backup_format": "redis-rdb-v1"
+    }
+  },
+  {
+    "Kind": "redis",
+    "Version": "8.2",
+    "Architecture": "arm64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "redis-8.2",
+      "revision": "1",
+      "product_version": "8.2.10",
+      "image": "docker.io/library/redis@sha256:0f16771e42330c740f93cc57e2ebd1d60c75569b6e4e2aa90ff4bc8f65618078",
+      "architecture": "arm64",
+      "mount_path": "/data",
+      "backup_format": "redis-rdb-v1"
+    }
+  },
+  {
+    "Kind": "redis",
+    "Version": "8.2",
+    "Architecture": "arm64",
+    "Target": "server",
+    "Recipe": {
+      "id": "redis-8.2",
+      "revision": "1",
+      "product_version": "8.2.10",
+      "image": "docker.io/library/redis@sha256:0f16771e42330c740f93cc57e2ebd1d60c75569b6e4e2aa90ff4bc8f65618078",
+      "architecture": "arm64",
+      "mount_path": "/data",
+      "backup_format": "redis-rdb-v1"
+    }
+  },
+  {
+    "Kind": "valkey",
+    "Version": "8.1",
+    "Architecture": "amd64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "valkey-8.1",
+      "revision": "1",
+      "product_version": "8.1.10",
+      "image": "docker.io/valkey/valkey@sha256:32627109abf6f741121096b45c732f758876803efd7b2e1018ebc0350d117119",
+      "architecture": "amd64",
+      "mount_path": "/data",
+      "backup_format": "valkey-rdb-v1"
+    }
+  },
+  {
+    "Kind": "valkey",
+    "Version": "8.1",
+    "Architecture": "amd64",
+    "Target": "server",
+    "Recipe": {
+      "id": "valkey-8.1",
+      "revision": "1",
+      "product_version": "8.1.10",
+      "image": "docker.io/valkey/valkey@sha256:32627109abf6f741121096b45c732f758876803efd7b2e1018ebc0350d117119",
+      "architecture": "amd64",
+      "mount_path": "/data",
+      "backup_format": "valkey-rdb-v1"
+    }
+  },
+  {
+    "Kind": "valkey",
+    "Version": "8.1",
+    "Architecture": "arm64",
+    "Target": "lookup",
+    "Recipe": {
+      "id": "valkey-8.1",
+      "revision": "1",
+      "product_version": "8.1.10",
+      "image": "docker.io/valkey/valkey@sha256:6bd0360157519e3de7c49f6bae7d2bdfab574083bd7d266182db36b1646b0936",
+      "architecture": "arm64",
+      "mount_path": "/data",
+      "backup_format": "valkey-rdb-v1"
+    }
+  },
+  {
+    "Kind": "valkey",
+    "Version": "8.1",
+    "Architecture": "arm64",
+    "Target": "server",
+    "Recipe": {
+      "id": "valkey-8.1",
+      "revision": "1",
+      "product_version": "8.1.10",
+      "image": "docker.io/valkey/valkey@sha256:6bd0360157519e3de7c49f6bae7d2bdfab574083bd7d266182db36b1646b0936",
+      "architecture": "arm64",
+      "mount_path": "/data",
+      "backup_format": "valkey-rdb-v1"
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "amd64",
+    "Target": "kubernetes",
+    "Recipe": {
+      "id": "postgresql-17-kubernetes",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1",
+      "volume_size_mb": 10240
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "amd64",
+    "Target": "kubernetes-postgres",
+    "Recipe": {
+      "id": "postgresql-17-kubernetes",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:aa90e97ee862e558111d34cfb8b2c4bec768c2b039fb791341686928560263b3",
+      "architecture": "amd64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1",
+      "volume_size_mb": 10240
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "arm64",
+    "Target": "kubernetes",
+    "Recipe": {
+      "id": "postgresql-17-kubernetes",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1",
+      "volume_size_mb": 10240
+    }
+  },
+  {
+    "Kind": "postgres",
+    "Version": "17",
+    "Architecture": "arm64",
+    "Target": "kubernetes-postgres",
+    "Recipe": {
+      "id": "postgresql-17-kubernetes",
+      "revision": "1",
+      "product_version": "17.11",
+      "image": "docker.io/library/postgres@sha256:0b2882c46a2b8d8e148431b333394348cf4d7f15aec6df7f17d51dc641e56cfa",
+      "architecture": "arm64",
+      "mount_path": "/var/lib/postgresql/data",
+      "backup_format": "pg-dump-custom-v1",
+      "volume_size_mb": 10240
+    }
+  }
+]

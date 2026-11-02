@@ -1,0 +1,207 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: whisper
+entries:
+  - id: openai/whisper-tiny
+    title: Whisper tiny
+    publisher: OpenAI
+    summary: The smallest Whisper model, for quick multilingual transcription.
+    revision: 169d4a4341b33bc18d8881c4b69c2e104e1cc0af
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 37760640
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 4
+      attention_heads: 6
+      kv_heads: 6
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 151061672
+        min_gpu_memory_gib: 3
+  - id: openai/whisper-base
+    title: Whisper base
+    publisher: OpenAI
+    summary: A small multilingual Whisper model for transcription.
+    revision: e37978b90ca9030d5170a5c07aadb050351a65bb
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 72593920
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 6
+      attention_heads: 8
+      kv_heads: 8
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 290403936
+        min_gpu_memory_gib: 4
+  - id: openai/whisper-small
+    title: Whisper small
+    publisher: OpenAI
+    summary: A multilingual Whisper model that's a good balance of speed and accuracy.
+    revision: 973afd24965f72e36ca33b3055d56a652f456b4d
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 241734912
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 966995080
+        min_gpu_memory_gib: 4
+  - id: openai/whisper-small.en
+    title: Whisper small.en
+    publisher: OpenAI
+    summary: An English-only Whisper model, more accurate on English than Whisper small.
+    revision: e8727524f962ee844a7319d92be39ac1bd25655a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 241734144
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 966992008
+        min_gpu_memory_gib: 4
+  - id: openai/whisper-medium
+    title: Whisper medium
+    publisher: OpenAI
+    summary: A larger multilingual Whisper model for more accurate transcription.
+    revision: abdf7c39ab9d0397620ccaea8974cc764cd0953e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 763857920
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 3055544304
+        min_gpu_memory_gib: 7
+  - id: openai/whisper-large-v3
+    title: Whisper large v3
+    publisher: OpenAI
+    summary: OpenAI's most accurate Whisper model, for transcription and translation in many languages.
+    revision: 06f233fe06e710322aca913c1bc4249a0d71fce1
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 1543490560
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 32
+      attention_heads: 20
+      kv_heads: 20
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 3087130976
+        args:
+          - --ignore-patterns=model.fp32*
+        min_gpu_memory_gib: 7
+  - id: openai/whisper-large-v3-turbo
+    title: Whisper large v3 turbo
+    publisher: OpenAI
+    summary: A pruned Whisper large v3 that transcribes much faster with almost the same accuracy.
+    revision: 41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 808878080
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 4
+      attention_heads: 20
+      kv_heads: 20
+      head_dim: 64
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 1617824864
+        min_gpu_memory_gib: 5
+  - id: distil-whisper/distil-large-v3
+    title: Distil-Whisper large v3
+    publisher: Hugging Face
+    summary: A distilled Whisper large v3 that's about six times faster on English.
+    revision: 8031d2e6ce6631b7fc45629dddfc00271116d981
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - speech-to-text
+    parameters: 756405760
+    context_length: 448
+    architecture:
+      name: WhisperForConditionalGeneration
+      layers: 2
+      attention_heads: 20
+      kv_heads: 20
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 1512874472
+        args:
+          - --ignore-patterns=model.fp32*
+        min_gpu_memory_gib: 5

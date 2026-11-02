@@ -5,20 +5,17 @@ package migrations
 import "testing"
 
 func TestCloudTagsMigration(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, cloudConnectionsUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_cloud_connections")
 	exec(t, conn, `CREATE UNIQUE INDEX loomplane_environments_scope_id ON loomplane_environments(org_id,project_id,id)`, `CREATE UNIQUE INDEX loomplane_connections_org_id ON loomplane_cloud_connections(org_id,id)`)
-	exec(t, conn, cloudProfilesUp...)
+	up(t, db, "create_cloud_profiles")
 	exec(t, conn, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('p','o','Project','project','ready','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,account,status,created_by,created_at,updated_at) VALUES('c','o','gcp','Account','project','ready','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,revision,created_at,updated_at) VALUES('cloud','o','p','Production',1,now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_targets(id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,revision,created_at,updated_at) VALUES('target','o','p','cloud','primary','Primary','cloud-run','c',1,now(),now())`)
-	// Central migrations are not transactional, so every prefix must repeat.
-	for i := range cloudTagsUp {
-		exec(t, conn, cloudTagsUp[:i+1]...)
-	}
-	exec(t, conn, cloudTagsUp...)
+	// The orchestrator runs a migration in one transaction, so no part of it
+	// is left behind on its own. A rerun still has to change nothing.
+	up(t, db, "cloud_tags", "cloud_tags")
 	if got := strs(t, conn, `SELECT coalesce(array_to_string(tags,','),'') FROM loomplane_cloud_targets`); len(got) != 1 || got[0] != "" {
 		t.Fatalf("existing target tags: %v", got)
 	}
@@ -42,7 +39,6 @@ func TestCloudTagsMigration(t *testing.T) {
 		}
 	}
 	exec(t, conn, `UPDATE loomplane_cloud_profiles SET default_provider=NULL,default_connection_id=NULL,default_region='',revision=3 WHERE id='cloud'`)
-	exec(t, conn, cloudTagsDown...)
-	exec(t, conn, cloudTagsDown...)
-	exec(t, conn, cloudTagsUp...)
+	down(t, db, "cloud_tags", "cloud_tags")
+	up(t, db, "cloud_tags")
 }

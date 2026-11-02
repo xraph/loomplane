@@ -1,0 +1,216 @@
+---
+title: Push notifications
+description: How the Loomplane app gets alerts and approvals from a self-hosted server through XRaph's push gateway, and how to run a gateway of your own.
+---
+
+The Loomplane app gets alerts and approvals from any self-hosted server through XRaph's push gateway at `push.loomplane.com`. You have nothing to install on your side. Turn push on, make sure the server can reach the gateway, and pair the app as usual.
+
+## What the gateway sees
+
+The gateway is a relay. A Loomplane server sends it a message, it hands that to Apple or Google, and they deliver it to the phone. For each send it sees:
+
+- the sending server's public key fingerprint,
+- the platform (`android` or `ios`) and the kind of send (`show` or `withdraw`),
+- the phone's push token, inside the gateway's own sealed handle,
+- the urgency,
+- an opaque collapse ID,
+- the TTL,
+- an encrypted payload it can't open (HPKE to a key only the phone holds).
+
+It never sees your workspace, project, titles, bodies or actions. On iOS the phone first shows a generic placeholder (title "Loomplane", body "New notification") and swaps in the real text after it decrypts the payload. Android gets a data-only message, and the app builds the notification itself once it decrypts.
+
+The gateway stores nothing. It has no database and no volume. Its logs carry the server key fingerprint, the platform, the urgency, the kind of send, the outcome and the latency, and no handle, token or payload. The source is open under [`cmd/loomplane-push-gateway`](https://github.com/xraph/loomplane/tree/main/cmd/loomplane-push-gateway) in the Loomplane repository.
+
+## On your server
+
+Two settings control push:
+
+| Setting | Environment variable | Default |
+|---|---|---|
+| `push.enabled` | `LOOMPLANE_PUSH_ENABLED` | `true` |
+| `push.gateway_url` | `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` |
+
+The gateway URL must be `https`. The one exception is a gateway on your own machine (`localhost`, `127.0.0.1` or `::1`), where plain `http` is accepted only when the server runs in development. Anywhere else the server rejects an `http` URL.
+
+The server needs outbound HTTPS to the gateway's host, and nothing inbound. With push off, the app says so and hides its push settings. The inbox and email keep working.
+
+A gateway outage loses nothing. The server's outbox retries, and the inbox has every item whether or not a push got through. Here is what the server hears back from a send:
+
+| Status | Meaning |
+|---|---|
+| `202` | Accepted and handed to Apple or Google. |
+| `400` | The request is malformed. |
+| `401` | The signature is missing or wrong, it is more than 300 seconds off the gateway's clock, or the handle was issued to a different server key. |
+| `410` | The handle is retired or the platform says the token is dead. The server deletes that device, and the app registers again on its next launch. |
+| `429` | You're over a limit. `Retry-After` says when to try again. |
+| `502` | Apple or Google refused the push, or the platform isn't one this gateway serves. |
+
+Two limits apply. Each server key gets 50 sends per second. Each device (platform plus token) gets 30 sends per minute, so a phone that registers again doesn't start with a fresh budget.
+
+You can't point the store version of the app at your own gateway. Apple and Google tie push to the app's signing identity, and only XRaph holds the keys for the store build.
+
+## Running the gateway
+
+You only need this if you work for XRaph or you ship your own build of the app, with your own Firebase project and APNs key. If you run a server, you can stop reading here.
+
+The gateway reads `PUSH_GATEWAY_*` environment variables. Secrets come in only as files named by `*_FILE` variables, mounted as Docker secrets. There's no way to pass a secret as a value.
+
+### Configuration
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PUSH_GATEWAY_ADDR` | `:8790` | Listen address inside the container. |
+| `PUSH_GATEWAY_SEALING_KEY_ID` | none, required | Name of the current sealing key, 1 to 32 letters, digits, `-` or `_`. |
+| `PUSH_GATEWAY_SEALING_KEY_FILE` | none, required | File holding 32 random bytes in base64 (`openssl rand -base64 32`). |
+| `PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID` | unset | ID of the key you rotated away from. Set it with its file, never alone. Must differ from the current ID. |
+| `PUSH_GATEWAY_PREVIOUS_SEALING_KEY_FILE` | unset | File holding the previous key. |
+| `PUSH_GATEWAY_FCM_CREDENTIALS_FILE` | unset | Firebase service-account JSON. Turns Android on. |
+| `PUSH_GATEWAY_FCM_BASE_URL` | Google's endpoint | Tests only. |
+| `PUSH_GATEWAY_APNS_KEY_FILE` | unset | Apple `.p8` key. Turns iOS on. |
+| `PUSH_GATEWAY_APNS_KEY_ID` | none | The 10-character key ID from Apple. Needed with the key file. |
+| `PUSH_GATEWAY_APNS_TEAM_ID` | none | The 10-character team ID from Apple. Needed with the key file. |
+| `PUSH_GATEWAY_APNS_BUNDLE_ID` | `com.loomplane.app` | The app's bundle ID. |
+| `PUSH_GATEWAY_APNS_BASE_URL` | Apple's endpoint | Tests only. |
+| `PUSH_GATEWAY_SERVER_RATE` | `50` | Sends per second per server key. |
+| `PUSH_GATEWAY_HANDLE_RATE` | `30` | Sends per minute per device (platform and token). The name is older than the behavior. |
+
+The gateway needs at least one of the two platform key files. It refuses to start when a platform's variable is set without that platform's key file: `PUSH_GATEWAY_APNS_KEY_ID`, `_TEAM_ID`, `_BUNDLE_ID` or `_BASE_URL` without `PUSH_GATEWAY_APNS_KEY_FILE`, or `PUSH_GATEWAY_FCM_BASE_URL` without `PUSH_GATEWAY_FCM_CREDENTIALS_FILE`. That's on purpose, so a typo in a file variable fails at start instead of quietly turning a platform off. To turn a platform off, unset all of its variables.
+
+The two `*_BASE_URL` variables exist for tests. The gateway logs a warning at start when one is set.
+
+### Alongside Loomplane
+
+For a single host, [Production on Docker](/docs/operations/production-on-docker#optional-push-gateway)
+includes an opt-in gateway in the same Compose project as Loomplane and its
+workers. You set `COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`, supply
+the gateway hostname and key files, and Caddy serves both hostnames on the
+same ports. Normal installs continue to use XRaph's hosted gateway.
+
+With Helm, enable `push.gateway.enabled`. The chart deploys a separate
+workload and ClusterIP Service, and optionally an Ingress or HTTPRoute.
+Set `push.gatewayUrl` to its public HTTPS address. A gateway needs a
+hostname different from the dashboard because its public proxy serves
+only the two push routes.
+
+Create a Secret in the release namespace. Keep these files outside git:
+
+```bash
+kubectl -n loomplane create secret generic loomplane-push \
+  --from-file=sealing-key=./secrets/sealing-key \
+  --from-file=fcm-service-account.json=./secrets/fcm-service-account.json
+```
+
+Add these values to your existing Helm configuration:
+
+```yaml
+push:
+  gatewayUrl: https://push.example.com
+  gateway:
+    enabled: true
+    image:
+      tag: VERSION # Use a published gateway tag, or set digest instead.
+    existingSecret: loomplane-push
+    sealingKeyId: k202611
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: 64k
+      tls:
+        - secretName: push-tls
+          hosts: [push.example.com]
+```
+
+Provision the TLS certificate through your ingress controller or certificate
+manager. You can use `push.gateway.httpRoute.enabled` with `parentRefs`
+instead, attached to a Gateway with an HTTPS listener and a certificate for
+the push hostname. If you manage the proxy separately, leave both route
+options off and forward only `/v1/registrations` and `/v1/send` to the
+`<release>-push-gateway` Service on port 8790. Keep `/_/health` private and
+configure a 64 KB request limit at your proxy.
+
+For Traefik, enable TLS on the HTTPS entry point (or set the ingress
+`traefik.ingress.kubernetes.io/router.tls` annotation to `"true"`). When you
+also use the chart's dashboard ingress with `blockInternalPaths=true`, set
+Traefik's `providers.kubernetesIngress.allowEmptyServices=true`. That keeps
+the blocked health and metrics routes active even though their target
+Service has no endpoints. The gateway itself uses exact route matches for
+its two public paths.
+
+The gateway mounts only its own Secret. API and worker pods do not mount
+it, and the gateway does not receive their database or encryption settings.
+For iOS, add `apns-key.p8` to the Secret, enable `push.gateway.apns.enabled`
+and set its `keyId`, `teamId` and `bundleId`. You can turn off FCM with
+`push.gateway.fcm.enabled=false` for an iOS-only Kubernetes gateway.
+
+The gateway reads keys at startup. After changing the Secret, restart its
+Deployment with `kubectl -n loomplane rollout restart deploy/loomplane-push-gateway`
+(use your release's name). During rotation, include `previous-sealing-key`
+and set `push.gateway.previousSealingKeyId` in the same upgrade. Every
+replica must use the same keys and IDs. Rate limits apply per replica, so
+keep the default single replica unless you account for the larger total.
+
+Hosting the gateway requires credentials for the mobile app you ship. Verify
+registration and a real notification on each enabled phone platform after
+you configure DNS, TLS and those credentials.
+
+### Setup
+
+The stack lives in `deployments/push-gateway`: the gateway, and Caddy in front of it for TLS. Only Caddy keeps state (its certificates). Run this from that directory:
+
+```bash
+umask 077
+mkdir secrets
+openssl rand -base64 32 > secrets/sealing-key
+touch secrets/previous-sealing-key secrets/apns-key.p8
+cp /path/to/firebase-service-account.json secrets/fcm-service-account.json
+cp /path/to/AuthKey_XXXXXXXXXX.p8 secrets/apns-key.p8
+sudo chown 10001:10001 secrets/*
+sudo chmod 0400 secrets/*
+cp .env.example .env
+docker compose config --quiet
+docker compose up -d --wait
+```
+
+Compose wants every secret file to exist, so the `touch` creates empty ones for what you don't use. An empty file stays unused until its ID is set in `.env`. Skip the `.p8` copy if you're running Android only.
+
+The container runs as uid 10001, and Compose bind-mounts each secret with the host's ownership. A file that user can't read stops the gateway from starting. The `chown` and `chmod` above handle it, and they need `sudo` because only root can hand a file to another user. `chmod 0444` works too if you can't `chown`.
+
+Edit `.env` before you start. Set `PUSH_GATEWAY_IMAGE` to the gateway image pinned by the digest from the release summary (`ghcr.io/xraph/loomplane-push-gateway@sha256:...`), not a bare tag, `PUSH_GATEWAY_DOMAIN` to your hostname, `ACME_EMAIL` to an address for certificate notices, and `PUSH_GATEWAY_SEALING_KEY_ID` to a name for your key. The Compose file turns iOS on only once `PUSH_GATEWAY_APNS_KEY_ID` is set, so keep that and the team ID together.
+
+Caddy serves only `/v1/registrations` and `/v1/send`, and answers 404 for everything else. The gateway's health check stays inside the Docker network.
+
+Keep the host's clock synced. The gateway refuses signatures more than 300 seconds off its own time.
+
+### Rotating the sealing key
+
+Every device handle is sealed under a key the gateway holds. To rotate it:
+
+1. Pick a new key ID you have never used, such as `k202702`. Don't reuse an old one: the gateway answers `410` only for an ID it doesn't know, and a known ID with different key bytes gets `400` forever, so those devices never re-register.
+2. Stop the gateway: `docker compose stop push-gateway`.
+3. Move the current key file aside: `mv -f secrets/sealing-key secrets/previous-sealing-key`. The old file is owned by uid 10001 with mode 0400, so `-f` is what lets it replace the empty one. Put the old ID in `PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID`.
+4. Write the new key: `(umask 077; openssl rand -base64 32 > secrets/sealing-key)`.
+5. Give the new file the same owner and mode as in Setup: `sudo chown 10001:10001 secrets/sealing-key` and `sudo chmod 0400 secrets/sealing-key`. Without that, uid 10001 can't read it and the gateway won't start.
+6. Set the new ID in `PUSH_GATEWAY_SEALING_KEY_ID` in `.env`.
+7. Run `docker compose up -d`.
+
+If you rotate again inside the 90 days, the older key drops out early, because only one previous key is kept. Devices sealed under it get `410` and register again.
+
+Keep the previous key for 90 days. That gives apps time to register again. After that, empty it with `sudo truncate -s 0 secrets/previous-sealing-key` (keep the file, Compose wants it), clear its ID, and run `docker compose up -d` again. Phones that registered during the window carry on. A phone whose handle was sealed under a key the gateway no longer holds gets `410`, its server drops the device, and the app registers again on its next launch.
+
+## Local deployment checks
+
+Run `make test-push-kubernetes` to build both images and install the chart
+in a disposable kind cluster. The test covers API and worker startup,
+HTTPS through both Ingress and Gateway API, registration and an encrypted
+notification sent from Loomplane to a local provider fixture. It also
+checks key mounts, gateway pod replacement, sealing-key rotation and
+turning the bundled gateway off. It creates its own kubeconfig and deletes
+its cluster when it finishes.
+
+`make test-digitalocean` exercises the Ubuntu installer and upgrade with
+the gateway enabled, checks that key permissions and configuration survive,
+and runs the installed release bundle locally. You need Docker, Python 3,
+OpenSSL, curl and jq; the Kubernetes check also needs kind, kubectl and Helm.
+These checks use generated test keys. Verify actual phone delivery after
+you configure your own DNS, TLS and Apple or Firebase credentials.

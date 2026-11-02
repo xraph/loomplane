@@ -1,0 +1,150 @@
+---
+title: Quick start
+description: Install Loomplane on a Linux host with Docker, install loomctl, and deploy your first project.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+This page gets a production Loomplane running and a first project deployed. If you only want to try it on your laptop, jump to [Develop Loomplane locally](#develop-loomplane-locally).
+
+## Install with Docker
+
+You need a Linux host with Docker Engine, Docker Compose 2.24.4 or newer, and a hostname pointed at that host. Open TCP ports 80 and 443, because Caddy uses them for HTTPS certificates and browser traffic. Start with 2 CPU cores and 8 GB of RAM, plus enough disk for your repositories, database and recovery objects. Measure your own workload before you pick something smaller.
+
+<Steps>
+<Step>
+
+### Download the release bundle
+
+Download the Docker bundle (`loomplane-<tag>-docker.tar.gz`) from the [GitHub release](https://github.com/xraph/loomplane/releases) you want to run. Check it against the release's `SHA256SUMS`, then extract it into `/srv/loomplane`. The bundle pins `.env.example` to an image digest, which `image.txt` also records.
+
+</Step>
+<Step>
+
+### Fill in `.env`
+
+Run these from the directory that holds `compose.yaml`:
+
+```bash
+umask 077
+cp .env.example .env
+openssl rand -base64 32
+openssl rand -hex 32
+```
+
+Edit `.env`. Set `LOOMPLANE_DOMAIN` to a bare hostname (no `https://`, no path) and `ACME_EMAIL` to an address Let's Encrypt can reach. Put the first generated value in `LOOMPLANE_SECRET_KEY` and the second in `POSTGRES_PASSWORD`. `LOOMPLANE_IMAGE` is already pinned by the bundle.
+
+</Step>
+<Step>
+
+### Start it
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d --wait --wait-timeout 240
+docker compose ps
+```
+
+Open `https://YOUR_HOSTNAME`, create an account and name your organization. Caddy gets and renews the certificate for you.
+
+</Step>
+</Steps>
+
+<Callout type="warn">
+  `LOOMPLANE_SECRET_KEY` encrypts every cloud credential and secret you store. Generate it once, keep it in your secret manager, and keep it away from your backups. Lose it and you lose every credential. [Production on Docker](/docs/operations/production-on-docker) covers the rest of this stack.
+</Callout>
+
+## Install loomctl
+
+`loomctl` is the command-line client. It also serves the MCP server for AI agents.
+
+<Tabs items={['Homebrew', 'Scoop', 'Release archive']}>
+  <Tab value="Homebrew">
+
+```bash
+brew install xraph/tap/loomctl
+```
+
+  </Tab>
+  <Tab value="Scoop">
+
+Install it from the `xraph` Scoop bucket.
+
+  </Tab>
+  <Tab value="Release archive">
+
+Each GitHub release carries `loomctl_<version>_<os>_<arch>` archives for macOS, Linux and Windows.
+
+  </Tab>
+</Tabs>
+
+## Deploy your first project
+
+<Steps>
+<Step>
+
+### Create a project
+
+In the dashboard choose **New project** and give it a GitHub URL. Any public monorepo works as is. Private ones need a GitHub App, which [Private repositories](/docs/guides/private-repositories) sets up.
+
+</Step>
+<Step>
+
+### Analyze it
+
+Choose **Analyze**. You get the services it builds, the packages they share and the databases they need, each one linked to the line it came from.
+
+</Step>
+<Step>
+
+### Save a manifest
+
+Open **Deploy**. Loomplane drafts a `loomplane.yaml`. Edit it if you want to, and save it. Every field is in the [manifest reference](/docs/reference/loomplane-yaml).
+
+</Step>
+<Step>
+
+### Connect your clouds
+
+Under **Integrations**, connect the clouds the manifest names. Each credential is checked with its cloud before Loomplane keeps it, and you're told which permissions are missing. The per-cloud pages walk through each one, starting with the [overview](/docs/clouds).
+
+</Step>
+<Step>
+
+### Plan, approve, watch
+
+Plan an environment. You see every action in order, anything in the way, and anything worth knowing. An admin approves the plan, and you watch each step build, deploy and answer. The environment then shows what runs where.
+
+</Step>
+</Steps>
+
+The same flow works from a terminal or CI. Make an API key under **Settings, API keys**, then:
+
+```bash
+loomctl login --url https://loomplane.example.com --key -
+loomctl analyze mono
+loomctl manifest save mono -f loomplane.yaml
+loomctl plan mono --env production
+loomctl approve <plan-id>
+```
+
+`--key -` reads the key from standard input, so it stays out of your shell history. See [CI with loomctl](/docs/guides/ci-with-loomctl) for pipelines.
+
+## Develop Loomplane locally
+
+This is for working on Loomplane itself, or kicking its tires. You'll need Go 1.26 (the right patch release downloads itself), Node.js 24 with pnpm, and Docker with Compose for the local PostgreSQL.
+
+```bash
+make up                                       # PostgreSQL on localhost:55532
+cp config.local.yaml.example config.local.yaml
+make setup
+make run
+```
+
+`make run` builds everything and starts the API and the analysis worker. Open [localhost:8780](http://localhost:8780), create an account and name your organization.
+
+For hot reload while you change Loomplane, run `make dev` instead. It serves the dashboard on [localhost:5173](http://localhost:5173) and reloads the API as you edit.
+
+No Go or Node on your machine? `make stack` builds the image and runs everything in Docker on the same port. It runs in development mode with the development secret key, which is fine on a laptop and nowhere else. Production refuses to start unless you set `LOOMPLANE_ENVIRONMENT=production`, `LOOMPLANE_SECRET_KEY` and an https `LOOMPLANE_PUBLIC_URL`.

@@ -1,14 +1,14 @@
 import type { OperationMeta } from '../ops';
 import { codec_AddSourceInputBody } from '../codecs/AddSourceInputBody';
-import { codec_Source } from '../codecs/Source';
+import { codec_DiscoverySource } from '../codecs/DiscoverySource';
 
 export const op_sources_create = {
   method: 'POST',
   path: '/api/v1/projects/{id}/sources',
-  entity: 'Source',
-  rootType: 'Source',
-  provides: ['Source:{id}'],
-  invalidates: ['Source[]'],
+  entity: 'DiscoverySource',
+  rootType: 'DiscoverySource',
+  provides: ['DiscoverySource:{id}'],
+  invalidates: ['DiscoverySource[]'],
   bodyCodec: codec_AddSourceInputBody,
-  responseCodec: codec_Source,
+  responseCodec: codec_DiscoverySource,
 } as const satisfies OperationMeta;

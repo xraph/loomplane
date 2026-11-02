@@ -130,6 +130,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	}
 	docs := connect("vercel", "docs-token-0123456789")
 	docsTarget := createTarget("docs", docs)
+	c.must(http.StatusOK, http.MethodGet, targets+"/"+docsTarget.ID, nil, &docsTarget)
 	managed = strings.Replace(managed, "ignore:", "  docs:\n    source: node:apps/web\n    cloud_target: docs\nignore:", 1)
 	deploy(managed)
 	afterAdoption = bindings()
@@ -172,7 +173,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 		t.Fatalf("cleanup failure not persisted: %+v", got)
 	}
 	serving := bindings()
-	if !reflect.DeepEqual(serving["docs"], afterAdoption["docs"]) || serving["web"].ConnectionID != replacement || serving["web"].CommitSHA != afterAdoption["web"].CommitSHA {
+	if !sameCloudFlowServingBinding(serving["docs"], afterAdoption["docs"]) || serving["web"].ConnectionID != replacement || serving["web"].CommitSHA != afterAdoption["web"].CommitSHA {
 		t.Fatalf("switch changed unrelated target or source: %+v", serving)
 	}
 	var applied planning.ServiceConfig
@@ -293,10 +294,24 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	if len(removed) != 1 || removed[0] != "old-token-0123456789" || count("new-token-0123456789") != 1 || count("docs-token-0123456789") != 1 {
 		t.Fatalf("retry redeployed or cleaned wrong account: %v", removed)
 	}
+	// Drift checks may refresh observations while the migration waits for cleanup.
+	observationDB, err := pgx.Connect(t.Context(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observationDB.Close(t.Context())
+	if _, err = observationDB.Exec(t.Context(), `UPDATE loomplane_bindings SET observed_at=now() WHERE id=$1`, serving["docs"].ID); err != nil {
+		t.Fatal(err)
+	}
 	var unchanged cloudprofiles.Target
 	c.must(http.StatusOK, http.MethodGet, targets+"/"+docsTarget.ID, nil, &unchanged)
-	if !reflect.DeepEqual(unchanged, docsTarget) || !reflect.DeepEqual(serving["docs"], bindings()["docs"]) {
-		t.Fatal("docs target changed during frontend migration")
+	docsAfter := bindings()["docs"]
+	if docsAfter.ObservedAt == nil || reflect.DeepEqual(serving["docs"].ObservedAt, docsAfter.ObservedAt) {
+		t.Fatal("fixture did not refresh the unrelated binding observation")
+	}
+	t.Logf("unrelated docs observation refreshed: before=%v after=%v", serving["docs"].ObservedAt, docsAfter.ObservedAt)
+	if !reflect.DeepEqual(unchanged, docsTarget) || !sameCloudFlowServingBinding(serving["docs"], docsAfter) {
+		t.Fatalf("docs serving state changed during frontend migration: target before=%+v after=%+v; binding before=%+v after=%+v", docsTarget, unchanged, serving["docs"], docsAfter)
 	}
 	// Compatible Next.js workload moves from Vercel serverless to Render Node.
 	replaced := switchTo("render", renderID, 2, "provider-switch")
@@ -309,7 +324,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 		t.Fatalf("provider replacement: %+v", got)
 	}
 	renderBinding := bindings()["web"]
-	if renderBinding.Provider != "render" || renderBinding.ConnectionID != renderID || renderBinding.CommitSHA != serving["web"].CommitSHA || !reflect.DeepEqual(bindings()["docs"], serving["docs"]) {
+	if renderBinding.Provider != "render" || renderBinding.ConnectionID != renderID || renderBinding.CommitSHA != serving["web"].CommitSHA || !sameCloudFlowServingBinding(bindings()["docs"], serving["docs"]) {
 		t.Fatalf("provider replacement lost inputs/isolation: %+v", renderBinding)
 	}
 	rd.mu.Lock()
@@ -346,8 +361,25 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	}
 	c.must(http.StatusOK, http.MethodGet, base+"/cloud-syncs/"+failed.ID, nil, &got)
 	c.must(http.StatusOK, http.MethodGet, targets+"/"+frontend.ID, nil, &targetAfter)
-	if got.Status != cloudprofiles.SyncReverted || targetAfter.Provider != "render" || targetAfter.ConnectionID != renderID || bindings()["web"].ExternalID != renderBinding.ExternalID || !reflect.DeepEqual(bindings()["docs"], serving["docs"]) {
+	if got.Status != cloudprofiles.SyncReverted || targetAfter.Provider != "render" || targetAfter.ConnectionID != renderID || bindings()["web"].ExternalID != renderBinding.ExternalID || !sameCloudFlowServingBinding(bindings()["docs"], serving["docs"]) {
 		t.Fatalf("revert did not restore placement: %+v %+v", got, targetAfter)
+	}
+	// A later ordinary release resolves the retained target name to Render.
+	vc.mu.Lock()
+	vc.deployFailure = false
+	vc.mu.Unlock()
+	ordinary := deploy(strings.Replace(managed, "cloud_target: frontend", "cloud_target: frontend\n    health_path: /ordinary", 1))
+	var ordinaryWeb bool
+	for _, action := range ordinary.Actions {
+		if action.Name == "web" {
+			ordinaryWeb = true
+			if action.Provider != "render" {
+				t.Fatalf("ordinary release returned to the old destination: %+v", action)
+			}
+		}
+	}
+	if !ordinaryWeb || bindings()["web"].ConnectionID != renderID {
+		t.Fatal("ordinary release did not follow the new destination")
 	}
 	// Even a read-only recent preview keeps its referenced Cloud protected.
 	var reviewed cloudprofiles.Profile
@@ -393,4 +425,11 @@ func holdCloudFlow(t *testing.T, origin, project, cloud, target, env, syncID, cl
 		default:
 		}
 	}
+}
+
+// A drift observation refreshes its timestamp without deploying the binding.
+// Keep every other field, including drift findings and provider identity, exact.
+func sameCloudFlowServingBinding(before, after planning.Binding) bool {
+	before.ObservedAt, after.ObservedAt = nil, nil
+	return reflect.DeepEqual(before, after)
 }

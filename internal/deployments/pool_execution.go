@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/planning"
 )
@@ -67,13 +68,24 @@ func (e *OwnedTarget) PreparePoolEffects(ctx context.Context, job *Job) error {
 		}
 		return errors.New("runtime cannot establish a physical effect fence")
 	}
-	_, labels := ownedSpec(job, "", ownedState{})
-	client, err := e.serverSession(job.Deployment.OrgID, job.Connection.ID)(ctx, labels)
+	client, err := e.serverSession(job.Deployment.OrgID, job.Connection.ID)(ctx, effectLabels(job))
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 	return client.ArmEffectFence(ctx, fence)
+}
+
+// effectLabels open the server session an action's effects run on. A
+// catalog resource's action has no service config until Apply makes one,
+// but it targets the same reviewed server.
+func effectLabels(job *Job) map[string]string {
+	if job.Action.Service == nil && job.Action.Resource != nil {
+		settings, _ := json.Marshal(job.Action.Resource.TargetSettings) //nolint:errcheck // string maps always encode
+		return map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelConnection: job.Connection.ID, owned.LabelSettings: string(settings)}
+	}
+	_, labels := ownedSpec(job, "", ownedState{})
+	return labels
 }
 
 // preparePoolRemoval drains mutations on the recorded source before exact

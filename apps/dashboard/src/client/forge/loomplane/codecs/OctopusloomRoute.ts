@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_OctopusloomRoute_methods } from './OctopusloomRoute.methods';
+
+export const codec_OctopusloomRoute: Codec = {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "created_by": {"ts": "createdBy"}, "environment_id": {"ts": "environmentId"}, "hostname": {"ts": "hostname"}, "id": {"ts": "id"}, "methods": {"ts": "methods", "codec": () => codec_OctopusloomRoute_methods}, "note": {"ts": "note"}, "org_id": {"ts": "orgId"}, "path": {"ts": "path"}, "port": {"ts": "port"}, "project_id": {"ts": "projectId"}, "resource": {"ts": "resource"}, "revision": {"ts": "revision"}, "service": {"ts": "service"}, "strip_prefix": {"ts": "stripPrefix"}, "updated_at": {"ts": "updatedAt"}}, "required": ["created_at", "created_by", "environment_id", "hostname", "id", "methods", "org_id", "path", "port", "project_id", "resource", "revision", "service", "strip_prefix", "updated_at"]};

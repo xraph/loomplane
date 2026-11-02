@@ -80,7 +80,7 @@ function Revisions({ projectId }: { projectId: string }) {
               type="button"
               onClick={() => setPicked(r.revision)}
               className={cn(
-                "grid w-full gap-0.5 rounded-md px-2.5 py-2 text-left text-sm hover:bg-muted",
+                "grid w-full gap-0.5 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted",
                 i === index && "bg-muted"
               )}
             >
@@ -110,7 +110,7 @@ function Changes({
   const { added, removed } = changeCount(lines)
   return (
     <div className="grid min-w-0 content-start gap-2">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         {previous
           ? `Revision ${current.revision} against ${previous.revision}: ${added} lines added, ${removed} removed.`
           : `Revision ${current.revision}, the first.`}
@@ -139,10 +139,9 @@ function Line({ line }: { line: DiffLine }) {
     <div
       className={cn(
         "px-3 whitespace-pre",
-        line.kind === "added" &&
-          "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+        line.kind === "added" && "bg-overdye-tint text-overdye-ink",
         line.kind === "removed" &&
-          "bg-red-500/10 text-red-700 line-through decoration-red-500/40 dark:text-red-300"
+          "bg-failed-tint text-destructive line-through decoration-destructive/40"
       )}
     >
       <span aria-hidden className="mr-3 opacity-50 select-none">

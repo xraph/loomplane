@@ -2,12 +2,15 @@ package server
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/xraph/ctrlplane/id"
 
@@ -42,11 +45,38 @@ func (r *Runtime) postgresSession(ctx context.Context, iid id.ID, labels map[str
 }
 
 func nativePostgres(c *Client, iid id.ID, labels map[string]string) nativepg.Database {
-	return nativepg.Database{Name: labels[LabelDatabase], Recovery: labels[LabelRecovery] != "", Run: func(ctx context.Context, args []string, out io.Writer) error {
+	return nativepg.Database{Name: labels[LabelDatabase], Recovery: labels[LabelRecovery] != "", Extensions: nativepg.ParseExtensions(labels[nativepg.LabelExtensions]), Run: func(ctx context.Context, args []string, out io.Writer) error {
 		return ExecOutput(ctx, c, ContainerName(iid), args, out)
 	}, Upload: func(ctx context.Context, name string, size int64, write func(io.Writer) error) error {
-		return putContainerFile(ctx, c, ContainerName(iid), name, size, write)
+		owner, err := execOwner(ctx, c, ContainerName(iid))
+		if err != nil {
+			return err
+		}
+		return putOwnedContainerFile(ctx, c, ContainerName(iid), owner, name, size, write)
 	}}
+}
+
+// fileOwner is the uid and gid a container's database tools run as.
+type fileOwner struct{ UID, GID int }
+
+// execOwner asks the container who its tools run as. Docker extracts an
+// uploaded archive as the owner in each tar header, root by default, and an
+// image that doesn't run as root (TimescaleDB runs as uid 1000) can neither
+// read a root-owned 0600 file nor remove it from the sticky /tmp.
+func execOwner(ctx context.Context, c *Client, container string) (fileOwner, error) {
+	var owner fileOwner
+	for flag, dst := range map[string]*int{"-u": &owner.UID, "-g": &owner.GID} {
+		var out bytes.Buffer
+		if err := ExecOutput(ctx, c, container, []string{"id", flag}, &out); err != nil {
+			return fileOwner{}, err
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(out.String()))
+		if err != nil || n < 0 {
+			return fileOwner{}, errors.New("the database container reported an invalid user")
+		}
+		*dst = n
+	}
+	return owner, nil
 }
 
 func (r *Runtime) BackupPostgres(ctx context.Context, iid id.ID, labels map[string]string, files *backupfiles.Store, key string) (backupfiles.Object, error) {
@@ -102,13 +132,18 @@ func (r *Runtime) ConfigurePostgres(ctx context.Context, iid id.ID, labels map[s
 }
 
 func putContainerFile(ctx context.Context, c *Client, container, name string, size int64, write func(io.Writer) error) error {
+	return putOwnedContainerFile(ctx, c, container, fileOwner{}, name, size, write)
+}
+
+// putOwnedContainerFile writes a 0600 file into /tmp owned by owner.
+func putOwnedContainerFile(ctx context.Context, c *Client, container string, owner fileOwner, name string, size int64, write func(io.Writer) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reader, writer := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
 		archive := tar.NewWriter(writer)
-		err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: size, Typeflag: tar.TypeReg})
+		err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Uid: owner.UID, Gid: owner.GID, Size: size, Typeflag: tar.TypeReg})
 		if err == nil {
 			err = write(archive)
 		}

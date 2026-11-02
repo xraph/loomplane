@@ -23,7 +23,9 @@ secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 database:
   # postgres://user:password@host:port/db?sslmode=disable
   url: "${LOOMPLANE_DATABASE_URL:-}"
-  pool_size: 16
+  # Connections each process keeps open. Each API process runs about two dozen
+  # job pollers, so raise it when the database is a slow network hop away.
+  pool_size: "${LOOMPLANE_DATABASE_POOL_SIZE:-16}"
 
 identity:
   base_path: /authsome
@@ -34,9 +36,17 @@ identity:
   # by every port on a host, so another authsome app on the same host needs
   # a different name, or each signs the other out.
   session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
+  # Unset leaves it to the instance's stored setting. true or false forces it.
+  waitlist: "${LOOMPLANE_WAITLIST_ENABLED:-}"
+
+console:
+  path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
 
 notifications:
-  # Empty host disables email. For local Mailpit use 127.0.0.1:1025.
+  # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
+  # "from" on a domain verified in Resend.
+  resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
+  # Empty host (with no Resend key) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"
@@ -44,6 +54,13 @@ notifications:
   from: "${LOOMPLANE_NOTIFICATIONS_FROM:-}"
   # Implicit TLS, commonly on port 465. Production requires this.
   smtp_tls: "${LOOMPLANE_NOTIFICATIONS_SMTP_TLS:-false}"
+
+push:
+  # Off hides push settings in the app and answers 404 on the push routes.
+  enabled: "${LOOMPLANE_PUSH_ENABLED:-true}"
+  # The gateway that hands notifications to Apple and Google. Only XRaph's
+  # gateway can reach the store app.
+  gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
 
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).
@@ -79,13 +96,23 @@ analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the
   # system's temporary directory.
   work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
-  concurrency: 2
+  concurrency: "${LOOMPLANE_ANALYSIS_CONCURRENCY:-2}"
 
 # Deployment planning.
 planning:
   # How long a plan waits for someone to approve or reject it before it
   # expires. Between 1m and 2160h (90 days).
   approval_window: "${LOOMPLANE_PLANNING_APPROVAL_WINDOW:-168h}"
+  # Ranges an external endpoint check from Loomplane's own network (a
+  # Kubernetes target's) never connects to, at any port, as a list or a
+  # comma-separated string, such as 10.20.0.0/16,192.0.2.7. Loomplane's own
+  # host, its database, its API and its provider plugins are always
+  # refused, as are loopback, link-local and 0.0.0.0/8 addresses, AWS's
+  # IPv6 metadata service (fd00:ec2::254) and the NAT64 forms of all of
+  # these under 64:ff9b::/96 and the local-use 64:ff9b:1::/48. Private
+  # ranges are otherwise dialable, since real endpoints live there. Empty
+  # denies nothing more.
+  endpoint_denied_cidrs: "${LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS:-}"
 
 # How often everything deployed is compared with what its cloud has live.
 # 0 turns the check off. It only records drift; the next plan fixes it.
@@ -111,6 +138,56 @@ clouds:
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
   azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
+  cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
+  cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
+  acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  managed_clusters:
+    management_probe:
+      provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"
+      network_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_NETWORK_ID:-}"
+      evidence_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EVIDENCE_ID:-}"
+      url: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_URL:-}"
+      spki_sha256: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_SPKI_SHA256:-}"
+      expires_at: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EXPIRES_AT:-}"
+    enabled: "${LOOMPLANE_MANAGED_CLUSTERS_ENABLED:-false}"
+    qualification_org_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ORG_ID:-}"
+    qualification_operator_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_OPERATOR_ID:-}"
+    qualification_account_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ACCOUNT_ID:-}"
+    qualification_region: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_REGION:-}"
+    max_node_hourly_micro_usd: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODE_HOURLY_MICRO_USD:-0}"
+    max_nodes: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODES:-0}"
+    max_account_creates: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_ACCOUNT_CREATES:-2}"
+  # Lets pools add servers on their own, within each Cloud's capacity policy.
+  # Off, policies are saved but nothing grows. Still being qualified.
+  automatic_capacity:
+    enabled: "${LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED:-false}"
+  # Lets people connect the Kubernetes cluster Loomplane runs in without a
+  # kubeconfig. Loomplane deploys there as its own service account, which
+  # every organization on this instance then shares, so turn it on only
+  # where they all may deploy to this cluster. The pod needs its service
+  # account token mounted; the Helm chart's inCluster values do both.
+  kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
+  # Loomplane's sign-in app at each cloud, so people can connect by signing
+  # in. Leave both empty to keep token entry only. Keep the secret in the
+  # environment.
+  oauth:
+    cloudflare:
+      client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_SECRET:-}"
+    digitalocean:
+      client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
+    vercel:
+      client_id: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET:-}"
+      # The integration's slug in its Vercel install address.
+      slug: "${LOOMPLANE_VERCEL_OAUTH_SLUG:-}"
+    gcp:
+      client_id: "${LOOMPLANE_GCP_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_GCP_OAUTH_CLIENT_SECRET:-}"
+    azure:
+      client_id: "${LOOMPLANE_AZURE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with
@@ -149,9 +226,19 @@ federation:
     workload_api: "${LOOMPLANE_FEDERATION_RUNTIME_WORKLOAD_API:-}"
     signing_keys_file: "${LOOMPLANE_FEDERATION_RUNTIME_SIGNING_KEYS_FILE:-}"
 
-# The database gateway. Its snapshots are signed with the Ed25519 key in
-# this file: private (0600), as an absolute path, holding
-# {"version":1,"private_key":"<base64 seed>","not_before":...,"not_after":...}.
-# Leave it empty and the gateway endpoints answer 503.
+# The AI section (models) is opt-in.
+ai:
+  enabled: "${LOOMPLANE_AI_ENABLED:-false}"
+  models:
+    # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
+    # token is sent here, so it must be https (http only for localhost).
+    huggingface_url: "${LOOMPLANE_AI_MODELS_HUGGINGFACE_URL:-https://huggingface.co}"
+
+# The database gateway. Its snapshots are signed with the Ed25519 keys in
+# this file: private (0600), as an absolute path, holding one key as
+# {"version":1,"private_key":"<base64 seed>","not_before":...,"not_after":...}
+# or several, for a rotation, as {"version":2,"keys":[{"private_key":...,
+# "not_before":...,"not_after":...}, ...]}. docs/postgres-services.md says
+# how to rotate. Leave it empty and the gateway endpoints answer 503.
 dbgateway:
   signing_key_file: "${LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE:-}"

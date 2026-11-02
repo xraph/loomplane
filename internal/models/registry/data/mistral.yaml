@@ -1,0 +1,356 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: mistral
+entries:
+  - id: mistralai/Mistral-7B-Instruct-v0.3
+    title: Mistral 7B Instruct v0.3
+    publisher: Mistral AI
+    summary: A small, fast chat model with function calling.
+    revision: c170c708c41dac9275d15a8fff4eca08d52bab71
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 7248023552
+    context_length: 32768
+    architecture:
+      name: MistralForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 14496080928
+        min_gpu_memory_gib: 19
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Mistral-7B-Instruct-v0.3-GGUF
+        revision: 61fd4167fff3ab01ee1cfe0da183fa27a944db48
+        file: Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+        weight_bytes: 4372812000
+        min_memory_gib: 6
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Mistral-7B-Instruct-v0.3-GGUF
+        revision: 61fd4167fff3ab01ee1cfe0da183fa27a944db48
+        file: Mistral-7B-Instruct-v0.3-Q8_0.gguf
+        weight_bytes: 7702565088
+        min_memory_gib: 10
+  - id: mistralai/Mistral-Nemo-Instruct-2407
+    title: Mistral Nemo Instruct 2407
+    publisher: Mistral AI
+    summary: A 12B multilingual chat model built with NVIDIA, with a 128K context.
+    revision: 04d8a90549d23fc6bd7f642064003592df51e9b3
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 12247782400
+    context_length: 131072
+    architecture:
+      name: MistralForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 24495607104
+        min_gpu_memory_gib: 30
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Mistral-Nemo-Instruct-2407-GGUF
+        revision: a2dd64a0a76ea1bdb2bb6ab6fa5496b003c7c908
+        file: Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
+        weight_bytes: 7477208192
+        min_memory_gib: 10
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Mistral-Nemo-Instruct-2407-GGUF
+        revision: a2dd64a0a76ea1bdb2bb6ab6fa5496b003c7c908
+        file: Mistral-Nemo-Instruct-2407-Q8_0.gguf
+        weight_bytes: 13022372992
+        min_memory_gib: 16
+  - id: mistralai/Mistral-Small-24B-Instruct-2501
+    title: Mistral Small 24B Instruct 2501
+    publisher: Mistral AI
+    summary: A 24B chat model that's quick for its size and good at following instructions.
+    revision: 9527884be6e5616bdd54de542f9ae13384489724
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 23572403200
+    context_length: 32768
+    architecture:
+      name: MistralForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 47144848872
+        min_gpu_memory_gib: 56
+  - id: mistralai/Mistral-Small-3.1-24B-Instruct-2503
+    title: Mistral Small 3.1 24B Instruct 2503
+    publisher: Mistral AI
+    summary: A 24B chat model that also reads images, with a 128K context.
+    revision: 68faf511d618ef198fef186659617cfd2eb8e33a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - vision
+    parameters: 24011361280
+    context_length: 131072
+    architecture:
+      name: Mistral3ForConditionalGeneration
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 48022800560
+        min_gpu_memory_gib: 58
+      - id: fp8
+        engine: vllm
+        repo: RedHatAI/Mistral-Small-3.1-24B-Instruct-2503-FP8-dynamic
+        revision: bdc94372635dc37dc9a1117bdd5223710a35ed91
+        weight_bytes: 25799579080
+        min_gpu_memory_gib: 33
+  - id: mistralai/Mistral-Small-3.2-24B-Instruct-2506
+    title: Mistral Small 3.2 24B Instruct 2506
+    publisher: Mistral AI
+    summary: An update of Mistral Small 3.1 that follows instructions and calls tools more reliably.
+    revision: 95a6d26c4bfb886c58daf9d3f7332c857cb27b43
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - vision
+    parameters: 24011361280
+    context_length: 131072
+    architecture:
+      name: Mistral3ForConditionalGeneration
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 48022800560
+        min_gpu_memory_gib: 58
+  - id: mistralai/Ministral-8B-Instruct-2410
+    title: Ministral 8B Instruct 2410
+    publisher: Mistral AI
+    summary: An 8B chat model for local and edge use, licensed for research only.
+    revision: 2f494a194c5b980dfb9772cb92d26cbb671fce5a
+    license:
+      id: mistral-mrl
+      commercial: false
+    gated: false
+    tasks:
+      - chat
+    parameters: 8019808256
+    context_length: 32768
+    architecture:
+      name: MistralForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16039654592
+        min_gpu_memory_gib: 21
+  - id: mistralai/Mistral-Large-Instruct-2411
+    title: Mistral Large Instruct 2411
+    publisher: Mistral AI
+    summary: Mistral's 123B flagship chat model, licensed for research only.
+    revision: ba78820945ae22361b0274cf0ae6d696c967c1a4
+    license:
+      id: mistral-mrl
+      commercial: false
+    gated: false
+    tasks:
+      - chat
+    parameters: 122610069504
+    context_length: 131072
+    architecture:
+      name: MistralForCausalLM
+      layers: 88
+      attention_heads: 96
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 245220233776
+        min_gpu_memory_gib: 278
+  - id: mistralai/Codestral-22B-v0.1
+    title: Codestral 22B v0.1
+    publisher: Mistral AI
+    summary: A 22B coding model for over 80 programming languages, for non-production use only.
+    revision: 28b1c1a51dabe9d86ca8c41420ada1984632498f
+    license:
+      id: mistral-mnpl
+      commercial: false
+    gated: false
+    tasks:
+      - code
+    parameters: 22247282688
+    context_length: 32768
+    architecture:
+      name: MistralForCausalLM
+      layers: 56
+      attention_heads: 48
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 44494624536
+        min_gpu_memory_gib: 53
+  - id: mistralai/Devstral-Small-2507
+    title: Devstral Small 2507
+    publisher: Mistral AI
+    summary: A 24B coding model built for agents that explore and edit codebases.
+    revision: bd165ab26cebbcc2eea2c4ecbfc07f3ac42b3c39
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 23572403200
+    context_length: 131072
+    architecture:
+      name: MistralForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 47144848872
+        min_gpu_memory_gib: 56
+  - id: mistralai/Magistral-Small-2506
+    title: Magistral Small 2506
+    publisher: Mistral AI
+    summary: A 24B reasoning model that works through a problem before it answers.
+    revision: ad2fce5b4113139e1877dcadfd826c9262ad8e8c
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 23572403200
+    context_length: 40960
+    architecture:
+      name: MistralForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 47144848872
+        min_gpu_memory_gib: 56
+  - id: mistralai/Mixtral-8x7B-Instruct-v0.1
+    title: Mixtral 8x7B Instruct v0.1
+    publisher: Mistral AI
+    summary: A mixture of experts chat model with about 13B parameters active per token.
+    revision: eba92302a2861cdc0098cc54bc9f17cb2c47eb61
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 46702792704
+    active_parameters: 12900000000
+    context_length: 32768
+    architecture:
+      name: MixtralForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 93405713504
+        min_gpu_memory_gib: 107
+      - id: awq-int4
+        engine: vllm
+        repo: TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ
+        revision: 9afb6f0a7d7fe9ecebdda1baa4ff4e13e73e97d7
+        weight_bytes: 24653955344
+        min_gpu_memory_gib: 30
+  - id: mistralai/Mixtral-8x22B-Instruct-v0.1
+    title: Mixtral 8x22B Instruct v0.1
+    publisher: Mistral AI
+    summary: A large mixture of experts chat model with about 39B parameters active per token.
+    revision: cc88a6cc19fbd17d9f1c0ee0b0d70a748dce698d
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 140630071296
+    active_parameters: 39000000000
+    context_length: 65536
+    architecture:
+      name: MixtralForCausalLM
+      layers: 56
+      attention_heads: 48
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: mistral
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 281260367720
+        min_gpu_memory_gib: 317

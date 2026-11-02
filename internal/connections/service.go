@@ -12,8 +12,11 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const maxName = 60
@@ -37,15 +40,52 @@ type Auditor interface {
 
 // Service is the connection API.
 type Service struct {
-	store    Store
-	secrets  Secrets
-	checkers map[string]Checker
-	authz    Authorizer
-	audit    Auditor
-	now      func() time.Time
-	warn     func(msg string, err error)
+	ManagedCredentials ManagedCredentialResolver
+	store              Store
+	secrets            Secrets
+	checkers           map[string]Checker
+	authz              Authorizer
+	audit              Auditor
+	now                func() time.Time
+	warn               func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
+	// Checked receives a detached public snapshot after a ready account is saved.
+	// It runs synchronously, so callers should enqueue bounded background work.
+	Checked func(context.Context, security.Principal, Connection)
+
+	// Signing in to a cloud. The extension sets these.
+	Providers   map[string]Provider
+	ConfigApps  map[string]oauth.App
+	CallbackURL string
+	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
+	AppSecrets Secrets
+	Apps       AppStore
+	// Lapsed hears about a signed-in connection the cloud stopped
+	// honoring. It may be nil.
+	Lapsed func(ctx context.Context, c *Connection)
+
+	// Connecting keylessly. The extension sets these. Without a usable
+	// issuer, nothing keyless works.
+	Keyless       KeylessIssuer
+	KeylessClouds map[string]KeylessCloud
+	// Rotate turns over the issuer's signing keys. The scheduled job calls
+	// it. It may be nil.
+	Rotate func(context.Context) error
+	// IssuerServing checks that Loomplane's issuer answers at its public
+	// URL with the key it signs with, as a cloud would fetch it. The
+	// background check asks it once a run, before it marks any keyless
+	// connection failed. Nil skips the check.
+	IssuerServing func(context.Context) error
+
+	// grants renews sign-ins. It's nil when the store can't lock a
+	// connection, and then nothing is renewed.
+	grants grantStore
+	// renewals queues renewals before they take a database connection.
+	renewals *renewGate
+
+	// GPUReader reads a server or cluster's GPUs. Nil uses the real SSH and Kubernetes readers.
+	GPUReader func(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error)
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;
@@ -54,7 +94,8 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn}
+	grants, _ := store.(grantStore) //nolint:errcheck // a store that can't lock leaves grants nil, as documented
+	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: newRenewGate(maxRenewals)}
 }
 
 // CreateInput connects a cloud account.
@@ -107,6 +148,38 @@ func (s *Service) check(ctx context.Context, cloud string, c Checker, credential
 	}
 }
 
+// pastedGrantAdvice is a GrantChecker that says, in its cloud's words,
+// what to do instead of pasting a sign-in's grant.
+type pastedGrantAdvice interface {
+	PastedGrant() string
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (GCPChecker) PastedGrant() string {
+	return "paste a service account key, or sign in to Google instead of pasting a signed-in key"
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (AzureChecker) PastedGrant() string {
+	return "paste a service principal's client secret, or sign in to Azure instead of pasting a signed-in key"
+}
+
+// refusePastedGrant keeps Method true to what Vault holds: a pasted
+// credential that is really a sign-in grant, or a keyless handout, is
+// refused.
+func refusePastedGrant(c Checker, cred []byte, method string) error {
+	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
+		if keylessJSON(cred) {
+			return fmt.Errorf("%w: that's a keyless handout, not a credential; connect keylessly from the connect dialog instead", ErrInvalid)
+		}
+		if a, ok := c.(pastedGrantAdvice); ok {
+			return fmt.Errorf("%w: %s", ErrInvalid, a.PastedGrant())
+		}
+		return fmt.Errorf("%w: paste the API token itself, not JSON", ErrInvalid)
+	}
+	return nil
+}
+
 func apply(c *Connection, res Check, now time.Time) {
 	c.Account, c.Details, c.Missing, c.Message = res.Account, res.Details, res.Missing, ""
 	c.Status = StatusReady
@@ -123,36 +196,78 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	cloud := strings.TrimSpace(in.Cloud)
+	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+}
+
+// newConnectionID makes the ID of a new connection.
+func newConnectionID() (string, error) {
+	id, err := typeid.Generate("conn")
+	if err != nil {
+		return "", fmt.Errorf("generate connection id: %w", err)
+	}
+	return id.String(), nil
+}
+
+func validName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxName {
+		return "", fmt.Errorf("%w: give it a name of at most %d characters", ErrInvalid, maxName)
+	}
+	return name, nil
+}
+
+// create checks cred with its cloud and stores a new connection that got
+// its credential by method, with ID id, or a new one when id is empty.
+// checked is what the check gets instead of cred, such as a sign-in's
+// handout; nil checks cred. A keyless or in-cluster connection writes
+// nothing to Vault. The caller has checked the principal's role.
+func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
 		return nil, err
 	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" || utf8.RuneCountInString(name) > maxName {
-		return nil, fmt.Errorf("%w: give it a name of at most %d characters", ErrInvalid, maxName)
-	}
-	cred := []byte(strings.TrimSpace(in.Credential))
-	res, err := s.check(ctx, cloud, checker, cred, in.Settings)
+	name, err = validName(name)
 	if err != nil {
 		return nil, err
 	}
-	id, err := typeid.Generate("conn")
+	if refuseErr := refusePastedGrant(checker, cred, method); refuseErr != nil {
+		return nil, refuseErr
+	}
+	if checked == nil {
+		checked = cred
+	}
+	settings, err = prepareConnection(ctx, checker, checked, settings)
 	if err != nil {
-		return nil, fmt.Errorf("generate connection id: %w", err)
+		return nil, err
+	}
+	res, err := s.check(ctx, cloud, checker, checked, settings)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		if id, err = newConnectionID(); err != nil {
+			return nil, err
+		}
 	}
 	now := s.now().UTC()
-	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, CreatedBy: p.UserID, CreatedAt: now}
+	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
+	keeps := method != MethodKeyless && method != MethodInCluster
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
 	// and harmless.
-	if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-		return nil, err
+	if keeps {
+		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.store.CreateConnection(ctx, c); err != nil {
-		if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
-			s.warn("remove the secret of a connection that wasn't saved", derr)
+		if keeps {
+			if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
+				s.warn("remove the secret of a connection that wasn't saved", derr)
+			}
 		}
 		return nil, err
 	}
@@ -178,7 +293,9 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Co
 
 // Recheck asks the cloud again, such as after granting the permissions an
 // incomplete connection lacked. A credential the cloud now refuses marks
-// the connection failed; a cloud it can't reach changes nothing.
+// the connection failed. A sign-in the cloud no longer honors, or whose
+// sign-in app it refuses, marks it sign_in_needed instead. A cloud it
+// can't reach changes nothing.
 func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
@@ -193,12 +310,43 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
+	if c.Method == MethodManagedKubernetes {
+		if _, checkErr := s.managedCredential(ctx, c); checkErr != nil {
+			return nil, checkErr
+		}
+		return c, nil
+	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
 	}
-	cred, err := s.secrets.Reveal(ctx, p.OrgID, c.ID)
-	if err != nil {
+	var cred []byte
+	if c.Method == MethodOAuth {
+		// Check what a deployment would get.
+		g, grantErr := s.deployGrant(ctx, c)
+		if grantErr == nil {
+			cred, grantErr = s.checkable(ctx, c, g)
+			grantErr = s.handoutWithoutApp(ctx, c, grantErr)
+		}
+		if errors.Is(grantErr, ErrNotReady) {
+			if c, err = s.store.GetConnection(ctx, p.OrgID, id); err != nil {
+				return nil, err
+			}
+			s.record(ctx, "cloud_connection.check", p, c)
+			return c, nil
+		}
+		if grantErr != nil {
+			return nil, grantErr
+		}
+	} else if c.Method == MethodKeyless {
+		// A trust the cloud refuses fails the way a refused token does.
+		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, err
+		}
+	} else if c.Method == MethodInCluster {
+		// With the operator's switch off, the check fails it, and says why.
+		cred = kubernetes.InClusterCredential()
+	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
 	now := s.now().UTC()
@@ -206,6 +354,28 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if err != nil && legacyPersonalVercel(c) {
 		// A failed legacy upgrade preserves the old row as well as its token.
 		return nil, err
+	}
+	var why string
+	switch {
+	case c.Method != MethodOAuth || err == nil:
+	case errors.Is(err, oauth.ErrAppRejected):
+		// Signing in again with the same app won't help, so the app
+		// shows the problem too.
+		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+	case refusedSignIn(err):
+		// Revoking Loomplane in the cloud kills the access token at once,
+		// so a refused grant asks for a new sign-in.
+		why = fmt.Sprintf("%s refused the sign-in. Sign in again.", cloudTitle(c.Cloud))
+	}
+	if why != "" {
+		// The account is the same, so the generation stays.
+		current, lapsed, markErr := s.signInRefused(ctx, c, why, &now)
+		if markErr != nil {
+			return nil, markErr
+		}
+		s.tellLapsed(ctx, lapsed)
+		s.record(ctx, "cloud_connection.check", p, current)
+		return current, nil
 	}
 	switch {
 	case errors.Is(err, ErrInvalid):
@@ -234,13 +404,35 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 // Replace swaps a connection's credential for a new one the cloud
 // accepts, such as a rotated key. It keeps the connection's ID, so
 // nothing that names the connection has to change.
+// A pasted credential turns off a connection's sign-in.
 func (s *Service) Replace(ctx context.Context, p security.Principal, id string, in ReplaceInput) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
+	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+}
+
+// signer is who a credential that got there by method is the sign-in of:
+// the person signing in, or no one for a token.
+func signer(p security.Principal, method string) string {
+	if method == MethodOAuth {
+		return p.UserID
+	}
+	return ""
+}
+
+// replace swaps connection id's credential for cred, which got there by
+// method, if the cloud accepts it for the same account. checked is what
+// the check gets instead of cred, as for create. A move to keyless writes
+// nothing to Vault; the caller removes the old secret. The caller has
+// checked the principal's role.
+func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return nil, ErrInUse
 	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
@@ -248,6 +440,9 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
+	}
+	if refuseErr := refusePastedGrant(checker, cred, method); refuseErr != nil {
+		return nil, refuseErr
 	}
 	before := AccountIdentity(c.Cloud, c.Account, c.Details)
 	if legacyPersonalVercel(c) {
@@ -264,12 +459,17 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 		}
 		before = AccountIdentity(c.Cloud, oldCheck.Account, oldCheck.Details)
 	}
-	settings := in.Settings
 	if settings == nil {
 		settings = c.Details
 	}
-	cred := []byte(strings.TrimSpace(in.Credential))
-	res, err := s.check(ctx, c.Cloud, checker, cred, settings)
+	if c.Cloud == Kubernetes && strings.TrimSpace(settings["ingress_address"]) != c.Details["ingress_address"] {
+		settings = maps.Clone(settings)
+		delete(settings, "registry_ingress_address")
+	}
+	if checked == nil {
+		checked = cred
+	}
+	res, err := s.checkPreparationIdentity(ctx, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -277,11 +477,29 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
 	}
+	// Verify the replacement's immutable identity before allowing setup writes.
+	if _, ok := checker.(connectionPreparer); ok {
+		settings, err = prepareConnection(ctx, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		res, err = s.check(ctx, c.Cloud, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		if AccountIdentity(c.Cloud, res.Account, res.Details) != before {
+			return nil, fmt.Errorf("%w: cluster identity changed during setup", ErrInvalid)
+		}
+	}
 	// Persistent stores serialize secret writes and invalidate old approvals first.
 	replace := func() error {
-		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-			return err
+		if method != MethodKeyless {
+			if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
+				return err
+			}
 		}
+		c.Method = method
+		c.SignedInBy = signer(p, method)
 		apply(c, res, s.now().UTC())
 		return s.store.UpdateConnection(ctx, c)
 	}
@@ -311,6 +529,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err != nil {
 		return err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return ErrInUse
+	}
 	if err := s.store.DeleteConnection(ctx, p.OrgID, id); err != nil {
 		return err
 	}
@@ -324,17 +545,52 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 
 // Credential returns a ready connection and its credential, for a
 // deployment. It checks no role: only Loomplane's own workflow calls it,
-// for a plan someone was allowed to approve.
+// for a plan someone was allowed to approve. A signed-in connection's
+// credential is its access token, renewed first if it expires within a
+// day, or its handout, for a cloud whose sessions renew themselves. A
+// keyless connection's is its keyless handout, and an in-cluster one's
+// the in-cluster credential, and for neither is Vault read.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
 		return nil, nil, err
 	}
+	if c.Cloud == Kubernetes && c.Details["registry_hostname"] != "" {
+		if registry, ok := s.store.(interface {
+			RegistryAccessAllowed(context.Context, string, string) error
+		}); ok {
+			if accessErr := registry.RegistryAccessAllowed(ctx, orgID, id); accessErr != nil {
+				return nil, nil, accessErr
+			}
+		}
+	}
 	if c.Message == replacementInProgressMessage || (c.Status != StatusReady && !RegistryPullReady(c)) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
 	}
-	cred, err := s.secrets.Reveal(ctx, orgID, id)
-	if err != nil {
+	var cred []byte
+	if c.Method == MethodOAuth {
+		g, grantErr := s.deployGrant(ctx, c)
+		if grantErr != nil {
+			return nil, nil, grantErr
+		}
+		if _, ok := s.Providers[c.Cloud].(Handout); ok {
+			if cred, err = s.checkable(ctx, c, g); err != nil {
+				return nil, nil, s.handoutWithoutApp(ctx, c, err)
+			}
+		} else {
+			cred = []byte(g.AccessToken)
+		}
+	} else if c.Method == MethodKeyless {
+		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Method == MethodManagedKubernetes {
+		if cred, err = s.managedCredential(ctx, c); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Method == MethodInCluster {
+		cred = kubernetes.InClusterCredential()
+	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}
 	// A replacement may start between reading the row and reading Vault.
@@ -358,4 +614,20 @@ func (s *Service) record(ctx context.Context, action string, p security.Principa
 	if s.audit != nil {
 		s.audit.Record(ctx, action, p, c)
 	}
+	if s.Checked == nil || c == nil || c.Status != StatusReady {
+		return
+	}
+	switch action {
+	case "cloud_connection.create", "cloud_connection.check", "cloud_connection.replace":
+	default:
+		return
+	}
+	snapshot := *c
+	snapshot.Details = maps.Clone(c.Details)
+	snapshot.Missing = slices.Clone(c.Missing)
+	if c.CheckedAt != nil {
+		checkedAt := *c.CheckedAt
+		snapshot.CheckedAt = &checkedAt
+	}
+	s.Checked(ctx, p, snapshot)
 }

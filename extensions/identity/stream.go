@@ -44,6 +44,11 @@ func (e *Extension) revalidateStream(ctx context.Context, request *http.Request)
 			return p, err
 		}
 	}
+	if p.IsFleet() {
+		// Authenticate has rechecked the service credential and its fixed scope.
+		// The fleet stream separately checks the instance and grant before delivery.
+		return p, nil
+	}
 	if _, found, err := e.membership(ctx, p.OrgID, p.UserID); err != nil {
 		return p, err
 	} else if !found {

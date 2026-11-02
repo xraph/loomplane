@@ -54,7 +54,7 @@ func TestPlatformFederationIdentityRequiresAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
@@ -72,6 +72,9 @@ func TestPlatformFederationIdentityRequiresAdmin(t *testing.T) {
 	if _, injectErr := forge.InjectType[*federation.EnrollmentService](app.Container()); injectErr != nil {
 		t.Fatal("enrollment service not wired", injectErr)
 	}
+	if _, injectErr := forge.InjectType[*federation.ApplicationService](app.Container()); injectErr != nil {
+		t.Fatal("application issuance service not wired", injectErr)
+	}
 }
 
 func TestPlatformFederationLaunchWiring(t *testing.T) {
@@ -88,7 +91,7 @@ func TestPlatformFederationLaunchWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)

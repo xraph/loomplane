@@ -1095,7 +1095,7 @@
     },
     "/authsome/v1/orgs/invitations/accept": {
       "post": {
-        "description": "Accepts a pending organization invitation using the invitation token.",
+        "description": "Accepts a pending organization invitation using the invitation token. The signed-in user must own the email the invitation was sent to.",
         "operationId": "acceptInvitation",
         "requestBody": {
           "content": {

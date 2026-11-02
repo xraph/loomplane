@@ -66,7 +66,7 @@ func SaveLastGood(path string, key *ecdh.PrivateKey, s SignedSnapshot) (err erro
 // the error from os.ReadFile, which matches fs.ErrNotExist. The caller still
 // verifies the snapshot before serving from it.
 func LoadLastGood(path string, key *ecdh.PrivateKey) (SignedSnapshot, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- the gateway's own state file, named by its config, never by a request.
 	if err != nil {
 		return SignedSnapshot{}, err
 	}

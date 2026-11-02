@@ -26,6 +26,9 @@ type interruptedRetentionMigration struct {
 	calls, failAt int
 }
 
+// Unwrap lets grove's schema builders find the driver behind the wrapper.
+func (e *interruptedRetentionMigration) Unwrap() migrate.Executor { return e.Executor }
+
 func (e *interruptedRetentionMigration) Exec(ctx context.Context, query string, args ...any) (driver.Result, error) {
 	e.calls++
 	if e.failAt == e.calls {
@@ -141,6 +144,9 @@ type afterRetentionMigrationStatement struct {
 	once  sync.Once
 	after func()
 }
+
+// Unwrap lets grove's schema builders find the driver behind the wrapper.
+func (e *afterRetentionMigrationStatement) Unwrap() migrate.Executor { return e.Executor }
 
 func (e *afterRetentionMigrationStatement) Exec(ctx context.Context, query string, args ...any) (driver.Result, error) {
 	result, err := e.Executor.Exec(ctx, query, args...)

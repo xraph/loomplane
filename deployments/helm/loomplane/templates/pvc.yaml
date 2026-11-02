@@ -1,0 +1,20 @@
+{{- if and .Values.storage.persistence.enabled (not .Values.storage.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "loomplane.storageClaimName" . }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+  annotations:
+    # Uninstalling Loomplane keeps its files.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.storage.persistence.accessModes | nindent 4 }}
+  {{- with .Values.storage.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.persistence.size }}
+{{- end }}

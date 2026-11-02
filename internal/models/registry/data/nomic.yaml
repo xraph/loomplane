@@ -1,0 +1,98 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: nomic
+entries:
+  - id: nomic-ai/nomic-embed-text-v1.5
+    title: Nomic Embed Text v1.5
+    publisher: Nomic AI
+    summary: An English embedding model whose vectors can be cut shorter to save space.
+    revision: e9b6763023c676ca8431644204f50c2b100d9aab
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 136731648
+    context_length: 2048
+    architecture:
+      name: NomicBertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 2048
+      query_prefix: 'search_query: '
+      document_prefix: 'search_document: '
+    core: true
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 546938168
+        min_memory_gib: 2
+  - id: nomic-ai/nomic-embed-text-v1
+    title: Nomic Embed Text v1
+    publisher: Nomic AI
+    summary: An English embedding model with an 8192 token input, fully open down to its training data.
+    revision: 3ac47f125a41961d13b397d0332866be2f9152e1
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 136731648
+    context_length: 8192
+    architecture:
+      name: NomicBertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+      query_prefix: 'search_query: '
+      document_prefix: 'search_document: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 546938168
+        min_memory_gib: 2
+  - id: nomic-ai/modernbert-embed-base
+    title: ModernBERT Embed base
+    publisher: Nomic AI
+    summary: An English embedding model built on ModernBERT, with an 8192 token input.
+    revision: d556a88e332558790b210f7bdbe87da2fa94a8d8
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 149014272
+    context_length: 8192
+    architecture:
+      name: ModernBertModel
+      layers: 22
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+      query_prefix: 'search_query: '
+      document_prefix: 'search_document: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 596070136
+        min_memory_gib: 2

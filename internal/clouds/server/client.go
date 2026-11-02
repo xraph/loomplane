@@ -87,6 +87,22 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// DialContext opens a TCP connection from the server, through the SSH
+// connection Dial pinned to its host key, so what's dialed is reached from
+// the server's network. It dials only TCP: a Unix socket on the server,
+// such as Docker's, isn't for anyone else to reach.
+func (c *Client) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("%w: the server dials only TCP, not %s", ErrInvalid, network)
+	}
+	if c.ssh == nil {
+		return nil, fmt.Errorf("%w: the server isn't connected", ErrInvalid)
+	}
+	return c.ssh.DialContext(ctx, network, address)
+}
+
 // Request addresses only the configured Docker daemon. The caller owns Body.
 func (c *Client) Request(ctx context.Context, method, resource string, body io.Reader) (*http.Response, error) {
 	return c.RequestHeaders(ctx, method, resource, body, nil)

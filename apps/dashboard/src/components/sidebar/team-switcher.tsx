@@ -56,8 +56,8 @@ export function TeamSwitcher({
               />
             }
           >
-            <OrgMark org={active} className="size-8 rounded-lg" />
-            <div className="grid flex-1 text-left text-sm leading-tight">
+            <OrgMark org={active} className="size-8.5 rounded-lg" />
+            <div className="grid flex-1 text-left text-[14px] leading-tight">
               <span className="truncate font-semibold tracking-tight">
                 {active.name}
               </span>
@@ -77,7 +77,7 @@ export function TeamSwitcher({
           >
             <DropdownMenuGroup>
               <DropdownMenuLabel className="text-xs text-muted-foreground">
-                Organizations
+                Workspaces
               </DropdownMenuLabel>
               {orgs.map((org) => (
                 <DropdownMenuItem
@@ -102,7 +102,7 @@ export function TeamSwitcher({
                       <PlusIcon className="size-4" />
                     </div>
                     <div className="font-medium text-muted-foreground">
-                      New organization
+                      New workspace
                     </div>
                   </DropdownMenuItem>
                 </DropdownMenuGroup>

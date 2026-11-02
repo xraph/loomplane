@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,7 +15,10 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 const pgUniqueViolation = "23505"
@@ -25,7 +30,9 @@ var ErrConflict = errors.New("another plan for this environment was just started
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	db *pgdriver.PgDB
+	groupAcceptance GroupAcceptanceAuthority
+	frontendWake    cloudinfra.CapacityCloudWakeup
+	db              *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
@@ -34,19 +41,27 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
-	manifest_id, manifest_revision, result, executable, error,
-	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog`
+	coalesce(manifest_id,''), manifest_revision, result, executable, error,
+	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog,
+	kind, from_environment, from_environment_id, rollback,
+ coalesce((SELECT i.id FROM loomplane_fleet_instances i WHERE i.org_id=loomplane_plans.org_id AND i.environment_id=loomplane_plans.environment_id),'')`
 
 // open lists the statuses of a plan that hasn't been settled.
 const open = `('planning', 'ready')`
 
 func scanPlan(row pgx.Row) (*Plan, error) {
 	var p Plan
-	var result []byte
+	var result, rollbackSpec []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
-		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog,
+		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec, &p.ManagedInstanceID); err != nil {
 		return nil, err
+	}
+	if len(rollbackSpec) > 0 {
+		if err := json.Unmarshal(rollbackSpec, &p.Rollback); err != nil {
+			return nil, fmt.Errorf("decode plan rollback: %w", err)
+		}
 	}
 	if len(result) > 0 {
 		var r Result
@@ -79,15 +94,28 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	fleetInput, ownershipErr := checkPlanOwnership(ctx, tx, p)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	superseded, err = supersede(ctx, tx, p)
 	if err != nil {
 		return nil, err
 	}
+	if p.Kind == "" {
+		p.Kind = KindRelease
+	}
+	var rollbackSpec []byte
+	if p.Rollback != nil {
+		if rollbackSpec, err = json.Marshal(p.Rollback); err != nil {
+			return nil, fmt.Errorf("encode plan rollback: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		manifest_id, manifest_revision, created_by, created_at, catalog)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict
@@ -95,11 +123,16 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
 	}
+	if len(fleetInput) > 0 {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_plan_inputs(plan_id,org_id,fleet_id,instance_id,snapshot) VALUES($1,$2,$3,$4,$5)`, p.ID, p.OrgID, p.FleetInput.Authority.Scope.FleetID, p.ManagedInstanceID, string(fleetInput)); err != nil {
+			return nil, err
+		}
+	}
 	for _, ps := range p.Sources {
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
-			(plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.Ref, ps.AnalysisID, ps.CommitSHA, ps.InScope); err != nil {
+			(plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope, from_plan_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.Ref, ps.AnalysisID, ps.CommitSHA, ps.InScope, ps.FromPlanID); err != nil {
 			return nil, fmt.Errorf("insert plan source %s: %w", ps.Alias, err)
 		}
 	}
@@ -141,6 +174,9 @@ func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
+	}
+	if err := s.withFleetInput(ctx, p); err != nil {
+		return nil, err
 	}
 	if err := s.withSources(ctx, p); err != nil {
 		return nil, err
@@ -186,7 +222,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 		ids[i], by[p.ID] = p.ID, p
 		p.Sources = []PlanSource{}
 	}
-	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope
+	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope, from_plan_id
 		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias COLLATE "C"`, ids)
 	if err != nil {
 		return fmt.Errorf("load plan sources: %w", err)
@@ -195,7 +231,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 	for rows.Next() {
 		var planID string
 		var ps PlanSource
-		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.Ref, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope); err != nil {
+		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.Ref, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope, &ps.FromPlanID); err != nil {
 			return fmt.Errorf("scan plan source: %w", err)
 		}
 		by[planID].Sources = append(by[planID].Sources, ps)
@@ -205,7 +241,17 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 
 // DeployedSources implements Store.
 func (s *PgStore) DeployedSources(ctx context.Context, orgID, environmentID string) ([]*DeployedSource, error) {
-	rows, err := s.db.Query(ctx, `SELECT environment_id, source_id, analysis_id, commit_sha, plan_id, deployed_at
+	return deployedSources(ctx, s.db, orgID, environmentID)
+}
+
+// rowQuerier is a database or a transaction.
+type rowQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+}
+
+func deployedSources(ctx context.Context, db rowQuerier, orgID, environmentID string) ([]*DeployedSource, error) {
+	rows, err := db.Query(ctx, `SELECT environment_id, source_id, analysis_id, commit_sha, plan_id, deployed_at
 		FROM loomplane_environment_sources WHERE org_id = $1 AND environment_id = $2 ORDER BY source_id`, orgID, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("list deployed sources: %w", err)
@@ -237,13 +283,95 @@ func (s *PgStore) RecordDeployed(ctx context.Context, orgID string, d *DeployedS
 	return nil
 }
 
+// DeployedState implements Store. Both reads run in one repeatable-read
+// transaction, so they see the same releases.
+func (s *PgStore) DeployedState(ctx context.Context, orgID, environmentID string) (manifest *DeployedManifest, sources []*DeployedSource, err error) {
+	tx, err := s.db.BeginTx(ctx, &driver.TxOptions{IsolationLevel: driver.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	var m DeployedManifest
+	err = tx.QueryRow(ctx, `SELECT environment_id, manifest_id, manifest_revision, plan_id, deployed_at
+		FROM loomplane_environment_manifests WHERE org_id = $1 AND environment_id = $2`, orgID, environmentID).
+		Scan(&m.EnvironmentID, &m.ManifestID, &m.ManifestRevision, &m.PlanID, &m.DeployedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		err = nil
+	case err != nil:
+		return nil, nil, fmt.Errorf("get deployed manifest: %w", err)
+	default:
+		m.DeployedAt = m.DeployedAt.UTC()
+		manifest = &m
+	}
+	if sources, err = deployedSources(ctx, tx, orgID, environmentID); err != nil {
+		return nil, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit: %w", err)
+	}
+	return manifest, sources, nil
+}
+
+// RecordRelease implements Store: the manifest row and every source row
+// are written in one transaction, each source by one statement.
+func (s *PgStore) RecordRelease(ctx context.Context, orgID string, r *DeployedRelease) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	at := r.DeployedAt.UTC()
+	if r.ManifestID != "" {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_manifests
+				(environment_id, org_id, manifest_id, manifest_revision, plan_id, deployed_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (environment_id) DO UPDATE SET
+				manifest_id = EXCLUDED.manifest_id, manifest_revision = EXCLUDED.manifest_revision,
+				plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at
+			WHERE loomplane_environment_manifests.org_id = EXCLUDED.org_id`,
+			r.EnvironmentID, orgID, r.ManifestID, r.ManifestRevision, r.PlanID, at); err != nil {
+			return fmt.Errorf("record deployed manifest: %w", err)
+		}
+	}
+	if len(r.Sources) > 0 {
+		values, args := releaseSourceRows(orgID, r, at)
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sources
+				(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at)
+			VALUES `+values+`
+			ON CONFLICT (environment_id, source_id) DO UPDATE SET
+				analysis_id = EXCLUDED.analysis_id, commit_sha = EXCLUDED.commit_sha,
+				plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at`, args...); err != nil {
+			return fmt.Errorf("record deployed sources: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// releaseSourceRows are the VALUES rows and arguments of a release's
+// sources, in source ID order: two releases of one environment then lock
+// the rows they share in the same order, and one waits for the other
+// instead of deadlocking. r.Sources keeps its order.
+func releaseSourceRows(orgID string, r *DeployedRelease, at time.Time) (values string, args []any) {
+	const columns = 7
+	sources := slices.Clone(r.Sources)
+	slices.SortFunc(sources, func(a, b *DeployedSource) int { return strings.Compare(a.SourceID, b.SourceID) })
+	rows := make([]string, 0, len(sources))
+	args = make([]any, 0, columns*len(sources))
+	for i, d := range sources {
+		n := i * columns
+		rows = append(rows, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)", n+1, n+2, n+3, n+4, n+5, n+6, n+7))
+		args = append(args, r.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, r.PlanID, at)
+	}
+	return strings.Join(rows, ", "), args
+}
+
 // FinishPlanning implements Store.
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
-	result, err := json.Marshal(Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
-		Connections: p.Connections,
-	})
+	result, err := json.Marshal(p.result())
 	if err != nil {
 		return false, fmt.Errorf("encode plan: %w", err)
 	}
@@ -257,6 +385,60 @@ func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	return affected(tag)
 }
 
+// ActiveCanaryStatuses are the statuses of a deployment's canary that still
+// hold its environment: nothing else may deploy there until it settles.
+// deployments names each one; this is the one list of which are active.
+func ActiveCanaryStatuses() []string {
+	return []string{"pending", "ramping", "promoting", "reverting"}
+}
+
+// RampingCanary returns the running or paused deployment whose canary still
+// holds the environment, the newest when there are several, or "" when none
+// does. Paused counts, as it does for the environment guard: a deployment
+// paused for capacity may have a candidate up. A plan made meanwhile is
+// blocked, so two deployments never move one service's traffic at once.
+// deployments.PgStore reads it through here.
+func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_deployments
+		WHERE org_id = $1 AND environment_id = $2 AND status IN ('running', 'paused') AND canary->>'status' = ANY($3::text[])
+		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID, ActiveCanaryStatuses()).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find ramping canary: %w", err)
+	}
+	return id, nil
+}
+
+// RolledBackPlans implements Store. Plans never succeed themselves, so a
+// rollback counts once its deployment has finished, succeeded or failed:
+// a failed one still undid some of its target, and one refused as stale
+// still says its target was judged bad, so no later rollback restores it.
+func (s *PgStore) RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT p.rollback->>'target_plan_id'
+		FROM loomplane_plans p JOIN loomplane_deployments d ON d.org_id = p.org_id AND d.plan_id = p.id
+		WHERE p.org_id = $1 AND p.kind = 'rollback' AND p.environment_id = $2 AND d.status IN ('succeeded', 'failed')
+			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan rolled back plan: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	return out, nil
+}
+
 // FailPlanning implements Store.
 func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, now time.Time) error {
 	if _, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = 'failed', error = $3, planned_at = $4
@@ -267,13 +449,69 @@ func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, no
 }
 
 // Decide implements Store.
-func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
-		WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
+func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string, now time.Time) (changed bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return false, err
+	}
+	defer func() { err = rollback(tx, err) }()
+	if status == StatusApproved {
+		if sourceErr := environments.LockRuntimeSourcesTx(ctx, tx); sourceErr != nil {
+			return false, sourceErr
+		}
+		if s.groupAcceptance != nil {
+			if authorityErr := s.groupAcceptance.LockGroupAuthorityTx(ctx, tx); authorityErr != nil {
+				return false, authorityErr
+			}
+		}
+	}
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, orgID); checkErr != nil {
+		return false, checkErr
+	}
+	if status == StatusApproved {
+		var raw []byte
+		var project string
+		if readErr := tx.QueryRow(ctx, `SELECT project_id,result FROM loomplane_plans WHERE org_id=$1 AND id=$2 FOR UPDATE`, orgID, id).Scan(&project, &raw); readErr != nil {
+			return false, readErr
+		}
+		var result Result
+		if len(raw) > 0 {
+			if decodeErr := json.Unmarshal(raw, &result); decodeErr != nil {
+				return false, decodeErr
+			}
+		}
+		if checkErr := validateLocationActionsTx(ctx, tx, orgID, project, result.Actions, now); checkErr != nil {
+			return false, ErrStale
+		}
+	}
+	if actor, ok := security.PrincipalFrom(ctx); ok {
+		raw, marshalErr := json.Marshal(actor)
+		if marshalErr != nil {
+			return false, marshalErr
+		}
+		if _, err = tx.Exec(ctx, `SELECT set_config('loomplane.capacity_actor',$1,true)`, string(raw)); err != nil {
+			return false, err
+		}
+	}
+	if status == StatusApproved {
+		if groupErr := s.acceptPlacementGroupsTx(ctx, tx, orgID, id, now); groupErr != nil {
+			return false, groupErr
+		}
+	}
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
+ WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
+	if err != nil {
+		if cloudprofiles.IsStaleCleanupReview(err) {
+			return false, ErrStale
+		}
 		return false, fmt.Errorf("decide plan: %w", err)
 	}
-	return affected(tag)
+	changed, err = affected(tag)
+	if err != nil {
+		return false, err
+	}
+	err = tx.Commit()
+	return changed, err
 }
 
 func affected(r driver.Result) (bool, error) {
@@ -286,7 +524,7 @@ func affected(r driver.Result) (bool, error) {
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
 	external_id, config, url, connection_id, revision, commit_sha, drift, drift_message, observed_at,
-	plan_id, created_at, updated_at, replaced, physical_id`
+	plan_id, created_at, updated_at, replaced, physical_id, owned_resources`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -310,12 +548,25 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 	return out, nil
 }
 
+// GetBinding returns one binding of the organization, or ErrNotFound.
+func (s *PgStore) GetBinding(ctx context.Context, orgID, id string) (*Binding, error) {
+	b, err := scanBinding(s.db.QueryRow(ctx, `SELECT `+bindingColumns+` FROM loomplane_bindings
+		WHERE org_id = $1 AND id = $2`, orgID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get binding: %w", err)
+	}
+	return b, nil
+}
+
 func scanBinding(row pgx.Row) (*Binding, error) {
 	var b Binding
 	var cfg, replaced []byte
 	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
 		&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.ConnectionID, &b.Revision, &b.CommitSHA, &b.Drift, &b.DriftMessage,
-		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced, &b.PhysicalID); err != nil {
+		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced, &b.PhysicalID, &b.OwnedResources); err != nil {
 		return nil, fmt.Errorf("scan binding: %w", err)
 	}
 	b.Config = cfg
@@ -370,21 +621,69 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	// Only a frontend has a slot to activate, under the organization gate.
+	// A direct server action writes its binding while it still holds its
+	// daemon's admission, which pool enrollment waits for under that gate.
+	frontend := frontendBinding(b)
+	if frontend {
+		if checkErr := cloudprofiles.LockOrganization(ctx, tx, b.OrgID); checkErr != nil {
+			return checkErr
+		}
+	}
 	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
 		return guardErr
 	}
-	if err := putBinding(ctx, tx, b); err != nil {
-		return err
+	if frontend {
+		if checkErr := cloudinfra.ActivateFrontendBinding(ctx, tx, b.OrgID, b.PlanID, b.Name, b.ConnectionID, b.ExternalID); checkErr != nil {
+			return checkErr
+		}
+	}
+	if checkErr := putBinding(ctx, tx, b); checkErr != nil {
+		return checkErr
 	}
 	if id != "" {
 		if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	s.wakeFrontendPlan(ctx, b.OrgID, b.PlanID, "frontend-active/"+b.PlanID+"/"+b.Name)
+	return nil
+}
+
+// frontendBinding reports whether b may hold a frontend slot. A binding
+// whose configuration doesn't parse is treated as one.
+func frontendBinding(b *Binding) bool {
+	if b.Subject != ServiceSubject {
+		return false
+	}
+	var cfg ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return true
+	}
+	return cloudinfra.ManagedFrontend(b.Provider, cfg.Workload, cfg.Execution)
 }
 
 func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
+	if _, err := b.OwnsResources(); err != nil {
+		return err
+	}
+	for _, old := range b.Replaced {
+		if _, err := old.OwnsResources(); err != nil {
+			return err
+		}
+	}
+	owned := []byte("{}")
+	if len(b.OwnedResources) > 0 {
+		var err error
+		owned, err = json.Marshal(b.OwnedResources)
+		if err != nil {
+			return fmt.Errorf("encode binding ownership: %w", err)
+		}
+	}
+
 	cfg := []byte(b.Config)
 	if len(cfg) == 0 {
 		cfg = []byte("{}")
@@ -394,17 +693,17 @@ func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 		return err
 	}
 	_, err = db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
 			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
 			connection_id = EXCLUDED.connection_id, revision = EXCLUDED.revision, commit_sha = EXCLUDED.commit_sha,
 			drift = EXCLUDED.drift, drift_message = EXCLUDED.drift_message, observed_at = EXCLUDED.observed_at,
-			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at, replaced = EXCLUDED.replaced, physical_id = EXCLUDED.physical_id
+			plan_id = EXCLUDED.plan_id, updated_at = EXCLUDED.updated_at, replaced = EXCLUDED.replaced, physical_id = EXCLUDED.physical_id, owned_resources = EXCLUDED.owned_resources
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
 		b.ExternalID, cfg, b.URL, b.ConnectionID, b.Revision, b.CommitSHA, b.Drift, b.DriftMessage, b.ObservedAt,
-		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced, b.PhysicalID)
+		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced, b.PhysicalID, owned)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
 	}
@@ -502,4 +801,38 @@ func (s *PgStore) SetEnvironmentConnection(ctx context.Context, orgID, projectID
 		return fmt.Errorf("set environment connection: %w", err)
 	}
 	return nil
+}
+
+// GPUBindings sums the GPUs the organization's current bindings hold, by
+// connection and kind: a service's gpu, or a catalog component's. GPU
+// targets subtract them from what a server has.
+func (s *PgStore) GPUBindings(ctx context.Context, orgID string) (map[string]map[string]int, error) {
+	rows, err := s.db.Query(ctx, `SELECT connection_id, g->>'kind', sum(floor((g->>'count')::numeric))::bigint
+		FROM (SELECT connection_id, coalesce(nullif(config->'gpu', 'null'::jsonb), nullif(config->'component'->'gpu', 'null'::jsonb)) AS g
+			FROM loomplane_bindings WHERE org_id = $1 AND connection_id <> '' AND jsonb_typeof(config) = 'object') b
+		WHERE jsonb_typeof(g) = 'object' AND coalesce(g->>'kind', '') <> '' AND jsonb_typeof(g->'count') = 'number'
+		GROUP BY 1, 2`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]map[string]int{}
+	for rows.Next() {
+		var connection, kind string
+		var count int64
+		if err := rows.Scan(&connection, &kind, &count); err != nil {
+			return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+		}
+		if count <= 0 {
+			continue
+		}
+		if out[connection] == nil {
+			out[connection] = map[string]int{}
+		}
+		out[connection][kind] = int(count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	return out, nil
 }

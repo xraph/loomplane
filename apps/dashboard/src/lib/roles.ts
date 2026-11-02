@@ -8,7 +8,7 @@ export const roles: { value: Role; label: string; description: string }[] = [
   {
     value: "owner",
     label: "Owner",
-    description: "Everything, including the organization itself",
+    description: "Everything, including the workspace itself",
   },
   {
     value: "admin",

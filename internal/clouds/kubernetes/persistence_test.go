@@ -245,3 +245,46 @@ func TestPersistentRuntimeRefusesAnotherConnectionWorkload(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesRebuildableComponentIsAStatefulSetWithoutDatabaseExec(t *testing.T) {
+	r, c, labels, sp := persistentFixture()
+	labels[owned.LabelPublic] = "false"
+	labels[owned.LabelCatalogKind] = "sample"
+	labels[owned.LabelCatalogResource] = "app"
+	labels[owned.LabelCatalogComponent] = "index"
+	labels[owned.LabelHealthPort] = "7001"
+	sp.Name, sp.Image = "index", "registry.example/sample-index@sha256:fixture"
+	sp.Ports = []cpprovider.PortSpec{{Container: 7000, Protocol: "tcp"}, {Container: 7001, Protocol: "tcp"}}
+	applied := func() *corev1.Probe {
+		t.Helper()
+		iid := id.New(id.PrefixInstance)
+		if _, err := r.Apply(t.Context(), iid, sp, labels); err != nil {
+			t.Fatal(err)
+		}
+		set, err := c.Kube.AppsV1().StatefulSets("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if set.Spec.PersistentVolumeClaimRetentionPolicy == nil || set.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted != "Retain" || len(set.Spec.Template.Spec.Volumes) != 1 {
+			t.Fatalf("component storage is not retained: %+v", set.Spec)
+		}
+		claim := set.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim
+		if claim == nil {
+			t.Fatalf("component volume is not a claim: %+v", set.Spec.Template.Spec.Volumes)
+		}
+		if _, err = c.Kube.CoreV1().PersistentVolumeClaims("selected").Get(t.Context(), claim.ClaimName, metav1.GetOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return set.Spec.Template.Spec.Containers[0].ReadinessProbe
+	}
+
+	probe := applied()
+	if probe == nil || probe.Exec != nil || probe.HTTPGet != nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntValue() != 7001 {
+		t.Fatalf("component readiness is not TCP on its health port: %+v", probe)
+	}
+	labels[owned.LabelHealth] = "/healthz"
+	probe = applied()
+	if probe == nil || probe.Exec != nil || probe.TCPSocket != nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/healthz" || probe.HTTPGet.Port.IntValue() != 7001 {
+		t.Fatalf("component readiness is not HTTP on its health port: %+v", probe)
+	}
+}

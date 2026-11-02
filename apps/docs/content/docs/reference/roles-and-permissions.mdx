@@ -1,0 +1,82 @@
+---
+title: Roles and permissions
+description: What each organization role can do, permission by permission, and how API keys and the Warden check fit in.
+---
+
+Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`. A fifth role belongs to [Loomplane automation](#loomplane-automation), never to a person.
+
+## The roles
+
+| Role | Description |
+|---|---|
+| Viewer | Reads everything, changes nothing. Can't see secret values |
+| Developer | Creates projects and environments, analyzes, edits manifests and variables, and requests deployments |
+| Admin | Approves deployments, manages members, cloud accounts and secrets |
+| Owner | Everything, including the organization itself |
+
+Your authsome organization role maps to one of these: `owner` to Owner, `admin` to Admin, `member` to Developer, and anything else to Viewer, so an unexpected role never grants more than reading.
+
+## Permission matrix
+
+An X means the role holds it.
+
+| Permission | Viewer | Developer | Admin | Owner |
+|---|---|---|---|---|
+| `project:read`, `environment:read`, `deployment:read`, `infrastructure:read`, `cloud_account:read`, `member:read`, `variable:read` | X | X | X | X |
+| `destination:read`, `network:read`, `service_backup:read` | X | X | X | X |
+| `ai:read` | X | X | X | X |
+| `project:create`, `project:update` | | X | X | X |
+| `environment:manage` | | X | X | X |
+| `deployment:create` (request a plan) | | X | X | X |
+| `analysis:run` | | X | X | X |
+| `variable:manage` (project and service variables) | | X | X | X |
+| `access_grant:propose` | | X | X | X |
+| `ai:edit`, `ai:tool_secret`, `ai:publish_nonproduction` | | X | X | X |
+| `deployment:approve` | | | X | X |
+| `project:delete` | | | X | X |
+| `infrastructure:modify` | | | X | X |
+| `organization_cloud:manage` | | | X | X |
+| `cloud_account:manage` | | | X | X |
+| `secret:manage` | | | X | X |
+| `member:manage` | | | X | X |
+| `repository:connect` (GitHub installations) | | | X | X |
+| `organization_variable:manage` | | | X | X |
+| `service_backup:manage`, `service_restore:manage` | | | X | X |
+| `ai:manage` | | | X | X |
+| `destination:manage`, `network:manage`, `service_export:manage`, `access_grant:approve`, `access_grant:revoke`, `federation_trust:manage` | | | X | X |
+| `organization:administer` | | | | X |
+| `service_backup:retire` | | | | X |
+
+The `destination`, `network`, `service_export`, `access_grant` and `federation_trust` permissions belong to federation, which isn't ready for production.
+
+The `ai` permissions belong to the [AI section](/docs/ai). Today `ai:read` lets you see its pages and the models deployed in your projects, `ai:edit` lets you deploy and change models outside production, and `ai:manage` does that in production and sets the workspace's Hugging Face token. `ai:tool_secret` and `ai:publish_nonproduction` are held already and guard nothing yet.
+
+A secret variable's value isn't readable by anyone, whatever their role.
+
+## API keys
+
+A key acts as the member who made it, with their role, in their organization, and never more. A read-only key fails every permission that isn't a read. Keys can't manage keys. When a member leaves or loses a role, their keys lose the same rights on the next request.
+
+Every key expires: 90 days by default, at most 366. Keysmith stores a hash, and the key shows once. `GET /api/v1/session` (or `loomctl whoami`) shows which permissions your key has.
+
+## Loomplane automation
+
+Every organization also has one identity that isn't a person: Loomplane automation. It's reserved for automatic rollback, which rolls back a release whose watch or canary failed, and it will do nothing else. It acts only when a [post-deploy watch](/docs/concepts/promotion-and-rollback#automatic-rollback) breaches, and you'll find each time in your audit log. It's there whether or not you turn the AI agent on, because automatic rollback doesn't use AI.
+
+You'll see it as "Loomplane automation" in the dashboard and the audit log, and `pkg/client` names it the same way with `client.ActorName`. Its ID is `loomplane:` followed by your organization's ID, which is what a rollback it makes shows as `created_by` and `decided_by`. Its audit events carry `actor: system` and `actor_name: Loomplane automation`, so you can filter for them.
+
+It holds one Warden role, `loomplane-automation`, as a service account. Loomplane writes that role into each organization the first time it checks anything there after starting, and resets it to the list below each time, so if someone widens it by hand it goes back at the next start. It holds:
+
+| Permission | Why |
+|---|---|
+| `project:read`, `environment:read`, `deployment:read`, `infrastructure:read` | To read the release it will roll back |
+| `deployment:create`, `deployment:approve` | To plan the rollback and approve it |
+| `infrastructure:modify` | To deploy the rollback and restore its routes |
+
+Warden isn't the only limit. The code refuses it everywhere a person works: it can't create, approve or reject a plan through the API, change a Cloud placement, choose a connection or draft a manifest. Automatic rollback and the deployment of a rollback it approved are the only things that act as it. To stop it rolling back an environment, turn that environment's watch off in the manifest; taking its Warden role away doesn't last past the next start. It can never retire a backup, and no session or API key can sign in as it. It isn't a member, so it doesn't appear among your members and you can't give its role to anyone.
+
+## Where this is enforced
+
+The dashboard hides what your role can't do, but the API checks regardless. Another organization's projects, plans, deployments, connections, variables and keys aren't found, which is the same answer as something that doesn't exist. A request's organization comes from the session or key, and the `X-Loomplane-Org` header the dashboard sends only helps a stale tab find out (it gets a 409), since it never selects an organization.
+
+[Organizations and roles](/docs/concepts/organizations-and-roles) covers the people side, and [the security model](/docs/operations/security-model) covers the rest.

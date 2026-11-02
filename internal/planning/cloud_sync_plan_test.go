@@ -2,6 +2,7 @@ package planning
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -137,5 +138,25 @@ func TestAppliedCloudRegionMatchesNextOrdinaryPlan(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A cloud sync onto a direct target records the Cloud server its
+// connection runs, and warns as an ordinary plan does when the connection
+// runs more than one.
+func TestAppliedCloudPlanRecordsTheCloudServer(t *testing.T) {
+	registry := providers.Registry()
+	b := appliedTestBinding(t, "web", "commit")
+	option := ConnectionOption{ID: "old", Cloud: "vercel", Ready: true, Account: "old", Details: map[string]string{"team_id": "old"}}
+	option.Servers = []CloudServer{{ID: "server_1", CloudID: "cloud"}}
+	result := AppliedCloudPlan([]*Binding{b}, appliedAssignment("old"), "target", []ConnectionOption{option}, registry)
+	if a := result.Actions[0]; !result.Executable || a.Service.CloudPlacement.ServerID != "server_1" || hasCode(result.Warnings, "cloud-server-ambiguous") {
+		t.Fatalf("one server: %+v %+v", a.Service.CloudPlacement, result.Warnings)
+	}
+	option.Servers = append(option.Servers, CloudServer{ID: "server_2", CloudID: "cloud"})
+	result = AppliedCloudPlan([]*Binding{b}, appliedAssignment("old"), "target", []ConnectionOption{option}, registry)
+	w := findCode(result.Warnings, "cloud-server-ambiguous")
+	if a := result.Actions[0]; a.Service.CloudPlacement.ServerID != "" || w == nil || w.Name != "web" || w.Path != "services.web" || !strings.Contains(w.Message, "target frontend") {
+		t.Fatalf("two servers: %+v %+v", a.Service.CloudPlacement, result.Warnings)
 	}
 }

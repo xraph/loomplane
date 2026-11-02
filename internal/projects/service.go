@@ -294,8 +294,8 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	now := s.now().UTC()
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
-		Icon: icon, Color: color,
-		Repositories: []string{}, Status: StatusInitializing, CreatedBy: p.UserID,
+		Icon: icon, Color: color, DeploymentMode: "application",
+		Repositories: []string{}, Exclusions: []Exclusion{}, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil
 }

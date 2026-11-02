@@ -1,0 +1,36 @@
+gateway:
+  listen: 0.0.0.0:8080
+admin:
+  listen: 0.0.0.0:9090
+  require_auth: true
+farp:
+  enabled: true
+  registration_token: ${OCTOPUS_FARP_TOKEN}
+  gateway:
+    hostnames:
+      - api.acme.dev
+upstreams:
+  - name: lp-auth-9000
+    lb_policy: round_robin
+    instances:
+      - id: lp-auth-0
+        host: lp-inst-01h455vb4pex5vsknk084sn02q
+        port: 9000
+        weight: 1
+routes:
+  - id: lp-octoroute_a
+    hosts:
+      - api.acme.dev
+    path: /auth/*
+    methods: []
+    upstream: lp-auth-9000
+    strip_prefix: /auth
+    priority: 0
+  - id: lp-octoroute_a-base
+    hosts:
+      - api.acme.dev
+    path: /auth
+    methods: []
+    upstream: lp-auth-9000
+    strip_prefix: /auth
+    priority: 0

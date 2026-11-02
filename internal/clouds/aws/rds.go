@@ -64,6 +64,7 @@ type DBInstanceSpec struct {
 
 // DBInstance is an RDS instance as it is.
 type DBInstance struct {
+	Recovery      *DBRecoverySettings
 	Tags          map[string]string
 	ID            string
 	ResourceID    string
@@ -82,7 +83,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 		return nil, err
 	}
 	if len(out.DBInstances) == 0 {
-		return nil, fmt.Errorf("db instance %s: %w", id, errNotFound)
+		return nil, fmt.Errorf("db instance %s: %w", id, ErrNotFound)
 	}
 	if len(out.DBInstances) != 1 || sdk.ToString(out.DBInstances[0].DBInstanceIdentifier) != id {
 		return nil, errors.New("RDS returned a different database identity")
@@ -92,6 +93,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 
 func readDBInstance(in rdstypes.DBInstance) *DBInstance {
 	db := &DBInstance{ID: sdk.ToString(in.DBInstanceIdentifier), ResourceID: sdk.ToString(in.DbiResourceId), Engine: sdk.ToString(in.Engine), EngineVersion: sdk.ToString(in.EngineVersion), Status: sdk.ToString(in.DBInstanceStatus), Tags: map[string]string{}}
+	db.Recovery = readDBRecoverySettings(in)
 	for _, tag := range in.TagList {
 		db.Tags[sdk.ToString(tag.Key)] = sdk.ToString(tag.Value)
 	}
@@ -201,17 +203,20 @@ func (s *Session) EnsureDBInstance(ctx context.Context, spec DBInstanceSpec, tra
 
 // DBSnapshot is native recovery metadata. It is separate from Trove backup files.
 type DBSnapshot struct {
-	ID            string    `json:"id"`
-	ARN           string    `json:"arn"`
-	InstanceID    string    `json:"instance_id"`
-	ResourceID    string    `json:"resource_id"`
-	Status        string    `json:"status"`
-	Type          string    `json:"type"`
-	Engine        string    `json:"engine,omitempty"`
-	EngineVersion string    `json:"engine_version,omitempty"`
-	Encrypted     bool      `json:"encrypted"`
-	KMSKey        string    `json:"kms_key,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	StorageGB       int32     `json:"storage_gb,omitempty"`
+	MasterUser      string    `json:"master_user,omitempty"`
+	ID              string    `json:"id"`
+	ARN             string    `json:"arn"`
+	InstanceID      string    `json:"instance_id"`
+	ResourceID      string    `json:"resource_id"`
+	Status          string    `json:"status"`
+	Type            string    `json:"type"`
+	Engine          string    `json:"engine,omitempty"`
+	EngineVersion   string    `json:"engine_version,omitempty"`
+	Encrypted       bool      `json:"encrypted"`
+	EncryptionKnown bool      `json:"-"`
+	KMSKey          string    `json:"kms_key,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // FinalDBSnapshotID remains stable across retries and changes with incarnation.
@@ -227,7 +232,7 @@ func (s *Session) GetDBSnapshot(ctx context.Context, id string) (*DBSnapshot, er
 		return nil, err
 	}
 	if len(out.DBSnapshots) == 0 {
-		return nil, errNotFound
+		return nil, ErrNotFound
 	}
 	if len(out.DBSnapshots) != 1 || sdk.ToString(out.DBSnapshots[0].DBSnapshotIdentifier) != id {
 		return nil, errors.New("RDS returned a different snapshot identity")

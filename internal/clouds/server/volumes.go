@@ -74,7 +74,10 @@ func ensureVolumes(ctx context.Context, c *Client, iid id.ID, volumes []cpprovid
 			}
 		}
 		m := volumeMount{Type: "volume", Source: name, Target: v.MountPath}
-		m.VolumeOptions.NoCopy = true
+		// Non-root catalog images need the image directory's ownership on a
+		// fresh volume. Docker populates only empty volumes; retained data
+		// stays in place on later releases.
+		m.VolumeOptions.NoCopy = labels[owned.LabelFSGroup] == "" || labels[owned.LabelFSGroup] == "0"
 		mounts = append(mounts, m)
 	}
 	return mounts, nil

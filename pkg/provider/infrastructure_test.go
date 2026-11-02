@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -48,6 +49,35 @@ func TestDNSValidation(t *testing.T) {
 	for _, kind := range []string{"NS", "MX", "SOA", "SRV"} {
 		if ValidateDNSRecord(DNSRecord{Name: "api", Type: kind, Value: "value", TTL: 60}) == nil {
 			t.Errorf("unsupported record %s accepted", kind)
+		}
+	}
+}
+
+// An apex takes several addresses. Records the caller already wrote on the
+// name don't stop the next one while they match.
+func TestPlanDNSUpsertAllowsMatchingSiblings(t *testing.T) {
+	zone := DNSZone{ID: "zone", Name: "example.com"}
+	first := DNSRecord{ID: "r1", ZoneID: "zone", Name: "", Type: "A", Value: "192.0.2.1", TTL: 60, Owner: "loomplane:route:r"}
+	next := DNSRecord{ZoneID: "zone", Name: "", Type: "A", Value: "192.0.2.2", TTL: 60, Owner: "loomplane:route:r:1"}
+	for _, ownerComments := range []bool{true, false} {
+		want := next
+		if !ownerComments {
+			want.Owner = ""
+		}
+		existing := first
+		if !ownerComments {
+			existing.Owner = ""
+		}
+		if _, _, err := PlanDNSUpsert(DNSUpsertRequest{Zone: zone, Record: want}, []DNSRecord{existing}, ownerComments); !errors.Is(err, ErrInfrastructureDrift) {
+			t.Fatalf("owner comments %t: a record nobody claims: %v", ownerComments, err)
+		}
+		if _, done, err := PlanDNSUpsert(DNSUpsertRequest{Zone: zone, Record: want, Siblings: []DNSRecord{existing}}, []DNSRecord{existing}, ownerComments); err != nil || done {
+			t.Fatalf("owner comments %t: a sibling: %v %t", ownerComments, err, done)
+		}
+		changed := existing
+		changed.Value = "198.51.100.9"
+		if _, _, err := PlanDNSUpsert(DNSUpsertRequest{Zone: zone, Record: want, Siblings: []DNSRecord{existing}}, []DNSRecord{changed}, ownerComments); !errors.Is(err, ErrInfrastructureDrift) {
+			t.Fatalf("owner comments %t: a sibling that changed: %v", ownerComments, err)
 		}
 	}
 }

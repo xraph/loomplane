@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/xraph/chronicle"
+	cpapp "github.com/xraph/ctrlplane/app"
+	cpext "github.com/xraph/ctrlplane/extension"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -18,9 +20,12 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/access"
+	kube "github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/deployments"
 	domain "github.com/xraph/loomplane/internal/federation"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/runtimeapi"
@@ -34,19 +39,20 @@ const Name = "loomplane-federation"
 // Extension provides destination management and an explicitly configured agent listener.
 type Extension struct {
 	*forge.BaseExtension
-	cfg     config.Config
-	runtime *runtimeapi.Runtime
-	cleanup *workloadidentity.CleanupRuntime
+	cfg       config.Config
+	ctrlplane func() *cpapp.CtrlPlane
+	runtime   *runtimeapi.Runtime
+	cleanup   *workloadidentity.CleanupRuntime
 }
 
 // New constructs the extension with explicit, default-off management settings.
-func New(cfg config.Config) *Extension {
-	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Federation destinations"), cfg: cfg}
+func New(cfg config.Config, ctrlplane func() *cpapp.CtrlPlane) *Extension {
+	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Federation destinations"), cfg: cfg, ctrlplane: ctrlplane}
 }
 
 // Dependencies puts authentication before destination management.
 func (e *Extension) Dependencies() []string {
-	return []string{identity.Name, realtimeext.Name, connectionsext.Name}
+	return []string{identity.Name, realtimeext.Name, connectionsext.Name, cpext.ExtensionName}
 }
 
 // Register provides the scoped service over the shared database and audit trail.
@@ -79,7 +85,11 @@ func (e *Extension) Register(app forge.App) error {
 		return fmt.Errorf("provide federation access service: %w", err)
 	}
 	if e.cfg.Federation.Identity.Enabled {
-		e.cleanup, err = workloadidentity.NewCleanupRuntime(e.cfg.Federation.Identity, workloadidentity.CleanupStores{workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), workloadidentity.NewWorkloadStore(pg, e.cfg.Federation.Identity.TrustDomain)}, func(result workloadidentity.CleanupResult, sweepErr error) {
+		if e.ctrlplane == nil || e.ctrlplane() == nil {
+			return errors.New("federation application issuance requires ctrlplane")
+		}
+		journal := workloadidentity.NewWorkloadStore(pg, e.cfg.Federation.Identity.TrustDomain)
+		e.cleanup, err = workloadidentity.NewCleanupRuntime(e.cfg.Federation.Identity, workloadidentity.CleanupStores{workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), journal}, func(result workloadidentity.CleanupResult, sweepErr error) {
 			if sweepErr != nil && !errors.Is(sweepErr, context.Canceled) {
 				e.Logger().Warn("federation identity cleanup incomplete", forge.F("org_id", e.cfg.Federation.Identity.OrganizationID), forge.F("attempted", result.Attempted), forge.F("deleted", result.Deleted), forge.F("failed", result.Failed), forge.F("error", sweepErr.Error()))
 			}
@@ -93,6 +103,10 @@ func (e *Extension) Register(app forge.App) error {
 		}
 		installations := domain.NewInstallationService(svc, domain.NewPgStore(pg), domain.VerifyKubernetesInstallation(credentials, e.cleanup, e.cfg.Federation.Identity.TrustDomain, e.cfg.Federation.Identity.OrganizationID))
 		if provideErr := forge.ProvideValue(c, installations); provideErr != nil {
+			return provideErr
+		}
+		sources := deployments.ApplicationSources{Bindings: planning.NewPgStore(pg), Instances: e.ctrlplane().Instances, Controllers: kube.NewControllerStore(pg), Installations: domain.NewPgStore(pg), Credentials: credentials, Nodes: e.cleanup, TrustDomain: e.cfg.Federation.Identity.TrustDomain, OrganizationID: e.cfg.Federation.Identity.OrganizationID}
+		if provideErr := forge.ProvideValue(c, domain.NewApplicationService(svc, journal, sources.Resolve, e.cleanup)); provideErr != nil {
 			return provideErr
 		}
 		enrollment := domain.NewEnrollmentService(svc, workloadidentity.NewEnrollmentStore(pg, e.cfg.Federation.Identity.TrustDomain), installations.Resolve, e.cleanup)

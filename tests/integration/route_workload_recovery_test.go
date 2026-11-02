@@ -106,6 +106,7 @@ func TestRouteWorkloadDirectPreflightAllowsReplan(t *testing.T) {
 func TestRouteWorkloadEffectBoundaryFencesSettlement(t *testing.T) {
 	f, _ := routeAttemptFixture(t)
 	ctx := t.Context()
+	approvedWorkloadPlan(t, f, "plan")
 	in := cloudinfra.WorkloadAttempt{Org: "org", Project: "proj", Environment: "env", Service: "web", Plan: "plan", Deployment: "deployment"}
 	first, err := f.store.BeginWorkloadAttempt(ctx, in, nil, false)
 	if err != nil {
@@ -169,6 +170,7 @@ func TestRouteWorkloadTTLUpdateRevisesAcceptedAuthority(t *testing.T) {
 	if _, err = svc.UpdateRouteTTL(ctx, p, "proj", before.ID, in); err == nil {
 		t.Fatal("stale revision changed TTL")
 	}
+	approvedWorkloadPlan(t, f, "new")
 	attempt := cloudinfra.WorkloadAttempt{Org: "org", Project: "proj", Environment: "env", Service: "web", Plan: "new", Deployment: "new"}
 	if _, err = f.store.BeginWorkloadAttempt(ctx, attempt, []cloudinfra.Route{*before}, false); err == nil {
 		t.Fatal("old reviewed snapshot survived TTL update")

@@ -21,9 +21,13 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
+	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativerabbit "github.com/xraph/loomplane/internal/clouds/rabbitmq"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var ErrOwned = errors.New("the matching Docker resource is not owned by this service")
@@ -32,11 +36,20 @@ var ErrMissing = errors.New("the Docker resource is absent")
 type Session func(context.Context, map[string]string) (*Client, error)
 
 type Runtime struct {
-	Session Session
-	Values  owned.Values
-	Ports   owned.PortReservations
-	Probe   func(context.Context, *Client, int, string) error
-	Wait    time.Duration
+	Session   Session
+	Values    owned.Values
+	Ports     owned.PortReservations
+	Probe     func(context.Context, *Client, int, string) error
+	ProbeRESP func(context.Context, *Client, int) error
+	Wait      time.Duration
+	// Now is the clock readiness waits are measured with; nil is time.Now.
+	Now func() time.Time
+	// GPUReader reads the server's GPUs for device assignment; nil is
+	// (*Client).GPUs.
+	GPUReader func(context.Context, *Client) (provider.GPUInventory, error)
+	// GPULocks keeps two GPU applies on one daemon from both reading a
+	// device as free. Nil serializes them within this process only.
+	GPULocks GPULocks
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -61,6 +74,7 @@ type containerInfo struct {
 	Mounts []struct{ Type, Name, Destination string }
 	Config struct {
 		Labels map[string]string
+		Env    []string
 		Image  string
 	}
 	State struct {
@@ -70,7 +84,8 @@ type containerInfo struct {
 		Error    string
 	}
 	NetworkSettings struct {
-		Ports map[string][]struct{ HostIP, HostPort string }
+		Ports    map[string][]struct{ HostIP, HostPort string }
+		Networks map[string]struct{ IPAddress, NetworkID string }
 	}
 }
 
@@ -162,6 +177,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if previous != nil && stopped != nil {
 		return nil, errors.New("multiple previous server containers need reconciliation")
 	}
+	own := map[string]bool{}
+	for _, existing := range []*containerInfo{old, previous, stopped} {
+		if existing != nil {
+			own[existing.ID] = true
+		}
+	}
 	for _, existing := range []*containerInfo{old, previous, stopped} {
 		if existing != nil {
 			if checkErr := checkVolumeLayout(existing, iid, spec.Volumes); checkErr != nil {
@@ -196,7 +217,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, checkErr
 		}
 		if previousRunning {
-			if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(previous.ID)+"/start", nil, nil); checkErr != nil {
+			if checkErr := dockerSetRunning(ctx, c, previous.ID, true); checkErr != nil {
 				return nil, checkErr
 			}
 		}
@@ -248,7 +269,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 				return
 			}
 			if wasRunning {
-				err = errors.Join(err, dockerJSON(cleanup, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/start", nil, nil))
+				err = errors.Join(err, dockerSetRunning(cleanup, c, old.ID, true))
 			}
 		}
 		if reserved && cleaned && (old == nil || old.Config.Labels[owned.LabelHostPort] != strconv.Itoa(reservation.Port)) {
@@ -270,7 +291,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server", Namespace: ""}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -290,7 +311,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine} {
+	// The declared readiness stays on the container, as it does on a
+	// Kubernetes workload's readiness probe.
+	for _, key := range []string{enginebackup.LabelEngine, enginebackup.LabelRevision, enginebackup.LabelSource, owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -311,7 +334,18 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
 		}
 	}
-	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Init": true, "Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
+	hostConfig := map[string]any{"Init": true, "Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}
+	if raw := labels[owned.LabelShmMB]; raw != "" {
+		shm, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || shm < 1 {
+			return nil, errors.New("invalid server shared memory size")
+		}
+		hostConfig["ShmSize"] = int64(shm) << 20
+	}
+	if _, timeoutErr := owned.StartTimeout(labels); timeoutErr != nil {
+		return nil, errors.New("invalid server start timeout")
+	}
+	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": hostConfig, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
 		body["Entrypoint"] = spec.Command
 	}
@@ -328,8 +362,33 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			}
 			return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: old.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
 		}
+	}
+	// Devices are assigned before the old container stops, so a refusal
+	// leaves it running. Its own devices count as free: it stops before
+	// the new one starts. Two applies can't both read a device as free:
+	// each holds the daemon's GPU lock from listing its containers until
+	// the new container, labelled with its devices, exists. Direct and
+	// pooled applies take the same lock. Nothing between the two touches
+	// the database, so the lock never waits behind the organization lock
+	// or a connection row.
+	unlockGPUs := func() {}
+	if raw := labels[owned.LabelGPU]; raw != "" {
+		unlock, lockErr := r.lockGPUs(ctx, c)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer unlock()
+		unlockGPUs = unlock
+		devices, gpuErr := r.gpuDevices(ctx, c, raw, own, old)
+		if gpuErr != nil {
+			return nil, gpuErr
+		}
+		hostConfig["DeviceRequests"] = []map[string]any{{"Driver": "nvidia", "DeviceIDs": devices, "Capabilities": [][]string{{"gpu"}}}}
+		containerLabels[LabelGPUDevices] = strings.Join(devices, ",")
+	}
+	if old != nil {
 		changed = true
-		if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/stop?t=10", nil, nil); checkErr != nil {
+		if checkErr := dockerSetRunning(ctx, c, old.ID, false); checkErr != nil {
 			return nil, checkErr
 		}
 		if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(old.ID)+"/rename?name="+backup, nil, nil); checkErr != nil {
@@ -343,7 +402,13 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, body, &result); checkErr != nil {
 		return nil, checkErr
 	}
-	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(result.ID)+"/start", nil, nil); checkErr != nil {
+	// The created container carries its device label, so the next apply's
+	// listing sees those devices as held.
+	unlockGPUs()
+	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
+		return nil, checkErr
+	}
+	if checkErr := dockerSetRunning(ctx, c, result.ID, true); checkErr != nil {
 		return nil, checkErr
 	}
 	if checkErr := r.wait(ctx, c, name, iid, labels); checkErr != nil {
@@ -375,6 +440,15 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 			value = labelPort(labels[owned.LabelHostPort])
 		}
 		protocol := "http"
+		if labels[nativerabbit.LabelEngine] != "" {
+			protocol = "amqp"
+		}
+		if labels[nativenats.LabelEngine] != "" {
+			protocol = "nats"
+		}
+		if labels[owned.LabelHealthProtocol] == "memcached" && port.Container == labelPort(labels[owned.LabelHealthPort]) {
+			protocol = "memcached"
+		}
 		if labels[LabelDatabase] != "" {
 			protocol = "postgresql"
 		}
@@ -389,45 +463,57 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 	return out
 }
 
+// wait waits for a container to pass its readiness check, for as long as
+// its LabelStartTimeout says, else Wait, else three minutes.
 func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, labels map[string]string) error {
-	wait := r.Wait
+	wait, err := owned.StartTimeout(labels)
+	if err != nil {
+		return err
+	}
+	if wait == 0 {
+		wait = r.Wait
+	}
 	if wait <= 0 {
 		wait = 3 * time.Minute
 	}
-	deadline := time.Now().Add(wait)
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	deadline := now().Add(wait)
 	for {
 		info, err := r.inspect(ctx, c, name, iid, labels)
 		if err != nil {
 			return err
 		}
 		if info.State.Running {
-			if isDatabase(labels) {
+			switch {
+			case labels[owned.LabelHealthChecker] != "":
+				if probeErr := catalogReady(ctx, c, name, labels); probeErr == nil {
+					return nil
+				}
+			case isDatabase(labels):
 				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
-			} else if labels[owned.LabelHealth] == "" {
+			case !probed(labels):
 				return nil
 			}
-			if !isDatabase(labels) {
-				probe := r.Probe
-				if probe == nil {
-					probe = probeServer
+			if !isDatabase(labels) && labels[owned.LabelHealthChecker] == "" {
+				probe, probeErr := r.healthProbe(labels)
+				if probeErr != nil {
+					return probeErr
 				}
-				for _, ports := range info.NetworkSettings.Ports {
-					for _, port := range ports {
-						value, parseErr := strconv.Atoi(port.HostPort)
-						if parseErr == nil && value > 0 {
-							if err = probe(ctx, c, value, labels[owned.LabelHealth]); err == nil {
-								return nil
-							}
-						}
+				for _, value := range healthPorts(info, labels) {
+					if err = probe(ctx, c, value); err == nil {
+						return nil
 					}
 				}
 			}
 		} else if info.State.Status == "exited" || info.State.Status == "dead" {
 			return fmt.Errorf("the server container exited before readiness with code %d", info.State.ExitCode)
 		}
-		if time.Now().After(deadline) {
+		if now().After(deadline) {
 			return errors.New("the server container did not pass its readiness check")
 		}
 		select {
@@ -436,6 +522,24 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// healthPorts are the host ports a readiness probe may answer on: the one
+// published for LabelHealthPort when the container declares it, otherwise
+// every published port.
+func healthPorts(info *containerInfo, labels map[string]string) []int {
+	var out []int
+	for key, ports := range info.NetworkSettings.Ports {
+		if declared := labels[owned.LabelHealthPort]; declared != "" && key != declared+"/tcp" {
+			continue
+		}
+		for _, port := range ports {
+			if value, err := strconv.Atoi(port.HostPort); err == nil && value > 0 {
+				out = append(out, value)
+			}
+		}
+	}
+	return out
 }
 
 func probeServer(ctx context.Context, c *Client, port int, path string) error {
@@ -530,18 +634,17 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 				state = cpprovider.StateStarting
 			}
 		}
-		if labels[owned.LabelHealth] != "" {
-			ready = false
-			probe := r.Probe
-			if probe == nil {
-				probe = probeServer
+		if labels[owned.LabelHealthChecker] != "" {
+			ready = catalogReady(ctx, c, ContainerName(iid), labels) == nil
+			if !ready {
+				state = cpprovider.StateStarting
 			}
-			for _, ports := range info.NetworkSettings.Ports {
-				for _, port := range ports {
-					value, parseErr := strconv.Atoi(port.HostPort)
-					if parseErr == nil && value > 0 && probe(ctx, c, value, labels[owned.LabelHealth]) == nil {
-						ready = true
-					}
+		} else if probed(labels) {
+			ready = false
+			probe, probeErr := r.healthProbe(labels)
+			for _, value := range healthPorts(info, labels) {
+				if probeErr == nil && probe(ctx, c, value) == nil {
+					ready = true
 				}
 			}
 			if !ready {
@@ -603,11 +706,24 @@ func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]s
 	if err != nil {
 		return err
 	}
+	return dockerSetRunning(ctx, c, info.ID, running)
+}
+
+func dockerSetRunning(ctx context.Context, c *Client, container string, running bool) error {
 	action := "stop?t=10"
 	if running {
 		action = "start"
 	}
-	return dockerJSON(ctx, c, http.MethodPost, "/containers/"+url.PathEscape(info.ID)+"/"+action, nil, nil)
+	res, err := c.Request(ctx, http.MethodPost, "/containers/"+url.PathEscape(container)+"/"+action, nil)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode == http.StatusNotModified {
+		// Docker returns 304 when the container already has the requested state.
+		defer res.Body.Close()
+		return nil
+	}
+	return dockerResult(res, nil)
 }
 func (*Runtime) Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error {
 	return ctrlplane.ErrProviderUnavail
@@ -626,6 +742,11 @@ func dockerJSON(ctx context.Context, c *Client, method, path string, body, out a
 	if err != nil {
 		return err
 	}
+	return dockerResult(res, out)
+}
+
+// dockerResult reads a Docker response into out, or the error it reports.
+func dockerResult(res *http.Response, out any) error {
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
 		return ErrMissing

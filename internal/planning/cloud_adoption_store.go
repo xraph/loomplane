@@ -3,8 +3,16 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
 // CloudAdoptionStore updates only placement metadata if the serving row has not
@@ -18,13 +26,51 @@ type CloudAdoptionStore interface {
 func (s *PgStore) AdoptCloudPlacement(ctx context.Context, expected *Binding, placement *CloudPlacement, at time.Time) (bool, error) {
 	id := syncMutation(ctx)
 	if id == "" {
-		return adoptCloudPlacement(ctx, s.db, expected, placement, at)
+		if placement == nil || placement.LocationReview == nil {
+			return adoptCloudPlacement(ctx, s.db, expected, placement, at)
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return false, err
+		}
+		defer rollbackLocationAdoption(tx)
+		if lockErr := cloudprofiles.LockOrganization(ctx, tx, expected.OrgID); lockErr != nil {
+			return false, lockErr
+		}
+		if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, expected.OrgID, expected.ProjectID, placement.LocationReview, at); checkErr != nil {
+			return false, checkErr
+		}
+		changed, err := adoptCloudPlacement(ctx, tx, expected, placement, at)
+		if err != nil || !changed {
+			return changed, err
+		}
+		return changed, tx.Commit()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, expected.OrgID); checkErr != nil {
+		return false, checkErr
+	}
+	if checkErr := cloudinfra.LockRouteWorkload(ctx, tx, expected.OrgID, expected.EnvironmentID, expected.Name); checkErr != nil {
+		return false, checkErr
+	}
+	var original string
+	if checkErr := tx.QueryRow(ctx, `SELECT loomplane_unstarted_compensation_origin($1,$2,$3,$4)`, expected.OrgID, id, expected.EnvironmentID, expected.Name).Scan(&original); checkErr != nil {
+		return false, checkErr
+	}
+	if original != "" {
+		var safe bool
+		if checkErr := tx.QueryRow(ctx, `SELECT loomplane_unstarted_cloud_compensation($1,$2,$3,$4)`, expected.OrgID, original, expected.EnvironmentID, expected.Name).Scan(&safe); checkErr != nil {
+			return false, checkErr
+		}
+		if !safe {
+			return false, fmt.Errorf("legacy compensation has an unresolved original attempt")
+		}
+	}
 	ok, err := adoptCloudPlacement(ctx, tx, expected, placement, at)
 	if err != nil || !ok {
 		return ok, err
@@ -55,4 +101,10 @@ func adoptCloudPlacement(ctx context.Context, db bindingExecutor, expected *Bind
 		return false, fmt.Errorf("count adopted Cloud placement: %w", err)
 	}
 	return n == 1, nil
+}
+
+func rollbackLocationAdoption(tx driver.Tx) {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.Error("rollback location adoption", "error", err)
+	}
 }

@@ -58,8 +58,15 @@ docs/plan.md
 docs/one-click-services-plan.md
 docs/catalog-recovery-verification.md
 
+# The push gateway's secrets never enter git
+deployments/push-gateway/secrets/
+deployments/production/secrets/
+
 # GoReleaser output
 /dist/
+
+# Python bytecode from the acceptance scripts
+__pycache__/
 
 # Neon driver capture: npm install output
 internal/dbgateway/plane/testdata/neon/node_modules/

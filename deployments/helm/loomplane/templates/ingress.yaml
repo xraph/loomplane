@@ -1,0 +1,43 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := .Values.ingress.host | default (include "loomplane.publicHost" .) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "loomplane.fullname" . }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- if .Values.ingress.blockInternalPaths }}
+          {{- range list "/_/health" "/_/metrics" "/debug" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "loomplane.fullname" $ }}-blocked
+                port:
+                  name: http
+          {{- end }}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "loomplane.fullname" . }}
+                port:
+                  name: http
+{{- end }}

@@ -4,3 +4,7 @@
 database:
   # Matches deployments/docker-compose/docker-compose.yml.
   url: postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable
+
+identity:
+  # Contributors sign up freely, so the waitlist stays off.
+  waitlist: false

@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -26,9 +29,18 @@ func (domainAuth) Require(_ context.Context, p security.Principal, _ security.Pe
 	return security.ErrForbidden
 }
 
-type domainDNS struct{ proof string }
+// domainDNS answers every TXT lookup with proof. during runs once, inside
+// the next lookup, before it answers.
+type domainDNS struct {
+	proof  string
+	during func()
+}
 
 func (r *domainDNS) LookupTXT(context.Context, string) ([]string, error) {
+	if during := r.during; during != nil {
+		r.during = nil
+		during()
+	}
 	return []string{r.proof}, nil
 }
 func (*domainDNS) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
@@ -44,6 +56,34 @@ func (w *domainWorkflow) StartRoute(context.Context, string, string, int) error 
 }
 
 func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
+	domainsDurableClaims(t, 60, 60)
+}
+
+func TestDomainsCompensationTrustedReceiptDeadline(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		previous, current int
+	}{{"previous-longer", 90000, 60}, {"current-longer", 60, 90000}} {
+		t.Run(tt.name, func(t *testing.T) { domainsDurableClaims(t, tt.previous, tt.current) })
+	}
+}
+
+// domainsRuntime is a Cloud server running proj's web service, and the
+// domains service that routes to it. Zones are each test's to add.
+type domainsRuntime struct {
+	svc      *cloudinfra.Service
+	store    *cloudinfra.PgStore
+	cs       *connections.PgStore
+	sql      *pgx.Conn
+	resolver *domainDNS
+	workflow *domainWorkflow
+	conn     *connections.Connection
+	host     *cloudinfra.Server
+	now      time.Time
+}
+
+func newDomainsRuntime(t *testing.T) *domainsRuntime {
+	t.Helper()
 	clouds, sql, db := cloudSyncDatabase(t)
 	ctx := t.Context()
 	store := cloudinfra.NewPgStore(db)
@@ -58,9 +98,9 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
-		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT NOT NULL DEFAULT 'docker.runtime')`,
 		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
-		`INSERT INTO cp_instances VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('instance','org',NULL,'{"main":"container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
 		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
 		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES('binding','org','proj','env','service','web','server','http','instance','runtime','{"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"},"port":8080}',now(),now())`,
 	} {
@@ -69,18 +109,62 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		}
 	}
 	resolver, workflow := &domainDNS{}, &domainWorkflow{}
-	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow})
+	adapters := cloudinfra.NewAdapters()
+	if err := adapters.RegisterDNS("vercel", &controlDNSAdapter{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow, Adapters: adapters, Connections: &syncAccounts{store: cs}})
+	return &domainsRuntime{svc: svc, store: store, cs: cs, sql: sql, resolver: resolver, workflow: workflow, conn: conn, host: host, now: now}
+}
+
+func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...string) {
+	t.Helper()
+	env := newDomainsRuntime(t)
+	ctx := t.Context()
+	svc, store, cs, sql, resolver, workflow, conn, host, now := env.svc, env.store, env.cs, env.sql, env.resolver, env.workflow, env.conn, env.host, env.now
 	p := security.Principal{OrgID: "org", UserID: "manager"}
-	zone, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "Example.COM.", Mode: "external", ProjectIDs: []string{"proj"}})
+	mode, dnsConnection := "external", ""
+	if len(modes) > 0 {
+		mode, dnsConnection = modes[0], "old"
+	}
+	zone, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "Example.COM.", Mode: mode, ConnectionID: dnsConnection, ProjectIDs: []string{"proj"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if zone.Name != "example.com" || zone.ConnectionID != "" || !zone.VerifiedAt.IsZero() {
+	if zone.Name != "example.com" || zone.ConnectionID != dnsConnection || !zone.VerifiedAt.IsZero() {
 		t.Fatal("unexpected external zone", zone)
 	}
 	input := cloudinfra.RouteInput{ZoneID: zone.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "APP.EXAMPLE.COM.", Port: 8080}
 	if _, err = svc.PreviewRoute(ctx, p, "proj", input); !errors.Is(err, cloudinfra.ErrNotFound) {
 		t.Fatal("unverified control accepted", err)
+	}
+	if mode == "managed" {
+		// A persisted hosting-only timestamp from an old version grants no control.
+		legacy := *zone
+		legacy.VerifiedAt, legacy.ProofName, legacy.ProofValue = now, "", ""
+		if err = store.SaveZone(ctx, &legacy); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+			t.Fatal("legacy hosting verification authorized route")
+		}
+		if _, err = svc.VerifyZone(ctx, p, zone.ID); err == nil {
+			t.Fatal("legacy hosting verification renewed without public proof")
+		}
+		// Every check is saved, so the renewal goes on the zone's new revision.
+		checked, checkErr := store.Zone(ctx, "org", zone.ID)
+		if checkErr != nil || checked.ProofCheckedAt.IsZero() {
+			t.Fatal("failed check not recorded", checked, checkErr)
+		}
+		renewed, renewErr := svc.UpdateZone(ctx, p, zone.ID, cloudinfra.ZoneUpdate{Revision: checked.Revision, ProjectIDs: legacy.ProjectIDs, RenewProof: true})
+		if renewErr != nil || !renewed.VerifiedAt.IsZero() || renewed.ProofName == "" {
+			t.Fatalf("legacy challenge renewal: %+v %v", renewed, renewErr)
+		}
+		zone = renewed
+	}
+	resolver.proof = "foreign-organization-proof"
+	if _, err = svc.VerifyZone(ctx, p, zone.ID); err == nil {
+		t.Fatal("foreign public proof accepted")
 	}
 	resolver.proof = zone.ProofValue
 	if zone, err = svc.VerifyZone(ctx, p, zone.ID); err != nil {
@@ -141,6 +225,18 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	resolver.proof = "changed-proof"
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err == nil {
+		t.Fatal("changed proof accepted")
+	}
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+		t.Fatal("changed proof allowed new preview")
+	}
+	var claims int
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_domain_routes`).Scan(&claims); err != nil || claims != 0 || workflow.routes != 0 {
+		t.Fatalf("unproved ownership reached claims/effects: %d %d %v", claims, workflow.routes, err)
+	}
+	resolver.proof = zone.ProofValue
 	accepted, err := svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review})
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +250,26 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	}
 	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
 		t.Fatal("duplicate global hostname accepted", err)
+	}
+	// A valid route row in a different organization still contends on the
+	// same exact hostname, after unproved previews reserved nothing above.
+	for _, statement := range []string{
+		`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('other-project','other-org','Other','other','ready','manager',now(),now())`,
+		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('other-env','other-org','other-project','production','production',now(),now())`,
+		`INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,revision,created_at,updated_at) VALUES('other-cloud','other-org','other-project','Other',1,now(),now())`,
+		`INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,status,details,created_by,created_at,updated_at) VALUES('other-runtime','other-org','server','Other','ready','{}','manager',now(),now())`,
+		`INSERT INTO loomplane_cloud_servers(id,org_id,cloud_id,connection_id,provider,account_id,ownership,revision,status,body) VALUES('other-host','other-org','other-cloud','other-runtime','server','other-daemon','adopted',1,'ready','{}')`,
+		`INSERT INTO loomplane_dns_zones(id,org_id,name,revision,body) VALUES('other-zone','other-org','example.com',1,'{}')`,
+		`INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body) VALUES('other-route','other-org','other-project','other-env','other-cloud','other-host','other-runtime','other-zone','other.example.com','ready',1,'{}')`,
+	} {
+		if _, fixtureErr := sql.Exec(ctx, statement); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+	}
+	_, claimErr := sql.Exec(ctx, `UPDATE loomplane_domain_routes SET hostname='app.example.com' WHERE id='other-route'`)
+	var constraint *pgconn.PgError
+	if !errors.As(claimErr, &constraint) || constraint.ConstraintName != "loomplane_hostname_claim" {
+		t.Fatalf("cross-organization claim was not fenced: %v", claimErr)
 	}
 	if _, err = store.Zone(ctx, "foreign-org", zone.ID); !errors.Is(err, cloudinfra.ErrNotFound) {
 		t.Fatal("foreign zone disclosed", err)
@@ -240,7 +356,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
-		`INSERT INTO cp_instances VALUES('destination','org',NULL,'{"main":"destination-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('destination','org',NULL,'{"main":"destination-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`,
 		`UPDATE loomplane_bindings SET external_id='destination',connection_id='runtime2',config=jsonb_set(config,'{cloud_placement,server_id}','"host2"') WHERE id='binding'`,
 	} {
 		if _, err = sql.Exec(ctx, statement); err != nil {
@@ -301,7 +417,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutover.Route.Status = "ready"
-	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: 60}
+	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: cutoverTTL}
 	if err = store.PublishRoute(ctx, cutover); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +467,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if rolled.PreviousReceipt == nil || rolled.PreviousReceipt.ID != "rotated-receipt" {
 		t.Fatal("rollback lost latest DNS receipt")
 	}
-	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: 60}
+	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: rollbackTTL}
 	if err = store.PublishRoute(ctx, rolled); err != nil {
 		t.Fatal(err)
 	}
@@ -360,6 +476,14 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	resolver.proof = "lost-control"
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+		t.Fatal("lost proof admitted new work")
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err != nil {
+		t.Fatal("lost proof blocked exact cleanup", err)
+	}
+	resolver.proof = zone.ProofValue
 	// Revocation and credential rotation do not grant fresh route work, but exact
 	// retained cleanup is still authorized for the active runtime.
 	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
@@ -386,15 +510,48 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
 		t.Fatal("revoked grant authorized rollback")
 	}
+	if cutoverTTL > 86400 || rollbackTTL > 86400 {
+		// Later operations from other handoffs must not hide the accepted maximum.
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'history-'||n,o.org_id,o.project_id,o.route_id,o.server_id,o.cloud_id,'succeeded',1,
+ o.body||jsonb_build_object('id','history-'||n,'handoff_id','unrelated','status','succeeded','created_at',now()+interval '1 second','receipt',jsonb_build_object('ttl',180000)),o.principal,o.checkpoint
+ FROM loomplane_route_operations o CROSS JOIN generate_series(1,105) n WHERE o.id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'unaccepted-receipt',org_id,project_id,route_id,server_id,cloud_id,'preview',1,
+ body||jsonb_build_object('id','unaccepted-receipt','status','preview','receipt',jsonb_build_object('ttl',180000)),principal,checkpoint FROM loomplane_route_operations WHERE id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		history, historyErr := store.RouteOperations(ctx, "org", "proj", cutover.Route.ID)
+		if historyErr != nil || len(history) != 100 {
+			t.Fatal("public history cap changed", len(history), historyErr)
+		}
+		for _, op := range history {
+			if op.ID == cutover.ID {
+				t.Fatal("fixture did not hide old cutover")
+			}
+		}
+	}
+	if _, invalidErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 90000); !errors.Is(invalidErr, cloudinfra.ErrInvalid) {
+		t.Fatal("unbounded caller drain accepted", invalidErr)
+	}
 	released, err := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(300 * time.Second)) {
+	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(time.Duration(max(300, cutoverTTL, rollbackTTL)) * time.Second)) {
 		t.Fatal("prior source TTL was shortened", released.NotBefore)
+	}
+	persistedRelease, readErr := store.RouteOperation(ctx, "org", released.ID)
+	if readErr != nil || !persistedRelease.NotBefore.Equal(released.NotBefore) {
+		t.Fatal("trusted drain deadline was not persisted", readErr)
 	}
 	if released.Source.Binding.ServerID != "host2" || released.NotBefore.IsZero() {
 		t.Fatal("release lost inactive identity or TTL gate")
+	}
+	if _, err = store.BeginIngress(ctx, released); err != nil {
+		t.Fatal(err)
 	}
 	if err = store.CompleteHandoff(ctx, released); err != nil {
 		t.Fatal(err)
@@ -423,7 +580,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 
 	// A same-server candidate can be abandoned after either failed or successful
 	// preparation, without restoring its Cloud grant or changing the source.
-	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
+	if _, err = sql.Exec(ctx, `INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('same-server-candidate','org',NULL,'{"main":"candidate-container"}','[{"name":"main","ports":[{"container":8080}]}]','{"loomplane.revision":"deployment/action"}','running')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, prepareStatus := range []string{"failed", "succeeded"} {
@@ -490,6 +647,9 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 			if resumed.DesiredConfig == nil || resumed.DesiredConfig.Version != abandoned.DesiredConfig.Version || resumed.PreviousConfig.ETag != "prepared" {
 				t.Fatal("cleanup CAS intent was lost")
 			}
+			if _, err = store.BeginIngress(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
 			if err = store.CompleteHandoff(ctx, resumed); err != nil {
 				t.Fatal(err)
 			}
@@ -535,6 +695,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if err = store.SaveRouteOperation(ctx, recoveryOp); err != nil {
 		t.Fatal(err)
 	}
+	resolver.proof = "lost-control-before-cleanup"
 	removal, removeErr := svc.RemoveRoute(ctx, p, "proj", recoveryOp.Route.ID, recoveryOp.Route.Revision)
 	if removeErr != nil {
 		t.Fatal(removeErr)
@@ -555,5 +716,277 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	}
 	if _, err = svc.ApplyRoute(ctx, p, "proj", changed.ID, cloudinfra.ApplyInput{Review: changed.Review}); err == nil {
 		t.Fatal("revoked Cloud grant admitted a route")
+	}
+}
+
+// The hosted-zone API can report Verified while public DNS is controlled elsewhere.
+type controlDNSAdapter struct{ provider.DNSAdapter }
+
+func (*controlDNSAdapter) ListZones(_ context.Context, c provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	return []provider.DNSZone{{ID: "provider-zone", Name: "example.com", AccountID: c.AccountID, Verified: true}}, nil
+}
+func (*controlDNSAdapter) GetZone(_ context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+	if name != "example.com" {
+		return provider.DNSZone{}, provider.ErrInfrastructureNotFound
+	}
+	return provider.DNSZone{ID: "provider-zone", Name: name, AccountID: c.AccountID, Verified: true}, nil
+}
+func (*controlDNSAdapter) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
+	return nil, nil
+}
+
+// UpsertRecord accepts the zone's TXT proof and hands back its receipt.
+func (*controlDNSAdapter) UpsertRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
+	record := req.Record
+	if record.ID == "" {
+		record.ID = "proof"
+	}
+	return record, nil
+}
+func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
+	domainsDurableClaims(t, 60, 60, "managed")
+}
+
+// app.example.com has no proof of its own and routes through example.com's.
+// AcceptRoute rereads example.com inside its transaction, so the domain
+// losing its verification after the apply's own check still stops the route.
+func TestDomainsSubdomainInheritsVerification(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "example.com", Mode: "external", ProjectIDs: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.resolver.proof = domain.ProofValue
+	if _, err = svc.VerifyZone(ctx, p, domain.ID); err != nil {
+		t.Fatal(err)
+	}
+	app, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "app.example.com", Mode: "external", ProjectIDs: []string{"proj"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.ProofName != "" || app.ProofValue != "" {
+		t.Fatalf("subdomain got a proof of its own: %+v", app)
+	}
+	input := cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080}
+	preview, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DesiredRecord.Name != "web" {
+		t.Fatalf("record relative to the subdomain: %+v", preview.DesiredRecord)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	input.Hostname = "api.app.example.com"
+	second, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The apply's own lookup of example.com's record succeeds; the domain
+	// is unverified before the acceptance transaction starts.
+	env.resolver.during = func() {
+		if _, execErr := env.sql.Exec(ctx, `UPDATE loomplane_dns_zones SET body=jsonb_set(body,'{verified_at}','"0001-01-01T00:00:00Z"') WHERE name='example.com'`); execErr != nil {
+			t.Error(execErr)
+		}
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("accepted a route under a domain that lost its verification", err)
+	}
+	// With the domain unverified from the start, the apply's own check refuses.
+	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("apply's own check passed under an unverified domain", err)
+	}
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("previewed under an unverified domain", err)
+	}
+	var claims int
+	if err = env.sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_domain_routes`).Scan(&claims); err != nil || claims != 1 || env.workflow.routes != 1 {
+		t.Fatalf("routes accepted: %d queued %d %v", claims, env.workflow.routes, err)
+	}
+}
+
+// domainWithSubdomain adds a verified example.com and app.example.com under
+// it, granted to proj.
+func domainWithSubdomain(t *testing.T, env *domainsRuntime) (domain, app *cloudinfra.Zone) {
+	t.Helper()
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "example.com", Mode: "external", ProjectIDs: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.resolver.proof = domain.ProofValue
+	if domain, err = svc.VerifyZone(ctx, p, domain.ID); err != nil {
+		t.Fatal(err)
+	}
+	if app, err = svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "app.example.com", Mode: "external", ProjectIDs: []string{"proj"}}); err != nil {
+		t.Fatal(err)
+	}
+	return domain, app
+}
+
+func zoneRows(t *testing.T, env *domainsRuntime) int {
+	t.Helper()
+	var n int
+	if err := env.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_dns_zones WHERE org_id='org'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestDomainsRemoveDomainWithSubdomain(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, app := domainWithSubdomain(t, env)
+	preview, err := svc.PreviewRoute(ctx, p, "proj", cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision)
+	var inUse *cloudinfra.ZoneInUseError
+	if !errors.As(err, &inUse) || !errors.Is(err, cloudinfra.ErrConflict) || len(inUse.Hostnames) != 1 || inUse.Hostnames[0].Hostname != "web.app.example.com" || inUse.Hostnames[0].ZoneName != "app.example.com" {
+		t.Fatalf("removed a domain whose subdomain is in use: %v %+v", err, inUse)
+	}
+	if n := zoneRows(t, env); n != 2 {
+		t.Fatal("rows left after a refused removal", n)
+	}
+	if _, err = env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='removed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if n := zoneRows(t, env); n != 0 {
+		t.Fatal("rows left after removing the domain", n)
+	}
+}
+
+// racingZones runs before ahead of each zone row delete, the way a request
+// can land between a removal's first check and its deletes.
+type racingZones struct {
+	*cloudinfra.PgStore
+	before func(id string)
+}
+
+func (s *racingZones) RemoveZone(ctx context.Context, org, id string, revision int64) error {
+	s.before(id)
+	return s.PgStore.RemoveZone(ctx, org, id, revision)
+}
+
+// A route that lands on a subdomain after the removal checked still names
+// itself, so you see which hostname is in the way.
+func TestDomainsRouteRacingARemovalIsListed(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, p := t.Context(), security.Principal{OrgID: "org", UserID: "manager"}
+	domain, app := domainWithSubdomain(t, env)
+	preview, err := env.svc.PreviewRoute(ctx, p, "proj", cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='removed'`); err != nil {
+		t.Fatal(err)
+	}
+	race := &racingZones{PgStore: env.store, before: func(id string) {
+		if id == app.ID {
+			if _, execErr := env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='ready'`); execErr != nil {
+				t.Fatal(execErr)
+			}
+		}
+	}}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: env.store, Domains: race, Authz: domainAuth{}, Resolver: env.resolver})
+	err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision)
+	var inUse *cloudinfra.ZoneInUseError
+	if !errors.As(err, &inUse) || len(inUse.Hostnames) != 1 || inUse.Hostnames[0].Hostname != "web.app.example.com" || inUse.Hostnames[0].ZoneName != "app.example.com" {
+		t.Fatalf("a route that raced the removal: %v %+v", err, inUse)
+	}
+	if n := zoneRows(t, env); n != 2 {
+		t.Fatal("rows left after a refused removal", n)
+	}
+}
+
+// A subdomain added while its domain is being removed is caught by the
+// store either way round: the domain is kept while a zone sits under it,
+// and a zone that would be verified through a removed domain isn't added.
+func TestDomainsSubdomainRacingItsDomainsRemovalFailsClosed(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, p := t.Context(), security.Principal{OrgID: "org", UserID: "manager"}
+	domain, _ := domainWithSubdomain(t, env)
+	// The removal looked before app was added and now reaches the domain.
+	err := env.store.RemoveZone(ctx, "org", domain.ID, domain.Revision)
+	if !errors.Is(err, cloudinfra.ErrConflict) || zoneRows(t, env) != 2 {
+		t.Fatal("removed a domain with a zone under it", err)
+	}
+	if err = env.svc.RemoveZone(ctx, p, domain.ID, domain.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// The create looked while the domain was still there.
+	late := &cloudinfra.Zone{ID: "zone_late", OrgID: "org", Name: "late.example.com", Mode: "external", ProjectIDs: []string{}, Revision: 1}
+	if err = env.store.CreateZone(ctx, late); !errors.Is(err, cloudinfra.ErrConflict) || zoneRows(t, env) != 0 {
+		t.Fatal("added a zone under a removed domain with no proof of its own", err)
+	}
+}
+
+// A composed catalog component on a Cloud server takes a route on a port its
+// recipe marks routable. Its control ports, engine databases, the composed
+// resource itself, its jobs and a dependency-only kind's component never do.
+func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
+	_, sql, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	store := cloudinfra.NewPgStore(db)
+	cs := connections.NewPgStore(db)
+	now := time.Now().UTC()
+	conn := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Name: "Runtime", Status: "ready", Details: map[string]string{"host": "192.0.2.42", "docker_id": "daemon"}, CreatedAt: now, UpdatedAt: now}
+	if err := cs.CreateConnection(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	host := &cloudinfra.Server{ID: "host", OrgID: "org", CloudID: "cloud", Name: "Host", Ownership: "adopted", Provider: "server", AccountID: "daemon", ResourceID: "daemon", ConnectionID: "runtime", RuntimeConnectionID: "runtime", Revision: 1, Status: "ready"}
+	if err := store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	placement := `"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"}`
+	for _, statement := range []string{
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT NOT NULL DEFAULT 'docker.runtime')`,
+		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
+		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('api','org',NULL,'{"main":"api-container"}','[{"name":"main","ports":[{"container":8080},{"container":9090}]}]','{"loomplane.revision":"deployment/api"}','running')`,
+		`INSERT INTO cp_instances(id,tenant_id,current_release,service_refs,services,labels,state) VALUES('db','org',NULL,'{"main":"db-container"}','[{"name":"main","ports":[{"container":5432}]}]','{"loomplane.revision":"deployment/db"}','running')`,
+		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES
+		('api','org','proj','env','resource','app--api','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"api","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('parent','org','proj','env','resource','app','server','resource','api','runtime','{"provider":"server","kind":"sample","composition":{"kind":"sample","version":"1","revision":"r"},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('migrate','org','proj','env','resource','app--migrate','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"migrate","role":"job"}},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('db','org','proj','env','resource','db','server','postgres','db','runtime','{"provider":"server","kind":"postgres","catalog":{"id":"postgres-17"},"routable_ports":[5432],` + placement + `}',now(),now()),
+		('graph','org','proj','env','resource','app--graph','server','resource','api','runtime','{"provider":"server","kind":"graph","component":{"kind":"graph","resource":"app--graph","component":{"name":"server","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now())`,
+	} {
+		if _, err := sql.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := func(name string, port int) cloudinfra.RouteInput {
+		return cloudinfra.RouteInput{CloudID: "cloud", EnvironmentID: "env", Service: name, Port: port}
+	}
+	binding, err := store.ResolveRouteBinding(ctx, "org", "proj", input("app--api", 8080))
+	if err != nil || binding.BindingID != "api" || binding.ServerID != "host" || binding.ContainerID != "api-container" || binding.ReleaseID != "deployment/api" {
+		t.Fatalf("routable component port: %+v %v", binding, err)
+	}
+	for _, refused := range []struct {
+		why string
+		in  cloudinfra.RouteInput
+	}{
+		{"control port", input("app--api", 9090)},
+		{"composed parent", input("app", 8080)},
+		{"job component", input("app--migrate", 8080)},
+		{"engine database", input("db", 5432)},
+		{"dependency-only component", input("app--graph", 8080)},
+	} {
+		if got, refuseErr := store.ResolveRouteBinding(ctx, "org", "proj", refused.in); !errors.Is(refuseErr, cloudinfra.ErrNotFound) {
+			t.Errorf("%s resolved: %+v %v", refused.why, got, refuseErr)
+		}
 	}
 }

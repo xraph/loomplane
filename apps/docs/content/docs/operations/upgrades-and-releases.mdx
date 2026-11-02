@@ -1,0 +1,110 @@
+---
+title: Upgrades and releases
+description: Upgrade a running Loomplane safely, roll back with a backup, and build and publish versioned releases.
+---
+
+## Upgrade
+
+The order matters: back up, stop both writers, swap the image, start the API, then the worker.
+
+1. Back up ([Backing up Loomplane](/docs/operations/backing-up-loomplane)).
+2. Stop `loomplane` and `loomplane-worker`.
+3. Replace the binaries or the image.
+4. Start `loomplane`. It applies new migrations before it starts serving.
+5. Start `loomplane-worker`.
+
+```bash
+loomplane migrations
+```
+
+shows how many migrations the database has and which are pending, before you start. `loomplane migrate` applies them without starting the server, if you'd rather do that step alone.
+
+Loomplane won't start against a database a newer Loomplane migrated, because it would read and write a schema it doesn't know. Going back a version means restoring the backup you made before upgrading. In development it only warns, since branches share a local database. Migrations only move forward. Each is written to be safe to run again, and none is edited after release. A fix is a new migration.
+
+### With the Docker stack
+
+Before an upgrade, stop both writers, take a backup with the currently installed image and copy it off the host:
+
+```bash
+umask 077
+mkdir -p backups
+docker compose stop loomplane-worker loomplane
+docker compose run --rm --no-deps \
+  -v "$PWD/backups:/backups" --user "$(id -u):$(id -g)" \
+  loomplane backup --out /backups/pre-upgrade.tar.gz
+```
+
+Back up `artifact-data` while the API is stopped, using your volume backup tool. Record the current image digest and keep the old Compose files and `.env`. Replace the deployment files with the next release bundle, change only `LOOMPLANE_IMAGE` in your existing `.env`, then:
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d --wait --wait-timeout 240
+docker compose exec -T loomplane loomplane migrations
+```
+
+Check sign-in, a repository analysis and a deployment's live status. Take a fresh backup before you retry an upgrade that partly ran.
+
+### Rolling back
+
+Changing the image back is safe only when the schema is compatible. To recover from an incompatible upgrade, stop both application services, use the previous image with a new empty database volume, and restore your pre-upgrade backup:
+
+```bash
+# Point compose.yaml at the recovery database volume before running this.
+docker compose up -d --wait postgres
+docker compose run --rm --no-deps \
+  -v "$PWD/backups:/backups:ro" --user "$(id -u):$(id -g)" \
+  loomplane restore /backups/pre-upgrade.tar.gz
+docker compose up -d --wait --wait-timeout 240
+```
+
+Restore the matching artifact data and the original secret key too. Keep the failed database volume until you've verified the restore, and test this on a separate host before your first upgrade.
+
+### Cloud and server migrations
+
+When an upgrade touches routing or server tables, stop every older app and worker binary before you run migrations and start only upgraded binaries afterward. Mixed versions with unfenced writers aren't supported.
+
+Migration `native_point_creation_identity` keeps native cloud snapshot points at full nanosecond precision. Allow time for the table rewrite and its exclusive lock, and stop older processes first, since their writes use the previous uniqueness constraint. Downgrade refuses while any native point history remains.
+
+## Versions
+
+When building from source, use `make build VERSION=your-version`, or `make build-cli VERSION=your-version` for `loomctl` alone. The API, worker and CLI share `internal/buildinfo.Version`. For custom build scripts, pass `-ldflags "-X github.com/xraph/loomplane/internal/buildinfo.Version=your-version"`.
+
+## Build and test your own image
+
+From the repository root:
+
+```bash
+make image VERSION=v0.1.0
+bash scripts/test-production.sh loomplane:v0.1.0
+```
+
+The test creates a unique Compose project with random credentials, a local TLS certificate and a random loopback port. It checks the dashboard, authentication, blocked public health routes, extension probes, database backup and persistence across container recreation, then removes only that project's containers and volumes. Public certificate issuance, mail delivery, GitHub App installation and real cloud deployment need separate live checks.
+
+## Publish a release
+
+Push a `vMAJOR.MINOR.PATCH` tag that's on `main`, or run the Release workflow from the Actions tab with the version you want. A manual run tags the commit you started it from, so start it from `main`:
+
+```bash
+gh workflow run release.yml --ref main -f version=v1.2.3
+```
+
+Prerelease suffixes such as `-rc.1` are accepted. The workflow runs lint, unit and integration tests, creates the GitHub release, then builds and smoke-tests native AMD64 and ARM64 images. Both must pass before the multi-platform tag is published to `ghcr.io/xraph/loomplane` with provenance and SBOM attestations.
+
+The workflow attaches a Docker deployment bundle, its checksum, manifest details and the immutable image reference to the release. A release of `v1.2.3` publishes `v1.2.3` and `1.2.3`, and moves `1.2`, `1` and `latest` only while it's the newest release in each of those lines. Rerunning or patching an older release can't drag `latest` backwards, and a prerelease moves nothing. A `0.x` release skips the major tag. To see what a tag would publish:
+
+```bash
+bash scripts/release-image-tags.sh v1.2.3
+```
+
+Pin the exact version or the digest from `image.txt` in production. The moving tags are for trying things out. Wait for the workflow to finish before you announce an image. Your repository needs Actions enabled, Linux ARM64 runner access and permission to write GHCR packages. With the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, every tag is mirrored to Docker Hub as well.
+
+GoReleaser attaches binaries to the same release. `loomctl` ships for macOS, Linux and Windows and installs with `brew install xraph/tap/loomctl` or from the `xraph` Scoop bucket. The `loomplane_*` archives carry the API, the worker, `config.yaml` and the built dashboard for Linux and macOS. Unpack one, set `LOOMPLANE_DASHBOARD_DIR=./dashboard` and run `./loomplane` from that directory. Homebrew and Scoop update only when the repository has a `HOMEBREW_TAP_GITHUB_TOKEN` secret that can push to `xraph/homebrew-tap` and `xraph/scoop-bucket`. Without it, the archives still publish.
+
+When one part of a release fails you don't need a new version. Run the workflow again with the same version and set `target` to `cli` or `docker`. Only that part publishes, from the existing tag, into the existing release. Tick `skip-tests` if the tag already passed them:
+
+```bash
+gh workflow run release.yml -f version=v1.2.3 -f target=docker -f skip-tests=true
+```
+
+You don't need a release to run the latest code. Once CI passes on `main`, the Docker workflow publishes AMD64 and ARM64 images as `ghcr.io/xraph/loomplane:main`, which moves with `main`, and `ghcr.io/xraph/loomplane:sha-<commit>`, which never moves. Pin the `sha-` tag in `LOOMPLANE_IMAGE` so a restart doesn't pull a build you haven't read. Those images skip the release checks and the ARM64 smoke test, so keep them for staging and early trials.

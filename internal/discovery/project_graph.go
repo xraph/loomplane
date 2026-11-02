@@ -55,6 +55,9 @@ func ProjectGraph(ctx context.Context, g Graphs, orgID, projectID string) (*grap
 		}
 		st := SourceState{Source: *src}
 		part := graph.Part{Source: graph.SourceRef{Alias: src.Alias, Repository: src.Repository, Root: src.Root}}
+		// A pinned analysis served one promotion; it says nothing about
+		// the source's branch.
+		list = unpinned(list)
 		if len(list) > 0 {
 			st.Latest = analysisView(list[0], nil, nil)
 		}
@@ -80,11 +83,13 @@ func ProjectGraph(ctx context.Context, g Graphs, orgID, projectID string) (*grap
 }
 
 // ProjectView is a project's application graph and what each of its
-// sources contributed.
+// sources contributed. Excluded are the services the analyses found that
+// the project's exclusions keep out of the graph.
 type ProjectView struct {
-	ProjectID string        `json:"project_id" forge:"id"`
-	Graph     *graph.Graph  `json:"graph"`
-	Sources   []SourceState `json:"sources"`
+	ProjectID string           `json:"project_id" forge:"id"`
+	Graph     *graph.Graph     `json:"graph"`
+	Sources   []SourceState    `json:"sources"`
+	Excluded  []graph.Excluded `json:"excluded"`
 }
 
 // ProjectGraph returns the project's composed graph.
@@ -92,12 +97,25 @@ func (s *Service) ProjectGraph(ctx context.Context, p security.Principal, projec
 	if err := s.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	proj, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	g, states, err := ProjectGraph(ctx, s.store, p.OrgID, projectID)
 	if err != nil {
 		return nil, err
 	}
-	return &ProjectView{ProjectID: projectID, Graph: g, Sources: states}, nil
+	g, excluded := graph.Exclude(g, proj.ExclusionRules())
+	return &ProjectView{ProjectID: projectID, Graph: g, Sources: states, Excluded: excluded}, nil
+}
+
+// unpinned is list without its pinned analyses, in a new slice.
+func unpinned(list []*Analysis) []*Analysis {
+	out := make([]*Analysis, 0, len(list))
+	for _, a := range list {
+		if !a.Pinned {
+			out = append(out, a)
+		}
+	}
+	return out
 }

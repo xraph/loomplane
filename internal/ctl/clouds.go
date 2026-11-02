@@ -27,6 +27,10 @@ func cloudTags(value string) []string {
 	}
 	return tags
 }
+func cloudOrganizationFlag() cli.Flag {
+	return cli.NewBoolFlag("organization", "", "Manage organization Clouds without a project argument", false)
+}
+
 func cloudRevisionFlag() cli.Flag {
 	return cloudFlag("revision", "Expected target, Cloud or assignment revision")
 }
@@ -34,35 +38,39 @@ func cloudExecutionFlags() []cli.Flag {
 	return append(recoveryFlags(), cli.NewBoolFlag("yes", "y", "Apply the displayed preview", false), cloudFlag("request-id", "Stable idempotency key to reuse after a lost response"))
 }
 func (a *App) cloudsCommand() cli.Command {
-	return cli.NewCommand("clouds", "List the project's Clouds", a.listClouds, cli.WithUsage("clouds <project>"), cli.WithFlag(jsonFlag),
-		cli.WithSubcommand(cli.NewCommand("create", "Create a Cloud", a.createCloud, cli.WithUsage("clouds create <project> --name production"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name")))),
-		cli.WithSubcommand(cli.NewCommand("show", "Show a Cloud", a.showCloud, cli.WithUsage("clouds show <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("update", "Rename a Cloud at its expected revision", a.updateCloud, cli.WithUsage("clouds update <project> <cloud-id> --name name --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name"), cloudRevisionFlag()))),
-		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unassigned Cloud", a.deleteCloud, cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assignment", "Show an environment's Cloud and assignment generation", a.cloudAssignment, cli.WithUsage("clouds assignment <project> <environment-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))),
-		cli.WithSubcommand(cli.NewCommand("switch-default", "Review a change to a Cloud's default provider and account, then apply with --yes", a.switchCloudDefault, cli.WithUsage("clouds switch-default <project> <cloud-id> --provider vercel --connection conn-id --revision 3 [--clear] [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cli.NewBoolFlag("clear", "", "Remove the default", false), cloudRevisionFlag())...))))
+	return cli.NewCommand("clouds", "List project or organization Clouds", a.listClouds, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds <project>"), cli.WithFlag(jsonFlag),
+		cli.WithSubcommand(cli.NewCommand("create", "Create a Cloud", a.createCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds create <project> --name production"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name")))),
+		cli.WithSubcommand(cli.NewCommand("show", "Show a Cloud", a.showCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds show <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("update", "Rename a Cloud at its expected revision", a.updateCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds update <project> <cloud-id> --name name --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name"), cloudRevisionFlag()))),
+		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unassigned Cloud", a.deleteCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("assignment", "Show an environment's Cloud and assignment generation", a.cloudAssignment, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds assignment <project> <environment-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))),
+		cli.WithSubcommand(cli.NewCommand("switch-default", "Review a change to a Cloud's default provider and account, then apply with --yes", a.switchCloudDefault, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds switch-default <project> <cloud-id> --provider vercel --connection conn-id --revision 3 [--clear] [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cli.NewBoolFlag("clear", "", "Remove the default", false), cloudRevisionFlag())...))))
 }
 func (a *App) cloudTargetsCommand() cli.Command {
-	return cli.NewCommand("cloud-targets", "List the targets in a Cloud", a.listCloudTargets, cli.WithUsage("cloud-targets <project> <cloud-id>"), cli.WithFlag(jsonFlag),
-		cli.WithSubcommand(cli.NewCommand("show", "Show a target's desired placement", a.showCloudTarget, cli.WithUsage("cloud-targets show <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("create", "Create a named deployment target", a.createCloudTarget, cli.WithUsage("cloud-targets create <project> <cloud-id> --name frontend --provider vercel --connection conn-id"), cli.WithFlags(jsonFlag, cloudFlag("name", "Immutable lowercase target slug"), cloudFlag("display-name", "Display label"), cloudFlag("provider", "Provider name"), cloudFlag("connection", "Verified connection ID"), cloudFlag("region", "Deployment region"), cloudFlag("tags", "Comma-separated tags, such as eu,gpu")))),
-		cli.WithSubcommand(cli.NewCommand("update", "Change a target's display name", a.updateCloudTarget, cli.WithUsage("cloud-targets update <project> <cloud-id> <target-id> --display-name Frontend --revision 1 [--tags eu,gpu | --clear-tags]"), cli.WithFlags(jsonFlag, cloudFlag("display-name", "Display label"), cloudFlag("tags", "Replace the tags, comma-separated"), cli.NewBoolFlag("clear-tags", "", "Remove every tag", false), cloudRevisionFlag()))),
-		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unused target", a.deleteCloudTarget, cli.WithUsage("cloud-targets delete <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("switch", "Review an account or provider switch, then apply with --yes", a.switchCloudTarget, cli.WithUsage("cloud-targets switch <project> <cloud-id> <target-id> --provider vercel --connection conn-id --revision 1 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cloudRevisionFlag())...))))
+	return cli.NewCommand("cloud-targets", "List the targets in a Cloud", a.listCloudTargets, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets <project> <cloud-id>"), cli.WithFlag(jsonFlag),
+		cli.WithSubcommand(cli.NewCommand("show", "Show a target's desired placement", a.showCloudTarget, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets show <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("create", "Create a named deployment target", a.createCloudTarget, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets create <project> <cloud-id> --name frontend --provider vercel --connection conn-id"), cli.WithFlags(jsonFlag, cloudFlag("name", "Immutable lowercase target slug"), cloudFlag("display-name", "Display label"), cloudFlag("provider", "Provider name"), cloudFlag("connection", "Verified connection ID"), cloudFlag("region", "Deployment region"), cloudFlag("runtime", "Runtime: managed or server"), cloudFlag("pool", "Server pool ID"), cloudFlag("tags", "Comma-separated tags, such as eu,gpu")))),
+		cli.WithSubcommand(cli.NewCommand("update", "Change a target's display name", a.updateCloudTarget, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets update <project> <cloud-id> <target-id> --display-name Frontend --revision 1 [--tags eu,gpu | --clear-tags]"), cli.WithFlags(jsonFlag, cloudFlag("display-name", "Display label"), cloudFlag("tags", "Replace the tags, comma-separated"), cli.NewBoolFlag("clear-tags", "", "Remove every tag", false), cloudRevisionFlag()))),
+		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unused target", a.deleteCloudTarget, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets delete <project> <cloud-id> <target-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("switch", "Review an account or provider switch, then apply with --yes", a.switchCloudTarget, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-targets switch <project> <cloud-id> <target-id> --provider vercel --connection conn-id --revision 1 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cloudFlag("runtime", "Runtime: managed or server"), cloudFlag("pool", "Server pool ID"), cloudRevisionFlag())...))))
 }
 func (a *App) cloudSyncsCommand() cli.Command {
-	return cli.NewCommand("cloud-syncs", "List persisted Cloud operations", a.listCloudSyncs, cli.WithUsage("cloud-syncs <project> [--before cursor]"), cli.WithFlags(jsonFlag, cloudFlag("before", "Next cursor from a previous page")),
-		cli.WithSubcommand(cli.NewCommand("show", "Show persisted deployment and routing progress", a.showCloudSync, cli.WithUsage("cloud-syncs show <project> <sync-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
-		cli.WithSubcommand(cli.NewCommand("wait", "Wait within a bounded timeout", a.waitCloudSync, cli.WithUsage("cloud-syncs wait <project> <sync-id> [--timeout 45m]"), cli.WithFlags(recoveryFlags()...))),
-		cli.WithSubcommand(cli.NewCommand("retry", "Retry failed or pending cleanup work", a.retryCloudSync, cli.WithUsage("cloud-syncs retry <project> <sync-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
-		cli.WithSubcommand(cli.NewCommand("revert", "Review compensation, then apply with --yes", a.revertCloudSync, cli.WithUsage("cloud-syncs revert <project> <sync-id> [--yes --wait]"), cli.WithFlags(cloudExecutionFlags()...))),
-		cli.WithSubcommand(cli.NewCommand("routing", "Record completed external routing for one environment", a.completeCloudRouting, cli.WithUsage("cloud-syncs routing <project> <sync-id> --environment env-id --evidence 'DNS verified' [--wait]"), cli.WithFlags(append(recoveryFlags(), cloudFlag("environment", "Environment ID"), cloudFlag("evidence", "How you verified external routing"))...))),
-		cli.WithSubcommand(cli.NewCommand("apply", "Accept a saved preview and revision", a.applyCloudPreview, cli.WithUsage("cloud-syncs apply <project> --preview preview-id --revision digest --request-id stable-key [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("preview", "Immutable preview ID"), cloudRevisionFlag())...))))
+	return cli.NewCommand("cloud-syncs", "List persisted Cloud operations", a.listCloudSyncs, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs <project> [--before cursor]"), cli.WithFlags(jsonFlag, cloudFlag("before", "Next cursor from a previous page")),
+		cli.WithSubcommand(cli.NewCommand("show", "Show persisted deployment and routing progress", a.showCloudSync, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs show <project> <sync-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
+		cli.WithSubcommand(cli.NewCommand("wait", "Wait within a bounded timeout", a.waitCloudSync, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs wait <project> <sync-id> [--timeout 45m]"), cli.WithFlags(recoveryFlags()...))),
+		cli.WithSubcommand(cli.NewCommand("retry", "Retry failed or pending cleanup work", a.retryCloudSync, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs retry <project> <sync-id> [--wait]"), cli.WithFlags(recoveryFlags()...))),
+		cli.WithSubcommand(cli.NewCommand("revert", "Review compensation, then apply with --yes", a.revertCloudSync, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs revert <project> <sync-id> [--yes --wait]"), cli.WithFlags(cloudExecutionFlags()...))),
+		cli.WithSubcommand(cli.NewCommand("routing", "Record completed external routing for one environment", a.completeCloudRouting, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs routing <project> <sync-id> --environment env-id --evidence 'DNS verified' [--wait]"), cli.WithFlags(append(recoveryFlags(), cloudFlag("environment", "Environment ID"), cloudFlag("evidence", "How you verified external routing"))...))),
+		cli.WithSubcommand(cli.NewCommand("apply", "Accept a saved preview and revision", a.applyCloudPreview, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("cloud-syncs apply <project> --preview preview-id --revision digest --request-id stable-key [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("preview", "Immutable preview ID"), cloudRevisionFlag())...))))
 }
 func (a *App) cloudClient(ctx cli.CommandContext, args int) (*client.Client, *client.Project, error) {
-	for i := 0; i < args; i++ {
-		if ctx.Arg(i) == "" {
+	start := 0
+	if ctx.Bool("organization") {
+		start = 1
+	}
+	for i := start; i < args; i++ {
+		if cloudArg(ctx, i) == "" {
 			return nil, nil, errors.New("give the project and required resource IDs")
 		}
 	}
@@ -70,9 +78,19 @@ func (a *App) cloudClient(ctx cli.CommandContext, args int) (*client.Client, *cl
 	if err != nil {
 		return nil, nil, err
 	}
+	if ctx.Bool("organization") {
+		return c, &client.Project{}, nil
+	}
 	p, err := a.project(ctx, c)
 	return c, p, err
 }
+func cloudArg(ctx cli.CommandContext, index int) string {
+	if ctx.Bool("organization") {
+		index--
+	}
+	return ctx.Arg(index)
+}
+
 func cloudRevision(ctx cli.CommandContext) (int64, error) {
 	value, err := strconv.ParseInt(ctx.String("revision"), 10, 64)
 	if err != nil || value < 0 {
@@ -107,7 +125,7 @@ func (a *App) showCloud(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.Cloud(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.Cloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
@@ -122,7 +140,7 @@ func (a *App) updateCloud(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.UpdateCloud(ctxOf(ctx), p.ID, ctx.Arg(1), client.CloudUpdateInput{Name: ctx.String("name"), Revision: revision})
+	v, err := c.UpdateCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1), client.CloudUpdateInput{Name: ctx.String("name"), Revision: revision})
 	if err != nil {
 		return err
 	}
@@ -133,14 +151,14 @@ func (a *App) deleteCloud(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	return c.DeleteCloud(ctxOf(ctx), p.ID, ctx.Arg(1))
+	return c.DeleteCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 }
 func (a *App) listCloudTargets(ctx cli.CommandContext) error {
 	c, p, err := a.cloudClient(ctx, 2)
 	if err != nil {
 		return err
 	}
-	v, err := c.CloudTargets(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.CloudTargets(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
@@ -151,7 +169,7 @@ func (a *App) showCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.CloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), ctx.Arg(2))
+	v, err := c.CloudTarget(ctxOf(ctx), p.ID, cloudArg(ctx, 1), cloudArg(ctx, 2))
 	if err != nil {
 		return err
 	}
@@ -162,7 +180,7 @@ func (a *App) createCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.CreateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), client.CloudCreateTargetInput{Name: ctx.String("name"), DisplayName: ctx.String("display-name"), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Tags: cloudTags(ctx.String("tags"))})
+	v, err := c.CreateCloudTarget(ctxOf(ctx), p.ID, cloudArg(ctx, 1), client.CloudCreateTargetInput{Name: ctx.String("name"), DisplayName: ctx.String("display-name"), Runtime: ctx.String("runtime"), PoolID: ctx.String("pool"), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Tags: cloudTags(ctx.String("tags"))})
 	if err != nil {
 		return err
 	}
@@ -184,7 +202,7 @@ func (a *App) updateCloudTarget(ctx cli.CommandContext) error {
 		}
 		in.Tags = &tags
 	}
-	v, err := c.UpdateCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), ctx.Arg(2), in)
+	v, err := c.UpdateCloudTarget(ctxOf(ctx), p.ID, cloudArg(ctx, 1), cloudArg(ctx, 2), in)
 	if err != nil {
 		return err
 	}
@@ -195,20 +213,26 @@ func (a *App) deleteCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	return c.DeleteCloudTarget(ctxOf(ctx), p.ID, ctx.Arg(1), ctx.Arg(2))
+	return c.DeleteCloudTarget(ctxOf(ctx), p.ID, cloudArg(ctx, 1), cloudArg(ctx, 2))
 }
 func (a *App) cloudAssignment(ctx cli.CommandContext) error {
+	if ctx.Bool("organization") {
+		return errors.New("this command requires a project; omit --organization")
+	}
 	c, p, err := a.cloudClient(ctx, 2)
 	if err != nil {
 		return err
 	}
-	v, err := c.EnvironmentCloud(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.EnvironmentCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
 	return a.json(v)
 }
 func (a *App) assignCloud(ctx cli.CommandContext) error {
+	if ctx.Bool("organization") {
+		return errors.New("this command requires a project; omit --organization")
+	}
 	revision, err := cloudRevision(ctx)
 	if err != nil {
 		return err
@@ -217,7 +241,7 @@ func (a *App) assignCloud(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	preview, err := c.PreviewEnvironmentCloud(ctxOf(ctx), p.ID, ctx.Arg(1), client.EnvironmentCloudInput{CloudID: ctx.String("cloud"), Revision: revision})
+	preview, err := c.PreviewEnvironmentCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1), client.EnvironmentCloudInput{CloudID: ctx.String("cloud"), Revision: revision})
 	if err != nil {
 		return err
 	}
@@ -232,7 +256,7 @@ func (a *App) switchCloudTarget(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, client.CloudChangeInput{CloudID: ctx.Arg(1), TargetID: ctx.Arg(2), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision})
+	preview, err := c.PreviewCloudChange(ctxOf(ctx), p.ID, client.CloudChangeInput{CloudID: cloudArg(ctx, 1), TargetID: cloudArg(ctx, 2), Runtime: ctx.String("runtime"), PoolID: ctx.String("pool"), Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision})
 	if err != nil {
 		return err
 	}
@@ -243,7 +267,7 @@ func (a *App) switchCloudDefault(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	in := client.CloudChangeInput{CloudID: ctx.Arg(1), Default: true, Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision}
+	in := client.CloudChangeInput{CloudID: cloudArg(ctx, 1), Default: true, Provider: ctx.String("provider"), ConnectionID: ctx.String("connection"), Region: ctx.String("region"), Revision: revision}
 	if ctx.Bool("clear") == (in.Provider != "") {
 		return fmt.Errorf("name the new --provider and --connection, or pass --clear")
 	}
@@ -276,9 +300,9 @@ func (a *App) getCloudSync(ctx cli.CommandContext, forceWait bool) error {
 		return err
 	}
 	if forceWait || ctx.Bool("wait") {
-		return a.cloudSyncResult(ctx, c, p.ID, &client.CloudSync{ID: ctx.Arg(1)}, true)
+		return a.cloudSyncResult(ctx, c, p.ID, &client.CloudSync{ID: cloudArg(ctx, 1)}, true)
 	}
-	v, err := c.CloudSync(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.CloudSync(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
@@ -289,7 +313,7 @@ func (a *App) retryCloudSync(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.RetryCloudSync(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.RetryCloudSync(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
@@ -300,7 +324,7 @@ func (a *App) revertCloudSync(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.PreviewCloudRevert(ctxOf(ctx), p.ID, ctx.Arg(1))
+	v, err := c.PreviewCloudRevert(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
 	if err != nil {
 		return err
 	}
@@ -311,7 +335,7 @@ func (a *App) completeCloudRouting(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	v, err := c.CompleteCloudRouting(ctxOf(ctx), p.ID, ctx.Arg(1), client.CompleteCloudRoutingInput{EnvironmentID: ctx.String("environment"), Evidence: ctx.String("evidence")})
+	v, err := c.CompleteCloudRouting(ctxOf(ctx), p.ID, cloudArg(ctx, 1), client.CompleteCloudRoutingInput{EnvironmentID: ctx.String("environment"), Evidence: ctx.String("evidence")})
 	if err != nil {
 		return err
 	}
@@ -365,7 +389,11 @@ func (a *App) cloudSyncResult(ctx cli.CommandContext, c *client.Client, project 
 			sync = latest
 		}
 		if err != nil {
-			return errors.Join(fmt.Errorf("follow Cloud sync %s with cloud-syncs show %s %s: %w", sync.ID, project, sync.ID, err), a.json(sync))
+			scope := project
+			if scope == "" {
+				scope = "--organization"
+			}
+			return errors.Join(fmt.Errorf("follow Cloud sync %s with cloud-syncs show %s %s: %w", sync.ID, scope, sync.ID, err), a.json(sync))
 		}
 	}
 	if err := a.json(sync); err != nil {

@@ -108,9 +108,14 @@ type Listener struct {
 // EnsureListener finds the listener forwarding to a target group, or
 // opens one on the first free port: 443 with a certificate, or 80, then
 // 8000 and up. Each public service gets a port of its own, since without
-// a domain there's no host to route on.
+// a domain there's no host to route on. A listener a canary splits
+// between the target group and its candidate's still forwards to it,
+// whatever its weight.
 func (s *Session) EnsureListener(ctx context.Context, lb, targetGroup, certificate string) (*Listener, error) {
-	cli := elb.NewFromConfig(s.cfg)
+	return ensureListener(ctx, elb.NewFromConfig(s.cfg), lb, targetGroup, certificate)
+}
+
+func ensureListener(ctx context.Context, cli listenerAPI, lb, targetGroup, certificate string) (*Listener, error) {
 	got, err := cli.DescribeListeners(ctx, &elb.DescribeListenersInput{LoadBalancerArn: sdk.String(lb)})
 	if err != nil {
 		return nil, fmt.Errorf("read listeners: %w", err)
@@ -118,10 +123,8 @@ func (s *Session) EnsureListener(ctx context.Context, lb, targetGroup, certifica
 	used := map[int32]bool{}
 	for _, l := range got.Listeners {
 		used[sdk.ToInt32(l.Port)] = true
-		for _, a := range l.DefaultActions {
-			if sdk.ToString(a.TargetGroupArn) == targetGroup {
-				return &Listener{ARN: sdk.ToString(l.ListenerArn), Port: sdk.ToInt32(l.Port), HTTPS: l.Protocol == elbtypes.ProtocolEnumHttps}, nil
-			}
+		if forwardsTo(l, targetGroup) {
+			return &Listener{ARN: sdk.ToString(l.ListenerArn), Port: sdk.ToInt32(l.Port), HTTPS: l.Protocol == elbtypes.ProtocolEnumHttps}, nil
 		}
 	}
 	first := int32(80)

@@ -16,15 +16,16 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/herald"
 	emaildriver "github.com/xraph/herald/driver/email"
+	"github.com/xraph/herald/driver/push"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	heraldstore "github.com/xraph/herald/store"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	"github.com/xraph/relay"
-	"github.com/xraph/relay/catalog"
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -42,11 +43,18 @@ type Service struct {
 	relay      *relay.Relay
 	relayStore *encryptedRelayStore
 	authz      Authorizer
+	pushCover  PushCover
 	audit      func(context.Context, security.Principal, string, string)
 	statusMu   sync.RWMutex
 	workerErr  error
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	closeMu    sync.Mutex // guards closed, stopCtx and stopCancel
+	closed     bool       // set once Shutdown starts, so nothing new joins wg
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	testMu     sync.Mutex
+	testPushed map[string]time.Time // last test push by device ID
 }
 
 func New(cfg config.Config, db *grove.DB) (*Service, error) {
@@ -59,7 +67,7 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 		return nil, err
 	}
 	ms := privateHeraldStore{Store: heraldpg.New(db)}
-	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}))
+	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&emaildriver.ResendDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
 	if err != nil {
 		return nil, err
 	}
@@ -77,35 +85,64 @@ func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
 
 // Prepare is called after central migrations and before Authsome starts. It
-// configures exactly one application-owned SMTP provider and seeds templates.
+// configures exactly one application-owned mail provider (SMTP or Resend) and seeds templates.
+// Replicas that start together take turns: the provider has no unique
+// constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
-	if err := s.herald.SeedDefaultTemplates(ctx, s.cfg.Identity.AppID); err != nil {
+	return pglock.Do(ctx, s.pg, pglock.StartupSeed, s.prepare)
+}
+
+func (s *Service) prepare(ctx context.Context) error {
+	if err := s.seedTemplates(ctx); err != nil {
+		return err
+	}
+	if err := s.preparePush(ctx); err != nil {
 		return err
 	}
 	if !s.MailEnabled() {
 		return nil
 	}
 	n := s.cfg.Notifications
+	name, driverName := "loomplane-smtp", "smtp"
 	creds := map[string]string{"username": n.SMTPUsername, "password": n.SMTPPassword}
 	settings := map[string]string{"host": n.SMTPHost, "port": strconv.Itoa(n.SMTPPort), "use_tls": strconv.FormatBool(n.SMTPTLS), "from": n.From}
+	if n.ResendAPIKey != "" {
+		name, driverName = "loomplane-resend", "resend"
+		creds = map[string]string{"api_key": n.ResendAPIKey}
+		settings = map[string]string{"from": n.From}
+	}
 	list, err := s.mailStore.ListAllProviders(ctx, s.cfg.Identity.AppID)
 	if err != nil {
 		return err
 	}
+	found := false
 	for _, p := range list {
-		if p.Name == "loomplane-smtp" {
+		switch p.Name {
+		case name:
+			found = true
 			enabled := true
-			_, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: creds, SetSettings: settings, Enabled: &enabled})
-			return err
+			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: creds, SetSettings: settings, Enabled: &enabled}); err != nil {
+				return err
+			}
+		case "loomplane-smtp", "loomplane-resend":
+			// Exactly one application-owned mail provider stays enabled.
+			if !p.Enabled {
+				continue
+			}
+			enabled := false
+			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{Enabled: &enabled}); err != nil {
+				return err
+			}
 		}
 	}
-	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: "loomplane-smtp", Channel: "email", Driver: "smtp", Credentials: creds, Settings: settings, Enabled: true})
+	if found {
+		return nil
+	}
+	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: name, Channel: "email", Driver: driverName, Credentials: creds, Settings: settings, Enabled: true})
 }
 func (s *Service) Run(ctx context.Context) error {
-	for _, status := range []string{"succeeded", "failed"} {
-		if _, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"}); err != nil {
-			return err
-		}
+	if err := s.registerEventTypes(ctx); err != nil {
+		return err
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.relay.Start(ctx)
@@ -132,12 +169,43 @@ func (s *Service) Run(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Shutdown(ctx context.Context) error {
+	s.closeMu.Lock()
+	s.closed = true
+	if s.stopCancel != nil {
+		s.stopCancel()
+	}
+	s.closeMu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
+	}
+	done := make(chan struct{})
+	go func() {
 		s.wg.Wait()
+		close(done)
+	}()
+	var err error
+	select {
+	case <-done:
+	case <-ctx.Done():
+		err = ctx.Err()
 	}
 	s.relay.Stop(ctx)
-	return nil
+	return err
+}
+
+// startBackground registers a goroutine with wg and returns the context
+// Shutdown cancels. It reports false once Shutdown has begun.
+func (s *Service) startBackground() (context.Context, bool) {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return nil, false
+	}
+	if s.stopCtx == nil {
+		s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
+	}
+	s.wg.Add(1)
+	return s.stopCtx, true
 }
 func (s *Service) Health(ctx context.Context) error {
 	if err := s.mailStore.Ping(ctx); err != nil {

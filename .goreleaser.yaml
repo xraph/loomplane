@@ -20,6 +20,10 @@ before:
     # The server archive carries the built dashboard.
     - pnpm --dir apps/dashboard install --frozen-lockfile
     - pnpm --dir apps/dashboard build
+    # Cross-compiling all release targets overflows the ~18 GB left on a
+    # standard GitHub Actions runner unless build-only dependencies and unused
+    # preinstalled SDKs are cleared before go build starts.
+    - sh -c 'if [ "${GITHUB_ACTIONS:-}" = "true" ]; then rm -rf apps/dashboard/node_modules "${HOME}/.local/share/pnpm"; sudo -n rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true; fi'
 
 builds:
   - id: loomctl
@@ -106,7 +110,7 @@ homebrew_casks:
       email: bot@goreleaser.com
     homepage: https://github.com/xraph/loomplane
     description: "Plan, approve and follow Loomplane deployments from your terminal"
-    license: AGPL-3.0-only
+    license: FSL-1.1-ALv2
     caveats: "Run 'loomctl login --url https://your-loomplane --key lp_live_...' to get started"
     hooks:
       post:
@@ -128,4 +132,4 @@ scoops:
       email: bot@goreleaser.com
     homepage: https://github.com/xraph/loomplane
     description: "Plan, approve and follow Loomplane deployments from your terminal"
-    license: AGPL-3.0-only
+    license: FSL-1.1-ALv2

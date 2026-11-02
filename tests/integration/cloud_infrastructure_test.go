@@ -4,16 +4,20 @@ package integration
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/connections"
@@ -163,6 +167,19 @@ type infraFixture struct {
 	runtime     *infraRuntime
 	provider    *infraProvider
 	p           security.Principal
+}
+
+func infraFixtureHostKey(t *testing.T) string {
+	t.Helper()
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
 }
 
 func newInfraFixture(t *testing.T) *infraFixture {
@@ -333,7 +350,7 @@ func TestCloudInfrastructureResizeAndManagedDeletion(t *testing.T) {
 	o = f.reconcile(t, o)
 	// Enrollment's real transport is covered by the SSH/Docker test below. This
 	// fixture isolates lifecycle checkpoint and exact-action behavior.
-	o.HostKey = "fixture-host-key"
+	o.HostKey = infraFixtureHostKey(t)
 	o.Enrolled = true
 	if err := f.store.SaveOperation(t.Context(), o); err != nil {
 		t.Fatal(err)
@@ -627,7 +644,7 @@ func TestCloudInfrastructureRetirementSerializesWorkloadReferences(t *testing.T)
 	f := newInfraFixture(t)
 	o := f.create(t)
 	o = f.reconcile(t, o)
-	o.HostKey = "fixture-key"
+	o.HostKey = infraFixtureHostKey(t)
 	o.Enrolled = true
 	if err := f.store.SaveOperation(t.Context(), o); err != nil {
 		t.Fatal(err)
@@ -688,5 +705,32 @@ func TestCloudInfrastructureStaleWorkersCannotResurrectRecords(t *testing.T) {
 	staleServer.Status = "ready"
 	if err = f.store.SaveServer(t.Context(), &staleServer); !errors.Is(err, cloudinfra.ErrConflict) {
 		t.Fatalf("stale worker restored readiness: %v", err)
+	}
+}
+
+// Ruling M32: OpenServerCreates finds an approved create however many
+// operations came after it, which ListOperations' latest hundred miss,
+// and leaves out previews.
+func TestCloudInfrastructureOpenCreatesHaveNoLimit(t *testing.T) {
+	f := newInfraFixture(t)
+	open := f.create(t)
+	for i := range 101 {
+		o, err := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: fmt.Sprintf("later-%d", i), ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu"})
+		if err != nil || o.Status != "preview" {
+			t.Fatalf("preview %d: %+v, %v", i, o, err)
+		}
+	}
+	latest, err := f.svc.ListOperations(t.Context(), f.p, "cloud")
+	if err != nil || len(latest) != 100 || slices.ContainsFunc(latest, func(o *cloudinfra.Operation) bool { return o.ID == open.ID }) {
+		t.Fatalf("the latest hundred: %d, %v", len(latest), err)
+	}
+	creates, err := f.svc.OpenServerCreates(t.Context(), f.p, "cloud")
+	if err != nil || len(creates) != 1 || creates[0].ID != open.ID || creates[0].Input.Name != "host" {
+		t.Fatalf("open creates: %+v, %v", creates, err)
+	}
+	denied := f.p
+	denied.UserID = "project-manager"
+	if _, err = f.svc.OpenServerCreates(t.Context(), denied, "cloud"); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("without cloud management: %v", err)
 	}
 }

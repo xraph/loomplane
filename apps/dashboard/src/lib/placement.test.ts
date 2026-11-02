@@ -194,3 +194,41 @@ it("inherits owned targets and build context, and clears endpoints when a target
   expect(settings.target).toBe("conn_other")
   expect(settings.endpoint).toBeUndefined()
 })
+
+it("normalizes PSC routes and follows provider and environment inheritance", () => {
+  const route = {
+    consumer_project: "app-project",
+    network: "projects/app-project/global/networks/apps",
+    subnetwork: "projects/app-project/regions/us-central1/subnetworks/apps",
+  }
+  const m: Manifest = {
+    version: 1,
+    services: {
+      api: {
+        source: "go:cmd/api",
+        cloud_sql_network: route,
+        environments: {
+          production: { provider: "cloud-run" },
+          preview: { provider: "render" },
+          staging: {
+            provider: "cloud-run",
+            cloud_sql_network: {
+              ...route,
+              network: "projects/app-project/global/networks/staging",
+            },
+          },
+        },
+      },
+    },
+  }
+  const row = placementRows(m, graph)[0]
+  expect(placementSettings(m, row, "production").cloudSqlNetwork).toEqual({
+    consumerProject: route.consumer_project,
+    network: route.network,
+    subnetwork: route.subnetwork,
+  })
+  expect(placementSettings(m, row, "preview").cloudSqlNetwork).toBeUndefined()
+  expect(placementSettings(m, row, "staging").cloudSqlNetwork?.network).toBe(
+    "projects/app-project/global/networks/staging"
+  )
+})

@@ -1,0 +1,155 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: rerankers
+entries:
+  - id: BAAI/bge-reranker-base
+    title: BGE reranker base
+    publisher: BAAI
+    summary: A reranker that scores how well a passage answers a query, in English and Chinese.
+    revision: 2cfc18c9415c912f9d8155881c133215df768a70
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 278044931
+    context_length: 514
+    architecture:
+      name: XLMRobertaForSequenceClassification
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1112206140
+        min_memory_gib: 2
+  - id: BAAI/bge-reranker-large
+    title: BGE reranker large
+    publisher: BAAI
+    summary: A larger English and Chinese reranker for more accurate ordering.
+    revision: 55611d7bca2a7133960a6d3b71e083071bbfc312
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 559891971
+    context_length: 514
+    architecture:
+      name: XLMRobertaForSequenceClassification
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 2239618772
+        min_memory_gib: 3
+  - id: BAAI/bge-reranker-v2-m3
+    title: BGE reranker v2 M3
+    publisher: BAAI
+    summary: A multilingual reranker built on BGE M3.
+    revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 567755777
+    context_length: 8194
+    architecture:
+      name: XLMRobertaForSequenceClassification
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    core: true
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 2271071852
+        min_memory_gib: 3
+  - id: cross-encoder/ms-marco-MiniLM-L6-v2
+    title: MS MARCO MiniLM L6 v2
+    publisher: Sentence Transformers
+    summary: A tiny English reranker trained on MS MARCO, fast on a CPU.
+    revision: 233902d25c440f23af6f7d6e94d2946bac0bee0a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 22714113
+    context_length: 512
+    architecture:
+      name: BertForSequenceClassification
+      layers: 6
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 90870598
+        min_memory_gib: 1
+  - id: cross-encoder/ms-marco-MiniLM-L12-v2
+    title: MS MARCO MiniLM L12 v2
+    publisher: Sentence Transformers
+    summary: A small English reranker trained on MS MARCO, a little slower and more accurate than L6.
+    revision: 7b0235231ca2674cb8ca8f022859a6eba2b1c968
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 33360897
+    context_length: 512
+    architecture:
+      name: BertForSequenceClassification
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 133469020
+        min_memory_gib: 1
+  - id: Alibaba-NLP/gte-multilingual-reranker-base
+    title: GTE multilingual reranker base
+    publisher: Alibaba
+    summary: A reranker for over 70 languages with an 8192 token input.
+    revision: 8215cf04918ba6f7b6a62bb44238ce2953d8831c
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - rerank
+    parameters: 305959681
+    context_length: 8192
+    architecture:
+      name: NewForSequenceClassification
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 611934706
+        min_memory_gib: 2

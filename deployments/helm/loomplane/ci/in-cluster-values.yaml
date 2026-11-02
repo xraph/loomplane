@@ -1,0 +1,12 @@
+# CI renders the chart with these to lint and validate it. They aren't a
+# working install: nothing listens at these addresses.
+publicURL: https://loomplane.example.com
+secrets:
+  secretKey: Y2ktb25seS1ub3QtYS1yZWFsLWtleS0zMi1ieXRlcyE=
+  databaseURL: postgres://loomplane:ci@postgres:5432/loomplane?sslmode=require
+storage:
+  url: s3://us-east-1/loomplane?endpoint=http://minio:9000&path_style=true
+inCluster:
+  enabled: true
+  namespaces: [apps, preview]
+  createNamespaces: true

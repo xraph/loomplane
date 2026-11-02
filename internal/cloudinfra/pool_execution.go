@@ -53,6 +53,10 @@ func (s *PgStore) BeginPoolExecution(ctx context.Context, org, plan, service str
 		l.Close()
 		return nil, err
 	}
+	if err = guardDeploymentEffects(ctx, tx, org, plan, false); err != nil {
+		l.Close()
+		return nil, err
+	}
 	var environment string
 	if err = tx.QueryRow(ctx, `SELECT environment_id FROM loomplane_plans WHERE org_id=$1 AND id=$2`, org, plan).Scan(&environment); err != nil {
 		l.Close()
@@ -94,12 +98,28 @@ func (l *PoolExecutionLock) Context(ctx context.Context) context.Context {
 	return WithExecutionScope(ctx, ExecutionScope{l.org, l.plan, l.service, l.generation})
 }
 func (l *PoolExecutionLock) Attempt(ctx context.Context) error {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, l.org); checkErr != nil {
+		return checkErr
+	}
+	var accepted bool
+	err = tx.QueryRow(ctx, `SELECT x.started OR EXISTS(SELECT 1 FROM loomplane_workload_attempts w WHERE w.org_id=x.org_id AND w.plan_id=x.plan_id AND w.service=x.service AND w.effects_started) FROM loomplane_pool_execution x WHERE x.org_id=$1 AND x.plan_id=$2 AND x.service=$3 AND x.generation=$4 AND x.active AND x.phase='reserved'`, l.org, l.plan, l.service, l.generation).Scan(&accepted)
+	if err != nil {
+		return errors.Join(ErrConflict, err)
+	}
+	if checkErr := guardDeploymentEffects(ctx, tx, l.org, l.plan, accepted); checkErr != nil {
+		return checkErr
+	}
 	var generation int64
-	err := l.db.QueryRow(ctx, `UPDATE loomplane_pool_execution SET started=true,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4 AND active AND phase='reserved' RETURNING generation`, l.org, l.plan, l.service, l.generation).Scan(&generation)
+	err = tx.QueryRow(ctx, `UPDATE loomplane_pool_execution SET started=true,revision=revision+1 WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND generation=$4 AND active AND phase='reserved' RETURNING generation`, l.org, l.plan, l.service, l.generation).Scan(&generation)
 	if err != nil {
 		return fmt.Errorf("%w: execution was fenced before effects", ErrConflict)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Finish is a compare-and-set on the worker generation. Even if its original

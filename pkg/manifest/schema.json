@@ -158,11 +158,221 @@
         }
       }
     },
+    "environments": {
+      "description": "What each environment declares about itself, by environment name. A release block says how its releases go live.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,39}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/environment"
+      }
+    },
     "federation": {
       "$ref": "#/$defs/federation"
     }
   },
   "$defs": {
+    "placementGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "members",
+        "min_ready",
+        "routing"
+      ],
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "members": {
+          "type": "object",
+          "minProperties": 2,
+          "maxProperties": 20,
+          "additionalProperties": {
+            "$ref": "#/$defs/placementMember"
+          }
+        },
+        "min_ready": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 20
+        },
+        "routing": {
+          "$ref": "#/$defs/groupRouting"
+        }
+      }
+    },
+    "placementMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "destination",
+        "replicas",
+        "prerequisite_id",
+        "prerequisite_revision"
+      ],
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prerequisite_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prerequisite_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "groupRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "hostname"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "dns-equal",
+            "external"
+          ]
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "zone_connection_id": {
+          "type": "string"
+        }
+      }
+    },
+    "workerSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "main": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.m?js$"
+        },
+        "compatibility_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "compatibility_flags": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,127}$"
+          }
+        },
+        "durable_objects": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "class_name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,127}$"
+              },
+              "class_name": {
+                "type": "string",
+                "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,127}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "release": {
+          "$ref": "#/$defs/release"
+        }
+      }
+    },
+    "release": {
+      "description": "How the environment's releases go live. Version 1 manifests only.",
+      "type": "object",
+      "required": ["strategy"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "description": "direct deploys all at once, blue_green swaps when the new version is ready, canary moves traffic in steps and checks health at each.",
+          "enum": ["direct", "blue_green", "canary"]
+        },
+        "steps": {
+          "description": "Canary only. The traffic percentages to move through, strictly increasing, ending at 100. Defaults to 5, 25, 50, 100.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "hold": {
+          "description": "Canary only. How long to watch each step, in whole minutes from 1m to 24h, such as 10m or 1h30m. Defaults to 10m.",
+          "type": "string",
+          "pattern": "^[0-9]+(?:h|m|h[0-9]+m)$"
+        },
+        "thresholds": {
+          "$ref": "#/$defs/thresholds"
+        },
+        "min_requests": {
+          "description": "The fewest requests a step needs before its health counts. Defaults to 200.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "watch": {
+          "description": "How long to watch each release's health after it finishes, in whole minutes up to 24h, such as 15m or 1h. 0 turns the watch off. Defaults to 15m for canary and blue_green, and off for direct. A breach rolls the release back.",
+          "type": "string",
+          "pattern": "^(?:0|[0-9]+(?:h|m|h[0-9]+m))$"
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error_rate": {
+          "description": "The highest share of failed requests a step may show, above 0% and at most 100%. Defaults to 1%.",
+          "type": "string",
+          "pattern": "^(?:100|[0-9]{1,2})(?:\\.[0-9]+)?%$"
+        },
+        "error_rate_delta": {
+          "description": "How far above the current version's failure share a step may be, above 0% and at most 100%. Defaults to 0.5%.",
+          "type": "string",
+          "pattern": "^(?:100|[0-9]{1,2})(?:\\.[0-9]+)?%$"
+        },
+        "p95_latency_ratio": {
+          "description": "How many times the current version's p95 latency a step may reach, from 1 to 10. Defaults to 1.3.",
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    },
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,39}$"
@@ -248,9 +458,191 @@
         }
       }
     },
+    "placementConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional checked location requirements. Environment overrides replace this block. Residency requires saved operator attestation.",
+      "properties": {
+        "allowed_locations": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "residency": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "runtime": { "enum": ["server", "kubernetes", "managed"] },
+        "architecture": { "enum": ["amd64", "arm64"] },
+        "gpu": { "$ref": "#/$defs/gpu" },
+        "network": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "storage": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "availability": { "enum": ["single", "independent-zone", "independent-datacenter"] }
+      }
+    },
+    "scratchMount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "volume",
+        "path"
+      ],
+      "properties": {
+        "volume": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 256,
+          "pattern": "^/"
+        },
+        "read_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "podSidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "image",
+        "architecture",
+        "cpu_millis",
+        "memory_mib",
+        "readiness"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,47}$"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.:/_-]*@sha256:[a-f0-9]{64}$"
+        },
+        "architecture": {
+          "enum": [
+            "arm64",
+            "amd64"
+          ]
+        },
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8000
+        },
+        "memory_mib": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 32768
+        },
+        "command": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "environment": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "port"
+          ],
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/scratchMount"
+          }
+        }
+      }
+    },
+    "podGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidecars": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/podSidecar"
+          }
+        },
+        "scratch": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "size_mib"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,47}$"
+              },
+              "size_mib": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              }
+            }
+          }
+        },
+        "mounts": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/scratchMount"
+          }
+        },
+        "isolation_revision": {"type":"string","enum":["kubernetes-instance-isolation-v1"]},
+        "runtime_storage_mib": {"type":"integer","minimum":0,"maximum":4096},
+        "surge_replicas": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
     "settings": {
       "type": "object",
       "properties": {
+        "pod_group": { "$ref": "#/$defs/podGroup" },
+        "worker": { "$ref": "#/$defs/workerSettings" },
+        "placement": { "$ref": "#/$defs/placementConstraints" },
+        "capacity_mode": {
+          "description": "Managed workload reservation mode. Guaranteed reserves your reviewed replica maximum; best effort grants no fleet expansion.",
+          "enum": ["guaranteed", "best_effort"]
+        },
         "cloud_target": {
           "description": "Named target in this environment's assigned Cloud.",
           "type": "string",
@@ -328,6 +720,12 @@
               "type": "integer",
               "minimum": 128,
               "maximum": 32768
+            },
+            "gpu": { "$ref": "#/$defs/gpu" },
+            "shm": {
+              "description": "MiB of /dev/shm. Counts toward memory.",
+              "type": "integer",
+              "minimum": 0
             }
           }
         },
@@ -338,8 +736,69 @@
         "enabled": {
           "description": "False leaves the service out.",
           "type": "boolean"
+        },
+        "cloud_sql_network": {
+          "description": "VPC and regional subnet for Cloud Run PSC database connections.",
+          "$ref": "#/$defs/cloudSQLApplicationNetwork"
+        },
+        "farp": {
+          "$ref": "#/$defs/farp"
         }
       }
+    },
+    "farp": {
+      "description": "Opts the service in to FARP route discovery by an Octopus gateway. An empty block takes Octopus's defaults. An environment's block replaces the service's whole block.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gateway": {
+          "description": "The Octopus resource the service feeds. Without it, the manifest's only one.",
+          "$ref": "#/$defs/name"
+        },
+        "openapi": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "asyncapi": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "graphql": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "health": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "metrics": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "grpc_reflection": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "description": "What the service speaks, such as rest or websocket.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          }
+        },
+        "port": {
+          "description": "The port Octopus reaches the service on. Without it, the service's own port.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "enabled": {
+          "description": "False opts the service out of FARP, for example in one environment.",
+          "type": "boolean"
+        }
+      }
+    },
+    "farpPath": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$"
     },
     "service": {
       "type": "object",
@@ -373,6 +832,24 @@
             "$ref": "#/$defs/name"
           }
         },
+        "need_options": {
+          "description": "Options this service passes to a need, by need and then by option name. A need has to be listed in needs. What a need accepts is checked when you plan.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",
@@ -390,11 +867,87 @@
         }
       }
     },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "description": "A resource in this manifest to use for the dependency.",
+          "$ref": "#/$defs/name"
+        },
+        "external": {
+          "description": "A catalog endpoint to connect to instead, by ID.",
+          "type": "string",
+          "pattern": "^endpoint_[0-9a-z]{26}$"
+        },
+        "enabled": {
+          "description": "Turns an optional dependency on or off. Off can't be set with resource or external.",
+          "type": "boolean"
+        }
+      }
+    },
+    "gpu": {
+      "description": "GPUs on one server or node. Planning checks the kind against the target.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count"],
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 8 }
+      }
+    },
     "resource": {
       "type": "object",
       "required": ["kind"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["cloud_sql_psc"]
+          },
+          "then": {
+            "required": ["provider", "version", "region"],
+            "properties": {
+              "kind": {
+                "const": "postgres"
+              },
+              "provider": {
+                "const": "cloud-sql"
+              },
+              "version": {
+                "const": "17"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
+        "gpu": { "$ref": "#/$defs/gpu" },
+        "cloud_sql_psc": {
+          "description": "Manual PSC endpoint for a PostgreSQL 17 source. You manage the endpoint and DNS. Application attachment is not available yet.",
+          "type": "object",
+          "required": ["consumer_project", "network", "forwarding_rule"],
+          "additionalProperties": false,
+          "properties": {
+            "consumer_project": {
+              "type": "string",
+              "minLength": 6
+            },
+            "network": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/global/networks/[^/]+$"
+            },
+            "forwarding_rule": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/regions/[^/]+/forwardingRules/[^/]+$"
+            }
+          }
+        },
+        "existing_resource": {
+          "description": "Synced provider resource to attach without taking lifecycle ownership.",
+          "type": "string",
+          "pattern": "^providerresource_[a-f0-9]{64}$"
+        },
         "kind": {
           "$ref": "#/$defs/kind"
         },
@@ -403,7 +956,7 @@
         },
         "target": {
           "type": "string",
-          "description": "Checked server connection for a catalog resource."
+          "description": "Checked provider account or runtime connection for this resource."
         },
         "region": {
           "$ref": "#/$defs/region"
@@ -417,6 +970,27 @@
           "description": "Put this Postgres resource behind the database gateway. Only postgres resources can.",
           "type": "boolean"
         },
+        "uses": {
+          "description": "Where a catalog resource gets each dependency, by dependency name: a resource in this manifest, an external endpoint, or on or off for an optional one. A dependency left out gets a new one.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/use"
+          }
+        },
+        "settings": {
+          "description": "Values the catalog kind takes, by setting name. The kind says which it has and what each must look like.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",
@@ -427,6 +1001,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "gpu": { "$ref": "#/$defs/gpu" },
               "provider": {
                 "$ref": "#/$defs/provider"
               },
@@ -439,6 +1014,21 @@
               "gateway": {
                 "description": "Turn the database gateway on or off for this Postgres resource in this environment. Wins over the resource's own gateway.",
                 "type": "boolean"
+              },
+              "target": {
+                "type": "string",
+                "description": "The checked server connection this environment runs the resource on. Replaces the resource's target; an environment that changes the provider doesn't keep the resource's."
+              },
+              "settings": {
+                "description": "Settings for this environment. Each one replaces the resource's setting of the same name; the rest come from the resource.",
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
               }
             }
           }
@@ -552,6 +1142,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "placement_groups": {
+          "type": "object",
+          "maxProperties": 100,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/placementGroup"
+          }
+        },
         "destinations": {
           "type": "object",
           "maxProperties": 100,
@@ -745,6 +1345,25 @@
         }
       },
       "required": ["service", "destination"]
+    },
+    "cloudSQLApplicationNetwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer_project", "network", "subnetwork"],
+      "properties": {
+        "consumer_project": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+        },
+        "network": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/global/networks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "subnetwork": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/regions/[a-z][a-z0-9-]*/subnetworks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
     }
   },
   "allOf": [

@@ -12,6 +12,8 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 )
@@ -19,22 +21,26 @@ import (
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	db *pgdriver.PgDB
+	frontendWake cloudinfra.CapacityCloudWakeup
+	db           *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
 func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
-var _ Store = (*PgStore)(nil)
+var (
+	_ Store       = (*PgStore)(nil)
+	_ CanaryStore = (*PgStore)(nil)
+)
 
 const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, sources,
-	error, steps, retries, started_by, started_at, finished_at`
+	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait, canary`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
-	var sources, steps []byte
+	var sources, steps, wait, canary []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt); err != nil {
+		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait, &canary); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(sources, &d.Sources); err != nil {
@@ -43,6 +49,14 @@ func scan(row pgx.Row) (*Deployment, error) {
 	var err error
 	if d.Steps, err = decodeSteps(steps); err != nil {
 		return nil, fmt.Errorf("decode steps: %w", err)
+	}
+	if len(wait) > 0 {
+		if err = json.Unmarshal(wait, &d.CapacityWait); err != nil {
+			return nil, fmt.Errorf("decode capacity wait: %w", err)
+		}
+	}
+	if d.Canary, err = decodeCanary(canary); err != nil {
+		return nil, err
 	}
 	d.normalize()
 	return &d, nil
@@ -60,11 +74,15 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 	if err != nil {
 		return nil, fmt.Errorf("encode sources: %w", err)
 	}
+	canary, err := encodeCanary(d.Canary)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL, $16)
 		ON CONFLICT (plan_id) DO NOTHING`,
 		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, sources,
-		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt)
+		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt, canary)
 	if err != nil {
 		return nil, fmt.Errorf("insert deployment: %w", err)
 	}
@@ -152,12 +170,17 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 		return guardErr
 	}
 	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
+	var status string
+	err = tx.QueryRow(ctx, `SELECT steps, status FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read steps: %w", err)
+	}
+	// A concurrent pause or cancellation keeps pending steps resumable.
+	if (step.Status == StepSkipped || step.Status == StepFailed) && (status == StatusPaused || status == StatusCancelled) {
+		return tx.Commit()
 	}
 	steps, err := decodeSteps(raw)
 	if err != nil {
@@ -187,11 +210,24 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 // Finish implements Store. A deployment that's already settled stays as
 // it is.
 func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, at time.Time) error {
-	if _, err := s.db.Exec(ctx, `UPDATE loomplane_deployments SET status = $3, error = $4, finished_at = $5
-		WHERE org_id = $1 AND id = $2 AND status = 'running'`, orgID, id, status, reason, at); err != nil {
+	if status != StatusSucceeded && status != StatusFailed && status != StatusCancelled {
+		return errors.New("deployment finish requires a terminal status")
+	}
+	if key := orchestration.FinalizationKey(ctx); key != "" {
+		return s.finishActivity(ctx, orgID, id, key, status, reason, at)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // no-op after commit
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, orgID); lockErr != nil {
+		return lockErr
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET status=$3,error=$4,finished_at=$5 WHERE org_id=$1 AND id=$2 AND status='running'`, orgID, id, status, reason, at); err != nil {
 		return fmt.Errorf("finish deployment: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Reopen implements Store, in one transaction, so of two retries at once
@@ -213,9 +249,13 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
-	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments
-		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw)
+	// Status admission and capacity transitions take this gate before the row.
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, orgID); lockErr != nil {
+		return false, lockErr
+	}
+	var raw, rawCanary []byte
+	err = tx.QueryRow(ctx, `SELECT steps, canary FROM loomplane_deployments
+		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw, &rawCanary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Not failed: end the transaction here, since the deferred
 		// rollback only runs on an error.
@@ -232,16 +272,29 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("decode steps: %w", err)
 	}
 	for i := range steps {
-		if steps[i].Status == StepFailed || steps[i].Status == StepSkipped {
+		if retried(steps[i].Status) {
 			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt = StepPending, "Waiting to retry", nil, nil
 		}
 	}
 	if raw, err = encodeSteps(steps); err != nil {
 		return false, fmt.Errorf("encode steps: %w", err)
 	}
+	// A canary starts over; its verdicts stay as the record of the failed run.
+	if len(rawCanary) > 0 {
+		c, decodeErr := decodeCanary(rawCanary)
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		if c != nil {
+			c.reopen()
+		}
+		if rawCanary, err = encodeCanary(c); err != nil {
+			return false, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments
-		SET status = 'running', error = '', finished_at = NULL, steps = $3, retries = retries + 1
-		WHERE org_id = $1 AND id = $2`, orgID, id, raw); err != nil {
+		SET status = 'running', error = '', finished_at = NULL, steps = $3, canary = $4, retries = retries + 1
+		WHERE org_id = $1 AND id = $2`, orgID, id, raw, rawCanary); err != nil {
 		return false, fmt.Errorf("reopen deployment: %w", err)
 	}
 	if err = tx.Commit(); err != nil {

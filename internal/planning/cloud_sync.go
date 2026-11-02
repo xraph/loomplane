@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // AppliedInputReader verifies access to encrypted variables and source artifacts.
@@ -42,6 +43,9 @@ func (s *Service) syncStore() (cloudprofiles.SyncStore, error) {
 	return st, nil
 }
 func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, project string) error {
+	if err := refuseAutomation(p); err != nil {
+		return err
+	}
 	if project == "" {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
@@ -61,6 +65,11 @@ func (s *Service) PreviewCloudChange(ctx context.Context, p security.Principal, 
 func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, project string, in cloudprofiles.ChangeInput, reverts string) (*cloudprofiles.Preview, error) {
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
+	}
+	if in.EnvironmentID != "" {
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, in.EnvironmentID); guardErr != nil {
+			return nil, guardErr
+		}
 	}
 	st, err := s.syncStore()
 	if err != nil {
@@ -186,6 +195,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			continue
 		}
 		found = true
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, env.ID); guardErr != nil {
+			if errors.Is(guardErr, projects.ErrFleetManaged) {
+				preview.Blockers = append(preview.Blockers, "Manage instance placement through its fleet.")
+				continue
+			}
+			return nil, guardErr
+		}
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env.ID)
 		if e != nil {
 			return nil, e
@@ -270,16 +286,84 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			return nil, e
 		}
 		plan := &Plan{ID: preview.ID + "/" + env.ID, OrgID: p.OrgID, ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, CreatedBy: p.UserID, CreatedAt: preview.CreatedAt, Status: StatusApproved, DecidedBy: p.UserID}
+		planningBindings := bindings
+		compensations := map[string]*CloudCompensation{}
+		if reverts != "" {
+			originalSync, originalSnapshot, readErr := st.GetSync(ctx, p.OrgID, preview.ProjectID, reverts)
+			if readErr != nil {
+				return nil, readErr
+			}
+			unstarted, checkErr := s.unstartedCloudCompensation(ctx, p.OrgID, reverts, env.ID, originalSnapshot)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			planningBindings, compensations, e = cloudCompensationBindings(bindings, originalSnapshot, reverts, env.ID, unstarted)
+			for _, compensation := range compensations {
+				compensation.OriginalCompleted = originalSync.Status == cloudprofiles.SyncSucceeded
+				if compensation.ServerAttempt != (compensation.Source.Provider == "server") && !compensation.OriginalCompleted {
+					preview.Blockers = append(preview.Blockers, "Finish or reconcile the original mixed-runtime change, then review its revert again; its unfinished effects cannot be safely transferred.")
+				}
+			}
+			if e != nil {
+				return nil, e
+			}
+		}
 		poolAssignment := after
 		if in.Default {
 			// A default is never a pool, and a default switch moves nothing pooled.
 			poolAssignment = nil
 		}
-		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, bindings, poolAssignment, preview.Before, options, planned)
+		capacityBindings := slices.DeleteFunc(slices.Clone(planningBindings), func(b *Binding) bool {
+			c := compensations[actionID(b.Subject, b.Name)]
+			return c != nil && c.Retained
+		})
+		intents := map[string]*CapacityIntent{}
+		poolPlacements, poolErr := s.syncPoolPlacements(ctx, plan, capacityBindings, poolAssignment, preview.Before, options, planned, intents)
+		if len(intents) > 0 {
+			syncID, idErr := capacitySyncID(preview.ID)
+			if idErr != nil {
+				return nil, idErr
+			}
+			for _, intent := range intents {
+				intent.Demand.PlanID = migrationPlanID(syncID, env.ID)
+				intent.Demand.IntentHash = ""
+				hash, hashErr := Digest(intent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				intent.Demand.IntentHash = hash
+			}
+		}
+		if poolPlacements == nil {
+			poolPlacements = map[string]CloudPlacement{}
+		}
+		for _, c := range compensations {
+			if !c.Retained {
+				continue
+			}
+			var source ServiceConfig
+			if decodeErr := json.Unmarshal(c.Source.Config, &source); decodeErr != nil {
+				return nil, decodeErr
+			}
+			if source.CloudPlacement != nil && source.CloudPlacement.PoolID != "" && after != nil {
+				pin, valid := repinCloudPlacement(*source.CloudPlacement, after)
+				if !valid {
+					return nil, cloudprofiles.ErrConflict
+				}
+				poolPlacements[c.Source.Name] = pin
+			}
+		}
 		if poolErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+poolErr.Error())
 		}
 		routes, routeErr := s.releaseRoutes(ctx, plan)
+		if reverts != "" {
+			if reader, ok := s.store.(interface {
+				CompensationRoutes(context.Context, string, string, string) ([]cloudinfra.Route, error)
+			}); ok {
+				routes, routeErr = reader.CompensationRoutes(ctx, p.OrgID, project, env.ID)
+			}
+		}
 		if routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
@@ -287,20 +371,100 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if in.Default {
 			selector = defaultPlacementSelector
 		}
-		result := appliedCloudPlan(bindings, after, selector, options, s.providers, poolPlacements, routes)
+		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
+		locationReviews := []*cloudprofiles.LocationReview{}
+		priorLocations := map[string]locationSelection{}
+		for i := range result.Actions {
+			action := &result.Actions[i]
+			if action.Service == nil || action.Service.Placement == nil {
+				continue
+			}
+			cfg := action.Service
+			pin := cfg.CloudPlacement
+			if cfg.CapacityIntent != nil {
+				pin = &CloudPlacement{TargetID: cfg.CapacityIntent.Demand.TargetID, TargetName: cfg.CapacityIntent.TargetName}
+			}
+			if pin == nil || !selectsPlacement(selector, pin) {
+				continue
+			}
+			set := manifest.Settings{Placement: cfg.Placement, CloudTarget: pin.TargetName, Size: cfg.Size, Scale: cfg.Scale}
+			_, selection, placementErr := s.selectLocation(ctx, plan, after, set, action.Name, planningBindings, options, nil, cfg.Repo, priorLocations, &locationCapacityReview{Intent: cfg.CapacityIntent, Placement: cfg.CloudPlacement, Before: preview.Before}, locationRequirements{Workload: cfg.Workload})
+			if result.LocationPlacements == nil {
+				result.LocationPlacements = map[string]LocationPlacementDecision{}
+			}
+			result.LocationPlacements[action.Name] = selection.Decision
+			if placementErr != nil {
+				result.Problems = append(result.Problems, Finding{Code: "location-placement", Subject: ServiceSubject, Name: action.Name, Message: placementErr.Error()})
+				result.Executable = false
+				continue
+			}
+			if cfg.CapacityIntent != nil {
+				cfg.CapacityIntent.Demand.LocationReview = selection.Review
+				cfg.CapacityIntent.Demand.IntentHash = ""
+				hash, hashErr := Digest(cfg.CapacityIntent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				cfg.CapacityIntent.Demand.IntentHash = hash
+			} else {
+				cfg.CloudPlacement.LocationReview = selection.Review
+			}
+			priorLocations[action.Name] = selection
+			locationReviews = append(locationReviews, selection.Review)
+		}
+
+		for i := range result.Actions {
+			a := &result.Actions[i]
+			c := compensations[a.ID]
+			if c == nil {
+				continue
+			}
+			a.Compensation = c
+			if c.Retained {
+				a.Op = Keep
+				a.AdoptCloudPlacement = true
+				a.CloudAdoption = nil
+				a.Routes = nil
+				a.Provider, a.ConnectionID, a.Region, a.Engine = c.Source.Provider, c.Source.ConnectionID, c.Source.Region, c.Source.Engine
+				a.Reason = "Restore the retained source instance and remove the replaced candidate after routing is verified."
+				for _, route := range routes {
+					if route.Input.Service == a.Name {
+						a.Routes = append(a.Routes, route)
+					}
+				}
+			} else {
+				a.Reason = "Recreate the saved source from its artifact and variables on the reviewed target. This creates a new runtime instance."
+			}
+		}
 		if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings, routePlacementReview{Prior: planned, Before: preview.Before}); routeErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+routeErr.Error())
 		}
 		for _, action := range result.Actions {
-			if action.Service != nil && action.Service.CloudPlacement != nil && action.Service.CloudPlacement.PoolID != "" && action.Op != Delete && (action.Op != Keep || action.AdoptCloudPlacement) {
+			if (action.Compensation == nil || !action.Compensation.Retained) && action.Service != nil && action.Service.CloudPlacement != nil && action.Service.CloudPlacement.PoolID != "" && action.Op != Delete && (action.Op != Keep || action.AdoptCloudPlacement) {
 				planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: action.Name, Placement: action.Service.CloudPlacement.PoolPlacement()})
 			}
+		}
+		frontendPlan := *plan
+		frontendSyncID, frontendIDErr := capacitySyncID(preview.ID)
+		if frontendIDErr != nil {
+			return nil, frontendIDErr
+		}
+		frontendPlan.ID = migrationPlanID(frontendSyncID, env.ID)
+		if frontendErr := s.pinFrontendDemands(ctx, &frontendPlan, result); frontendErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+frontendErr.Error())
+		}
+		if workloadErr := s.PrepareClusterWorkloadDemands(ctx, &frontendPlan, result); workloadErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+workloadErr.Error())
+		}
+		if cleanupErr := s.PrepareManagedCleanupTargets(ctx, &frontendPlan, result); cleanupErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+cleanupErr.Error())
 		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
 		}
 		change := cloudprofiles.EnvironmentChange{ProjectID: project, EnvironmentID: env.ID, Environment: env.Name, Services: []string{}, Status: cloudprofiles.SyncPending}
+		change.CompensationMode, change.CompensationMessage = cloudCompensationDescription(plan.Actions)
 		change.Summary = cloudprofiles.PlanSummary{Create: plan.Summary.Create, Update: plan.Summary.Update, Replace: plan.Summary.Replace, Delete: plan.Summary.Delete, Keep: plan.Summary.Keep}
 		for _, a := range plan.Actions {
 			if a.AdoptCloudPlacement {
@@ -310,7 +474,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				continue
 			}
 			change.Services = append(change.Services, a.Name)
-			if a.Op == Replace && a.Service.Public && len(a.Routes) == 0 {
+			if requiresExternalRouting(a) {
 				change.ExternalRouting = true
 			}
 			if plan.ManifestID == "" {
@@ -351,7 +515,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if string(routeSnapshot) == "null" {
 			routeSnapshot = []byte("[]")
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {
@@ -434,6 +598,9 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 			return nil, authErr
 		}
 	}
+	if ownershipErr := s.requireUnmanagedSnapshot(ctx, p.OrgID, project, snapshot); ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	if preview.Revision != revision {
 		return nil, cloudprofiles.ErrConflict
 	}
@@ -473,6 +640,20 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		}
 	}
 	id, err := typeid.Generate("csync")
+	for _, env := range snapshot.Environments {
+		var plan Plan
+		if decodeErr := json.Unmarshal(env.Plan, &plan); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if slices.ContainsFunc(plan.Actions, HasCapacityIntent) {
+			reserved, idErr := capacitySyncID(preview.ID)
+			if idErr != nil {
+				return nil, idErr
+			}
+			id, err = typeid.Parse(reserved)
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +663,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	if planErr := prepareAcceptedPlans(sync, snapshot); planErr != nil {
 		return nil, planErr
 	}
-	sync, err = st.Accept(ctx, preview, snapshot, sync, key)
+	sync, err = st.Accept(security.WithPrincipal(ctx, p), preview, snapshot, sync, key)
 	if err != nil {
 		return nil, err
 	}
@@ -506,12 +687,12 @@ func (s *Service) validateSnapshotConnections(ctx context.Context, org string, s
 			if option.ID == id {
 				found = true
 				if expected != "" && connections.AccountIdentity(option.Cloud, option.Account, option.Details) != expected {
-					return fmt.Errorf("reviewed connection %s changed its account", id)
+					return fmt.Errorf("%w: reviewed connection %s changed its account", cloudprofiles.ErrConflict, id)
 				}
 			}
 		}
 		if !found {
-			return fmt.Errorf("reviewed connection %s is unavailable", id)
+			return fmt.Errorf("%w: reviewed connection %s is unavailable", cloudprofiles.ErrConflict, id)
 		}
 	}
 	for _, env := range snapshot.Environments {
@@ -526,7 +707,7 @@ func (s *Service) validateSnapshotConnections(ctx context.Context, org string, s
 			pin := a.Service.CloudPlacement
 			i := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == pin.ConnectionID })
 			if i < 0 || !options[i].Ready || connections.AccountIdentity(options[i].Cloud, options[i].Account, options[i].Details) != pin.AccountIdentity {
-				return fmt.Errorf("reviewed account for %s is unavailable or changed", a.Name)
+				return fmt.Errorf("%w: reviewed account for %s is unavailable or changed", cloudprofiles.ErrConflict, a.Name)
 			}
 		}
 	}
@@ -586,7 +767,7 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	if authErr := s.authorizeStoredCloudSync(ctx, p, sync, snapshot); authErr != nil {
 		return nil, authErr
 	}
-	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup {
+	if sync.Status != cloudprofiles.SyncFailed && sync.Status != cloudprofiles.SyncCleanup && sync.Status != cloudprofiles.SyncRouting {
 		return nil, cloudprofiles.ErrConflict
 	}
 	snapshot.Actor = p
@@ -606,7 +787,12 @@ func (s *Service) RetryCloudSync(ctx context.Context, p security.Principal, proj
 	return sync, nil
 }
 
-// CompleteCloudRouting records the operator's explicit external-route evidence.
+func requiresExternalRouting(a Action) bool {
+	return a.Op == Replace && a.Service != nil && a.Service.Public && len(a.Routes) == 0
+}
+
+// CompleteCloudRouting records evidence only for the accepted unmanaged replacements.
+// Recorded routes still reconcile and drain independently before source cleanup.
 func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal, project, id, environment, evidence string) (*cloudprofiles.Sync, error) {
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
@@ -631,6 +817,20 @@ func (s *Service) CompleteCloudRouting(ctx context.Context, p security.Principal
 	i := slices.IndexFunc(sync.Environments, func(e cloudprofiles.EnvironmentChange) bool { return e.EnvironmentID == environment })
 	if i < 0 || !sync.Environments[i].ExternalRouting {
 		return nil, cloudprofiles.ErrNotFound
+	}
+	unmanaged := false
+	for _, env := range snapshot.Environments {
+		if env.EnvironmentID != environment {
+			continue
+		}
+		var plan Plan
+		if err := json.Unmarshal(env.Plan, &plan); err != nil {
+			return nil, err
+		}
+		unmanaged = slices.ContainsFunc(plan.Actions, requiresExternalRouting)
+	}
+	if !unmanaged {
+		return nil, cloudprofiles.ErrConflict
 	}
 	sync.Environments[i].RoutingEvidence = strings.TrimSpace(evidence)
 	snapshot.Actor = p
@@ -667,7 +867,8 @@ func decodeCloudBindings(raw []byte) ([]*Binding, error) {
 }
 
 // CloudSyncPage returns persisted operations after enforcing the full project scope.
-func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
+// A nonempty cloud keeps only that Cloud's operations.
+func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project, cloud string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
 	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, page.Cursor{}, err
 	}
@@ -677,12 +878,12 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 		}
 	}
 	st, ok := s.cloudProfiles.(interface {
-		ListSyncPage(context.Context, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
+		ListSyncPage(context.Context, string, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
 	})
 	if !ok {
 		return nil, page.Cursor{}, errors.New("cloud sync pagination unavailable")
 	}
-	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, before, limit)
+	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, cloud, before, limit)
 	for _, sync := range syncs {
 		if filterErr := s.filterCloudSync(ctx, p, sync, project); filterErr != nil {
 			return nil, page.Cursor{}, filterErr
@@ -734,12 +935,16 @@ func (s *Service) filterCloudPreviewAssignments(ctx context.Context, p security.
 		}
 		assignment := **field
 		assignment.Targets = []cloudprofiles.Target{}
+		assignment.DefaultPlacement = nil
 		if grants, ok := s.cloudProfiles.(cloudprofiles.GrantStore); ok {
 			grant, err := grants.GetProjectGrant(ctx, p.OrgID, assignment.CloudID, preview.ProjectID)
 			if err != nil && !errors.Is(err, cloudprofiles.ErrNotFound) {
 				return err
 			}
 			if err == nil && !grant.Revoked {
+				if len(grant.TargetIDs) == 0 {
+					assignment.DefaultPlacement = (*field).DefaultPlacement
+				}
 				for _, target := range (*field).Targets {
 					if len(grant.TargetIDs) == 0 || slices.Contains(grant.TargetIDs, target.ID) {
 						assignment.Targets = append(assignment.Targets, target)
@@ -809,4 +1014,17 @@ func (s *Service) filterCloudSync(ctx context.Context, p security.Principal, syn
 		}
 	}
 	return nil
+}
+
+// capacitySyncID reserves the operation identity while its intents are reviewed.
+func capacitySyncID(preview string) (string, error) {
+	id, err := typeid.Parse(preview)
+	if err != nil || id.Prefix() != "cpv" || id.IsZero() {
+		return "", cloudprofiles.ErrInvalid
+	}
+	sync, err := typeid.FromUUID("csync", id.UUID())
+	if err != nil {
+		return "", err
+	}
+	return sync.String(), nil
 }

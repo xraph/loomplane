@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Deployment, Plan } from "@/client/forge/loomplane/types"
-import { commitLabel, matches, runLog, toRun } from "@/lib/runs"
+import {
+  commitLabel,
+  isLive,
+  matches,
+  runKindLabel,
+  runLog,
+  toRun,
+} from "@/lib/runs"
 
 const action = (id: string, step: number, op = "create"): Action => ({
   id,
@@ -24,6 +31,11 @@ const plan = (status: string, extra: Partial<Plan> = {}): Plan => ({
   environmentId: "env_1",
   status,
   actions: [action("api", 1), action("web", 2)],
+  artifacts: [],
+  fromEnvironment: "",
+  fromEnvironmentId: "",
+  kind: "release",
+  leftovers: [],
   connections: {},
   createdAt: "2026-10-12T10:00:00Z",
   createdBy: "user_1",
@@ -109,6 +121,22 @@ describe("toRun", () => {
     expect(toRun(p, deployment("succeeded", [])).status).toBe("succeeded")
     expect(toRun(p, deployment("failed", [])).status).toBe("failed")
   })
+
+  it("shows a paused deployment as paused, not in progress", () => {
+    const p = plan("approved")
+    const paused = toRun(p, deployment("paused", []))
+    expect(paused.status).toBe("paused")
+    expect(paused.phase).toBe("Paused for capacity")
+    expect(isLive(paused)).toBe(true)
+    const cancelled = toRun(p, deployment("cancelled", []))
+    expect(cancelled.status).toBe("canceled")
+    expect(cancelled.phase).toBe("Deployment canceled")
+    expect(isLive(cancelled)).toBe(false)
+    expect(cancelled.thread.slice(2).map((s) => s.state)).toEqual([
+      "canceled",
+      "canceled",
+    ])
+  })
 })
 
 describe("thread", () => {
@@ -173,6 +201,26 @@ describe("thread", () => {
   })
 })
 
+it("does not queue kept services as deployment work", () => {
+  const kept = action("cache", 1, "keep")
+  const created = action("browser-cache", 2)
+  const run = toRun(
+    plan("approved", { actions: [kept, created] }),
+    deployment("succeeded", [
+      { actionId: "browser-cache", status: "succeeded" },
+    ])
+  )
+  expect(
+    run.thread.filter((s) => s.group === "Deploy").map((s) => [s.key, s.state])
+  ).toEqual([["browser-cache", "done"]])
+  const unchanged = toRun(
+    plan("approved", { actions: [kept] }),
+    deployment("succeeded", [])
+  )
+  expect(unchanged.thread.at(-1)?.name).toBe("Nothing to change")
+  expect(unchanged.thread.at(-1)?.state).toBe("done")
+})
+
 describe("runLog", () => {
   it("tells the story in time order, with the decision by name", () => {
     const r = toRun(
@@ -219,5 +267,33 @@ describe("helpers", () => {
     expect(matches(r, "PRODUCTION")).toBe(true)
     expect(matches(r, "plan_1")).toBe(true)
     expect(matches(r, "staging")).toBe(false)
+  })
+})
+
+describe("runKindLabel", () => {
+  const rollback = (trigger: string) =>
+    plan("approved", {
+      kind: "rollback",
+      rollback: {
+        reason: "errors up",
+        restoreDeploymentId: "dep_1",
+        restoreFinishedAt: "2026-10-12T09:00:00Z",
+        restorePlanId: "plan_0",
+        targetDeploymentId: "dep_2",
+        targetPlanId: "plan_2",
+        trigger,
+      },
+    })
+
+  it("labels promotions and rollbacks", () => {
+    expect(
+      runKindLabel(
+        plan("ready", { kind: "promotion", fromEnvironment: "staging" })
+      )
+    ).toBe("Promoted from staging")
+    expect(runKindLabel(rollback("watch"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("canary"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("manual"))).toBe("Rollback")
+    expect(runKindLabel(plan("ready"))).toBe("")
   })
 })

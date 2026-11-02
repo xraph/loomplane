@@ -54,7 +54,7 @@ describe("ownLayer", () => {
 
 describe("labels", () => {
   it("names the layer and where it applies", () => {
-    expect(layerLabel(variable({ scope: "organization" }))).toBe("Organization")
+    expect(layerLabel(variable({ scope: "organization" }))).toBe("Workspace")
     expect(reachLabel(variable({}))).toBe("every environment")
     expect(reachLabel(variable({ environment: "production" }))).toBe(
       "production only"

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 )
 
 // Errors a request can fail with before it reaches a handler.
@@ -30,6 +31,7 @@ const HeaderOrganization = "X-Loomplane-Org"
 
 // Principal is the caller of a request.
 type Principal struct {
+	Fleet  *FleetScope `json:"fleet_scope,omitempty"`
 	UserID string
 	OrgID  string
 	// KeyID is the API key the request came with, if it came with one. A
@@ -37,6 +39,9 @@ type Principal struct {
 	KeyID string
 	// ReadOnly limits the request to reading, whatever the member's role.
 	ReadOnly bool
+	// Kind is who the principal is: a person (the zero value) or Loomplane
+	// automation. Only SystemPrincipal and ActorPrincipal set it.
+	Kind Kind `json:",omitempty"`
 }
 
 type principalKey struct{}
@@ -57,6 +62,10 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 func Resolve(userID, sessionOrg, header string) (Principal, error) {
 	switch {
 	case userID == "":
+		return Principal{}, ErrUnauthenticated
+	case strings.HasPrefix(userID, systemPrefix), IsFleetSubject(userID):
+		// authsome never issues such an ID; refusing it anyway means no
+		// session can ever act as Loomplane automation.
 		return Principal{}, ErrUnauthenticated
 	case sessionOrg == "":
 		return Principal{}, ErrNoOrganization

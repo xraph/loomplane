@@ -222,7 +222,7 @@ export function ServiceGraph({
   return (
     <Card ref={frame} className="gap-0 overflow-x-auto py-0">
       <div style={{ width: Math.max(g.width, frameW) }}>
-        <div className="flex border-b text-xs text-muted-foreground">
+        <div className="flex border-b bg-subtle text-[11.5px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
           {columns.map((c, i) => (
             <span
               key={c.title}
@@ -295,9 +295,9 @@ function Node({
 }) {
   const style = { left: n.x, top: n.y, width: n.w, height: n.h }
   const common = cn(
-    "absolute flex h-auto items-center justify-start gap-2.5 rounded-xl border bg-background px-3 text-left text-sm font-normal whitespace-normal shadow-[0_1px_2px_0_rgb(0_0_0/0.05),0_4px_12px_-6px_rgb(0_0_0/0.08)] transition-[opacity,box-shadow,border-color] duration-150 outline-none hover:border-foreground/30 hover:bg-background focus-visible:ring-3 focus-visible:ring-ring/50",
+    "absolute flex h-auto items-center justify-start gap-2.5 rounded-xl border bg-background px-3 text-left text-[13px] font-normal whitespace-normal shadow-[0_1px_2px_0_rgb(0_0_0/0.05),0_4px_12px_-6px_rgb(0_0_0/0.08)] transition-[opacity,box-shadow,border-color] duration-150 outline-none hover:border-foreground/30 hover:bg-background focus-visible:ring-3 focus-visible:ring-ring/50",
     dim && "opacity-45",
-    active && "border-foreground/60 ring-3 ring-foreground/10"
+    active && "border-brand-line ring-3 ring-ring/40"
   )
   const hoverProps = {
     onMouseEnter: () => onHover(n.id),
@@ -326,7 +326,9 @@ function Node({
           />
         </span>
         <span className="grid min-w-0 flex-1 leading-tight">
-          <span className="truncate font-medium">{resourceLabel(r.kind)}</span>
+          <span className="truncate font-semibold">
+            {resourceLabel(r.kind)}
+          </span>
           <span className="truncate text-xs text-muted-foreground">
             {review
               ? "Suggested, needs review"
@@ -351,7 +353,7 @@ function Node({
       {...hoverProps}
     >
       <span className="grid min-w-0 flex-1 leading-tight">
-        <span className="truncate font-medium">{s.name}</span>
+        <span className="truncate font-semibold">{s.name}</span>
         <span className="truncate text-xs text-muted-foreground">
           {s.deployable
             ? [kindLabel(s.kind), s.framework].filter(Boolean).join(", ")

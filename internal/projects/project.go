@@ -33,6 +33,7 @@ func Kinds() []string { return []string{KindProduction, KindStaging, KindPreview
 
 // Errors the service and stores return.
 var (
+	ErrFleetManaged        = errors.New("manage this project or environment through its instance fleet")
 	ErrNotFound            = errors.New("project not found")
 	ErrSlugTaken           = errors.New("a project with that slug already exists in this organization")
 	ErrInvalid             = errors.New("invalid project")
@@ -50,32 +51,37 @@ var (
 // generated client, which keeps one normalized copy per ID. A tag, not a
 // Forge interface, so this package stays free of Forge.
 type Project struct {
-	ID          string `json:"id" forge:"id"`
-	OrgID       string `json:"org_id"`
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	Icon        string `json:"icon"`
-	Color       string `json:"color"`
+	DeploymentMode string `json:"deployment_mode"`
+	ID             string `json:"id" forge:"id"`
+	OrgID          string `json:"org_id"`
+	Name           string `json:"name"`
+	Slug           string `json:"slug"`
+	Description    string `json:"description"`
+	Icon           string `json:"icon"`
+	Color          string `json:"color"`
 	// Repositories are the "owner/name" of each repository the project
 	// builds from, each once, by its first alias. Its sources belong to discovery; the store
 	// reads them so a list of projects can show them.
-	Repositories []string  `json:"repositories"`
-	Status       string    `json:"status"`
-	CreatedBy    string    `json:"created_by"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Repositories []string `json:"repositories"`
+	// Exclusions keep analysis-found services out of the graph, plans
+	// and deploys. See Exclusion.
+	Exclusions []Exclusion `json:"exclusions"`
+	Status     string      `json:"status"`
+	CreatedBy  string      `json:"created_by"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.
 type Environment struct {
-	ID        string    `json:"id" forge:"id"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	ID         string    `json:"id" forge:"id"`
+	OrgID      string    `json:"org_id"`
+	ProjectID  string    `json:"project_id"`
+	Name       string    `json:"name"`
+	Kind       string    `json:"kind"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DefaultEnvironments are the environments every new project starts with.

@@ -19,7 +19,7 @@
 }
 
 .dark {
-  --terminal: oklch(0.13 0.004 286);
+  --terminal: oklch(0.1 0 0);
 }
 
 @layer components {

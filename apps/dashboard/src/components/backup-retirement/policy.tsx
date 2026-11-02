@@ -169,11 +169,11 @@ export function RetentionPolicyControls({
     <section
       ref={focusTarget}
       tabIndex={-1}
-      className="grid min-w-0 gap-2 rounded-lg border p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="grid min-w-0 gap-2 rounded-xl bg-card p-3 ring-1 ring-border outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="Automatic retention policy"
     >
       {state.status === "pending" ? (
-        <p role="status" className="text-sm">
+        <p role="status" className="text-[13px]">
           Loading automatic policy…
         </p>
       ) : state.status === "error" ? (
@@ -193,7 +193,7 @@ export function RetentionPolicyControls({
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-medium">
+              <p className="text-[13px] font-medium">
                 {policy?.enabled
                   ? "Automatic deletion enabled"
                   : policy

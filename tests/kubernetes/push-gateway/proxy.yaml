@@ -1,0 +1,118 @@
+# Test-only ingress controller and HTTPS Gateway in a disposable kind cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: push-test-proxy
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, services, secrets, configmaps, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, ingressclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses/status]
+    verbs: [update]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses, gateways, httproutes, grpcroutes, tcproutes, tlsroutes, referencegrants, backendtlspolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses/status, gateways/status, httproutes/status, grpcroutes/status, tcproutes/status, tlsroutes/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: push-test-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: push-test-proxy
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: loomplane
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: traefik}
+  template:
+    metadata:
+      labels: {app: traefik}
+    spec:
+      serviceAccountName: traefik
+      containers:
+        - name: traefik
+          image: traefik:v3.7.16
+          args:
+            - --entrypoints.websecure.address=:8443
+            - --entrypoints.websecure.http.tls=true
+            - --entrypoints.health.address=:8082
+            - --ping=true
+            - --ping.entrypoint=health
+            - --providers.kubernetesingress=true
+            - --providers.kubernetesingress.ingressclass=traefik
+            - --providers.kubernetesingress.allowemptyservices=true
+            - --providers.kubernetesgateway=true
+            - --providers.kubernetesgateway.statusaddress.ip=127.0.0.1
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            httpGet: {path: /ping, port: 8082}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik
+spec:
+  selector: {app: traefik}
+  ports:
+    - {name: https, port: 443, targetPort: https}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: traefik
+spec:
+  controller: traefik.io/ingress-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: traefik
+spec:
+  controllerName: traefik.io/gateway-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: push-test
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: https
+      hostname: "*.loomplane.test"
+      port: 8443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: push-tls
+      allowedRoutes:
+        namespaces: {from: Same}

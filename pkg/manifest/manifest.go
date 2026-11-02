@@ -14,10 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	providercontract "github.com/xraph/loomplane/pkg/provider"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,9 +70,11 @@ type Manifest struct {
 	DatabaseGateway *DatabaseGateway `json:"database_gateway,omitempty" yaml:"database_gateway,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
-	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
-	Ignore Ignore          `json:"ignore,omitzero" yaml:"ignore,omitempty" optional:"true"`
-	Held   Held            `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
+	Links map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
+	// Environments declare how each environment's releases go live.
+	Environments map[string]Environment `json:"environments,omitempty" yaml:"environments,omitempty"`
+	Ignore       Ignore                 `json:"ignore,omitzero" yaml:"ignore,omitempty" optional:"true"`
+	Held         Held                   `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
 }
 
 // Link is a private network link between two clouds: an HA VPN between
@@ -142,6 +149,11 @@ type Service struct {
 	// Needs names the resources and other services this one talks to.
 	// Each one it names gets the service its address, in a variable.
 	Needs []string `json:"needs,omitempty" yaml:"needs,omitempty"`
+	// NeedOptions are the values this service passes to a need, by need
+	// and then by option name: need_options.fabriq.tenant. Only a need
+	// that is listed in Needs can have options, and what a need accepts
+	// is the planner's question, not the manifest's.
+	NeedOptions map[string]map[string]string `json:"need_options,omitempty" yaml:"need_options,omitempty"`
 	// Environments override settings in one environment, by name.
 	Environments map[string]Settings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
@@ -161,6 +173,13 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	PodGroup  *PodGroup                        `json:"pod_group,omitempty" yaml:"pod_group,omitempty"`
+	Worker    *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
+	Placement *PlacementConstraints            `json:"placement,omitempty" yaml:"placement,omitempty"`
+	// CapacityMode chooses managed workload reservation semantics.
+	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
+	// CloudSQLNetwork is the explicit application route for PSC attachments.
+	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty" yaml:"cloud_sql_network,omitempty"`
 	// CloudTarget names a target in the environment's assigned Cloud.
 	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
 	// CloudTags select the one target in the assigned Cloud that carries
@@ -185,6 +204,50 @@ type Settings struct {
 	Public *bool `json:"public,omitempty" yaml:"public,omitempty"`
 	// Enabled false leaves the service out, here or in one environment.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Farp opts the service in to FARP route discovery by an Octopus
+	// gateway. An environment's block replaces the service's whole block.
+	Farp *Farp `json:"farp,omitempty" yaml:"farp,omitempty"`
+}
+
+// Farp is what a service tells an Octopus gateway about itself. The block
+// being there is the opt-in: an empty one takes Octopus's defaults, and
+// enabled: false opts out, for example in one environment.
+type Farp struct {
+	// Gateway names the Octopus resource the service feeds. Empty means
+	// the manifest's only one.
+	Gateway string `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// OpenAPI, AsyncAPI, GraphQL, Health and Metrics are paths on the
+	// service. Empty leaves the choice to Octopus.
+	OpenAPI        string `json:"openapi,omitempty" yaml:"openapi,omitempty"`
+	AsyncAPI       string `json:"asyncapi,omitempty" yaml:"asyncapi,omitempty"`
+	GraphQL        string `json:"graphql,omitempty" yaml:"graphql,omitempty"`
+	Health         string `json:"health,omitempty" yaml:"health,omitempty"`
+	Metrics        string `json:"metrics,omitempty" yaml:"metrics,omitempty"`
+	GRPCReflection bool   `json:"grpc_reflection,omitempty" yaml:"grpc_reflection,omitempty"`
+	// Capabilities are what the service speaks, such as rest or websocket.
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// Port is the port Octopus reaches the service on. Empty means the
+	// service's own port.
+	Port int `json:"port,omitempty" yaml:"port,omitempty"`
+	// Enabled false opts the service out.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// MaxFarpCapabilities is the most capabilities a farp block can name.
+const MaxFarpCapabilities = 8
+
+// clone copies the block, so settings never share its slice or pointer.
+func (f *Farp) clone() *Farp {
+	if f == nil {
+		return nil
+	}
+	out := *f
+	out.Capabilities = slices.Clone(f.Capabilities)
+	if f.Enabled != nil {
+		enabled := *f.Enabled
+		out.Enabled = &enabled
+	}
+	return &out
 }
 
 // Scale is how many instances of a service run.
@@ -199,10 +262,28 @@ type Size struct {
 	CPU float64 `json:"cpu" yaml:"cpu"`
 	// Memory is in MiB.
 	Memory int `json:"memory" yaml:"memory"`
+	// GPU asks for GPUs on the server or node the service runs on.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Shm is MiB of /dev/shm. It counts toward Memory.
+	Shm int `json:"shm,omitempty" yaml:"shm,omitempty"`
 }
+
+// GPU asks for Count GPUs of Kind on one server or node. Planning checks
+// Kind against the target.
+type GPU struct {
+	Kind  string `json:"kind" yaml:"kind"`
+	Count int    `json:"count" yaml:"count"`
+}
+
+// MaxGPUs is the most GPUs a manifest can ask for on one server or node.
+const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
+	// ExistingResource attaches inventory without owning its cloud lifecycle.
+	ExistingResource string `json:"existing_resource,omitempty" yaml:"existing_resource,omitempty"`
+	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
+	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
 	// Kind is what it is: postgres, mysql, redis and so on, the names
 	// repository analysis uses.
 	Kind     string `json:"kind" yaml:"kind"`
@@ -215,6 +296,14 @@ type Resource struct {
 	// Gateway puts a Postgres resource behind the database gateway.
 	// Only postgres resources can.
 	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// Uses chooses, by dependency name, where a catalog resource gets each
+	// dependency. A dependency left out gets a new one of its own.
+	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
+	// GPU asks for GPUs, for catalog resources that can use them.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Settings are values a catalog kind takes, by setting name. The kind
+	// says which it has and what each must look like; the planner checks.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
@@ -243,6 +332,16 @@ func (r Resource) GatewayIn(env string) bool {
 		return *o.Gateway
 	}
 	return r.Gateway != nil && *r.Gateway
+}
+
+// Use says how a composed catalog resource gets one of its dependencies:
+// from another resource in this manifest, from an external endpoint, or
+// switched on or off when the dependency is optional. With none of them
+// set, the resource gets a new one of its own.
+type Use struct {
+	Resource string `json:"resource,omitempty" yaml:"resource,omitempty"` // a resource in this manifest
+	External string `json:"external,omitempty" yaml:"external,omitempty"` // an external endpoint's ID
+	Enabled  *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`   // optional dependencies
 }
 
 // Gateway is one public address in front of several services, routing
@@ -279,6 +378,16 @@ type ResourceSettings struct {
 	// Gateway turns the database gateway on or off for a Postgres
 	// resource in one environment. Nothing else reads it.
 	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// GPU replaces the resource's GPU request. Gateways can't use it.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Target replaces the resource's target in this environment. An
+	// environment that moves the resource to another provider doesn't keep
+	// the resource's own target. Gateways can't use it.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// Settings replace the resource's settings one by one: each key set
+	// here wins, and the rest come from the resource. Gateways can't use
+	// them.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -315,18 +424,35 @@ func (h Held) WarnSameAddress() bool { return h.SameAddress == SameAddressWarn }
 var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 
 var (
-	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	inventoryResourceRE = regexp.MustCompile(`^providerresource_[a-f0-9]{64}$`)
+	cloudTargetRE       = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE          = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE           = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	envRE               = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE             = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE           = regexp.MustCompile(`^[a-z0-9-]+$`)
+	kindRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
 	dirRE     = regexp.MustCompile(`^[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	sourceRE  = regexp.MustCompile(`^(?:[a-z]+:)?[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$`)
 	repoRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	// endpointRE is a catalog endpoint's ID: the typeid prefix endpoint and
+	// a 26 character suffix.
+	endpointRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
+	// optionRE is the name of an option a service passes to a need, the
+	// same rule a catalog kind's consumer options follow.
+	optionRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 )
+
+// MaxOptionValue is the most characters one need option's value can have.
+const MaxOptionValue = 200
+
+// MaxSettingValue is the most characters one resource setting's value can
+// have.
+const MaxSettingValue = 1024
 
 // Problem is one thing wrong with a manifest, at a path such as
 // "services.api.scale".
@@ -485,11 +611,28 @@ func (m *Manifest) Validate() error {
 			add(path+".kind", "%q isn't a resource kind", r.Kind)
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
+		if r.ExistingResource != "" {
+			if !inventoryResourceRE.MatchString(r.ExistingResource) {
+				add(path+".existing_resource", "must name a synced provider resource")
+			}
+			if r.Provider != "" || r.Target != "" || r.Region != "" || r.Version != "" || r.Gateway != nil || r.CloudSQLPSC != nil || r.GPU != nil || len(r.Uses) > 0 || len(r.Settings) > 0 {
+				add(path, "an existing resource accepts kind and existing_resource, without creation or lifecycle settings")
+			}
+			for env, o := range r.Environments {
+				if o.Provider != "" || o.Target != "" || o.Region != "" || o.Gateway != nil || o.GPU != nil || len(o.Settings) > 0 {
+					add(path+".environments."+env, "an existing resource only accepts an enabled override")
+				}
+			}
+		}
 		checkToken(add, path+".region", "region", r.Region)
+		if r.CloudSQLPSC != nil && (r.Provider != "cloud-sql" || r.Kind != "postgres" || r.Version != "17" || !r.CloudSQLPSC.Valid(r.Region)) {
+			add(path+".cloud_sql_psc", "requires explicit cloud-sql PostgreSQL 17 placement and a manual PSC endpoint in the resource region")
+		}
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
 		checkGatewayKind(add, path, r.Kind, r.Gateway)
+		m.validateUses(add, name, path, r.Uses)
 		for _, env := range sortedKeys(r.Environments) {
 			o := r.Environments[env]
 			epath := path + ".environments." + env
@@ -499,7 +642,11 @@ func (m *Manifest) Validate() error {
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
 			checkGatewayKind(add, epath, r.Kind, o.Gateway)
+			checkGPU(add, epath+".gpu", o.GPU)
+			checkResourceSettings(add, epath+".settings", o.Settings)
 		}
+		checkGPU(add, path+".gpu", r.GPU)
+		checkResourceSettings(add, path+".settings", r.Settings)
 	}
 
 	for _, name := range m.ServiceNames() {
@@ -536,6 +683,12 @@ func (m *Manifest) Validate() error {
 			}
 			seen[need] = true
 		}
+		for _, need := range sortedKeys(s.NeedOptions) {
+			if !slices.Contains(s.Needs, need) {
+				add(path, "need_options.%s isn't in needs", need)
+			}
+			checkNeedOptions(add, path+".need_options."+need, s.NeedOptions[need])
+		}
 		for _, env := range sortedKeys(s.Environments) {
 			epath := path + ".environments." + env
 			if !envRE.MatchString(env) {
@@ -556,11 +709,29 @@ func (m *Manifest) Validate() error {
 	if a := m.Held.SameAddress; a != "" && !slices.Contains(sameAddressChoices, a) {
 		add("held.same_address", "%q isn't a choice; use %s", a, strings.Join(sameAddressChoices, " or "))
 	}
+	m.validateEnvironments(add)
 	ps = append(ps, ValidateFederation(m)...)
 	if len(ps) > 0 {
 		return ps
 	}
 	return nil
+}
+
+// checkNeedOptions checks the options one service passes to one need.
+func checkNeedOptions(add func(string, string, ...any), path string, options map[string]string) {
+	for _, name := range sortedKeys(options) {
+		opath := path + "." + name
+		if !optionRE.MatchString(name) {
+			add(opath, "%q isn't an option name; use lower case letters, digits and underscores, starting with a letter, at most 32 long", name)
+		}
+		value := options[name]
+		if n := utf8.RuneCountInString(value); n > MaxOptionValue {
+			add(opath, "is %d characters; the most is %d", n, MaxOptionValue)
+		}
+		if strings.ContainsFunc(value, unicode.IsControl) {
+			add(opath, "can't hold a newline or other control character")
+		}
+	}
 }
 
 func checkToken(add func(string, string, ...any), path, what, value string) {
@@ -605,7 +776,62 @@ func checkCloudTags(add func(string, string, ...any), path string, tags []string
 	}
 }
 
+// checkFarp reports what is wrong with a farp block. Which Octopus it
+// feeds, and whether the service has a port, are the planner's questions.
+func checkFarp(add func(string, string, ...any), path string, f *Farp) {
+	if f == nil {
+		return
+	}
+	if f.Gateway != "" && !nameRE.MatchString(f.Gateway) {
+		add(path+".gateway", "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+	}
+	for _, p := range []struct{ key, value string }{
+		{"openapi", f.OpenAPI}, {"asyncapi", f.AsyncAPI}, {"graphql", f.GraphQL}, {"health", f.Health}, {"metrics", f.Metrics},
+	} {
+		switch {
+		case p.value == "":
+		case !strings.HasPrefix(p.value, "/"):
+			add(path+"."+p.key, "must start with /")
+		case len(p.value) > 512 || !farpPathRE.MatchString(p.value):
+			add(path+"."+p.key, "must be a path of at most 512 characters, with no query string, fragment or spaces")
+		}
+	}
+	if len(f.Capabilities) > MaxFarpCapabilities {
+		add(path+".capabilities", "has %d capabilities; the most is %d", len(f.Capabilities), MaxFarpCapabilities)
+	}
+	seen := map[string]bool{}
+	for _, c := range f.Capabilities {
+		if !farpCapRE.MatchString(c) {
+			add(path+".capabilities", "%q must be a lowercase word of at most 32 characters", c)
+		}
+		if seen[c] {
+			add(path+".capabilities", "names %q twice", c)
+		}
+		seen[c] = true
+	}
+	if f.Port < 0 || f.Port > MaxPort {
+		add(path+".port", "must be between 1 and %d", MaxPort)
+	}
+}
+
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if err := providercontract.ValidatePodGroup(s.PodGroup); err != nil {
+		add(path+".pod_group", "%s", err.Error())
+	}
+	if s.Placement != nil {
+		if err := s.Placement.Validate(); err != nil {
+			add(path+".placement", "%s", err)
+		}
+	}
+	if n := s.CloudSQLNetwork; n != nil {
+		region := s.Region
+		if parts := strings.Split(n.Subnetwork, "/"); region == "" && len(parts) == 6 {
+			region = parts[3]
+		}
+		if !n.Valid(region) {
+			add(path+".cloud_sql_network", "requires a canonical VPC and regional subnet in the consumer project")
+		}
+	}
 	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
 		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
 	}
@@ -616,8 +842,12 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
 	checkInfrastructure(add, path, s)
+	checkFarp(add, path+".farp", s.Farp)
 	if s.Port < 0 || s.Port > MaxPort {
 		add(path+".port", "must be between 1 and %d", MaxPort)
+	}
+	if s.CapacityMode != "" && s.CapacityMode != "guaranteed" && s.CapacityMode != "best_effort" {
+		add(path+".capacity_mode", "must be guaranteed or best_effort")
 	}
 	if s.Scale != nil {
 		switch {
@@ -638,6 +868,39 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 		if s.Size.Memory < MinMemory || s.Size.Memory > MaxMemory {
 			add(path+".size.memory", "must be between %d and %d MiB", MinMemory, MaxMemory)
 		}
+		checkGPU(add, path+".size.gpu", s.Size.GPU)
+		if s.Size.Shm < 0 {
+			add(path+".size.shm", "can't be negative")
+		} else if s.Size.Shm >= s.Size.Memory && s.Size.Shm > 0 {
+			add(path+".size.shm", "(%d MiB) must be less than memory (%d MiB), which it counts toward", s.Size.Shm, s.Size.Memory)
+		}
+	}
+}
+
+// checkResourceSettings checks a resource's settings: names and lengths.
+// Whether the kind takes them is the planner's question.
+func checkResourceSettings(add func(string, string, ...any), path string, settings map[string]string) {
+	for _, name := range sortedKeys(settings) {
+		if !optionRE.MatchString(name) {
+			add(path+"."+name, "the name must be a lower case letter, then up to 31 lower case letters, digits and underscores")
+		}
+		if n := utf8.RuneCountInString(settings[name]); n > MaxSettingValue {
+			add(path+"."+name, "is %d characters; the most is %d", n, MaxSettingValue)
+		}
+	}
+}
+
+func checkGPU(add func(string, string, ...any), path string, g *GPU) {
+	if g == nil {
+		return
+	}
+	if g.Kind == "" {
+		add(path+".kind", "is required, such as nvidia-l4")
+	} else if !gpuKindRE.MatchString(g.Kind) {
+		add(path+".kind", "%q isn't a GPU kind", g.Kind)
+	}
+	if g.Count < 1 || g.Count > MaxGPUs {
+		add(path+".count", "must be between 1 and %d", MaxGPUs)
 	}
 }
 
@@ -680,6 +943,35 @@ func (m *Manifest) serviceCycle() []string {
 		}
 	}
 	return nil
+}
+
+// validateUses checks one resource's choices of where its dependencies
+// come from. Whether the kind has a dependency by that name is the
+// planner's question, not the manifest's.
+func (m *Manifest) validateUses(add func(string, string, ...any), resource, path string, uses map[string]Use) {
+	for _, dep := range sortedKeys(uses) {
+		u := uses[dep]
+		upath := path + ".uses." + dep
+		if !nameRE.MatchString(dep) {
+			add(upath, "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+		}
+		if u.Resource != "" && u.External != "" {
+			add(upath, "choose resource or external, not both")
+		}
+		if u.Resource != "" {
+			if _, ok := m.Resources[u.Resource]; !ok {
+				add(upath+".resource", "%q isn't a resource in this manifest", u.Resource)
+			} else if u.Resource == resource {
+				add(upath+".resource", "a resource can't use itself")
+			}
+		}
+		if u.External != "" && !endpointRE.MatchString(u.External) {
+			add(upath+".external", "%q isn't a catalog endpoint ID", u.External)
+		}
+		if u.Enabled != nil && !*u.Enabled && (u.Resource != "" || u.External != "") {
+			add(upath, "enabled: false can't be set with resource or external")
+		}
+	}
 }
 
 func (m *Manifest) validateLinks(add func(string, string, ...any)) {
@@ -764,6 +1056,10 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
 			checkNoGateway(add, epath, o.Gateway)
+			if o.GPU != nil {
+				add(epath+".gpu", "a gateway can't use GPUs")
+			}
+			checkNoTargetOrSettings(add, epath, o)
 		}
 	}
 }
@@ -789,6 +1085,18 @@ func (m *Manifest) validateDatabaseGateway(add func(string, string, ...any)) {
 		checkToken(add, epath+".provider", "provider", o.Provider)
 		checkToken(add, epath+".region", "region", o.Region)
 		checkNoGateway(add, epath, o.Gateway)
+		checkNoTargetOrSettings(add, epath, o)
+	}
+}
+
+// checkNoTargetOrSettings refuses the overrides only a resource can use
+// on a gateway's or the database gateway's environment.
+func checkNoTargetOrSettings(add func(string, string, ...any), path string, o ResourceSettings) {
+	if o.Target != "" {
+		add(path+".target", "a gateway can't use a target")
+	}
+	if o.Settings != nil {
+		add(path+".settings", "a gateway can't use settings")
 	}
 }
 
@@ -834,13 +1142,20 @@ func (m *Manifest) Ignored(kind string) bool { return slices.Contains(m.Ignore.R
 // doesn't take its region along.
 func (s Service) For(env string, d Defaults) Settings {
 	out := s.Settings
+	out.PodGroup = providercontract.ClonePodGroup(s.PodGroup)
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
+	if o.Placement != nil {
+		out.Placement = o.Placement
+	}
 	if !ok {
 		return cloudTagDefaults(out, d)
 	}
 	if o.Provider != "" && o.Provider != out.Provider {
 		out.Target, out.Endpoint = "", nil
+		if out.Provider != "" || o.Provider != "cloud-run" {
+			out.CloudSQLNetwork = nil
+		}
 	}
 	if o.Target != "" && o.Target != out.Target {
 		out.Endpoint = nil
@@ -859,14 +1174,26 @@ func (s Service) For(env string, d Defaults) Settings {
 	if o.Endpoint != nil {
 		out.Endpoint = o.Endpoint
 	}
+	if o.CloudSQLNetwork != nil {
+		out.CloudSQLNetwork = o.CloudSQLNetwork
+	}
 	if o.HealthPath != "" {
 		out.HealthPath = o.HealthPath
 	}
 	if o.Build != nil {
 		out.Build = o.Build
 	}
+	if o.PodGroup != nil {
+		out.PodGroup = providercontract.ClonePodGroup(o.PodGroup)
+	}
+	if o.Worker != nil {
+		out.Worker = o.Worker
+	}
 	if o.Port != 0 {
 		out.Port = o.Port
+	}
+	if o.CapacityMode != "" {
+		out.CapacityMode = o.CapacityMode
 	}
 	if o.Scale != nil {
 		out.Scale = o.Scale
@@ -880,28 +1207,107 @@ func (s Service) For(env string, d Defaults) Settings {
 	if o.Enabled != nil {
 		out.Enabled = o.Enabled
 	}
+	// An environment's block replaces the service's whole block.
+	if o.Farp != nil {
+		out.Farp = o.Farp
+	}
 	return cloudTagDefaults(out, d)
 }
 
 // cloudTagDefaults gives a service with no placement of its own the
 // manifest's default Cloud tags.
 func cloudTagDefaults(out Settings, d Defaults) Settings {
+	out.Farp = out.Farp.clone()
+	if out.CloudSQLNetwork != nil {
+		network := *out.CloudSQLNetwork
+		out.CloudSQLNetwork = &network
+	}
 	if len(d.CloudTags) > 0 && out.CloudTarget == "" && len(out.CloudTags) == 0 && out.Provider == "" && out.Target == "" {
 		out.CloudTags = slices.Clone(d.CloudTags)
 	}
 	return out
 }
 
-// For returns a resource's settings in an environment, the same way.
+// For returns a resource's settings in an environment, the same way. The
+// environment's target replaces the resource's, and an environment that
+// moves the resource to another provider doesn't keep the resource's
+// target. Each setting the environment sets replaces that one setting.
+// Settings is a new map, nil when there are none.
 func (r Resource) For(env string, d Defaults) ResourceSettings {
 	out := ResourceSettings{}
 	out.Provider, out.Region = place(r.Provider, r.Region, d)
+	out.GPU = r.GPU
+	out.Target = r.Target
+	o, ok := r.Environments[env]
+	if !ok {
+		out.Settings = mergeSettings(r.Settings, nil)
+		return out
+	}
+	if o.GPU != nil {
+		out.GPU = o.GPU
+	}
+	if o.Provider != "" && o.Provider != out.Provider {
+		out.Target = ""
+	}
+	if o.Target != "" {
+		out.Target = o.Target
+	}
+	out.Settings = mergeSettings(r.Settings, o.Settings)
+	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
+	out.Enabled = o.Enabled
+	return out
+}
+
+// In returns the resource as env runs it: the target, GPU and settings
+// For resolves, and the environment's provider and region when it sets
+// them. It doesn't fill in the defaults, so r.In(env, d).For(env, d) is
+// r.For(env, d). Environments stay, so On and GatewayIn read the same.
+// Uses and the GPU are copies, so writing to them leaves r alone.
+func (r Resource) In(env string, d Defaults) Resource {
+	s := r.For(env, d)
+	out := r
+	out.Target, out.GPU, out.Settings = s.Target, s.GPU, s.Settings
+	if out.GPU != nil {
+		gpu := *out.GPU
+		out.GPU = &gpu
+	}
+	if r.Uses != nil {
+		out.Uses = make(map[string]Use, len(r.Uses))
+		for name, u := range r.Uses {
+			if u.Enabled != nil {
+				enabled := *u.Enabled
+				u.Enabled = &enabled
+			}
+			out.Uses[name] = u
+		}
+	}
 	o, ok := r.Environments[env]
 	if !ok {
 		return out
 	}
-	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
-	out.Enabled = o.Enabled
+	if o.Provider != "" {
+		// A region belongs to a provider, so moving to another one
+		// leaves the resource's region behind, as For does.
+		if provider, _ := place(r.Provider, r.Region, d); o.Provider != provider {
+			out.Region = ""
+		}
+		out.Provider = o.Provider
+	}
+	if o.Region != "" {
+		out.Region = o.Region
+	}
+	return out
+}
+
+// mergeSettings returns a new map of base with each key in over replacing
+// it, or nil when both are empty.
+func mergeSettings(base, over map[string]string) map[string]string {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(over))
+	maps.Copy(out, base)
+	maps.Copy(out, over)
 	return out
 }
 

@@ -96,7 +96,7 @@ func compileRoute(g Gateway, r RouteRecord, raw string, verify verifierFunc) (rt
 		return plane.Route{}, reason, nil
 	}
 	// This exact shape is what the router opens.
-	secret, err := json.Marshal(struct { //nolint:gosec // G117: marshaled only to be sealed to the gateway, never stored or logged
+	secret, err := json.Marshal(struct { // #nosec G117 -- marshaled only to be sealed to the gateway, never stored or logged.
 		User     string `json:"user"`
 		Password string `json:"password"`
 	}{b.user, b.password})

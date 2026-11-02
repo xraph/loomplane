@@ -8,6 +8,8 @@ import (
 )
 
 const (
+	MaxImageIndexBytes  = 256 * 1024
+	MaxImageIndexes     = 4
 	ociImageIndex       = "application/vnd.oci.image.index.v1+json"
 	dockerImageIndex    = "application/vnd.docker.distribution.manifest.list.v2+json"
 	ociImageManifest    = "application/vnd.oci.image.manifest.v1+json"
@@ -32,11 +34,11 @@ type imageDescriptor struct {
 // ValidImageIndexes bounds content-addressed proofs before copying or parsing.
 // Raw bytes must be retained exactly; JSON normalization changes their digest.
 func ValidImageIndexes(indexes [][]byte) bool {
-	if len(indexes) > 4 {
+	if len(indexes) > MaxImageIndexes {
 		return false
 	}
 	for _, index := range indexes {
-		if len(index) == 0 || len(index) > 256*1024 {
+		if len(index) == 0 || len(index) > MaxImageIndexBytes {
 			return false
 		}
 	}
@@ -68,7 +70,7 @@ func ResolveImageSelector(reference, reported, operatingSystem, architecture str
 	seen := map[string]bool{}
 	var reaches func(string, int) bool
 	reaches = func(digest string, depth int) bool {
-		if depth >= 4 || seen[digest] {
+		if depth >= MaxImageIndexes || seen[digest] {
 			return false
 		}
 		seen[digest] = true
@@ -112,7 +114,7 @@ func parseImageIndex(raw []byte) (imageIndex, bool) {
 }
 
 func exclusiveImageWrapper(proofs map[string][]byte, current, pinned, operatingSystem, architecture string) bool {
-	for range 4 {
+	for range MaxImageIndexes {
 		index, ok := parseImageIndex(proofs[current])
 		if !ok || len(index.Manifests) != 1 {
 			return false

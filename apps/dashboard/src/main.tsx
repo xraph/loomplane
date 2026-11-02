@@ -13,6 +13,9 @@ import { forgeClient, setAuthsomeApp } from "@/client/runtime"
 import { SessionRefreshBridge } from "@/client/session-refresh-bridge"
 import { authStorage, forgetStoredSession } from "@/client/auth-storage"
 import { applyAccent } from "@/lib/accent"
+import { FeaturesProvider, setFeatures } from "@/lib/features"
+import { setInstance } from "@/lib/instance"
+import { isUnder } from "@/console/path"
 import { captureInvite } from "@/lib/invite"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner"
@@ -33,31 +36,58 @@ forgetStoredSession()
 try {
   const config = await publicConfig().fetch()
   setAuthsomeApp(config)
-  root.render(
-    <StrictMode>
-      <ThemeProvider>
-        <TooltipProvider>
-          <AuthProvider
-            baseURL={`${window.location.origin}${config.authBasePath}`}
-            publishableKey={config.publishableKey}
-            session="cookie"
-            storage={authStorage}
-          >
-            <ClientProvider client={forgeClient}>
-              <SessionRefreshBridge />
-              <RouterProvider router={router} />
-            </ClientProvider>
-          </AuthProvider>
-          <Toaster />
-        </TooltipProvider>
-      </ThemeProvider>
-    </StrictMode>
-  )
+  // Once, before the router's first load runs the routes' feature checks.
+  setFeatures(config.features)
+  setInstance({
+    setupPending: config.setupPending,
+    waitlist: config.waitlist,
+    setupTokenRequired: config.setupTokenRequired,
+    consolePath: config.consolePath,
+  })
+  // Only a platform admin is told the console's path, and the console is its
+  // own app: its bundle loads here and nowhere else.
+  if (
+    config.consolePath &&
+    isUnder(window.location.pathname, config.consolePath)
+  ) {
+    const { default: Console } = await import("./console/console")
+    root.render(
+      <StrictMode>
+        <ThemeProvider>
+          <Console basePath={config.consolePath} />
+        </ThemeProvider>
+      </StrictMode>
+    )
+  } else {
+    root.render(
+      <StrictMode>
+        <ThemeProvider>
+          <TooltipProvider>
+            <AuthProvider
+              baseURL={`${window.location.origin}${config.authBasePath}`}
+              publishableKey={config.publishableKey}
+              session="cookie"
+              storage={authStorage}
+            >
+              <ClientProvider client={forgeClient}>
+                <SessionRefreshBridge />
+                <FeaturesProvider features={config.features}>
+                  <RouterProvider router={router} />
+                </FeaturesProvider>
+              </ClientProvider>
+            </AuthProvider>
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </StrictMode>
+    )
+  }
 } catch {
   root.render(
     <Problem
       title="Loomplane isn't answering"
-      message="The dashboard couldn't reach Loomplane's API. Check that it's running, then reload."
+      message="The dashboard couldn't reach Loomplane's API. If it's restarting, try again in a moment. Otherwise check that it's running."
+      address={`${window.location.host}/api`}
     />
   )
 }

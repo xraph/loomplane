@@ -6,11 +6,19 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	cpprovider "github.com/xraph/ctrlplane/provider"
+
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -80,5 +88,140 @@ func TestTarToZip_dropsTheTopDirectory(t *testing.T) {
 	}
 	if len(names) != 2 || !names["go.mod"] || !names["services/api/main.go"] {
 		t.Fatalf("zip holds %v", names)
+	}
+}
+
+// ECR's answers to reading a pushed image's digest, besides the digest
+// itself.
+const (
+	ecrNotFound = ""       // ImageNotFoundException
+	ecrDenied   = "denied" // AccessDeniedException
+	ecrNoImage  = "none"   // an answer that lists no image
+)
+
+// ecrFake is the AWS behind an ECS build that CodeBuild has started:
+// CodeBuild finishes it, and ECR answers for the image it pushed with
+// digest, or as one of the modes above says.
+func ecrFake(t *testing.T, digest string) *httptest.Server {
+	t.Helper()
+	const uri = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		target := r.Header.Get("X-Amz-Target")
+		switch {
+		case strings.HasSuffix(target, ".DescribeRepositories"):
+			_, _ = w.Write([]byte(`{"repositories":[{"repositoryName":"loomplane/api-23456789","repositoryUri":"` + uri + `"}]}`))
+		case strings.HasSuffix(target, ".BatchGetBuilds"):
+			_, _ = w.Write([]byte(`{"builds":[{"id":"loomplane:1","buildStatus":"SUCCEEDED"}]}`))
+		case strings.HasSuffix(target, ".DescribeImages"):
+			ids, _ := in["imageIds"].([]any)
+			switch digest {
+			case ecrDenied:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"__type":"AccessDeniedException","message":"not authorized to perform: ecr:DescribeImages"}`))
+				return
+			case ecrNoImage:
+				_, _ = w.Write([]byte(`{"imageDetails":[]}`))
+				return
+			}
+			if digest == ecrNotFound || in["repositoryName"] != "loomplane/api-23456789" || len(ids) != 1 || ids[0].(map[string]any)["imageTag"] != doApproved[:12] {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"__type":"ImageNotFoundException","message":"The image requested does not exist"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"imageDetails":[{"repositoryName":"loomplane/api-23456789","imageDigest":"` + digest + `"}]}`))
+		default:
+			t.Errorf("asked %s", target)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func ecsBuild(t *testing.T, digest string) (string, error) {
+	t.Helper()
+	image, _, err := ecsBuildState(t, digest)
+	return image, err
+}
+
+func ecsBuildState(t *testing.T, digest string) (string, *ecsState, error) {
+	t.Helper()
+	srv := ecrFake(t, digest)
+	exec := &ECS{AWS: aws.New(srv.URL)}
+	job := azureJob(t, apiConfig())
+	job.Connection = &connections.Connection{ID: "conn_a", Cloud: connections.AWS, Account: "123456789012", Details: map[string]string{"region": "eu-west-1"}}
+	s, err := exec.session(job, []byte(`{"access_key_id":"AKIATESTTESTTESTTEST","secret_access_key":"secret-test-secret-test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CodeBuild already started the build.
+	state := &ecsState{BuildID: "loomplane:1", LogAttempt: "attempt"}
+	image, err := exec.build(t.Context(), s, job, state, func() {})
+	return image, state, err
+}
+
+func TestECS_deploysTheBuiltImageByDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("e5", 32)
+	image, err := ecsBuild(t, digest)
+	if want := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789@" + digest; err != nil || image != want {
+		t.Fatalf("built %q, %v; want %s", image, err, want)
+	}
+}
+
+// A connection that may not read ECR's digests deploys the image by tag,
+// as before images were pinned, and says why.
+func TestECS_deploysByTagWhenItMayNotReadTheDigest(t *testing.T) {
+	image, state, err := ecsBuildState(t, ecrDenied)
+	if want := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789:" + doApproved[:12]; err != nil || image != want {
+		t.Fatalf("built %q, %v; want %s", image, err, want)
+	}
+	if state.Unpinned != "ecr:DescribeImages" {
+		t.Fatalf("checkpoint %+v", state)
+	}
+	if got := unpinnedWarning("api", state.Unpinned).Error(); !strings.Contains(got, "ecr:DescribeImages") ||
+		!strings.Contains(got, "promoting or rolling back api builds it again") {
+		t.Fatalf("warning %q", got)
+	}
+}
+
+// A promotion that reuses staging's image skips CodeBuild and ECR and goes
+// straight to deploying it. The fake AWS refuses everything, so the step
+// stops at the first call that deploys.
+func TestECS_deploysAReusedImageWithoutBuilding(t *testing.T) {
+	reused := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789@sha256:" + strings.Repeat("e7", 32)
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		mu.Lock()
+		asked = append(asked, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Amz-Target")+" "+r.Form.Get("Action"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"__type":"ValidationException","message":"refused"}`))
+	}))
+	t.Cleanup(srv.Close)
+	exec := &ECS{AWS: aws.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: &createdInstances{}}}
+	job := azureJob(t, apiConfig())
+	job.Action.Provider = "ecs-fargate"
+	job.Connection = &connections.Connection{ID: "conn_a", Cloud: connections.AWS, Account: "123456789012", Details: map[string]string{"region": "eu-west-1"}}
+	job.Credential = []byte(`{"access_key_id":"AKIATESTTESTTESTTEST","secret_access_key":"secret-test-secret-test"}`)
+	var saved ecsState
+	job.Checkpoint = func(data []byte) error { return json.Unmarshal(data, &saved) }
+	messages := reusing(t, job, reused)
+	if _, err := exec.Apply(t.Context(), job); err == nil {
+		t.Fatal("the fake AWS deployed nothing, yet the step succeeded")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, call := range asked {
+		if strings.Contains(call, "CodeBuild") || strings.Contains(call, "AmazonEC2ContainerRegistry") || strings.HasPrefix(call, http.MethodPut) {
+			t.Errorf("built: %s", call)
+		}
+	}
+	if !slices.Contains(*messages, "Using the image staging ran") || !slices.Contains(*messages, "Deploying "+reused) || saved.Image != reused || saved.BuildID != "" {
+		t.Fatalf("progress %q, checkpoint %+v", *messages, saved)
 	}
 }

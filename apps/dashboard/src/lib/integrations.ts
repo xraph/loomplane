@@ -79,6 +79,9 @@ export function cloudHealth(connections: Connection[]): CloudHealth {
   }
 }
 
+/** Servers you run yourself; every other connection form is a cloud. */
+export const serverKinds = new Set(["server", "kubernetes", "registry"])
+
 /** What Loomplane runs or provisions on each built-in cloud. */
 export const cloudPurposes: Record<string, string> = {
   gcp: "Cloud Run, Cloud SQL, Memorystore and Cloud Storage",
@@ -86,6 +89,9 @@ export const cloudPurposes: Record<string, string> = {
   vercel: "Web apps and static sites",
   render: "Web services, workers, Postgres and Key Value",
   digitalocean: "App Platform, Managed PostgreSQL, MySQL and Valkey",
+  azure:
+    "Container Apps, PostgreSQL and MySQL flexible servers and Managed Redis",
+  cloudflare: "DNS zones and domain registration",
 }
 
 // The built-in clouds, for while the API's list is on its way.

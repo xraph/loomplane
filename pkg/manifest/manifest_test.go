@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -276,16 +278,37 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"service", append(props(defs["service"]), props(defs["settings"])...), Service{}},
 		{"build", props(defs["build"]), Build{}},
 		{"endpoint", props(defs["endpoint"]), Endpoint{}},
+		{"farp", props(defs["farp"]), Farp{}},
 		{"settings", props(defs["settings"]), Settings{}},
 		{"scale", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["scale"]), Scale{}},
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
+		{"use", props(defs["use"]), Use{}},
+		{"gpu", props(defs["gpu"]), GPU{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
 		{"database gateway", props(schema["properties"].(map[string]any)["database_gateway"]), DatabaseGateway{}},
 		{"link", props(defs["link"]), Link{}},
 		{"link settings", props(defs["link"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"]), LinkSettings{}},
 		{"route", props(defs["route"]), Route{}},
+		{"environment", props(defs["environment"]), Environment{}},
+		{"release", props(defs["release"]), Release{}},
+		{"thresholds", props(defs["thresholds"]), Thresholds{}},
+	}
+	// Only a resource's environment can name a target or take settings;
+	// a gateway's and the database gateway's can't.
+	for _, k := range []string{"target", "settings"} {
+		if !slices.Contains(props(envOverride), k) {
+			t.Errorf("the resource environment block has no %s", k)
+		}
+		for name, block := range map[string]any{
+			"gateway":          defs["gateway"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"],
+			"database gateway": schema["properties"].(map[string]any)["database_gateway"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"],
+		} {
+			if slices.Contains(props(block), k) {
+				t.Errorf("the %s environment block has %s", name, k)
+			}
+		}
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -374,6 +397,190 @@ func TestParse_held(t *testing.T) {
 	}
 	if out, _ := Marshal(&Manifest{Version: 1}); strings.Contains(string(out), "held") {
 		t.Fatalf("Marshal wrote an unset held:\n%s", out)
+	}
+}
+
+const usesEndpoint = "endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae"
+
+func TestUsesValidation(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"both resource and external", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, external: " + usesEndpoint + "}", "resources.gateway.uses.postgres: choose resource or external, not both"},
+		{"resource that isn't there", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: nope}", "resources.gateway.uses.postgres.resource: \"nope\" isn't a resource in this manifest"},
+		{"a service isn't a resource", "version: 1\nservices:\n  api: {source: x}\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: api}", "\"api\" isn't a resource in this manifest"},
+		{"resource names itself", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: gateway}", "resources.gateway.uses.postgres.resource: a resource can't use itself"},
+		{"external that isn't an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: x}", "resources.gateway.uses.postgres.external: \"x\" isn't a catalog endpoint ID"},
+		{"external with the wrong prefix", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: target_01jbz7q5mx8vh3k2r9t4w6y0ae}", "isn't a catalog endpoint ID"},
+		{"disabled but connected to a resource", "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: false}", "resources.gateway.uses.postgres: enabled: false can't be set with resource or external"},
+		{"disabled but connected to an endpoint", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {external: " + usesEndpoint + ", enabled: false}", "enabled: false can't be set with resource or external"},
+		{"bad dependency name", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      Bad: {enabled: true}", "resources.gateway.uses.Bad: the name must be"},
+		{"unknown field", "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {kind: postgres}", "field kind not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil {
+				t.Fatal("parsed")
+			}
+			if !errors.Is(err, ErrInvalid) {
+				t.Errorf("%v doesn't wrap ErrInvalid", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsesAccepts(t *testing.T) {
+	for name, doc := range map[string]string{
+		"nothing set takes a new one": "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      postgres: {}",
+		"switched off":                "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: false}",
+		"switched on":                 "version: 1\nresources:\n  gateway:\n    kind: sample\n    uses:\n      falkordb: {enabled: true}",
+		"enabled with a resource":     "version: 1\nresources:\n  db: {kind: postgres}\n  gateway:\n    kind: sample\n    uses:\n      postgres: {resource: db, enabled: true}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(doc)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestUsesRoundTrips(t *testing.T) {
+	doc := `version: 1
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_1
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: ` + usesEndpoint + `
+      falkordb:
+        enabled: true
+`
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uses := m.Resources["gateway"].Uses
+	on := true
+	want := map[string]Use{
+		"postgres": {Resource: "db"},
+		"redis":    {External: usesEndpoint},
+		"falkordb": {Enabled: &on},
+	}
+	if !reflect.DeepEqual(uses, want) {
+		t.Fatalf("uses = %+v, want %+v", uses, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("reparse: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(m, again) {
+		t.Errorf("round trip changed the manifest:\n%s", out)
+	}
+	for _, s := range []string{"uses:", "resource: db", "external: " + usesEndpoint, "enabled: true"} {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("lost %q:\n%s", s, out)
+		}
+	}
+}
+
+const needOptionsDoc = `version: 1
+services:
+  api:
+    source: services/api
+    needs: [db, fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+        plan_tier: "2"
+resources:
+  db:
+    kind: postgres
+  fabriq:
+    kind: sample
+`
+
+func TestNeedOptionsValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		opts string
+		want string
+	}{
+		{"for a resource it doesn't need", "      cache: {tenant: acme}\n", "need_options.cache isn't in needs"},
+		{"for something that isn't a need at all", "      fabriq: {tenant: acme}\n      other: {a: b}\n", "need_options.other isn't in needs"},
+		{"option name in capitals", "      fabriq: {Tenant: acme}\n", `"Tenant" isn't an option name`},
+		{"option name with a hyphen", "      fabriq: {plan-tier: gold}\n", `"plan-tier" isn't an option name`},
+		{"option name too long", "      fabriq: {" + strings.Repeat("a", 33) + ": x}\n", "isn't an option name"},
+		{"value of 201 characters", "      fabriq: {tenant: " + strings.Repeat("a", 201) + "}\n", "is 201 characters; the most is 200"},
+		{"value with a newline", "      fabriq: {tenant: \"acme\\nevil\"}\n", "can't hold a newline or other control character"},
+		{"value with a tab", "      fabriq: {tenant: \"a\\tb\"}\n", "can't hold a newline or other control character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := "version: 1\nservices:\n  api:\n    source: services/api\n    needs: [db, fabriq]\n    need_options:\n" + tt.opts +
+				"resources:\n  db: {kind: postgres}\n  cache: {kind: redis}\n  fabriq: {kind: sample}\n"
+			_, err := Parse([]byte(doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("got %v, want problems", err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("got %v, want %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := Parse([]byte(needOptionsDoc)); err != nil {
+		t.Fatalf("a valid manifest: %v", err)
+	}
+	ok := strings.Replace(needOptionsDoc, "tenant: acme", "tenant: "+strings.Repeat("a", 200), 1)
+	if _, err := Parse([]byte(ok)); err != nil {
+		t.Errorf("200 characters is allowed: %v", err)
+	}
+}
+
+func TestNeedOptionsRoundTrip(t *testing.T) {
+	m, err := Parse([]byte(needOptionsDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]string{"fabriq": {"tenant": "acme", "plan_tier": "2"}}
+	if got := m.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("need_options %v, want %v", got, want)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := again.Services["api"].NeedOptions; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after Marshal %v, want %v\n%s", got, want, out)
+	}
+	// A service without options writes none.
+	plain, err := Parse([]byte("version: 1\nservices:\n  api: {source: services/api}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := Marshal(plain); strings.Contains(string(out), "need_options") {
+		t.Errorf("wrote need_options for a service with none:\n%s", out)
+	}
+	data, err := json.Marshal(m.Services["api"])
+	if err != nil || !strings.Contains(string(data), `"need_options"`) {
+		t.Errorf("JSON %s, %v", data, err)
 	}
 }
 
@@ -588,3 +795,505 @@ type anyRegexp string
 
 func (a anyRegexp) MatchString(string) bool { return true }
 func (a anyRegexp) String() string          { return string(a) }
+
+func TestFarpValidation(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{source: a, farp: {openapi: openapi.json}}`:                          "services.api.farp.openapi: must start with /",
+		`{source: a, farp: {health: "/h?x"}}`:                                 "services.api.farp.health",
+		`{source: a, farp: {capabilities: [REST]}}`:                           "services.api.farp.capabilities",
+		`{source: a, farp: {capabilities: [a, b, c, d, e, f, g, h, i]}}`:      "services.api.farp.capabilities: has 9",
+		`{source: a, farp: {port: 70000}}`:                                    "services.api.farp.port",
+		`{source: a, farp: {gateway: Bad}}`:                                   "services.api.farp.gateway",
+		`{source: a, environments: {staging: {farp: {metrics: "no-slash"}}}}`: "services.api.environments.staging.farp.metrics: must start with /",
+		`{source: a, farp: {capabilities: [rest, rest]}}`:                     "names \"rest\" twice",
+		`{source: a, farp: {asyncapi: "/a b"}}`:                               "services.api.farp.asyncapi",
+		`{source: a, farp: {graphql: "/g#frag"}}`:                             "services.api.farp.graphql",
+	} {
+		_, err := Parse([]byte("version: 1\nservices:\n  api: " + doc + "\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: expected %q, got %v", doc, want, err)
+		}
+	}
+
+	// A bare block, defaults, a port left out and the largest port are all fine.
+	for _, doc := range []string{
+		`{source: a, farp: {}}`,
+		`{source: a, port: 8080, farp: {gateway: edge, openapi: /openapi.json, asyncapi: /asyncapi.json, graphql: /graphql, health: /health, metrics: /metrics, grpc_reflection: true, capabilities: [rest, websocket], port: 65535}}`,
+		`{source: a, farp: {enabled: false}}`,
+	} {
+		if _, err := Parse([]byte("version: 1\nservices:\n  api: " + doc + "\nresources:\n  edge: {kind: octopus}\n")); err != nil {
+			t.Errorf("%s: %v", doc, err)
+		}
+	}
+}
+
+func TestFarpRoundTrips(t *testing.T) {
+	m, err := Parse([]byte("version: 1\nservices:\n  api: {source: a, farp: {}}\n  web: {source: w}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Services["api"].Farp == nil || m.Services["web"].Farp != nil {
+		t.Fatalf("farp blocks: %+v, %+v", m.Services["api"].Farp, m.Services["web"].Farp)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil || again.Services["api"].Farp == nil || again.Services["web"].Farp != nil {
+		t.Fatalf("round trip: %v\n%s", err, out)
+	}
+}
+
+func TestFarpEnvironmentReplacesBlock(t *testing.T) {
+	m, err := Parse([]byte(`version: 1
+services:
+  api:
+    source: a
+    farp: {openapi: /a, health: /h}
+    environments:
+      staging:
+        farp: {enabled: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := m.Services["api"].For("staging", m.Defaults)
+	off := false
+	if want := (&Farp{Enabled: &off}); !reflect.DeepEqual(staging.Farp, want) {
+		t.Fatalf("staging farp: %+v", staging.Farp)
+	}
+	production := m.Services["api"].For("production", m.Defaults)
+	if production.Farp == nil || production.Farp.OpenAPI != "/a" || production.Farp.Health != "/h" || production.Farp.Enabled != nil {
+		t.Fatalf("production farp: %+v", production.Farp)
+	}
+	// Settings are copies: changing one doesn't change the manifest.
+	production.Farp.OpenAPI = "/changed"
+	if m.Services["api"].Farp.OpenAPI != "/a" {
+		t.Fatal("a service's farp block is shared with its settings")
+	}
+}
+
+const gpuResourceDoc = "version: 2\nresources:\n  llm: {kind: gpusample, provider: server, target: t, gpu: {kind: nvidia-l4, count: 1}, environments: {staging: {gpu: {kind: nvidia-t4, count: 1}}}}\n"
+
+// schemaAccepts reports the schema's verdict on a manifest document.
+func schemaAccepts(t *testing.T, doc string) error {
+	t.Helper()
+	return compileSchema(t).Validate(yamlToJSON(t, []byte(doc)))
+}
+
+func TestParse_gpuResourceMergesPerEnvironment(t *testing.T) {
+	m, err := Parse([]byte(gpuResourceDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.Resources["llm"]
+	if got := r.For("staging", m.Defaults).GPU; got == nil || got.Kind != "nvidia-t4" {
+		t.Errorf("staging GPU = %+v, want nvidia-t4", got)
+	}
+	if got := r.For("production", m.Defaults).GPU; got == nil || got.Kind != "nvidia-l4" || got.Count != 1 {
+		t.Errorf("production GPU = %+v, want nvidia-l4 x1", got)
+	}
+	if err := schemaAccepts(t, gpuResourceDoc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuOnService(t *testing.T) {
+	doc := "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 4, memory: 16384, gpu: {kind: nvidia-l4, count: 2}, shm: 2048}\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sz := m.Services["api"].Size
+	if sz.GPU == nil || sz.GPU.Kind != "nvidia-l4" || sz.GPU.Count != 2 || sz.Shm != 2048 {
+		t.Errorf("size = %+v", sz)
+	}
+	if err := schemaAccepts(t, doc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuRejects(t *testing.T) {
+	svc := func(size string) string {
+		return "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 1, memory: 16384, " + size + "}\n"
+	}
+	res := func(gpu string) string {
+		return "version: 2\nresources:\n  llm: {kind: gpusample, gpu: " + gpu + "}\n"
+	}
+	tests := []struct {
+		name, doc, path string
+		schemaRejects   bool
+	}{
+		{"count 0", svc("gpu: {kind: nvidia-l4, count: 0}"), "services.api.size.gpu.count", true},
+		{"count 9", svc("gpu: {kind: nvidia-l4, count: 9}"), "services.api.size.gpu.count", true},
+		{"empty kind", svc(`gpu: {kind: "", count: 1}`), "services.api.size.gpu.kind", true},
+		{"shm equals memory", svc("shm: 16384"), "services.api.size.shm", false},
+		{"negative shm", svc("shm: -1"), "services.api.size.shm", true},
+		{"resource count 0", res("{kind: nvidia-l4, count: 0}"), "resources.llm.gpu.count", true},
+		{"resource env count 9", "version: 2\nresources:\n  llm: {kind: gpusample, environments: {staging: {gpu: {kind: nvidia-l4, count: 9}}}}\n", "resources.llm.environments.staging.gpu.count", true},
+		{"gateway env", "version: 2\nservices:\n  web: {source: a}\ngateways:\n  edge: {routes: [{path: /, to: web}], environments: {staging: {gpu: {kind: nvidia-l4, count: 1}}}}\n", "gateways.edge.environments.staging.gpu", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("Parse err = %v, want problems", err)
+			}
+			found := false
+			for _, p := range ps {
+				if p.Path == tt.path {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no problem at %s: %v", tt.path, err)
+			}
+			if tt.schemaRejects && schemaAccepts(t, tt.doc) == nil {
+				t.Error("schema accepts it")
+			}
+		})
+	}
+}
+
+func TestResourceSettingsParse(t *testing.T) {
+	doc := "version: 1\nresources:\n  llm:\n    kind: sample\n    settings: {model: acme/x, max_model_len: \"8192\"}\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.Resources["llm"].Settings, map[string]string{"model": "acme/x", "max_model_len": "8192"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("settings %v, want %v", got, want)
+	}
+	schema := compileSchema(t)
+	if err := schema.Validate(yamlToJSON(t, []byte(doc))); err != nil {
+		t.Fatalf("the schema rejects settings: %v", err)
+	}
+	for name, bad := range map[string]string{
+		"a bad key":        "version: 1\nresources:\n  llm: {kind: sample, settings: {Bad: x}}\n",
+		"a long value":     "version: 1\nresources:\n  llm: {kind: sample, settings: {model: " + strings.Repeat("x", MaxSettingValue+1) + "}}\n",
+		"a value not text": "version: 1\nresources:\n  llm: {kind: sample, settings: {model: {name: x}}}\n",
+	} {
+		if err := schema.Validate(yamlToJSON(t, []byte(bad))); err == nil {
+			t.Errorf("%s: the schema accepts it", name)
+		}
+		if _, err := Parse([]byte(bad)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse: %v", name, err)
+		}
+	}
+}
+
+func TestResourceForTakesTheEnvironmentsTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		resource     Resource
+		wantTarget   string
+		wantSettings map[string]string
+	}{
+		{
+			name:       "no environment block",
+			resource:   Resource{Kind: "sample", Provider: "server", Target: "c1"},
+			wantTarget: "c1",
+		},
+		{
+			name: "the environment's target",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Target: "c2"},
+			}},
+			wantTarget: "c2",
+		},
+		{
+			name: "another provider drops the inherited target",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Provider: "kubernetes"},
+			}},
+			wantTarget: "",
+		},
+		{
+			name: "the same provider keeps it",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Provider: "server"},
+			}},
+			wantTarget: "c1",
+		},
+		{
+			name: "each setting the environment sets replaces that one",
+			resource: Resource{Kind: "sample", Settings: map[string]string{"a": "1", "b": "2"}, Environments: map[string]ResourceSettings{
+				"production": {Settings: map[string]string{"b": "3"}},
+			}},
+			wantSettings: map[string]string{"a": "1", "b": "3"},
+		},
+		{
+			name: "no settings anywhere",
+			resource: Resource{Kind: "sample", Environments: map[string]ResourceSettings{
+				"production": {Target: "c2"},
+			}},
+			wantTarget: "c2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := maps.Clone(tt.resource.Settings)
+			got := tt.resource.For("production", Defaults{})
+			if got.Target != tt.wantTarget {
+				t.Errorf("Target = %q, want %q", got.Target, tt.wantTarget)
+			}
+			if !reflect.DeepEqual(got.Settings, tt.wantSettings) {
+				t.Errorf("Settings = %#v, want %#v", got.Settings, tt.wantSettings)
+			}
+			if !reflect.DeepEqual(tt.resource.Settings, before) {
+				t.Errorf("the resource's settings changed to %v", tt.resource.Settings)
+			}
+			// The result is a map of its own: writing to it leaves the
+			// resource alone.
+			if got.Settings != nil {
+				got.Settings["a"] = "changed"
+				if !reflect.DeepEqual(tt.resource.Settings, before) {
+					t.Errorf("For's settings alias the resource's: %v", tt.resource.Settings)
+				}
+			}
+		})
+	}
+}
+
+// envCopiesDoc moves resources between providers, regions and targets in
+// some environments, on top of defaults, so In has every case to match.
+const envCopiesDoc = `version: 1
+defaults:
+  provider: cloud-run
+  region: us-central1
+services:
+  api:
+    source: services/api
+    needs: [llm, db, cache]
+resources:
+  llm:
+    kind: sample
+    provider: server
+    target: conn_a
+    region: fra1
+    gpu: {kind: nvidia-l4, count: 1}
+    settings: {model: acme/x, quantization: fp16}
+    environments:
+      production:
+        target: conn_b
+        gpu: {kind: nvidia-l40s, count: 2}
+        settings: {quantization: awq}
+      staging:
+        provider: kubernetes
+        region: eu
+      preview:
+        enabled: false
+      qa:
+        provider: server
+  db:
+    kind: postgres
+    region: us-east1
+    environments:
+      production:
+        provider: cloud-sql
+      staging:
+        provider: cloud-run
+  cache:
+    kind: redis
+    provider: memorystore
+    environments:
+      staging:
+        provider: cloud-run
+        region: europe-west1
+`
+
+func TestResourceInMatchesFor(t *testing.T) {
+	docs := map[string]string{
+		"example":                    example,
+		"commented":                  commented,
+		"needsDoc":                   needsDoc,
+		"modelDoc":                   modelDoc,
+		"databaseGatewayDoc":         databaseGatewayDoc,
+		"gpuResourceDoc":             gpuResourceDoc,
+		"needOptionsDoc":             needOptionsDoc,
+		"pscManifest":                pscManifest,
+		"applicationNetworkManifest": applicationNetworkManifest,
+		"federationExample":          federationExample,
+		"envCopiesDoc":               envCopiesDoc,
+	}
+	files, err := filepath.Glob("testdata/*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		data, readErr := os.ReadFile(f)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		docs[f] = string(data)
+	}
+	checked := 0
+	for _, name := range slices.Sorted(maps.Keys(docs)) {
+		m, parseErr := Parse([]byte(docs[name]))
+		if parseErr != nil {
+			continue
+		}
+		for _, rname := range m.ResourceNames() {
+			r := m.Resources[rname]
+			envs := append(sortedKeys(r.Environments), "nowhere")
+			for _, env := range envs {
+				in := r.In(env, m.Defaults)
+				if got, want := in.For(env, m.Defaults), r.For(env, m.Defaults); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s: resources.%s in %s: In(...).For = %+v, For = %+v", name, rname, env, got, want)
+				}
+				if !reflect.DeepEqual(in.Environments, r.Environments) || On(in.For(env, m.Defaults).Enabled) != On(r.For(env, m.Defaults).Enabled) || in.GatewayIn(env) != r.GatewayIn(env) {
+					t.Errorf("%s: resources.%s in %s: In changed what On or GatewayIn read", name, rname, env)
+				}
+				o := r.Environments[env]
+				if o.Target == "" && o.Settings == nil && o.Provider == "" {
+					if in.Target != r.Target || !reflect.DeepEqual(in.Settings, r.Settings) {
+						t.Errorf("%s: resources.%s in %s: In = target %q settings %v, want the resource's %q %v", name, rname, env, in.Target, in.Settings, r.Target, r.Settings)
+					}
+				}
+				checked++
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("checked %d resource environments; the fixtures should give more", checked)
+	}
+
+	// The copies doc: production runs its own copy on conn_b with its own
+	// GPU and quantization, staging moves to a cluster without the server's
+	// target or region, and qa keeps both.
+	m, err := Parse([]byte(envCopiesDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := m.Resources["llm"]
+	prod := llm.In("production", m.Defaults)
+	if prod.Target != "conn_b" || prod.GPU.Kind != "nvidia-l40s" || !reflect.DeepEqual(prod.Settings, map[string]string{"model": "acme/x", "quantization": "awq"}) {
+		t.Errorf("production = %+v", prod)
+	}
+	if llm.Target != "conn_a" || llm.Settings["quantization"] != "fp16" {
+		t.Errorf("In changed the resource: %+v", llm)
+	}
+	if st := llm.In("staging", m.Defaults); st.Provider != "kubernetes" || st.Region != "eu" || st.Target != "" {
+		t.Errorf("staging = %+v", st)
+	}
+	if qa := llm.In("qa", m.Defaults); qa.Provider != "server" || qa.Region != "fra1" || qa.Target != "conn_a" {
+		t.Errorf("qa = %+v", qa)
+	}
+	// db's default provider is cloud-run, so staging naming it keeps the
+	// region, and production's move to cloud-sql leaves it behind.
+	if st := m.Resources["db"].In("staging", m.Defaults); st.Provider != "cloud-run" || st.Region != "us-east1" {
+		t.Errorf("db in staging = %+v, want cloud-run in us-east1", st)
+	}
+	if p := m.Resources["db"].In("production", m.Defaults); p.Provider != "cloud-sql" || p.Region != "" {
+		t.Errorf("db in production = %+v, want cloud-sql with no region", p)
+	}
+}
+
+// TestResourceInCopiesUsesAndGPU: In hands back copies, so a caller
+// writing to the view never changes the manifest's resource.
+func TestResourceInCopiesUsesAndGPU(t *testing.T) {
+	on := true
+	r := Resource{
+		Kind: "sample", Target: "c1", GPU: &GPU{Kind: "nvidia-l4", Count: 1},
+		Uses: map[string]Use{"db": {Resource: "pg", Enabled: &on}},
+		Environments: map[string]ResourceSettings{
+			"production": {GPU: &GPU{Kind: "nvidia-l40s", Count: 2}},
+		},
+	}
+	for _, env := range []string{"staging", "production"} {
+		in := r.In(env, Defaults{})
+		in.GPU.Count = 7
+		*in.Uses["db"].Enabled = false
+		in.Uses["db"] = Use{Resource: "other"}
+		in.Uses["cache"] = Use{Resource: "redis"}
+		if r.GPU.Count != 1 || r.Environments["production"].GPU.Count != 2 {
+			t.Errorf("%s: writing the view's GPU changed the resource: %+v, %+v", env, r.GPU, r.Environments["production"].GPU)
+		}
+		if !reflect.DeepEqual(r.Uses, map[string]Use{"db": {Resource: "pg", Enabled: &on}}) || !on {
+			t.Errorf("%s: writing the view's uses changed the resource: %+v (enabled %v)", env, r.Uses, on)
+		}
+	}
+	if in := (Resource{Kind: "sample"}).In("production", Defaults{}); in.Uses != nil || in.GPU != nil {
+		t.Errorf("a resource with no uses or GPU = %+v, want both nil", in)
+	}
+}
+
+func TestValidateEnvironmentTargetAndSettings(t *testing.T) {
+	const services = "services:\n  web: {source: a}\n"
+	tests := []struct {
+		name, doc, path, message string
+	}{
+		{
+			"a bad setting name in an environment",
+			"version: 1\nresources:\n  llm: {kind: sample, environments: {production: {settings: {Bad: x}}}}\n",
+			"resources.llm.environments.production.settings.Bad",
+			"the name must be a lower case letter",
+		},
+		{
+			"a long setting in an environment",
+			"version: 1\nresources:\n  llm: {kind: sample, environments: {production: {settings: {model: " + strings.Repeat("x", MaxSettingValue+1) + "}}}}\n",
+			"resources.llm.environments.production.settings.model",
+			"characters; the most is",
+		},
+		{
+			"a gateway's target",
+			"version: 1\n" + services + "gateways:\n  web:\n    routes: [{path: /, to: web}]\n    environments: {production: {target: c1}}\n",
+			"gateways.web.environments.production.target",
+			"a gateway can't use a target",
+		},
+		{
+			"a gateway's settings",
+			"version: 1\n" + services + "gateways:\n  web:\n    routes: [{path: /, to: web}]\n    environments: {production: {settings: {model: x}}}\n",
+			"gateways.web.environments.production.settings",
+			"a gateway can't use settings",
+		},
+		{
+			"the database gateway's target",
+			"version: 1\ndatabase_gateway:\n  provider: cloud-run\n  environments: {production: {target: c1}}\n",
+			"database_gateway.environments.production.target",
+			"a gateway can't use a target",
+		},
+		{
+			"the database gateway's settings",
+			"version: 1\ndatabase_gateway:\n  provider: cloud-run\n  environments: {production: {settings: {}}}\n",
+			"database_gateway.environments.production.settings",
+			"a gateway can't use settings",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("Parse err = %v, want problems", err)
+			}
+			found := false
+			for _, p := range ps {
+				if p.Path == tt.path && strings.Contains(p.Message, tt.message) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no problem at %s saying %q: %v", tt.path, tt.message, err)
+			}
+			if schemaAccepts(t, tt.doc) == nil {
+				t.Error("the schema accepts it")
+			}
+		})
+	}
+
+	// A resource's environment takes both, and so does the schema.
+	ok := "version: 1\nresources:\n  llm:\n    kind: sample\n    target: c1\n    environments:\n      production: {target: c2, settings: {quantization: awq}}\n"
+	m, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Resources["llm"].Environments["production"]; got.Target != "c2" || got.Settings["quantization"] != "awq" {
+		t.Errorf("production = %+v", got)
+	}
+	if err := schemaAccepts(t, ok); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}

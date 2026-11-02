@@ -122,7 +122,7 @@ func TestControlClientAgainstTheRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	trust := plane.TrustKey{PublicKey: cpPub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
-	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, cpPriv, trust, time.Now)
+	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, []dbgateway.SigningKey{{Private: cpPriv, Trust: trust}}, time.Now)
 	r := forge.NewRouter()
 	if err = mount(r, &handlers{svc: svc, wait: 200 * time.Millisecond, every: 20 * time.Millisecond, now: time.Now,
 		warn: func(msg string, werr error) { t.Errorf("%s: %v", msg, werr) }}); err != nil {
@@ -232,7 +232,7 @@ func TestManagementRoutesAgainstTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	trust := plane.TrustKey{PublicKey: cpPub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
-	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, cpPriv, trust, time.Now)
+	svc := dbgateway.NewService(store, resourceURLs{secrets: secrets}, []dbgateway.SigningKey{{Private: cpPriv, Trust: trust}}, time.Now)
 	trail, events := memChronicle(t)
 	svc.Authz = catalogAuthz{"usr_viewer": security.RoleViewer, "usr_admin": security.RoleAdmin}
 	svc.Audit = auditor{chronicle: trail, appID: "app_1", log: forge.NewNoopLogger()}

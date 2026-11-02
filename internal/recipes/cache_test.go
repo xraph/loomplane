@@ -16,8 +16,11 @@ func TestCacheRecipesStayEngineAndTargetSpecific(t *testing.T) {
 				if recipe.Engine() != test.kind || recipe.ProductVersion != test.product || recipe.Port() != 6379 || recipe.MountPath != "/data" || recipe.BackupFormat != test.format {
 					t.Fatalf("wrong cache contract: %+v", recipe)
 				}
-				if _, err = LookupForTarget(test.kind, test.version, architecture, "kubernetes"); err == nil {
-					t.Fatal("unqualified Kubernetes cache accepted")
+				// Kubernetes runs a cache only as a composition's dependency;
+				// the planner refuses a standalone one.
+				cluster, err := LookupForTarget(test.kind, test.version, architecture, "kubernetes")
+				if err != nil || cluster.ID != recipe.ID+"-kubernetes" || cluster.VolumeSizeMB != 2048 {
+					t.Fatalf("Kubernetes cache recipe: %+v %v", cluster, err)
 				}
 			})
 		}

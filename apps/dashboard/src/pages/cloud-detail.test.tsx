@@ -1,0 +1,770 @@
+import { ClientProvider } from "@forge-go/client-react"
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, expect, it, vi } from "vitest"
+
+import { forgeClient } from "@/client/runtime"
+import { publishLiveState } from "@/lib/realtime-state"
+
+import { CloudDetail } from "./cloud-detail"
+
+// Tests switch between an organization manager and a project member.
+let manager = true
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({
+    session: { orgId: "org" },
+    can: (p: string) => manager || p !== "organization_cloud:manage",
+  }),
+}))
+vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+vi.mock("@/lib/router", () => ({
+  Link: ({
+    children,
+    to,
+    params,
+    search,
+  }: {
+    children: React.ReactNode
+    to: string
+    params?: Record<string, string>
+    search?: Record<string, string>
+  }) => {
+    let href = to
+    for (const [key, value] of Object.entries(params ?? {}))
+      href = href.replace(`$${key}`, encodeURIComponent(value))
+    const query = new URLSearchParams(search).toString()
+    return <a href={href + (query ? `?${query}` : "")}>{children}</a>
+  },
+  useNavigate: () => () => Promise.resolve(),
+}))
+afterEach(() => {
+  manager = true
+  publishLiveState({
+    status: "stale",
+    transport: "ws",
+    lastSync: 0,
+    gap: false,
+  })
+  window.history.replaceState(null, "", "/")
+  cleanup()
+  vi.unstubAllGlobals()
+  forgeClient.clear()
+})
+
+const cloud = {
+  id: "c",
+  name: "Production",
+  org_id: "org",
+  project_id: "",
+  revision: 1,
+  created_at: "2026-10-20T00:00:00Z",
+  updated_at: "2026-10-20T00:00:00Z",
+}
+const target = (id: string, provider: string, connection: string) => ({
+  id,
+  name: id,
+  display_name: id[0]!.toUpperCase() + id.slice(1),
+  cloud_id: "c",
+  provider,
+  connection_id: connection,
+  region: "",
+  revision: 1,
+})
+
+const usage = {
+  cloud_id: "c",
+  environments: [
+    {
+      project_id: "web",
+      project_name: "Web app",
+      environment_id: "prod",
+      environment_name: "production",
+      assigned: true,
+      placements: [
+        { target_id: "frontend", services: ["site", "docs"] },
+        { target_id: "api", services: ["api"] },
+      ],
+    },
+  ],
+}
+
+const none = { servers: 0, cpu_millis: 0, memory_bytes: 0, storage_bytes: 0 }
+const unknown = {
+  servers: null,
+  cpu_millis: null,
+  memory_bytes: null,
+  storage_bytes: null,
+}
+const capacityUsage = {
+  cloud_id: "c",
+  accounts: [],
+  records: [],
+  provisioned: none,
+  pending: none,
+  reserved: none,
+  observed: unknown,
+  system_reserve: none,
+  allocatable: unknown,
+  headroom: none,
+  observed_storage_bytes: null,
+  checked_at: "2026-10-20T00:00:00Z",
+  fresh: true,
+  gpus: [],
+  frontends: [],
+}
+
+function fixture({
+  granted = false,
+  inUse = false,
+  noTargets = false,
+  unused = false,
+  profile = {} as Record<string, unknown>,
+  syncs = [] as unknown[],
+  clusterOperations = [] as unknown[],
+} = {}) {
+  const writes: { method: string; path: string; body: unknown }[] = []
+  const reads: string[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost")
+      const path = url.pathname
+      const method = init?.method ?? "GET"
+      if (method === "GET") reads.push(path + url.search)
+      if (method !== "GET") {
+        const sent = JSON.parse(String(init?.body ?? "{}"))
+        writes.push({ method, path, body: sent })
+        if (path.endsWith("/capacity-policy"))
+          return Response.json({
+            policy: { ...sent.policy, revision: 1 },
+            automatic_expansion: false,
+          })
+        if (path.endsWith("/default-placement"))
+          return inUse
+            ? Response.json(
+                { message: "an environment uses this Cloud" },
+                { status: 409 }
+              )
+            : Response.json({
+                ...cloud,
+                revision: 2,
+                default_placement: sent.default_placement,
+              })
+        return Response.json({
+          cloud_id: "c",
+          project_id: "web",
+          target_ids: ["frontend"],
+          revision: 2,
+          revoked: false,
+        })
+      }
+      let body: unknown = {}
+      if (path === "/api/v1/clouds/c") body = { ...cloud, ...profile }
+      if (path === "/api/v1/projects/web/clouds")
+        body = { clouds: [{ ...cloud, ...profile }] }
+      if (path.endsWith("/usage"))
+        body = unused ? { cloud_id: "c", environments: [] } : usage
+      if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
+        body = { syncs }
+      if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
+      if (path === "/api/v1/clouds/c/pools")
+        body = {
+          pools: [
+            {
+              id: "web",
+              name: "web",
+              cloud_id: "c",
+              org_id: "org",
+              revision: 1,
+              members: [],
+            },
+          ],
+        }
+      if (path === "/api/v1/clouds/c/capacity-policy")
+        body = {
+          automatic_expansion: false,
+          policy: {
+            org_id: "org",
+            cloud_id: "c",
+            revision: 0,
+            enabled: false,
+            require_expansion_approval: true,
+            limits: {
+              servers: 0,
+              cpu_millis: 0,
+              memory_bytes: 0,
+              storage_bytes: 0,
+            },
+            pools: [],
+            frontend_limits: [],
+          },
+        }
+      if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
+      if (path === "/api/v1/clouds/c/capacity-usage") body = capacityUsage
+      if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
+      if (path === "/api/v1/clouds/c/cluster-operations") {
+        const offset = Number(url.searchParams.get("cursor") || 0)
+        body = {
+          items: clusterOperations.slice(offset, offset + 50),
+          next_cursor:
+            offset + 50 < clusterOperations.length ? String(offset + 50) : "",
+        }
+      }
+      if (path === "/api/v1/members") body = { members: [] }
+      if (path.endsWith("/environments")) body = { environments: [] }
+      if (path === "/api/v1/providers")
+        body = {
+          providers: [
+            {
+              name: "digitalocean",
+              cloud: "digitalocean",
+              title: "DigitalOcean App Platform",
+              available: true,
+              runs: ["service"],
+              regions: ["nyc", "ams"],
+            },
+            {
+              name: "vercel",
+              cloud: "vercel",
+              title: "Vercel",
+              available: true,
+              runs: ["service"],
+            },
+          ],
+        }
+      if (path.endsWith("/clouds/c/targets") && noTargets)
+        body = { targets: [] }
+      else if (path.endsWith("/clouds/c/targets"))
+        body = {
+          targets: [
+            target("frontend", "vercel", "v"),
+            target("api", "digitalocean", "do-1"),
+            target("worker", "digitalocean", "do-2"),
+          ],
+        }
+      if (path === "/api/v1/clouds/c/projects")
+        body = {
+          grants: granted
+            ? [
+                {
+                  cloud_id: "c",
+                  project_id: "web",
+                  target_ids: ["frontend", "api"],
+                  revision: 1,
+                  revoked: false,
+                },
+              ]
+            : [],
+        }
+      if (path === "/api/v1/projects")
+        body = {
+          projects: [
+            { id: "web", name: "Web app", icon: "globe", color: "blue" },
+            { id: "jobs", name: "Jobs", icon: "box", color: "green" },
+          ],
+        }
+      if (path === "/api/v1/connections")
+        body = {
+          connections: [
+            {
+              id: "v",
+              name: "Vercel team",
+              cloud: "vercel",
+              account: "team",
+              status: "ready",
+            },
+            {
+              id: "do-1",
+              name: "DO US",
+              cloud: "digitalocean",
+              account: "us",
+              status: "ready",
+            },
+            {
+              id: "do-2",
+              name: "DO EU",
+              cloud: "digitalocean",
+              account: "eu",
+              status: "ready",
+            },
+          ],
+        }
+      if (path === "/api/v1/clouds/c/cluster-operations/saved")
+        body = {
+          id: "saved",
+          cloud_id: "c",
+          status: "needs_attention",
+          digest: "review",
+          input: { spec: { name: "Saved worker" }, ref: {} },
+          steps: [],
+          unknown_costs: [],
+        }
+      return Response.json(body)
+    }
+  )
+  return {
+    writes,
+    reads,
+    publishTargets: () => {
+      noTargets = false
+    },
+  }
+}
+
+const show = (project?: string, tab?: "capacity") =>
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" project={project} tab={tab} />
+    </ClientProvider>
+  )
+const openTab = async (name: string) =>
+  userEvent.click(
+    await screen.findByRole("tab", { name: new RegExp(`^${name}`) })
+  )
+
+it("shows where services go and how many run on each target", async () => {
+  const { reads } = fixture({ granted: true })
+  show()
+  const where = await screen.findByRole("region", { name: "Where services go" })
+  await waitFor(() => expect(where).toHaveTextContent("2 services"))
+  expect(where).toHaveTextContent("1 service")
+  expect(where).toHaveTextContent("0 services")
+  expect(
+    await screen.findByRole("region", { name: "Environments on this Cloud" })
+  ).toHaveTextContent(/production.*Web app.*3 services.*In sync/)
+  expect(screen.getByRole("banner")).toHaveTextContent("In sync")
+  // History is asked for this Cloud only, not filtered from a page of all.
+  expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
+})
+
+it("names each change in words and shows what moved", async () => {
+  fixture({
+    syncs: [
+      {
+        id: "s1",
+        cloud_id: "c",
+        target_id: "api",
+        status: "routing_pending",
+        attempt: 1,
+        created_at: new Date().toISOString(),
+        before: { ...target("api", "vercel", "v") },
+        after: { ...target("api", "digitalocean", "do-1"), region: "nyc" },
+        environments: [
+          {
+            environment_id: "prod",
+            environment: "production",
+            status: "succeeded",
+            external_routing: true,
+            services: ["api"],
+            summary: {},
+          },
+        ],
+      },
+    ],
+  })
+  show()
+  expect(
+    await screen.findByText(
+      "Moved Api to DO US: waiting on routing in production"
+    )
+  ).toBeInTheDocument()
+  await openTab("Changes")
+  expect(await screen.findByText("Moved Api to DO US")).toBeInTheDocument()
+  expect(
+    screen.getByText("Vercel team · its default region")
+  ).toBeInTheDocument()
+  expect(screen.getByText("DO US · nyc")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Confirm routing" })).toBeDisabled()
+})
+
+it("shows a project member only the project's share, read-only", async () => {
+  manager = false
+  const { reads } = fixture()
+  show("web")
+  await screen.findByRole("region", { name: "Where services go" })
+  expect(
+    screen.queryByRole("tab", { name: /^Projects/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("tab", { name: /^Infrastructure/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("tab", { name: /^Settings/ })
+  ).not.toBeInTheDocument()
+  expect(reads).toContain("/api/v1/projects/web/clouds/c/usage")
+  expect(reads.some((r) => r.startsWith("/api/v1/clouds/c/operations"))).toBe(
+    false
+  )
+  await openTab("Targets")
+  expect(
+    screen.queryByRole("button", { name: /^Edit/ })
+  ).not.toBeInTheDocument()
+})
+
+it("shows an organization's Cloud with the projects allowed on each target", async () => {
+  fixture({ granted: true })
+  show()
+  await openTab("Projects")
+  const access = await screen.findByRole("region", {
+    name: "Projects with access",
+  })
+  await waitFor(() => expect(access).toHaveTextContent("Web app"))
+  // Web app may use frontend and api, not worker, and production chose it.
+  expect(access).toHaveTextContent(/Web app\s*frontend\s*api\s*production/)
+  expect(access).not.toHaveTextContent("worker")
+  expect(
+    screen.getByRole("button", { name: "Edit access" })
+  ).toBeInTheDocument()
+})
+
+it("asks once before removing access from the access dialog", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ granted: true })
+  show()
+  await openTab("Projects")
+  await user.click(await screen.findByRole("button", { name: "Edit access" }))
+  await user.click(screen.getByRole("button", { name: "Remove access" }))
+  // The edit dialog hands off to the one confirm dialog; nothing is removed yet.
+  const confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent("Remove Web app's access?")
+  expect(
+    screen.queryByRole("button", { name: "Confirm remove access" })
+  ).not.toBeInTheDocument()
+  expect(writes).toEqual([])
+})
+
+it("gives a project access to only the targets you tick", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ unused: true })
+  show()
+  // Nothing uses the Cloud yet, so there is nothing to call in sync.
+  await waitFor(() =>
+    expect(screen.getByRole("banner")).toHaveTextContent("Not in use")
+  )
+  await openTab("Projects")
+  expect(
+    await screen.findByText("No project has access yet")
+  ).toBeInTheDocument()
+  await user.click(
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
+  )
+  await user.click(screen.getByRole("combobox", { name: "Project" }))
+  await user.click(await screen.findByRole("option", { name: /Jobs/ }))
+  // Every target starts ticked; leave worker out.
+  await user.click(screen.getByRole("checkbox", { name: /Worker/ }))
+  await user.click(screen.getByRole("button", { name: "Give access" }))
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        method: "PUT",
+        path: "/api/v1/clouds/c/projects/jobs",
+        body: { target_ids: ["frontend", "api"] },
+      },
+    ])
+  )
+})
+
+it("disables target choices for whole Cloud access and all grant choices while saving", async () => {
+  const user = userEvent.setup()
+  fixture()
+  const fetch = globalThis.fetch
+  let finishSave!: (response: Response) => void
+  const pendingSave = new Promise<Response>((resolve) => {
+    finishSave = resolve
+  })
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/projects/"))
+      return pendingSave
+    return fetch(input, init)
+  })
+  show()
+  await openTab("Projects")
+  await user.click(
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
+  )
+  const wholeCloud = screen.getByRole("checkbox", { name: /Whole Cloud/ })
+  const frontend = screen.getByRole("checkbox", { name: /Frontend/ })
+  await user.click(wholeCloud)
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  await user.click(frontend)
+  expect(frontend).toBeChecked()
+  await user.click(wholeCloud)
+  expect(frontend).not.toHaveAttribute("aria-disabled", "true")
+  await user.click(screen.getByRole("button", { name: "Give access" }))
+  await waitFor(() =>
+    expect(wholeCloud).toHaveAttribute("aria-disabled", "true")
+  )
+  expect(frontend).toHaveAttribute("aria-disabled", "true")
+  expect(screen.getByRole("combobox", { name: "Project" })).toBeDisabled()
+  finishSave(
+    Response.json({
+      cloud_id: "c",
+      project_id: "web",
+      target_ids: ["frontend", "api", "worker"],
+      revision: 2,
+    })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+})
+
+it("sets a targetless Cloud's one provider and account", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ noTargets: true })
+  show()
+  await openTab("Targets")
+  expect(
+    await screen.findByText(/every service on it runs here/)
+  ).toBeInTheDocument()
+  // The section head and the empty state both offer it; either opens the dialog.
+  await user.click(screen.getAllByRole("button", { name: "Set default" })[0]!)
+  await user.click(
+    await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
+  )
+  await user.click(screen.getByRole("radio", { name: /DO EU/ }))
+  await user.click(screen.getByRole("combobox", { name: "Default region" }))
+  await user.click(await screen.findByRole("option", { name: /ams/ }))
+  await user.click(screen.getByRole("button", { name: "Set default" }))
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        method: "PUT",
+        path: "/api/v1/clouds/c/default-placement",
+        body: {
+          default_placement: {
+            provider: "digitalocean",
+            connection_id: "do-2",
+            region: "ams",
+          },
+          revision: 1,
+        },
+      },
+    ])
+  )
+  expect(await screen.findByText("DO EU")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Change" })).toBeInTheDocument()
+})
+
+it("explains why a default can't move while an environment uses the Cloud", async () => {
+  const user = userEvent.setup()
+  fixture({ inUse: true })
+  show()
+  await openTab("Targets")
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Set default" }))[0]!
+  )
+  await user.click(
+    await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
+  )
+  await user.click(screen.getByRole("radio", { name: /DO US/ }))
+  await user.click(screen.getByRole("button", { name: "Set default" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /Unassign the Cloud from those environments first/
+  )
+})
+
+it("reviews a default provider switch through the organization Cloud change contract", async () => {
+  fixture({
+    profile: {
+      default_placement: { provider: "vercel", connection_id: "v", region: "" },
+    },
+  })
+  const user = userEvent.setup()
+  show()
+  await openTab("Targets")
+  await user.click(await screen.findByRole("button", { name: "Change" }))
+  await user.click(
+    await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
+  )
+  await user.click(screen.getByRole("radio", { name: /DO US/ }))
+  expect(
+    screen.getByRole("button", { name: "Review default switch" })
+  ).toBeInTheDocument()
+})
+
+it("says pools won't grow on their own while automatic expansion is off, and saves the policy", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture()
+  show()
+  await openTab("Capacity")
+  expect(
+    await screen.findByText(
+      "Automatic expansion isn't on for this Loomplane yet"
+    )
+  ).toBeInTheDocument()
+  // It names the setting, so the operator knows exactly what to change.
+  expect(
+    screen.getByText("LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED=true")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText("clouds.automatic_capacity.enabled")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(/nothing will appear here until it's turned on/)
+  ).toBeInTheDocument()
+  // A pool without a rule never grows.
+  expect(
+    screen.getByText("No rule, so this pool never grows.")
+  ).toBeInTheDocument()
+  await user.type(screen.getByRole("spinbutton", { name: "Servers" }), "3")
+  await user.type(screen.getByRole("spinbutton", { name: "vCPU" }), "8")
+  // A saved limit is enforced even while pools don't grow, so an empty one
+  // is never saved as 0.
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("before you save")
+  expect(writes).toEqual([])
+  await user.type(screen.getByRole("spinbutton", { name: "Memory, GiB" }), "16")
+  await user.type(
+    screen.getByRole("spinbutton", { name: "Storage, GB" }),
+    "200"
+  )
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  await waitFor(() =>
+    expect(writes.at(-1)).toMatchObject({
+      method: "POST",
+      path: "/api/v1/clouds/c/capacity-policy",
+      body: {
+        expected_revision: 0,
+        policy: {
+          enabled: false,
+          require_expansion_approval: true,
+          limits: {
+            servers: 3,
+            cpu_millis: 8000,
+            memory_bytes: 16 * 2 ** 30,
+            storage_bytes: 200e9,
+          },
+          pools: [],
+        },
+      },
+    })
+  )
+})
+
+it("says which limits are missing before letting pools grow", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture()
+  show()
+  await openTab("Capacity")
+  await user.click(
+    await screen.findByRole("switch", { name: "Let pools on this Cloud grow" })
+  )
+  await user.type(screen.getByRole("spinbutton", { name: "Servers" }), "2")
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "set the most this Cloud may hold for vCPU, memory, storage"
+  )
+  expect(writes).toEqual([])
+})
+
+// A paused deployment's "Review capacity" opens the Cloud on its Capacity
+// tab, with ?project= set. A manager lands there with usage, the growth
+// policy, the pools' rules with Add pool, and waiting servers.
+it("opens on the Capacity tab with usage, the policy, pools and expansions", async () => {
+  const { reads } = fixture()
+  show("web", "capacity")
+  expect(
+    await screen.findByRole("tab", { name: /^Capacity/, selected: true })
+  ).toBeInTheDocument()
+  const usage = await screen.findByRole("region", { name: "Capacity usage" })
+  const policy = await screen.findByRole("region", { name: "Growth policy" })
+  const pools = screen.getByRole("region", { name: "How each pool grows" })
+  const waiting = screen.getByRole("region", {
+    name: "Servers waiting for approval",
+  })
+  const after = (a: Element, b: Element) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+  expect(
+    after(usage, policy) && after(policy, pools) && after(pools, waiting)
+  ).toBe(true)
+  expect(
+    within(pools).getByRole("button", { name: "Add pool" })
+  ).toBeInTheDocument()
+  await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
+  // Capacity lives on its own tab; Servers doesn't mount a second copy.
+  await openTab("Infrastructure")
+  expect(
+    screen.queryByRole("region", { name: "Capacity usage" })
+  ).not.toBeInTheDocument()
+})
+
+it("reloads a saved cluster operation on Infrastructure without issuing creation", async () => {
+  window.history.replaceState(null, "", "/clouds/c?clusterOperation=saved")
+  const { reads, writes } = fixture()
+  show()
+  expect(await screen.findByText("Saved worker")).toBeInTheDocument()
+  // The operation is a page of its own under Infrastructure, with a way back.
+  expect(
+    screen.getByRole("button", { name: /Production · Infrastructure/ })
+  ).toBeInTheDocument()
+  expect(reads.some((path) => path.includes("cluster-operations/saved"))).toBe(
+    true
+  )
+  expect(writes).toEqual([])
+})
+
+it("refreshes published targets and account metadata on live sync without reloading", async () => {
+  const state = fixture({ noTargets: true })
+  show()
+  await openTab("Targets")
+  await screen.findByText("No targets yet")
+  state.publishTargets()
+  act(() =>
+    publishLiveState({
+      status: "live",
+      transport: "ws",
+      lastSync: 42,
+      gap: false,
+    })
+  )
+  await screen.findByText("Frontend")
+  expect(
+    state.reads.filter((path) => path === "/api/v1/connections").length
+  ).toBeGreaterThan(1)
+})
+
+it("keeps cluster operations beyond the first history page reachable", async () => {
+  const clusterOperations = Array.from({ length: 51 }, (_, i) => ({
+    id: `cluster-op-${i}`,
+    cloud_id: "c",
+    kind: "create",
+    status: i === 50 ? "needs_attention" : "succeeded",
+    input: { spec: { name: `workers-${i}` }, ref: {} },
+    created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(),
+  }))
+  fixture({ clusterOperations })
+  show()
+  await openTab("Changes")
+  await userEvent.click(await screen.findByRole("tab", { name: "Clusters" }))
+  await screen.findByRole("link", { name: "Create cluster: workers-49" })
+  expect(
+    screen.queryByRole("link", { name: "Create cluster: workers-50" })
+  ).not.toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Older cluster changes" })
+  )
+  const saved = await screen.findByRole("link", {
+    name: "Create cluster: workers-50",
+  })
+  expect(saved).toHaveAttribute(
+    "href",
+    "/clouds/c?tab=infrastructure&clusterOperation=cluster-op-50"
+  )
+  await screen.findByText("Needs attention")
+  await userEvent.click(
+    screen.getByRole("button", { name: "Newer cluster changes" })
+  )
+  await screen.findByRole("link", { name: "Create cluster: workers-0" })
+})

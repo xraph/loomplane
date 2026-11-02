@@ -1,10 +1,14 @@
 package identity
 
 import (
+	"context"
 	"net/http"
 
+	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -20,24 +24,38 @@ type Session struct {
 // PublicConfig is what the dashboard needs before anyone signs in. Nothing
 // in it is secret: the publishable key and app ID only name the authsome
 // app, which some authsome calls (checking an organization slug) take.
+// ConsolePath is the exception, and it only goes to a session holding a
+// platform role.
 type PublicConfig struct {
-	PublishableKey string `json:"publishable_key"`
-	AppID          string `json:"app_id"`
-	AuthBasePath   string `json:"auth_base_path"`
+	PublishableKey string   `json:"publishable_key"`
+	AppID          string   `json:"app_id"`
+	AuthBasePath   string   `json:"auth_base_path"`
+	Features       Features `json:"features"`
+	// SetupPending means the instance has no users yet, so the dashboard
+	// shows setup instead of sign-in.
+	SetupPending bool `json:"setup_pending"`
+	// Waitlist means sign-up needs an invitation or an approved waitlist
+	// entry.
+	Waitlist bool `json:"waitlist"`
+	// SetupTokenRequired means setup is pending and needs the setup token
+	// from the API's log. It is never true in development.
+	SetupTokenRequired bool `json:"setup_token_required"`
+	// ConsolePath is where the instance console is mounted, for platform
+	// admins only.
+	ConsolePath string `json:"console_path,omitempty"`
+}
+
+// Features says which optional sections the server runs, so the dashboard
+// shows only those.
+type Features struct {
+	AI bool `json:"ai"` // the server runs the AI section
 }
 
 func (e *Extension) routes(r forge.Router) error {
-	public := PublicConfig{
-		PublishableKey: e.cfg.Identity.PublishableKey,
-		AppID:          e.cfg.Identity.AppID,
-		AuthBasePath:   e.cfg.Identity.BasePath,
+	if err := e.publicConfigRoute(r); err != nil {
+		return err
 	}
-	if err := r.GET("/api/v1/public-config", func(c forge.Context) error { return c.JSON(http.StatusOK, public) },
-		forge.WithName("publicConfig.get"),
-		forge.WithSummary("Settings the dashboard needs before sign-in"),
-		forge.WithTags("Identity"),
-		forge.WithResponseSchema(http.StatusOK, "Public settings", PublicConfig{}),
-	); err != nil {
+	if err := e.setupRoutes(r); err != nil {
 		return err
 	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
@@ -52,6 +70,68 @@ func (e *Extension) routes(r forge.Router) error {
 		return err
 	}
 	return e.keyRoutes(r)
+}
+
+// publicConfigRoute serves the settings the dashboard reads before sign-in.
+// A session is optional; with one, a platform admin also learns where the
+// console is.
+func (e *Extension) publicConfigRoute(r forge.Router) error {
+	return r.GET("/api/v1/public-config", e.publicConfig,
+		forge.WithName("publicConfig.get"),
+		forge.WithSummary("Settings the dashboard needs before sign-in"),
+		forge.WithTags("Identity"),
+		forge.WithMiddleware(e.sessionMiddleware()...),
+		forge.WithResponseSchema(http.StatusOK, "Public settings", PublicConfig{}),
+	)
+}
+
+// staticPublicConfig is the part of the public config that only the config
+// file decides.
+func (e *Extension) staticPublicConfig() PublicConfig {
+	return PublicConfig{
+		PublishableKey: e.cfg.Identity.PublishableKey,
+		AppID:          e.cfg.Identity.AppID,
+		AuthBasePath:   e.cfg.Identity.BasePath,
+		Features:       Features{AI: e.cfg.AI.Enabled},
+	}
+}
+
+func (e *Extension) publicConfig(c forge.Context) error {
+	ctx := c.Request().Context()
+	out := e.staticPublicConfig()
+	out.SetupPending = e.setupPending(ctx)
+	out.SetupTokenRequired = out.SetupPending && !e.cfg.IsDevelopment()
+	out.Waitlist = e.waitlistOn(ctx)
+	if e.holdsPlatformRole(ctx) {
+		out.ConsolePath = e.cfg.Console.Path
+	}
+	// The answer changes with setup, the waitlist and who asks.
+	c.Response().Header().Set("Cache-Control", "no-store")
+	return c.JSON(http.StatusOK, out)
+}
+
+// holdsPlatformRole reports whether the request's session belongs to a
+// platform owner or admin. Without a session, or when the roles can't be
+// read, it says no.
+func (e *Extension) holdsPlatformRole(ctx context.Context) bool {
+	userID, ok := authmw.UserIDFrom(ctx)
+	if !ok {
+		return false
+	}
+	roles, ok := e.appRoles(ctx, userID.String())
+	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID)
+}
+
+// appRoles reads a user's roles in Loomplane's app, live from Warden rather
+// than from anything stamped on the session. A failure is logged and
+// reported as ok false.
+func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.Role, ok bool) {
+	roles, err := e.platformRoles.ListUserRolesForApp(ctx, e.cfg.Identity.AppID, userID)
+	if err != nil {
+		e.Logger().Error("read platform roles", forge.F("user_id", userID), forge.F("error", err.Error()))
+		return nil, false
+	}
+	return roles, true
 }
 
 func (e *Extension) getSession(c forge.Context) error {

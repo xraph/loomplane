@@ -27,7 +27,8 @@ describe("clouds", () => {
   it("labels known clouds and passes others through", () => {
     expect(cloudLabel("gcp")).toBe("Google Cloud")
     expect(cloudLabel("aws")).toBe("AWS")
-    expect(cloudLabel("azure")).toBe("azure")
+    expect(cloudLabel("azure")).toBe("Azure")
+    expect(cloudLabel("future-cloud")).toBe("future-cloud")
   })
 
   it("recognizes a service account key", () => {

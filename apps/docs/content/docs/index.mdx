@@ -1,0 +1,39 @@
+---
+title: Introduction
+description: Loomplane is a self-hosted deployment platform that takes the monorepos you already have from source to running services across your own clouds.
+---
+
+Loomplane takes a Go, Rust, TypeScript, JavaScript, Python or JVM monorepo, or an application split across several repositories, and deploys it to the clouds you already pay for. You give it the repositories. It reads the code (and never runs it) to find your services and the databases they need, drafts a `loomplane.yaml`, and plans what a deployment would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it.
+
+A Next.js app goes to Vercel. A Go API goes to Cloud Run. A worker goes to ECS on Fargate. Postgres lands on Cloud SQL or RDS, and every service gets its connection string through the cloud's own secret store. After that, Loomplane keeps checking that what runs is what it deployed.
+
+Your applications don't need Forge, or Go. Everything runs in your own clouds, on your own accounts, and your traffic never passes through Loomplane.
+
+## Who it's for
+
+If you run a monorepo and you're tired of maintaining a pile of per-cloud deploy scripts, this is for you. It also suits teams that want a person to look at the exact set of changes before any cloud account is touched, and teams that just want one place to see what runs where.
+
+You run Loomplane yourself, and it's small: one API and dashboard process, one analysis worker and one PostgreSQL database. It's free software under the AGPL-3.0. If you run a changed version as a service for other people, you have to offer them the source of your changes too.
+
+## Where to start
+
+<Cards>
+  <Card title="Quick start" href="/docs/quick-start" description="Install Loomplane with Docker, connect a repository and deploy your first project." />
+  <Card title="How it works" href="/docs/how-it-works" description="Follow a project from analysis to a plan, an approval, a deployment and drift checks." />
+  <Card title="Concepts" href="/docs/concepts/projects-and-environments" description="Projects, the manifest, plans, variables, gateways and roles." />
+  <Card title="Clouds" href="/docs/clouds" description="What each deployment target runs, how to connect an account, and how to move between them." />
+  <Card title="Database services" href="/docs/services/database-services" description="PostgreSQL, MySQL, MariaDB, Redis and Valkey, with backups and tested restores." />
+  <Card title="Guides" href="/docs/guides/deploy-a-monorepo" description="A monorepo end to end, private repositories, CI and notifications." />
+  <Card title="AI agents" href="/docs/agents/mcp-server" description="Let an agent analyze, plan and, if you allow it, approve over MCP." />
+  <Card title="Reference" href="/docs/reference/loomplane-yaml" description="Every manifest field, loomctl command, configuration variable and role." />
+  <Card title="Operations" href="/docs/operations/production-on-docker" description="Run, back up, upgrade, monitor and secure Loomplane itself." />
+  <Card title="Extending" href="/docs/extending/provider-plugins" description="Add a deployment target without changing Loomplane." />
+</Cards>
+
+## What's solid and what isn't
+
+Every milestone on the roadmap, through operational maturity, is built. Most cloud paths are tested against fakes that answer the way each real API does. We've also run the Vercel static-site path against a real account, and the acceptance runs on real Google Cloud and AWS accounts are what we do next. Check a target against your own account before you rely on it.
+
+<Callout type="warn">
+  Federation (one application spanning clusters and clouds) is still being built and isn't ready for production. Several managed database and recovery paths are qualified against controlled endpoints only, and live cloud qualification is pending. Each page says so where it applies.
+</Callout>

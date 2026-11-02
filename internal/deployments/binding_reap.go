@@ -10,8 +10,9 @@ import (
 
 // resourceCredentialFields are the fields a deployed action may keep in
 // Vault under its own name: a resource's address, its application password,
-// and the administrator's password of a database Loomplane runs itself.
-var resourceCredentialFields = []string{ResourceURL, passwordField, adminPasswordField}
+// the administrator's password of a database Loomplane runs itself, and
+// the explicit SDK output fields of an attached bucket.
+var resourceCredentialFields = append([]string{ResourceURL, passwordField, adminPasswordField}, bucketCredentialFields()...)
 
 // BindingReaper cleans up after the services and resources deployed in a
 // project or environment being deleted. The deletion takes every binding
@@ -90,7 +91,7 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 	br.forget(ctx, r)
 	for _, b := range r.bindings {
-		if databaseGatewayOf(b) != nil {
+		if databaseGatewayOf(b) != nil || planning.ExistingResourceBinding(b) {
 			continue
 		}
 		for _, left := range append([]planning.Binding{*b}, b.Replaced...) {
@@ -101,28 +102,32 @@ func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 	}
 }
 
-// forget deletes what the environment kept in Vault: every key under it,
-// when Secrets can list them, or else each binding's own credentials.
+// forget deletes what the environment kept in Vault: each binding's own
+// credentials, then every key still under it when Secrets can list them.
 func (br *BindingReaper) forget(ctx context.Context, r reapedEnvironment) {
 	if br.Secrets == nil {
 		return
 	}
-	if keys, ok := br.Secrets.(ResourceSecretKeys); ok {
-		if br.sweep(ctx, keys, r) {
-			return
-		}
-	}
+	// Each binding's own credentials go first: a resource's inventory says
+	// which fields it kept, so the sweep mustn't delete it before it's read.
 	for _, b := range r.bindings {
+		if b.Subject == planning.ResourceSubject {
+			br.reapResourceAccess(ctx, r, b.Name)
+			continue
+		}
 		for _, field := range resourceCredentialFields {
 			if err := br.Secrets.Delete(ctx, resourceKey(r.org, r.id, b.Name, field)); err != nil {
 				br.warn(fmt.Sprintf("delete the credentials of %s, whose environment %s was deleted", b.Name, r.name), err)
 			}
 		}
 	}
+	if keys, ok := br.Secrets.(ResourceSecretKeys); ok {
+		br.sweep(ctx, keys, r)
+	}
 }
 
-// sweep deletes every key under the environment, and reports whether it
-// could list them. When it couldn't, forget falls back on the bindings.
+// sweep deletes every key still under the environment, and reports whether
+// it could list them.
 func (br *BindingReaper) sweep(ctx context.Context, keys ResourceSecretKeys, r reapedEnvironment) bool {
 	prefix, err := environmentKeys(r.org, r.id)
 	if err == nil {

@@ -1,0 +1,119 @@
+{{- $component := dict "ctx" $ "component" "worker" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "loomplane.workerName" . }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    {{- toYaml .Values.worker.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "loomplane.selectorLabels" $component | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "loomplane.checksums" . | nindent 8 }}
+        {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "loomplane.selectorLabels" $component | nindent 8 }}
+        {{- with .Values.worker.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "loomplane.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Only the API migrates. A worker starting first waits here until the
+        # schema is current, rather than running jobs against an old one.
+        - name: wait-for-schema
+          image: {{ include "loomplane.image" . }}
+          imagePullPolicy: {{ include "loomplane.pullPolicy" . }}
+          command:
+            - /bin/sh
+            - -c
+            - until loomplane migrations --check; do echo "waiting for the API to migrate"; sleep 5; done
+          envFrom:
+            {{- include "loomplane.envFrom" . | nindent 12 }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "loomplane.volumeMounts" . | nindent 12 }}
+      containers:
+        - name: worker
+          image: {{ include "loomplane.image" . }}
+          imagePullPolicy: {{ include "loomplane.pullPolicy" . }}
+          env:
+            - name: LOOMPLANE_PROCESS
+              value: worker
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            {{- include "loomplane.envFrom" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8781
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: {{ .Values.worker.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.worker.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: {{ .Values.worker.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.worker.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /_/health/ready
+              port: http
+            initialDelaySeconds: {{ .Values.worker.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.worker.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.worker.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "loomplane.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "loomplane.volumes" (dict "ctx" $ "tmpSize" .Values.worker.tmpSize) | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "loomplane.topologySpread" (dict "ctx" $ "component" "worker" "constraints" .Values.worker.topologySpreadConstraints) | nindent 8 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

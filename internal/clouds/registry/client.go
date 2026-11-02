@@ -92,9 +92,16 @@ func (c *Client) request(ctx context.Context, method, path string) (*http.Respon
 }
 
 func (c *Client) requestFor(ctx context.Context, method, path, repository string) (*http.Response, error) {
+	return c.requestScoped(ctx, method, path, repository, "pull,push", nil)
+}
+
+func (c *Client) requestScoped(ctx context.Context, method, path, repository, actions string, headers http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Config.Endpoint+path, http.NoBody)
 	if err != nil {
 		return nil, err
+	}
+	for key, values := range headers {
+		req.Header[key] = values
 	}
 	if c.Config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Config.Token)
@@ -113,7 +120,7 @@ func (c *Client) requestFor(ctx context.Context, method, path, repository string
 		return response, nil
 	}
 	_ = response.Body.Close()
-	token, err := c.bearerToken(ctx, challenge, repository, "pull,push")
+	token, err := c.bearerToken(ctx, challenge, repository, actions)
 	if err != nil {
 		return nil, err
 	}

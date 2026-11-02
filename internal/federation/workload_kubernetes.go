@@ -1,9 +1,7 @@
 package federation
 
 import (
-	"bytes"
 	"context"
-	"time"
 
 	"github.com/xraph/ctrlplane/id"
 	corev1 "k8s.io/api/core/v1"
@@ -47,25 +45,10 @@ type KubernetesWorkloadVerifier func(context.Context, domain.Destination, Worklo
 // VerifyKubernetesWorkload reads ownership and SPIRE evidence through the current
 // explicit connection. It creates no registration and grants no service access.
 func VerifyKubernetesWorkload(credentials InstallationCredentials, nodes SPIRENodeReader, trustDomain, org string) KubernetesWorkloadVerifier {
-	_, scopeErr := workloadidentity.ControlURIForOrganization(trustDomain, org)
+	verify := VerifyKubernetesWorkloadEvidence(credentials, nodes, trustDomain, org, nil)
 	return func(ctx context.Context, d domain.Destination, binding WorkloadDeployment, p KubernetesWorkloadProfile) (workloadidentity.WorkloadBinding, error) {
-		if err := ctx.Err(); err != nil {
-			return workloadidentity.WorkloadBinding{}, err
-		}
-		if scopeErr != nil || d.OrgID != org || nodes == nil || !workloadProfileMatches(binding, p, d) {
-			return workloadidentity.WorkloadBinding{}, ErrUnverified
-		}
-		indexes := make([][]byte, len(p.ImageIndexes))
-		for i, raw := range p.ImageIndexes {
-			indexes[i] = bytes.Clone(raw)
-		}
-		p.ImageIndexes = indexes
-		client, err := openInstallationKubernetes(ctx, credentials, org, d)
-		if err != nil {
-			return workloadidentity.WorkloadBinding{}, err
-		}
-		r := &kubernetesWorkloadResolver{attestation: &KubernetesAttestationResolver{client: client, nodes: nodes, profile: p.KubernetesAttestationProfile, domain: trustDomain, now: time.Now}, profile: p, binding: binding}
-		return r.Resolve(ctx, d)
+		evidence, err := verify(ctx, d, binding, p)
+		return evidence.Workload, err
 	}
 }
 
@@ -73,6 +56,7 @@ type kubernetesWorkloadResolver struct {
 	attestation *KubernetesAttestationResolver
 	profile     KubernetesWorkloadProfile
 	binding     WorkloadDeployment
+	images      KubernetesImageProofLoader
 }
 
 func workloadProfileMatches(b WorkloadDeployment, p KubernetesWorkloadProfile, d domain.Destination) bool {
@@ -81,28 +65,13 @@ func workloadProfileMatches(b WorkloadDeployment, p KubernetesWorkloadProfile, d
 }
 
 func (r *kubernetesWorkloadResolver) Resolve(ctx context.Context, d domain.Destination) (workloadidentity.WorkloadBinding, error) {
-	if err := ctx.Err(); err != nil {
-		return workloadidentity.WorkloadBinding{}, err
-	}
-	if r == nil || r.attestation == nil || r.attestation.profile != r.profile.KubernetesAttestationProfile || !workloadProfileMatches(r.binding, r.profile, d) {
-		return workloadidentity.WorkloadBinding{}, ErrUnverified
-	}
-	var imageSelector string
-	binding, err := r.attestation.resolve(ctx, d, func(ctx context.Context, pod *corev1.Pod, node *corev1.Node) error {
-		var verifyErr error
-		imageSelector, verifyErr = r.verifyOwnership(ctx, pod, node)
-		return verifyErr
-	})
-	if err != nil {
-		return workloadidentity.WorkloadBinding{}, err
-	}
-	return workloadidentity.WorkloadBinding{Binding: binding, Workload: domain.WorkloadSelector{Scope: d.Scope, DestinationID: d.ID, ServiceID: r.binding.ServiceID}, ContainerImage: imageSelector}, nil
+	evidence, err := r.ResolveEvidence(ctx, d)
+	return evidence.Workload, err
 }
 
 func (r *kubernetesWorkloadResolver) verifyOwnership(ctx context.Context, pod *corev1.Pod, node *corev1.Node) (string, error) {
 	p, b := r.profile, r.binding
-	imageSelector, imageOK := r.runningImage(pod, node)
-	if pod.Name != p.PodName || pod.Namespace != r.attestation.client.Config.Namespace || pod.ResourceVersion == "" || pod.Status.Phase != corev1.PodRunning || !r.templateMatches(pod.ObjectMeta, pod.Spec) || !imageOK {
+	if pod.Name != p.PodName || pod.Namespace != r.attestation.client.Config.Namespace || pod.ResourceVersion == "" || pod.Status.Phase != corev1.PodRunning || !r.templateMatches(pod.ObjectMeta, pod.Spec) {
 		return "", ErrUnverified
 	}
 	owner, ok := workloadController(pod, "ReplicaSet")
@@ -129,6 +98,10 @@ func (r *kubernetesWorkloadResolver) verifyOwnership(ctx context.Context, pod *c
 	if !ownedWorkloadObject(deployment, parent.Name, p.DeploymentUID, ns) || deployment.Generation != p.DeploymentGeneration || deployment.Spec.Paused || deployment.Spec.Replicas == nil || *deployment.Spec.Replicas < 1 || !r.labelsMatch(deployment.Labels) || !r.templateMatches(deployment.Spec.Template.ObjectMeta, deployment.Spec.Template.Spec) || !selectsWorkload(deployment.Spec.Selector, rs.Labels) || !selectsWorkload(deployment.Spec.Selector, pod.Labels) {
 		return "", ErrUnverified
 	}
+	imageSelector, err := r.runningImage(ctx, pod, node)
+	if err != nil {
+		return "", err
+	}
 	// Kubernetes has no transaction spanning these resources. Refuse an observed
 	// change during verification; issuance must also recheck the retained pins.
 	currentDeployment, err := client.AppsV1().Deployments(ns).Get(ctx, deployment.Name, metav1.GetOptions{})
@@ -144,6 +117,13 @@ func (r *kubernetesWorkloadResolver) verifyOwnership(ctx context.Context, pod *c
 		return "", err
 	}
 	if !sameWorkloadVersion(deployment, currentDeployment) || !sameWorkloadVersion(rs, currentRS) || !sameWorkloadVersion(pod, currentPod) {
+		return "", ErrUnverified
+	}
+	currentNode, err := client.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	if currentNode.UID != node.UID || currentNode.DeletionTimestamp != nil || currentNode.Status.NodeInfo.OperatingSystem != node.Status.NodeInfo.OperatingSystem || currentNode.Status.NodeInfo.Architecture != node.Status.NodeInfo.Architecture {
 		return "", ErrUnverified
 	}
 	return imageSelector, nil
@@ -174,24 +154,37 @@ func (r *kubernetesWorkloadResolver) templateMatches(meta metav1.ObjectMeta, spe
 	return matches == 1
 }
 
-func (r *kubernetesWorkloadResolver) runningImage(pod *corev1.Pod, node *corev1.Node) (string, bool) {
+func (r *kubernetesWorkloadResolver) runningImage(ctx context.Context, pod *corev1.Pod, node *corev1.Node) (string, error) {
 	matches := 0
-	var selected string
+	reported := ""
 	for _, status := range pod.Status.ContainerStatuses {
 		if status.Name != r.profile.Container {
 			continue
 		}
 		matches++
-		if status.State.Running == nil {
-			return "", false
+		if status.State.Running == nil || !domain.ValidPinnedImage(status.ImageID) {
+			return "", ErrUnverified
 		}
-		image, ok := domain.ResolveImageSelector(r.binding.Image, status.ImageID, node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.Architecture, r.profile.ImageIndexes)
-		if !ok {
-			return "", false
-		}
-		selected = image
+		reported = status.ImageID
 	}
-	return selected, matches == 1 && selected != ""
+	if matches != 1 {
+		return "", ErrUnverified
+	}
+	if r.images != nil {
+		proofs, err := r.images(ctx, r.binding, reported, node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.Architecture)
+		if err != nil {
+			return "", err
+		}
+		if !domain.ValidImageIndexes(proofs) {
+			return "", ErrUnverified
+		}
+		r.profile.ImageIndexes = cloneWorkloadIndexes(proofs)
+	}
+	image, ok := domain.ResolveImageSelector(r.binding.Image, reported, node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.Architecture, r.profile.ImageIndexes)
+	if !ok {
+		return "", ErrUnverified
+	}
+	return image, nil
 }
 
 func workloadController(object metav1.Object, kind string) (metav1.OwnerReference, bool) {

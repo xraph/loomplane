@@ -11,6 +11,8 @@ import (
 
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	store "github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -49,15 +51,25 @@ func permission(event string) security.Permission {
 	switch strings.SplitN(event, ".", 2)[0] {
 	case "environment":
 		return security.EnvironmentRead
-	case "plan", "deployment", "build", "cloud_sync":
+	case "plan", "deployment", "build", "cloud_sync", "canary_verdict", "release_watch":
 		return security.DeploymentRead
 	case "binding":
 		return security.InfrastructureRead
 	case "connection", "cloud", "cloud_target", "environment_cloud":
 		return security.CloudAccountRead
+	case "cloud_capacity", "cloud_cluster":
+		return security.OrganizationCloudManage
 	default:
 		return security.ProjectRead
 	}
+}
+
+// logger is nil when the extension has not been registered, as in unit tests.
+func (e *Extension) logger() forge.Logger {
+	if e.BaseExtension == nil {
+		return nil
+	}
+	return e.Logger()
 }
 
 func (e *Extension) checkScope(ctx context.Context, p security.Principal, sub Subscription) error {
@@ -90,10 +102,41 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 	out := []store.Event{}
 	grants := map[string]bool{}
 	for _, event := range events {
+		// A notification belongs to one person. It needs no permission, only
+		// the right recipient, and the recipient never sees the user ID.
+		if strings.HasPrefix(event.Type, "notification.") {
+			var doc map[string]json.RawMessage
+			var user string
+			malformed := json.Unmarshal(event.Data, &doc) != nil
+			if raw, ok := doc["user_id"]; !malformed && ok {
+				malformed = json.Unmarshal(raw, &user) != nil
+			}
+			if malformed {
+				// Fail closed for everyone, but never end the stream over one
+				// bad row. The payload stays out of the log.
+				if l := e.logger(); l != nil {
+					l.Warn("realtime skipped a malformed notification event", forge.F("type", event.Type), forge.F("org_id", event.OrgID))
+				}
+				continue
+			}
+			if user == "" || user != p.UserID {
+				continue
+			}
+			delete(doc, "user_id")
+			data, err := json.Marshal(doc)
+			if err != nil {
+				return nil, err
+			}
+			event.Data = data
+			out = append(out, event)
+			continue
+		}
 		if event.ProjectID != "" && len(sub.ProjectIDs) != 0 && !slices.Contains(sub.ProjectIDs, event.ProjectID) {
 			continue
 		}
-		if strings.HasPrefix(event.Type, "build.") {
+		// Build output and canary verdicts reach a subscription that names
+		// their deployment, like the logs they sit beside.
+		if strings.HasPrefix(event.Type, "build.") || strings.HasPrefix(event.Type, "canary_verdict.") {
 			var ref struct {
 				DeploymentID string `json:"deployment_id"`
 			}
@@ -116,6 +159,17 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			grants[key] = allowed
 		}
 		if allowed {
+			if strings.HasPrefix(event.Type, "plan.") && len(event.Data) > 0 {
+				var plan planning.Plan
+				if err := json.Unmarshal(event.Data, &plan); err != nil {
+					return nil, err
+				}
+				data, err := json.Marshal(publicplan.Project(&plan))
+				if err != nil {
+					return nil, err
+				}
+				event.Data = data
+			}
 			if event.Type == "cloud_sync.updated" && len(event.Data) > 0 {
 				managerErr := e.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 				if managerErr != nil && !errors.Is(managerErr, security.ErrForbidden) {

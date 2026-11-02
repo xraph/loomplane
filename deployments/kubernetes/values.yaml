@@ -1,0 +1,17 @@
+# The values the plain manifest (loomplane.yaml) is rendered with. It reads
+# its secrets from a Secret named loomplane that you create; see the
+# manifest's header.
+publicURL: https://loomplane.example.com
+secrets:
+  existingSecret: loomplane
+ingress:
+  enabled: true
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+  className: nginx
+  tls:
+    - secretName: loomplane-tls
+      hosts: [loomplane.example.com]

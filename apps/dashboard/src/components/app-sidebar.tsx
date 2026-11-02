@@ -4,16 +4,10 @@
 import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
-  ActivityIcon,
-  CloudIcon,
-  DatabaseIcon,
   CopyIcon,
+  DatabaseIcon,
   FolderGit2Icon,
   KeyboardIcon,
-  LayoutDashboardIcon,
-  LayoutGridIcon,
-  RocketIcon,
-  ServerIcon,
   Settings2Icon,
 } from "lucide-react"
 import { type ComponentProps, useState } from "react"
@@ -22,12 +16,24 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import {
+  ActivityIcon,
+  CloudsIcon,
+  DeploymentsIcon,
+  DomainsIcon,
+  InfrastructureIcon,
+  OverviewIcon,
+  ProjectsIcon,
+  ServicesIcon,
+} from "@/components/icons"
 import { OrganizationForm } from "@/components/organization-form"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
+import { aiNavItems } from "@/lib/ai-nav"
+import { useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
   Dialog,
@@ -63,14 +69,17 @@ const settingsPaths = [
   "/members",
   "/variables",
   "/integrations",
+  "/cloud-sign-in",
   "/api-keys",
   "/notifications",
+  "/ai/settings",
 ]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
   const { openNewProject } = useShell()
+  const features = useFeatures()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -87,14 +96,19 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const nav: NavItem[] = [
     {
       title: "Overview",
-      icon: <LayoutDashboardIcon />,
+      icon: <OverviewIcon />,
       link: <Link to="/" />,
       isActive: path === "/",
     },
     {
       title: "Deployments",
-      icon: <RocketIcon />,
+      icon: <DeploymentsIcon />,
       isActive: path.startsWith("/deployments"),
+      badge: waiting > 0 && (
+        <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
+          {waiting}
+        </span>
+      ),
       items: [
         {
           title: "All deployments",
@@ -105,43 +119,63 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "In flight",
           link: <Link to="/deployments" search={{ status: "live" }} />,
           isActive: status === "live",
-          badge: live || undefined,
+          badge: live > 0 && <span className="text-flight-ink">{live}</span>,
         },
         {
           title: "Needs approval",
           link: <Link to="/deployments" search={{ status: "waiting" }} />,
           isActive: status === "waiting",
-          badge: waiting || undefined,
+          badge: waiting > 0 && (
+            <span className="text-weld-ink">{waiting}</span>
+          ),
         },
         {
           title: "Failed",
           link: <Link to="/deployments" search={{ status: "failed" }} />,
           isActive: status === "failed",
-          badge: failed || undefined,
+          badge: failed > 0 && (
+            <span className="text-destructive">{failed}</span>
+          ),
         },
       ],
     },
     {
       title: "Projects",
-      icon: <LayoutGridIcon />,
+      icon: <ProjectsIcon />,
       link: <Link to="/projects" />,
       isActive: path === "/projects",
     },
     {
       title: "Services",
-      icon: <DatabaseIcon />,
+      icon: <ServicesIcon />,
       link: <Link to="/services" />,
       isActive: path === "/services",
     },
+    ...(can("organization_cloud:manage")
+      ? [
+          {
+            title: "Domains",
+            icon: <DomainsIcon />,
+            link: <Link to="/domains" />,
+            isActive: path.startsWith("/domains"),
+          },
+        ]
+      : []),
     {
       title: "Clouds",
-      icon: <CloudIcon />,
+      icon: <CloudsIcon />,
       link: <Link to="/clouds" />,
       isActive: path.startsWith("/clouds"),
     },
     {
+      title: "Resources",
+      icon: <DatabaseIcon />,
+      link: <Link to="/resources" />,
+      isActive: path.startsWith("/resources"),
+    },
+    {
       title: "Infrastructure",
-      icon: <ServerIcon />,
+      icon: <InfrastructureIcon />,
       link: <Link to="/infrastructure" />,
       isActive: path.startsWith("/infrastructure"),
     },
@@ -177,6 +211,22 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           isActive: path.startsWith("/integrations"),
         },
         {
+          title: "Cloud sign-in",
+          link: <Link to="/cloud-sign-in" />,
+          isActive: path.startsWith("/cloud-sign-in"),
+        },
+        // The workspace's AI settings sit with its other settings, so the AI
+        // group below doesn't carry a second "Settings".
+        ...(features.ai && can("ai:read")
+          ? [
+              {
+                title: "AI",
+                link: <Link to="/ai/settings" />,
+                isActive: path.startsWith("/ai/settings"),
+              },
+            ]
+          : []),
+        {
           title: "API keys",
           link: <Link to="/api-keys" />,
           isActive: path.startsWith("/api-keys"),
@@ -192,13 +242,16 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={nav} />
+        {features.ai && can("ai:read") && (
+          <NavMain items={aiNavItems({ path, can })} label="AI" />
+        )}
         <Projects
           path={path}
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border">
         <Account />
       </SidebarFooter>
       <SidebarRail />
@@ -211,7 +264,7 @@ function Organizations() {
   const [creating, setCreating] = useState(false)
   const switchTo = (orgId: string) =>
     switchOrganization(orgId).catch((err: unknown) =>
-      toast.error(messageOf(err, "Couldn't switch organization."))
+      toast.error(messageOf(err, "Couldn't switch workspace."))
     )
   return (
     <>
@@ -234,7 +287,7 @@ function Organizations() {
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New organization</DialogTitle>
+            <DialogTitle>New workspace</DialogTitle>
             <DialogDescription>
               A separate home for another team&apos;s projects. You&apos;ll be
               its owner.
@@ -263,6 +316,9 @@ function attentionFor(latest?: Run): Attention | undefined {
   }
   if (latest.status === "waiting") {
     return { tone: "waiting", note: "waiting for approval" }
+  }
+  if (latest.status === "paused") {
+    return { tone: "waiting", note: "paused for capacity" }
   }
   if (latest.status === "failed") {
     return { tone: "failed", note: "last deploy failed" }

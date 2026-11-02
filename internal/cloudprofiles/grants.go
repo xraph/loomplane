@@ -2,8 +2,12 @@ package cloudprofiles
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/projects"
@@ -84,8 +88,36 @@ func (s *Service) setGrant(ctx context.Context, p security.Principal, cloudID, p
 }
 
 // LockOrganization orders Cloud acceptance, metadata changes and grant updates.
+// It bounds this wait, and every later lock wait in tx, by LockWaitLimit.
 func LockOrganization(ctx context.Context, tx driver.Tx, org string) error {
+	if err := BoundLockWaits(ctx, tx); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "cloud-organization/"+org)
+	return LockWaitError(err, "the organization lock")
+}
+
+// LockWaitLimit is the longest a transaction waits for a lock once it holds
+// or asks for the organization lock, or while it admits a direct server
+// apply. Those transactions only read and write the database, so even a
+// queue of them clears in well under a second. A wait this long is a lock
+// cycle that runs through a goroutine waiting on another connection, which
+// Postgres can't detect. The wait fails instead of hanging the organization.
+const LockWaitLimit = 60 * time.Second
+
+// BoundLockWaits sets LockWaitLimit as tx's lock_timeout.
+func BoundLockWaits(ctx context.Context, tx driver.Tx) error {
+	_, err := tx.Exec(ctx, `SELECT set_config('lock_timeout',$1,true)`, fmt.Sprintf("%dms", LockWaitLimit.Milliseconds()))
+	return err
+}
+
+// LockWaitError names the lock a wait gave up on after LockWaitLimit.
+// Other errors pass through unchanged.
+func LockWaitError(err error, lock string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+		return fmt.Errorf("waited %s for %s and gave up; another transaction held it that long, which usually means a lock cycle: %w", LockWaitLimit, lock, err)
+	}
 	return err
 }
 

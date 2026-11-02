@@ -48,7 +48,7 @@ func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput
 	return after, nil
 }
 
-func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption, prior []cloudinfra.PlannedPlacement) (map[string]CloudPlacement, error) {
+func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption, prior []cloudinfra.PlannedPlacement, future ...map[string]*CapacityIntent) (map[string]CloudPlacement, error) {
 	result := map[string]CloudPlacement{}
 	if assignment == nil {
 		return result, nil
@@ -79,6 +79,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			return nil, err
 		}
 		req := cloudinfra.PlacementRequest{PlanID: plan.ID, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: assignment.CloudID, TargetID: target.ID, TargetRevision: target.Revision, PoolID: target.PoolID, Service: b.Name, CPUMillis: cpu, MemoryBytes: mem, Replicas: 1, Planned: planned, LocalData: old.Catalog != nil, Architecture: old.TargetSettings["architecture"]}
+		req.GPUKind, req.GPUs = ServerGPUs(old.Size)
 		if old.CloudPlacement.PoolID == target.PoolID {
 			req.StickyServerID = old.CloudPlacement.ServerID
 			req.Allocation = old.CloudPlacement.Allocation
@@ -90,6 +91,16 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			req.TargetRevision = before.Revision
 		}
 		placed, err := resolver.PreviewPlacement(ctx, req)
+		if err != nil && len(future) > 0 {
+			futurePlan := *plan
+			futurePlan.Sources = []PlanSource{{Alias: old.Repo, CommitSHA: old.CommitSHA}}
+			intent, intentErr := s.futureCapacity(ctx, &futurePlan, assignment, target, req, old.Repo, err)
+			if intentErr == nil {
+				future[0][b.Name] = intent
+				continue
+			}
+			err = intentErr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +109,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			return nil, errors.New("selected pool connection is unavailable")
 		}
 		connection := options[ci]
-		result[b.Name] = CloudPlacement{Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes}
+		result[b.Name] = CloudPlacement{LocationID: target.LocationID, ManagedResourceID: target.ManagedResourceID, Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes, GPUKind: placed.GPUKind, GPUs: placed.GPUs}
 		planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: b.Name, Placement: *placed})
 	}
 	return result, nil
@@ -114,11 +125,16 @@ func prepareAcceptedPlans(sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snap
 		if !slices.ContainsFunc(plan.Actions, func(a Action) bool { return a.Op != Keep || a.AdoptCloudPlacement }) {
 			continue
 		}
+		for _, a := range plan.Actions {
+			if a.Service != nil && a.Service.CapacityIntent != nil && a.Service.CapacityIntent.Demand.PlanID != migrationPlanID(sync.ID, env.EnvironmentID) {
+				return cloudprofiles.ErrConflict
+			}
+		}
 		revision, err := Digest(plan.Actions)
 		if err != nil {
 			return err
 		}
-		result, err := json.Marshal(Result{CloudSyncID: sync.ID, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
+		result, err := json.Marshal(Result{CloudSyncID: sync.ID, RequiredRuntimeProtocol: plan.RequiredRuntimeProtocol, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
 		if err != nil {
 			return err
 		}

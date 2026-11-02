@@ -68,6 +68,24 @@
           "title": "build.log event",
           "summary": "SSE event: build.log"
         },
+        "canary_verdict.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/CanaryVerdict"
+          },
+          "contentType": "text/event-stream",
+          "name": "canary_verdict.deleted",
+          "title": "canary_verdict.deleted event",
+          "summary": "SSE event: canary_verdict.deleted"
+        },
+        "canary_verdict.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/CanaryVerdict"
+          },
+          "contentType": "text/event-stream",
+          "name": "canary_verdict.updated",
+          "title": "canary_verdict.updated event",
+          "summary": "SSE event: canary_verdict.updated"
+        },
         "cloud.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Profile"
@@ -85,6 +103,24 @@
           "name": "cloud.updated",
           "title": "cloud.updated event",
           "summary": "SSE event: cloud.updated"
+        },
+        "cloud_capacity.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/CapacityChange"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_capacity.updated",
+          "title": "cloud_capacity.updated event",
+          "summary": "SSE event: cloud_capacity.updated"
+        },
+        "cloud_cluster.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ClusterChange"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_cluster.updated",
+          "title": "cloud_cluster.updated event",
+          "summary": "SSE event: cloud_cluster.updated"
         },
         "cloud_sync.updated": {
           "payload": {
@@ -212,6 +248,15 @@
           "title": "manifest.updated event",
           "summary": "SSE event: manifest.updated"
         },
+        "notification.created": {
+          "payload": {
+            "$ref": "#/components/schemas/NotificationCreated"
+          },
+          "contentType": "text/event-stream",
+          "name": "notification.created",
+          "title": "notification.created event",
+          "summary": "SSE event: notification.created"
+        },
         "plan.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Plan"
@@ -265,6 +310,24 @@
           "name": "realtime.status",
           "title": "realtime.status event",
           "summary": "SSE event: realtime.status"
+        },
+        "release_watch.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Watch"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_watch.deleted",
+          "title": "release_watch.deleted event",
+          "summary": "SSE event: release_watch.deleted"
+        },
+        "release_watch.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Watch"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_watch.updated",
+          "title": "release_watch.updated event",
+          "summary": "SSE event: release_watch.updated"
         },
         "source.deleted": {
           "payload": {
@@ -388,7 +451,7 @@
             "Plan[]"
           ],
           "message": "plan.updated",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Plan",
@@ -397,7 +460,7 @@
             "Plan[]"
           ],
           "message": "plan.deleted",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Binding",
@@ -456,6 +519,42 @@
           "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
         },
         {
+          "entityType": "CanaryVerdict",
+          "intent": "upsert",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.updated",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
+          "entityType": "CanaryVerdict",
+          "intent": "evict",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "upsert",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.updated",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "evict",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.deleted",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -510,6 +609,44 @@
           ],
           "message": "cloud_sync.updated",
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
+        },
+        {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
+          "entityType": "CapacityChange",
+          "intent": "patch",
+          "invalidates": [
+            "CapacityPolicyView:{cloud_id}",
+            "CapacityUsage:{cloud_id}",
+            "Expansion[]"
+          ],
+          "message": "cloud_capacity.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
         },
         {
           "entityType": "Log",
@@ -662,7 +799,7 @@
             "Plan[]"
           ],
           "message": "plan.updated",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Plan",
@@ -671,7 +808,7 @@
             "Plan[]"
           ],
           "message": "plan.deleted",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Binding",
@@ -730,6 +867,42 @@
           "type": "github.com/xraph/loomplane/internal/deployments.Deployment"
         },
         {
+          "entityType": "CanaryVerdict",
+          "intent": "upsert",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.updated",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
+          "entityType": "CanaryVerdict",
+          "intent": "evict",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "upsert",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.updated",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "evict",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.deleted",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -786,6 +959,44 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
+          "entityType": "CapacityChange",
+          "intent": "patch",
+          "invalidates": [
+            "CapacityPolicyView:{cloud_id}",
+            "CapacityUsage:{cloud_id}",
+            "Expansion[]"
+          ],
+          "message": "cloud_capacity.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -839,10 +1050,22 @@
           "$ref": "#/channels/api-v1-realtime-events/messages/build.log"
         },
         {
+          "$ref": "#/channels/api-v1-realtime-events/messages/canary_verdict.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/canary_verdict.updated"
+        },
+        {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud.deleted"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_capacity.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_cluster.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_sync.updated"
@@ -887,6 +1110,9 @@
           "$ref": "#/channels/api-v1-realtime-events/messages/manifest.updated"
         },
         {
+          "$ref": "#/channels/api-v1-realtime-events/messages/notification.created"
+        },
+        {
           "$ref": "#/channels/api-v1-realtime-events/messages/plan.deleted"
         },
         {
@@ -903,6 +1129,12 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/realtime.status"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_watch.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_watch.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/source.deleted"
@@ -968,14 +1200,26 @@
           "adopt_cloud_placement": {
             "type": "boolean"
           },
+          "backup_every_hours": {
+            "type": "integer"
+          },
           "changes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Change"
             }
           },
+          "cleanup_targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupTarget"
+            }
+          },
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
+          },
+          "compensation": {
+            "$ref": "#/components/schemas/CloudCompensation"
           },
           "connection_id": {
             "type": "string"
@@ -1030,16 +1274,29 @@
           }
         }
       },
-      "AppliedInputs": {
+      "ArtifactChoice": {
         "type": "object",
+        "required": [
+          "service",
+          "reused"
+        ],
         "properties": {
-          "artifact_key": {
+          "from": {
             "type": "string"
           },
-          "source": {
-            "$ref": "#/components/schemas/PlanSource"
+          "reason": {
+            "type": "string"
           },
-          "variables": {
+          "reference": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -1048,6 +1305,9 @@
         "type": "object",
         "properties": {
           "builder": {
+            "type": "string"
+          },
+          "builder_cloud": {
             "type": "string"
           },
           "builder_settings": {
@@ -1063,6 +1323,263 @@
           "registry_settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "Canary": {
+        "type": "object",
+        "required": [
+          "status",
+          "steps",
+          "hold_seconds",
+          "thresholds",
+          "step",
+          "weight",
+          "services",
+          "updated_at"
+        ],
+        "properties": {
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanaryService"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "integer"
+          }
+        }
+      },
+      "CanaryService": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "provider",
+          "binding_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "baseline": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityBlock": {
+        "type": "object",
+        "required": [
+          "reason",
+          "resource",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "limit",
+          "counted",
+          "requested",
+          "policy_revision",
+          "retryable"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "counted": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requested": {
+            "type": "integer"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "plan_id",
+          "service",
+          "architecture",
+          "sticky_server_id",
+          "resources",
+          "local_data",
+          "policy_revision",
+          "intent_hash"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "intent_hash": {
+            "type": "string"
+          },
+          "local_data": {
+            "type": "boolean"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "service": {
+            "type": "string"
+          },
+          "sticky_server_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityIntent": {
+        "type": "object",
+        "required": [
+          "demand",
+          "template",
+          "template_hash",
+          "commit_sha",
+          "assignment_revision",
+          "cloud_revision",
+          "target_revision",
+          "grant_revision",
+          "target_name"
+        ],
+        "properties": {
+          "assignment_revision": {
+            "type": "integer"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "demand": {
+            "$ref": "#/components/schemas/CapacityDemand"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          },
+          "template": {
+            "$ref": "#/components/schemas/PoolExpansionPolicy"
+          },
+          "template_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityWait": {
+        "type": "object",
+        "required": [
+          "revision",
+          "blocks",
+          "created_at"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapacityBlock"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -1085,20 +1602,77 @@
           }
         }
       },
+      "CleanupObject": {
+        "type": "object",
+        "required": [
+          "resource",
+          "name",
+          "namespace"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "CleanupTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "service",
+          "plan_id",
+          "deployment_id",
+          "namespace",
+          "objects",
+          "unresolved_writes",
+          "identity_current"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "identity_current": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupObject"
+            }
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "unresolved_writes": {
+            "type": "integer"
+          }
+        }
+      },
       "CloudAdoption": {
         "type": "object",
         "required": [
           "binding_id",
           "external_id",
           "revision",
-          "plan_id",
-          "config_digest"
+          "plan_id"
         ],
         "properties": {
           "binding_id": {
-            "type": "string"
-          },
-          "config_digest": {
             "type": "string"
           },
           "external_id": {
@@ -1112,9 +1686,43 @@
           }
         }
       },
+      "CloudCompensation": {
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action_id",
+          "retained",
+          "server_attempt",
+          "original_completed"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "original_completed": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "retained": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
+          "server_attempt": {
+            "type": "boolean"
+          }
+        }
+      },
       "CloudPlacement": {
         "type": "object",
         "required": [
+          "account_identity",
           "cloud_id",
           "cloud_revision",
           "assignment_revision",
@@ -1122,8 +1730,7 @@
           "target_revision",
           "target_name",
           "provider",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -1152,6 +1759,12 @@
           },
           "default": {
             "type": "boolean"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
           },
           "grant_revision": {
             "type": "integer"
@@ -1191,6 +1804,47 @@
           }
         }
       },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
+            "type": "string"
+          }
+        }
+      },
       "CloudinfraRoute": {
         "properties": {
           "binding": {
@@ -1214,6 +1868,12 @@
           },
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "revision": {
             "type": "integer"
@@ -1244,6 +1904,162 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
       },
+      "ClusterDemand": {
+        "type": "object",
+        "required": [
+          "mode",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ClusterSchedulingProfile"
+          }
+        }
+      },
+      "ClusterSchedulingProfile": {
+        "type": "object",
+        "required": [
+          "pool_id",
+          "template_digest",
+          "digest",
+          "architecture",
+          "zone",
+          "allocatable",
+          "overhead",
+          "available"
+        ],
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "available": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "overhead": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "template_digest": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterWorkloadVector": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "ephemeral_storage_bytes",
+          "pods"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        }
+      },
+      "ComponentConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "resource",
+          "revision",
+          "component",
+          "protection"
+        ],
+        "properties": {
+          "component": {
+            "$ref": "#/components/schemas/ResolvedComponent"
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
+          },
+          "inputs": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "protection": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "CompositionConfig": {
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "revision"
+        ],
+        "properties": {
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Output"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedSecret"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "DNSRecord": {
         "type": "object",
         "required": [
@@ -1263,6 +2079,9 @@
           },
           "owner": {
             "type": "string"
+          },
+          "proxied": {
+            "type": "boolean"
           },
           "ttl": {
             "type": "integer"
@@ -1321,6 +2140,9 @@
             }
           },
           "suffix": {
+            "type": "string"
+          },
+          "trust": {
             "type": "string"
           }
         }
@@ -1389,6 +2211,9 @@
           "address": {
             "type": "string"
           },
+          "field": {
+            "type": "string"
+          },
           "from": {
             "type": "string"
           },
@@ -1398,7 +2223,37 @@
           "key": {
             "type": "string"
           },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvVar": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -1414,6 +2269,12 @@
           "external_routing"
         ],
         "properties": {
+          "compensation_message": {
+            "type": "string"
+          },
+          "compensation_mode": {
+            "type": "string"
+          },
           "deployment_id": {
             "type": "string"
           },
@@ -1435,7 +2296,16 @@
           "project_id": {
             "type": "string"
           },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncRoute"
+            }
+          },
           "routing_evidence": {
+            "type": "string"
+          },
+          "routing_status": {
             "type": "string"
           },
           "services": {
@@ -1473,6 +2343,95 @@
           }
         }
       },
+      "Exclusion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ExistingResourceConfig": {
+        "type": "object",
+        "required": [
+          "incarnation",
+          "account_identity",
+          "resource_id",
+          "endpoint_id",
+          "revision",
+          "endpoint_revision",
+          "external_id"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_revision": {
+            "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "FarpConfig": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "port"
+        ],
+        "properties": {
+          "gateway": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
       "Federation": {
         "type": "object",
         "properties": {
@@ -1495,6 +2454,20 @@
           "service_exports": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "File": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "mode": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
           }
         }
       },
@@ -1528,6 +2501,53 @@
           }
         }
       },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "GatewayRoute": {
         "properties": {
           "env": {
@@ -1550,6 +2570,26 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
+      },
+      "GeneratedSecret": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          }
+        }
       },
       "GraphSummary": {
         "properties": {
@@ -1579,10 +2619,76 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/graph.Summary"
       },
+      "HTTPProbe": {
+        "type": "object",
+        "required": [
+          "port",
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "requests",
+          "errors",
+          "latency_ms",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "statistic": {
+            "type": "string"
+          }
+        }
+      },
       "Held": {
         "type": "object",
         "properties": {
           "same_address": {
+            "type": "string"
+          }
+        }
+      },
+      "HeldRoute": {
+        "type": "object",
+        "required": [
+          "service",
+          "key",
+          "route_ids"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "route_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -1598,16 +2704,74 @@
           }
         }
       },
+      "KubernetesRule": {
+        "type": "object",
+        "required": [
+          "api_groups",
+          "resources",
+          "verbs"
+        ],
+        "properties": {
+          "api_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Leftover": {
+        "type": "object",
+        "required": [
+          "subject",
+          "name",
+          "op",
+          "data_bearing",
+          "reason"
+        ],
+        "properties": {
+          "data_bearing": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
       "ManagedDatabaseConfig": {
         "type": "object",
         "required": [
+          "account_identity",
           "profile",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
             "type": "string"
+          },
+          "cloud_sql_psc": {
+            "$ref": "#/components/schemas/CloudSQLSourceEndpoint"
           },
           "connection_id": {
             "type": "string"
@@ -1704,6 +2868,10 @@
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "federation": {
             "$ref": "#/components/schemas/Federation"
           },
@@ -1734,6 +2902,52 @@
           }
         }
       },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "Output": {
+        "type": "object",
+        "required": [
+          "name",
+          "env_key"
+        ],
+        "properties": {
+          "env_key": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "name": {
+            "type": "string"
+          },
+          "per_consumer": {
+            "type": "boolean"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "template": {
+            "type": "string"
+          }
+        }
+      },
       "PlanSource": {
         "type": "object",
         "required": [
@@ -1753,6 +2967,9 @@
             "type": "string"
           },
           "commit_sha": {
+            "type": "string"
+          },
+          "from_plan_id": {
             "type": "string"
           },
           "in_scope": {
@@ -1831,6 +3048,87 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
       },
+      "PoolExpansionPolicy": {
+        "type": "object",
+        "required": [
+          "bootstrap_size",
+          "pool_id",
+          "connection_id",
+          "region",
+          "architecture",
+          "image",
+          "allowed_sizes",
+          "min_servers",
+          "max_servers",
+          "system_reserve"
+        ],
+        "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
+          "allowed_sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "bootstrap_size": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "max_servers": {
+            "type": "integer"
+          },
+          "min_servers": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "system_reserve": {
+            "$ref": "#/components/schemas/ResourceVector"
+          }
+        }
+      },
+      "Port": {
+        "type": "object",
+        "required": [
+          "name",
+          "container",
+          "protocol"
+        ],
+        "properties": {
+          "container": {
+            "type": "integer"
+          },
+          "control": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "routable": {
+            "type": "boolean"
+          }
+        }
+      },
       "Recipe": {
         "type": "object",
         "required": [
@@ -1848,6 +3146,18 @@
           },
           "backup_format": {
             "type": "string"
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "family": {
+            "type": "string"
+          },
+          "fs_group": {
+            "type": "integer"
           },
           "id": {
             "type": "string"
@@ -1869,6 +3179,161 @@
           }
         }
       },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
+      },
+      "Ref": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "dependency": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        }
+      },
+      "Release": {
+        "type": "object",
+        "required": [
+          "strategy",
+          "thresholds"
+        ],
+        "properties": {
+          "canary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "strategy": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          }
+        }
+      },
+      "ResolvedComponent": {
+        "type": "object",
+        "required": [
+          "name",
+          "role",
+          "resources",
+          "image",
+          "step"
+        ],
+        "properties": {
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/File"
+            }
+          },
+          "image": {
+            "type": "string"
+          },
+          "kubernetes_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesRule"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Port"
+            }
+          },
+          "protection": {
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/HTTPProbe"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/Resources"
+          },
+          "role": {
+            "type": "string"
+          },
+          "start_timeout": {
+            "type": "integer"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "timeout": {
+            "type": "integer"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "weight_cache": {
+            "$ref": "#/components/schemas/WeightCache"
+          }
+        }
+      },
       "ResourceConfig": {
         "type": "object",
         "required": [
@@ -1876,8 +3341,23 @@
           "kind"
         ],
         "properties": {
+          "account_identity": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
+          },
+          "cloud_placement": {
+            "$ref": "#/components/schemas/CloudPlacement"
+          },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
+          },
+          "composition": {
+            "$ref": "#/components/schemas/CompositionConfig"
+          },
+          "existing_resource": {
+            "$ref": "#/components/schemas/ExistingResourceConfig"
           },
           "kind": {
             "type": "string"
@@ -1891,6 +3371,12 @@
           "region": {
             "type": "string"
           },
+          "routable_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
           "target": {
             "type": "string"
           },
@@ -1899,6 +3385,143 @@
             "additionalProperties": true
           },
           "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ResourceStep": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
+            "type": "integer"
+          }
+        }
+      },
+      "ResourceVector": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "Resources": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_mb"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/RecipesGPU"
+          },
+          "memory_mb": {
+            "type": "integer"
+          },
+          "per_gpu": {
+            "$ref": "#/components/schemas/ResourceStep"
+          },
+          "shm_mb": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReusedArtifact": {
+        "type": "object",
+        "required": [
+          "commit_sha",
+          "from_environment",
+          "from_deployment_id"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "from_deployment_id": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "Rollback": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "target_deployment_id",
+          "target_plan_id",
+          "restore_deployment_id",
+          "restore_plan_id",
+          "restore_finished_at"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "restore_deployment_id": {
+            "type": "string"
+          },
+          "restore_finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "restore_plan_id": {
+            "type": "string"
+          },
+          "target_deployment_id": {
+            "type": "string"
+          },
+          "target_plan_id": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "watch_id": {
             "type": "string"
           }
         }
@@ -1922,6 +3545,9 @@
           "address": {
             "type": "string"
           },
+          "backend": {
+            "type": "string"
+          },
           "binding_id": {
             "type": "string"
           },
@@ -1937,7 +3563,19 @@
           "container_id": {
             "type": "string"
           },
+          "external_id": {
+            "type": "string"
+          },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "release_id": {
@@ -1947,6 +3585,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {
@@ -1965,6 +3606,12 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -2007,6 +3654,9 @@
           "cert_expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "cert_state": {
+            "type": "string"
           },
           "checked_at": {
             "type": "string",
@@ -2053,8 +3703,8 @@
           "public"
         ],
         "properties": {
-          "applied_inputs": {
-            "$ref": "#/components/schemas/AppliedInputs"
+          "artifact": {
+            "$ref": "#/components/schemas/ReusedArtifact"
           },
           "build": {
             "type": "string"
@@ -2062,14 +3712,29 @@
           "build_target": {
             "$ref": "#/components/schemas/BuildTarget"
           },
+          "capacity_intent": {
+            "$ref": "#/components/schemas/CapacityIntent"
+          },
+          "capacity_mode": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
           "cloud_placement": {
             "$ref": "#/components/schemas/CloudPlacement"
           },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          },
+          "cluster_demand": {
+            "$ref": "#/components/schemas/ClusterDemand"
+          },
           "commit_sha": {
             "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/ComponentConfig"
           },
           "context": {
             "type": "string"
@@ -2092,6 +3757,9 @@
           "execution": {
             "type": "string"
           },
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
+          },
           "framework": {
             "type": "string"
           },
@@ -2100,6 +3768,9 @@
             "items": {
               "$ref": "#/components/schemas/GatewayRoute"
             }
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "health_path": {
             "type": "string"
@@ -2146,6 +3817,9 @@
           "target": {
             "type": "string"
           },
+          "target_account_identity": {
+            "type": "string"
+          },
           "target_settings": {
             "type": "object",
             "additionalProperties": true
@@ -2165,7 +3839,13 @@
           "cpu": {
             "type": "number"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/ManifestGPU"
+          },
           "memory": {
+            "type": "integer"
+          },
+          "shm": {
             "type": "integer"
           }
         }
@@ -2265,6 +3945,9 @@
           "provider": {
             "type": "string"
           },
+          "revision": {
+            "type": "string"
+          },
           "started_at": {
             "type": "string"
           },
@@ -2285,6 +3968,167 @@
           }
         }
       },
+      "SyncRoute": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "prepare_id",
+          "status",
+          "hostname",
+          "not_before"
+        ],
+        "properties": {
+          "cutover_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "prepare_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "Thresholds": {
+        "type": "object",
+        "required": [
+          "error_rate",
+          "error_rate_delta",
+          "p95_latency_ratio",
+          "min_requests"
+        ],
+        "properties": {
+          "error_rate": {
+            "type": "number"
+          },
+          "error_rate_delta": {
+            "type": "number"
+          },
+          "min_requests": {
+            "type": "number"
+          },
+          "p95_latency_ratio": {
+            "type": "number"
+          }
+        }
+      },
+      "UnwatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Volume": {
+        "type": "object",
+        "required": [
+          "mount_path"
+        ],
+        "properties": {
+          "fs_group": {
+            "type": "integer"
+          },
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          }
+        }
+      },
+      "WatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "binding_id",
+          "op",
+          "revision",
+          "verdict",
+          "reason"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        }
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "size_setting": {
+            "type": "string"
+          }
+        }
+      },
       "Analysis": {
         "type": "object",
         "required": [
@@ -2297,6 +4141,7 @@
           "repository",
           "ref",
           "commit_sha",
+          "pinned",
           "error",
           "summary",
           "created_by",
@@ -2325,6 +4170,9 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
           },
           "project_id": {
             "type": "string"
@@ -2417,6 +4265,10 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "owned_resources": {
+            "type": "object",
+            "additionalProperties": true
           },
           "physical_id": {
             "type": "string"
@@ -2562,6 +4414,92 @@
           }
         }
       },
+      "CanaryVerdict": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "retry",
+          "action_id",
+          "service",
+          "step",
+          "attempt",
+          "weight",
+          "verdict",
+          "reason",
+          "baseline_fallback",
+          "baseline",
+          "candidate",
+          "thresholds",
+          "window_start",
+          "window_end",
+          "decided_at"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "baseline_fallback": {
+            "type": "boolean"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer"
+          },
+          "window_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window_start": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Profile": {
         "type": "object",
         "required": [
@@ -2612,6 +4550,67 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "CapacityChange": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "kind",
+          "entity_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterChange": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "cloud_id",
+          "resource_id",
+          "revision",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
@@ -2701,6 +4700,12 @@
             "type": "string",
             "x-forge-id": true
           },
+          "location_id": {
+            "type": "string"
+          },
+          "managed_resource_id": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -2745,6 +4750,7 @@
           "org_id",
           "cloud",
           "name",
+          "method",
           "account",
           "details",
           "status",
@@ -2788,6 +4794,9 @@
           "message": {
             "type": "string"
           },
+          "method": {
+            "type": "string"
+          },
           "missing": {
             "type": "array",
             "items": {
@@ -2798,6 +4807,9 @@
             "type": "string"
           },
           "org_id": {
+            "type": "string"
+          },
+          "signed_in_by": {
             "type": "string"
           },
           "status": {
@@ -2828,6 +4840,12 @@
           "started_at"
         ],
         "properties": {
+          "canary": {
+            "$ref": "#/components/schemas/Canary"
+          },
+          "capacity_wait": {
+            "$ref": "#/components/schemas/CapacityWait"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -3019,10 +5037,30 @@
           }
         }
       },
+      "NotificationCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          }
+        }
+      },
       "Plan": {
         "type": "object",
         "required": [
           "catalog",
+          "kind",
+          "from_environment",
+          "from_environment_id",
+          "leftovers",
+          "artifacts",
           "id",
           "org_id",
           "project_id",
@@ -3050,6 +5088,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Action"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChoice"
             }
           },
           "catalog": {
@@ -3093,9 +5137,24 @@
           "expires_at": {
             "type": "string"
           },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "leftovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Leftover"
+            }
           },
           "manifest_id": {
             "type": "string"
@@ -3118,8 +5177,14 @@
           "project_id": {
             "type": "string"
           },
+          "release": {
+            "$ref": "#/components/schemas/Release"
+          },
           "revision": {
             "type": "string"
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/Rollback"
           },
           "sources": {
             "type": "array",
@@ -3152,6 +5217,7 @@
           "icon",
           "color",
           "repositories",
+          "exclusions",
           "status",
           "created_by",
           "created_at",
@@ -3170,6 +5236,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exclusion"
+            }
           },
           "icon": {
             "type": "string"
@@ -3237,6 +5309,125 @@
           "time": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Watch": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "deployment_id",
+          "plan_id",
+          "status",
+          "verdict",
+          "reason",
+          "thresholds",
+          "services",
+          "unwatched",
+          "held",
+          "held_released",
+          "unverified",
+          "rollback_plan_id",
+          "starts_at",
+          "ends_at",
+          "bound_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "bound_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldRoute"
+            }
+          },
+          "held_released": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rollback_approved_at": {
+            "type": "string"
+          },
+          "rollback_plan_id": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WatchedService"
+            }
+          },
+          "settled_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "unverified": {
+            "type": "boolean"
+          },
+          "unwatched": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnwatchedService"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verdict": {
+            "type": "string"
           }
         }
       },
@@ -3359,6 +5550,7 @@
             "repository",
             "ref",
             "commit_sha",
+            "pinned",
             "error",
             "summary",
             "created_by",
@@ -3387,6 +5579,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -3432,6 +5627,7 @@
             "repository",
             "ref",
             "commit_sha",
+            "pinned",
             "error",
             "summary",
             "created_by",
@@ -3460,6 +5656,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -3558,6 +5757,10 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
             },
             "physical_id": {
               "type": "string"
@@ -3660,6 +5863,10 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
             },
             "physical_id": {
               "type": "string"
@@ -3822,6 +6029,190 @@
         "title": "build.log event",
         "summary": "SSE event: build.log"
       },
+      "api-v1-realtime-eventscanary_verdict.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "retry",
+            "action_id",
+            "service",
+            "step",
+            "attempt",
+            "weight",
+            "verdict",
+            "reason",
+            "baseline_fallback",
+            "baseline",
+            "candidate",
+            "thresholds",
+            "window_start",
+            "window_end",
+            "decided_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer"
+            },
+            "baseline": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "baseline_fallback": {
+              "type": "boolean"
+            },
+            "candidate": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retry": {
+              "type": "integer"
+            },
+            "service": {
+              "type": "string"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "verdict": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "integer"
+            },
+            "window_end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "window_start": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "canary_verdict.deleted",
+        "title": "canary_verdict.deleted event",
+        "summary": "SSE event: canary_verdict.deleted"
+      },
+      "api-v1-realtime-eventscanary_verdict.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "retry",
+            "action_id",
+            "service",
+            "step",
+            "attempt",
+            "weight",
+            "verdict",
+            "reason",
+            "baseline_fallback",
+            "baseline",
+            "candidate",
+            "thresholds",
+            "window_start",
+            "window_end",
+            "decided_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer"
+            },
+            "baseline": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "baseline_fallback": {
+              "type": "boolean"
+            },
+            "candidate": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retry": {
+              "type": "integer"
+            },
+            "service": {
+              "type": "string"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "verdict": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "integer"
+            },
+            "window_end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "window_start": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "canary_verdict.updated",
+        "title": "canary_verdict.updated event",
+        "summary": "SSE event: canary_verdict.updated"
+      },
       "api-v1-realtime-eventscloud.deleted": {
         "payload": {
           "type": "object",
@@ -3940,6 +6331,79 @@
         "title": "cloud.updated event",
         "summary": "SSE event: cloud.updated"
       },
+      "api-v1-realtime-eventscloud_capacity.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "org_id",
+            "cloud_id",
+            "kind",
+            "entity_id",
+            "revision"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "entity_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_capacity.updated",
+        "title": "cloud_capacity.updated event",
+        "summary": "SSE event: cloud_capacity.updated"
+      },
+      "api-v1-realtime-eventscloud_cluster.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "operation_id",
+            "cloud_id",
+            "resource_id",
+            "revision",
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "resource_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_cluster.updated",
+        "title": "cloud_cluster.updated event",
+        "summary": "SSE event: cloud_cluster.updated"
+      },
       "api-v1-realtime-eventscloud_sync.updated": {
         "payload": {
           "type": "object",
@@ -4033,6 +6497,12 @@
               "type": "string",
               "x-forge-id": true
             },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -4111,6 +6581,12 @@
               "type": "string",
               "x-forge-id": true
             },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -4161,6 +6637,7 @@
             "org_id",
             "cloud",
             "name",
+            "method",
             "account",
             "details",
             "status",
@@ -4204,6 +6681,9 @@
             "message": {
               "type": "string"
             },
+            "method": {
+              "type": "string"
+            },
             "missing": {
               "type": "array",
               "items": {
@@ -4214,6 +6694,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "signed_in_by": {
               "type": "string"
             },
             "status": {
@@ -4239,6 +6722,7 @@
             "org_id",
             "cloud",
             "name",
+            "method",
             "account",
             "details",
             "status",
@@ -4282,6 +6766,9 @@
             "message": {
               "type": "string"
             },
+            "method": {
+              "type": "string"
+            },
             "missing": {
               "type": "array",
               "items": {
@@ -4292,6 +6779,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "signed_in_by": {
               "type": "string"
             },
             "status": {
@@ -4328,6 +6818,12 @@
             "started_at"
           ],
           "properties": {
+            "canary": {
+              "$ref": "#/components/schemas/Canary"
+            },
+            "capacity_wait": {
+              "$ref": "#/components/schemas/CapacityWait"
+            },
             "commit_sha": {
               "type": "string"
             },
@@ -4408,6 +6904,12 @@
             "started_at"
           ],
           "properties": {
+            "canary": {
+              "$ref": "#/components/schemas/Canary"
+            },
+            "capacity_wait": {
+              "$ref": "#/components/schemas/CapacityWait"
+            },
             "commit_sha": {
               "type": "string"
             },
@@ -4728,11 +7230,37 @@
         "title": "manifest.updated event",
         "summary": "SSE event: manifest.updated"
       },
+      "api-v1-realtime-eventsnotification.created": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "notification.created",
+        "title": "notification.created event",
+        "summary": "SSE event: notification.created"
+      },
       "api-v1-realtime-eventsplan.deleted": {
         "payload": {
           "type": "object",
           "required": [
             "catalog",
+            "kind",
+            "from_environment",
+            "from_environment_id",
+            "leftovers",
+            "artifacts",
             "id",
             "org_id",
             "project_id",
@@ -4760,6 +7288,12 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/Action"
+              }
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ArtifactChoice"
               }
             },
             "catalog": {
@@ -4803,9 +7337,24 @@
             "expires_at": {
               "type": "string"
             },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "leftovers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Leftover"
+              }
             },
             "manifest_id": {
               "type": "string"
@@ -4828,8 +7377,14 @@
             "project_id": {
               "type": "string"
             },
+            "release": {
+              "$ref": "#/components/schemas/Release"
+            },
             "revision": {
               "type": "string"
+            },
+            "rollback": {
+              "$ref": "#/components/schemas/Rollback"
             },
             "sources": {
               "type": "array",
@@ -4861,6 +7416,11 @@
           "type": "object",
           "required": [
             "catalog",
+            "kind",
+            "from_environment",
+            "from_environment_id",
+            "leftovers",
+            "artifacts",
             "id",
             "org_id",
             "project_id",
@@ -4888,6 +7448,12 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/Action"
+              }
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ArtifactChoice"
               }
             },
             "catalog": {
@@ -4931,9 +7497,24 @@
             "expires_at": {
               "type": "string"
             },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "leftovers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Leftover"
+              }
             },
             "manifest_id": {
               "type": "string"
@@ -4956,8 +7537,14 @@
             "project_id": {
               "type": "string"
             },
+            "release": {
+              "$ref": "#/components/schemas/Release"
+            },
             "revision": {
               "type": "string"
+            },
+            "rollback": {
+              "$ref": "#/components/schemas/Rollback"
             },
             "sources": {
               "type": "array",
@@ -4996,6 +7583,7 @@
             "icon",
             "color",
             "repositories",
+            "exclusions",
             "status",
             "created_by",
             "created_at",
@@ -5014,6 +7602,12 @@
             },
             "description": {
               "type": "string"
+            },
+            "exclusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Exclusion"
+              }
             },
             "icon": {
               "type": "string"
@@ -5063,6 +7657,7 @@
             "icon",
             "color",
             "repositories",
+            "exclusions",
             "status",
             "created_by",
             "created_at",
@@ -5081,6 +7676,12 @@
             },
             "description": {
               "type": "string"
+            },
+            "exclusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Exclusion"
+              }
             },
             "icon": {
               "type": "string"
@@ -5167,6 +7768,256 @@
         "name": "realtime.status",
         "title": "realtime.status event",
         "summary": "SSE event: realtime.status"
+      },
+      "api-v1-realtime-eventsrelease_watch.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "deployment_id",
+            "plan_id",
+            "status",
+            "verdict",
+            "reason",
+            "thresholds",
+            "services",
+            "unwatched",
+            "held",
+            "held_released",
+            "unverified",
+            "rollback_plan_id",
+            "starts_at",
+            "ends_at",
+            "bound_at",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "bound_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "ends_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "held": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/HeldRoute"
+              }
+            },
+            "held_released": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rollback_approved_at": {
+              "type": "string"
+            },
+            "rollback_plan_id": {
+              "type": "string"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/WatchedService"
+              }
+            },
+            "settled_at": {
+              "type": "string"
+            },
+            "starts_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "unverified": {
+              "type": "boolean"
+            },
+            "unwatched": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnwatchedService"
+              }
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_watch.deleted",
+        "title": "release_watch.deleted event",
+        "summary": "SSE event: release_watch.deleted"
+      },
+      "api-v1-realtime-eventsrelease_watch.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "deployment_id",
+            "plan_id",
+            "status",
+            "verdict",
+            "reason",
+            "thresholds",
+            "services",
+            "unwatched",
+            "held",
+            "held_released",
+            "unverified",
+            "rollback_plan_id",
+            "starts_at",
+            "ends_at",
+            "bound_at",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "bound_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "ends_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "held": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/HeldRoute"
+              }
+            },
+            "held_released": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rollback_approved_at": {
+              "type": "string"
+            },
+            "rollback_plan_id": {
+              "type": "string"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/WatchedService"
+              }
+            },
+            "settled_at": {
+              "type": "string"
+            },
+            "starts_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "unverified": {
+              "type": "boolean"
+            },
+            "unwatched": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnwatchedService"
+              }
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_watch.updated",
+        "title": "release_watch.updated event",
+        "summary": "SSE event: release_watch.updated"
       },
       "api-v1-realtime-eventssource.deleted": {
         "payload": {

@@ -19,8 +19,10 @@ import (
 	"time"
 
 	cpext "github.com/xraph/ctrlplane/extension"
+	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
+	"github.com/xraph/forge/extensions/dashboard"
 	"github.com/xraph/grove"
 	groveDriver "github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -28,6 +30,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	aiext "github.com/xraph/loomplane/extensions/ai"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	dbgatewayext "github.com/xraph/loomplane/extensions/dbgateway"
@@ -37,6 +40,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
+	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
@@ -98,11 +102,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// repository's code. Its handlers go to Dispatch now; the planning
 	// extension binds them to the planner when it registers.
 	deployments := orchestration.NewDeployments()
-	jobs := dispatchext.New(
+	withPoll := func(opts drt.Options) drt.Options {
+		if opts.PollInterval <= 0 {
+			opts.PollInterval = cfg.Orchestration.PollInterval
+		}
+		return opts
+	}
+	jobs := newJobs(withPoll(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
-		dispatchext.WithDurableWorkflows(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		// Followers check for a leader every half lease. A short lease
 		// means a leader that stops, a restarted replica or a stopped
 		// worker, is replaced in seconds, and the drift check keeps its
@@ -114,6 +123,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
+	jobs.WithCapacity(withPoll(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency)), deployments.BindCapacityWorker)
+	jobs.WithBuild(withPoll(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.LegacyCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.LegacyCleanupBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.RuntimeAccessOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.RuntimeAccessBuild, w) })
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
@@ -126,9 +145,13 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// action; Loomplane's API reaches Ctrl Plane in-process instead.
 		cpext.WithDisableRoutes(),
 		cpext.WithDisableMigrate(),
+		// Its scheduler (reconciler, health checks, garbage collection, cert
+		// renewal) runs on one API replica, elected through a Postgres
+		// advisory lock. Without this, every replica runs every worker.
+		cpext.WithLeaderElection(""),
 	)
 
-	return []forge.Extension{
+	exts := []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
 		newFiles(cfg),
@@ -142,13 +165,45 @@ func Extensions(cfg config.Config) []forge.Extension {
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
 		cloudinfraext.New(cfg, deployments),
-		federationext.New(cfg),
+		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		octopusext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
 	}
+	// The AI section exists only when ai.enabled is on: with it off, no AI
+	// route, hook or setting is registered at all.
+	if cfg.AI.Enabled {
+		exts = append(exts, aiext.New(cfg, jobs.Engine))
+	} else {
+		// What AI scheduled while it was on stays in the database and keeps
+		// firing; this gives those jobs handlers that do nothing, and adds
+		// nothing else of the AI section.
+		exts = append(exts, aiext.NewOff(jobs.Engine))
+	}
+	exts = append(exts, console(exts))
+	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))
+}
+
+// console is the Forge dashboard's API, mounted for platform admins as the
+// instance console. The identity extension signs people in to it, gates
+// every request to it and decides which intents it may call.
+//
+// While it starts, the dashboard asks every other extension for its
+// contributors, so it depends on all of them: each has registered and
+// started by then.
+func console(others []forge.Extension) forge.Extension {
+	ext, ok := dashboard.NewExtension(dashboard.WithBasePath(identity.ConsoleBasePath), dashboard.WithEnableAuth(true)).(*dashboard.Extension)
+	if !ok {
+		panic("dashboard.NewExtension no longer returns *dashboard.Extension")
+	}
+	deps := make([]string, 0, len(others))
+	for _, o := range others {
+		deps = append(deps, o.Name())
+	}
+	ext.SetDependencies(deps)
+	return ext
 }
 
 // NewWorker builds loomplane-worker: the process that analyzes

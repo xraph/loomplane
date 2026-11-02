@@ -31,6 +31,345 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly aiModelDeployments = {
+    /**
+     * Stop a model that's waiting for its GPU server; a server already approved stays in Infrastructure
+     */
+    cancel: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CancelResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/waiting`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CancelResult"],
+      };
+
+      return this.request<types.CancelResult>(config);
+    },
+
+    /**
+     * A model's state, cost, budget and the services that link to it
+     */
+    get: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+    /**
+     * Every model deployed in the projects you can read, with its state and cost
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelDeploymentList> => {
+      let __path = `/api/v1/ai/models/deployments`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelDeploymentList"],
+      };
+
+      return this.request<types.ModelDeploymentList>(config);
+    },
+
+    /**
+     * Move a model to another server, cluster or new GPU server and plan its environment
+     * For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.
+     */
+    move: async (projectId: string, environmentId: string, resource: string, body: types.ModelsMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsMoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * What moving a model to another server, cluster or new GPU server would do
+     * Writes nothing, except the review of a GPU server when review_server is true, which only an admin may ask for. The rules are a deploy preview's.
+     */
+    movePreview: async (projectId: string, environmentId: string, resource: string, body: types.ModelsMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move-preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsMoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployPreview"],
+      };
+
+      return this.request<types.DeployPreview>(config);
+    },
+
+    /**
+     * Move a model deployed before a registry re-pin to the weights the registry pins now, and plan its environment
+     */
+    moveToPin: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move-to-pin`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * Take a model out of the manifest and plan its environment; its weights stay on the server
+     */
+    remove: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * Try a model that failed to start, or whose GPU server needs attention, again
+     */
+    retry: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+    /**
+     * Change a model's monthly budget or its hourly price, without changing what runs
+     */
+    update: async (projectId: string, environmentId: string, resource: string, body: types.ModelsUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsUpdateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+  };
+
+  public readonly aiModels = {
+    /**
+     * A model's card from Hugging Face, as Markdown
+     */
+    card: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Card> => {
+      let __path = `/api/v1/ai/models/registry/card`;
+      const queryParams: Record<string, any> = {};
+      queryParams['id'] = id;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Card"],
+      };
+
+      return this.request<types.Card>(config);
+    },
+
+    /**
+     * Deploy a model in this environment: add it to the manifest and plan the environment, or create its GPU server first
+     * For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.
+     */
+    deploy: async (projectId: string, environmentId: string, body: types.DeployInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeployInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * One model with its quantizations and where each fits
+     */
+    entry: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EntryDetail> => {
+      let __path = `/api/v1/ai/models/registry/entry`;
+      const queryParams: Record<string, any> = {};
+      queryParams['id'] = id;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EntryDetail"],
+      };
+
+      return this.request<types.EntryDetail>(config);
+    },
+
+    /**
+     * Read any Hugging Face model, pin it to a commit and work out where it fits
+     */
+    inspect: async (body: types.InspectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EntryDetail> => {
+      let __path = `/api/v1/ai/models/inspect`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["InspectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EntryDetail"],
+      };
+
+      return this.request<types.EntryDetail>(config);
+    },
+
+    /**
+     * What deploying a model in this environment would do, what it costs and what stops it
+     * Writes nothing. A server size target is priced from its list price and comes back with server_review_needed and can_deploy false. Send the same body with review_server true to review the GPU server: only an admin may, and it records the review in Infrastructure and returns it as server, priced by the provider. Deploy then sends server set from it within five minutes.
+     */
+    preview: async (projectId: string, environmentId: string, body: types.DeployInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeployInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployPreview"],
+      };
+
+      return this.request<types.DeployPreview>(config);
+    },
+
+    /**
+     * The models Loomplane can deploy, filtered by task, size, license, fit and whether they were tested
+     */
+    registry: async (q?: string, task?: string, size?: string, license?: string, commercial?: boolean, fits?: boolean, tested?: boolean, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistryList> => {
+      let __path = `/api/v1/ai/models/registry`;
+      const queryParams: Record<string, any> = {};
+      queryParams['q'] = q;
+      queryParams['task'] = task;
+      queryParams['size'] = size;
+      queryParams['license'] = license;
+      queryParams['commercial'] = commercial;
+      queryParams['fits'] = fits;
+      queryParams['tested'] = tested;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistryList"],
+      };
+
+      return this.request<types.RegistryList>(config);
+    },
+
+  };
+
+  public readonly aiSettings = {
+    /**
+     * Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it
+     */
+    deleteHuggingFaceToken: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/ai/settings/huggingface-token`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The workspace's AI settings, without any secret, and whether you can change them
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
+      let __path = `/api/v1/ai/settings`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["View"],
+      };
+
+      return this.request<types.View>(config);
+    },
+
+    /**
+     * Check a Hugging Face token with Hugging Face and save it as the workspace's; it's never shown again
+     */
+    putHuggingFaceToken: async (body: types.HuggingFaceTokenInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.HuggingFaceToken> => {
+      let __path = `/api/v1/ai/settings/huggingface-token`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["HuggingFaceTokenInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["HuggingFaceToken"],
+      };
+
+      return this.request<types.HuggingFaceToken>(config);
+    },
+
+  };
+
   public readonly analyses = {
     /**
      * Analyze the project's repositories, or the ones named
@@ -213,6 +552,236 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly catalogAdmin = {
+    /**
+     * Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure
+     */
+    open: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogproxySession> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/catalog/${encodeURIComponent(String(resource))}/admin-sessions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogproxySession"],
+      };
+
+      return this.request<types.CatalogproxySession>(config);
+    },
+
+  };
+
+  public readonly catalogEndpoints = {
+    /**
+     * Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned
+     */
+    check: async (body: types.CheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CheckResult> => {
+      let __path = `/api/v1/catalog/endpoints/checks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CheckResult"],
+      };
+
+      return this.request<types.CheckResult>(config);
+    },
+
+    /**
+     * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
+     */
+    create: async (body: types.CatalogconnectCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CatalogconnectCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The external databases and caches a catalog service can connect to, without their DSNs
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EndpointList> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EndpointList"],
+      };
+
+      return this.request<types.EndpointList>(config);
+    },
+
+  };
+
+  public readonly catalogKinds = {
+    /**
+     * The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogKindList> => {
+      let __path = `/api/v1/catalog/kinds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogKindList"],
+      };
+
+      return this.request<types.CatalogKindList>(config);
+    },
+
+  };
+
+  public readonly cloudCapacity = {
+    /**
+     * cloudCapacity.approveExpansion
+     */
+    approveExpansion: async (cloudId: string, expansionId: string, body: types.ApproveExpansionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Expansion> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions/${encodeURIComponent(String(expansionId))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApproveExpansionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Expansion"],
+      };
+
+      return this.request<types.Expansion>(config);
+    },
+
+    /**
+     * cloudCapacity.createScalingPool
+     */
+    createScalingPool: async (cloudId: string, body: types.ScalingPoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ScalingPool> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/scaling-pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ScalingPoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ScalingPool"],
+      };
+
+      return this.request<types.ScalingPool>(config);
+    },
+
+    /**
+     * cloudCapacity.getPolicy
+     */
+    getPolicy: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.listExpansions
+     */
+    listExpansions: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ExpansionList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ExpansionList"],
+      };
+
+      return this.request<types.ExpansionList>(config);
+    },
+
+    /**
+     * cloudCapacity.refresh
+     */
+    refresh: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
+    },
+
+    /**
+     * cloudCapacity.savePolicy
+     */
+    savePolicy: async (cloudId: string, body: types.CapacityPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply
@@ -268,17 +837,222 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudClusters = {
+    /**
+     * cloudClusters.attachments
+     */
+    attachments: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RuntimeAttachmentPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/attachments`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RuntimeAttachmentPage"],
+      };
+
+      return this.request<types.RuntimeAttachmentPage>(config);
+    },
+
+    /**
+     * cloudClusters.capacity
+     */
+    capacity: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
+     * cloudClusters.get
+     */
+    get: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudCluster> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudCluster"],
+      };
+
+      return this.request<types.CloudCluster>(config);
+    },
+
+    /**
+     * cloudClusters.list
+     */
+    list: async (cloudId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterPage"],
+      };
+
+      return this.request<types.CloudClusterPage>(config);
+    },
+
+    /**
+     * cloudClusters.options
+     */
+    options: async (cloudId: string, connectionId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterOptions> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-options/${encodeURIComponent(String(connectionId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterOptions"],
+      };
+
+      return this.request<types.ClusterOptions>(config);
+    },
+
+    /**
+     * cloudClusters.preview
+     */
+    preview: async (cloudId: string, body: types.ClusterInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * cloudClusters.refreshCapacity
+     */
+    refreshCapacity: async (cloudId: string, clusterId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterCapacity> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterCapacity"],
+      };
+
+      return this.request<types.ClusterCapacity>(config);
+    },
+
+    /**
+     * cloudClusters.retirementPreview
+     */
+    retirementPreview: async (cloudId: string, clusterId: string, body: types.ClusterRetirementPreviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterRetirementReview> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/retirement/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterRetirementPreviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterRetirementReview"],
+      };
+
+      return this.request<types.ClusterRetirementReview>(config);
+    },
+
+  };
+
   public readonly cloudPlacements = {
     /**
      * cloudPlacements.acceptMove
      */
-    acceptMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+    acceptMove: async (cloudId: string, body: types.CloudinfraMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/accept-move`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["MoveInputBody"],
+        bodyCodec: CODECS["CloudinfraMoveInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["MoveReview"],
@@ -290,13 +1064,13 @@ export class RESTClient extends Client {
     /**
      * cloudPlacements.previewMove
      */
-    previewMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+    previewMove: async (cloudId: string, body: types.CloudinfraMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/preview-move`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["MoveInputBody"],
+        bodyCodec: CODECS["CloudinfraMoveInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["MoveReview"],
@@ -515,6 +1289,59 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudSignInApps = {
+    /**
+     * Remove the organization's own sign-in app for a cloud
+     */
+    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The clouds you can sign in to, where each one's app comes from, and the callback URL to register
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
+      let __path = `/api/v1/cloud-sign-in/apps`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInAppList"],
+      };
+
+      return this.request<types.SignInAppList>(config);
+    },
+
+    /**
+     * Set the organization's own sign-in app for a cloud. The secret is never returned
+     */
+    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
+      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AppInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInApp"],
+      };
+
+      return this.request<types.SignInApp>(config);
+    },
+
+  };
+
   public readonly cloudSyncs = {
     /**
      * cloudSyncs.applyRevert
@@ -571,7 +1398,7 @@ export class RESTClient extends Client {
     /**
      * cloudSyncs.list
      */
-    list: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (id: string, before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/cloud-syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -579,6 +1406,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -804,19 +1634,148 @@ export class RESTClient extends Client {
     /**
      * clouds.update
      */
-    update: async (id: string, cloudId: string, body: types.UpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+    update: async (id: string, cloudId: string, body: types.CloudprofilesUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}`;
       const config: RequestConfig = {
         method: 'PUT',
         url: __path,
         body,
-        bodyCodec: CODECS["UpdateInputBody"],
+        bodyCodec: CODECS["CloudprofilesUpdateInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["Profile"],
       };
 
       return this.request<types.Profile>(config);
+    },
+
+    /**
+     * clouds.usage
+     */
+    usage: async (id: string, cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
+    },
+
+  };
+
+  public readonly clusterOperations = {
+    /**
+     * clusterOperations.apply
+     */
+    apply: async (cloudId: string, operationId: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.cancel
+     */
+    cancel: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.get
+     */
+    get: async (cloudId: string, operationId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.list
+     */
+    list: async (cloudId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperationPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperationPage"],
+      };
+
+      return this.request<types.CloudClusterOperationPage>(config);
+    },
+
+    /**
+     * clusterOperations.retry
+     */
+    retry: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
     },
 
   };
@@ -836,6 +1795,190 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ConnectionsCloudList>(config);
+    },
+
+  };
+
+  public readonly connectionClusters = {
+    /**
+     */
+    list: async (connectionId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterPage> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/clusters`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterPage"],
+      };
+
+      return this.request<types.ClusterPage>(config);
+    },
+
+  };
+
+  public readonly connectionGpus = {
+    /**
+     * GPUs a server or cluster connection can see, read live
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUInventory> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/gpus`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUInventory"],
+      };
+
+      return this.request<types.GPUInventory>(config);
+    },
+
+  };
+
+  public readonly connectionInCluster = {
+    /**
+     * Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first
+     */
+    create: async (body: types.InClusterInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/in-cluster`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["InClusterInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+  };
+
+  public readonly connectionKeyless = {
+    /**
+     * Connect a cloud keylessly, with the reserved ID, once the cloud accepts Loomplane's token
+     */
+    create: async (body: types.KeylessInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/keyless`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * Reserve a new keyless connection's ID for a day, and say how to set up the cloud's trust in it
+     */
+    prepare: async (body: types.KeylessPrepareInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/keyless/prepare`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessPrepareInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+    /**
+     * Move a connection to keyless, or change its keyless settings, if the cloud's trust reaches the same account
+     */
+    replace: async (id: string, body: types.KeylessReplaceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessReplaceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * How to set up the cloud's trust in an existing connection, to move it to keyless
+     */
+    setup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+  };
+
+  public readonly connectionSignIns = {
+    /**
+     * Finish a sign-in with what the cloud sent back to the callback
+     */
+    complete: async (body: types.CompleteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/sign-ins/complete`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CompleteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * Start signing in to a cloud, for a new connection or in place of an existing one's credential
+     */
+    start: async (body: types.SignInInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignIn> => {
+      let __path = `/api/v1/connections/sign-ins`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SignInInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignIn"],
+      };
+
+      return this.request<types.SignIn>(config);
     },
 
   };
@@ -1031,35 +2174,148 @@ export class RESTClient extends Client {
 
   public readonly deployments = {
     /**
+     * The deployment's canary: where traffic is and every step's verdict
+     */
+    canary: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CanaryReport> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/canary`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CanaryReport"],
+      };
+
+      return this.request<types.CanaryReport>(config);
+    },
+
+    /**
+     * Cancel a deployment paused waiting for capacity; steps that finished stay as they are
+     */
+    cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeploymentsDeployment"],
+      };
+
+      return this.request<types.DeploymentsDeployment>(config);
+    },
+
+    /**
+     */
+    cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupApply: async (id: string, body: types.FailedCleanupInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupCancel: async (id: string, body: types.FailedCleanupCancelInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupCancelInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupPreview: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CleanupReview> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CleanupReview"],
+      };
+
+      return this.request<types.CleanupReview>(config);
+    },
+
+    /**
+     */
+    cleanupRetry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
      * The deployment an approved plan started
      */
-    forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/deployment`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
      * One deployment, with each step's progress
      */
-    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
@@ -1116,19 +2372,37 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries
+     */
+    resumeCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/resume`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeploymentsDeployment"],
+      };
+
+      return this.request<types.DeploymentsDeployment>(config);
+    },
+
+    /**
      * Run a failed deployment's failed and skipped steps again, with the plan that was approved
      */
-    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/retry`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
   };
@@ -1150,6 +2424,44 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Zone>(config);
+    },
+
+    /**
+     * dnsZones.discover
+     */
+    discover: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderZoneList> => {
+      let __path = `/api/v1/dns-zones/discover`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderZoneList"],
+      };
+
+      return this.request<types.ProviderZoneList>(config);
+    },
+
+    /**
+     * dnsZones.get
+     */
+    get: async (zoneId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainDetail> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainDetail"],
+      };
+
+      return this.request<types.DomainDetail>(config);
     },
 
     /**
@@ -1203,6 +2515,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * dnsZones.setChallengeCredential
+     */
+    setChallengeCredential: async (zoneId: string, body: types.ChallengeCredentialInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/challenge-credential`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ChallengeCredentialInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+    /**
      * dnsZones.update
      */
     update: async (zoneId: string, body: types.ZoneUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
@@ -1234,6 +2564,234 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Zone>(config);
+    },
+
+  };
+
+  public readonly domainEdge = {
+    /**
+     * domainEdge.get
+     */
+    get: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.purge
+     */
+    purge: async (projectId: string, routeId: string, body: types.EdgePurgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/purge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgePurgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.retry
+     */
+    retry: async (projectId: string, routeId: string, body: types.RemoveRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RemoveRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.update
+     */
+    update: async (projectId: string, routeId: string, body: types.EdgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+  };
+
+  public readonly domainRegistration = {
+    /**
+     * domainRegistration.check
+     */
+    check: async (body: types.DomainCheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOfferList> => {
+      let __path = `/api/v1/domain-registration/check`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DomainCheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOfferList"],
+      };
+
+      return this.request<types.DomainOfferList>(config);
+    },
+
+    /**
+     * domainRegistration.extensions
+     */
+    extensions: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistrationExtensionList> => {
+      let __path = `/api/v1/domain-registration/extensions`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistrationExtensionList"],
+      };
+
+      return this.request<types.RegistrationExtensionList>(config);
+    },
+
+    /**
+     * domainRegistration.search
+     */
+    search: async (connectionId?: string, q?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOfferList> => {
+      let __path = `/api/v1/domain-registration/search`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      queryParams['q'] = q;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOfferList"],
+      };
+
+      return this.request<types.DomainOfferList>(config);
+    },
+
+  };
+
+  public readonly domainRegistrations = {
+    /**
+     * domainRegistrations.approve
+     */
+    approve: async (registrationId: string, body: types.RegistrationApprovalBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistrationApprovalBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.get
+     */
+    get: async (registrationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.list
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistrationList> => {
+      let __path = `/api/v1/domain-registrations`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistrationList"],
+      };
+
+      return this.request<types.RegistrationList>(config);
+    },
+
+    /**
+     * domainRegistrations.preview
+     */
+    preview: async (body: types.RegistrationInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistrationInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.setAutoRenew
+     */
+    setAutoRenew: async (registrationId: string, body: types.AutoRenewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}/auto-renew`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AutoRenewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
     },
 
   };
@@ -1426,6 +2984,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * domainRoutes.status
+     */
+    status: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRouteStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudinfraRouteStatus"],
+      };
+
+      return this.request<types.CloudinfraRouteStatus>(config);
+    },
+
+    /**
      * domainRoutes.updateTTL
      */
     updateTTL: async (projectId: string, routeId: string, body: types.RouteTTLInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRoute> => {
@@ -1457,6 +3031,41 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RouteOperation>(config);
+    },
+
+  };
+
+  public readonly domains = {
+    /**
+     * domains.overview
+     */
+    overview: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOverview> => {
+      let __path = `/api/v1/domains`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOverview"],
+      };
+
+      return this.request<types.DomainOverview>(config);
+    },
+
+    /**
+     * domains.project
+     */
+    project: async (projectId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectDomainList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domains`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectDomainList"],
+      };
+
+      return this.request<types.ProjectDomainList>(config);
     },
 
   };
@@ -1588,6 +3197,150 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly fabriq = {
+    /**
+     * A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FabriqloomStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FabriqloomStatus"],
+      };
+
+      return this.request<types.FabriqloomStatus>(config);
+    },
+
+  };
+
+  public readonly fabriqKeys = {
+    /**
+     * The Fabriq key of each service that needs it or had one; never a key itself, only its prefix
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FabriqKeyList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FabriqKeyList"],
+      };
+
+      return this.request<types.FabriqKeyList>(config);
+    },
+
+    /**
+     * Revoke a service's Fabriq keys now; its next release gets a new one while it still needs Fabriq
+     */
+    revoke: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/revoke`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+    /**
+     * Issue a service a new Fabriq key, which its next release takes and then revokes the old one
+     */
+    rotate: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/rotate`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+  };
+
+  public readonly fabriqRebuilds = {
+    /**
+     * Rebuild a FalkorDB or Elasticsearch projection from Postgres; while one is queued or running, return it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.RebuildInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Rebuild> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RebuildInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Rebuild"],
+      };
+
+      return this.request<types.Rebuild>(config);
+    },
+
+    /**
+     * A hosted Fabriq's latest projection rebuilds, newest first
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RebuildList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RebuildList"],
+      };
+
+      return this.request<types.RebuildList>(config);
+    },
+
+  };
+
+  public readonly fabriqTenants = {
+    /**
+     * Create a tenant in a hosted Fabriq, or find it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.TenantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Tenant> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["TenantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Tenant"],
+      };
+
+      return this.request<types.Tenant>(config);
+    },
+
+    /**
+     * A hosted Fabriq's tenants, by id
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TenantList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TenantList"],
+      };
+
+      return this.request<types.TenantList>(config);
+    },
+
+  };
+
   public readonly github = {
     /**
      * Connect a GitHub App installation, from what GitHub's install redirect carried back
@@ -1653,6 +3406,39 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.GitHubStatus>(config);
+    },
+
+  };
+
+  public readonly gpuTargets = {
+    /**
+     * Where GPUs can run and what they cost per hour
+     */
+    list: async (minMemoryGib?: number | undefined, count?: number | undefined, kind?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUTargetList> => {
+      let __path = `/api/v1/gpu-targets`;
+      const queryParams: Record<string, any> = {};
+      if (minMemoryGib !== undefined) {
+        queryParams['min_memory_gib'] = minMemoryGib;
+      }
+      if (count !== undefined) {
+        queryParams['count'] = count;
+      }
+      if (kind !== undefined) {
+        queryParams['kind'] = kind;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUTargetList"],
+      };
+
+      return this.request<types.GPUTargetList>(config);
     },
 
   };
@@ -1925,11 +3711,250 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly nativeRecoveryCopies = {
+    /**
+     */
+    cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    create: async (body: types.NativeCopyCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    credentials: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyCredentials> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}/credentials`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyCredentials"],
+      };
+
+      return this.request<types.NativeCopyCredentials>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoveryCopies> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-copies`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRecoveryCopies"],
+      };
+
+      return this.request<types.NativeRecoveryCopies>(config);
+    },
+
+    /**
+     */
+    review: async (id: string, pointId: string, body: types.NativeCopyReviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyReview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/copy-review`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyReviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyReview"],
+      };
+
+      return this.request<types.NativeCopyReview>(config);
+    },
+
+  };
+
+  public readonly nativeRecoveryRetirements = {
+    /**
+     */
+    create: async (id: string, pointId: string, body: types.NativeRetirementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/retirements`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeRetirementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetirementHistory"],
+      };
+
+      return this.request<types.RetirementHistory>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirementPage> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retirements`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirementPage"],
+      };
+
+      return this.request<types.NativeRetirementPage>(config);
+    },
+
+    /**
+     */
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+  };
+
   public readonly nativeRecoverySources = {
     /**
      */
-    inventory: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+    inventory: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -1943,8 +3968,25 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -1954,6 +3996,43 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeRecoverySources>(config);
+    },
+
+    /**
+     */
+    pitrWindow: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativePITRWindow> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/pitr-window`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativePITRWindow"],
+      };
+
+      return this.request<types.NativePITRWindow>(config);
+    },
+
+    /**
+     */
+    previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-preview`;
+      const queryParams: Record<string, any> = {};
+      queryParams['older_than_days'] = olderThanDays;
+      queryParams['keep_last'] = keepLast;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPreview"],
+      };
+
+      return this.request<types.RetentionPreview>(config);
     },
 
     /**
@@ -1969,6 +4048,67 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeInventory>(config);
+    },
+
+  };
+
+  public readonly nativeRetentionPolicies = {
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicyState> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicyState"],
+      };
+
+      return this.request<types.NativeRetentionPolicyState>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicyHistory> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicyHistory"],
+      };
+
+      return this.request<types.RetentionPolicyHistory>(config);
+    },
+
+    /**
+     */
+    set: async (id: string, body: types.RetentionPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicy> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetentionPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicy"],
+      };
+
+      return this.request<types.NativeRetentionPolicy>(config);
     },
 
   };
@@ -2146,6 +4286,145 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly octopus = {
+    /**
+     * An Octopus gateway's routes by domain: the ones added here, the ones FARP found and the ones made in the Octopus admin
+     */
+    board: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Board> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/board`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Board"],
+      };
+
+      return this.request<types.Board>(config);
+    },
+
+    /**
+     * Add a route to an Octopus gateway and push it, without a redeploy
+     */
+    createRoute: async (projectId: string, environmentId: string, resource: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+    /**
+     * The services an Octopus gateway's FARP discovery found or is waiting for
+     */
+    discovery: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/discovery`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DiscoverySummary"],
+      };
+
+      return this.request<types.DiscoverySummary>(config);
+    },
+
+    /**
+     * Remove a route at the revision read; a FARP route it hid comes back
+     */
+    removeRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.RouteRevisionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteRevisionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Set the attached domains FARP routes answer on, at the gateway's revision; none is any host
+     */
+    setFarpHostnames: async (projectId: string, environmentId: string, resource: string, body: types.FarpHostnamesInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/farp-hostnames`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FarpHostnamesInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * An Octopus gateway's state, its last sync and what attaching a domain to it takes
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * Push an Octopus gateway's routes now, and register its services with FARP again
+     */
+    sync: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/sync`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Change a route at the revision read, and push it
+     */
+    updateRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/update`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+  };
+
   public readonly organizationCloudChanges = {
     /**
      * organizationCloudChanges.apply
@@ -2257,7 +4536,7 @@ export class RESTClient extends Client {
     /**
      * organizationCloudSyncs.list
      */
-    list: async (before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/clouds/syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -2265,6 +4544,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -2540,19 +4822,35 @@ export class RESTClient extends Client {
     /**
      * organizationClouds.update
      */
-    update: async (cloudId: string, body: types.UpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+    update: async (cloudId: string, body: types.CloudprofilesUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}`;
       const config: RequestConfig = {
         method: 'PUT',
         url: __path,
         body,
-        bodyCodec: CODECS["UpdateInputBody"],
+        bodyCodec: CODECS["CloudprofilesUpdateInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["Profile"],
       };
 
       return this.request<types.Profile>(config);
+    },
+
+    /**
+     * organizationClouds.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
     },
 
   };
@@ -2577,7 +4875,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them
+     * Plan an environment from the current manifest and one commit of each repository, or what another environment runs, replacing its open plan; a scope moves only some of them
      */
     create: async (id: string, body: types.CreatePlanInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
@@ -2658,6 +4956,22 @@ export class RESTClient extends Client {
       return this.request<types.Plan>(config);
     },
 
+    /**
+     * How long the promotion's source environment has run exactly the commits the plan moves, and whether it ran them healthily; unverified means missing evidence
+     */
+    soak: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Soak> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/soak`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Soak"],
+      };
+
+      return this.request<types.Soak>(config);
+    },
+
   };
 
   public readonly projectVariables = {
@@ -2733,6 +5047,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
+     */
+    exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ExcludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * One project
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -2762,6 +5094,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectView>(config);
+    },
+
+    /**
+     * Remove exclusions, bringing those services back into the graph and the next plan
+     */
+    include: async (id: string, body: types.IncludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["IncludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
     },
 
     /**
@@ -2800,6 +5150,75 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly providerResources = {
+    /**
+     * Store an application DSN for a verified provider resource
+     */
+    connect: async (resourceId: string, body: types.ProviderResourceConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}/connection`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderResourceConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * Read a provider resource without its credentials
+     */
+    get: async (resourceId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResource> => {
+      let __path = `/api/v1/provider-resources/${encodeURIComponent(String(resourceId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResource"],
+      };
+
+      return this.request<types.ProviderResource>(config);
+    },
+
+    /**
+     * List your provider resource inventory and sync attempts
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceList> => {
+      let __path = `/api/v1/provider-resources`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceList"],
+      };
+
+      return this.request<types.ProviderResourceList>(config);
+    },
+
+    /**
+     * Refresh a connected account's resource inventory
+     */
+    sync: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderResourceSync> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/resource-syncs`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderResourceSync"],
+      };
+
+      return this.request<types.ProviderResourceSync>(config);
+    },
+
+  };
+
   public readonly providers = {
     /**
      * The deployment targets a manifest can name, and what each runs and provisions
@@ -2834,6 +5253,99 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.PublicConfig>(config);
+    },
+
+  };
+
+  public readonly push = {
+    config: {
+      /**
+       * How this server sends push notifications
+       */
+      get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushConfig> => {
+        let __path = `/api/v1/push/config`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushConfig"],
+        };
+
+        return this.request<types.PushConfig>(config);
+      },
+
+    },
+
+    devices: {
+      /**
+       * Register this phone for push notifications
+       */
+      create: async (body: types.RegisterDeviceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushDevice> => {
+        let __path = `/api/v1/push/devices`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["RegisterDeviceInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushDevice"],
+        };
+
+        return this.request<types.PushDevice>(config);
+      },
+
+      /**
+       * Stop sending push notifications to a phone
+       */
+      delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}`;
+        const config: RequestConfig = {
+          method: 'DELETE',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          allowEmptyBody: true,
+        };
+
+        await this.request(config);
+      },
+
+      /**
+       * Send a test notification to a phone
+       */
+      test: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TestPushResult> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}/test`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["TestPushResult"],
+        };
+
+        return this.request<types.TestPushResult>(config);
+      },
+
+      /**
+       * Change a phone's time zone, quiet hours or settings
+       */
+      update: async (id: string, body: types.UpdateDeviceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushDevice> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}`;
+        const config: RequestConfig = {
+          method: 'PUT',
+          url: __path,
+          body,
+          bodyCodec: CODECS["UpdateDeviceInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushDevice"],
+        };
+
+        return this.request<types.PushDevice>(config);
+      },
+
     },
 
   };
@@ -2937,6 +5449,94 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly registries = {
+    /**
+     * Queue registry maintenance
+     */
+    action: async (connectionId: string, body: types.RegistryActionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry/actions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistryActionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
+    },
+
+    /**
+     * Read registry DNS, maintenance and backups
+     */
+    get: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
+    },
+
+  };
+
+  public readonly releaseWatches = {
+    /**
+     * How long a release in the environment would be watched, which services a canary would ramp, and whether each other service can be watched
+     */
+    coverage: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Coverage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/watch-coverage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Coverage"],
+      };
+
+      return this.request<types.Coverage>(config);
+    },
+
+    /**
+     * What the post-deploy watch says about the environment's current release; unverified means missing evidence
+     */
+    evidence: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseEvidence> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/release-evidence`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseEvidence"],
+      };
+
+      return this.request<types.ReleaseEvidence>(config);
+    },
+
+    /**
+     * The deployment's post-deploy watch: the services it judges, their verdicts and any automatic rollback; 404 when it has none
+     */
+    forDeployment: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Watch> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/watch`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Watch"],
+      };
+
+      return this.request<types.Watch>(config);
+    },
+
+  };
+
   public readonly retentionPolicies = {
     /**
      */
@@ -2994,6 +5594,51 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RetentionPolicy>(config);
+    },
+
+  };
+
+  public readonly rollbacks = {
+    /**
+     * Plan the environment back to its previous successful release, with a reason; a person approves it like any plan. Data-bearing resources and services stay as they are
+     */
+    create: async (id: string, body: types.RollbackInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/rollbacks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RollbackInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
+    },
+
+    /**
+     * What rolling the environment back would undo and restore, and each repository's commits; nothing changes
+     */
+    target: async (id: string, environment: string, deploymentId?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RollbackTarget> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/rollback-target`;
+      const queryParams: Record<string, any> = {};
+      if (deploymentId !== undefined) {
+        queryParams['deployment_id'] = deploymentId;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RollbackTarget"],
+      };
+
+      return this.request<types.RollbackTarget>(config);
     },
 
   };
@@ -3261,17 +5906,54 @@ export class RESTClient extends Client {
     /**
      * The signed-in user, their active organization and their permissions in it
      */
-    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Session> => {
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.IdentitySession> => {
       let __path = `/api/v1/session`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Session"],
+        responseCodec: CODECS["IdentitySession"],
       };
 
-      return this.request<types.Session>(config);
+      return this.request<types.IdentitySession>(config);
+    },
+
+  };
+
+  public readonly setup = {
+    /**
+     * Create the first account, make it the platform owner, and create its organization
+     */
+    complete: async (body: types.SetupRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
+      let __path = `/api/v1/setup`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetupRequestBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SetupResponse"],
+      };
+
+      return this.request<types.SetupResponse>(config);
+    },
+
+    /**
+     * Whether this instance still waits for its first account
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {
+      let __path = `/api/v1/setup`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SetupStatus"],
+      };
+
+      return this.request<types.SetupStatus>(config);
     },
 
   };
@@ -3280,7 +5962,7 @@ export class RESTClient extends Client {
     /**
      * Attach a repository, or a directory of one, after checking Loomplane can read it
      */
-    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources`;
       const config: RequestConfig = {
         method: 'POST',
@@ -3289,10 +5971,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["AddSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
     },
 
     /**
@@ -3330,7 +6012,7 @@ export class RESTClient extends Client {
     /**
      * Change the directory or branch a source reads
      */
-    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources/${encodeURIComponent(String(alias))}`;
       const config: RequestConfig = {
         method: 'PATCH',
@@ -3339,10 +6021,53 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["UpdateSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
+    },
+
+  };
+
+  public readonly usage = {
+    /**
+     * What each connected account has cost this month, read from the cloud's own billing, and why any account can't say
+     */
+    spend: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SpendReport> => {
+      let __path = `/api/v1/usage/spend`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SpendReport"],
+      };
+
+      return this.request<types.SpendReport>(config);
+    },
+
+    /**
+     * Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before
+     */
+    traffic: async (range?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TrafficReport> => {
+      let __path = `/api/v1/usage/traffic`;
+      const queryParams: Record<string, any> = {};
+      if (range !== undefined) {
+        queryParams['range'] = range;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TrafficReport"],
+      };
+
+      return this.request<types.TrafficReport>(config);
     },
 
   };

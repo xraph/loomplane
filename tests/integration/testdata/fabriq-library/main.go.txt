@@ -1,0 +1,50 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/xraph/fabriq"
+	"github.com/xraph/fabriq/core/command"
+	"github.com/xraph/fabriq/core/registry"
+	"github.com/xraph/fabriq/core/tenant"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cfg := fabriq.Config{
+		Postgres: fabriq.PostgresConfig{DSN: os.Getenv("FABRIQ_POSTGRES_DSN")},
+		Redis: fabriq.RedisConfig{Addr: os.Getenv("FABRIQ_REDIS_ADDR"), Username: os.Getenv("FABRIQ_REDIS_USERNAME"), Password: os.Getenv("FABRIQ_REDIS_PASSWORD")},
+		Dynamic: fabriq.DynamicConfig{Persist: true},
+	}
+	f, _, err := fabriq.Open(ctx, registry.New(), cfg)
+	if err != nil { return fmt.Errorf("open: %w", err) }
+	spec := registry.EntitySpec{Name: "library_note", Kind: registry.KindAggregate,
+		Schema: &registry.DynamicSchema{Table: "ds_library_note", Columns: []registry.DynamicColumn{{Name: "title", Type: registry.ColText}}}}
+	if err := f.DefineDynamic(ctx, spec); err != nil { _ = f.Close(); return fmt.Errorf("define: %w", err) }
+	tenantCtx, err := tenant.WithTenant(ctx, "acme")
+	if err != nil { _ = f.Close(); return err }
+	created, err := f.Exec(tenantCtx, command.Command{Entity: "library_note", Op: command.OpCreate, Payload: map[string]any{"title": "library-round-trip"}})
+	if err != nil { _ = f.Close(); return fmt.Errorf("create: %w", err) }
+	if err := f.Close(); err != nil { return err }
+	reg := registry.New()
+	reopened, _, err := fabriq.Open(ctx, reg, cfg)
+	if err != nil { return fmt.Errorf("reopen: %w", err) }
+	defer reopened.Close()
+	if _, ok := reg.Get("library_note"); !ok { return fmt.Errorf("dynamic schema did not persist") }
+	var row map[string]any
+	if err := reopened.Relational().Get(tenantCtx, "library_note", created.AggID, &row); err != nil { return fmt.Errorf("read: %w", err) }
+	if row["title"] != "library-round-trip" { return fmt.Errorf("entity data did not persist") }
+	fmt.Println("library schema and entity survived reopen")
+	return nil
+}

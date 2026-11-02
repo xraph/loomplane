@@ -1,0 +1,206 @@
+{{- if .Values.push.gateway.enabled }}
+{{- $g := .Values.push.gateway }}
+{{- $name := include "loomplane.pushGatewayName" . }}
+{{- $component := dict "ctx" $ "component" "push-gateway" }}
+{{- $host := (urlParse .Values.push.gatewayUrl).host }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: push-gateway
+spec:
+  replicas: {{ $g.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "loomplane.selectorLabels" $component | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "loomplane.selectorLabels" $component | nindent 8 }}
+      {{- with $g.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: push-gateway
+          image: {{ include "loomplane.pushGatewayImage" . | quote }}
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          env:
+            - name: PUSH_GATEWAY_ADDR
+              value: ":8790"
+            - name: PUSH_GATEWAY_SEALING_KEY_ID
+              value: {{ $g.sealingKeyId | quote }}
+            - name: PUSH_GATEWAY_SEALING_KEY_FILE
+              value: /run/secrets/sealing-key
+            {{- if $g.previousSealingKeyId }}
+            - name: PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID
+              value: {{ $g.previousSealingKeyId | quote }}
+            - name: PUSH_GATEWAY_PREVIOUS_SEALING_KEY_FILE
+              value: /run/secrets/previous-sealing-key
+            {{- end }}
+            {{- if $g.fcm.enabled }}
+            - name: PUSH_GATEWAY_FCM_CREDENTIALS_FILE
+              value: /run/secrets/fcm-service-account.json
+            {{- end }}
+            {{- if $g.apns.enabled }}
+            - name: PUSH_GATEWAY_APNS_KEY_FILE
+              value: /run/secrets/apns-key.p8
+            - name: PUSH_GATEWAY_APNS_KEY_ID
+              value: {{ $g.apns.keyId | quote }}
+            - name: PUSH_GATEWAY_APNS_TEAM_ID
+              value: {{ $g.apns.teamId | quote }}
+            - name: PUSH_GATEWAY_APNS_BUNDLE_ID
+              value: {{ $g.apns.bundleId | quote }}
+            {{- end }}
+            - name: PUSH_GATEWAY_SERVER_RATE
+              value: {{ $g.serverRate | toString | quote }}
+            - name: PUSH_GATEWAY_HANDLE_RATE
+              value: {{ $g.handleRate | toString | quote }}
+          ports:
+            - name: http
+              containerPort: 8790
+          startupProbe:
+            httpGet:
+              path: /_/health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /_/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /_/health
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: credentials
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ $g.existingSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: sealing-key
+                path: sealing-key
+              {{- if $g.previousSealingKeyId }}
+              - key: previous-sealing-key
+                path: previous-sealing-key
+              {{- end }}
+              {{- if $g.fcm.enabled }}
+              - key: fcm-service-account.json
+                path: fcm-service-account.json
+              {{- end }}
+              {{- if $g.apns.enabled }}
+              - key: apns-key.p8
+                path: apns-key.p8
+              {{- end }}
+      {{- with $g.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $g.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+    app.kubernetes.io/component: push-gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8790
+      targetPort: http
+  selector:
+    {{- include "loomplane.selectorLabels" $component | nindent 4 }}
+{{- if $g.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+  {{- with $g.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with ($g.ingress.className | default .Values.ingress.className) }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  tls:
+    {{- toYaml $g.ingress.tls | nindent 4 }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range list "/v1/registrations" "/v1/send" }}
+          - path: {{ . }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}
+{{- if $g.httpRoute.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+  {{- with $g.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- required "push.gateway.httpRoute.parentRefs needs an HTTPS Gateway" $g.httpRoute.parentRefs | toYaml | nindent 4 }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    - matches:
+        {{- range list "/v1/registrations" "/v1/send" }}
+        - path:
+            type: Exact
+            value: {{ . }}
+        {{- end }}
+      backendRefs:
+        - name: {{ $name }}
+          port: 8790
+{{- end }}
+{{- end }}

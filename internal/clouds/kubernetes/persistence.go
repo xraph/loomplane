@@ -21,6 +21,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
+	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 )
 
 const volumeMountAnnotation = "loomplane.volume.mount"
@@ -112,7 +113,7 @@ func (c *Client) checkBoundVolume(ctx context.Context, claim *corev1.PersistentV
 	return nil
 }
 
-func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, start time.Duration) (result *cpprovider.ProvisionResult, err error) {
 	if checkErr := validatePersistentSpec(spec, labels); checkErr != nil {
 		return nil, checkErr
 	}
@@ -145,6 +146,13 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			return nil, errors.New("invalid PostgreSQL database configuration")
 		}
 		identity[nativepg.LabelDatabase] = database
+	}
+	if engine := labels[nativecache.LabelEngine]; engine != "" {
+		// A cache's pods carry its engine, which configuring it checks.
+		if !nativecache.ValidEngine(engine) {
+			return nil, errors.New("invalid Redis/Valkey database identity")
+		}
+		identity[nativecache.LabelEngine] = engine
 	}
 	if recovery := labels[nativepg.LabelRecovery]; recovery != "" {
 		if labels[owned.LabelPublic] != "false" || labels[nativepg.LabelDatabase] == "" {
@@ -207,7 +215,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -215,15 +223,31 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if values.PullAuth != "" {
 		return nil, errors.New("private Kubernetes registry credentials require an existing image_pull_secret")
 	}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-runtime", Namespace: ns, Labels: maps.Clone(identity), Annotations: map[string]string{owned.LabelStateful: "true"}}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{}}
-	for key, value := range values.Env {
-		secret.Data[key] = []byte(value)
+	data, err := runtimeSecretData(values)
+	if err != nil {
+		return nil, err
 	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-runtime", Namespace: ns, Labels: maps.Clone(identity), Annotations: map[string]string{owned.LabelStateful: "true"}}, Type: corev1.SecretTypeOpaque, Data: data}
 	pulls := []corev1.LocalObjectReference{}
 	if pull := c.Config.Details["image_pull_secret"]; pull != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: pull})
 	}
-	template, ports, err := runtimePod(spec, labels, values, secret, pulls)
+	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if err != nil {
+		return nil, err
+	}
+	if pullSecret != nil {
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
+	}
+	rules, err := accessRules(labels)
+	if err != nil {
+		return nil, err
+	}
+	account := ""
+	if rules != nil {
+		account = name
+	}
+	template, ports, err := runtimePod(spec, labels, values, secret, pulls, account)
 	if err != nil {
 		return nil, err
 	}
@@ -234,11 +258,27 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		}
 	}
 	template.Spec.Containers[0].Env = append(template.Spec.Containers[0].Env, podIdentityEnv())
-	automount := false
-	template.Spec.AutomountServiceAccountToken = &automount
-	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(spec.Ports[0].Container)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
-	if database := labels[nativepg.LabelDatabase]; database != "" {
-		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+	if account == "" {
+		automount := false
+		template.Spec.AutomountServiceAccountToken = &automount
+	}
+	// Fixed authenticated probes already rendered by runtimePod also govern
+	// StatefulSets. Legacy database probes keep their recorded behavior.
+	if labels[owned.LabelHealthChecker] == "" {
+		port, portErr := healthPort(spec, labels)
+		if portErr != nil {
+			return nil, portErr
+		}
+		template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
+		switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
+		case database != "":
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+		case labels[owned.LabelHealthProtocol] == "redis":
+			// A RESP port keeps the TCP probe.
+		case health != "":
+			// A catalog component declares an HTTP readiness probe.
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
+		}
 	}
 	for i, v := range spec.Volumes {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: v.Name, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claims[i].Name}}})
@@ -277,8 +317,16 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			return nil, checkErr
 		}
 	}
+	if _, err = r.applyAccess(ctx, c, iid, labels); err != nil {
+		return nil, err
+	}
 	// Claims have no owner references and are never rolled back or deleted here.
 	mutated = true
+	if pullSecret != nil {
+		if pullErr := c.applyManagedPull(ctx, pullSecret, old.pull); pullErr != nil {
+			return nil, pullErr
+		}
+	}
 	if old.runtime != nil {
 		secret.ResourceVersion = old.runtime.ResourceVersion
 		_, err = c.Kube.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})
@@ -318,7 +366,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if r.WaitReady != nil {
 		err = r.WaitReady(ctx, c, name)
 	} else {
-		err = r.waitPersistent(ctx, c, set)
+		err = r.waitPersistent(ctx, c, set, r.readyWait(start))
 	}
 	if err != nil {
 		return nil, err
@@ -335,6 +383,9 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 			return nil, checkErr
 		}
 	}
+	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
+		return nil, dropErr
+	}
 	endpoints := make([]cpprovider.Endpoint, 0, len(spec.Ports))
 	for _, p := range spec.Ports {
 		if labels[nativepg.LabelRecovery] != "" {
@@ -348,11 +399,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 func persistentReady(set *appsv1.StatefulSet) bool {
 	return set.Spec.Replicas != nil && *set.Spec.Replicas == 1 && set.Status.ObservedGeneration >= set.Generation && set.Status.ReadyReplicas == 1 && set.Status.UpdatedReplicas == 1 && set.Status.CurrentRevision != "" && set.Status.CurrentRevision == set.Status.UpdateRevision
 }
-func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet) error {
-	wait := r.Wait
-	if wait <= 0 {
-		wait = 3 * time.Minute
-	}
+func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
 	for {
 		current, err := c.Kube.AppsV1().StatefulSets(c.Config.Namespace).Get(ctx, applied.Name, metav1.GetOptions{})
@@ -364,6 +411,9 @@ func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1
 		}
 		if persistentReady(current) {
 			return nil
+		}
+		if gpuErr := unschedulableGPU(ctx, c, applied.Spec.Template, applied.Spec.Selector); gpuErr != nil {
+			return gpuErr
 		}
 		if time.Now().After(deadline) {
 			return errors.New("persistent workload did not become ready")

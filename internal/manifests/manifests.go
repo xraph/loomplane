@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,9 +68,11 @@ type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 }
 
-// Projects looks up the project a manifest belongs to.
+// Projects looks up the project a manifest belongs to, and its
+// environments.
 type Projects interface {
 	GetProject(ctx context.Context, orgID, id string) (*projects.Project, error)
+	ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error)
 }
 
 // Service is the manifest API: every method checks the caller's role.
@@ -97,19 +100,80 @@ type SaveInput struct {
 }
 
 // EditInput is one change to the current manifest, made to its YAML so
-// the comments in it survive: add a resource, ignore a resource kind or
-// change an existing entry's placement.
+// the comments in it survive: add a resource, update or remove one, ignore
+// a resource kind, change an existing entry's placement, link a service to
+// a need or unlink it, or set where one dependency of a catalog resource
+// comes from.
 type EditInput struct {
-	AddResource *NewResource        `json:"add_resource,omitempty"`
-	Ignore      string              `json:"ignore,omitempty"`
-	Placement   *manifest.Placement `json:"placement,omitempty"`
+	AddResource    *NewResource         `json:"add_resource,omitempty"`
+	UpdateResource *ResourceUpdateInput `json:"update_resource,omitempty"`
+	RemoveResource string               `json:"remove_resource,omitempty"`
+	Ignore         string               `json:"ignore,omitempty"`
+	Placement      *manifest.Placement  `json:"placement,omitempty"`
+	Link           *ServiceLink         `json:"link,omitempty"`
+	Unlink         *ServiceLink         `json:"unlink,omitempty"`
+	SetUse         *ResourceUse         `json:"set_use,omitempty"`
+	// BaseRevision makes the edit conditional on the revision the caller
+	// decided it from: when another save landed since, the edit is
+	// ErrConflict and changes nothing. Nil edits whatever is current. It
+	// isn't part of the API: a caller there edits the current revision.
+	BaseRevision *int `json:"-"`
+}
+
+// ResourceUpdateInput changes an existing resource. A field left out
+// keeps what is there; Provider or Target set to "" removes it. ClearGPU
+// removes the GPU request, and can't be sent with GPU. Each setting is
+// set, and a setting set to "" is deleted. Environment, one of the
+// project's environments, makes the change in that environment's block
+// instead of on the resource; Enabled turns the resource on or off there,
+// and needs Environment.
+type ResourceUpdateInput struct {
+	Resource    string            `json:"resource"`
+	Environment string            `json:"environment,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	Provider    *string           `json:"provider,omitempty"`
+	Target      *string           `json:"target,omitempty"`
+	GPU         *manifest.GPU     `json:"gpu,omitempty"`
+	ClearGPU    bool              `json:"clear_gpu,omitempty"`
+	Settings    map[string]string `json:"settings,omitempty"`
+}
+
+// ServiceLink names a service and something it needs. Link adds the need,
+// with the options the service passes to it; Unlink removes the need and
+// its options, and ignores Options.
+type ServiceLink struct {
+	Service string            `json:"service"`
+	Need    string            `json:"need"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// ResourceUse sets where one dependency of a catalog resource comes from.
+// A Use with nothing set asks for a new dependency.
+type ResourceUse struct {
+	Resource   string       `json:"resource"`
+	Dependency string       `json:"dependency"`
+	Use        manifest.Use `json:"use"`
 }
 
 // NewResource is a resource to add to the manifest.
 type NewResource struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Provider string `json:"provider,omitempty"`
+	ExistingResource string `json:"existing_resource,omitempty"`
+	Region           string `json:"region,omitempty"`
+	Name             string `json:"name"`
+	Kind             string `json:"kind"`
+	Provider         string `json:"provider,omitempty"`
+	// Target is the checked server connection a catalog resource runs on.
+	Target  string                  `json:"target,omitempty"`
+	Version string                  `json:"version,omitempty"`
+	Uses    map[string]manifest.Use `json:"uses,omitempty"`
+	// Settings are values the catalog kind takes, by setting name.
+	Settings map[string]string `json:"settings,omitempty"`
+	// GPU asks for GPUs, for a catalog kind that can use them.
+	GPU *manifest.GPU `json:"gpu,omitempty"`
+	// EnabledIn names one of the project's environments. The resource is
+	// written with environments.<EnabledIn>.enabled: true, in the same
+	// revision.
+	EnabledIn string `json:"enabled_in,omitempty"`
 }
 
 // Edit applies one change to the project's current manifest and saves the
@@ -125,9 +189,12 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	if err != nil {
 		return nil, false, err
 	}
+	if in.BaseRevision != nil && *in.BaseRevision != cur.Revision {
+		return nil, false, ErrConflict
+	}
 	var out []byte
 	edits := 0
-	for _, present := range []bool{in.AddResource != nil, in.Ignore != "", in.Placement != nil} {
+	for _, present := range []bool{in.AddResource != nil, in.UpdateResource != nil, in.RemoveResource != "", in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil} {
 		if present {
 			edits++
 		}
@@ -136,19 +203,89 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	case edits > 1:
 		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
 	case in.AddResource != nil:
-		r := in.AddResource
-		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{Kind: r.Kind, Provider: r.Provider})
+		out, err = s.addResource(ctx, p.OrgID, projectID, []byte(cur.YAML), in.AddResource)
+	case in.UpdateResource != nil:
+		out, err = s.updateResource(ctx, p.OrgID, projectID, []byte(cur.YAML), in.UpdateResource)
+	case in.RemoveResource != "":
+		out, err = manifest.WithoutResource([]byte(cur.YAML), strings.TrimSpace(in.RemoveResource))
 	case in.Ignore != "":
 		out, err = manifest.WithIgnored([]byte(cur.YAML), strings.TrimSpace(in.Ignore))
 	case in.Placement != nil:
 		out, err = manifest.WithPlacement([]byte(cur.YAML), *in.Placement)
+	case in.Link != nil:
+		l := in.Link
+		out, err = manifest.WithNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need), l.Options)
+	case in.Unlink != nil:
+		l := in.Unlink
+		out, err = manifest.WithoutNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need))
+	case in.SetUse != nil:
+		u := in.SetUse
+		out, err = manifest.WithUse([]byte(cur.YAML), strings.TrimSpace(u.Resource), strings.TrimSpace(u.Dependency), u.Use)
 	default:
-		return nil, false, fmt.Errorf("%w: say what to change: add_resource, ignore or placement", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: say what to change: add_resource, update_resource, remove_resource, ignore, placement, link, unlink or set_use", ErrInvalid)
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	return s.Save(ctx, p, projectID, SaveInput{YAML: string(out), BaseRevision: &cur.Revision})
+}
+
+// addResource writes a new resource, turned on in the environment it
+// names, if it names one.
+func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc []byte, r *NewResource) ([]byte, error) {
+	name := strings.TrimSpace(r.Name)
+	environment := strings.TrimSpace(r.EnabledIn)
+	if environment != "" {
+		if err := s.checkEnvironment(ctx, orgID, projectID, environment); err != nil {
+			return nil, err
+		}
+	}
+	out, err := manifest.WithResource(doc, name, manifest.Resource{
+		Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
+		Settings: r.Settings, GPU: r.GPU, ExistingResource: r.ExistingResource, Region: r.Region,
+	})
+	if err != nil || environment == "" {
+		return out, err
+	}
+	return manifest.WithResourceEnabled(out, name, environment, true)
+}
+
+// checkEnvironment refuses an environment the project doesn't have.
+func (s *Service) checkEnvironment(ctx context.Context, orgID, projectID, name string) error {
+	envs, err := s.projects.ListEnvironments(ctx, orgID, projectID)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(envs, func(e *projects.Environment) bool { return e.Name == name }) {
+		return fmt.Errorf("%w: the project has no environment called %s", ErrInvalid, name)
+	}
+	return nil
+}
+
+// updateResource changes an existing resource's YAML, on the resource or
+// in one of the project's environments.
+func (s *Service) updateResource(ctx context.Context, orgID, projectID string, doc []byte, in *ResourceUpdateInput) ([]byte, error) {
+	if in.ClearGPU && in.GPU != nil {
+		return nil, fmt.Errorf("%w: send gpu or clear_gpu, not both", ErrInvalid)
+	}
+	environment := strings.TrimSpace(in.Environment)
+	if environment != "" {
+		if err := s.checkEnvironment(ctx, orgID, projectID, environment); err != nil {
+			return nil, err
+		}
+	}
+	u := manifest.ResourceUpdate{
+		Environment: environment, Enabled: in.Enabled,
+		Provider: in.Provider, Target: in.Target, Settings: in.Settings,
+	}
+	switch {
+	case in.ClearGPU:
+		var none *manifest.GPU
+		u.GPU = &none
+	case in.GPU != nil:
+		u.GPU = &in.GPU
+	}
+	return manifest.WithResourceUpdate(doc, strings.TrimSpace(in.Resource), u)
 }
 
 // Current returns the project's manifest.

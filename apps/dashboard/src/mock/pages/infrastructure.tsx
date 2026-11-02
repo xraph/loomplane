@@ -209,7 +209,7 @@ function CloudCard({ p }: { p: Provider }) {
         </CardAction>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {p.note && <p className="text-weld-ink text-xs">{p.note}</p>}
+        {p.note && <p className="text-xs text-weld-ink">{p.note}</p>}
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="grid gap-0.5">
             <span className="text-xs text-muted-foreground">Services</span>

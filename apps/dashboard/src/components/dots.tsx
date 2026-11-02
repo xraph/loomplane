@@ -2,10 +2,13 @@
 // of dots is what a loom's crossings look like up close, so the dashboard
 // draws its numbers that way: the primary color for what matters now, quiet
 // grey for the rest. Pass tone to draw a status instead, such as failed.
-import { useState } from "react"
+import { useId, useState } from "react"
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
+  CartesianGrid,
   Cell,
   Line,
   LineChart,
@@ -384,6 +387,7 @@ export function GlowBarChart({
   data,
   label,
   unit = "",
+  format = String,
   ticks = "all",
   className,
 }: {
@@ -392,6 +396,8 @@ export function GlowBarChart({
   data: { label: string; value: number }[]
   label: string
   unit?: string
+  /** How the tooltip writes a value, such as money. */
+  format?: (value: number) => string
   /** Label every column, or only the first and last when labels are long. */
   ticks?: "all" | "ends"
   className?: string
@@ -448,7 +454,7 @@ export function GlowBarChart({
               hideIndicator
               formatter={(v) => (
                 <span className="font-medium tabular-nums">
-                  {String(v)}
+                  {format(Number(v))}
                   {unit}
                 </span>
               )}
@@ -482,6 +488,88 @@ export function GlowBarChart({
           }}
         />
       </BarChart>
+    </ChartContainer>
+  )
+}
+
+/** A series over time as an area filled with dots, under a solid edge. */
+export function DotAreaChart({
+  tone = "primary",
+  data,
+  label,
+  ticks,
+  formatTime,
+  formatValue = String,
+  className,
+}: {
+  /** The color the chart lights up in. */
+  tone?: ChartTone
+  /** t is milliseconds since the epoch. */
+  data: { t: number; v: number }[]
+  label: string
+  /** The times the axis names; recharts picks when it's left out. */
+  ticks?: number[]
+  formatTime: (t: number) => string
+  formatValue?: (v: number) => string
+  className?: string
+}) {
+  const config = { v: { label, color: toneColor[tone] } } satisfies ChartConfig
+  // Two areas on one page mustn't share a pattern id.
+  const id = `dot-area-${useId().replace(/:/g, "")}`
+  return (
+    <ChartContainer
+      config={config}
+      className={cn("aspect-auto min-h-56 w-full flex-1", className)}
+    >
+      <AreaChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
+        <defs>
+          <pattern id={id} width="5" height="5" patternUnits="userSpaceOnUse">
+            <circle cx="2.5" cy="2.5" r="1.05" fill="var(--color-v)" />
+          </pattern>
+        </defs>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" />
+        <XAxis
+          dataKey="t"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={10}
+          minTickGap={40}
+          ticks={ticks}
+          tickFormatter={formatTime}
+          fontSize={11}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={44}
+          tickFormatter={formatValue}
+          fontSize={11}
+        />
+        <ChartTooltip
+          cursor={{ strokeDasharray: "3 3" }}
+          content={
+            <ChartTooltipContent
+              indicator="line"
+              labelFormatter={(_, p) => {
+                const t = p?.[0]?.payload?.t
+                return typeof t === "number" ? formatTime(t) : ""
+              }}
+              formatter={(v) =>
+                `${formatValue(Number(v))} ${label.toLowerCase()}`
+              }
+            />
+          }
+        />
+        <Area
+          dataKey="v"
+          type="linear"
+          stroke="var(--color-v)"
+          strokeWidth={1.75}
+          fill={`url(#${id})`}
+          fillOpacity={0.75}
+          isAnimationActive={false}
+        />
+      </AreaChart>
     </ChartContainer>
   )
 }
