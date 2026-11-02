@@ -475,19 +475,26 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Revoke an API key, at once
+     * Revoke an API key, at once. With compromised=true, also list the nodes that joined with a token it made.
      */
-    revoke: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+    revoke: async (id: string, compromised?: boolean, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CompromisedRevoke | void> => {
       let __path = `/api/v1/api-keys/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      queryParams['compromised'] = compromised;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'DELETE',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
         allowEmptyBody: true,
+        responseCodec: CODECS["CompromisedRevoke"],
       };
 
-      await this.request(config);
+      return this.request<types.CompromisedRevoke | void>(config);
     },
 
   };
@@ -4109,6 +4116,114 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeRetentionPolicy>(config);
+    },
+
+  };
+
+  public readonly nodeJoinTokens = {
+    /**
+     * Make a single-use token for one machine to join, and the command that uses it
+     */
+    create: async (body: types.JoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinToken> => {
+      let __path = `/api/v1/nodes/join-tokens`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["JoinTokenRequestBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["JoinToken"],
+      };
+
+      return this.request<types.JoinToken>(config);
+    },
+
+  };
+
+  public readonly nodes = {
+    /**
+     * One node
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
+     * A machine joins with a join token. The token is spent.
+     */
+    join: async (body: types.NodeJoinBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeJoined> => {
+      let __path = `/api/v1/nodes/join`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NodeJoinBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeJoined"],
+      };
+
+      return this.request<types.NodeJoined>(config);
+    },
+
+    /**
+     * The machines joined to this organization
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeList> => {
+      let __path = `/api/v1/nodes`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeList"],
+      };
+
+      return this.request<types.NodeList>(config);
+    },
+
+    /**
+     * Stop trusting a node, at once. Its key can't connect again.
+     */
+    revoke: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/revoke`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
+     * Rename a node, relabel it, narrow what it serves or set its ingress mode
+     */
+    update: async (id: string, body: types.NodeUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NodeUpdateBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
     },
 
   };

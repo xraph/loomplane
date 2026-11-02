@@ -1327,6 +1327,11 @@ export interface CompositionConfig {
   version: string;
 }
 
+export interface CompromisedRevoke {
+  joinedNodes: Node[];
+  revoked: APIKey;
+}
+
 export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
@@ -2480,6 +2485,37 @@ export interface InstanceStatus {
   snapshotVersion: number;
 }
 
+export interface Inventory {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+}
+
+export interface JoinToken {
+  command: string;
+  expiresAt: string;
+  token: string;
+}
+
+export interface JoinTokenRequestBody {
+  cloudId?: string;
+  edge?: boolean;
+  edgeScope?: string;
+  endpoints?: string[];
+  labels?: Record<string, any>;
+  lifetimeMinutes?: number;
+}
+
 export interface KeylessInputBody {
   connectionId: string;
   name: string;
@@ -3013,6 +3049,67 @@ export interface NewKeyBody {
   name: string;
 }
 
+export interface Node {
+  createdAt: string;
+  edgeScope: string;
+  endpoints: string[];
+  id: string;
+  identityGeneration: number;
+  ingressMode: string;
+  inventory: Inventory;
+  joinedBy: string;
+  joinedByKeyId: string;
+  keyFingerprint: string;
+  labels: Record<string, any>;
+  lastSeenAt?: string;
+  name: string;
+  orgId: string;
+  protocolVersion: number;
+  revokedAt?: string;
+  revokedBy: string;
+  role: string;
+  status: string;
+  updatedAt: string;
+  version: string;
+}
+
+export interface NodeJoinBody {
+  endpoints?: string[];
+  inventory: {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+};
+  labels?: Record<string, any>;
+  name?: string;
+  nodeVersion: string;
+  protocolVersion: number;
+  publicKey: number[];
+  token: string;
+}
+
+export interface NodeJoined {
+  cloudId?: string;
+  endpoints: string[];
+  identityGeneration: number;
+  nodeId: string;
+  orgId: string;
+}
+
+export interface NodeList {
+  nodes: Node[];
+}
+
 export interface NodePoolSpec {
   autoscale: boolean;
   count: number;
@@ -3030,6 +3127,19 @@ export interface NodePoolTaint {
   effect: string;
   key: string;
   value: string;
+}
+
+export interface NodeUpdateBody {
+  endpoints?: string[];
+  ingressMode?: string;
+  labels?: Record<string, any>;
+  name?: string;
+}
+
+export interface NodeprotoGPU {
+  memoryMib: number;
+  model: string;
+  vendor: string;
 }
 
 export interface Note {
@@ -4406,6 +4516,11 @@ export interface Runs {
   creates: string;
   execution: string;
   workload: string;
+}
+
+export interface Runtime {
+  socket: string;
+  version: string;
 }
 
 export interface RuntimeAccessProfile {
