@@ -50,8 +50,9 @@ func (a *agentOrg) userID() string {
 	return s.UserID
 }
 
-// invoke runs one of the agent's operations the way cortex does, as a's
-// agent acting for its owner, at a's workspace's scope.
+// invoke runs one of the agent's operations the way cortex does, through
+// the agent's tool authorizer, as a's agent acting for its owner, at a's
+// workspace's scope.
 func (a *agentOrg) invoke(t *testing.T, reg *agentops.Registry, name string, args any) (string, error) {
 	t.Helper()
 	raw, err := json.Marshal(args)
@@ -59,10 +60,10 @@ func (a *agentOrg) invoke(t *testing.T, reg *agentops.Registry, name string, arg
 		t.Fatal(err)
 	}
 	p := security.AgentPrincipal(a.orgID, &security.Principal{UserID: a.userID(), OrgID: a.orgID})
-	return reg.Invoke(context.Background(), cortex.Invocation{
+	return reg.Dispatch(context.Background(), cortex.Invocation{
 		Subject: cortex.Subject{Scope: agentscope.Scope{OrgID: a.orgID}.Cortex(), Principal: p, RunID: cortexid.NewAgentRunID()},
 		Call:    llm.ToolCall{ID: "call_" + name, Name: name, Arguments: string(raw)},
-	})
+	}, false)
 }
 
 // With AI on, cortex has every operation of the registry as a tool, the

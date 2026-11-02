@@ -84,6 +84,11 @@ type Authorizer struct {
 	// ApprovalWindow is how long a paused approval waits:
 	// planning.approval_window.
 	ApprovalWindow time.Duration
+	// Requested, when set, reads another stored record that names plan as
+	// a release the run's person asked for, such as the agent task they
+	// started for it. Nil means only the plan's own creator counts. An
+	// error counts as not requested.
+	Requested func(ctx context.Context, call agentops.Call, plan *planning.Plan) (bool, error)
 
 	mu   sync.RWMutex
 	gate PromotionGate
@@ -213,9 +218,14 @@ func (a *Authorizer) approval(ctx context.Context, call agentops.Call, tc llm.To
 		return err
 	}
 	// A plan someone already decided is only reported: the handler
-	// approves nothing that isn't ready.
-	if plan.Status != planning.StatusReady && plan.DecidedBy != "" {
-		return nil
+	// approves nothing that isn't ready. One nobody decided and nobody can
+	// (superseded, expired, still planning) is refused, not left waiting
+	// for a person.
+	if plan.Status != planning.StatusReady {
+		if plan.DecidedBy != "" {
+			return nil
+		}
+		return fmt.Errorf("plan %s is %s: %w", plan.ID, plan.Status, planning.ErrNotReady)
 	}
 	if agentops.SetsBackupSchedule(plan) {
 		return a.pause(reasonBackup)
@@ -235,19 +245,38 @@ func (a *Authorizer) approval(ctx context.Context, call agentops.Call, tc llm.To
 	return nil
 }
 
+// requested reports whether a stored record names plan as a release the
+// run's person asked for: the plan's creator is that person, or Requested
+// finds another record that says so. The agent acting alone has no person
+// and never has a request. Nothing the model passes counts.
+func (a *Authorizer) requested(ctx context.Context, call agentops.Call, plan *planning.Plan) bool {
+	person, ok := call.Principal.Person()
+	if !ok || person.UserID == "" {
+		return false
+	}
+	if plan.CreatedBy == person.UserID {
+		return true
+	}
+	if a.Requested == nil {
+		return false
+	}
+	asked, err := a.Requested(ctx, call, plan)
+	return err == nil && asked
+}
+
 func (a *Authorizer) pause(reason string) error {
 	return cortex.ApprovalRequired{Reason: reason, TTL: a.ApprovalWindow}
 }
 
 // Promote decides whether the agent may approve a production plan alone.
-// Before any gate, a person must have asked for the release (the agent
-// acting alone never promotes) and the project's autonomous promotion must
-// be on, read from the project now, never kept. Then the gate in use
+// Before any gate, the release must be one the run's person asked for, by
+// a stored record (requested), and the project's autonomous promotion
+// must be on, read from the project now, never kept. Then the gate in use
 // decides. A gate's error is returned and treated as not allowed. It's
 // agentops.Deps.Promote, so approve_plan's handler asks the same question
 // just before it approves.
 func (a *Authorizer) Promote(ctx context.Context, call agentops.Call, plan *planning.Plan) (allowed bool, failed []string, err error) {
-	if _, asked := call.Principal.Person(); !asked {
+	if !a.requested(ctx, call, plan) {
 		return false, []string{failedUnrequested}, nil
 	}
 	project, err := a.Projects.Get(ctx, call.Principal, plan.ProjectID)

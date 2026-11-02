@@ -34,7 +34,7 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// Workspaces: Engines (orgA), where Ada owns and Vi views; Other (orgB),
+// Workspaces: Engines (orgA), where Ada and Ben own and Vi views; Other (orgB),
 // where Bob owns; Strict (orgC), whose shield asks a person for every
 // change and blocks secrets; and Unseeded (orgD), whose shield has no
 // profiles at all.
@@ -44,6 +44,7 @@ const (
 	orgC = "o3"
 	orgD = "o4"
 	ada  = "usr_ada"
+	ben  = "usr_ben"
 	vi   = "usr_vi"
 	bob  = "usr_bob"
 	cy   = "usr_cy"
@@ -62,7 +63,7 @@ type memberBook struct {
 
 func newMembers() *memberBook {
 	return &memberBook{orgs: map[string]map[string]string{
-		orgA: {ada: security.MemberOwner, vi: security.MemberViewer},
+		orgA: {ada: security.MemberOwner, ben: security.MemberOwner, vi: security.MemberViewer},
 		orgB: {bob: security.MemberOwner},
 		orgC: {cy: security.MemberOwner},
 		orgD: {dee: security.MemberOwner},
@@ -433,6 +434,7 @@ func newWorld(t *testing.T) *world {
 	agentops.Builtins(w.reg, w.d)
 	w.a = &agentauthz.Authorizer{Registry: w.reg, Plans: w.plans, Projects: w.projects, Authz: authz, ApprovalWindow: window}
 	w.d.Promote = w.a.Promote
+	w.reg.BindAuthorizer(w.a)
 	return w
 }
 
@@ -445,13 +447,18 @@ func (w *world) shielded() cortex.ToolAuthorizer {
 	return agentauthz.Layered(w.a, w.shield)
 }
 
+// planners is who creates plans in each workspace's tests: the person who
+// asks for the release.
+var planners = map[string]string{orgA: ada, orgB: bob, orgC: cy, orgD: dee}
+
 // plan stores a ready plan of project in its environment env ("production"
-// or "staging"), at revision r1, doing actions.
+// or "staging"), at revision r1, doing actions, created by the
+// workspace's planner.
 func (w *world) plan(id string, p *projects.Project, env string, actions ...planning.Action) *planning.Plan {
 	w.t.Helper()
 	pl := &planning.Plan{
 		ID: id, OrgID: p.OrgID, ProjectID: p.ID, EnvironmentID: p.ID + "_" + env, Environment: env,
-		Status: planning.StatusReady, Revision: "r1", Actions: actions, Executable: true,
+		Status: planning.StatusReady, Revision: "r1", Actions: actions, Executable: true, CreatedBy: planners[p.OrgID],
 	}
 	w.plans.mu.Lock()
 	w.plans.plans[id] = pl
@@ -499,23 +506,19 @@ func (w *world) authorize(auth cortex.ToolAuthorizer, p security.Principal, name
 	return auth.Authorize(w.t.Context(), subject(p, p.OrgID), toolCall(w.t, name, args))
 }
 
-// dispatch is what cortex does with a call: ask auth, then run the
-// handler, which an approval pause or a denial never reaches.
-func (w *world) dispatch(auth cortex.ToolAuthorizer, p security.Principal, scopeOrg, name string, args any) (string, error) {
+// dispatch is what cortex does with a new call: the registry's
+// authorizer (the table) decides, and the handler runs only if it allows.
+func (w *world) dispatch(p security.Principal, scopeOrg, name string, args any) (string, error) {
 	w.t.Helper()
-	s := subject(p, scopeOrg)
-	tc := toolCall(w.t, name, args)
-	if err := auth.Authorize(w.t.Context(), s, tc); err != nil {
-		return "", err
-	}
-	return w.reg.Invoke(w.t.Context(), cortex.Invocation{Subject: s, Call: tc})
+	return w.reg.Dispatch(w.t.Context(), cortex.Invocation{Subject: subject(p, scopeOrg), Call: toolCall(w.t, name, args)}, false)
 }
 
-// invoke runs the handler without asking any authorizer first, the way a
-// resumed call cortex already authorized runs.
+// invoke is a call cortex resumes after a person approved its checkpoint:
+// the authorizer runs again and only its approval is excused, so the
+// handler's own checks are what stand.
 func (w *world) invoke(p security.Principal, name string, args any) (string, error) {
 	w.t.Helper()
-	return w.reg.Invoke(w.t.Context(), cortex.Invocation{Subject: subject(p, p.OrgID), Call: toolCall(w.t, name, args)})
+	return w.reg.Dispatch(w.t.Context(), cortex.Invocation{Subject: subject(p, p.OrgID), Call: toolCall(w.t, name, args)}, true)
 }
 
 // approvalOf returns the approval err asks for, failing the test when it

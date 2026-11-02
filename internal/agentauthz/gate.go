@@ -29,8 +29,11 @@ type GateDecision struct {
 
 // PromotionGate decides, from evidence Loomplane computes, whether the
 // agent may promote a release to production without a person. It's asked
-// only after the checks no gate can lift: a person asked for the release,
+// only after the checks no gate can lift: a stored record names the plan
+// as a release the run's person asked for (they created the plan, or
+// Authorizer.Requested finds another record, such as their agent task),
 // the project's autonomous promotion is on, and the plan destroys nothing.
+// A person merely being on the run is not a request.
 type PromotionGate interface {
 	Evaluate(ctx context.Context, req PromotionRequest) (GateDecision, error)
 }

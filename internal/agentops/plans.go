@@ -40,13 +40,25 @@ func SetsBackupSchedule(plan *planning.Plan) bool {
 	return slices.ContainsFunc(plan.Actions, func(a planning.Action) bool { return a.BackupEveryHours != 0 })
 }
 
+// NonProduction reports whether an environment of kind is one the agent
+// may deploy to within its permissions: staging, preview or development.
+// Any other kind, an empty or unknown one included, counts as production.
+func NonProduction(kind string) bool {
+	switch kind {
+	case projects.KindStaging, projects.KindPreview, projects.KindDevelopment:
+		return true
+	}
+	return false
+}
+
 // PlanRisk is the risk of approving plan in an environment of envKind
-// (projects.Kind*). Outside production it's deploy_nonproduction. In
-// production it's destroy_production when any action deletes, or replaces
-// something that holds data (planning.DataBearing); otherwise
-// promote_production. Replacing a stateless service is never a destroy.
+// (projects.Kind*). In a non-production environment (NonProduction) it's
+// deploy_nonproduction. Anywhere else it's destroy_production when any
+// action deletes, or replaces something that holds data
+// (planning.DataBearing); otherwise promote_production. Replacing a
+// stateless service is never a destroy.
 func PlanRisk(plan *planning.Plan, envKind string) defs.Risk {
-	if envKind != projects.KindProduction {
+	if NonProduction(envKind) {
 		return defs.RiskDeployNonProduction
 	}
 	for _, a := range plan.Actions {
@@ -198,6 +210,12 @@ func registerPlans(r *Registry, d *Deps) {
 			}
 			return decisionOutput{}, fmt.Errorf("plan %s is %s: %w", plan.ID, plan.Status, planning.ErrNotReady)
 		}
+		// The risk below is about this revision, so this revision is the
+		// one approved: a plan that changed since the agent read it is
+		// stale.
+		if in.Revision != plan.Revision {
+			return decisionOutput{}, planning.ErrStale
+		}
 		if SetsBackupSchedule(plan) {
 			return decisionOutput{}, errBackupNeedsAPerson
 		}
@@ -217,7 +235,7 @@ func registerPlans(r *Registry, d *Deps) {
 		if err != nil {
 			return decisionOutput{}, err
 		}
-		approved, err := d.Plans.Approve(ctx, call.Principal, plan.ID, planning.DecideInput{Revision: in.Revision, Note: note})
+		approved, err := d.Plans.Approve(ctx, call.Principal, plan.ID, planning.DecideInput{Revision: plan.Revision, Note: note})
 		if err != nil {
 			return decisionOutput{}, err
 		}

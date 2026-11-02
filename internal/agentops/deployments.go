@@ -8,7 +8,6 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/page"
-	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
 	defs "github.com/xraph/loomplane/pkg/agentops"
@@ -95,7 +94,7 @@ func registerDeployments(r *Registry, d *Deps) {
 		if err != nil {
 			return nil, err
 		}
-		if kind == projects.KindProduction {
+		if !NonProduction(kind) {
 			return nil, errProductionRetry
 		}
 		dep, err = d.Deployments.Retry(ctx, call.Principal, in.DeploymentID)
@@ -112,7 +111,7 @@ func registerDeployments(r *Registry, d *Deps) {
 		if err != nil {
 			return "", err
 		}
-		if kind == projects.KindProduction {
+		if !NonProduction(kind) {
 			return defs.RiskPromoteProduction, nil
 		}
 		return defs.RiskDeployNonProduction, nil

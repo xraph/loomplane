@@ -61,6 +61,21 @@ func TestPlanRisk(t *testing.T) {
 			want: defs.RiskPromoteProduction,
 		},
 		{
+			name: "development plan deleting a database", kind: projects.KindDevelopment,
+			plan: planning.Plan{Actions: []planning.Action{with(database, planning.Delete)}},
+			want: defs.RiskDeployNonProduction,
+		},
+		{
+			name: "unknown kind is production", kind: "prod-eu",
+			plan: planning.Plan{Actions: []planning.Action{with(statelessService, planning.Update)}},
+			want: defs.RiskPromoteProduction,
+		},
+		{
+			name: "empty kind is production", kind: "",
+			plan: planning.Plan{Actions: []planning.Action{with(database, planning.Delete)}},
+			want: defs.RiskDestroyProduction,
+		},
+		{
 			name: "preview plan replacing a database", kind: projects.KindPreview,
 			plan: planning.Plan{Actions: []planning.Action{with(database, planning.Replace)}},
 			want: defs.RiskDeployNonProduction,

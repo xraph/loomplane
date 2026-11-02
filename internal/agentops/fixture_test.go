@@ -185,7 +185,7 @@ func (w *world) call(ctx context.Context, p security.Principal, scope agentscope
 	if args == nil {
 		raw = []byte("{}")
 	}
-	return w.reg.Invoke(ctx, cortex.Invocation{
+	return w.reg.invoke(ctx, cortex.Invocation{
 		Subject: cortex.Subject{Scope: scope.Cortex(), Principal: p, RunID: cortexid.NewAgentRunID()},
 		Call:    llm.ToolCall{ID: "call_" + name, Name: name, Arguments: string(raw)},
 	})

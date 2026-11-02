@@ -94,6 +94,8 @@ type Registry struct {
 	ops map[string]Op
 	// audit records each call; Builtins points it at Deps.Audit.
 	audit func() projects.Auditor
+	// authorizer is what Dispatch asks first.
+	authorizer cortex.ToolAuthorizer
 }
 
 // NewRegistry returns an empty registry.
@@ -255,6 +257,11 @@ func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, ri
 		if !ok || p.OrgID == "" {
 			return
 		}
+		// An agent.tool.call's actor is an agent: a call that came with
+		// anything else is recorded under the workspace's agent.
+		if !p.IsAgent() {
+			p = security.AgentPrincipal(p.OrgID, nil)
+		}
 		call = Call{Principal: p, RunID: inv.RunID.String(), CallID: inv.Call.ID}
 	}
 	call.TaskID = TaskIDFrom(ctx)
@@ -284,9 +291,41 @@ func (r *Registry) EngineOptions() []engine.Option {
 	return out
 }
 
-// Invoke runs the call inv names with the handler cortex runs for it. An
-// external operation has no handler: a person answers it.
-func (r *Registry) Invoke(ctx context.Context, inv cortex.Invocation) (string, error) {
+// BindAuthorizer gives the registry the tool authorizer Dispatch asks: the
+// one cortex runs. It can be bound once; a second call panics, so nothing
+// swaps the table for a laxer one later.
+func (r *Registry) BindAuthorizer(a cortex.ToolAuthorizer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.authorizer != nil {
+		panic("agentops: the registry's authorizer is already bound")
+	}
+	r.authorizer = a
+}
+
+// Dispatch runs a call the way cortex does: the bound authorizer decides
+// first, and the handler runs only if it allows the call. approved is a
+// call a person approved at a checkpoint, which cortex resumes: the
+// authorizer still runs, and only its asking for approval again is
+// excused, as cortex excuses it. Without a bound authorizer nothing runs.
+// The handlers have no other way in from outside this package.
+func (r *Registry) Dispatch(ctx context.Context, inv cortex.Invocation, approved bool) (string, error) {
+	r.mu.RLock()
+	a := r.authorizer
+	r.mu.RUnlock()
+	if a == nil {
+		return "", errors.New("agentops: no tool authorizer is bound")
+	}
+	if err := a.Authorize(ctx, inv.Subject, inv.Call); err != nil && (!approved || !errors.Is(err, cortex.ErrRequiresApproval)) {
+		return "", err
+	}
+	return r.invoke(ctx, inv)
+}
+
+// invoke runs the call inv names with the handler cortex runs for it, with
+// no authorizer. An external operation has no handler: a person answers
+// it.
+func (r *Registry) invoke(ctx context.Context, inv cortex.Invocation) (string, error) {
 	op, ok := r.Lookup(inv.Call.Name)
 	if !ok {
 		return "", fmt.Errorf("agentops: unknown operation %q", inv.Call.Name)

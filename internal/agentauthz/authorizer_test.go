@@ -19,6 +19,7 @@ import (
 	"github.com/xraph/cortex/suspension"
 
 	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -461,29 +462,27 @@ func TestAnotherOrgsAgentCannotApproveRetryOrRead(t *testing.T) {
 			s := subject(as(orgA, ada), orgA)
 			tc := toolCall(t, tool, args)
 			err := auth.a.Authorize(t.Context(), s, tc)
-			if errors.Is(err, cortex.ErrRequiresApproval) {
-				t.Errorf("%s %s: paused for an approval of another workspace's plan", auth.name, name)
-				continue
-			}
 			if err == nil {
-				out, invokeErr := w.reg.Invoke(t.Context(), cortex.Invocation{Subject: s, Call: tc})
-				if invokeErr == nil {
-					t.Errorf("%s %s: answered %s", auth.name, name, out)
-				}
+				// A read the table allows unseen: its handler must find
+				// nothing.
+				_, err = w.reg.Dispatch(t.Context(), cortex.Invocation{Subject: s, Call: tc}, false)
+			}
+			if kind := agentops.ErrorKind(err); kind != "not_found" {
+				t.Errorf("%s %s: %v (%s), want not found", auth.name, name, err, kind)
 			}
 		}
 	}
 	// Under the other workspace's scope it's refused before anything.
-	if _, err := w.dispatch(layered, as(orgA, ada), orgB, "approve_plan", approve("plan_ledger")); err == nil || errors.Is(err, cortex.ErrRequiresApproval) {
+	if err := layered.Authorize(t.Context(), subject(as(orgA, ada), orgB), toolCall(t, "approve_plan", approve("plan_ledger"))); err == nil || errors.Is(err, cortex.ErrRequiresApproval) {
 		t.Fatalf("under org B's scope: %v", err)
 	}
-	// And the handler, reached directly, finds nothing.
+	// A resumed call, its approval excused, finds nothing either.
 	for name, args := range map[string]any{
 		"approve_plan":     approve("plan_ledger_staging"),
 		"retry_deployment": map[string]string{"deployment_id": "dep_ledger"},
 	} {
-		if _, err := w.invoke(as(orgA, ada), name, args); err == nil {
-			t.Errorf("handler %s went through", name)
+		if _, err := w.invoke(as(orgA, ada), name, args); agentops.ErrorKind(err) != "not_found" {
+			t.Errorf("resumed %s: %v, want not found", name, err)
 		}
 	}
 	if got := w.plans.approved(); len(got) != 0 {
@@ -555,8 +554,10 @@ func TestApprovePlanHandlerRechecksTheGate(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "staging hasn't soaked for an hour") {
 		t.Fatalf("got %v", err)
 	}
-	if len(gate.asked()) != 1 {
-		t.Fatal("the handler didn't ask the gate")
+	// The resumed call's authorizer asks once (its approval is excused),
+	// and the handler asks again just before it would approve.
+	if n := len(gate.asked()); n != 2 {
+		t.Fatalf("the gate was asked %d times, want the authorizer and the handler", n)
 	}
 	if got := w.plans.approved(); len(got) != 0 {
 		t.Fatalf("Approve was called: %+v", got)
@@ -571,7 +572,7 @@ func TestApprovePlanUsesTheReadRevision(t *testing.T) {
 	w.plan("plan_changed", p, "production", updateAPI)
 	w.a.SetGate(&fakeGate{decision: agentauthz.GateDecision{Allowed: true}})
 
-	raw, err := w.dispatch(w.a, as(orgA, ada), orgA, "approve_plan", approve("plan_prod"))
+	raw, err := w.dispatch(as(orgA, ada), orgA, "approve_plan", approve("plan_prod"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,11 +591,16 @@ func TestApprovePlanUsesTheReadRevision(t *testing.T) {
 		t.Fatalf("approved %+v", a)
 	}
 
-	// A plan that changed since the agent read it settles stale.
+	// A plan that changed since the agent read it is stale: the handler
+	// checks the revision it assessed against the one the agent read, and
+	// approves only that one.
 	args := approve("plan_changed")
 	args["revision"] = "r0"
-	if _, err = w.dispatch(w.a, as(orgA, ada), orgA, "approve_plan", args); !errors.Is(err, planning.ErrStale) {
+	if _, err = w.dispatch(as(orgA, ada), orgA, "approve_plan", args); !errors.Is(err, planning.ErrStale) {
 		t.Fatalf("an old revision: %v", err)
+	}
+	if got := w.plans.approved(); len(got) != 1 {
+		t.Fatalf("Approve was called for a stale revision: %+v", got)
 	}
 }
 
@@ -656,4 +662,69 @@ func (m *scriptedModel) Complete(context.Context, *llm.Request) (*llm.Response, 
 
 func (m *scriptedModel) CompleteStream(context.Context, *llm.Request) (llm.Stream, error) {
 	return nil, errors.New("no streams here")
+}
+
+// I1: a person on the run doesn't make a release theirs. Ada chatting with
+// the agent, with a gate that allows everything, can't have it promote a
+// production plan Ben made and nobody asked the agent for.
+func TestAPersonOnTheRunDoesntRequestAnotherPersonsPlan(t *testing.T) {
+	w := newWorld(t)
+	p := w.projects.add(orgA, "prj_mono")
+	w.projects.setAutonomy(p.ID, true)
+	bens := w.plan("plan_bens", p, "production", updateAPI)
+	bens.CreatedBy = ben
+	agents := w.plan("plan_agents", p, "staging", updateAPI)
+	agents.EnvironmentID, agents.Environment = p.ID+"_production", "production"
+	agents.CreatedBy = security.AgentSubject(orgA)
+	gate := &fakeGate{decision: agentauthz.GateDecision{Allowed: true}}
+	w.a.SetGate(gate)
+
+	for _, id := range []string{"plan_bens", "plan_agents"} {
+		ar := approvalOf(t, w.authorize(w.a, as(orgA, ada), "approve_plan", approve(id)))
+		if !strings.Contains(ar.Reason, "nobody asked for this release") {
+			t.Fatalf("%s: reason %q", id, ar.Reason)
+		}
+		if _, err := w.invoke(as(orgA, ada), "approve_plan", approve(id)); err == nil {
+			t.Fatalf("%s: the handler approved it", id)
+		}
+	}
+	if n := len(gate.asked()); n != 0 {
+		t.Fatalf("the gate was asked %d times", n)
+	}
+	// Ben's own run asks for Ben's plan.
+	if err := w.authorize(w.a, as(orgA, ben), "approve_plan", approve("plan_bens")); err != nil {
+		t.Fatalf("Ben's run on Ben's plan: %v", err)
+	}
+	// Another stored record that names the plan as Ada's request (an agent
+	// task she started) counts too; the model's input never does.
+	w.a.Requested = func(_ context.Context, call agentops.Call, plan *planning.Plan) (bool, error) {
+		person, _ := call.Principal.Person()
+		return person.UserID == ada && plan.ID == "plan_agents", nil
+	}
+	if err := w.authorize(w.a, as(orgA, ada), "approve_plan", approve("plan_agents")); err != nil {
+		t.Fatalf("a recorded request: %v", err)
+	}
+	approvalOf(t, w.authorize(w.a, as(orgA, ada), "approve_plan", approve("plan_bens")))
+	w.a.Requested = func(context.Context, agentops.Call, *planning.Plan) (bool, error) {
+		return true, errors.New("task store unavailable")
+	}
+	approvalOf(t, w.authorize(w.a, as(orgA, ada), "approve_plan", approve("plan_agents")))
+	if got := w.plans.approved(); len(got) != 0 {
+		t.Fatalf("approved %+v", got)
+	}
+}
+
+// M2: a plan that isn't waiting for a decision is refused, not paused for a
+// person who couldn't approve it either.
+func TestApprovingAPlanThatIsntReadyIsRefused(t *testing.T) {
+	w := newWorld(t)
+	p := w.projects.add(orgA, "prj_mono")
+	for _, status := range []string{planning.StatusSuperseded, planning.StatusPlanning, planning.StatusFailed, planning.StatusExpired} {
+		pl := w.plan("plan_"+status, p, "production", deleteAPI)
+		pl.Status = status
+		err := w.authorize(w.a, as(orgA, ada), "approve_plan", approve(pl.ID))
+		if !errors.Is(err, planning.ErrNotReady) || errors.Is(err, cortex.ErrRequiresApproval) {
+			t.Errorf("%s: %v", status, err)
+		}
+	}
 }

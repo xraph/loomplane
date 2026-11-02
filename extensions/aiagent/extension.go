@@ -106,6 +106,9 @@ func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 	// approve_plan asks the same question as the authorizer just before it
 	// approves, through whichever gate is installed then.
 	e.deps.Promote = e.authz.Promote
+	// The registry's only way in from outside runs the same authorizer
+	// cortex does, so the registry the container provides is no bypass.
+	e.ops.BindAuthorizer(e.toolAuthorizer)
 	registerOps(e.ops, e.deps)
 	e.buildLibraries()
 	return e
