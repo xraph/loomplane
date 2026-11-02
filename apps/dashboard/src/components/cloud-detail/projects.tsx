@@ -270,6 +270,15 @@ export function Projects({
             setEditing(null)
             onSaved()
           }}
+          onRemove={
+            editing !== "new" && manage
+              ? () => {
+                  setEditing(null)
+                  setError("")
+                  setRemoving(editing)
+                }
+              : undefined
+          }
         />
       )}
     </section>

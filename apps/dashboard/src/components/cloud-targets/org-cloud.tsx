@@ -73,6 +73,7 @@ export function GrantDialog({
   project,
   onClose,
   onSaved,
+  onRemove,
 }: {
   cloud: Profile
   targets: Target[]
@@ -83,9 +84,10 @@ export function GrantDialog({
   project?: Project
   onClose: () => void
   onSaved: () => void
+  /** Removes the grant being edited; the caller asks to confirm first. */
+  onRemove?: () => void
 }) {
   const save = useMutation(api.useOrganizationCloudsGrantProject)
-  const revoke = useMutation(api.useOrganizationCloudsRevokeProject)
   const [projectId, setProjectId] = useState(
     grant?.projectId ?? projects[0]?.id ?? ""
   )
@@ -95,9 +97,8 @@ export function GrantDialog({
   const [wholeCloud, setWholeCloud] = useState(
     grant ? grant.targetIds.length === 0 : targets.length === 0
   )
-  const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState("")
-  const busy = save.isPending || revoke.isPending
+  const busy = save.isPending
   const toggle = (id: string) =>
     setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const submit = async () => {
@@ -110,15 +111,6 @@ export function GrantDialog({
       onSaved()
     } catch (err) {
       setError(messageOf(err, "Access wasn't saved."))
-    }
-  }
-  const remove = async () => {
-    setError("")
-    try {
-      await revoke.mutateAsync({ path: { cloudId: cloud.id, projectId } })
-      onSaved()
-    } catch (err) {
-      setError(messageOf(err, "Access wasn't removed."))
     }
   }
   return (
@@ -210,21 +202,17 @@ export function GrantDialog({
               )
             })}
           </FieldSet>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          {error && <CloudCallout tone="error" title={error} />}
         </div>
         <DialogFooter className="flex-wrap">
-          {grant && (
+          {grant && onRemove && (
             <Button
               variant="outline"
               className="mr-auto text-destructive"
               disabled={busy}
-              onClick={() => (confirming ? void remove() : setConfirming(true))}
+              onClick={onRemove}
             >
-              {confirming ? "Confirm remove access" : "Remove access"}
+              Remove access
             </Button>
           )}
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -239,12 +227,6 @@ export function GrantDialog({
             {grant ? "Save access" : "Give access"}
           </Button>
         </DialogFooter>
-        {confirming && (
-          <p className="text-xs text-muted-foreground">
-            Services already running keep running. The project just can&apos;t
-            place new ones on {cloud.name}.
-          </p>
-        )}
       </DialogContent>
     </Dialog>
   )

@@ -424,6 +424,22 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
   ).toBeInTheDocument()
 })
 
+it("asks once before removing access from the access dialog", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ granted: true })
+  show()
+  await openTab("Projects")
+  await user.click(await screen.findByRole("button", { name: "Edit access" }))
+  await user.click(screen.getByRole("button", { name: "Remove access" }))
+  // The edit dialog hands off to the one confirm dialog; nothing is removed yet.
+  const confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent("Remove Web app's access?")
+  expect(
+    screen.queryByRole("button", { name: "Confirm remove access" })
+  ).not.toBeInTheDocument()
+  expect(writes).toEqual([])
+})
+
 it("gives a project access to only the targets you tick", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ unused: true })
