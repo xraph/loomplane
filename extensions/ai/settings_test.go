@@ -108,7 +108,7 @@ var settingWrites = []call{
 	{http.MethodPut, "/api/v1/ai/settings/budget", `{"monthly_budget_usd":"100","revision":0}`},
 	{http.MethodPut, "/api/v1/ai/settings/provider-keys/claude", `{"type":"anthropic","fields":{"api_key":"` + keyValue + `"}}`},
 	{http.MethodDelete, "/api/v1/ai/settings/provider-keys/claude", ""},
-	{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"25"}`},
+	{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"25","revision":1}`},
 	{http.MethodPatch, "/api/v1/ai/settings/agent", `{"model":"claude-sonnet-5-5","revision":0}`},
 }
 
@@ -274,9 +274,17 @@ func TestAgentSettingsRoutes(t *testing.T) {
 	rig := newSettingsRig(t, nil)
 	admin := as(security.RoleAdmin)
 	for _, c := range []call{settingWrites[0], settingWrites[1], settingWrites[3]} {
+		if c.path == "/api/v1/ai/settings/agent/budget" {
+			c.body = fmt.Sprintf(`{"monthly_budget_usd":"25","revision":%d}`, rig.rev(t))
+		}
 		if out := do(t, rig.r, c, admin); out.Code != http.StatusOK {
 			t.Fatalf("%s %s: %d %s", c.method, c.path, out.Code, out.Body.String())
 		}
+	}
+	// The budget write is at a revision too: an old one is stale.
+	stale := do(t, rig.r, call{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"30","revision":1}`}, admin)
+	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), `"code":"stale"`) {
+		t.Fatalf("stale budget: %d %s", stale.Code, stale.Body.String())
 	}
 	get := do(t, rig.r, call{http.MethodGet, "/api/v1/ai/settings/agent", ""}, admin)
 	var v agentsettings.AgentView
@@ -317,11 +325,11 @@ func TestAgentSettingsRoutes(t *testing.T) {
 	if del.Code != http.StatusUnprocessableEntity || !strings.Contains(del.Body.String(), `"code":"in_use"`) {
 		t.Errorf("delete the agent's key: %d %s", del.Code, del.Body.String())
 	}
-	zero := do(t, rig.r, call{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"0"}`}, admin)
+	zero := do(t, rig.r, call{http.MethodPut, "/api/v1/ai/settings/agent/budget", fmt.Sprintf(`{"monthly_budget_usd":"0","revision":%d}`, rig.rev(t))}, admin)
 	if zero.Code != http.StatusUnprocessableEntity || !strings.Contains(zero.Body.String(), "turn the agent off") {
 		t.Errorf("zero budget while on: %d %s", zero.Code, zero.Body.String())
 	}
-	over := do(t, rig.r, call{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"500"}`}, admin)
+	over := do(t, rig.r, call{http.MethodPut, "/api/v1/ai/settings/agent/budget", fmt.Sprintf(`{"monthly_budget_usd":"500","revision":%d}`, rig.rev(t))}, admin)
 	if over.Code != http.StatusUnprocessableEntity {
 		t.Errorf("over the workspace budget: %d %s", over.Code, over.Body.String())
 	}

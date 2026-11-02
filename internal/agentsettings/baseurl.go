@@ -71,6 +71,104 @@ func systemLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
+// policy is where the agent may send a workspace key and its requests.
+// The check when a key is chosen and the dial guard share it, resolver
+// included, so they can't disagree.
+type policy struct {
+	environment string
+	// denied is planning.endpoint_denied_cidrs, with IPv4-mapped prefixes
+	// written as the IPv4 prefixes they are.
+	denied []netip.Prefix
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
+}
+
+func newPolicy(environment string, denied []netip.Prefix, lookup func(ctx context.Context, host string) ([]netip.Addr, error)) policy {
+	if lookup == nil {
+		lookup = systemLookup
+	}
+	out := make([]netip.Prefix, 0, len(denied))
+	for _, p := range denied {
+		out = append(out, unmapPrefix(p))
+	}
+	return policy{environment: environment, denied: out, lookup: lookup}
+}
+
+// unmapPrefix writes an IPv4-mapped IPv6 prefix (::ffff:10.0.0.0/104) as
+// the IPv4 prefix it covers (10.0.0.0/8). Addresses are unmapped before
+// they're matched, so a mapped prefix would otherwise never match.
+func unmapPrefix(p netip.Prefix) netip.Prefix {
+	if p.Addr().Is4In6() && p.Bits() >= 96 {
+		return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96).Masked()
+	}
+	return p
+}
+
+// deniedContains reports whether a falls in a denied prefix, in either of
+// its forms: a short IPv6 prefix can still cover the mapped form of an
+// IPv4 address.
+func (p policy) deniedContains(a netip.Addr) bool {
+	a = a.Unmap()
+	mapped := netip.AddrFrom16(a.As16())
+	for _, d := range p.denied {
+		if d.Contains(a) || (a.Is4() && d.Contains(mapped)) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkURL checks raw without looking anything up: an absolute http(s)
+// URL without credentials, https in production. It returns the host.
+func (p policy) checkURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
+		return "", invalid("the provider key's base_url must be an absolute http or https URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", invalid("the provider key's base_url must be an absolute http or https URL")
+	}
+	if u.User != nil {
+		return "", invalid("the provider key's base_url can't carry credentials. Put the key in api_key")
+	}
+	if scheme != "https" && p.environment == config.EnvProduction {
+		return "", invalid("the agent sends its key to the provider key's base_url, so in production it must be https")
+	}
+	return strings.TrimSuffix(u.Hostname(), "."), nil
+}
+
+// checkAddr decides whether the agent may connect to a: never a denied
+// range, a link-local or a cloud metadata address, and outside
+// development never a private, loopback or other non-public one.
+func (p policy) checkAddr(a netip.Addr) error {
+	a = a.Unmap()
+	if p.deniedContains(a) {
+		return invalid("the provider key's base_url reaches a network this server refuses (planning.endpoint_denied_cidrs)")
+	}
+	if hostOnly(a) {
+		return invalid("the provider key's base_url reaches a link-local or cloud metadata address, which the agent never calls")
+	}
+	if p.environment != config.EnvDevelopment && !public(a) {
+		return invalid("the provider key's base_url reaches a private or loopback address, which the agent can't call outside development")
+	}
+	return nil
+}
+
+// resolve returns host's addresses: itself when it's an address, else
+// what the policy's resolver answers. An empty answer is an error.
+func (p policy) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
+	if a, err := netip.ParseAddr(host); err == nil {
+		return []netip.Addr{a}, nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	addrs, err := p.lookup(lctx, host)
+	if err != nil || len(addrs) == 0 {
+		return nil, invalid("Loomplane couldn't look up the provider key's base_url host. Check the address and try again")
+	}
+	return addrs, nil
+}
+
 // checkBaseURL decides whether the agent may send a workspace key, and
 // its requests, to raw. It must be an absolute http(s) URL without
 // credentials, https in production, and its host's every address outside
@@ -79,50 +177,37 @@ func systemLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 // common) outside private, loopback and other non-public ranges. Messages
 // never quote the URL: it's the user's and could hold anything.
 //
-// It runs when a key is chosen for the agent and again before every call,
-// since what a name resolves to can change. The call's own dial is the
-// last word: nexus dials the URL itself.
+// It runs when a key is chosen for the agent. Each call checks the URL
+// again without a lookup (checkBaseURLStatic), and the dial guard checks
+// every address nexus dials, so a name that resolves somewhere else later
+// is refused then.
 func (s *Service) checkBaseURL(ctx context.Context, raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Host == "" || u.Opaque != "" {
-		return invalid("the provider key's base_url must be an absolute http or https URL")
+	host, err := s.policy.checkURL(raw)
+	if err != nil {
+		return err
 	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return invalid("the provider key's base_url must be an absolute http or https URL")
+	addrs, err := s.policy.resolve(ctx, host)
+	if err != nil {
+		return err
 	}
-	if u.User != nil {
-		return invalid("the provider key's base_url can't carry credentials. Put the key in api_key")
-	}
-	if scheme != "https" && s.environment == config.EnvProduction {
-		return invalid("the agent sends its key to the provider key's base_url, so in production it must be https")
-	}
-	host := strings.TrimSuffix(u.Hostname(), ".")
-	var addrs []netip.Addr
-	if a, perr := netip.ParseAddr(host); perr == nil {
-		addrs = []netip.Addr{a}
-	} else {
-		lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
-		defer cancel()
-		addrs, err = s.lookup(lctx, host)
-		if err != nil || len(addrs) == 0 {
-			return invalid("Loomplane couldn't look up the provider key's base_url host. Check the address and try again")
-		}
-	}
-	allowPrivate := s.environment == config.EnvDevelopment
 	for _, a := range addrs {
-		a = a.Unmap()
-		for _, p := range s.denied {
-			if p.Contains(a) {
-				return invalid("the provider key's base_url reaches a network this server refuses (planning.endpoint_denied_cidrs)")
-			}
+		if err := s.policy.checkAddr(a); err != nil {
+			return err
 		}
-		if hostOnly(a) {
-			return invalid("the provider key's base_url reaches a link-local or cloud metadata address, which the agent never calls")
-		}
-		if !allowPrivate && !public(a) {
-			return invalid("the provider key's base_url reaches a private or loopback address, which the agent can't call outside development")
-		}
+	}
+	return nil
+}
+
+// checkBaseURLStatic is checkBaseURL without a lookup: the URL's shape,
+// and its host when the host is an address. Each call runs it; where a
+// name resolves is the dial guard's to check, at dial.
+func (s *Service) checkBaseURLStatic(raw string) error {
+	host, err := s.policy.checkURL(raw)
+	if err != nil {
+		return err
+	}
+	if a, perr := netip.ParseAddr(host); perr == nil {
+		return s.policy.checkAddr(a)
 	}
 	return nil
 }

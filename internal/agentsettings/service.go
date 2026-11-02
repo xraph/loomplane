@@ -99,17 +99,15 @@ type Deps struct {
 // principal checks it first; the ones that don't are for the agent's own
 // services.
 type Service struct {
-	store       Store
-	ai          AISettings
-	keys        *Keys
-	roles       Roles
-	authz       Authorizer
-	audit       projects.Auditor
-	cfg         config.AIConfig
-	environment string
-	denied      []netip.Prefix
-	lookup      func(ctx context.Context, host string) ([]netip.Addr, error)
-	now         func() time.Time
+	store  Store
+	ai     AISettings
+	keys   *Keys
+	roles  Roles
+	authz  Authorizer
+	audit  projects.Auditor
+	cfg    config.AIConfig
+	policy policy
+	now    func() time.Time
 
 	mu        sync.RWMutex
 	gateway   Gateway
@@ -120,16 +118,13 @@ type Service struct {
 
 // NewService returns a Service.
 func NewService(d Deps) *Service {
-	lookup, now := d.Lookup, d.Now
-	if lookup == nil {
-		lookup = systemLookup
-	}
+	now := d.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Service{
 		store: d.Store, ai: d.AI, keys: NewKeys(d.AI), roles: d.Roles, authz: d.Authz, audit: d.Audit,
-		cfg: d.Config, environment: d.Environment, denied: slices.Clone(d.Denied), lookup: lookup, now: now,
+		cfg: d.Config, policy: newPolicy(d.Environment, d.Denied, d.Lookup), now: now,
 		gateway: d.Gateway, seeder: d.Seeder,
 		knowledge: KnowledgeStatus{
 			Configured: d.Config.Knowledge.Configured(), Reason: "Knowledge isn't set up yet on this server",
@@ -312,16 +307,37 @@ func unusableType(k *Key) error {
 }
 
 // checkKey decides whether the agent may use k: a type it runs on, granted
-// to every project, and a base URL it may send the key to.
+// to every project, and a base URL it may send the key to, with its host
+// looked up. It runs when a key is chosen.
 func (s *Service) checkKey(ctx context.Context, k *Key) error {
+	if err := checkKeyGrant(k); err != nil {
+		return err
+	}
+	if k.BaseURL != "" {
+		return s.checkBaseURL(ctx, k.BaseURL)
+	}
+	return nil
+}
+
+// checkKeyStatic is checkKey without a lookup, for every call: the dial
+// guard checks the addresses nexus dials.
+func (s *Service) checkKeyStatic(k *Key) error {
+	if err := checkKeyGrant(k); err != nil {
+		return err
+	}
+	if k.BaseURL != "" {
+		return s.checkBaseURLStatic(k.BaseURL)
+	}
+	return nil
+}
+
+// checkKeyGrant decides whether the agent may use k's type and grant.
+func checkKeyGrant(k *Key) error {
 	if k.Provider == "" {
 		return unusableType(k)
 	}
 	if len(k.Projects) > 0 {
 		return invalid("the agent works across the workspace, so its provider key must be granted to every project, and %q is granted to some", k.Name)
-	}
-	if k.BaseURL != "" {
-		return s.checkBaseURL(ctx, k.BaseURL)
 	}
 	return nil
 }
@@ -539,11 +555,17 @@ func (s *Service) undoOn(ctx context.Context, gw Gateway, orgID, tenantID string
 // SetBudget sets the agent's monthly budget: its allocation of the
 // workspace budget, which the workspace budget must cover. "0" releases
 // it, which only an agent that's off can do. ai:manage.
-func (s *Service) SetBudget(ctx context.Context, p security.Principal, amount string) (*AgentView, error) {
+//
+// in.Revision is the workspace AI settings' revision the caller read. The
+// write claims the row at that revision first, as Update does, so of two
+// budget writes (or a budget write and a turn-on) at the same revision
+// one goes through and the other is ErrStale and changes nothing. The
+// claim bumps the revision even when the allocation is then refused.
+func (s *Service) SetBudget(ctx context.Context, p security.Principal, in AgentBudgetInput) (*AgentView, error) {
 	if err := s.authz.Require(ctx, p, security.AIManage, ""); err != nil {
 		return nil, err
 	}
-	c, err := toCents(strings.TrimSpace(amount))
+	c, err := toCents(strings.TrimSpace(in.MonthlyBudgetUSD))
 	if err != nil {
 		return nil, invalid("the agent's monthly budget must be an amount in USD, like 25 or 12.50")
 	}
@@ -551,10 +573,18 @@ func (s *Service) SetBudget(ctx context.Context, p security.Principal, amount st
 	if err != nil {
 		return nil, err
 	}
+	if st.Revision != in.Revision {
+		return nil, ErrStale
+	}
+	if c == 0 && st.Enabled {
+		return nil, invalid("turn the agent off before taking its budget away")
+	}
+	claim := *st
+	claim.UpdatedBy = p.UserID
+	if serr := s.store.Save(ctx, &claim, st.Revision); serr != nil {
+		return nil, serr
+	}
 	if c == 0 {
-		if st.Enabled {
-			return nil, invalid("turn the agent off before taking its budget away")
-		}
 		if rerr := s.ai.ReleaseAllocation(ctx, p.OrgID, AllocationScope); rerr != nil {
 			return nil, rerr
 		}

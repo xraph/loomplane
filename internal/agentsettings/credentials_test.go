@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/xraph/nexus/pipeline"
@@ -147,20 +148,28 @@ func TestCredentialsRefuseWhenTheAgentIsOff(t *testing.T) {
 }
 
 // What was checked when the key was chosen is checked again on every call:
-// the key changed since, or its host now resolves somewhere else.
+// the key changed since. Where its host resolves is the dial guard's to
+// check, at dial, so a call looks nothing up here.
 func TestCredentialsCheckTheKeyOnEveryCall(t *testing.T) {
 	h, ctx := on(t, "local", "llama")
+	var lookups atomic.Int32
+	next := h.deps.Lookup
+	h.restart(func(d *agentsettings.Deps) {
+		d.Lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			lookups.Add(1)
+			return next(ctx, host)
+		}
+	})
 	creds := h.svc.Credentials()
-	h.hosts["llm.example.com"] = []netip.Addr{netip.MustParseAddr("10.9.8.7")}
-	_, err := creds.ResolveCredential(ctx, "openai-compatible")
-	refused(t, err)
-	h.hosts["llm.example.com"] = []netip.Addr{netip.MustParseAddr("93.184.215.14")}
-	if _, err = creds.ResolveCredential(ctx, "openai-compatible"); err != nil {
-		t.Fatalf("public again: %v", err)
+	if _, err := creds.ResolveCredential(ctx, "openai-compatible"); err != nil {
+		t.Fatal(err)
+	}
+	if lookups.Load() != 0 {
+		t.Fatalf("a call looked the host up %d times", lookups.Load())
 	}
 
 	h.store.SetKeyField(org, "local", "base_url", "http://llm.example.com/v1")
-	_, err = creds.ResolveCredential(ctx, "openai-compatible")
+	_, err := creds.ResolveCredential(ctx, "openai-compatible")
 	refused(t, err)
 	h.store.SetKeyField(org, "local", "base_url", "https://user:pass@llm.example.com/v1")
 	_, err = creds.ResolveCredential(ctx, "openai-compatible")
@@ -168,9 +177,18 @@ func TestCredentialsCheckTheKeyOnEveryCall(t *testing.T) {
 	if strings.Contains(err.Error(), "pass") {
 		t.Errorf("the refusal quotes the URL: %v", err)
 	}
+	// A literal address needs no lookup, and is refused here already.
+	for _, u := range []string{"https://10.0.0.5/v1", "https://169.254.169.254/latest", "https://203.0.113.7/v1"} {
+		h.store.SetKeyField(org, "local", "base_url", u)
+		_, err = creds.ResolveCredential(ctx, "openai-compatible")
+		refused(t, err)
+	}
 	h.store.SetKeyField(org, "local", "base_url", "https://llm.example.com/v1")
 
 	h.store.RestrictKey(org, "local", "p1")
 	_, err = creds.ResolveCredential(ctx, "openai-compatible")
 	refused(t, err)
+	if lookups.Load() != 0 {
+		t.Fatalf("calls looked the host up %d times", lookups.Load())
+	}
 }

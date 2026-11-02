@@ -29500,11 +29500,15 @@
       "AgentBudgetInputBody": {
         "type": "object",
         "required": [
-          "monthly_budget_usd"
+          "monthly_budget_usd",
+          "revision"
         ],
         "properties": {
           "monthly_budget_usd": {
             "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },

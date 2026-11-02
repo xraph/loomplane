@@ -164,6 +164,8 @@ type AgentUpdateInput struct {
 
 // AgentBudgetInput sets the agent's monthly budget, its allocation of the
 // workspace's. "0" releases it, which only an agent that's off can do.
+// Revision is the workspace AI settings' revision the caller read.
 type AgentBudgetInput struct {
 	MonthlyBudgetUSD string `json:"monthly_budget_usd"`
+	Revision         int64  `json:"revision"`
 }

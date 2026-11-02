@@ -284,7 +284,7 @@ func (h *harness) budget(t *testing.T, agent string) {
 	if _, err := h.ai.Update(context.Background(), admin, aisettings.UpdateInput{MonthlyBudgetUSD: &workspace, Revision: h.rev(t)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetBudget(context.Background(), admin, agent); err != nil {
+	if _, err := h.svc.SetBudget(context.Background(), admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: agent, Revision: h.rev(t)}); err != nil {
 		t.Fatal(err)
 	}
 }

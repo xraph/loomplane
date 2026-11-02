@@ -60,7 +60,9 @@ func (c *Credentials) ResolveCredential(ctx context.Context, providerName string
 	if k.Provider != providerName {
 		return provider.Credential{}, fmt.Errorf("agentsettings: refused a call to %s: the workspace's agent uses the %s key %q", providerName, k.Type, k.Name)
 	}
-	if err = s.checkKey(ctx, k); err != nil {
+	// The key may have changed since it was chosen. Where its host
+	// resolves now is checked at dial, by ProviderTransport.
+	if err = s.checkKeyStatic(k); err != nil {
 		return provider.Credential{}, refusal("use the agent's provider key", err)
 	}
 	if k.Provider == config.AIProviderOpenAICompatible && k.BaseURL == "" {

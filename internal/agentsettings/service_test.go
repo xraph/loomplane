@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/agentsettings"
@@ -370,11 +371,11 @@ func TestBudgetState(t *testing.T) {
 func TestSetBudgetAllocatesTheAgentScope(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	if _, err := h.svc.SetBudget(ctx, developer, "10"); !errors.Is(err, security.ErrForbidden) {
+	if _, err := h.svc.SetBudget(ctx, developer, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "10", Revision: h.rev(t)}); !errors.Is(err, security.ErrForbidden) {
 		t.Errorf("developer: %v", err)
 	}
 	// More than the workspace budget leaves.
-	if _, err := h.svc.SetBudget(ctx, admin, "10"); !errors.Is(err, aisettings.ErrOverBudget) {
+	if _, err := h.svc.SetBudget(ctx, admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "10", Revision: h.rev(t)}); !errors.Is(err, aisettings.ErrOverBudget) {
 		t.Errorf("over the workspace budget: %v", err)
 	}
 	h.budget(t, "30")
@@ -382,7 +383,7 @@ func TestSetBudgetAllocatesTheAgentScope(t *testing.T) {
 	if err != nil || a.Label != "Infra agent" || a.MonthlyBudgetUSD != "30.00" || a.ProjectID != "" {
 		t.Fatalf("allocation %+v %v", a, err)
 	}
-	if _, nerr := h.svc.SetBudget(ctx, admin, "-1"); !errors.Is(nerr, agentsettings.ErrInvalid) && !errors.Is(nerr, aisettings.ErrInvalid) {
+	if _, nerr := h.svc.SetBudget(ctx, admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "-1", Revision: h.rev(t)}); !errors.Is(nerr, agentsettings.ErrInvalid) && !errors.Is(nerr, aisettings.ErrInvalid) {
 		t.Errorf("negative: %v", nerr)
 	}
 
@@ -390,19 +391,19 @@ func TestSetBudgetAllocatesTheAgentScope(t *testing.T) {
 	// go to zero.
 	h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(true)})
 	h.gw.take()
-	v, err := h.svc.SetBudget(ctx, admin, "40")
+	v, err := h.svc.SetBudget(ctx, admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "40", Revision: h.rev(t)})
 	if err != nil || v.Budget.LimitUSD != "40.00" {
 		t.Fatalf("raise: %+v %v", v, err)
 	}
 	if got := h.gw.take(); !slices.Equal(got, []string{"budget tenant_o 40.00"}) {
 		t.Errorf("gateway %v", got)
 	}
-	_, err = h.svc.SetBudget(ctx, admin, "0")
+	_, err = h.svc.SetBudget(ctx, admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "0", Revision: h.rev(t)})
 	wantInvalid(t, err, "turn the agent off")
 
 	// Off, zero releases it.
 	h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(false)})
-	if _, err = h.svc.SetBudget(ctx, admin, "0"); err != nil {
+	if _, err = h.svc.SetBudget(ctx, admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "0", Revision: h.rev(t)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = h.ai.Allocation(ctx, org, agentsettings.AllocationScope); !errors.Is(err, aisettings.ErrNotFound) {
@@ -610,5 +611,52 @@ func TestALostClaimChangesNothing(t *testing.T) {
 	}
 	if on, _ := h.svc.Enabled(context.Background(), org); on {
 		t.Error("the agent is on")
+	}
+}
+
+// Two budget writes at the same revision: the first to claim the row sets
+// the agent's budget, and the other is stale and changes nothing.
+func TestConcurrentBudgetWritesOneWins(t *testing.T) {
+	h := newHarness(t)
+	h.budget(t, "25")
+	rev := h.rev(t)
+	amounts := []string{"30", "40"}
+	errs := make([]error, len(amounts))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, amount := range amounts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = h.svc.SetBudget(context.Background(), admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: amount, Revision: rev})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	won := -1
+	for i, err := range errs {
+		switch {
+		case err == nil && won < 0:
+			won = i
+		case errors.Is(err, agentsettings.ErrStale):
+		default:
+			t.Fatalf("writes: %v", errs)
+		}
+	}
+	if won < 0 {
+		t.Fatalf("no write won: %v", errs)
+	}
+	a, err := h.ai.Allocation(context.Background(), org, agentsettings.AllocationScope)
+	if err != nil || a.MonthlyBudgetUSD != amounts[won]+".00" {
+		t.Fatalf("allocation %+v %v, want the winner's %s", a, err, amounts[won])
+	}
+	if h.rev(t) <= rev {
+		t.Fatalf("the revision didn't move: %d", h.rev(t))
+	}
+
+	// A write at an old revision is stale, releasing included.
+	if _, err = h.svc.SetBudget(context.Background(), admin, agentsettings.AgentBudgetInput{MonthlyBudgetUSD: "0", Revision: rev}); !errors.Is(err, agentsettings.ErrStale) {
+		t.Fatalf("stale release: %v", err)
 	}
 }

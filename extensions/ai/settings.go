@@ -25,7 +25,7 @@ type budgetAPI interface {
 type agentAPI interface {
 	Get(ctx context.Context, p security.Principal) (*agentsettings.AgentView, error)
 	Update(ctx context.Context, p security.Principal, in agentsettings.AgentUpdateInput) (*agentsettings.AgentView, error)
-	SetBudget(ctx context.Context, p security.Principal, amount string) (*agentsettings.AgentView, error)
+	SetBudget(ctx context.Context, p security.Principal, in agentsettings.AgentBudgetInput) (*agentsettings.AgentView, error)
 	PutProviderKey(ctx context.Context, p security.Principal, name string, in aisettings.ProviderKeyInput) (*aisettings.ProviderKey, error)
 	DeleteProviderKey(ctx context.Context, p security.Principal, name string) error
 }
@@ -176,9 +176,9 @@ func (h settingsHandlers) setAgentBudget(c forge.Context) error {
 		return err
 	}
 	var in agentsettings.AgentBudgetInput
-	if berr := bind(c, &in, `{"monthly_budget_usd": "25"}`); berr != nil {
+	if berr := bind(c, &in, `{"monthly_budget_usd": "25", "revision": 3}`); berr != nil {
 		return berr
 	}
-	out, err := h.agent.SetBudget(c.Request().Context(), p, in.MonthlyBudgetUSD)
+	out, err := h.agent.SetBudget(c.Request().Context(), p, in)
 	return answer(c, http.StatusOK, out, err)
 }
