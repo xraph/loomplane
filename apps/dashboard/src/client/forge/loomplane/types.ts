@@ -1329,6 +1329,7 @@ export interface CompositionConfig {
 
 export interface CompromisedRevoke {
   joinedNodes: Node[];
+  joinedNodesWithheld: boolean;
   revoked: APIKey;
 }
 
@@ -3094,7 +3095,7 @@ export interface NodeJoinBody {
   name?: string;
   nodeVersion: string;
   protocolVersion: number;
-  publicKey: number[];
+  publicKey: string;
   token: string;
 }
 

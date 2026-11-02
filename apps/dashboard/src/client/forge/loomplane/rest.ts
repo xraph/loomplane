@@ -477,10 +477,12 @@ export class RESTClient extends Client {
     /**
      * Revoke an API key, at once. With compromised=true, also list the nodes that joined with a token it made.
      */
-    revoke: async (id: string, compromised?: boolean, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CompromisedRevoke | void> => {
+    revoke: async (id: string, compromised?: boolean | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CompromisedRevoke | void> => {
       let __path = `/api/v1/api-keys/${encodeURIComponent(String(id))}`;
       const queryParams: Record<string, any> = {};
-      queryParams['compromised'] = compromised;
+      if (compromised !== undefined) {
+        queryParams['compromised'] = compromised;
+      }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;

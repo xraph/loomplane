@@ -427,7 +427,6 @@
           {
             "name": "compromised",
             "in": "query",
-            "required": true,
             "schema": {
               "type": "boolean"
             }
@@ -31823,7 +31822,8 @@
         "type": "object",
         "required": [
           "revoked",
-          "joined_nodes"
+          "joined_nodes",
+          "joined_nodes_withheld"
         ],
         "properties": {
           "joined_nodes": {
@@ -31831,6 +31831,9 @@
             "items": {
               "$ref": "#/components/schemas/Node"
             }
+          },
+          "joined_nodes_withheld": {
+            "type": "boolean"
           },
           "revoked": {
             "$ref": "#/components/schemas/APIKey"
@@ -32133,10 +32136,7 @@
             "type": "integer"
           },
           "public_key": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
+            "type": "string"
           },
           "token": {
             "type": "string"
