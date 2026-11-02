@@ -30,6 +30,8 @@ var (
 	// ErrWidenRemotely is returned when an update would add endpoints. Only
 	// the machine's owner can widen what it serves.
 	ErrWidenRemotely = errors.New("add endpoints on the machine with: loomctl node allow <endpoint>")
+	// ErrNonceUsed is returned when a challenge nonce has been spent already.
+	ErrNonceUsed = errors.New("nodes: challenge nonce already used")
 )
 
 // Node is one machine in an org.
@@ -101,4 +103,15 @@ type Store interface {
 	// ReleaseSession deletes the session only when its epoch matches.
 	ReleaseSession(ctx context.Context, nodeID string, epoch int64) error
 	MarkStaleOffline(ctx context.Context, before time.Time) ([]string, error)
+	// ApplyInventory writes a node's reported inventory, version and protocol
+	// version on a node that is not revoked. It never touches endpoints or
+	// status: Inventory.Endpoints is informational.
+	ApplyInventory(ctx context.Context, id string, inv nodeproto.Inventory, version string, protocolVersion int) error
+	// AllowEndpoints adds endpoints the machine's owner allowed on the machine
+	// to a node that is not revoked, and returns the stored node.
+	AllowEndpoints(ctx context.Context, id string, add []nodeproto.Endpoint) (*Node, error)
+	// UseNonce spends a challenge nonce. A second use gives ErrNonceUsed.
+	UseNonce(ctx context.Context, nonce string, expires time.Time) error
+	// DeleteExpiredNonces drops spent nonces that expired before now.
+	DeleteExpiredNonces(ctx context.Context, now time.Time) error
 }

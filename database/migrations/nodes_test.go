@@ -47,3 +47,19 @@ func TestNodeEventsIgnoreHeartbeats(t *testing.T) {
 		t.Fatal("down dropped tables that hold nodes")
 	}
 }
+
+func TestNodeNoncesAreSingleUse(t *testing.T) {
+	conn, ex := scratch(t)
+	if _, err := migrate.NewOrchestrator(ex, Group()).Migrate(t.Context()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	up(t, ex, "node_nonces")
+	exec(t, conn, `INSERT INTO loomplane_node_nonces (nonce,expires_at) VALUES ('n1',now())`)
+	if _, err := conn.Exec(t.Context(), `INSERT INTO loomplane_node_nonces (nonce,expires_at) VALUES ('n1',now())`); err == nil {
+		t.Fatal("a nonce was stored twice")
+	}
+	down(t, ex, "node_nonces")
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_tables WHERE tablename='loomplane_node_nonces'`); got[0] != "0" {
+		t.Fatalf("down left the table: %v", got)
+	}
+}

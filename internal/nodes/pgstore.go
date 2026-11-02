@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -289,4 +290,51 @@ func (s *PgStore) MarkStaleOffline(ctx context.Context, before time.Time) ([]str
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// ApplyInventory writes the inventory, version and protocol version a node
+// reported, on a node that is not revoked. Endpoints and status stay as they
+// are. Inventory is not in the event payload; a version change is.
+func (s *PgStore) ApplyInventory(ctx context.Context, id string, inv nodeproto.Inventory, version string, protocolVersion int) error {
+	raw, err := json.Marshal(inv)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET inventory=$2,version=$3,protocol_version=$4,updated_at=now() WHERE id=$1 AND revoked_at IS NULL`, id, raw, version, protocolVersion)
+	return affected(res, err)
+}
+
+// AllowEndpoints unions add into the endpoints of a node that is not revoked,
+// keeping the stored order and appending what is new.
+func (s *PgStore) AllowEndpoints(ctx context.Context, id string, add []nodeproto.Endpoint) (*Node, error) {
+	uniq := []nodeproto.Endpoint{}
+	for _, e := range add {
+		if !slices.Contains(uniq, e) {
+			uniq = append(uniq, e)
+		}
+	}
+	raw, err := json.Marshal(uniq)
+	if err != nil {
+		return nil, err
+	}
+	return scanNode(s.db.QueryRow(ctx, `UPDATE loomplane_nodes SET endpoints=endpoints||COALESCE((SELECT jsonb_agg(x.e ORDER BY x.i) FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY AS x(e,i) WHERE NOT loomplane_nodes.endpoints @> jsonb_build_array(x.e)),'[]'::jsonb),updated_at=now() WHERE id=$1 AND revoked_at IS NULL RETURNING `+nodeColumns, id, string(raw)))
+}
+
+// UseNonce records a challenge nonce as spent. The primary key makes a second
+// use, on any replica, fail with ErrNonceUsed.
+func (s *PgStore) UseNonce(ctx context.Context, nonce string, expires time.Time) error {
+	res, err := s.db.Exec(ctx, `INSERT INTO loomplane_node_nonces(nonce,expires_at) VALUES($1,$2) ON CONFLICT (nonce) DO NOTHING`, nonce, expires)
+	if err := affected(res, err); errors.Is(err, ErrNotFound) {
+		return ErrNonceUsed
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteExpiredNonces drops spent nonces whose expiry is before now. They
+// can't be replayed anyway, since an expired nonce is refused before use.
+func (s *PgStore) DeleteExpiredNonces(ctx context.Context, now time.Time) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM loomplane_node_nonces WHERE expires_at < $1`, now)
+	return err
 }

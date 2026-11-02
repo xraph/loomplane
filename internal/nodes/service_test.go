@@ -16,14 +16,25 @@ import (
 )
 
 type fakeStore struct {
-	mu    sync.Mutex
-	nodes map[string]*Node
-	fail  error
+	mu       sync.Mutex
+	nodes    map[string]*Node
+	epochs   map[string]int64
+	sessions map[string]Session
+	nonces   map[string]time.Time
+	touches  map[string]int
+	fail     error
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{nodes: map[string]*Node{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{nodes: map[string]*Node{}, epochs: map[string]int64{}, sessions: map[string]Session{},
+		nonces: map[string]time.Time{}, touches: map[string]int{}}
+}
 
-func clone(n *Node) *Node { c := *n; return &c }
+func clone(n *Node) *Node {
+	c := *n
+	c.Endpoints = slices.Clone(n.Endpoints)
+	return &c
+}
 
 func (f *fakeStore) Create(_ context.Context, n *Node) error {
 	f.mu.Lock()
@@ -77,9 +88,15 @@ func (f *fakeStore) ListJoinedByKey(_ context.Context, org, keyID string) ([]Nod
 	}
 	return out, nil
 }
-func (f *fakeStore) Update(_ context.Context, n *Node) error {
+func (f *fakeStore) Update(ctx context.Context, n *Node) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail != nil {
+		return f.fail
+	}
 	old, ok := f.nodes[n.ID]
 	if !ok || old.OrgID != n.OrgID {
 		return ErrNotFound
@@ -119,18 +136,114 @@ func (f *fakeStore) UpdateSettings(_ context.Context, org, id string, u Settings
 	}
 	return clone(n), nil
 }
-func (f *fakeStore) Touch(context.Context, string, time.Time, nodeproto.Usage) error { return nil }
+func (f *fakeStore) Touch(_ context.Context, id string, at time.Time, _ nodeproto.Usage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok {
+		return ErrNotFound
+	}
+	n.LastSeenAt = &at
+	f.touches[id]++
+	return nil
+}
 func (f *fakeStore) SetStatus(_ context.Context, id string, s Status) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.nodes[id].Status = s
+	n, ok := f.nodes[id]
+	if !ok || (n.RevokedAt != nil && s != StatusRevoked) {
+		return ErrNotFound
+	}
+	n.Status = s
 	return nil
 }
-func (f *fakeStore) ClaimSession(context.Context, Session) (int64, error) { return 1, nil }
-func (f *fakeStore) Session(context.Context, string) (*Session, error)    { return nil, ErrNotFound }
-func (f *fakeStore) ReleaseSession(context.Context, string, int64) error  { return nil }
-func (f *fakeStore) MarkStaleOffline(context.Context, time.Time) ([]string, error) {
-	return nil, nil
+func (f *fakeStore) ClaimSession(_ context.Context, s Session) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[s.NodeID]
+	if !ok || n.RevokedAt != nil {
+		return 0, ErrNotFound
+	}
+	f.epochs[s.NodeID]++
+	s.Epoch = f.epochs[s.NodeID]
+	f.sessions[s.NodeID] = s
+	return s.Epoch, nil
+}
+func (f *fakeStore) Session(_ context.Context, id string) (*Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &s, nil
+}
+func (f *fakeStore) ReleaseSession(_ context.Context, id string, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.sessions[id]; ok && s.Epoch == epoch {
+		delete(f.sessions, id)
+	}
+	return nil
+}
+func (f *fakeStore) MarkStaleOffline(_ context.Context, before time.Time) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ids := []string{}
+	for _, n := range f.nodes {
+		seen := n.UpdatedAt
+		if n.LastSeenAt != nil {
+			seen = *n.LastSeenAt
+		}
+		if n.Status == StatusOnline && seen.Before(before) {
+			n.Status = StatusOffline
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids, nil
+}
+func (f *fakeStore) ApplyInventory(_ context.Context, id string, inv nodeproto.Inventory, version string, proto int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return ErrNotFound
+	}
+	n.Inventory, n.Version, n.ProtocolVersion = inv, version, proto
+	return nil
+}
+func (f *fakeStore) AllowEndpoints(_ context.Context, id string, add []nodeproto.Endpoint) (*Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nil, ErrNotFound
+	}
+	for _, e := range add {
+		if !slices.Contains(n.Endpoints, e) {
+			n.Endpoints = append(n.Endpoints, e)
+		}
+	}
+	return clone(n), nil
+}
+func (f *fakeStore) UseNonce(_ context.Context, nonce string, exp time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.nonces[nonce]; ok {
+		return ErrNonceUsed
+	}
+	f.nonces[nonce] = exp
+	return nil
+}
+func (f *fakeStore) DeleteExpiredNonces(_ context.Context, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, exp := range f.nonces {
+		if exp.Before(now) {
+			delete(f.nonces, k)
+		}
+	}
+	return nil
 }
 
 type fakeTokens struct {

@@ -454,3 +454,137 @@ func TestUnchangedUpdateSettingsAppendsNoEvent(t *testing.T) {
 		t.Fatalf("events %d -> %d %v", before, after, err)
 	}
 }
+
+func countNodeEvents(t *testing.T, conn *pgx.Conn) int {
+	t.Helper()
+	var c int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_events WHERE type='node.updated'`).Scan(&c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestApplyInventoryWritesOnlyItsColumns(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	n := newNode("node_1", "org_1", "web-1")
+	n.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe}
+	if err := s.Create(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
+		t.Fatal(err)
+	}
+	before := countNodeEvents(t, conn)
+
+	// Inventory alone is not in the event payload, so it appends nothing.
+	inv := nodeproto.Inventory{OS: "linux", CPUs: 16, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}}
+	if err := s.ApplyInventory(ctx, "node_1", inv, "1.0.0", 1); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetByID(ctx, "node_1")
+	if got.Inventory.CPUs != 16 || got.Status != StatusOnline || len(got.Endpoints) != 1 || got.Endpoints[0] != nodeproto.EndpointProbe {
+		t.Fatalf("node %+v", got)
+	}
+	if c := countNodeEvents(t, conn); c != before {
+		t.Fatalf("inventory-only change appended events: %d -> %d", before, c)
+	}
+
+	// A version change is in the payload, so it appends one.
+	if err := s.ApplyInventory(ctx, "node_1", inv, "1.1.0", 1); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetByID(ctx, "node_1")
+	if got.Version != "1.1.0" || got.ProtocolVersion != 1 {
+		t.Fatalf("version %q protocol %d", got.Version, got.ProtocolVersion)
+	}
+	if c := countNodeEvents(t, conn); c != before+1 {
+		t.Fatalf("version change events: %d -> %d", before, c)
+	}
+
+	if err := s.ApplyInventory(ctx, "nope", inv, "1.1.0", 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	now := time.Now().UTC()
+	got.RevokedAt, got.RevokedBy = &now, "usr_1"
+	if err := s.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyInventory(ctx, "node_1", nodeproto.Inventory{OS: "plan9"}, "9.9.9", 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked: %v", err)
+	}
+	got, _ = s.GetByID(ctx, "node_1")
+	if got.Inventory.OS != "linux" || got.Version != "1.1.0" {
+		t.Fatalf("revoked node changed: %+v", got)
+	}
+}
+
+func TestAllowEndpointsUnions(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	n := newNode("node_1", "org_1", "web-1")
+	n.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe}
+	if err := s.Create(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
+		t.Fatal(err)
+	}
+	before := countNodeEvents(t, conn)
+	got, err := s.AllowEndpoints(ctx, "node_1", []nodeproto.Endpoint{nodeproto.EndpointDocker, nodeproto.EndpointProbe, nodeproto.EndpointDocker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker}
+	if fmt.Sprint(got.Endpoints) != fmt.Sprint(want) || got.Status != StatusOnline {
+		t.Fatalf("node %+v", got)
+	}
+	if c := countNodeEvents(t, conn); c != before+1 {
+		t.Fatalf("widen events: %d -> %d", before, c)
+	}
+	// Allowing what is already there changes nothing.
+	got, err = s.AllowEndpoints(ctx, "node_1", []nodeproto.Endpoint{nodeproto.EndpointDocker})
+	if err != nil || fmt.Sprint(got.Endpoints) != fmt.Sprint(want) {
+		t.Fatalf("again: %v %+v", err, got)
+	}
+	if c := countNodeEvents(t, conn); c != before+1 {
+		t.Fatalf("no-op allow appended events: %d", c)
+	}
+
+	now := time.Now().UTC()
+	got.RevokedAt, got.RevokedBy = &now, "usr_1"
+	if err := s.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AllowEndpoints(ctx, "node_1", []nodeproto.Endpoint{nodeproto.EndpointKube}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked: %v", err)
+	}
+	if _, err := s.AllowEndpoints(ctx, "nope", []nodeproto.Endpoint{nodeproto.EndpointKube}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+}
+
+func TestUseNonceOnce(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	exp := time.Now().Add(time.Minute)
+	if err := s.UseNonce(ctx, "n1", exp); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UseNonce(ctx, "n1", exp); !errors.Is(err, ErrNonceUsed) {
+		t.Fatalf("replay: %v", err)
+	}
+	if err := s.UseNonce(ctx, "n2", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteExpiredNonces(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// The expired row is gone; the live one still refuses a replay.
+	if err := s.UseNonce(ctx, "n2", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("expired row kept: %v", err)
+	}
+	if err := s.UseNonce(ctx, "n1", exp); !errors.Is(err, ErrNonceUsed) {
+		t.Fatalf("live row pruned: %v", err)
+	}
+}
