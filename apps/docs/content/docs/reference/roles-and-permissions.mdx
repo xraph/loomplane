@@ -53,6 +53,16 @@ The `ai` permissions belong to the [AI section](/docs/ai). Today `ai:read` lets 
 
 A secret variable's value isn't readable by anyone, whatever their role.
 
+## Teams
+
+A [team](/docs/concepts/teams) can give viewer, developer or admin, on the whole workspace or on one project, and never owner. Loomplane copies the team's role onto each member as a role of their own, so a team's role is checked the same way a direct one is. Your effective role is the highest of your own and your teams'. The roles nest, so the highest one holds everything the lower ones do.
+
+A project role only counts on that project. Workspace actions such as creating projects, managing members and managing clouds still check your workspace role. An admin role on a project lets its members delete that project, manage its secrets and choose its cloud connection.
+
+`session.permissions` and `loomctl whoami` list your workspace-wide permissions. To see what you hold on one project, team roles included, call `GET /api/v1/projects/{id}/permissions`. Project pages in the dashboard do this for you.
+
+Loomplane's sync is the only writer of a person's Warden roles. A change made in Warden's console is undone the next time that person syncs, so make role changes in Loomplane. Each replica also opens up to 4 extra database connections for the sync lock, so leave `max_connections` headroom.
+
 ## API keys
 
 A key acts as the member who made it, with their role, in their organization, and never more. A read-only key fails every permission that isn't a read. Keys can't manage keys. When a member leaves or loses a role, their keys lose the same rights on the next request.
