@@ -1,11 +1,19 @@
 package aiagent
 
-import cortexengine "github.com/xraph/cortex/engine"
+import (
+	cortexengine "github.com/xraph/cortex/engine"
 
-// toolOptions are the engine options that give cortex the agent's
-// operations, one tool each. Cortex fixes its tools when it builds its
-// engine, so this is the one place every plan's operations go in. The
-// operation registry (Task 12) fills it; 3c and 3d each add their own.
+	"github.com/xraph/loomplane/internal/agentops"
+)
+
+// registerOps registers every operation the agent can call. Cortex fixes
+// its tools when it builds its engine, so this is the one place every
+// plan's operations go in; 3c and 3d each add a line.
+func registerOps(r *agentops.Registry, d *agentops.Deps) {
+	agentops.Builtins(r, d)
+}
+
+// toolOptions give cortex the agent's operations, one tool each.
 func (e *Extension) toolOptions() []cortexengine.Option {
-	return nil
+	return e.ops.EngineOptions()
 }

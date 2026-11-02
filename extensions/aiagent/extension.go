@@ -32,6 +32,7 @@ import (
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
+	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
@@ -71,6 +72,12 @@ type Extension struct {
 	db       *grove.DB
 	binder   *agentscope.Binder
 	scanner  *agentsafety.Scanner
+
+	// ops are the agent's operations, registered in New because cortex
+	// takes its tools when it builds its engine; Register fills deps, which
+	// the operations read at call time.
+	ops  *agentops.Registry
+	deps *agentops.Deps
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -81,7 +88,10 @@ func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "The AI infra agent"),
 		cfg:           cfg,
 		jobs:          jobs,
+		ops:           agentops.NewRegistry(),
+		deps:          &agentops.Deps{},
 	}
+	registerOps(e.ops, e.deps)
 	e.buildLibraries()
 	return e
 }
@@ -144,6 +154,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	if err = forge.ProvideValue(c, e.scanner); err != nil {
 		return fmt.Errorf("provide the agent's safety scanner: %w", err)
+	}
+	if depsErr := e.fillDeps(c, projectSvc); depsErr != nil {
+		return depsErr
+	}
+	if err = forge.ProvideValue(c, e.ops); err != nil {
+		return fmt.Errorf("provide the agent's operations: %w", err)
 	}
 	return mountRoutes(fapp.Router(), guard, settings, projectSvc)
 }
