@@ -173,7 +173,7 @@ func TestClaimSessionEpochs(t *testing.T) {
 		t.Fatalf("session after release: %v", err)
 	}
 	// Epochs keep rising after a release.
-	if e3, err := s.ClaimSession(ctx, Session{NodeID: "node_1", ConnectedAt: at}); err != nil || e3 < 1 {
+	if e3, err := s.ClaimSession(ctx, Session{NodeID: "node_1", ConnectedAt: at}); err != nil || e3 != 3 {
 		t.Fatalf("claim after release: %d %v", e3, err)
 	}
 	if _, err = s.ClaimSession(ctx, Session{NodeID: "ghost", ConnectedAt: at}); !errors.Is(err, ErrNotFound) {
@@ -240,5 +240,148 @@ func TestMarkStaleOffline(t *testing.T) {
 	}
 	if err = s.SetStatus(ctx, "nope", StatusOnline); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("set status missing: %v", err)
+	}
+}
+
+func TestStaleReleaseKeepsNewSession(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	claim := func(replica string) int64 {
+		e, err := s.ClaimSession(ctx, Session{NodeID: "node_1", Replica: replica, ConnectedAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	claim("r1")
+	claim("r2")
+	if err := s.ReleaseSession(ctx, "node_1", 2); err != nil {
+		t.Fatal(err)
+	}
+	if e := claim("r3"); e != 3 {
+		t.Fatalf("epoch: %d", e)
+	}
+	for _, stale := range []int64{1, 2} {
+		if err := s.ReleaseSession(ctx, "node_1", stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sess, err := s.Session(ctx, "node_1"); err != nil || sess.Epoch != 3 || sess.Replica != "r3" {
+		t.Fatalf("session: %+v %v", sess, err)
+	}
+}
+
+func revoke(t *testing.T, s *PgStore, id string) {
+	t.Helper()
+	n, err := s.GetByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	n.Status, n.RevokedAt, n.RevokedBy = StatusRevoked, &now, "usr_1"
+	if err = s.Update(t.Context(), n); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimRefusesRevoked(t *testing.T) {
+	s, _ := testStore(t)
+	if err := s.Create(t.Context(), newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	revoke(t, s, "node_1")
+	if _, err := s.ClaimSession(t.Context(), Session{NodeID: "node_1", ConnectedAt: time.Now()}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("claim on revoked: %v", err)
+	}
+	if _, err := s.Session(t.Context(), "node_1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("session row: %v", err)
+	}
+}
+
+func TestStaleUpdateStaysRevoked(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := s.GetByID(ctx, "node_1")
+	revoke(t, s, "node_1")
+	revoked, _ := s.GetByID(ctx, "node_1")
+	stale.Version = "9.9.9"
+	stale.Status = StatusOnline
+	if err := s.Update(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetByID(ctx, "node_1")
+	if got.Status != StatusRevoked || got.RevokedAt == nil || !got.RevokedAt.Equal(*revoked.RevokedAt) || got.RevokedBy != "usr_1" || got.Version != "9.9.9" {
+		t.Fatalf("after stale update: %+v", got)
+	}
+}
+
+func TestSetStatusAfterRevoke(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	revoke(t, s, "node_1")
+	if err := s.SetStatus(ctx, "node_1", StatusOnline); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("set online after revoke: %v", err)
+	}
+	if got, _ := s.GetByID(ctx, "node_1"); got.Status != StatusRevoked {
+		t.Fatalf("status: %s", got.Status)
+	}
+	if err := s.SetStatus(ctx, "node_1", StatusRevoked); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarkStaleOfflineWithoutLastSeen(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	n := newNode("node_1", "org_1", "web-1")
+	n.Status = StatusOnline
+	if err := s.Create(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE loomplane_nodes SET updated_at=now()-interval '10 minutes' WHERE id='node_1'`); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := s.MarkStaleOffline(ctx, time.Now().Add(-45*time.Second))
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("stale: %v %v", ids, err)
+	}
+}
+
+func TestUnchangedUpdateAppendsNoEvent(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := s.GetByID(ctx, "node_1")
+	if err := s.Update(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	var c int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_events WHERE type='node.updated'`).Scan(&c); err != nil || c != 1 {
+		t.Fatalf("events: %d %v", c, err)
+	}
+}
+
+func TestCreateDefaults(t *testing.T) {
+	s, _ := testStore(t)
+	n := newNode("node_1", "org_1", "web-1")
+	n.IdentityGeneration, n.CreatedAt, n.UpdatedAt = 0, time.Time{}, time.Time{}
+	if err := s.Create(t.Context(), n); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetByID(t.Context(), "node_1")
+	if got.IdentityGeneration != 1 || got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatalf("defaults: %+v", got)
 	}
 }

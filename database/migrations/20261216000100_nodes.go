@@ -28,6 +28,7 @@ func init() {
 	protocol_version INTEGER NOT NULL DEFAULT 0,
 	inventory JSONB NOT NULL DEFAULT '{}',
 	usage JSONB NOT NULL DEFAULT '{}',
+	session_epoch BIGINT NOT NULL DEFAULT 0,
 	last_seen_at TIMESTAMPTZ,
 	joined_by TEXT NOT NULL DEFAULT '',
 	joined_by_key_id TEXT NOT NULL DEFAULT '',

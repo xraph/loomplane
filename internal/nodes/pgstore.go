@@ -36,7 +36,9 @@ func storeError(err error) error {
 	if errors.As(err, &pe) {
 		switch pe.Code {
 		case "23505":
-			return ErrNameTaken
+			if pe.ConstraintName == "loomplane_nodes_live_name" {
+				return ErrNameTaken
+			}
 		case "23503":
 			return ErrNotFound
 		}
@@ -97,6 +99,17 @@ func encode(n *Node) (endpoints, labels, inventory []byte, err error) {
 // Create inserts n. It returns ErrNameTaken when a live node of the org has
 // the name.
 func (s *PgStore) Create(ctx context.Context, n *Node) error {
+	if n.IdentityGeneration == 0 {
+		n.IdentityGeneration = 1
+	}
+	if now := time.Now().UTC(); n.CreatedAt.IsZero() || n.UpdatedAt.IsZero() {
+		if n.CreatedAt.IsZero() {
+			n.CreatedAt = now
+		}
+		if n.UpdatedAt.IsZero() {
+			n.UpdatedAt = now
+		}
+	}
 	endpoints, labels, inventory, err := encode(n)
 	if err != nil {
 		return err
@@ -145,13 +158,14 @@ func (s *PgStore) ListJoinedByKey(ctx context.Context, org, keyID string) ([]Nod
 }
 
 // Update saves everything but the heartbeat columns, the org and the creation
-// time.
+// time. Revocation is final: a revoked node stays revoked, with its original
+// time and revoker, whatever the caller's copy says.
 func (s *PgStore) Update(ctx context.Context, n *Node) error {
 	endpoints, labels, inventory, err := encode(n)
 	if err != nil {
 		return err
 	}
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET name=$3,public_key=$4,key_fingerprint=$5,identity_generation=$6,status=$7,endpoints=$8,ingress_mode=$9,role=$10,edge_scope=$11,labels=$12,version=$13,protocol_version=$14,inventory=$15,joined_by=$16,joined_by_key_id=$17,revoked_at=$18,revoked_by=$19,updated_at=now() WHERE org_id=$1 AND id=$2`,
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET name=$3,public_key=$4,key_fingerprint=$5,identity_generation=$6,status=CASE WHEN COALESCE(loomplane_nodes.revoked_at,$18::timestamptz) IS NOT NULL THEN 'revoked' ELSE $7 END,endpoints=$8,ingress_mode=$9,role=$10,edge_scope=$11,labels=$12,version=$13,protocol_version=$14,inventory=$15,joined_by=$16,joined_by_key_id=$17,revoked_at=COALESCE(loomplane_nodes.revoked_at,$18::timestamptz),revoked_by=CASE WHEN loomplane_nodes.revoked_at IS NOT NULL THEN loomplane_nodes.revoked_by ELSE $19 END,updated_at=now() WHERE org_id=$1 AND id=$2`,
 		n.OrgID, n.ID, n.Name, n.PublicKey, n.KeyFingerprint, n.IdentityGeneration, string(n.Status), endpoints, n.IngressMode, n.Role, n.EdgeScope, labels, n.Version, n.ProtocolVersion, inventory, n.JoinedBy, n.JoinedByKeyID, n.RevokedAt, n.RevokedBy)
 	return affected(res, err)
 }
@@ -181,18 +195,21 @@ func (s *PgStore) Touch(ctx context.Context, id string, at time.Time, usage node
 	return affected(res, err)
 }
 
-// SetStatus moves a node to s.
+// SetStatus moves a node to st. Once a node is revoked only 'revoked' is
+// accepted.
 func (s *PgStore) SetStatus(ctx context.Context, id string, st Status) error {
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET status=$2,updated_at=now() WHERE id=$1`, id, string(st))
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET status=$2,updated_at=now() WHERE id=$1 AND (revoked_at IS NULL OR $2='revoked')`, id, string(st))
 	return affected(res, err)
 }
 
-// ClaimSession takes the node's session for a replica, raising its epoch by
-// one so an older connection is fenced. The first claim is epoch 1.
+// ClaimSession takes the node's session for a replica. The epoch is a counter
+// on the node row, so it keeps rising across releases and a stale connection
+// can never match a newer row. A missing or revoked node gives ErrNotFound.
 func (s *PgStore) ClaimSession(ctx context.Context, sess Session) (int64, error) {
 	var epoch int64
-	err := s.db.QueryRow(ctx, `INSERT INTO loomplane_node_sessions(node_id,epoch,replica,remote_addr,connected_at) VALUES($1,1,$2,$3,$4)
-ON CONFLICT (node_id) DO UPDATE SET epoch=loomplane_node_sessions.epoch+1,replica=EXCLUDED.replica,remote_addr=EXCLUDED.remote_addr,connected_at=EXCLUDED.connected_at
+	err := s.db.QueryRow(ctx, `WITH e AS (UPDATE loomplane_nodes SET session_epoch=session_epoch+1 WHERE id=$1 AND revoked_at IS NULL RETURNING session_epoch)
+INSERT INTO loomplane_node_sessions(node_id,epoch,replica,remote_addr,connected_at) SELECT $1,session_epoch,$2,$3,$4 FROM e
+ON CONFLICT (node_id) DO UPDATE SET epoch=EXCLUDED.epoch,replica=EXCLUDED.replica,remote_addr=EXCLUDED.remote_addr,connected_at=EXCLUDED.connected_at
 RETURNING epoch`, sess.NodeID, sess.Replica, sess.RemoteAddr, sess.ConnectedAt).Scan(&epoch)
 	if err != nil {
 		return 0, storeError(err)
@@ -222,7 +239,7 @@ func (s *PgStore) ReleaseSession(ctx context.Context, nodeID string, epoch int64
 // MarkStaleOffline sets online nodes last seen before the cutoff to offline
 // and returns their ids.
 func (s *PgStore) MarkStaleOffline(ctx context.Context, before time.Time) ([]string, error) {
-	rows, err := s.db.Query(ctx, `UPDATE loomplane_nodes SET status='offline',updated_at=now() WHERE status='online' AND last_seen_at < $1 RETURNING id`, before)
+	rows, err := s.db.Query(ctx, `UPDATE loomplane_nodes SET status='offline',updated_at=now() WHERE status='online' AND COALESCE(last_seen_at,updated_at) < $1 RETURNING id`, before)
 	if err != nil {
 		return nil, err
 	}
