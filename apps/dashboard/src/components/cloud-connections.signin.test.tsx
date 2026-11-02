@@ -334,8 +334,11 @@ it("offers sign in again for a refused sign-in, not a refused token", async () =
       <CloudAccount id="conn_do" />
     </ClientProvider>
   )
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "More account actions" }))
   expect(
-    await screen.findByRole("button", { name: "Replace credential" })
+    await screen.findByRole("menuitem", { name: "Replace credential" })
   ).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull()
 })

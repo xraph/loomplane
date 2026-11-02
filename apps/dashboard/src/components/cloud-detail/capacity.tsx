@@ -3,6 +3,7 @@
 // them. Pools never shrink on their own, and nothing grows while this
 // Loomplane keeps automatic expansion off.
 import type { UseQueryResult } from "@forge-go/client-react"
+import { GlobeIcon, ServerIcon, ZapIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -16,15 +17,24 @@ import type {
   Target,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
+import {
+  ActionsCell,
+  Cell,
+  CloudCallout,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  hourlyCost,
+} from "@/components/cloud-targets/cloud-page"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
-  CloudError,
   CloudEmpty,
   CloudSectionHead,
-  Row,
-  Rows,
+  StatePill,
+  statusWord,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { supports } from "@/components/cloud-targets/servers"
+import { ApproveIcon, PoolsIcon } from "@/components/icons"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
 import { Button } from "@/components/ui/button"
@@ -46,6 +56,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { blockText, conflictText, staleText } from "@/lib/capacity"
 import {
@@ -93,7 +104,7 @@ export function Capacity({
   cloudId: string
   pools: Pool[]
   connections: Connection[]
-  /** A pool was created here, so the page reads its pools again. */
+  /** A pool was added here, so the page reads its pools again. */
   onPoolsChanged?: () => void
 }) {
   const view = useQuery(api.useCloudCapacityGetPolicy, { path: { cloudId } })
@@ -113,27 +124,17 @@ export function Capacity({
   return (
     <div className="grid min-w-0 gap-6">
       {!automatic && (
-        <section
-          aria-label="Automatic expansion is off"
-          className="flex gap-3 rounded-xl bg-muted px-4 py-3 ring-1 ring-border"
+        <CloudCallout
+          tone="info"
+          icon={ZapIcon}
+          title="Automatic expansion isn't on for this Loomplane yet"
         >
-          <span
-            aria-hidden="true"
-            className="mt-1.5 size-2 shrink-0 rounded-full bg-muted-foreground/50"
-          />
-          <span className="grid gap-0.5">
-            <span className="text-[13px] font-semibold">
-              Automatic expansion isn&apos;t on for this Loomplane yet
-            </span>
-            <span className="text-[12.5px] leading-relaxed text-muted-foreground">
-              You can set the policy now and it&apos;s saved. Until expansion is
-              enabled on the server, pools don&apos;t grow on their own: a
-              deployment that doesn&apos;t fit waits for a server you add. Pools
-              never shrink on their own either; you drain and remove servers
-              yourself.
-            </span>
-          </span>
-        </section>
+          You can set the policy now and it&apos;s saved. Until expansion is
+          enabled on the server, pools don&apos;t grow on their own: a
+          deployment that doesn&apos;t fit waits for a server you add. Pools
+          never shrink on their own either; you drain and remove servers
+          yourself.
+        </CloudCallout>
       )}
       <CapacityUsage cloudId={cloudId} />
       <PolicyEditor
@@ -285,206 +286,210 @@ function PolicyEditor({
 
   return (
     <>
-      <section aria-label="Growth policy" className="grid min-w-0 gap-3">
+      <section aria-label="Growth policy" className="grid min-w-0 gap-2.5">
         <CloudSectionHead
           title="Growth policy"
           description={`When a deployment needs more room than a pool has, Loomplane may add a server within these limits.${base.revision ? ` Saved as revision ${base.revision}.` : " Not saved yet."}`}
-        >
-          {dirty && (
-            <Button variant="ghost" disabled={save.isPending} onClick={restart}>
-              Discard
-            </Button>
-          )}
-          <Button
-            disabled={!dirty || save.isPending || !targetsRead}
-            onClick={() => void submit()}
-          >
-            Save policy
-          </Button>
-        </CloudSectionHead>
-        <Rows>
-          <Row>
-            <FormField orientation="horizontal" className="flex-1">
-              <FieldLabel className="flex flex-1 items-center justify-between gap-4">
-                <span className="grid gap-0.5">
-                  <span className="text-[13px] font-medium">
-                    Let pools on this Cloud grow
-                  </span>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {automatic
-                      ? "Off keeps every pool at the servers it has."
-                      : "Off keeps every pool at the servers it has. On is saved, but nothing grows until automatic expansion is on for this Loomplane."}
-                  </span>
-                </span>
-                <Switch
-                  aria-label="Let pools on this Cloud grow"
-                  checked={draft.enabled}
-                  onCheckedChange={(enabled) => set({ enabled })}
-                />
-              </FieldLabel>
-            </FormField>
-          </Row>
-          <Row>
-            <FormField orientation="horizontal" className="flex-1">
-              <FieldLabel className="flex flex-1 items-center justify-between gap-4">
-                <span className="grid gap-0.5">
-                  <span className="text-[13px] font-medium">
-                    Ask before adding a server
-                  </span>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    Each new server waits below for someone to approve it. Off
-                    adds it as soon as a deployment needs it.
-                  </span>
-                </span>
-                <Switch
-                  aria-label="Ask before adding a server"
-                  checked={draft.approval}
-                  onCheckedChange={(approval) => set({ approval })}
-                />
-              </FieldLabel>
-            </FormField>
-          </Row>
-          <Row className="flex-wrap items-end gap-y-3">
-            <span className="grid min-w-48 flex-1 gap-0.5">
-              <span className="text-[13px] font-medium">
-                Most this Cloud may hold
-              </span>
-              <span className="text-xs text-muted-foreground">
-                Across every server it has, including ones it adds. Once saved,
-                these apply to servers you create, adopt or resize too, even
-                while pools don&apos;t grow.
-              </span>
-            </span>
-            <div className="col-span-full grid gap-2">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={!!draft.budget}
-                  onCheckedChange={(v) =>
-                    set({
-                      budget: v
-                        ? { hourly: "", horizon: "", hours: "24" }
-                        : undefined,
-                    })
-                  }
-                />
-                Limit provider costs
-              </label>
-              {draft.budget && (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {(
-                    [
-                      ["hourly", "Maximum USD / hour"],
-                      ["horizon", "Maximum USD over horizon"],
-                      ["hours", "Horizon hours"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <FormField key={key}>
-                      <FieldLabel>{label}</FieldLabel>
-                      <Input
-                        inputMode="decimal"
-                        value={draft.budget![key]}
-                        onChange={(e) =>
-                          set({
-                            budget: { ...draft.budget!, [key]: e.target.value },
-                          })
-                        }
-                      />
-                    </FormField>
-                  ))}
-                </div>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Your exact amounts set the budget limits. Unknown charges need a
-                separate manual review and block automatic growth.
-              </p>
-            </div>
-            {ceilings.map((c) => (
-              <TextAmount
-                key={c.key}
-                label={c.label}
-                value={draft.ceilings[c.key]}
-                whole={c.whole}
-                onChange={(v) => setCeiling(c.key, v)}
-              />
-            ))}
-            {kinds.map((kind) => (
-              <TextAmount
-                key={kind}
-                label={`${gpuTitle(kind)} GPUs`}
-                value={draft.gpus[kind] ?? ""}
-                whole
-                onChange={(maximum) => {
-                  const gpus = { ...draft.gpus }
-                  // An empty GPU field is no ceiling at all, never 0.
-                  if (maximum.trim() === "") delete gpus[kind]
-                  else gpus[kind] = maximum
-                  set({ gpus })
-                }}
-              />
-            ))}
-            <AddGpuCeiling
-              used={kinds}
-              onAdd={(kind) => setAdded((a) => [...a, kind])}
+        />
+        <div className="min-w-0 overflow-hidden rounded-xl bg-card ring-1 ring-border">
+          <div className="divide-y">
+            <SwitchRow
+              label="Let pools on this Cloud grow"
+              hint={
+                automatic
+                  ? "Off keeps every pool at the servers it has."
+                  : "Off keeps every pool at the servers it has. On is saved, but nothing grows until automatic expansion is on for this Loomplane."
+              }
+              checked={draft.enabled}
+              onChange={(enabled) => set({ enabled })}
             />
-          </Row>
-          {(zeroTyped || stuckKinds.length > 0) && (
-            <Row className="grid gap-1 text-xs text-muted-foreground">
-              {zeroTyped && (
-                <span>
-                  A limit of 0 is a real limit: nothing more of it fits on this
-                  Cloud, including servers you add yourself.
+            <SwitchRow
+              label="Ask before adding a server"
+              hint="Each new server waits below for someone to approve it. Off adds it as soon as a deployment needs it."
+              checked={draft.approval}
+              onChange={(approval) => set({ approval })}
+            />
+            <div className="grid gap-3 px-4 py-3">
+              <span className="grid gap-0.5">
+                <span className="text-[13px] font-medium">
+                  Most this Cloud may hold
                 </span>
-              )}
-              {stuckKinds.map((k) => (
-                <span key={k}>
-                  {`Pools of ${gpuTitle(k)} can't grow until its GPU ceiling is above zero.`}
+                <span className="text-xs text-muted-foreground">
+                  Across every server it has, including ones it adds. Once
+                  saved, these apply to servers you create, adopt or resize too,
+                  even while pools don&apos;t grow.
                 </span>
-              ))}
-            </Row>
-          )}
-        </Rows>
-        {stale && (
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-[1_1_240px]">
-              <CloudError message={staleText} />
+              </span>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {ceilings.map((c) => (
+                  <TextAmount
+                    key={c.key}
+                    label={c.label}
+                    value={draft.ceilings[c.key]}
+                    whole={c.whole}
+                    onChange={(v) => setCeiling(c.key, v)}
+                  />
+                ))}
+                {kinds.map((kind) => (
+                  <TextAmount
+                    key={kind}
+                    label={`${gpuTitle(kind)} GPUs`}
+                    value={draft.gpus[kind] ?? ""}
+                    whole
+                    onChange={(maximum) => {
+                      const gpus = { ...draft.gpus }
+                      // An empty GPU field is no ceiling at all, never 0.
+                      if (maximum.trim() === "") delete gpus[kind]
+                      else gpus[kind] = maximum
+                      set({ gpus })
+                    }}
+                  />
+                ))}
+                <AddGpuCeiling
+                  used={kinds}
+                  onAdd={(kind) => setAdded((a) => [...a, kind])}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label className="flex items-center gap-2 text-[13px]">
+                  <Checkbox
+                    checked={!!draft.budget}
+                    onCheckedChange={(v) =>
+                      set({
+                        budget: v
+                          ? { hourly: "", horizon: "", hours: "24" }
+                          : undefined,
+                      })
+                    }
+                  />
+                  Limit provider costs
+                </label>
+                {draft.budget && (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {(
+                      [
+                        ["hourly", "Maximum USD / hour"],
+                        ["horizon", "Maximum USD over horizon"],
+                        ["hours", "Horizon hours"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <FormField key={key} className="min-w-0 gap-1 text-xs">
+                        <FieldLabel>{label}</FieldLabel>
+                        <Input
+                          inputMode="decimal"
+                          value={draft.budget![key]}
+                          onChange={(e) =>
+                            set({
+                              budget: {
+                                ...draft.budget!,
+                                [key]: e.target.value,
+                              },
+                            })
+                          }
+                        />
+                      </FormField>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Your exact amounts set the budget limits. Unknown charges need
+                  a separate manual review and block automatic growth.
+                </p>
+              </div>
             </div>
-            <Button variant="outline" size="sm" onClick={restart}>
-              Reload
-            </Button>
+            {(zeroTyped || stuckKinds.length > 0) && (
+              <div className="grid gap-1 px-4 py-3 text-xs text-muted-foreground">
+                {zeroTyped && (
+                  <span>
+                    A limit of 0 is a real limit: nothing more of it fits on
+                    this Cloud, including servers you add yourself.
+                  </span>
+                )}
+                {stuckKinds.map((k) => (
+                  <span key={k}>
+                    {`Pools of ${gpuTitle(k)} can't grow until its GPU ceiling is above zero.`}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/40 px-4 py-2.5">
+            <p className="text-xs text-muted-foreground">
+              Applies to new requests. Servers already running stay.
+            </p>
+            <div className="ml-auto flex gap-2">
+              {dirty && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={save.isPending}
+                  onClick={restart}
+                >
+                  Discard
+                </Button>
+              )}
+              <Button
+                size="sm"
+                disabled={!dirty || save.isPending || !targetsRead}
+                onClick={() => void submit()}
+              >
+                {save.isPending && <Spinner />}
+                Save policy
+              </Button>
+            </div>
+          </div>
+        </div>
+        {stale && (
+          <CloudCallout
+            title={staleText}
+            action={
+              <Button variant="outline" size="sm" onClick={restart}>
+                Reload
+              </Button>
+            }
+          />
         )}
-        <CloudError message={error} />
+        {error && <CloudCallout tone="error" title={error} />}
       </section>
 
-      <section aria-label="How each pool grows" className="grid min-w-0 gap-3">
+      <section
+        aria-label="How each pool grows"
+        className="grid min-w-0 gap-2.5"
+      >
         <CloudSectionHead
           title="How each pool grows"
           count={pools.length}
-          description="A pool without a rule never grows. A new server joins with its size's capacity, less what you keep back for the system. Changes here are part of the policy, so save it after."
+          description="A pool without a rule never grows. A new server joins with its size's capacity, less what you keep back for the system. Rules are part of the policy, so save it after."
         >
-          <Button variant="outline" onClick={() => setScaling(true)}>
-            New scaling pool
+          <Button size="sm" variant="outline" onClick={() => setScaling(true)}>
+            Add pool
           </Button>
         </CloudSectionHead>
         {pools.length === 0 ? (
           <CloudEmpty
-            kind="compact"
-            title="No server pools"
+            kind="list"
+            icon={PoolsIcon}
+            title="No pools yet"
             action={
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => setScaling(true)}
               >
-                Create scaling pool
+                Add pool
               </Button>
             }
           >
-            Start an empty pool, or add existing servers on the Servers tab and
-            set a growth rule here.
+            Add an empty pool that grows from a rule, or put servers in a pool
+            on Infrastructure and give it a rule here.
           </CloudEmpty>
         ) : (
-          <Rows>
+          <CloudTable
+            label="Pool rules"
+            columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,1fr) 96px"
+            head={["Pool", "Runs on", "Grows", "Keeps back", ""]}
+            minWidth={760}
+          >
             {pools.map((pool) => (
               <PoolRow
                 key={pool.id}
@@ -494,18 +499,23 @@ function PolicyEditor({
                 onEdit={() => setEditing(pool)}
               />
             ))}
-          </Rows>
+          </CloudTable>
         )}
       </section>
 
       {targets.length > 0 && (
-        <section aria-label="Frontend limits" className="grid min-w-0 gap-3">
+        <section aria-label="Frontend limits" className="grid min-w-0 gap-2.5">
           <CloudSectionHead
             title="Frontend limits"
             count={targets.length}
             description="How many hosted frontends each target may run. Services already there can still redeploy at the limit. These are part of the policy, so save it after."
           />
-          <Rows>
+          <CloudTable
+            label="Frontend limits"
+            columns="minmax(0,1fr) 160px 120px"
+            head={["Frontend", "Limit", ""]}
+            minWidth={480}
+          >
             {targets.map((t) => (
               <FrontendRow
                 key={t.id}
@@ -518,7 +528,7 @@ function PolicyEditor({
                 }
               />
             ))}
-          </Rows>
+          </CloudTable>
         </section>
       )}
 
@@ -566,6 +576,37 @@ function PolicyEditor({
   )
 }
 
+/** SwitchRow is one on/off setting of the growth policy. */
+function SwitchRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string
+  hint: string
+  checked: boolean
+  onChange: (on: boolean) => void
+}) {
+  return (
+    <FormField orientation="horizontal" className="px-4 py-3">
+      <FieldLabel className="flex flex-1 items-center justify-between gap-4">
+        <span className="grid gap-0.5">
+          <span className="text-[13px] font-medium">{label}</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            {hint}
+          </span>
+        </span>
+        <Switch
+          aria-label={label}
+          checked={checked}
+          onCheckedChange={onChange}
+        />
+      </FieldLabel>
+    </FormField>
+  )
+}
+
 /** AddGpuCeiling offers the GPU kinds that have no ceiling field yet. */
 function AddGpuCeiling({
   used,
@@ -577,18 +618,23 @@ function AddGpuCeiling({
   const left = nvidiaKinds.filter((k) => !used.includes(k))
   if (!left.length) return null
   return (
-    <Select value="" onValueChange={(v) => v && onAdd(String(v))}>
-      <SelectTrigger aria-label="Add a GPU ceiling" className="w-44">
-        <SelectValue placeholder="Add a GPU ceiling" />
-      </SelectTrigger>
-      <SelectContent>
-        {left.map((k) => (
-          <SelectItem key={k} value={k}>
-            {gpuTitle(k)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="flex min-w-0 items-end">
+      <Select value="" onValueChange={(v) => v && onAdd(String(v))}>
+        <SelectTrigger
+          aria-label="Add a GPU ceiling"
+          className="w-full min-w-0"
+        >
+          <SelectValue placeholder="Add a GPU ceiling" />
+        </SelectTrigger>
+        <SelectContent>
+          {left.map((k) => (
+            <SelectItem key={k} value={k}>
+              {gpuTitle(k)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   )
 }
 
@@ -605,20 +651,16 @@ function PoolRow({
 }) {
   const active = rule?.connectionId ? rule : undefined
   return (
-    <Row className="flex-wrap gap-y-2">
-      <span className="grid min-w-32 flex-[1_1_120px] gap-0.5">
-        <span className="font-mono text-[13px] font-medium break-all">
-          {pool.name}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {pool.members.length}{" "}
-          {pool.members.length === 1 ? "server" : "servers"} now
-          {pool.acceleratorKind ? ` · ${gpuTitle(pool.acceleratorKind)}` : ""}
-        </span>
-      </span>
+    <CloudTableRow>
+      <NameCell
+        mono
+        tile={<PoolsIcon />}
+        name={pool.name}
+        meta={`${pool.members.length} ${pool.members.length === 1 ? "server" : "servers"} now${pool.acceleratorKind ? ` · ${gpuTitle(pool.acceleratorKind)}` : ""}`}
+      />
       {active ? (
         <>
-          <span className="min-w-0 flex-[2_1_240px]">
+          <Cell>
             <RunsOn
               target={{
                 runtime: "managed",
@@ -628,44 +670,53 @@ function PoolRow({
               }}
               connections={connections}
             />
-          </span>
-          <span className="flex min-w-0 flex-[2_1_200px] flex-wrap gap-1">
-            {active.allowedSizes.map((s) => (
-              <span
-                key={s}
-                className="rounded-md bg-muted px-1.5 font-mono text-[11.5px] break-all"
-              >
-                {s}
+          </Cell>
+          <Cell className="grid gap-1">
+            <span>
+              <span className="font-mono">
+                {active.minServers} to {active.maxServers}
+              </span>{" "}
+              <span className="text-xs text-muted-foreground">servers</span>
+            </span>
+            <span className="flex min-w-0 flex-wrap gap-1">
+              {active.allowedSizes.map((s) => (
+                <span
+                  key={s}
+                  className="rounded-md bg-muted px-1.5 font-mono text-[11.5px] break-all"
+                >
+                  {s}
+                </span>
+              ))}
+            </span>
+          </Cell>
+          <Cell className="grid gap-0.5">
+            <span>
+              {Number((active.systemReserve.cpuMillis / 1000).toFixed(2))} vCPU,{" "}
+              {Number((active.systemReserve.memoryBytes / GIB).toFixed(2))} GiB
+            </span>
+            {active.limits && (
+              <span className="text-xs text-muted-foreground">
+                With its own limits
               </span>
-            ))}
-          </span>
-          <span className="w-24 text-[13px]">
-            <span className="font-mono">
-              {active.minServers} to {active.maxServers}
-            </span>{" "}
-            <span className="text-xs text-muted-foreground">servers</span>
-          </span>
-          <span className="w-36 text-[12.5px] text-muted-foreground">
-            Keeps back{" "}
-            {Number((active.systemReserve.cpuMillis / 1000).toFixed(2))} vCPU,{" "}
-            {Number((active.systemReserve.memoryBytes / GIB).toFixed(2))} GiB
-            {active.limits ? ", with its own limits" : ""}
-          </span>
+            )}
+          </Cell>
         </>
       ) : (
-        <span className="flex-[6_1_400px] text-[12.5px] text-muted-foreground">
+        <Cell className="col-span-3 text-[12.5px] text-muted-foreground">
           No rule, so this pool never grows.
-        </span>
+        </Cell>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        aria-label={`${active ? "Edit" : "Add"} the rule for pool ${pool.name}`}
-        onClick={onEdit}
-      >
-        {active ? "Edit rule" : "Add rule"}
-      </Button>
-    </Row>
+      <ActionsCell>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={`${active ? "Edit" : "Add"} the rule for pool ${pool.name}`}
+          onClick={onEdit}
+        >
+          {active ? "Edit rule" : "Add rule"}
+        </Button>
+      </ActionsCell>
+    </CloudTableRow>
   )
 }
 
@@ -721,8 +772,8 @@ function PoolRuleDialog({
         </DialogHeader>
         <p className="text-xs text-muted-foreground">
           {kind
-            ? `GPU kind: ${gpuTitle(kind)}, so only its sizes and images with NVIDIA drivers are offered. Change the kind in the pool editor on the Servers tab.`
-            : "A CPU pool, so only sizes and images without GPUs are offered. Give it a GPU kind in the pool editor on the Servers tab."}
+            ? `GPU kind: ${gpuTitle(kind)}, so only its sizes and images with NVIDIA drivers are offered. Change the kind in the pool editor on Infrastructure.`
+            : "A CPU pool, so only sizes and images without GPUs are offered. Give it a GPU kind in the pool editor on Infrastructure."}
         </p>
         <RuleFields
           cloudId={cloudId}
@@ -745,8 +796,8 @@ function PoolRuleDialog({
         <DialogFooter className="flex-wrap">
           {rule && (
             <Button
-              variant="outline"
-              className="mr-auto text-destructive"
+              variant="destructive"
+              className="mr-auto"
               onClick={() => onDone(null)}
             >
               Remove rule
@@ -778,25 +829,18 @@ function FrontendRow({
 }) {
   const n = read(value.maximum, true)
   return (
-    <Row className="flex-wrap items-start">
-      <span className="min-w-0 flex-[1_1_160px] pt-1 text-[13px] break-all">
-        {name}
-      </span>
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
-        <label className="flex items-center gap-2 pt-1 text-[13px]">
-          <Checkbox
-            aria-label={`Unlimited frontends on ${name}`}
-            checked={value.unlimited}
-            onCheckedChange={(on) => onChange({ ...value, unlimited: on })}
-          />
-          Unlimited
-        </label>
-        {!value.unlimited && (
-          <div className="grid w-28 gap-1">
+    <CloudTableRow>
+      <NameCell tile={<GlobeIcon />} name={name} />
+      <Cell>
+        {value.unlimited ? (
+          <span className="text-muted-foreground">No limit</span>
+        ) : (
+          <span className="grid gap-1">
             <Input
               type="number"
               min={0}
               step={1}
+              className="w-28"
               aria-label={`Frontend limit for ${name}`}
               value={value.maximum}
               aria-invalid={Number.isNaN(n) || undefined}
@@ -807,20 +851,26 @@ function FrontendRow({
                 No new frontends
               </span>
             )}
-          </div>
+          </span>
         )}
-      </div>
-    </Row>
+      </Cell>
+      <ActionsCell>
+        <label className="flex items-center gap-2 text-[13px]">
+          <Checkbox
+            aria-label={`Unlimited frontends on ${name}`}
+            checked={value.unlimited}
+            onCheckedChange={(on) => onChange({ ...value, unlimited: on })}
+          />
+          Unlimited
+        </label>
+      </ActionsCell>
+    </CloudTableRow>
   )
 }
 
-const blockWords: Record<string, string> = {
-  expansion_approval: "Waiting for approval",
-  review_required: "Needs review",
-  hard_limit: "Over a limit",
-  limit: "Over a limit",
-  provisioning: "Being created",
-}
+// A blocked server reads by why it's blocked, in the words every Cloud page
+// uses, or plainly "Blocked".
+const blockReasons = ["hard_limit", "limit", "review_required"]
 
 function Expansions({
   cloudId,
@@ -842,7 +892,7 @@ function Expansions({
   return (
     <section
       aria-label="Servers waiting for approval"
-      className="grid min-w-0 gap-3"
+      className="grid min-w-0 gap-2.5"
     >
       <CloudSectionHead
         title="Servers waiting for approval"
@@ -856,15 +906,24 @@ function Expansions({
           retry={query.refetch}
         />
       ) : !query.data ? (
-        <Skeleton className="h-16 rounded-xl" />
+        <Skeleton className="h-32 rounded-xl" />
       ) : waiting.length === 0 ? (
-        <CloudEmpty kind="compact" title="No pending server approvals">
+        <CloudEmpty
+          kind="list"
+          icon={ApproveIcon}
+          title="Nothing waiting for approval"
+        >
           {automatic
-            ? "Nothing is waiting."
-            : "Nothing is waiting. While automatic expansion is off, Loomplane doesn't propose servers, so nothing will appear here until it's turned on."}
+            ? "When a deployment needs a server and growth asks first, it waits here for you."
+            : "While automatic expansion is off, Loomplane doesn't propose servers, so nothing will appear here until it's turned on."}
         </CloudEmpty>
       ) : (
-        <Rows>
+        <CloudTable
+          label="Servers waiting for approval"
+          columns="minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) 130px 96px"
+          head={["Request", "Where", "Cost", "Status", ""]}
+          minWidth={760}
+        >
           {waiting.map((e) => (
             // Keyed by ID alone: after a 409 the reload sentence stays while
             // the row shows the new revision, until the next approval.
@@ -878,17 +937,10 @@ function Expansions({
               reload={query.refetch}
             />
           ))}
-        </Rows>
+        </CloudTable>
       )}
     </section>
   )
-}
-
-// A price reads per month, and an unknown one says so, never $0.
-function expansionPrice(e: Expansion): string {
-  return priceKnown(e.estimatedHourlyUsd, e.hourlyPriceKnown)
-    ? `about $${Math.round(e.estimatedHourlyUsd * 730).toLocaleString("en-US")} a month`
-    : "price unknown"
 }
 
 function expansionGpus(e: Expansion): string {
@@ -917,6 +969,7 @@ function ExpansionRow({
   const approve = useMutation(api.useCloudCapacityApproveExpansion)
   const now = useNow()
   const [error, setError] = useState("")
+  const [conflict, setConflict] = useState(false)
   const reason = e.block?.reason ?? ""
   // Over a hard limit, nothing is approved until the limit goes up. Saving
   // a higher limit offers the server for approval again.
@@ -937,6 +990,7 @@ function ExpansionRow({
       const status = statusOf(err)
       // A 409 is a moved expansion or work already running; a 422 carries
       // the block's sentence. Either way the row reads again.
+      setConflict(status === 409)
       setError(
         status === 409
           ? conflictText(err)
@@ -946,54 +1000,66 @@ function ExpansionRow({
     }
   }
   return (
-    <Row className="flex-wrap gap-y-2">
-      <span className="grid min-w-0 flex-[1_1_300px] gap-0.5">
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-semibold break-words">
-            Add a {e.size} server to pool {pool ?? "that was removed"}
-          </span>
-          <StatusPill
-            tone={e.status === "awaiting_approval" ? "waiting" : "failed"}
-          >
-            {e.status === "awaiting_approval"
-              ? "Waiting for you"
-              : (blockWords[reason] ?? "Blocked")}
+    <CloudTableRow>
+      <NameCell
+        tile={<ServerIcon />}
+        name={`Add a ${e.size} server to pool ${pool ?? "that was removed"}`}
+        meta={[gpus, `asked ${relative(Date.parse(e.createdAt), now)}`]
+          .filter(Boolean)
+          .join(" · ")}
+      />
+      <Cell className="grid gap-0.5">
+        <span className="truncate">{account ?? "A removed account"}</span>
+        <span className="truncate font-mono text-xs text-muted-foreground">
+          {e.region}
+        </span>
+      </Cell>
+      <Cell className="tabular-nums">
+        {priceKnown(e.estimatedHourlyUsd, e.hourlyPriceKnown) ? (
+          hourlyCost(e.estimatedHourlyUsd)
+        ) : (
+          <span className="text-muted-foreground">Price unknown</span>
+        )}
+      </Cell>
+      <Cell>
+        {e.status === "awaiting_approval" ? (
+          <StatePill status="awaiting_approval" />
+        ) : (
+          <StatusPill tone="failed">
+            {blockReasons.includes(reason) ? statusWord(reason) : "Blocked"}
           </StatusPill>
-        </span>
-        <span className="text-xs break-words text-muted-foreground">
-          {[
-            account ?? "A removed account",
-            e.region,
-            gpus,
-            expansionPrice(e),
-            `asked ${relative(Date.parse(e.createdAt), now)}`,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
-        {blockSentence && (
-          <span className="text-xs break-words">{blockSentence}</span>
         )}
-        {overLimit && (
-          <span className="text-xs break-words text-muted-foreground">
-            To approve it, raise this limit under Growth policy and save.
-          </span>
+      </Cell>
+      <ActionsCell>
+        {automatic && e.status === "awaiting_approval" && !overLimit && (
+          <Button
+            size="sm"
+            disabled={approve.isPending}
+            onClick={() => void act()}
+          >
+            {approve.isPending && <Spinner />}
+            Approve
+          </Button>
         )}
-        {shownError && (
-          <span className="mt-1">
-            <CloudError message={shownError} />
-          </span>
-        )}
-      </span>
-      {automatic && e.status === "awaiting_approval" && !overLimit && (
-        <Button
-          size="sm"
-          disabled={approve.isPending}
-          onClick={() => void act()}
-        >
-          Approve
-        </Button>
+      </ActionsCell>
+      {(blockSentence || overLimit) && (
+        <Cell className="col-span-full -mt-1 grid gap-0.5 text-xs break-words">
+          {blockSentence && <span>{blockSentence}</span>}
+          {overLimit && (
+            <span className="text-muted-foreground">
+              To approve it, raise this limit under Growth policy and save.
+            </span>
+          )}
+        </Cell>
       )}
-    </Row>
+      {shownError && (
+        <Cell className="col-span-full">
+          <CloudCallout
+            tone={conflict ? "attention" : "error"}
+            title={shownError}
+          />
+        </Cell>
+      )}
+    </CloudTableRow>
   )
 }

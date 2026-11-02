@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react"
 import { expect, it } from "vitest"
-import { ClusterMoney, exactUSD, observedTime } from "./cluster-money"
-it("keeps large money exact and names unknown categories without exposing source IDs", () => {
-  expect(exactUSD("9007199254740993")).toBe("$9007199254.740993")
+import { ClusterMoney, microCost, observedTime } from "./cluster-money"
+it("prices large amounts in the standard format and names unknown categories without exposing source IDs", () => {
+  expect(microCost("620000")).toBe("$0.62/hr · about $453/mo")
+  expect(microCost("")).toBe("Price unknown")
+  expect(microCost("not-a-number")).toBe("Price unknown")
   render(
     <ClusterMoney
       estimate={{
@@ -25,10 +27,10 @@ it("keeps large money exact and names unknown categories without exposing source
     />
   )
   expect(screen.getByText("Network traffic")).toBeInTheDocument()
-  expect(screen.getByText(/Unknown \/ hour/)).toBeInTheDocument()
+  expect(screen.getByText("Price unknown")).toBeInTheDocument()
   expect(screen.queryByText(/private-account|opaque/)).toBeNull()
   expect(
-    screen.getByText(/Known portion: \$9007199254.740993/)
+    screen.getByText(/Known portion: \$9007199254\.74\/hr · about \$/)
   ).toBeInTheDocument()
 })
 

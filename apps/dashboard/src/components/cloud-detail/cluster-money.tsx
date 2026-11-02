@@ -1,17 +1,30 @@
 import type { MoneyEstimate } from "@/client/forge/loomplane/types"
-import { Row, Rows } from "@/components/cloud-targets/infrastructure-ui"
+import {
+  Cell,
+  CloudTable,
+  CloudTableRow,
+  hourlyCost,
+} from "@/components/cloud-targets/cloud-page"
+import { formatDate } from "@/lib/format"
 
+/** observedTime is a provider timestamp as a date, unless it was never set. */
 export function observedTime(value?: string) {
   if (!value || value.startsWith("0001-")) return undefined
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? undefined : date.toLocaleString()
+  return Number.isNaN(new Date(value).getTime()) ? undefined : formatDate(value)
 }
 
-export function exactUSD(micro?: string) {
-  if (!micro || !/^\d+$/.test(micro)) return "Unknown"
-  const amount = BigInt(micro)
-  return `$${amount / 1000000n}.${(amount % 1000000n).toString().padStart(6, "0")}`
+/** microUSD reads an hourly price in micro-dollars, if one is known. */
+export function microUSD(micro?: string): number | undefined {
+  if (!micro || !/^\d+$/.test(micro)) return undefined
+  return Number(micro) / 1_000_000
 }
+
+/** microCost is an hourly micro-dollar price in the standard money format. */
+export function microCost(micro?: string, unknown = "Price unknown") {
+  const usd = microUSD(micro)
+  return usd === undefined ? unknown : hourlyCost(usd)
+}
+
 export const costCategory = (category = "") =>
   ({
     nodes: "Nodes",
@@ -25,36 +38,49 @@ export const costCategory = (category = "") =>
   })[category] ??
   (category.replaceAll("_", " ") || "Unclassified cost")
 
+const costColumns = "minmax(0,1fr) minmax(0,1.4fr) 80px minmax(0,1fr)"
+
+/** ClusterMoney is a reviewed change's cost: the total, then each part. */
 export function ClusterMoney({ estimate }: { estimate?: MoneyEstimate }) {
   if (!estimate)
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[12.5px] text-muted-foreground">
         Cost estimate unavailable. Unknown charges are not zero.
       </p>
     )
+  const horizon = microUSD(estimate.horizonMicroUsd)
   return (
-    <div className="grid gap-2" aria-label="Cost breakdown">
-      <p className="text-sm">
+    <div className="grid gap-2.5" aria-label="Cost breakdown">
+      <p className="text-[13px]">
         {estimate.known ? "Estimated" : "Known portion"}:{" "}
-        {exactUSD(estimate.hourlyMicroUsd)} / hour ·{" "}
-        {exactUSD(estimate.horizonMicroUsd)} over{" "}
-        {estimate.horizonSeconds / 3600} hours
+        {microCost(estimate.hourlyMicroUsd)}
+        {horizon !== undefined &&
+          estimate.horizonSeconds > 0 &&
+          ` · $${horizon.toFixed(2)} over ${estimate.horizonSeconds / 3600} hours`}
       </p>
-      <Rows>
-        {(estimate.components ?? []).map((part, i) => (
-          <Row key={i}>
-            <span>{costCategory(part.category)}</span>
-            <span>
-              {exactUSD(part.hourlyMicroUsd)} / hour · quantity {part.quantity}
-              {observedTime(part.priceCheckedAt)
-                ? ` · checked ${observedTime(part.priceCheckedAt)}`
-                : " · freshness unavailable"}
-            </span>
-          </Row>
-        ))}
-      </Rows>
+      {!!estimate.components?.length && (
+        <CloudTable
+          label="Cost parts"
+          columns={costColumns}
+          head={["Part", "Cost", "Quantity", "Price checked"]}
+          minWidth={480}
+        >
+          {estimate.components.map((part, i) => (
+            <CloudTableRow key={i}>
+              <Cell>{costCategory(part.category)}</Cell>
+              <Cell className="tabular-nums">
+                {microCost(part.hourlyMicroUsd)}
+              </Cell>
+              <Cell className="tabular-nums">{part.quantity}</Cell>
+              <Cell className="text-muted-foreground">
+                {observedTime(part.priceCheckedAt) ?? "Not checked"}
+              </Cell>
+            </CloudTableRow>
+          ))}
+        </CloudTable>
+      )}
       {!estimate.known && (
-        <p className="text-xs">
+        <p className="text-[12.5px] text-muted-foreground">
           Unknown charges remain outside this subtotal. A manual acknowledgement
           covers only this reviewed scope. Automatic growth requires known
           costs.

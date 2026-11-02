@@ -8,6 +8,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
+import { CloudCallout } from "@/components/cloud-targets/cloud-page"
 import {
   CloudError,
   Field,
@@ -22,14 +23,59 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog"
 import { ClusterChoice } from "./cluster-create"
 import { ClusterRetirement } from "./cluster-retirement"
 
+const weekdays = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]
+
+/**
+ * maintenanceTitle says what a cluster change does, as a person would ask
+ * for it.
+ */
+function maintenanceTitle(kind: string, cluster: string, pool?: string) {
+  switch (kind) {
+    case "node-pool-create":
+      return `Add a node pool to ${cluster}`
+    case "node-pool-update":
+      return pool ? `Change node count for ${pool}` : "Change node count"
+    case "node-pool-scaling":
+      return pool ? `Scale node pool ${pool}` : "Scale a node pool"
+    case "node-pool-delete":
+      return pool ? `Remove node pool ${pool}` : "Remove a node pool"
+    case "cluster-upgrade":
+      return `Upgrade ${cluster}`
+    case "cluster-configure":
+      return `Set the maintenance window for ${cluster}`
+    case "retire-cluster":
+      return `Retire ${cluster}`
+    case "detach-runtime":
+      return `Detach a namespace from ${cluster}`
+    case "runtime-access-upgrade":
+      return "Upgrade namespace access"
+    default:
+      return `Change ${cluster}`
+  }
+}
+
+/**
+ * ClusterMaintenance saves a review of one change to a cluster. Each change
+ * reads the cluster, the Cloud and the provider options again first.
+ */
 export function ClusterMaintenance({
   cluster,
   cloud,
   kind,
+  poolId: initialPool,
   attachmentId,
   attachmentRevision,
   attachmentHpa = false,
@@ -39,6 +85,8 @@ export function ClusterMaintenance({
   cluster: CloudCluster
   cloud: Profile
   kind: string
+  /** The node pool a row opened the change for. */
+  poolId?: string
   attachmentId?: string
   attachmentRevision?: number
   attachmentHpa?: boolean
@@ -54,7 +102,7 @@ export function ClusterMaintenance({
   })
   const preview = useMutation(api.useCloudClustersPreview)
   const [poolId, setPoolId] = useState(
-    cluster.observation?.pools?.[0]?.id ?? ""
+    initialPool ?? cluster.observation?.pools?.[0]?.id ?? ""
   )
   const pool = cluster.observation?.pools?.find((p) => p.id === poolId)
   const [count, setCount] = useState(String(pool?.count ?? 1))
@@ -220,7 +268,7 @@ export function ClusterMaintenance({
       })
       onSaved(result.id)
     } catch (e) {
-      setError(messageOf(e, "Cluster change could not be reviewed."))
+      setError(messageOf(e, "The cluster change couldn't be reviewed."))
       setStale(statusOf(e) === 409)
       if (statusOf(e) === 409 && retiring) {
         setRetirement(undefined)
@@ -257,10 +305,16 @@ export function ClusterMaintenance({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Review {kind.replaceAll("-", " ")}</DialogTitle>
+          <DialogTitle>
+            {maintenanceTitle(
+              kind,
+              cluster.observation?.name || cluster.externalId,
+              pool?.name
+            )}
+          </DialogTitle>
           <DialogDescription>
-            {cluster.observation?.name || cluster.externalId}. Current
-            permission and a fresh review are required for each change.
+            Each change needs your current permission and a fresh review.
+            Nothing changes until you apply the saved review.
           </DialogDescription>
         </DialogHeader>
         <CloudError message={error} />
@@ -307,9 +361,9 @@ export function ClusterMaintenance({
                   }))}
                 />
               ) : (
-                <p className="self-center text-sm">
-                  Node size: {pool?.size}. Count changes preserve the existing
-                  pool shape.
+                <p className="self-center text-[13px]">
+                  Node size <span className="font-mono">{pool?.size}</span>.
+                  Count changes keep the pool's shape.
                 </p>
               )}
               <Field label="Desired nodes">
@@ -365,11 +419,11 @@ export function ClusterMaintenance({
                     .map((p) => ({ value: p.id ?? "", label: p.name }))}
                 />
               )}
-              <p className="text-xs">
+              <p className="text-[12.5px] text-muted-foreground">
                 The provider can add and remove nodes within reviewed native
                 bounds. Loomplane's ten-minute growth cooldown applies to its
                 own changes, not provider additions. Native growth requires
-                current known prices and quota; unknown charges cannot be
+                current known prices and quota; unknown charges can't be
                 acknowledged away.
               </p>
             </>
@@ -391,15 +445,10 @@ export function ClusterMaintenance({
                 label="Maintenance day"
                 value={day}
                 onChange={setDay}
-                items={[
-                  "monday",
-                  "tuesday",
-                  "wednesday",
-                  "thursday",
-                  "friday",
-                  "saturday",
-                  "sunday",
-                ].map((v) => ({ value: v, label: v }))}
+                items={weekdays.map((v) => ({
+                  value: v,
+                  label: v.charAt(0).toUpperCase() + v.slice(1),
+                }))}
               />
               <Field label="Provider start time (UTC)">
                 <Input
@@ -428,14 +477,16 @@ export function ClusterMaintenance({
             </div>
           )}
           {unsupported && (
-            <p role="status" className="text-sm">
-              DigitalOcean has no qualified no-force path for this removal or
-              upgrade. Complete ownership of cluster children is also required
-              for deletion. You cannot bypass this restriction.
-            </p>
+            <div role="status">
+              <CloudCallout title="DigitalOcean can't make this change safely">
+                DigitalOcean has no qualified no-force path for this removal or
+                upgrade. Deletion also needs complete ownership of the cluster's
+                children. You can't bypass this restriction.
+              </CloudCallout>
+            </div>
           )}
           {access && (
-            <div className="grid gap-2 text-sm">
+            <div className="grid gap-2 text-[13px]">
               <p>Review dependent cleanup permissions for this namespace.</p>
               <label className="flex items-start gap-2">
                 <Checkbox
@@ -466,7 +517,7 @@ export function ClusterMaintenance({
               }}
             />
           )}
-          <label className="flex items-start gap-2 text-sm">
+          <label className="flex items-start gap-2 text-[13px]">
             <Checkbox
               aria-label={
                 access
@@ -486,27 +537,18 @@ export function ClusterMaintenance({
                     : "Prepare a manual cost review, including unknown charges. You will see the scoped categories before applying."}
             </span>
           </label>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onClose}
-              disabled={busy}
-            >
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose} disabled={busy}>
               Cancel
             </Button>
-            <Button
-              size="sm"
-              onClick={() => void submit()}
-              disabled={!valid || busy}
-            >
+            <Button onClick={() => void submit()} disabled={!valid || busy}>
               {busy
                 ? "Reviewing..."
                 : stale
                   ? "Create fresh review"
                   : "Save review"}
             </Button>
-          </div>
+          </DialogFooter>
         </SetupReads>
       </DialogContent>
     </Dialog>

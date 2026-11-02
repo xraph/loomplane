@@ -157,7 +157,9 @@ it("requires retained-resource inventory and acknowledgement before retirement r
   await user.click(
     screen.getByRole("button", { name: "Review retained resources" })
   )
-  expect(await screen.findByText("volume · volume")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("table", { name: "Retirement inventory" })
+  ).toHaveTextContent("Retained")
   expect(save).toBeDisabled()
   await user.click(screen.getByRole("checkbox"))
   expect(save).toBeEnabled()

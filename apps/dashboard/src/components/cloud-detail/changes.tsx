@@ -1,8 +1,7 @@
-import { useLiveState } from "@/lib/realtime-state"
 // One history for a Cloud: every reviewed move of a target, the default or an
 // environment, and server and cluster operations, newest first within each page.
 import type { UseQueryResult } from "@forge-go/client-react"
-import { ArrowRightIcon } from "lucide-react"
+import { ArrowRightIcon, TargetIcon } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 
 import { messageOf } from "@/client/errors"
@@ -19,27 +18,38 @@ import type {
 import { useMutation, useQuery } from "@/client/hooks"
 import { ChangeReview } from "@/components/cloud-targets/change-review"
 import {
+  ActionsCell,
+  Cell,
+  CloudTable,
+  CloudTableRow,
+  RowMenu,
+  Segments,
+} from "@/components/cloud-targets/cloud-page"
+import {
   CloudEmpty,
   CloudError,
   CloudSectionHead,
-  Rows,
-  Row,
   StatePill,
   stateTone,
+  statusWord,
   useInfrastructureRefresh,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { EnvironmentProgress } from "@/components/cloud-targets/organization-activity"
-import { ActivityIcon } from "@/components/icons"
+import {
+  ActivityIcon,
+  ClustersIcon,
+  InfrastructureIcon,
+} from "@/components/icons"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { syncLabel } from "@/lib/cloud-targets"
 import { dateTime, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { useLiveState } from "@/lib/realtime-state"
 import { Link } from "@/lib/router"
-import { cn } from "@/lib/utils"
 import { useNow, usePeople } from "@/lib/use-runs"
 
 import {
@@ -52,10 +62,7 @@ import {
 
 /** A sync's status as a reader would say it, and its tone. */
 export function syncState(sync: Sync): { label: string; tone: Tone } {
-  if (sync.status === "routing_pending")
-    return { label: "Waiting on routing", tone: "waiting" }
-  if (sync.status === "succeeded") return { label: "Done", tone: "live" }
-  return { label: syncLabel(sync.status), tone: stateTone(sync.status) }
+  return { label: statusWord(sync.status), tone: stateTone(sync.status) }
 }
 
 /** changeTitle names what a sync did to this Cloud. */
@@ -95,15 +102,67 @@ export function changeTitle(
 const serverVerbs: Record<string, string> = {
   create: "Create server",
   adopt: "Connect server",
-  resize: "Resize",
+  resize: "Resize server",
   delete: "Delete server",
   disconnect: "Disconnect server",
 }
+
+type Kind = "placement" | "servers" | "clusters"
+type Filter = "all" | Kind
+
+const filters: { id: Filter; label: string; empty: string }[] = [
+  { id: "all", label: "All", empty: "No changes yet" },
+  { id: "placement", label: "Placement", empty: "No placement changes yet" },
+  { id: "servers", label: "Servers", empty: "No server changes yet" },
+  { id: "clusters", label: "Clusters", empty: "No cluster changes yet" },
+]
 
 type Entry =
   | { kind: "placement"; at: number; sync: Sync }
   | { kind: "servers"; at: number; op: Operation }
   | { kind: "clusters"; at: number; op: CloudClusterOperation }
+
+/**
+ * Pages walks a cursor-paged history. Each history only says what comes
+ * after a page, so going back to newer changes retraces the cursors taken.
+ */
+type Pages = {
+  cursor: string
+  first: boolean
+  older: (next: string) => void
+  newer: () => void
+}
+
+function usePages(): Pages {
+  const [stack, setStack] = useState<string[]>([""])
+  return {
+    cursor: stack[stack.length - 1] ?? "",
+    first: stack.length === 1,
+    older: (next) => setStack((s) => [...s, next]),
+    newer: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
+  }
+}
+
+/** when is a change's time: relative within a week, else "Oct 20, 9:40 AM". */
+function when(at: number, now: number) {
+  return now - at < 7 * 24 * 60 * 60 * 1000
+    ? relative(at, now)
+    : new Date(at).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+}
+
+function Time({ iso, now }: { iso: string; now: number }) {
+  const at = Date.parse(iso)
+  return (
+    <time dateTime={iso} title={dateTime(at)}>
+      {when(at, now)}
+    </time>
+  )
+}
 
 type ChangesProps = {
   scope: CloudScope
@@ -125,18 +184,17 @@ function WithOperations(props: ChangesProps) {
   const operations = useQuery(api.useInfrastructureOperationsList, {
     path: { cloudId: props.scope.cloud.id },
   })
-  const [clusterCursor, setClusterCursor] = useState("")
+  const clusterPages = usePages()
   const clusters = useQuery(api.useClusterOperationsList, {
     path: { cloudId: props.scope.cloud.id },
-    query: { cursor: clusterCursor, limit: 50 },
+    query: { cursor: clusterPages.cursor, limit: 50 },
   })
   return (
     <ChangeList
       {...props}
       operations={operations}
       clusters={clusters}
-      clusterCursor={clusterCursor}
-      setClusterCursor={setClusterCursor}
+      clusterPages={clusterPages}
     />
   )
 }
@@ -148,20 +206,16 @@ function ChangeList({
   onChanged,
   operations,
   clusters,
-  clusterCursor = "",
-  setClusterCursor,
+  clusterPages,
 }: ChangesProps & {
   operations?: UseQueryResult<OperationList>
   clusters?: UseQueryResult<CloudClusterOperationPage>
-  clusterCursor?: string
-  setClusterCursor?: (cursor: string) => void
+  clusterPages?: Pages
 }) {
   const org = !!operations
-  const [filter, setFilter] = useState<
-    "all" | "placement" | "servers" | "clusters"
-  >("all")
-  const [before, setBefore] = useState("")
-  const syncs = useScopedSyncs(scope, before)
+  const [filter, setFilter] = useState<Filter>("all")
+  const syncPages = usePages()
+  const syncs = useScopedSyncs(scope, syncPages.cursor)
   const ops = (operations?.data?.operations ?? []).filter(
     (o): o is Operation => !!o
   )
@@ -212,36 +266,40 @@ function ChangeList({
     syncs.status === "error" ||
     operations?.status === "error" ||
     clusters?.status === "error"
+
+  // Placement and cluster histories page on their own cursors, so each
+  // keeps its own Newer and Older in the one footer.
+  const pagers = [
+    (filter === "all" || filter === "placement") && {
+      label: "placement",
+      pages: syncPages,
+      next: syncs.data?.next ?? "",
+    },
+    (filter === "all" || filter === "clusters") &&
+      clusterPages && {
+        label: "cluster",
+        pages: clusterPages,
+        next: clusters?.data?.nextCursor ?? "",
+      },
+  ].filter(
+    (p): p is { label: string; pages: Pages; next: string } =>
+      !!p && (!!p.next || !p.pages.first)
+  )
+  const filterLabel = filters.find((f) => f.id === filter)!
+
   return (
-    <section aria-label="Changes" className="grid gap-3">
+    <section aria-label="Changes" className="grid gap-2.5">
       <CloudSectionHead
         title="Changes to this Cloud"
         description="Every move of a target or the default, every environment joining or leaving, and every server or cluster change. Environments keep serving their current release until a move finishes."
       >
         {org && (
-          <div
-            role="radiogroup"
-            aria-label="Show"
-            className="flex gap-0.5 rounded-lg bg-muted p-[3px]"
-          >
-            {(["all", "placement", "servers", "clusters"] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                role="radio"
-                aria-checked={filter === f}
-                onClick={() => setFilter(f)}
-                className={cn(
-                  "h-7 rounded-md px-2.5 text-[12.5px] font-medium capitalize",
-                  filter === f
-                    ? "bg-card text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
+          <Segments
+            label="Show"
+            value={filter}
+            onChange={setFilter}
+            items={filters.map(({ id, label }) => ({ id, label }))}
+          />
         )}
       </CloudSectionHead>
       {failed ? (
@@ -254,13 +312,57 @@ function ChangeList({
         (operations && !operations.data) ||
         (clusters && !clusters.data) ? (
         <Skeleton className="h-32 rounded-xl" />
-      ) : entries.length === 0 ? (
-        <CloudEmpty kind="list" icon={ActivityIcon} title="No changes yet">
+      ) : entries.length === 0 && pagers.length === 0 ? (
+        <CloudEmpty kind="list" icon={ActivityIcon} title={filterLabel.empty}>
           Moving a target or the default, choosing this Cloud for an
           environment, and server or cluster changes appear here.
         </CloudEmpty>
       ) : (
-        <Rows>
+        <CloudTable
+          label="Changes to this Cloud"
+          columns="minmax(0,1fr) auto"
+          head={["Change", ""]}
+          minWidth={560}
+          footer={
+            <>
+              <span>
+                Showing {entries.length}{" "}
+                {entries.length === 1 ? "change" : "changes"}
+              </span>
+              {pagers.length > 0 && (
+                <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  {pagers.map(({ label, pages, next }) => (
+                    <span key={label} className="flex items-center gap-1.5">
+                      {pagers.length > 1 && (
+                        <span className="mr-1">
+                          {label === "placement" ? "Placement" : "Clusters"}
+                        </span>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Newer ${label} changes`}
+                        disabled={pages.first}
+                        onClick={pages.newer}
+                      >
+                        Newer
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Older ${label} changes`}
+                        disabled={!next}
+                        onClick={() => pages.older(next)}
+                      >
+                        Older
+                      </Button>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </>
+          }
+        >
           {entries.map((e) =>
             e.kind === "placement" ? (
               <SyncEntry
@@ -272,23 +374,7 @@ function ChangeList({
                 onChanged={reload}
               />
             ) : e.kind === "clusters" ? (
-              <Row key={e.op.id}>
-                <div className="min-w-0 flex-1">
-                  <Link
-                    className="text-sm font-medium break-words hover:underline"
-                    to="/clouds/$id"
-                    params={{ id: scope.cloud.id }}
-                    search={{ tab: "servers", clusterOperation: e.op.id }}
-                  >
-                    {clusterChangeLabel(e.op.kind)}:{" "}
-                    {e.op.input.spec.name || e.op.input.ref.id}
-                  </Link>
-                  <p className="text-xs text-muted-foreground">
-                    {dateTime(Date.parse(e.op.createdAt))}
-                  </p>
-                </div>
-                <StatePill status={e.op.status} />
-              </Row>
+              <ClusterEntry key={e.op.id} cloudId={scope.cloud.id} op={e.op} />
             ) : (
               <OperationEntry
                 key={e.op.id}
@@ -298,87 +384,85 @@ function ChangeList({
               />
             )
           )}
-        </Rows>
+        </CloudTable>
       )}
-      {(filter === "all" || filter === "clusters") &&
-        setClusterCursor &&
-        (clusters?.data?.nextCursor || clusterCursor) && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              Cluster history pages
-            </span>
-            {clusters?.data?.nextCursor && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  setClusterCursor(clusters.data?.nextCursor ?? "")
-                }
-              >
-                Next cluster changes
-              </Button>
-            )}
-            {clusterCursor && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setClusterCursor("")}
-              >
-                First cluster changes
-              </Button>
-            )}
-          </div>
-        )}
-      {(filter === "all" || filter === "placement") &&
-        (syncs.data?.next || before) && (
-          <div className="flex gap-2">
-            {syncs.data?.next && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setBefore(syncs.data?.next ?? "")}
-              >
-                Older changes
-              </Button>
-            )}
-            {before && (
-              <Button size="sm" variant="ghost" onClick={() => setBefore("")}>
-                Newest changes
-              </Button>
-            )}
-          </div>
-        )}
     </section>
   )
 }
 
-function Entry({
+const kindTile: Record<Kind, ReactNode> = {
+  placement: <TargetIcon />,
+  servers: <InfrastructureIcon />,
+  clusters: <ClustersIcon />,
+}
+
+/**
+ * ChangeRow is one change of any kind: its tile, the change as a sentence
+ * with its status, who and when, what moved, and its actions.
+ */
+function ChangeRow({
+  kind,
   title,
-  state,
+  status,
   meta,
-  actions,
+  from,
+  to,
+  action,
+  menu,
   children,
 }: {
-  title: string
-  state: { label: string; tone: Tone }
-  meta: ReactNode
-  actions?: ReactNode
+  kind: Kind
+  title: ReactNode
+  status: ReactNode
+  meta: ReactNode[]
+  from?: string
+  to?: string
+  /** The one visible button. */
+  action?: ReactNode
+  /** The rest, in the row's More menu. */
+  menu?: ReactNode
   children?: ReactNode
 }) {
   return (
-    <article className="grid gap-2 border-b px-4 py-3 last:border-b-0">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="grid min-w-0 flex-[1_1_360px] gap-0.5">
-          <p className="flex flex-wrap items-center gap-2">
-            <span className="text-[13px] font-semibold">{title}</span>
-            <StatusPill tone={state.tone}>{state.label}</StatusPill>
-          </p>
-          <p className="text-xs text-muted-foreground">{meta}</p>
+    <CloudTableRow className="items-start">
+      <Cell className="flex gap-2.5">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground [&_svg]:size-3.5">
+          {kindTile[kind]}
+        </span>
+        <div className="grid min-w-0 flex-1 gap-1.5">
+          <div className="grid gap-px">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-semibold break-words">{title}</span>
+              {status}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {meta
+                .filter((m) => m !== false && m !== "" && m != null)
+                .map((m, i) => (
+                  <span key={i}>
+                    {i > 0 && " · "}
+                    {m}
+                  </span>
+                ))}
+            </p>
+          </div>
+          {from && to && (
+            <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
+              <span className="rounded-md bg-muted px-2 py-0.5">{from}</span>
+              <ArrowRightIcon aria-label="to" className="size-3.5" />
+              <span className="rounded-md bg-muted px-2 py-0.5 text-foreground">
+                {to}
+              </span>
+            </p>
+          )}
+          {children}
         </div>
-        {actions && <div className="flex flex-wrap gap-1.5">{actions}</div>}
-      </div>
-      {children}
-    </article>
+      </Cell>
+      <ActionsCell>
+        {action}
+        {menu && <RowMenu label="More actions for this change">{menu}</RowMenu>}
+      </ActionsCell>
+    </CloudTableRow>
   )
 }
 
@@ -433,60 +517,48 @@ function SyncEntry({
     targets,
     connections
   )
-  const at = Date.parse(sync.createdAt)
+  const state = syncState(sync)
   // A revert is reviewed through the project that made the change.
   const revertProject = scope.project || sync.projectId
+  const canRetry = ["failed", "cleanup_pending"].includes(sync.status)
+  const canRevert =
+    !!revertProject &&
+    !movingSync(sync) &&
+    !["reverted", "failed"].includes(sync.status)
   return (
-    <Entry
+    <ChangeRow
+      kind="placement"
       title={title}
-      state={syncState(sync)}
-      meta={
-        <>
-          {sync.createdBy ? `${person(sync.createdBy).name} · ` : ""}
-          <time dateTime={sync.createdAt} title={dateTime(at)}>
-            {relative(at, now)}
-          </time>
-          {sync.attempt > 1 && ` · attempt ${sync.attempt}`}
-        </>
+      status={<StatusPill tone={state.tone}>{state.label}</StatusPill>}
+      meta={[
+        sync.createdBy && person(sync.createdBy).name,
+        <Time key="at" iso={sync.createdAt} now={now} />,
+        sync.attempt > 1 && `attempt ${sync.attempt}`,
+      ]}
+      from={from}
+      to={to}
+      action={
+        permitted &&
+        canRetry && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void act()}
+          >
+            Retry
+          </Button>
+        )
       }
-      actions={
-        permitted && (
-          <>
-            {["failed", "cleanup_pending"].includes(sync.status) && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void act()}
-              >
-                Retry
-              </Button>
-            )}
-            {revertProject &&
-              !movingSync(sync) &&
-              !["reverted", "failed"].includes(sync.status) && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => setReverting(true)}
-                >
-                  Review revert
-                </Button>
-              )}
-          </>
+      menu={
+        permitted &&
+        canRevert && (
+          <DropdownMenuItem disabled={busy} onClick={() => setReverting(true)}>
+            Review revert
+          </DropdownMenuItem>
         )
       }
     >
-      {from && to && (
-        <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
-          <span className="rounded-md bg-muted px-2 py-0.5">{from}</span>
-          <ArrowRightIcon aria-label="to" className="size-3.5" />
-          <span className="rounded-md bg-muted px-2 py-0.5 text-foreground">
-            {to}
-          </span>
-        </p>
-      )}
       {sync.error && <CloudError message={sync.error} />}
       {(sync.environments ?? []).map((env) => {
         const waiting =
@@ -499,9 +571,14 @@ function SyncEntry({
               <span className="font-medium text-foreground">
                 {env.environment}
               </span>
-              {waiting
-                ? "deployed, waiting for you to point traffic here"
-                : syncLabel(env.status).toLowerCase()}
+              {waiting ? (
+                <>
+                  <StatusPill tone="waiting">Waiting for you</StatusPill>
+                  Deployed. Point traffic here, then say what you changed.
+                </>
+              ) : (
+                <StatePill status={env.status} />
+              )}
               {env.deploymentId && (
                 <Link
                   to="/deployments/$id"
@@ -530,7 +607,6 @@ function SyncEntry({
                 />
                 <Button
                   size="sm"
-                  variant="outline"
                   disabled={busy || !evidence[env.environmentId]?.trim()}
                   onClick={() => void act(env.environmentId)}
                 >
@@ -554,7 +630,7 @@ function SyncEntry({
           }}
         />
       )}
-    </Entry>
+    </ChangeRow>
   )
 }
 
@@ -571,7 +647,6 @@ function OperationEntry({
   const cancel = useMutation(api.useInfrastructureOperationsCancel)
   const [error, setError] = useState("")
   const now = useNow()
-  const at = Date.parse(op.createdAt)
   const act = async (kind: "retry" | "cancel") => {
     setError("")
     try {
@@ -585,54 +660,90 @@ function OperationEntry({
   }
   const verb = serverVerbs[op.input.kind] ?? "Change server"
   const subject = op.input.name || op.input.size || ""
-  const word = op.status.replace(/_/g, " ")
   return (
-    <Entry
-      title={`${verb}${op.input.kind === "resize" ? " server" : ""} ${subject}`.trim()}
-      state={{
-        label:
-          op.status === "applied" || op.status === "succeeded"
-            ? "Done"
-            : word.charAt(0).toUpperCase() + word.slice(1),
-        tone: stateTone(op.status),
-      }}
-      meta={
-        <>
-          <time dateTime={op.createdAt} title={dateTime(at)}>
-            {relative(at, now)}
-          </time>
-          {op.input.region && ` · ${op.input.region}`}
-          {op.attempt > 1 && ` · attempt ${op.attempt}`}
-          {op.message && ` · ${op.message}`}
-        </>
+    <ChangeRow
+      kind="servers"
+      title={`${verb} ${subject}`.trim()}
+      status={<StatePill status={op.status} />}
+      meta={[
+        <Time key="at" iso={op.createdAt} now={now} />,
+        op.input.region,
+        op.attempt > 1 && `attempt ${op.attempt}`,
+        op.message,
+      ]}
+      action={
+        ["failed", "waiting", "cleanup_pending"].includes(op.status) && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={retry.isPending}
+            onClick={() => void act("retry")}
+          >
+            Retry
+          </Button>
+        )
       }
-      actions={
-        <>
-          {["failed", "waiting", "cleanup_pending"].includes(op.status) && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={retry.isPending}
-              onClick={() => void act("retry")}
-            >
-              Retry
-            </Button>
-          )}
-          {!op.attempted && ["preview", "pending"].includes(op.status) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={cancel.isPending}
-              onClick={() => void act("cancel")}
-            >
-              Cancel
-            </Button>
-          )}
-        </>
+      menu={
+        !op.attempted &&
+        ["preview", "pending"].includes(op.status) && (
+          <DropdownMenuItem
+            disabled={cancel.isPending}
+            onClick={() => void act("cancel")}
+          >
+            Cancel
+          </DropdownMenuItem>
+        )
       }
     >
       <CloudError message={error} />
-    </Entry>
+    </ChangeRow>
+  )
+}
+
+function ClusterEntry({
+  cloudId,
+  op,
+}: {
+  cloudId: string
+  op: CloudClusterOperation
+}) {
+  const now = useNow()
+  // A cluster has a page once the operation names it; retiring ends it.
+  const cluster = op.kind !== "retire-cluster" ? op.resourceId : ""
+  return (
+    <ChangeRow
+      kind="clusters"
+      title={
+        <Link
+          className="underline-offset-2 hover:underline"
+          to="/clouds/$id"
+          params={{ id: cloudId }}
+          search={{ tab: "infrastructure", clusterOperation: op.id }}
+        >
+          {clusterChangeLabel(op.kind)}: {op.input.spec.name || op.input.ref.id}
+        </Link>
+      }
+      status={<StatePill status={op.status} />}
+      meta={[
+        <Time key="at" iso={op.createdAt} now={now} />,
+        op.attempt > 1 && `attempt ${op.attempt}`,
+      ]}
+      menu={
+        cluster && (
+          <DropdownMenuItem
+            render={
+              <Link
+                to="/clouds/$id"
+                params={{ id: cloudId }}
+                search={{ tab: "infrastructure", cluster }}
+              />
+            }
+          >
+            Open cluster
+          </DropdownMenuItem>
+        )
+      }
+    />
   )
 }
 

@@ -18,6 +18,7 @@ export {
   GlobeSimpleIcon as DomainsIcon,
   SignpostIcon as RoutesIcon,
   CubeIcon as PoolsIcon,
+  HexagonIcon as ClustersIcon,
   LockSimpleIcon as RestrictedIcon,
   ShieldCheckIcon as ApproveIcon,
   FolderPlusIcon as NewProjectIcon,

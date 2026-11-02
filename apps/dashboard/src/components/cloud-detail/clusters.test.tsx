@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { publishLiveState } from "@/lib/realtime-state"
 import { forgeClient } from "@/client/runtime"
 import type { Profile } from "@/client/forge/loomplane/types"
-import { ClusterNodePools } from "./cluster-node-pools"
+import { ClusterNodeCapacity, ClusterNodePools } from "./cluster-node-pools"
 import { Clusters } from "./clusters"
 import { ClusterDetail, ClusterOperationDetail } from "./cluster-detail"
 vi.mock("@/lib/router", () => ({
@@ -52,19 +52,22 @@ afterEach(() => {
 const cloud = { id: "cloud", name: "Production", revision: 1 } as Profile
 const mount = (child: React.ReactNode) =>
   render(<ClientProvider client={forgeClient}>{child}</ClientProvider>)
+const open = () => undefined
 it("distinguishes empty, denied and failed cluster reads", async () => {
   const fetcher = vi.fn().mockResolvedValue(Response.json({ items: [] }))
   vi.stubGlobal("fetch", fetcher)
-  const view = mount(<Clusters cloud={cloud} />)
-  expect(
-    await screen.findByText("No clusters in this Cloud")
-  ).toBeInTheDocument()
+  const view = mount(
+    <Clusters cloud={cloud} onOpenCluster={open} onOpenOperation={open} />
+  )
+  expect(await screen.findByText("No clusters yet")).toBeInTheDocument()
   view.unmount()
   forgeClient.clear()
   fetcher.mockImplementation(() =>
     Promise.resolve(Response.json({ message: "denied" }, { status: 403 }))
   )
-  const denied = mount(<Clusters cloud={cloud} />)
+  const denied = mount(
+    <Clusters cloud={cloud} onOpenCluster={open} onOpenOperation={open} />
+  )
   expect(
     await screen.findByText("Cluster access is restricted")
   ).toBeInTheDocument()
@@ -75,19 +78,17 @@ it("distinguishes empty, denied and failed cluster reads", async () => {
       Response.json({ message: "provider unavailable" }, { status: 500 })
     )
   )
-  mount(<Clusters cloud={cloud} />)
+  mount(<Clusters cloud={cloud} onOpenCluster={open} onOpenOperation={open} />)
   expect(await screen.findByText(/Provider unavailable/)).toBeInTheDocument()
-  expect(
-    screen.queryByText("No clusters in this Cloud")
-  ).not.toBeInTheDocument()
+  expect(screen.queryByText("No clusters yet")).not.toBeInTheDocument()
 })
 it("project callers never request account cluster lifecycle", () => {
   permissions.allowed = false
   const fetcher = vi.fn()
   vi.stubGlobal("fetch", fetcher)
-  mount(<Clusters cloud={cloud} />)
+  mount(<Clusters cloud={cloud} onOpenCluster={open} onOpenOperation={open} />)
   expect(
-    screen.getByText("Cluster management is restricted")
+    screen.getByText("Clusters are managed by your organization")
   ).toBeInTheDocument()
   expect(fetcher).not.toHaveBeenCalled()
 })
@@ -149,7 +150,6 @@ it("blocks duplicate apply and preserves a stale-review recovery path", async ()
   expect(refresh).toHaveBeenCalledOnce()
 })
 it("reload reads the saved operation without another create", async () => {
-  window.history.replaceState(null, "", "/?clusterOperation=op")
   const fetcher = vi.fn((input: RequestInfo | URL) =>
     Promise.resolve(
       Response.json(
@@ -164,7 +164,14 @@ it("reload reads the saved operation without another create", async () => {
     )
   )
   vi.stubGlobal("fetch", fetcher)
-  mount(<Clusters cloud={cloud} />)
+  mount(
+    <ClusterOperationDetail
+      cloud={cloud}
+      id="op"
+      onBack={open}
+      onRefreshReview={open}
+    />
+  )
   expect(await screen.findByText("Setup incomplete")).toBeInTheDocument()
   await waitFor(() =>
     expect(
@@ -211,14 +218,13 @@ it("clears recovery guidance when a cached operation succeeds live", async () =>
       gap: false,
     })
   )
-  await screen.findByText("Succeeded")
+  await screen.findByText("Done")
   expect(
     screen.queryByText(/Provider resources may still exist/)
   ).not.toBeInTheDocument()
 })
 
 it("shows saved fixed node pool scope before applying after reload", async () => {
-  window.history.replaceState(null, "", "/?clusterOperation=op")
   vi.stubGlobal("fetch", (input: RequestInfo | URL) =>
     Promise.resolve(
       Response.json(
@@ -226,9 +232,17 @@ it("shows saved fixed node pool scope before applying after reload", async () =>
       )
     )
   )
-  mount(<Clusters cloud={cloud} />)
+  mount(
+    <ClusterOperationDetail
+      cloud={cloud}
+      id="op"
+      onBack={open}
+      onRefreshReview={open}
+    />
+  )
   await screen.findByRole("button", { name: "Apply reviewed change" })
-  expect(screen.getByText(/workers: 3 × s-2vcpu-4gb/)).toHaveTextContent(
+  expect(screen.getByText("Node pool workers")).toBeInTheDocument()
+  expect(screen.getByText(/3 × s-2vcpu-4gb/)).toHaveTextContent(
     "Fixed capacity"
   )
 })
@@ -266,22 +280,30 @@ it("loads current cluster by ID and exposes permission-specific controls", async
       )
     )
   )
+  const targets = vi.fn()
   mount(
     <ClusterDetail
       cloud={cloud}
       id="cluster"
       onSaved={() => {}}
       onBack={() => {}}
+      onOpenTargets={targets}
     />
   )
-  expect(await screen.findByText("Observed 3 nodes")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "Runtime targets" })).toHaveAttribute(
-    "href",
-    "/clouds/cloud?tab=targets"
-  )
+  expect(await screen.findByText("3 nodes")).toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Edit node pool workers" })
+  ).toBeInTheDocument()
   expect(
     screen.getByText(/History grants no standing permission/)
   ).toBeInTheDocument()
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("button", { name: "More cluster actions" }))
+  expect(
+    await screen.findByRole("menuitem", { name: "Retire cluster" })
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole("menuitem", { name: "Runtime targets" }))
+  expect(targets).toHaveBeenCalledOnce()
 })
 
 it("keeps inventory visible while specific lifecycle permissions are denied", async () => {
@@ -327,11 +349,20 @@ it("keeps inventory visible while specific lifecycle permissions are denied", as
   )
   await screen.findByText("provider-cluster")
   await screen.findByText("workers")
-  expect(screen.queryByRole("button", { name: "Change nodes" })).toBeNull()
-  expect(screen.queryByRole("button", { name: "Review retirement" })).toBeNull()
+  expect(screen.queryByRole("button", { name: /Edit node pool/ })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Add node pool" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Maintenance" })).toBeNull()
   expect(
     screen.queryByRole("button", { name: "Review access upgrade" })
   ).toBeNull()
+  expect(
+    screen.queryByRole("button", { name: "More actions for workers" })
+  ).toBeNull()
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "More cluster actions" }))
+  await screen.findByRole("menu")
+  expect(screen.queryByRole("menuitem", { name: "Retire cluster" })).toBeNull()
 })
 it.each([
   "pdb_blocked",
@@ -434,9 +465,7 @@ it("reads persisted capacity after reconnect and ages freshness without provider
       })
     }
   )
-  mount(
-    <ClusterNodePools cluster={currentCluster} canManage onChange={() => {}} />
-  )
+  mount(<ClusterNodeCapacity cluster={currentCluster} canManage />)
   await screen.findByText(/first observation/)
   const before = reads
   revision = 2
@@ -474,14 +503,12 @@ it("shows observed native bounds separately while reviewed bounds await converge
       onChange={() => {}}
     />
   )
+  expect(screen.getByText("1 node")).toBeInTheDocument()
+  expect(screen.getByText("Provider bounds 1 to 2")).toBeInTheDocument()
   expect(
-    screen.getByText(/Observed 1 nodes · bounds 1 to 2/)
+    screen.getByText(/Provider autoscaler, reviewed bounds 2 to 3/)
   ).toBeInTheDocument()
-  expect(
-    screen.getByText(
-      /Reviewed native · bounds 2 to 3 · Awaiting provider convergence/
-    )
-  ).toBeInTheDocument()
+  expect(screen.getByText("Waiting on provider")).toBeInTheDocument()
 })
 
 it("retries the exact saved operation after reload", async () => {
@@ -602,7 +629,7 @@ it("shows changed retirement inventory and clears acknowledgement before saving 
   await user.click(
     screen.getByRole("button", { name: "Review retained resources" })
   )
-  await screen.findByText("volume · new-volume")
+  await screen.findByText("new-volume")
   expect(save).toBeDisabled()
   await user.click(screen.getByRole("checkbox", { name: "Acknowledge review" }))
   expect(save).toBeEnabled()

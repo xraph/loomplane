@@ -8,12 +8,24 @@ import { useMutation } from "@/client/hooks"
 import { messageOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
 import {
-  CloudError,
-  Row,
-  Rows,
-} from "@/components/cloud-targets/infrastructure-ui"
+  Cell,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+} from "@/components/cloud-targets/cloud-page"
+import { CloudError } from "@/components/cloud-targets/infrastructure-ui"
+import { StatusPill } from "@/components/runs"
 import { Link } from "@/lib/router"
-import { exactUSD, observedTime } from "./cluster-money"
+import { microCost, observedTime } from "./cluster-money"
+import { ownershipPhrase } from "./clusters"
+
+const resourceColumns =
+  "minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.1fr) minmax(0,1.2fr)"
+
+/**
+ * ClusterRetirement reads what retiring a cluster or detaching a namespace
+ * deletes and what it leaves running, before the review is saved.
+ */
 export function ClusterRetirement({
   cluster,
   attachmentId,
@@ -44,11 +56,21 @@ export function ClusterRetirement({
       setReview(result)
       onReview(result)
     } catch (e) {
-      setError(messageOf(e, "Retirement inventory could not be reviewed."))
+      setError(messageOf(e, "Retirement inventory couldn't be reviewed."))
     }
   }
+  const resources = review
+    ? [
+        ...new Map(
+          [
+            ...(review.deletionCandidates ?? []),
+            ...(review.retainedResources ?? []),
+          ].map((r) => [r.id, r])
+        ).values(),
+      ]
+    : []
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-2.5">
       <Button
         size="sm"
         variant="outline"
@@ -61,18 +83,18 @@ export function ClusterRetirement({
       <CloudError message={error} />
       {review && (
         <>
-          <p className="text-sm">
+          <p className="text-[13px]">
             Remaining known charges:{" "}
-            {exactUSD(review.estimatedRemainingHourlyMicroUsd)} / hour. Checked{" "}
-            {observedTime(review.checkedAt) ?? "time unavailable"}.
+            {microCost(review.estimatedRemainingHourlyMicroUsd)}. Checked{" "}
+            {observedTime(review.checkedAt) ?? "at an unknown time"}.
           </p>
           {(review.blockers ?? []).map((b) => (
-            <p key={b} role="status" className="text-sm">
+            <p key={b} role="status" className="text-[13px]">
               {b.startsWith("connection_use:plan:") ? (
                 <>
                   A deployment plan still uses this connection.{" "}
                   <Link
-                    className="text-primary underline"
+                    className="text-foreground underline underline-offset-2"
                     to="/deployments/$id"
                     params={{ id: b.slice("connection_use:plan:".length) }}
                   >
@@ -86,30 +108,35 @@ export function ClusterRetirement({
               )}
             </p>
           ))}
-          <Rows>
-            {[
-              ...new Map(
-                [
-                  ...(review.deletionCandidates ?? []),
-                  ...(review.retainedResources ?? []),
-                ].map((r) => [r.id, r])
-              ).values(),
-            ].map((r) => (
-              <Row key={r.id}>
-                <span className="break-all">
-                  {r.kind} · {r.id}
-                </span>
-                <span>
-                  {r.survivesClusterDeletion
-                    ? "Retained"
-                    : "Deletion candidate"}{" "}
-                  · {r.ownership} · {exactUSD(r.estimatedHourlyMicroUsd)} / hour
-                </span>
-              </Row>
-            ))}
-          </Rows>
+          {resources.length > 0 && (
+            <CloudTable
+              label="Retirement inventory"
+              columns={resourceColumns}
+              head={["Resource", "What happens", "Ownership", "Cost"]}
+              minWidth={560}
+            >
+              {resources.map((r) => (
+                <CloudTableRow key={r.id}>
+                  <NameCell mono name={r.id} meta={r.kind} />
+                  <Cell>
+                    {r.survivesClusterDeletion ? (
+                      <StatusPill tone="waiting">Retained</StatusPill>
+                    ) : (
+                      <StatusPill tone="failed">Deleted</StatusPill>
+                    )}
+                  </Cell>
+                  <Cell className="text-[12.5px]">
+                    {ownershipPhrase(r.ownership)}
+                  </Cell>
+                  <Cell className="text-[12.5px] tabular-nums">
+                    {microCost(r.estimatedHourlyMicroUsd)}
+                  </Cell>
+                </CloudTableRow>
+              ))}
+            </CloudTable>
+          )}
           {!!review.unknownCosts?.length && (
-            <p className="text-xs">
+            <p className="text-[12.5px] text-muted-foreground">
               Some retained charges are unknown. Review does not delete
               resources or release capacity.
             </p>

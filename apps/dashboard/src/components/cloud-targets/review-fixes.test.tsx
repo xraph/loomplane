@@ -154,7 +154,10 @@ it("stages a 15-minute move and links to the existing deployment planner with th
   const user = userEvent.setup()
   mount(<Pools cloud={cloud as never} servers={[host] as never} />)
   await user.click(
-    await screen.findByRole("button", { name: "Review service move" })
+    await screen.findByRole("button", { name: "More actions for Pool" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Move services" })
   )
   await user.click(screen.getByRole("combobox", { name: "Move project" }))
   await user.click(await screen.findByRole("option", { name: /Project/ }))
@@ -181,7 +184,7 @@ it("refreshes cached reservation usage after recovery before reopening the serve
   fixture()
   const user = userEvent.setup()
   mount(<Servers cloud={cloud as never} />)
-  await user.click(await screen.findByRole("button", { name: "Inspect Host" }))
+  await user.click(await screen.findByRole("button", { name: "Open Host" }))
   await user.click(
     await screen.findByRole("button", { name: "Review reservation recovery" })
   )
@@ -191,9 +194,9 @@ it("refreshes cached reservation usage after recovery before reopening the serve
   )
   expect(await screen.findByText("Recovery recorded.")).toBeInTheDocument()
   await user.keyboard("{Escape}")
-  await user.click(screen.getByRole("button", { name: "Inspect Host" }))
+  await user.click(screen.getByRole("button", { name: "Open Host" }))
   await waitFor(() =>
-    expect(screen.queryByText(/failed-reservation/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed.reservation/i)).not.toBeInTheDocument()
   )
   expect(
     screen.queryByRole("button", { name: "Review reservation recovery" })
@@ -229,7 +232,10 @@ it("shows denied project reads in move setup with retry", async () => {
   const user = userEvent.setup()
   mount(<Pools cloud={cloud as never} servers={[host] as never} />)
   await user.click(
-    await screen.findByRole("button", { name: "Review service move" })
+    await screen.findByRole("button", { name: "More actions for Pool" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Move services" })
   )
   expect(await screen.findByText(/projects unavailable/i)).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
@@ -291,9 +297,9 @@ it("retries a denied projects read and restores zone grant choices without reloa
 it.each([
   [
     "Servers",
-    "No servers connected",
-    "Connect existing server",
-    "Connect existing server",
+    "No servers yet",
+    "Connect server",
+    "Connect a server you already run",
   ],
   ["Domains", "No DNS zones", "Add DNS zone", "Add DNS zone"],
   ["Routes", "No routes for this project", "Add route", "Add route"],

@@ -417,9 +417,7 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
   })
   await waitFor(() => expect(access).toHaveTextContent("Web app"))
   // Web app may use frontend and api, not worker, and production chose it.
-  expect(access).toHaveTextContent(
-    /May use\s*frontend\s*api\s*Environments\s*production/
-  )
+  expect(access).toHaveTextContent(/Web app\s*frontend\s*api\s*production/)
   expect(access).not.toHaveTextContent("worker")
   expect(
     screen.getByRole("button", { name: "Edit access" })
@@ -439,7 +437,9 @@ it("gives a project access to only the targets you tick", async () => {
     await screen.findByText("No project has access yet")
   ).toBeInTheDocument()
   await user.click(
-    await screen.findByRole("button", { name: "Give a project access" })
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
   )
   await user.click(screen.getByRole("combobox", { name: "Project" }))
   await user.click(await screen.findByRole("option", { name: /Jobs/ }))
@@ -473,7 +473,9 @@ it("disables target choices for whole Cloud access and all grant choices while s
   show()
   await openTab("Projects")
   await user.click(
-    await screen.findByRole("button", { name: "Give a project access" })
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
   )
   const wholeCloud = screen.getByRole("checkbox", { name: /Whole Cloud/ })
   const frontend = screen.getByRole("checkbox", { name: /Frontend/ })
@@ -510,7 +512,7 @@ it("sets a targetless Cloud's one provider and account", async () => {
   expect(
     await screen.findByText(/every service on it runs here/)
   ).toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "Set default provider" }))
+  await user.click(screen.getByRole("button", { name: "Set default" }))
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
@@ -543,9 +545,7 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   fixture({ inUse: true })
   show()
   await openTab("Targets")
-  await user.click(
-    await screen.findByRole("button", { name: "Set default provider" })
-  )
+  await user.click(await screen.findByRole("button", { name: "Set default" }))
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
@@ -645,7 +645,7 @@ it("says which limits are missing before letting pools grow", async () => {
 
 // A paused deployment's "Review capacity" opens the Cloud on its Capacity
 // tab, with ?project= set. A manager lands there with usage, the growth
-// policy, the pools' rules with New scaling pool, and waiting servers.
+// policy, the pools' rules with Add pool, and waiting servers.
 it("opens on the Capacity tab with usage, the policy, pools and expansions", async () => {
   const { reads } = fixture()
   show("web", "capacity")
@@ -664,7 +664,7 @@ it("opens on the Capacity tab with usage, the policy, pools and expansions", asy
     after(usage, policy) && after(policy, pools) && after(pools, waiting)
   ).toBe(true)
   expect(
-    within(pools).getByRole("button", { name: "New scaling pool" })
+    within(pools).getByRole("button", { name: "Add pool" })
   ).toBeInTheDocument()
   await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
   // Capacity lives on its own tab; Servers doesn't mount a second copy.
@@ -679,10 +679,10 @@ it("reloads a saved cluster operation on Infrastructure without issuing creation
   const { reads, writes } = fixture()
   show()
   expect(await screen.findByText("Saved worker")).toBeInTheDocument()
-  expect(screen.getByRole("tab", { name: /^Infrastructure/ })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  )
+  // The operation is a page of its own under Infrastructure, with a way back.
+  expect(
+    screen.getByRole("button", { name: /Production · Infrastructure/ })
+  ).toBeInTheDocument()
   expect(reads.some((path) => path.includes("cluster-operations/saved"))).toBe(
     true
   )
@@ -721,24 +721,24 @@ it("keeps cluster operations beyond the first history page reachable", async () 
   fixture({ clusterOperations })
   show()
   await openTab("Changes")
-  await userEvent.click(await screen.findByRole("radio", { name: "clusters" }))
+  await userEvent.click(await screen.findByRole("tab", { name: "Clusters" }))
   await screen.findByRole("link", { name: "Create cluster: workers-49" })
   expect(
     screen.queryByRole("link", { name: "Create cluster: workers-50" })
   ).not.toBeInTheDocument()
   await userEvent.click(
-    screen.getByRole("button", { name: "Next cluster changes" })
+    screen.getByRole("button", { name: "Older cluster changes" })
   )
   const saved = await screen.findByRole("link", {
     name: "Create cluster: workers-50",
   })
   expect(saved).toHaveAttribute(
     "href",
-    "/clouds/c?tab=servers&clusterOperation=cluster-op-50"
+    "/clouds/c?tab=infrastructure&clusterOperation=cluster-op-50"
   )
   await screen.findByText("Needs attention")
   await userEvent.click(
-    screen.getByRole("button", { name: "First cluster changes" })
+    screen.getByRole("button", { name: "Newer cluster changes" })
   )
   await screen.findByRole("link", { name: "Create cluster: workers-0" })
 })

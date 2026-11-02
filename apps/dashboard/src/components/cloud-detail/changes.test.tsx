@@ -121,13 +121,13 @@ it("names lifecycle changes, refreshes persisted history on reconnect and follow
   expect(reads).toBeGreaterThan(before)
   expect(link).toHaveAttribute(
     "href",
-    "/workspace/clouds/cloud?tab=servers&clusterOperation=op"
+    "/workspace/clouds/cloud?tab=infrastructure&clusterOperation=op"
   )
   await userEvent.setup().click(link)
   await screen.findByText("Saved operation destination")
   await waitFor(() =>
     expect(history.location.href).toContain(
-      "/workspace/clouds/cloud?tab=servers&clusterOperation=op"
+      "/workspace/clouds/cloud?tab=infrastructure&clusterOperation=op"
     )
   )
   expect(writes).toEqual([])
