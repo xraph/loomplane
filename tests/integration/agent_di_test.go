@@ -16,6 +16,8 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
@@ -51,4 +53,7 @@ func TestAgentDependenciesAreProvided(t *testing.T) {
 	resolves[*repositories.Connections](t, c, "repository connections")
 	resolves[*realtime.PgStore](t, c, "realtime store")
 	resolves[realtime.WakeSource](t, c, "realtime wake source")
+	resolves[*releasewatch.Service](t, c, "release watches")
+	resolves[releasehealth.Reader](t, c, "release health reader")
+	resolves[*planning.PgStore](t, c, "planning store")
 }

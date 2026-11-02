@@ -28,6 +28,8 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -90,6 +92,8 @@ type world struct {
 	github   *fakeGitHub
 	disco    *fakeDiscovery
 	mans     *fakeManifests
+	health   *fakeHealth
+	watches  *fakeWatches
 }
 
 func newWorld(t *testing.T) *world {
@@ -98,7 +102,7 @@ func newWorld(t *testing.T) *world {
 		t: t, authz: newAuthz(t), pstore: newMemProjects(), dstore: newMemDeployments(),
 		shield: &fakeShield{}, audit: &recordingAuditor{}, logs: &fakeLogs{lines: map[string][]string{}},
 		plans: &fakePlans{plans: map[string]*planning.Plan{}}, vars: &fakeVariables{}, github: &fakeGitHub{},
-		disco: &fakeDiscovery{}, mans: &fakeManifests{},
+		disco: &fakeDiscovery{}, mans: &fakeManifests{}, health: &fakeHealth{}, watches: &fakeWatches{watches: map[string]*releasewatch.Watch{}},
 	}
 	w.projects = projects.NewService(w.pstore, w.authz, noInit{}, nil)
 	dsvc := deployments.NewService(w.dstore, w.authz, noRetry{}, nil)
@@ -109,7 +113,9 @@ func newWorld(t *testing.T) *world {
 		Projects: w.projects, Environments: w.vars, Discovery: w.disco, GitHub: w.github, Manifests: w.mans,
 		Plans: w.plans, Deployments: dsvc, Logs: w.logs, Authz: w.authz,
 		Safety: &agentsafety.Scanner{Engine: w.shield}, Audit: w.audit,
+		Health: w.health, Bindings: w.plans, Watches: w.watches,
 	}
+	w.watches.deps = dsvc
 	w.reg = NewRegistry()
 	Builtins(w.reg, w.deps)
 	return w
@@ -533,6 +539,37 @@ type fakePlans struct {
 	deployed []*planning.DeployedRepository
 	created  []planning.CreatePlanInput
 	rejected []string
+	rollback []planning.RollbackInput
+}
+
+func (f *fakePlans) RollbackTarget(ctx context.Context, p security.Principal, projectID, environment, deploymentID string) (*planning.RollbackTarget, error) {
+	if err := f.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
+		return nil, err
+	}
+	return &planning.RollbackTarget{Environment: environment, Target: planning.ReleaseRef{DeploymentID: deploymentID}}, nil
+}
+
+func (f *fakePlans) CreateRollback(ctx context.Context, p security.Principal, projectID string, in planning.RollbackInput) (*planning.Plan, error) {
+	if err := f.authz.Require(ctx, p, security.DeploymentCreate, projectID); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rollback = append(f.rollback, in)
+	pl := &planning.Plan{ID: fmt.Sprintf("plan_rb%d", len(f.rollback)), OrgID: p.OrgID, ProjectID: projectID, Environment: in.Environment, Kind: planning.KindRollback, Status: planning.StatusReady}
+	f.plans[pl.ID] = pl
+	return pl, nil
+}
+
+// GetBinding is planning's store lookup, by org and ID.
+func (f *fakePlans) GetBinding(_ context.Context, orgID, id string) (*planning.Binding, error) {
+	for _, b := range f.bindings {
+		if b.OrgID == orgID && b.ID == id {
+			c := *b
+			return &c, nil
+		}
+	}
+	return nil, planning.ErrNotFound
 }
 
 func (f *fakePlans) Create(ctx context.Context, p security.Principal, projectID string, in planning.CreatePlanInput) (*planning.Plan, error) {
@@ -685,3 +722,52 @@ func hasKey(v any, key string) bool {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// fakeHealth answers every read with one reading and remembers the
+// windows it was asked for.
+type fakeHealth struct {
+	mu      sync.Mutex
+	reading releasehealth.Health
+	asked   []releasehealth.Window
+}
+
+func (f *fakeHealth) Health(_ context.Context, _, _, _ string, w releasehealth.Window) (releasehealth.Health, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, w)
+	return f.reading, nil
+}
+
+// fakeWatches is the release watch service over a map, reading the
+// deployment through the real deployments service as the watch service
+// does.
+type fakeWatches struct {
+	deps    *deployments.Service
+	watches map[string]*releasewatch.Watch
+}
+
+func (f *fakeWatches) ForDeployment(ctx context.Context, p security.Principal, id string) (*releasewatch.Watch, error) {
+	if _, err := f.deps.Get(ctx, p, id); err != nil {
+		return nil, err
+	}
+	w, ok := f.watches[id]
+	if !ok {
+		return nil, releasewatch.ErrNotFound
+	}
+	c := *w
+	return &c, nil
+}
+
+// denyAuthz is the real Authorizer, except that the person user lacks perm.
+type denyAuthz struct {
+	Authorizer
+	user string
+	perm security.Permission
+}
+
+func (d denyAuthz) Require(ctx context.Context, p security.Principal, perm security.Permission, resource string) error {
+	if person, ok := p.Person(); ok && person.UserID == d.user && perm == d.perm {
+		return fmt.Errorf("%w (%s): the person the agent acts for lacks it", security.ErrForbidden, perm.Name())
+	}
+	return d.Authorizer.Require(ctx, p, perm, resource)
+}

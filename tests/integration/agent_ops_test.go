@@ -113,6 +113,17 @@ func TestAgentOperationsKeepToTheirWorkspace(t *testing.T) {
 			t.Errorf("Engines' agent deployed(%q): %q, %v; want not found", ref, res, err)
 		}
 	}
+	evidence := map[string]map[string]string{
+		"recent_canaries": {"project": proj.Slug, "environment": "production"},
+		"rollback_target": {"project": proj.Slug, "environment": "production"},
+		"binding_metrics": {"project": proj.Slug, "environment": "production", "service": "api"},
+	}
+	for op, args := range evidence {
+		res, err := a.invoke(t, reg, op, args)
+		if err == nil || agentops.ErrorKind(err) != "not_found" {
+			t.Errorf("Engines' agent %s: %q, %v; want not found", op, res, err)
+		}
+	}
 	res, err := a.invoke(t, reg, "list_projects", defs.NoInput{})
 	if err != nil || strings.Contains(res, proj.ID) {
 		t.Fatalf("Engines' agent lists %s, %v", res, err)
@@ -122,6 +133,15 @@ func TestAgentOperationsKeepToTheirWorkspace(t *testing.T) {
 		if _, readErr := b.invoke(t, reg, op, map[string]string{"project": proj.Slug}); readErr != nil {
 			t.Errorf("Ledger's agent %s: %v", op, readErr)
 		}
+	}
+	res, err = b.invoke(t, reg, "recent_canaries", evidence["recent_canaries"])
+	if err != nil || res != `{"canaries":[]}` {
+		t.Fatalf("Ledger's agent recent_canaries: %s, %v", res, err)
+	}
+	// Ledger runs no api yet: the real planning service and the binding
+	// lookup find nothing, after the project's infrastructure:read passed.
+	if res, err = b.invoke(t, reg, "binding_metrics", evidence["binding_metrics"]); agentops.ErrorKind(err) != "not_found" || !strings.Contains(err.Error(), "doesn't run") {
+		t.Fatalf("Ledger's agent binding_metrics: %s, %v", res, err)
 	}
 	res, err = b.invoke(t, reg, "list_variables", map[string]string{"project": "ledger"})
 	if err != nil || !strings.Contains(res, `"key":"LEDGER_MODE"`) || strings.Contains(res, "strict") {

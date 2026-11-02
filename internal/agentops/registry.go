@@ -31,6 +31,8 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	defs "github.com/xraph/loomplane/pkg/agentops"
@@ -363,6 +365,24 @@ type Deps struct {
 	Authz        Authorizer
 	Safety       *agentsafety.Scanner
 	Audit        projects.Auditor
+	// Health reads a binding's traffic from its cloud's monitoring. It
+	// reads without a principal, so binding_metrics checks
+	// infrastructure:read on the project itself first.
+	Health releasehealth.Reader
+	// Bindings looks a binding up by ID in an organization, without a
+	// principal: *planning.PgStore.
+	Bindings BindingLookup
+	Watches  WatchService
+}
+
+// BindingLookup is *planning.PgStore's binding read.
+type BindingLookup interface {
+	GetBinding(ctx context.Context, orgID, id string) (*planning.Binding, error)
+}
+
+// WatchService is *releasewatch.Service.
+type WatchService interface {
+	ForDeployment(ctx context.Context, p security.Principal, deploymentID string) (*releasewatch.Watch, error)
 }
 
 // ProjectService is *projects.Service.
@@ -407,6 +427,8 @@ type PlanService interface {
 	Bindings(ctx context.Context, p security.Principal, projectID, environment string) ([]*planning.Binding, error)
 	Deployed(ctx context.Context, p security.Principal, projectID, environment string) ([]*planning.DeployedRepository, error)
 	DraftManifest(ctx context.Context, p security.Principal, projectID string) (*planning.ManifestDraft, error)
+	RollbackTarget(ctx context.Context, p security.Principal, projectID, environment, deploymentID string) (*planning.RollbackTarget, error)
+	CreateRollback(ctx context.Context, p security.Principal, projectID string, in planning.RollbackInput) (*planning.Plan, error)
 }
 
 // DeploymentService is *deployments.Service.
@@ -415,6 +437,8 @@ type DeploymentService interface {
 	Get(ctx context.Context, p security.Principal, id string) (*deployments.Deployment, error)
 	ForPlan(ctx context.Context, p security.Principal, planID string) (*deployments.Deployment, error)
 	Retry(ctx context.Context, p security.Principal, id string) (*deployments.Deployment, error)
+	Canary(ctx context.Context, p security.Principal, deploymentID string) (*deployments.CanaryReport, error)
+	RecentCanaries(ctx context.Context, p security.Principal, projectID, environmentID string, limit int) ([]deployments.CanaryRun, error)
 }
 
 // LogStore is *realtime.PgStore. It reads without a principal, so

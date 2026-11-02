@@ -86,7 +86,7 @@ func registerDeployments(r *Registry, d *Deps) {
 		return d.quoteDeployment(ctx, dep), nil
 	})
 
-	Register(r, def("retry_deployment"), security.DeploymentCreate, func(ctx context.Context, call Call, in defs.DeploymentInput) (*deployments.Deployment, error) {
+	Register(r, def("retry_deployment"), security.DeploymentApprove, func(ctx context.Context, call Call, in defs.DeploymentInput) (*deployments.Deployment, error) {
 		dep, err := d.deployment(ctx, call, in.DeploymentID)
 		if err != nil {
 			return nil, err

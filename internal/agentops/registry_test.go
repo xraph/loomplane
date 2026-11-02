@@ -22,7 +22,7 @@ import (
 
 // later are agent definitions this package doesn't serve yet: list_teams
 // needs the teams service, which lands with the teams work.
-var later = []string{"list_teams", "binding_metrics", "canary_report", "create_rollback", "get_release_watch", "recent_canaries", "rollback_target"}
+var later = []string{"list_teams"}
 
 func panicsWith(t *testing.T, want string, fn func()) {
 	t.Helper()

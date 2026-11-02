@@ -118,7 +118,7 @@ func (c Call) inScope(ctx context.Context, projectID, environmentID string) erro
 
 // notFound are the errors that mean "no such thing" across the services.
 var notFound = []error{
-	errOutOfScope, errProjectNotFound,
+	errOutOfScope, errProjectNotFound, errNoService,
 	projects.ErrNotFound, projects.ErrEnvironmentNotFound, planning.ErrNotFound, deployments.ErrNotFound,
 	discovery.ErrNotFound, environments.ErrNotFound, manifests.ErrNotFound, releasewatch.ErrNotFound,
 }

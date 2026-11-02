@@ -122,9 +122,6 @@ func registerPlans(r *Registry, d *Deps) {
 	})
 
 	Register(r, def("create_plan"), security.DeploymentCreate, func(ctx context.Context, call Call, in defs.CreatePlanInput) (*planning.Plan, error) {
-		if in.From != "" {
-			return nil, fmt.Errorf("%w: promoting from another environment isn't available yet", errInvalid)
-		}
 		p, err := d.findProject(ctx, call, in.Project)
 		if err != nil {
 			return nil, err
@@ -132,7 +129,7 @@ func registerPlans(r *Registry, d *Deps) {
 		if _, err = d.environment(ctx, call, p.ID, in.Environment); err != nil {
 			return nil, err
 		}
-		plan, err := d.Plans.Create(ctx, call.Principal, p.ID, planning.CreatePlanInput{Environment: in.Environment, Scope: in.Scope})
+		plan, err := d.Plans.Create(ctx, call.Principal, p.ID, planning.CreatePlanInput{Environment: in.Environment, Scope: in.Scope, From: in.From})
 		if err != nil {
 			return nil, err
 		}
