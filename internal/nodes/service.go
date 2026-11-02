@@ -143,7 +143,7 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	n := &Node{
 		ID: id, OrgID: claim.OrgID, Name: name, PublicKey: in.PublicKey,
 		KeyFingerprint: nodeproto.Fingerprint(ed25519.PublicKey(in.PublicKey)), IdentityGeneration: 1,
-		Status: StatusPending, Endpoints: joinEndpoints(in.Endpoints, claim.Scope.Endpoints), IngressMode: "none",
+		Status: StatusPending, Endpoints: joinEndpoints(in.Endpoints, claim.Scope.Endpoints), IngressMode: nodeproto.IngressNone,
 		Role: role, EdgeScope: claim.Scope.EdgeScope, Labels: labels, Version: in.NodeVersion,
 		ProtocolVersion: in.ProtocolVersion, Inventory: in.Inventory,
 		JoinedBy: claim.MintedBy, JoinedByKeyID: claim.MintedByKeyID,
@@ -340,7 +340,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 	}
 	if u.IngressMode != nil {
 		switch *u.IngressMode {
-		case "none", "direct", "relay":
+		case nodeproto.IngressNone, nodeproto.IngressDirect, nodeproto.IngressRelay:
 		default:
 			return nil, fmt.Errorf("%w: ingress mode must be none, direct or relay", ErrInvalid)
 		}

@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestConfigRoundTrip0600(t *testing.T) {
 		t.Fatal("missing config should error")
 	}
 	in := Config{URL: "https://x", NodeID: "n1", OrgID: "o1", IdentityGeneration: 3,
-		Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}, IngressMode: "relay", DockerSocket: "/s", Edge: true}
+		Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}, IngressMode: nodeproto.IngressRelay, DockerSocket: "/s", Edge: true}
 	if err := s.SaveConfig(in); err != nil {
 		t.Fatal(err)
 	}
@@ -106,5 +107,100 @@ func TestLoadConfigDefaultsIngressNone(t *testing.T) {
 	c, err := s.LoadConfig()
 	if err != nil || c.IngressMode != "none" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+func TestStateDirTightenedAndChecked(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "s")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (State{Dir: dir}).Identity(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("not tightened: %v", fi.Mode())
+	}
+}
+
+func TestStateDirOwnedBySomeoneElseRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip()
+	}
+	s := State{Dir: t.TempDir(), euid: func() int { return os.Geteuid() + 1 }}
+	for name, f := range map[string]func() error{
+		"identity": func() error { _, err := s.Identity(); return err },
+		"load":     func() error { _, err := s.LoadConfig(); return err },
+		"save":     func() error { return s.SaveConfig(Config{}) },
+	} {
+		if err := f(); err == nil || !strings.Contains(err.Error(), "owned by") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestStateDirSymlinkRefused(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (State{Dir: link}).Identity(); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestIdentitySymlinkRefused(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
+	if _, err := (State{Dir: other}).Identity(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, "identity.key"), filepath.Join(dir, "identity.key")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (State{Dir: dir}).Identity(); err == nil {
+		t.Fatal("symlinked identity.key must be refused")
+	}
+}
+
+func TestIdentityConcurrentFirstRun(t *testing.T) {
+	s := State{Dir: filepath.Join(t.TempDir(), "s")}
+	keys := make(chan string, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			k, err := s.Identity()
+			if err != nil {
+				keys <- "err: " + err.Error()
+				return
+			}
+			keys <- string(k)
+		}()
+	}
+	first := <-keys
+	for i := 1; i < 8; i++ {
+		if got := <-keys; got != first || strings.HasPrefix(got, "err:") {
+			t.Fatalf("racing first runs disagree: %.40q vs %.40q", got, first)
+		}
+	}
+	entries, _ := os.ReadDir(s.Dir)
+	if len(entries) != 1 {
+		t.Fatalf("leftovers: %v", entries)
+	}
+}
+
+func TestSupported(t *testing.T) {
+	if err := supportedFor("linux"); err != nil {
+		t.Fatal(err)
+	}
+	if err := supportedFor("darwin"); err != nil {
+		t.Fatal(err)
+	}
+	err := supportedFor("windows")
+	if err == nil || err.Error() != "loomplane node runs on Linux and macOS; this machine runs windows" {
+		t.Fatalf("%v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/hashicorp/yamux"
 
@@ -211,10 +212,23 @@ func readReason(r io.Reader) string {
 		}
 		b.WriteByte(c[0])
 	}
-	if reason := strings.TrimSpace(b.String()); reason != "" {
+	if reason := sanitizeReason(b.String()); reason != "" {
 		return reason
 	}
 	return "no reason given"
+}
+
+// sanitizeReason drops control and non-printable runes and invalid UTF-8, so
+// a hostile node cannot put escape sequences into logs or API errors.
+func sanitizeReason(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, s)
+	return strings.TrimSpace(s)
 }
 
 // register makes s the node's local session and closes an older one. It

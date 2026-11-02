@@ -2,6 +2,8 @@ package node
 
 import (
 	"slices"
+	"sync"
+	"sync/atomic"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -14,7 +16,7 @@ func (c Config) Allows(e nodeproto.Endpoint) bool {
 	case nodeproto.EndpointControl:
 		return true
 	case nodeproto.EndpointPublic:
-		return c.IngressMode == "relay" || c.IngressMode == "direct"
+		return c.IngressMode == nodeproto.IngressRelay || c.IngressMode == nodeproto.IngressDirect
 	}
 	return slices.Contains(c.Endpoints, e)
 }
@@ -30,5 +32,42 @@ func (c *Config) Narrow(keep []nodeproto.Endpoint) []nodeproto.Endpoint {
 		}
 	}
 	c.Endpoints = next
+	return next
+}
+
+// Live holds the node's current Config so the control loop can change it while
+// streams are being served. It is copy on write: readers get a value and never
+// see a half-updated slice.
+type Live struct {
+	mu sync.Mutex
+	p  atomic.Pointer[Config]
+}
+
+// NewLive returns a Live holding a copy of c.
+func NewLive(c Config) *Live {
+	l := &Live{}
+	c.Endpoints = slices.Clone(c.Endpoints)
+	l.p.Store(&c)
+	return l
+}
+
+// Load returns a snapshot. Its Endpoints do not alias the stored slice.
+func (l *Live) Load() Config {
+	c := *l.p.Load()
+	c.Endpoints = slices.Clone(c.Endpoints)
+	return c
+}
+
+// Update applies f to a copy and publishes it, then returns the new Config.
+// Updates are serialized.
+func (l *Live) Update(f func(*Config)) Config {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	next := *l.p.Load()
+	next.Endpoints = slices.Clone(next.Endpoints)
+	f(&next)
+	stored := next
+	stored.Endpoints = slices.Clone(next.Endpoints)
+	l.p.Store(&stored)
 	return next
 }

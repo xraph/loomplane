@@ -414,7 +414,7 @@ func (h *Hub) hopOpen(ctx context.Context, target string, n *Node, hdr nodeproto
 		if body == "" {
 			body = "no reason given"
 		}
-		return nil, &refusedError{reason: body}
+		return nil, &refusedError{reason: sanitizeReason(body)}
 	case http.StatusNotFound:
 		return nil, ErrNotFound
 	case http.StatusServiceUnavailable:

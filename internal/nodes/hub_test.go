@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -423,6 +424,18 @@ func TestOpenRefused(t *testing.T) {
 		if _, err := r.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: e}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("%s: %v", e, err)
 		}
+	}
+}
+
+func TestOpenRefusedReasonIsSanitized(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1")
+	n := r.connect("node_1", priv, "")
+	n.verdict = func(nodeproto.StreamHeader) (byte, string) { return 1, "bad \x1b[31mred\x00 \xff end" }
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	_, err := r.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker})
+	if err == nil || !utf8.ValidString(err.Error()) || strings.ContainsAny(err.Error(), "\x1b\x00") || !strings.Contains(err.Error(), "bad [31mred  end") {
+		t.Fatalf("err %q", err)
 	}
 }
 

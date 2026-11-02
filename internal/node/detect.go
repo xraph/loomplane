@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,8 +26,9 @@ import (
 // DetectOptions carries what Detect needs. Zero fields use the real machine,
 // and tests inject the rest. Detect never reads a kubeconfig.
 type DetectOptions struct {
-	// Config, when set, supplies the informational endpoint list.
-	Config        *Config
+	// Config is a snapshot (Live.Load) that supplies the informational
+	// endpoint list.
+	Config        Config
 	DockerSockets []string
 	PodmanSockets []string
 	// NvidiaSMI runs nvidia-smi and returns its CSV output.
@@ -65,9 +67,9 @@ func runNvidiaSMI(ctx context.Context) ([]byte, error) {
 		"--query-gpu=name,memory.total", "--format=csv,noheader,nounits").Output()
 }
 
-// Detect reports what the machine offers. Missing runtimes and GPUs are not
-// errors.
-func Detect(ctx context.Context, o DetectOptions) (nodeproto.Inventory, error) {
+// Detect reports what the machine offers. Missing runtimes and GPUs are just
+// absent from the result.
+func Detect(ctx context.Context, o DetectOptions) nodeproto.Inventory {
 	if o.DockerSockets == nil {
 		o.DockerSockets = dockerSockets()
 	}
@@ -100,10 +102,8 @@ func Detect(ctx context.Context, o DetectOptions) (nodeproto.Inventory, error) {
 		inv.GPUs = parseNvidia(out)
 	}
 	inv.Ports80443 = o.Ports()
-	if o.Config != nil {
-		inv.Endpoints = append([]nodeproto.Endpoint(nil), o.Config.Endpoints...)
-	}
-	return inv, nil
+	inv.Endpoints = slices.Clone(o.Config.Endpoints)
+	return inv
 }
 
 // parseNvidia turns "name, memory" CSV lines into GPUs and skips bad lines.
@@ -261,12 +261,4 @@ func memoryMiB(ctx context.Context) int64 {
 		}
 	}
 	return 0
-}
-
-func diskGiB() int64 {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs("/", &st); err != nil {
-		return 0
-	}
-	return int64(st.Blocks) * int64(st.Bsize) / (1 << 30) //nolint:gosec // disk sizes fit int64
 }

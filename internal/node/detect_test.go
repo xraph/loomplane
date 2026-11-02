@@ -26,10 +26,7 @@ func fakeOpts(t *testing.T) DetectOptions {
 }
 
 func TestDetectNoDocker(t *testing.T) {
-	inv, err := Detect(context.Background(), fakeOpts(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	inv := Detect(context.Background(), fakeOpts(t))
 	if inv.Docker != nil || inv.Podman != nil || len(inv.GPUs) != 0 {
 		t.Fatalf("%+v", inv)
 	}
@@ -43,7 +40,7 @@ func TestDetectNvidiaParse(t *testing.T) {
 	o.NvidiaSMI = func(context.Context) ([]byte, error) {
 		return []byte("NVIDIA GeForce RTX 4090, 24564\nTesla T4, 15360\n\n"), nil
 	}
-	inv, _ := Detect(context.Background(), o)
+	inv := Detect(context.Background(), o)
 	if len(inv.GPUs) != 2 || inv.GPUs[0] != (nodeproto.GPU{Vendor: "nvidia", Model: "NVIDIA GeForce RTX 4090", MemoryMiB: 24564}) || inv.GPUs[1].MemoryMiB != 15360 {
 		t.Fatalf("%+v", inv.GPUs)
 	}
@@ -57,8 +54,8 @@ func TestParseNvidiaSkipsGarbage(t *testing.T) {
 
 func TestDetectEndpointsFromConfig(t *testing.T) {
 	o := fakeOpts(t)
-	o.Config = &Config{Endpoints: []nodeproto.Endpoint{eDocker}}
-	inv, _ := Detect(context.Background(), o)
+	o.Config = Config{Endpoints: []nodeproto.Endpoint{eDocker}}
+	inv := Detect(context.Background(), o)
 	if len(inv.Endpoints) != 1 || inv.Endpoints[0] != eDocker {
 		t.Fatalf("%v", inv.Endpoints)
 	}
@@ -80,7 +77,7 @@ func TestDetectDockerOverUnixSocket(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	o := fakeOpts(t)
 	o.DockerSockets = []string{sock}
-	inv, _ := Detect(context.Background(), o)
+	inv := Detect(context.Background(), o)
 	if inv.Docker == nil || inv.Docker.Socket != sock || inv.Docker.Version != "27.1.0" {
 		t.Fatalf("%+v", inv.Docker)
 	}

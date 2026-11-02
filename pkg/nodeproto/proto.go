@@ -56,6 +56,13 @@ func AllowableEndpoints() []Endpoint {
 	return []Endpoint{EndpointProbe, EndpointDocker, EndpointDial, EndpointKube, EndpointFirecracker}
 }
 
+// Ingress modes a node can run.
+const (
+	IngressNone   = "none"
+	IngressDirect = "direct"
+	IngressRelay  = "relay"
+)
+
 // Fence carries the ownership claim a stream operates under.
 type Fence struct {
 	Resource   string `json:"resource"`

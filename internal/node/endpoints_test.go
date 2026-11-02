@@ -2,16 +2,21 @@ package node
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
-func serveWith(t *testing.T, r *Registry, cfg *Config, hdr nodeproto.StreamHeader) (net.Conn, chan struct{}) {
+func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+func serveWith(t *testing.T, r *Registry, cfg *Live, hdr nodeproto.StreamHeader) (net.Conn, chan struct{}) {
 	t.Helper()
 	a, b := net.Pipe()
 	done := make(chan struct{})
@@ -38,9 +43,9 @@ func readRefusal(t *testing.T, c net.Conn) (byte, string) {
 }
 
 func TestServeRefusesDisallowed(t *testing.T) {
-	r := &Registry{}
+	r := &Registry{Log: discardLog()}
 	r.Register(eKube, func(context.Context, nodeproto.StreamHeader, net.Conn) error { t.Error("ran"); return nil })
-	c, done := serveWith(t, r, &Config{Endpoints: []nodeproto.Endpoint{eDocker}}, nodeproto.StreamHeader{Endpoint: eKube})
+	c, done := serveWith(t, r, NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker}}), nodeproto.StreamHeader{Endpoint: eKube})
 	v, line := readRefusal(t, c)
 	if v != 1 || line != "endpoint kube is not allowed on this node\n" {
 		t.Fatalf("%d %q", v, line)
@@ -49,8 +54,8 @@ func TestServeRefusesDisallowed(t *testing.T) {
 }
 
 func TestServeRefusesUnregistered(t *testing.T) {
-	r := &Registry{}
-	c, done := serveWith(t, r, &Config{Endpoints: []nodeproto.Endpoint{eDocker}}, nodeproto.StreamHeader{Endpoint: eDocker})
+	r := &Registry{Log: discardLog()}
+	c, done := serveWith(t, r, NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker}}), nodeproto.StreamHeader{Endpoint: eDocker})
 	v, line := readRefusal(t, c)
 	if v != 1 || line != "endpoint docker is not available in this node version\n" {
 		t.Fatalf("%d %q", v, line)
@@ -59,12 +64,12 @@ func TestServeRefusesUnregistered(t *testing.T) {
 }
 
 func TestServeRunsHandler(t *testing.T) {
-	r := &Registry{}
+	r := &Registry{Log: discardLog()}
 	r.Register(eDocker, func(_ context.Context, h nodeproto.StreamHeader, s net.Conn) error {
 		_, err := s.Write([]byte("hi " + h.Target))
 		return err
 	})
-	c, done := serveWith(t, r, &Config{Endpoints: []nodeproto.Endpoint{eDocker}}, nodeproto.StreamHeader{Endpoint: eDocker, Target: "x"})
+	c, done := serveWith(t, r, NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker}}), nodeproto.StreamHeader{Endpoint: eDocker, Target: "x"})
 	var v [1]byte
 	if _, err := io.ReadFull(c, v[:]); err != nil || v[0] != 0 {
 		t.Fatalf("verdict %v %v", v, err)
@@ -79,17 +84,43 @@ func TestServeRunsHandler(t *testing.T) {
 func TestServeBadHeaderClosesQuietly(*testing.T) {
 	a, b := net.Pipe()
 	done := make(chan struct{})
-	go func() { (&Registry{}).Serve(context.Background(), &Config{}, b); close(done) }()
+	go func() { (&Registry{Log: discardLog()}).Serve(context.Background(), NewLive(Config{}), b); close(done) }()
 	_ = a.Close()
 	<-done
 }
 
 func TestServeProbeGatedLikeAnyOther(t *testing.T) {
-	r := &Registry{}
+	r := &Registry{Log: discardLog()}
 	r.Register(eProbe, ProbeHandler(func() DetectOptions { return DetectOptions{} }))
-	c, done := serveWith(t, r, &Config{}, nodeproto.StreamHeader{Endpoint: eProbe})
+	c, done := serveWith(t, r, NewLive(Config{}), nodeproto.StreamHeader{Endpoint: eProbe})
 	if v, _ := readRefusal(t, c); v != 1 {
 		t.Fatalf("probe should be refused when not allowed, got %d", v)
+	}
+	<-done
+}
+
+func TestServeRefusesAfterNarrowAndLogs(t *testing.T) {
+	var buf bytes.Buffer
+	r := &Registry{Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	r.Register(eKube, func(context.Context, nodeproto.StreamHeader, net.Conn) error { t.Error("ran"); return nil })
+	live := NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker, eKube}})
+	live.Update(func(c *Config) { c.Narrow([]nodeproto.Endpoint{eDocker}) })
+	c, done := serveWith(t, r, live, nodeproto.StreamHeader{Endpoint: eKube})
+	if v, line := readRefusal(t, c); v != 1 || !strings.Contains(line, "not allowed") {
+		t.Fatalf("%d %q", v, line)
+	}
+	<-done
+	if !strings.Contains(buf.String(), "not allowed on this node") {
+		t.Fatalf("refusal not logged: %q", buf.String())
+	}
+}
+
+func TestRefusalReasonIsSanitized(t *testing.T) {
+	r := &Registry{Log: discardLog()}
+	c, done := serveWith(t, r, NewLive(Config{}), nodeproto.StreamHeader{Endpoint: "x\x1b[0m\ny"})
+	_, line := readRefusal(t, c)
+	if strings.ContainsAny(line[:len(line)-1], "\x1b\n") {
+		t.Fatalf("%q", line)
 	}
 	<-done
 }

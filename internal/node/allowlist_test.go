@@ -1,7 +1,11 @@
 package node
 
 import (
+	"context"
+	"io"
+	"net"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
@@ -57,5 +61,57 @@ func TestNarrowStaleWiderAfterNarrower(t *testing.T) {
 	}
 	if got := c.Narrow(nil); len(got) != 0 || c.Allows(eDocker) {
 		t.Fatalf("empty keep: %v", got)
+	}
+}
+
+func TestLiveLoadDoesNotAlias(t *testing.T) {
+	l := NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker, eProbe}})
+	got := l.Load()
+	got.Endpoints[0] = eKube
+	if l.Load().Allows(eKube) || !l.Load().Allows(eDocker) {
+		t.Fatal("Load aliases the stored slice")
+	}
+	before := l.Load()
+	l.Update(func(c *Config) { c.Narrow([]nodeproto.Endpoint{eDocker}) })
+	if len(before.Endpoints) != 2 {
+		t.Fatal("Update mutated an earlier snapshot")
+	}
+}
+
+func TestLiveConcurrentNarrowAndServe(t *testing.T) {
+	l := NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker, eProbe, eKube}, IngressMode: nodeproto.IngressNone})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			l.Update(func(c *Config) { c.Narrow([]nodeproto.Endpoint{eDocker, eProbe, eKube}) })
+			l.Update(func(c *Config) {
+				if i%2 == 0 {
+					c.IngressMode = nodeproto.IngressRelay
+				} else {
+					c.IngressMode = nodeproto.IngressNone
+				}
+			})
+		}
+		l.Update(func(c *Config) { c.Narrow([]nodeproto.Endpoint{eDocker}) })
+	}()
+	go func() {
+		defer wg.Done()
+		r := &Registry{Log: discardLog()}
+		for i := 0; i < 300; i++ {
+			_ = l.Load().Allows(eKube)
+			a, b := net.Pipe()
+			go func() {
+				_ = nodeproto.WriteHeader(a, nodeproto.StreamHeader{Endpoint: eKube})
+				_, _ = io.Copy(io.Discard, a)
+			}()
+			r.Serve(context.Background(), l, b)
+			_ = a.Close()
+		}
+	}()
+	wg.Wait()
+	if l.Load().Allows(eKube) {
+		t.Fatal("narrowed endpoint still allowed")
 	}
 }

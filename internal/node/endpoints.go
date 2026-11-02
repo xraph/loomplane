@@ -3,10 +3,11 @@ package node
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
-	"os"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -17,6 +18,9 @@ type Handler func(ctx context.Context, hdr nodeproto.StreamHeader, stream net.Co
 // Registry maps endpoints to handlers. Later phases call Register from their
 // own files.
 type Registry struct {
+	// Log receives refusals and handler errors. It defaults to slog.Default.
+	Log *slog.Logger
+
 	mu       sync.RWMutex
 	handlers map[nodeproto.Endpoint]Handler
 }
@@ -36,41 +40,60 @@ const verdictRefused = 1
 // Serve reads the stream header, writes the verdict and runs the handler.
 // The wire contract matches the hub: one verdict byte, 0 for accepted, and for
 // anything else a reason line ending in a newline.
-func (r *Registry) Serve(ctx context.Context, cfg *Config, stream net.Conn) {
+func (r *Registry) logger() *slog.Logger {
+	if r.Log != nil {
+		return r.Log
+	}
+	return slog.Default()
+}
+
+func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 	defer func() { _ = stream.Close() }()
 	hdr, err := nodeproto.ReadHeader(stream)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "loomplane-node: reading a stream header: %v\n", err)
+		r.logger().Warn("loomplane-node: reading a stream header", "error", err)
 		return
 	}
-	if !cfg.Allows(hdr.Endpoint) {
-		refuse(stream, fmt.Sprintf("endpoint %s is not allowed on this node", hdr.Endpoint))
+	if !cfg.Load().Allows(hdr.Endpoint) {
+		r.refuse(stream, fmt.Sprintf("endpoint %s is not allowed on this node", hdr.Endpoint))
 		return
 	}
 	r.mu.RLock()
 	h := r.handlers[hdr.Endpoint]
 	r.mu.RUnlock()
 	if h == nil {
-		refuse(stream, fmt.Sprintf("endpoint %s is not available in this node version", hdr.Endpoint))
+		r.refuse(stream, fmt.Sprintf("endpoint %s is not available in this node version", hdr.Endpoint))
 		return
 	}
 	if _, err := stream.Write([]byte{0}); err != nil {
 		return
 	}
 	if err := h(ctx, hdr, stream); err != nil {
-		fmt.Fprintf(os.Stderr, "loomplane-node: serving %s: %v\n", hdr.Endpoint, err)
+		r.logger().Warn("loomplane-node: serving a stream", "endpoint", sanitize(string(hdr.Endpoint)), "error", err)
 	}
 }
 
-// refuse writes the refusal verdict and a single-line reason. The hub reads at
-// most 512 bytes of reason, so the line is capped below that.
-func refuse(stream net.Conn, reason string) {
-	fmt.Fprintf(os.Stderr, "loomplane-node: refused a stream: %s\n", reason)
-	reason = strings.NewReplacer("\n", " ", "\r", " ").Replace(reason)
+// refuse sanitizes the reason, logs it and writes the refusal verdict and a
+// single-line reason. The hub reads at most 512 bytes of reason, so the line
+// is capped below that.
+func (r *Registry) refuse(stream net.Conn, reason string) {
+	reason = sanitize(reason)
 	if len(reason) > 500 {
-		reason = reason[:500]
+		reason = strings.ToValidUTF8(reason[:500], "")
 	}
+	r.logger().Warn("loomplane-node: refused a stream", "reason", reason)
 	if _, err := stream.Write(append([]byte{verdictRefused}, reason+"\n"...)); err != nil {
-		fmt.Fprintf(os.Stderr, "loomplane-node: writing a refusal: %v\n", err)
+		r.logger().Warn("loomplane-node: writing a refusal", "error", err)
 	}
+}
+
+// sanitize drops control and non-printable runes and invalid UTF-8.
+func sanitize(s string) string {
+	s = strings.ToValidUTF8(s, "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, s)
 }
