@@ -41,9 +41,7 @@ const verdictRefused = 1
 // headerTimeout is how long a stream may take to send its header.
 var headerTimeout = 10 * time.Second
 
-// Serve reads the stream header, writes the verdict and runs the handler.
-// The wire contract matches the hub: one verdict byte, 0 for accepted, and for
-// anything else a reason line ending in a newline.
+// logger is the registry's log, or the default one.
 func (r *Registry) logger() *slog.Logger {
 	if r.Log != nil {
 		return r.Log
@@ -51,6 +49,9 @@ func (r *Registry) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// Serve reads the stream header, writes the verdict and runs the handler.
+// The wire contract matches the hub: one verdict byte, 0 for accepted, and for
+// anything else a reason line ending in a newline.
 func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 	defer func() { _ = stream.Close() }()
 	// A stream that never sends its header must not hold a goroutine forever.

@@ -270,14 +270,52 @@ func writeAtomic(path string, data []byte) error {
 // writeExclusive creates path with data only if it does not exist. It links
 // the finished temp file into place, so a reader never sees a partial file and
 // two first runs cannot both win. It returns an error wrapping fs.ErrExist if
-// the file is already there.
+// the file is already there. Where the file system cannot link (some FUSE and
+// bind mounts), it creates the final name with O_EXCL instead: still
+// exclusive, but a reader could see the file half written.
 func writeExclusive(path string, data []byte) error {
+	return writeExclusiveWith(path, data, os.Link)
+}
+
+func writeExclusiveWith(path string, data []byte, link func(oldname, newname string) error) error {
 	tmp, err := writeTemp(path, data)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp) }()
-	if err := os.Link(tmp, path); err != nil {
+	if err := link(tmp, path); err != nil {
+		if !linkUnsupported(err) {
+			return err
+		}
+		return createExclusive(path, data)
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// linkUnsupported reports whether err says the file system has no hard links.
+func linkUnsupported(err error) bool {
+	return errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EPERM)
+}
+
+func createExclusive(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	fail := func(err error) error {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
 		return err
 	}
 	return syncDir(filepath.Dir(path))

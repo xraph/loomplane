@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: GOOS=windows GOARCH=amd64 go build ./cmd/loomctl
+      - run: GOOS=windows GOARCH=amd64 go build ./cmd/loomctl ./internal/node
 
   fuzz:
     name: Fuzz the parsers

@@ -411,10 +411,11 @@ func (h *Hub) hopOpen(ctx context.Context, target string, n *Node, hdr nodeproto
 	case http.StatusSwitchingProtocols:
 		return conn, nil
 	case http.StatusConflict:
-		if body == "" {
-			body = "no reason given"
+		reason := sanitizeReason(body)
+		if reason == "" {
+			reason = "no reason given"
 		}
-		return nil, &refusedError{reason: sanitizeReason(body)}
+		return nil, &refusedError{reason: reason}
 	case http.StatusNotFound:
 		return nil, ErrNotFound
 	case http.StatusServiceUnavailable:

@@ -1,10 +1,13 @@
 package node
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
@@ -202,5 +205,42 @@ func TestSupported(t *testing.T) {
 	err := supportedFor("windows")
 	if err == nil || err.Error() != "loomplane node runs on Linux and macOS; this machine runs windows" {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestWriteExclusiveFallsBackWhenLinkIsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity.key")
+	unsupported := func(string, string) error { return &os.LinkError{Op: "link", Err: syscall.EOPNOTSUPP} }
+	if err := writeExclusiveWith(path, []byte("secret"), unsupported); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "secret" {
+		t.Fatalf("read %q, %v", got, err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("leftover files: %v", entries)
+	}
+	// Still exclusive: a second writer loses.
+	if err := writeExclusiveWith(path, []byte("other"), unsupported); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("second write: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "secret" {
+		t.Fatalf("overwritten with %q", got)
+	}
+}
+
+func TestWriteExclusiveKeepsOtherLinkErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x")
+	boom := errors.New("boom")
+	if err := writeExclusiveWith(path, []byte("a"), func(string, string) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a failed link left a file")
 	}
 }
