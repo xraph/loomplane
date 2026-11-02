@@ -75,6 +75,9 @@ var (
 	MemberManage = Permission{"member", "manage"}
 
 	OrganizationAdminister = Permission{"organization", "administer"}
+
+	NodeRead   = Permission{"nodes", "read"}
+	NodeManage = Permission{"nodes", "manage"}
 )
 
 // Role slugs. They're Warden roles in each organization's tenant.
@@ -98,7 +101,7 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
-		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead,
+		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead, NodeRead,
 	}
 	developer := append(clone(viewer),
 		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
@@ -107,7 +110,7 @@ func Catalog() []RoleDef {
 	admin := append(clone(developer),
 		OrganizationCloudManage, ClusterManage, ClusterDelete, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
-		AIManage,
+		AIManage, NodeManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister, BackupRetire)
 	return []RoleDef{
