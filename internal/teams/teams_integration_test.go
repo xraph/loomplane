@@ -602,6 +602,86 @@ func TestSetGrantRules(t *testing.T) {
 	}
 }
 
+// The grant ceiling covers every team write that can move rights. A
+// caller's ceiling is their member role, raised by any workspace-wide
+// team grant they hold (a project grant doesn't raise it). They can't hand
+// out a role above it, and they can't change a team (its members, its
+// grants, its name, or whether it exists) whose highest grant, on the
+// workspace or any project, is above it.
+func TestCeilingCoversEveryTeamWrite(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	admins := r.grant(r.team("Admins", grace).ID, "admin", "")
+	devs := r.grant(r.team("Devs", grace).ID, "developer", "proj_a")
+	viewers := r.grant(r.team("Viewers").ID, "viewer", "")
+	// Vi manages members but is a viewer, and an admin only on proj_b
+	// through a team, which doesn't raise her ceiling.
+	r.grant(r.team("B admins", vi).ID, "admin", "proj_b")
+	r.authz.managers[vi] = true
+	before := len(r.audit.events)
+	name := "Renamed"
+
+	refused := map[string]func() error{
+		"add to a workspace admin team": func() error { _, err := r.svc.AddMember(ctx, as(vi), admins.ID, bo); return err },
+		"add to a project developer team": func() error {
+			_, err := r.svc.AddMember(ctx, as(vi), devs.ID, bo)
+			return err
+		},
+		"remove from a developer team": func() error {
+			_, err := r.svc.RemoveMember(ctx, as(vi), devs.ID, grace)
+			return err
+		},
+		"rename an admin team": func() error {
+			_, err := r.svc.Update(ctx, as(vi), admins.ID, UpdateTeamInput{Name: &name})
+			return err
+		},
+		"delete an admin team": func() error { return r.svc.Delete(ctx, as(vi), admins.ID) },
+		"remove a developer grant": func() error {
+			_, err := r.svc.RemoveGrant(ctx, as(vi), devs.ID, devs.Grants[0].ID)
+			return err
+		},
+		"raise a viewer grant": func() error {
+			_, err := r.svc.SetGrant(ctx, as(vi), viewers.ID, SetGrantInput{Role: "developer"})
+			return err
+		},
+		"add a viewer grant to an admin team": func() error {
+			_, err := r.svc.SetGrant(ctx, as(vi), admins.ID, SetGrantInput{Role: "viewer", ProjectID: "proj_b"})
+			return err
+		},
+	}
+	for what, write := range refused {
+		if err := write(); !errors.Is(err, security.ErrForbidden) || !strings.Contains(err.Error(), "above your own") {
+			t.Errorf("Vi can %s: %v, want ErrForbidden above your own", what, err)
+		}
+	}
+	if s, q := r.authz.synced(), r.queue(); len(s)+len(q) != 0 {
+		t.Fatalf("refused writes synced %v and queued %v", s, q)
+	}
+	if n := len(r.audit.events); n != before {
+		t.Fatalf("refused writes recorded %d audit events", n-before)
+	}
+	if got := r.strs(`SELECT name FROM loomplane_teams WHERE id=$1`, admins.ID); !slices.Equal(got, []string{"Admins"}) {
+		t.Fatalf("Admins is now %v", got)
+	}
+	// At or below her ceiling she goes ahead.
+	if _, err := r.svc.AddMember(ctx, as(vi), viewers.ID, bo); err != nil {
+		t.Fatalf("Vi adds Bo to Viewers: %v", err)
+	}
+
+	// A workspace admin grant raises her ceiling to admin: she acts as a
+	// workspace admin, whatever her member role.
+	r.grant(r.team("Platform", vi).ID, "admin", "")
+	if _, err := r.svc.AddMember(ctx, as(vi), admins.ID, bo); err != nil {
+		t.Fatalf("Vi, an admin through Platform, adds Bo to Admins: %v", err)
+	}
+	if _, err := r.svc.SetGrant(ctx, as(vi), viewers.ID, SetGrantInput{Role: "developer"}); err != nil {
+		t.Fatalf("Vi, an admin through Platform, raises Viewers: %v", err)
+	}
+	if err := r.svc.Delete(ctx, as(vi), devs.ID); err != nil {
+		t.Fatalf("Vi, an admin through Platform, deletes Devs: %v", err)
+	}
+}
+
 func TestRemoveGrantQueuesAndSyncsMembers(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)

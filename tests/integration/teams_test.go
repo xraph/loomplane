@@ -407,11 +407,25 @@ func TestTeams_automationCantJoin(t *testing.T) {
 	}
 }
 
-// Nobody grants above their own role, and only admins manage teams.
+// Only admins manage teams, and nobody hands out or touches a role above
+// their own. A caller's ceiling is their member role, raised by a
+// workspace-wide team grant: Vi, a viewer who is an admin through a team,
+// acts as a workspace admin. A project admin through a team is no
+// workspace admin at all.
 func TestTeams_grantCeiling(t *testing.T) {
 	w := newTeamsWorld(t)
-	w.grant(w.team("Admins", w.viID).ID, "admin", "")
+	p := w.project("P")
+	admins := w.grant(w.team("Admins", w.viID).ID, "admin", "")
 	other := w.team("Payments")
+	w.grant(w.team("P admins", w.graceID).ID, "admin", p)
+
+	// Grace is an admin on P alone, so she can't touch a team, and least
+	// of all put herself in a workspace admin team.
+	if code, body := send(w.grace, http.MethodPut, "/api/v1/teams/"+admins.ID+"/members/"+w.graceID, nil); code != http.StatusForbidden {
+		t.Fatalf("Grace joins Admins: %d %s, want 403", code, body)
+	}
+	w.grace.must(http.StatusForbidden, http.MethodPost, "/api/v1/teams", map[string]string{"name": "Mine"}, nil)
+
 	var sess struct {
 		Permissions []string `json:"permissions"`
 	}
@@ -419,14 +433,14 @@ func TestTeams_grantCeiling(t *testing.T) {
 	if !contains(sess.Permissions, "member:manage") {
 		t.Fatalf("Vi through Admins holds %v", sess.Permissions)
 	}
-	code, body := send(w.vi, http.MethodPut, "/api/v1/teams/"+other.ID+"/grants", teams.SetGrantInput{Role: "developer"})
-	if code != http.StatusForbidden || !strings.Contains(body, "above your own") {
-		t.Fatalf("Vi grants developer: %d %s, want 403 above your own", code, body)
+	// Vi's ceiling is admin, through Admins: she grants developer and
+	// admin, and puts Grace in Admins.
+	w.vi.must(http.StatusOK, http.MethodPut, "/api/v1/teams/"+other.ID+"/grants", teams.SetGrantInput{Role: "developer"}, nil)
+	w.vi.must(http.StatusOK, http.MethodPut, "/api/v1/teams/"+other.ID+"/grants", teams.SetGrantInput{Role: "admin", ProjectID: p}, nil)
+	w.vi.must(http.StatusOK, http.MethodPut, "/api/v1/teams/"+admins.ID+"/members/"+w.graceID, nil, nil)
+	if got := patch(w.grace, w.project("Q")); got != http.StatusOK {
+		t.Fatalf("Grace in Admins: PATCH Q %d, want 200", got)
 	}
-	// Viewer is her own member role, so that one goes through.
-	w.vi.must(http.StatusOK, http.MethodPut, "/api/v1/teams/"+other.ID+"/grants", teams.SetGrantInput{Role: "viewer"}, nil)
-	w.grace.must(http.StatusForbidden, http.MethodPost, "/api/v1/teams", map[string]string{"name": "Mine"}, nil)
-	w.grace.must(http.StatusForbidden, http.MethodPut, "/api/v1/teams/"+other.ID+"/members/"+w.graceID, nil, nil)
 }
 
 // authsome's own team routes are gone, whatever the method; its other

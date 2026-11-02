@@ -185,6 +185,25 @@ func lockTeam(ctx context.Context, tx querier, orgID, id string) error {
 	return nil
 }
 
+// teamGrantRoles is the role of each of the team's grants, whatever its
+// scope.
+func teamGrantRoles(ctx context.Context, q querier, orgID, teamID string) ([]string, error) {
+	var roles []string
+	err := collect(ctx, q, `SELECT role FROM loomplane_team_grants WHERE team_id = $1 AND org_id = $2`,
+		[]any{teamID, orgID}, func(rows driver.Rows) error {
+			var role string
+			if scanErr := rows.Scan(&role); scanErr != nil {
+				return scanErr
+			}
+			roles = append(roles, role)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("read team grants: %w", err)
+	}
+	return roles, nil
+}
+
 func deleteTeam(ctx context.Context, tx querier, orgID, id string) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM loomplane_teams WHERE id = $1 AND org_id = $2`, id, orgID); err != nil {
 		return fmt.Errorf("delete team: %w", err)

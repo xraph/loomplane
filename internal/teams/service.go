@@ -109,7 +109,8 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateTea
 }
 
 // Update changes a team's name or description. A new name re-derives the
-// slug. Rights don't change, so nobody is synced.
+// slug. Rights don't change, so nobody is synced, but the caller's
+// ceiling still has to reach the team's highest grant.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateTeamInput) (*Team, error) {
 	if err := refuseAutomation(p); err != nil {
 		return nil, err
@@ -138,12 +139,19 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 	if len(fields) == 0 {
 		return s.load(ctx, p.OrgID, id)
 	}
-	found, err := updateTeam(ctx, s.db, p.OrgID, id, name, slug, description)
+	ceiling, err := s.ceiling(ctx, p)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		return nil, ErrNotFound
+	err = s.change(ctx, p.OrgID, ceiling, id, func(tx driver.Tx) ([]queued, error) {
+		found, updateErr := updateTeam(ctx, tx, p.OrgID, id, name, slug, description)
+		if updateErr == nil && !found {
+			updateErr = ErrNotFound
+		}
+		return nil, updateErr
+	})
+	if err != nil {
+		return nil, err
 	}
 	s.record(ctx, p, "team.update", id, map[string]any{"fields": fields})
 	return s.load(ctx, p.OrgID, id)
@@ -159,10 +167,14 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return err
 	}
-	err := s.change(ctx, p.OrgID, id, func(tx driver.Tx) ([]queued, error) {
-		q, err := queueTeam(ctx, tx, p.OrgID, id)
-		if err != nil {
-			return nil, err
+	ceiling, err := s.ceiling(ctx, p)
+	if err != nil {
+		return err
+	}
+	err = s.change(ctx, p.OrgID, ceiling, id, func(tx driver.Tx) ([]queued, error) {
+		q, txErr := queueTeam(ctx, tx, p.OrgID, id)
+		if txErr != nil {
+			return nil, txErr
 		}
 		return q, deleteTeam(ctx, tx, p.OrgID, id)
 	})
@@ -192,12 +204,16 @@ func (s *Service) AddMember(ctx context.Context, p security.Principal, teamID, u
 	} else if !found {
 		return nil, ErrNotMember
 	}
-	err := s.change(ctx, p.OrgID, teamID, func(tx driver.Tx) ([]queued, error) {
+	ceiling, err := s.ceiling(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	err = s.change(ctx, p.OrgID, ceiling, teamID, func(tx driver.Tx) ([]queued, error) {
 		// The insert takes the member ID from authsome_members, so a
 		// person who left after the lookup above is still refused.
-		added, err := addMember(ctx, tx, p.OrgID, teamID, userID, p.UserID)
-		if err != nil {
-			return nil, err
+		added, txErr := addMember(ctx, tx, p.OrgID, teamID, userID, p.UserID)
+		if txErr != nil {
+			return nil, txErr
 		}
 		if !added {
 			return nil, ErrNotMember
@@ -220,10 +236,14 @@ func (s *Service) RemoveMember(ctx context.Context, p security.Principal, teamID
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
-	err := s.change(ctx, p.OrgID, teamID, func(tx driver.Tx) ([]queued, error) {
-		removed, err := removeMember(ctx, tx, teamID, userID)
-		if err != nil {
-			return nil, err
+	ceiling, err := s.ceiling(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	err = s.change(ctx, p.OrgID, ceiling, teamID, func(tx driver.Tx) ([]queued, error) {
+		removed, txErr := removeMember(ctx, tx, teamID, userID)
+		if txErr != nil {
+			return nil, txErr
 		}
 		if !removed {
 			return nil, ErrMemberNotFound
@@ -238,8 +258,8 @@ func (s *Service) RemoveMember(ctx context.Context, p security.Principal, teamID
 }
 
 // SetGrant gives the team a role on a project of the caller's workspace,
-// or on the whole workspace. The caller can't grant a role above their own
-// member role (security.MayGrant).
+// or on the whole workspace. The caller can't grant a role above their
+// ceiling (security.MayGrant), nor change a team that already holds one.
 func (s *Service) SetGrant(ctx context.Context, p security.Principal, teamID string, in SetGrantInput) (*Team, error) {
 	if err := refuseAutomation(p); err != nil {
 		return nil, err
@@ -250,15 +270,15 @@ func (s *Service) SetGrant(ctx context.Context, p security.Principal, teamID str
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
-	callerRole, found, err := s.members(ctx, p.OrgID, p.UserID)
+	ceiling, err := s.ceiling(ctx, p)
 	if err != nil {
-		return nil, fmt.Errorf("look up membership: %w", err)
+		return nil, err
 	}
 	granted, err := security.MemberRoleFor(in.Role)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if !found || !security.MayGrant(callerRole, granted) {
+	if !security.MayGrant(ceiling, granted) {
 		return nil, fmt.Errorf("%w: you can't grant a role above your own", security.ErrForbidden)
 	}
 	id, err := typeid.Generate("tgrant")
@@ -266,7 +286,7 @@ func (s *Service) SetGrant(ctx context.Context, p security.Principal, teamID str
 		return nil, fmt.Errorf("generate grant id: %w", err)
 	}
 	grantID := ""
-	err = s.change(ctx, p.OrgID, teamID, func(tx driver.Tx) ([]queued, error) {
+	err = s.change(ctx, p.OrgID, ceiling, teamID, func(tx driver.Tx) ([]queued, error) {
 		var upsertErr error
 		if grantID, upsertErr = upsertGrant(ctx, tx, p.OrgID, teamID, id.String(), in.Role, in.ProjectID, p.UserID); upsertErr != nil {
 			return nil, upsertErr
@@ -288,11 +308,15 @@ func (s *Service) RemoveGrant(ctx context.Context, p security.Principal, teamID,
 	if err := s.authz.Require(ctx, p, security.MemberManage, ""); err != nil {
 		return nil, err
 	}
+	ceiling, err := s.ceiling(ctx, p)
+	if err != nil {
+		return nil, err
+	}
 	var gone Grant
-	err := s.change(ctx, p.OrgID, teamID, func(tx driver.Tx) ([]queued, error) {
-		var err error
-		if gone, err = deleteGrant(ctx, tx, p.OrgID, teamID, grantID); err != nil {
-			return nil, err
+	err = s.change(ctx, p.OrgID, ceiling, teamID, func(tx driver.Tx) ([]queued, error) {
+		var txErr error
+		if gone, txErr = deleteGrant(ctx, tx, p.OrgID, teamID, grantID); txErr != nil {
+			return nil, txErr
 		}
 		return queueTeam(ctx, tx, p.OrgID, teamID)
 	})
@@ -396,11 +420,13 @@ func (s *Service) Reap(ctx context.Context, orgID, projectID, environmentID stri
 
 // change runs fn in a transaction that holds the team's row lock, and
 // once it has committed, syncs everyone fn queued. A team that isn't in
-// orgID is ErrNotFound.
+// orgID is ErrNotFound. A team holding a grant above ceiling, on the
+// workspace or on any project, is refused before fn runs: whoever can't
+// hand out a team's role can't change who holds it either.
 //
 // The syncs run after the commit, with no connection held: Sync waits for
 // a person's lock, which holds a connection of its own, and needs another.
-func (s *Service) change(ctx context.Context, orgID, teamID string, fn func(tx driver.Tx) ([]queued, error)) error {
+func (s *Service) change(ctx context.Context, orgID, ceiling, teamID string, fn func(tx driver.Tx) ([]queued, error)) error {
 	if teamID == "" {
 		return ErrNotFound
 	}
@@ -411,6 +437,16 @@ func (s *Service) change(ctx context.Context, orgID, teamID string, fn func(tx d
 	defer rollback(tx)
 	if lockErr := lockTeam(ctx, tx, orgID, teamID); lockErr != nil {
 		return lockErr
+	}
+	roles, err := teamGrantRoles(ctx, tx, orgID, teamID)
+	if err != nil {
+		return err
+	}
+	for _, role := range roles {
+		held, roleErr := security.MemberRoleFor(role)
+		if roleErr != nil || !security.MayGrant(ceiling, held) {
+			return fmt.Errorf("%w: you can't change a team whose role is above your own", security.ErrForbidden)
+		}
 	}
 	rows, err := fn(tx)
 	if err != nil {
@@ -447,6 +483,34 @@ func (s *Service) record(ctx context.Context, p security.Principal, action, team
 		return
 	}
 	s.audit.Record(ctx, AuditEvent{Action: action, TeamID: teamID, Principal: p, Attributes: attrs})
+}
+
+// ceiling is the highest role the caller may hand out or touch: their
+// member role, raised by any workspace-wide team grant they hold. A
+// project grant doesn't raise it. It's in authsome's member role terms,
+// for security.MayGrant. It reads before any transaction opens, since the
+// lookups take connections of their own.
+func (s *Service) ceiling(ctx context.Context, p security.Principal) (string, error) {
+	role, found, err := s.members(ctx, p.OrgID, p.UserID)
+	if err != nil {
+		return "", fmt.Errorf("look up membership: %w", err)
+	}
+	if !found {
+		return "", fmt.Errorf("%w: you aren't a member of this workspace", security.ErrForbidden)
+	}
+	grants, err := grantsOf(ctx, s.db, p.OrgID, p.UserID)
+	if err != nil {
+		return "", err
+	}
+	for _, g := range grants {
+		if g.ProjectID != "" {
+			continue
+		}
+		if held, roleErr := security.MemberRoleFor(g.Role); roleErr == nil && !security.MayGrant(role, held) {
+			role = held
+		}
+	}
+	return role, nil
 }
 
 // refuseAutomation refuses a write by anyone but a person: Loomplane
