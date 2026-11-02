@@ -100,6 +100,7 @@ import {
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { Link } from "@/lib/router"
 import {
   changeCount,
@@ -302,7 +303,7 @@ export function ManifestEditor({
   draftedFrom?: string
   onPendingChange?: (pending: boolean) => void
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
   const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
@@ -476,7 +477,7 @@ function PlansCard({
   busy: boolean
   onOpen: (id: string) => void
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const plans = useQuery(usePlansList, { path: { id: project.id } })
   const list = plans.data?.plans ?? []
   useRefetchWhile(
@@ -745,7 +746,7 @@ function PlanBody({
   project: Project
   onPlanned: (id: string) => void
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const create = useMutation(usePlansCreate)
   const invalidate = useInvalidate()
   const planned = !isPlanning(plan.status) && plan.status !== "failed"
@@ -973,9 +974,10 @@ function Findings({
   environment: string
   sources: SourceLink[]
 }) {
-  const { can } = useOrganization()
+  const { can: workspaceCan } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
-  const mayConnect = can("cloud_account:manage")
+  const mayConnect = workspaceCan("cloud_account:manage")
   return (
     <ul className="grid grid-cols-[minmax(0,1fr)] gap-3">
       {findings.map((f, i) => (
@@ -1508,7 +1510,7 @@ function DeploymentsCard({
  * again, with the plan that was approved.
  */
 function RetryDeployment({ deployment: d }: { deployment: Deployment }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(d.projectId)
   const retry = useMutation(useDeploymentsRetry)
   const invalidate = useInvalidate()
   if (!can("deployment:approve")) return null

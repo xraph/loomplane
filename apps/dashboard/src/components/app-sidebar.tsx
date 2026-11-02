@@ -66,6 +66,7 @@ import { useRuns } from "@/lib/use-runs"
 
 const settingsPaths = [
   "/members",
+  "/teams",
   "/variables",
   "/integrations",
   "/cloud-sign-in",
@@ -192,6 +193,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "Members",
           link: <Link to="/members" />,
           isActive: path.startsWith("/members"),
+        },
+        {
+          title: "Teams",
+          link: <Link to="/teams" />,
+          isActive: path.startsWith("/teams"),
         },
         {
           title: "Variables",
