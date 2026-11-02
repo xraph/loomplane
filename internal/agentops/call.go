@@ -137,7 +137,7 @@ func ErrorKind(err error) string {
 	switch {
 	case err == nil:
 		return "success"
-	case errors.Is(err, security.ErrForbidden), errors.Is(err, security.ErrUnauthenticated):
+	case errors.Is(err, security.ErrForbidden), errors.Is(err, security.ErrUnauthenticated), errors.Is(err, errNeedsAPerson):
 		return "forbidden"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "canceled"

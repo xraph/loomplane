@@ -97,17 +97,31 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 		cortexext.WithDisableMigrate(),
 		cortexext.WithNexusOptions(nexusllm.WithTenant(e.cortexTenant), nexusllm.WithProvider(e.cortexProvider)),
 		cortexext.WithShieldOptions(shieldsafety.WithApp(agentscope.App)),
-		cortexext.WithEngineOption(cortexengine.WithSuspensionTTL(suspensionTTL)),
-		cortexext.WithEngineOption(cortexengine.WithRejectionsReturnToModel()),
-		cortexext.WithEngineOption(cortexengine.WithRunConcurrency(RunsPerProcess)),
 	}
-	tools := e.toolOptions()
-	out := make([]cortexext.ExtOption, 0, len(opts)+len(tools))
+	engineOpts := e.engineOptions()
+	out := make([]cortexext.ExtOption, 0, len(opts)+len(engineOpts))
 	out = append(out, opts...)
-	for _, o := range tools {
+	for _, o := range engineOpts {
 		out = append(out, cortexext.WithEngineOption(o))
 	}
 	return out
+}
+
+// engineOptions are the engine's own options: how long a run waits on a
+// person, rejections the model reads, the per-process run cap, the tool
+// authorizer with the principal codec it needs (cortex refuses the first
+// without the second), and the agent's operations.
+func (e *Extension) engineOptions() []cortexengine.Option {
+	tools := e.toolOptions()
+	opts := make([]cortexengine.Option, 0, 5+len(tools))
+	opts = append(opts,
+		cortexengine.WithSuspensionTTL(suspensionTTL),
+		cortexengine.WithRejectionsReturnToModel(),
+		cortexengine.WithRunConcurrency(RunsPerProcess),
+		cortexengine.WithToolAuthorizer(e.toolAuthorizer),
+		cortexengine.WithPrincipalCodec(e.codec),
+	)
+	return append(opts, tools...)
 }
 
 // nexusTenant is the workspace's nexus tenant, or agentsettings.ErrDisabled

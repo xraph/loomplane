@@ -8,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/xraph/cortex"
+	cortexengine "github.com/xraph/cortex/engine"
+	"github.com/xraph/cortex/llm"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/sqlitedriver"
@@ -21,6 +24,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // fakeProvider is a nexus provider that records what reaches it.
@@ -282,5 +286,42 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	}
 	if ext.weave.IsStarted() {
 		t.Fatal("weave still reads as started")
+	}
+}
+
+// Cortex refuses a tool authorizer without a principal codec, so the two
+// go in together: the engine the extension builds starts, and one without
+// the codec doesn't.
+func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
+	ai := New(config.Config{AI: serverAI()}, nil)
+	app := forge.New(forge.WithAppName("cortex-authz-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
+	cx := ai.cortex
+	cx.SetDependencies(nil)
+	if err := app.RegisterExtension(cx); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Start(context.Background()); err != nil {
+		t.Fatalf("the extension's engine: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+
+	opts := ai.engineOptions()
+	if _, err := cortexengine.New(opts...); err != nil {
+		t.Fatalf("engine.New with the extension's options: %v", err)
+	}
+	withoutCodec := make([]cortexengine.Option, 0, len(ai.toolOptions())+1)
+	withoutCodec = append(withoutCodec, ai.toolOptions()...)
+	withoutCodec = append(withoutCodec, cortexengine.WithToolAuthorizer(ai.toolAuthorizer))
+	if _, err := cortexengine.New(withoutCodec...); !errors.Is(err, cortex.ErrPrincipalCodecRequired) {
+		t.Fatalf("engine.New without the codec: %v", err)
+	}
+	// Until Register binds it, the authorizer shows nothing and allows
+	// nothing.
+	s := cortex.Subject{Principal: security.AgentPrincipal("o", nil)}
+	if got := ai.toolAuthorizer.Visible(context.Background(), s, []llm.Tool{{Name: "list_projects"}}); len(got) != 0 {
+		t.Fatalf("an unbound authorizer shows %v", got)
+	}
+	if err := ai.toolAuthorizer.Authorize(context.Background(), s, llm.ToolCall{Name: "list_projects"}); err == nil {
+		t.Fatal("an unbound authorizer allowed a call")
 	}
 }

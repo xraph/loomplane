@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xraph/shield"
@@ -47,6 +48,14 @@ const Withheld = "[withheld: this text failed Loomplane's safety scan]"
 // sets no limit: well under shield's 1 MiB default, so the scan never fails
 // for size.
 const DefaultMaxBytes = 256 << 10
+
+// DefaultMaxOutboundBytes is how much outbound text is sent when Scanner
+// sets no limit: room for any report or notice, and far enough under
+// shield's 1 MiB that the scan never fails for size.
+const DefaultMaxOutboundBytes = 64 << 10
+
+// OutboundCut ends outbound text whose rest was cut to fit.
+const OutboundCut = "\n[the rest was cut to fit]"
 
 // GuardrailShieldProfile is the agent-config guardrail cortex reads the
 // shield profile from, for its own scans and its publication gate.
@@ -81,6 +90,9 @@ type Scanner struct {
 	Engine Engine
 	// MaxBytes bounds the untrusted text scanned; 0 is DefaultMaxBytes.
 	MaxBytes int
+	// MaxOutboundBytes bounds the outbound text sent, OutboundCut
+	// included; 0 is DefaultMaxOutboundBytes.
+	MaxOutboundBytes int
 	// Warn, when set, hears about every scan that failed rather than
 	// decided: msg says which, err is one of shield's errors or a generic
 	// one, never the text.
@@ -118,9 +130,18 @@ func (s *Scanner) Untrusted(ctx context.Context, source, text string) string {
 // allows or flags it, shield's redaction when it redacts. A block, or a
 // scan that fails for any reason, is ErrOutboundBlocked, and the caller
 // sends nothing.
+//
+// Text longer than MaxOutboundBytes keeps its start, since a report or a
+// notice reads from the top, cut where a word ends so no token is split,
+// and ends with OutboundCut; what is kept is what's scanned. Text with no
+// such place in the room it has is ErrOutboundBlocked.
 func (s *Scanner) Outbound(ctx context.Context, text string) (string, error) {
 	if s == nil || s.Engine == nil {
 		s.warn("outbound text wasn't scanned: no safety engine", errScanFailed)
+		return "", ErrOutboundBlocked
+	}
+	text, ok := head(text, s.maxOutboundBytes())
+	if !ok {
 		return "", ErrOutboundBlocked
 	}
 	res, err := s.Engine.ScanOutput(ctx, &scan.Input{Text: text, Profile: presets.InfraAgentOutput})
@@ -147,6 +168,13 @@ func (s *Scanner) maxBytes() int {
 		return s.MaxBytes
 	}
 	return DefaultMaxBytes
+}
+
+func (s *Scanner) maxOutboundBytes() int {
+	if s.MaxOutboundBytes > 0 {
+		return s.MaxOutboundBytes
+	}
+	return DefaultMaxOutboundBytes
 }
 
 func (s *Scanner) warn(msg string, err error) {
@@ -197,4 +225,29 @@ func tail(text string, maxBytes int) string {
 		}
 	}
 	return cutMarker + kept
+}
+
+// head returns text when it fits in maxBytes. Otherwise it returns the
+// start of text that fits with OutboundCut after it, cut at the last space
+// or line break in that room, so the last word kept is whole. ok is false
+// when there is no such place to cut.
+func head(text string, maxBytes int) (string, bool) {
+	if len(text) <= maxBytes {
+		return text, true
+	}
+	room := maxBytes - len(OutboundCut)
+	if room <= 0 {
+		return "", false
+	}
+	// text[room] is the first byte cut off: when it's a space, the word
+	// before it is whole.
+	cut := strings.LastIndexFunc(text[:room+1], unicode.IsSpace)
+	if cut <= 0 {
+		return "", false
+	}
+	kept := strings.TrimRightFunc(text[:cut], unicode.IsSpace)
+	if kept == "" {
+		return "", false
+	}
+	return kept + OutboundCut, true
 }

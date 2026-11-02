@@ -106,3 +106,18 @@ func TestScansWithTheSeededProfiles(t *testing.T) {
 		t.Fatalf("%d warnings, want 4", len(warned))
 	}
 }
+
+// A report longer than shield scans in one go is cut and sent, rather than
+// refused for its size.
+func TestOutboundSendsTextLongerThanShieldScans(t *testing.T) {
+	eng := seeded(t, "org_a")
+	s := &agentsafety.Scanner{Engine: eng}
+	long := strings.Repeat("The canary held at 10 percent for an hour.\n", 50_000) // about 2 MiB
+	got, err := s.Outbound(bound(t, "org_a"), long)
+	if err != nil {
+		t.Fatalf("a long report: %v", err)
+	}
+	if len(got) > agentsafety.DefaultMaxOutboundBytes || !strings.HasSuffix(got, agentsafety.OutboundCut) {
+		t.Fatalf("sent %d bytes ending %q", len(got), got[max(0, len(got)-60):])
+	}
+}

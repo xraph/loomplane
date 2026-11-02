@@ -5,18 +5,23 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/cortex"
 	cortexengine "github.com/xraph/cortex/engine"
 	cortexid "github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/llm"
 
+	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agenttest"
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	defs "github.com/xraph/loomplane/pkg/agentops"
 )
@@ -150,5 +155,63 @@ func TestAgentOperationsKeepToTheirWorkspace(t *testing.T) {
 	res, err = b.invoke(t, reg, "whoami", defs.NoInput{})
 	if err != nil || !strings.Contains(res, security.AgentSubject(b.orgID)) || !strings.Contains(res, `"project:read"`) || strings.Contains(res, `"secret:manage"`) {
 		t.Fatalf("Ledger's agent whoami: %s, %v", res, err)
+	}
+}
+
+// The agent's tool authorizer reads plans and projects through the real
+// services as the agent: one workspace's agent can't reach another's
+// production plan, even by its ID, while that workspace's own agent is
+// asked to leave the plan to a person, since its autonomy is off.
+func TestAgentAuthorizerKeepsToItsWorkspace(t *testing.T) {
+	fake := agenttest.Anthropic(t)
+	a := startAgentOrg(t, fake.AIConfig())
+	defer a.r.stop()
+	a.budget("10")
+	a.enable(nil)
+	b := secondAgentOrg(t, a, "bob@example.com", "Ledger Co", "ledger-co")
+	b.budget("5")
+	b.enable(nil)
+
+	var proj struct {
+		ID string `json:"id"`
+	}
+	b.owner.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Ledger"}, &proj)
+	var manifest struct {
+		ID       string `json:"id"`
+		Revision int    `json:"revision"`
+	}
+	b.owner.must(http.StatusCreated, http.MethodPut, "/api/v1/projects/"+proj.ID+"/manifest", map[string]string{"yaml": "version: 1\n"}, &manifest)
+	ctx := context.Background()
+	bob := security.Principal{UserID: b.userID(), OrgID: b.orgID}
+	envs, err := inject[*projects.Service](t, a.container()).Environments(ctx, bob, proj.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var production string
+	for _, e := range envs {
+		if e.Kind == projects.KindProduction {
+			production = e.ID
+		}
+	}
+	plan := &planning.Plan{
+		ID: "plan_ledger_production", OrgID: b.orgID, ProjectID: proj.ID, EnvironmentID: production, Environment: "production",
+		Status: planning.StatusReady, ManifestID: manifest.ID, ManifestRevision: manifest.Revision, CreatedBy: bob.UserID, CreatedAt: time.Now().UTC(),
+	}
+	if _, err = inject[*planning.PgStore](t, a.container()).CreatePlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+
+	authz := inject[*agentauthz.Authorizer](t, a.container())
+	approve := llm.ToolCall{ID: "call_approve", Name: "approve_plan", Arguments: `{"plan_id":"` + plan.ID + `","revision":"r1"}`}
+	engines := security.AgentPrincipal(a.orgID, &security.Principal{UserID: a.userID(), OrgID: a.orgID})
+	err = authz.Authorize(ctx, cortex.Subject{Scope: agentscope.Scope{OrgID: a.orgID}.Cortex(), Principal: engines, RunID: cortexid.NewAgentRunID()}, approve)
+	if err == nil || errors.Is(err, cortex.ErrRequiresApproval) || agentops.ErrorKind(err) != "not_found" {
+		t.Fatalf("Engines' agent approving Ledger's plan: %v", err)
+	}
+	ledger := security.AgentPrincipal(b.orgID, &bob)
+	err = authz.Authorize(ctx, cortex.Subject{Scope: agentscope.Scope{OrgID: b.orgID}.Cortex(), Principal: ledger, RunID: cortexid.NewAgentRunID()}, approve)
+	var ar cortex.ApprovalRequired
+	if !errors.As(err, &ar) || !strings.Contains(ar.Reason, "autonomous promotion is off") {
+		t.Fatalf("Ledger's agent approving its own plan: %v", err)
 	}
 }

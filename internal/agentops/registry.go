@@ -213,11 +213,52 @@ func (r *Registry) Ops() []Op {
 // Risk is the risk of calling name with args: the definition's, or the one
 // its RiskFrom computes. An unknown name is an error.
 func (r *Registry) Risk(ctx context.Context, call Call, name string, args json.RawMessage) (defs.Risk, error) {
+	risk, _, err := r.Assess(ctx, call, name, args)
+	return risk, err
+}
+
+// Assess is Risk, with the project the computation read when it read one
+// (a plan's or a deployment's), for the audit entry of a call the tool
+// authorizer answers before any handler runs.
+func (r *Registry) Assess(ctx context.Context, call Call, name string, args json.RawMessage) (defs.Risk, string, error) {
 	op, ok := r.Lookup(name)
 	if !ok {
-		return "", fmt.Errorf("agentops: unknown operation %q", name)
+		return "", "", fmt.Errorf("agentops: unknown operation %q", name)
 	}
-	return op.risk(ctx, call, args)
+	state := &callState{}
+	risk, err := op.risk(context.WithValue(ctx, callStateKey{}, state), call, args)
+	return risk, state.project(), err
+}
+
+// How the tool authorizer answered a call no handler runs for, as
+// RecordDecision writes it.
+const (
+	// DecisionRefused is a call the authorizer refused.
+	DecisionRefused = "forbidden"
+	// DecisionApproval is a call paused for a person to approve.
+	DecisionApproval = "approval_required"
+	// DecisionRequested is a request to a person cortex suspends the run
+	// on.
+	DecisionRequested = "requested"
+)
+
+// RecordDecision writes agent.tool.call for a call the tool authorizer
+// answered with decision (DecisionRefused, DecisionApproval or
+// DecisionRequested), which no handler records: a refusal, a pause, or a
+// request to a person. A call the authorizer allows to run in-process is
+// recorded by its handler instead. A call without a Loomplane principal
+// has no workspace to record under, and isn't recorded.
+func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, risk defs.Risk, projectID, decision string) {
+	call, err := CallFrom(inv)
+	if err != nil {
+		p, ok := inv.Principal.(security.Principal)
+		if !ok || p.OrgID == "" {
+			return
+		}
+		call = Call{Principal: p, RunID: inv.RunID.String(), CallID: inv.Call.ID}
+	}
+	call.TaskID = TaskIDFrom(ctx)
+	r.write(ctx, call, inv.Call.Name, projectID, risk, decision)
 }
 
 // EngineOptions give cortex every operation: a tool with its handler for
@@ -301,27 +342,34 @@ func (r *Registry) run(ctx context.Context, inv cortex.Invocation, op Op, fn fun
 // record writes the call's agent.tool.call audit entry: the tool, its risk
 // and how it went, never its arguments.
 func (r *Registry) record(ctx context.Context, call Call, op Op, state *callState, risk defs.Risk, err error) {
+	r.write(ctx, call, op.Def.Name, state.project(), risk, ErrorKind(err))
+}
+
+// write records agent.tool.call with kind, one of ErrorKind's answers or
+// a Decision*.
+func (r *Registry) write(ctx context.Context, call Call, name, projectID string, risk defs.Risk, kind string) {
 	a := r.auditor()
 	if a == nil {
 		return
 	}
-	kind := ErrorKind(err)
-	outcome := "success"
+	outcome := "failure"
 	switch kind {
 	case "success":
+		outcome = "success"
 	case "forbidden":
 		outcome = "denied"
-	default:
-		outcome = "failure"
+	case DecisionApproval, DecisionRequested:
+		outcome = "pending"
 	}
 	severity := "info"
 	if kind == "forbidden" {
 		severity = "warning"
 	}
+	ctx = security.WithAgentCall(ctx, security.AgentCall{TaskID: call.TaskID, RunID: call.RunID, Tool: name, CallID: call.CallID})
 	a.Record(context.WithoutCancel(ctx), projects.AuditEvent{
 		Action: "agent.tool.call", Severity: severity, Outcome: outcome,
-		ProjectID: state.project(), Principal: call.Principal,
-		Attributes: map[string]any{"tool": op.Def.Name, "risk": string(risk), "outcome": kind},
+		ProjectID: projectID, Principal: call.Principal,
+		Attributes: map[string]any{"tool": name, "risk": string(risk), "outcome": kind},
 	})
 }
 
@@ -384,6 +432,12 @@ type Deps struct {
 	// principal: *planning.PgStore.
 	Bindings BindingLookup
 	Watches  WatchService
+	// Promote decides whether the agent may approve a production plan
+	// without a person: allowed, or the reasons it may not, in words a
+	// person reads. approve_plan asks it again just before approving.
+	// aiagent sets it to the tool authorizer's Promote, which reads the
+	// gate installed at call time. Nil never allows.
+	Promote func(ctx context.Context, call Call, plan *planning.Plan) (allowed bool, failed []string, err error)
 }
 
 // BindingLookup is *planning.PgStore's binding read.
@@ -434,6 +488,7 @@ type PlanService interface {
 	Create(ctx context.Context, p security.Principal, projectID string, in planning.CreatePlanInput) (*planning.Plan, error)
 	List(ctx context.Context, p security.Principal, projectID, environment string, before page.Cursor, limit int) ([]*planning.Plan, page.Cursor, error)
 	Get(ctx context.Context, p security.Principal, id string) (*planning.Plan, error)
+	Approve(ctx context.Context, p security.Principal, id string, in planning.DecideInput) (*planning.Plan, error)
 	Reject(ctx context.Context, p security.Principal, id string, in planning.DecideInput) (*planning.Plan, error)
 	Bindings(ctx context.Context, p security.Principal, projectID, environment string) ([]*planning.Binding, error)
 	Deployed(ctx context.Context, p security.Principal, projectID, environment string) ([]*planning.DeployedRepository, error)

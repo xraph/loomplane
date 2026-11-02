@@ -2,7 +2,6 @@ package agentops
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/xraph/loomplane/internal/environments"
@@ -13,7 +12,7 @@ import (
 // errSecretNeedsAPerson is set_variable asked for a secret. The tool
 // authorizer refuses such a call first (its risk is secret_or_external);
 // this is the second line.
-var errSecretNeedsAPerson = errors.New("secret values are typed by a person: call request_secret")
+var errSecretNeedsAPerson = fmt.Errorf("%w: secret values are typed by a person: call request_secret", errNeedsAPerson)
 
 // errEveryEnvironment is set_variable for every environment in a run
 // scoped to one.

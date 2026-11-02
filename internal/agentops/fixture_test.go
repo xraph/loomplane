@@ -539,6 +539,7 @@ type fakePlans struct {
 	deployed []*planning.DeployedRepository
 	created  []planning.CreatePlanInput
 	rejected []string
+	approved []string
 	rollback []planning.RollbackInput
 }
 
@@ -610,6 +611,26 @@ func (f *fakePlans) Get(ctx context.Context, p security.Principal, id string) (*
 		return nil, err
 	}
 	c := *pl
+	return &c, nil
+}
+
+func (f *fakePlans) Approve(ctx context.Context, p security.Principal, id string, in planning.DecideInput) (*planning.Plan, error) {
+	pl, err := f.Get(ctx, p, id)
+	if err != nil {
+		return nil, err
+	}
+	if err = f.authz.Require(ctx, p, security.DeploymentApprove, pl.ProjectID); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.approved = append(f.approved, id)
+	if in.Revision != pl.Revision {
+		return nil, planning.ErrStale
+	}
+	stored := f.plans[id]
+	stored.Status, stored.DecidedBy, stored.DecisionNote = planning.StatusApproved, p.UserID, in.Note
+	c := *stored
 	return &c, nil
 }
 

@@ -242,3 +242,45 @@ func TestGuardrailsNameTheOutputProfile(t *testing.T) {
 		t.Fatal("Guardrails shares its map")
 	}
 }
+
+// Outbound keeps the start of a long text, cut where a word ends so no
+// token is split, marks the cut, and scans what it keeps. A text with no
+// place to cut isn't sent.
+func TestOutboundCapsLongText(t *testing.T) {
+	ctx := context.Background()
+	eng := &fakeEngine{result: &scan.Result{Decision: scan.DecisionAllow}}
+	s := &Scanner{Engine: eng, MaxOutboundBytes: 1000}
+
+	long := strings.Repeat("deploy finished cleanly\n", 200) + "TAIL_TOKEN_abcdef"
+	got, err := s.Outbound(ctx, long)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) > 1000 || !strings.HasSuffix(got, OutboundCut) || strings.Contains(got, "TAIL_TOKEN") {
+		t.Fatalf("capped to %d bytes: %q", len(got), got)
+	}
+	kept := strings.TrimSuffix(got, OutboundCut)
+	if !strings.HasPrefix(long, kept) || (long[len(kept)] != ' ' && long[len(kept)] != '\n') {
+		t.Fatalf("cut mid-word: %q", kept[max(0, len(kept)-40):])
+	}
+	if n := len(eng.outputs); n != 1 || eng.outputs[0].Text != got {
+		t.Fatalf("scanned %d texts, the last %q", n, eng.outputs[n-1].Text)
+	}
+
+	// A word longer than the cap can't be cut without splitting it.
+	if got, err = s.Outbound(ctx, strings.Repeat("x", 5000)); !errors.Is(err, ErrOutboundBlocked) || got != "" {
+		t.Fatalf("one long word: %q, %v", got, err)
+	}
+	if len(eng.outputs) != 1 {
+		t.Fatal("a text that can't be cut was scanned")
+	}
+
+	// Short text is sent as it is, and the default cap is well under
+	// shield's own limit.
+	if got, err = (&Scanner{Engine: eng}).Outbound(ctx, "The deploy finished."); err != nil || got != "The deploy finished." {
+		t.Fatalf("short: %q, %v", got, err)
+	}
+	if DefaultMaxOutboundBytes >= shield.DefaultMaxScanBytes {
+		t.Fatalf("DefaultMaxOutboundBytes %d isn't under shield's %d", DefaultMaxOutboundBytes, shield.DefaultMaxScanBytes)
+	}
+}

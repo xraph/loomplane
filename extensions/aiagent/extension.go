@@ -32,6 +32,7 @@ import (
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
+	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
@@ -78,6 +79,14 @@ type Extension struct {
 	// the operations read at call time.
 	ops  *agentops.Registry
 	deps *agentops.Deps
+
+	// authz is the agent's risk table, and codec carries a run's principal
+	// across a pause. Cortex takes both when it builds its engine, before
+	// Register fills their services in; toolAuthorizer is the table
+	// layered under shield, bound in Register once shield's engine exists.
+	authz          *agentauthz.Authorizer
+	codec          *agentauthz.Codec
+	toolAuthorizer *lateAuthorizer
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -85,12 +94,18 @@ type Extension struct {
 // extension's engine once it has registered; the agent's jobs go there.
 func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 	e := &Extension{
-		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "The AI infra agent"),
-		cfg:           cfg,
-		jobs:          jobs,
-		ops:           agentops.NewRegistry(),
-		deps:          &agentops.Deps{},
+		BaseExtension:  forge.NewBaseExtension(Name, "0.1.0", "The AI infra agent"),
+		cfg:            cfg,
+		jobs:           jobs,
+		ops:            agentops.NewRegistry(),
+		deps:           &agentops.Deps{},
+		codec:          &agentauthz.Codec{},
+		toolAuthorizer: &lateAuthorizer{},
 	}
+	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow}
+	// approve_plan asks the same question as the authorizer just before it
+	// approves, through whichever gate is installed then.
+	e.deps.Promote = e.authz.Promote
 	registerOps(e.ops, e.deps)
 	e.buildLibraries()
 	return e
@@ -160,6 +175,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	if err = forge.ProvideValue(c, e.ops); err != nil {
 		return fmt.Errorf("provide the agent's operations: %w", err)
+	}
+	if authzErr := e.bindAuthorization(c, settings, projectSvc); authzErr != nil {
+		return authzErr
 	}
 	return mountRoutes(fapp.Router(), guard, settings, projectSvc)
 }

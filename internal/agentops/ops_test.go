@@ -352,16 +352,28 @@ func TestRetryRefusesProduction(t *testing.T) {
 	}
 }
 
-func TestApprovePlanIsNotAvailableYet(t *testing.T) {
+// Without a promotion gate (Deps.Promote unset), a production plan is
+// left to a person; a staging plan is approved at the revision the agent
+// read.
+func TestApprovePlanWithoutAGateLeavesProductionToAPerson(t *testing.T) {
 	w := newWorld(t)
 	p := w.project(orgA, ada, "Mono")
-	w.plans.plans["plan_p"] = &planning.Plan{ID: "plan_p", OrgID: orgA, ProjectID: p.ID, EnvironmentID: w.env(p, "production").ID, Status: planning.StatusReady}
+	w.plans.plans["plan_p"] = &planning.Plan{ID: "plan_p", OrgID: orgA, ProjectID: p.ID, EnvironmentID: w.env(p, "production").ID, Status: planning.StatusReady, Revision: "r1"}
+	w.plans.plans["plan_s"] = &planning.Plan{ID: "plan_s", OrgID: orgA, ProjectID: p.ID, EnvironmentID: w.env(p, "staging").ID, Status: planning.StatusReady, Revision: "r1"}
 	_, err := w.call(t.Context(), as(orgA, ada), agentscope.Scope{OrgID: orgA}, "approve_plan", map[string]string{"plan_id": "plan_p", "revision": "r1"})
-	if err == nil || !contains(err.Error(), "not available yet") {
+	if err == nil || !contains(err.Error(), "ask a person") {
 		t.Fatalf("approve_plan: %v", err)
 	}
-	if got := w.audit.toolCalls(); len(got) != 1 || got[0].Attributes["risk"] != "promote_production" {
+	if got := w.audit.toolCalls(); len(got) != 1 || got[0].Attributes["risk"] != "promote_production" || got[0].Attributes["outcome"] != "forbidden" {
 		t.Fatalf("approve_plan's audit %+v", got)
+	}
+	var out decisionOutput
+	w.callOK(orgA, ada, "approve_plan", map[string]string{"plan_id": "plan_s", "revision": "r1"}, &out)
+	if out.Status != planning.StatusApproved || out.DecidedBy != security.AgentSubject(orgA) {
+		t.Fatalf("staging approval %+v", out)
+	}
+	if len(w.plans.approved) != 1 || w.plans.approved[0] != "plan_s" {
+		t.Fatalf("approved %v", w.plans.approved)
 	}
 }
 

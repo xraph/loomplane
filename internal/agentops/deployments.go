@@ -2,7 +2,7 @@ package agentops
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/agentsafety"
@@ -30,7 +30,7 @@ const maxLogPages = 1000
 
 // errProductionRetry is retry_deployment on a production deployment. The
 // tool authorizer (Task 14) refuses it first; this is the second line.
-var errProductionRetry = errors.New("retry production deployments from the dashboard or ask a person")
+var errProductionRetry = fmt.Errorf("%w: retry production deployments from the dashboard or ask a person", errNeedsAPerson)
 
 // Outputs.
 type (
