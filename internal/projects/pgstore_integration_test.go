@@ -81,22 +81,28 @@ func TestPgStoreAutonomy(t *testing.T) {
 
 	on, soak := true, int64(1800)
 	later := now.Add(time.Minute)
-	got, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &on, MinStagingSoakSeconds: &soak}, later)
+	got, before, err := s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &on, MinStagingSoakSeconds: &soak}, later)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if before != (projects.Autonomy{}) {
+		t.Fatalf("before the first change: %+v", before)
 	}
 	if !got.AutonomousPromotion || got.MinStagingSoakSeconds != 1800 || !got.UpdatedAt.Equal(later) {
 		t.Fatalf("after SetAutonomy: %+v", got)
 	}
 	// A nil field keeps its value.
 	off := false
-	if got, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &off}, later); err != nil {
+	if got, before, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &off}, later); err != nil {
 		t.Fatal(err)
+	}
+	if before != (projects.Autonomy{AutonomousPromotion: true, MinStagingSoakSeconds: 1800}) {
+		t.Fatalf("before turning it off: %+v", before)
 	}
 	if got.AutonomousPromotion || got.MinStagingSoakSeconds != 1800 {
 		t.Fatalf("after turning it off: %+v", got)
 	}
-	if _, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &on}, later); err != nil {
+	if _, _, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{AutonomousPromotion: &on}, later); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,11 +129,11 @@ func TestPgStoreAutonomy(t *testing.T) {
 
 	// Another organization's project reads as not found, and the database
 	// refuses a soak beyond a week even if the service didn't.
-	if _, err = s.SetAutonomy(ctx, "org_b", "proj_a", projects.AutonomyInput{AutonomousPromotion: &off}, later); !errors.Is(err, projects.ErrNotFound) {
+	if _, _, err = s.SetAutonomy(ctx, "org_b", "proj_a", projects.AutonomyInput{AutonomousPromotion: &off}, later); !errors.Is(err, projects.ErrNotFound) {
 		t.Fatalf("another organization: %v", err)
 	}
 	tooLong := int64(604860)
-	if _, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{MinStagingSoakSeconds: &tooLong}, later); err == nil {
+	if _, _, err = s.SetAutonomy(ctx, "org_a", "proj_a", projects.AutonomyInput{MinStagingSoakSeconds: &tooLong}, later); err == nil {
 		t.Fatal("a soak beyond a week was stored")
 	}
 }

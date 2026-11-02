@@ -11,6 +11,12 @@ import (
 // ask for: a week.
 const MaxStagingSoakSeconds = 7 * 24 * 60 * 60
 
+// Autonomy is how much the AI agent may do on its own in a project.
+type Autonomy struct {
+	AutonomousPromotion   bool
+	MinStagingSoakSeconds int64
+}
+
 // AutonomyInput changes how much the AI agent may do on its own in a
 // project. A nil field is left alone.
 type AutonomyInput struct {
@@ -40,19 +46,31 @@ func (s *Service) SetAutonomy(ctx context.Context, p security.Principal, project
 	if soak := in.MinStagingSoakSeconds; soak != nil && (*soak < 0 || *soak > MaxStagingSoakSeconds || *soak%60 != 0) {
 		return nil, fmt.Errorf("%w: the minimum staging soak is whole minutes, from none up to a week", ErrInvalid)
 	}
-	proj, err := s.store.SetAutonomy(ctx, p.OrgID, projectID, in, s.now().UTC())
+	proj, before, err := s.store.SetAutonomy(ctx, p.OrgID, projectID, in, s.now().UTC())
 	if err != nil {
 		return nil, err
 	}
+	// The trail names only what changed, each field with the value it
+	// replaced. Sending what's already there records nothing.
+	var fields []string
+	attrs := map[string]any{}
+	if proj.AutonomousPromotion != before.AutonomousPromotion {
+		fields = append(fields, "autonomous_promotion")
+		attrs["autonomous_promotion"], attrs["previous_autonomous_promotion"] = proj.AutonomousPromotion, before.AutonomousPromotion
+	}
+	if proj.MinStagingSoakSeconds != before.MinStagingSoakSeconds {
+		fields = append(fields, "min_staging_soak_seconds")
+		attrs["min_staging_soak_seconds"], attrs["previous_min_staging_soak_seconds"] = proj.MinStagingSoakSeconds, before.MinStagingSoakSeconds
+	}
+	if len(fields) == 0 {
+		return proj, nil
+	}
+	attrs["fields"] = fields
 	// Letting the agent promote alone is worth noticing in the trail.
 	severity := "info"
 	if proj.AutonomousPromotion {
 		severity = "warning"
 	}
-	s.record(ctx, AuditEvent{Action: "project.autonomy.update", Severity: severity, ProjectID: proj.ID, Principal: p,
-		Attributes: map[string]any{
-			"autonomous_promotion":     proj.AutonomousPromotion,
-			"min_staging_soak_seconds": proj.MinStagingSoakSeconds,
-		}})
+	s.record(ctx, AuditEvent{Action: "project.autonomy.update", Severity: severity, ProjectID: proj.ID, Principal: p, Attributes: attrs})
 	return proj, nil
 }

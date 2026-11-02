@@ -85,13 +85,14 @@ func (m *memStore) UpdateProject(_ context.Context, p *Project) error {
 	return nil
 }
 
-func (m *memStore) SetAutonomy(_ context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, error) {
+func (m *memStore) SetAutonomy(_ context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.projects[id]
 	if !ok || p.OrgID != orgID {
-		return nil, ErrNotFound
+		return nil, Autonomy{}, ErrNotFound
 	}
+	before := Autonomy{AutonomousPromotion: p.AutonomousPromotion, MinStagingSoakSeconds: p.MinStagingSoakSeconds}
 	if in.AutonomousPromotion != nil {
 		p.AutonomousPromotion = *in.AutonomousPromotion
 	}
@@ -100,7 +101,7 @@ func (m *memStore) SetAutonomy(_ context.Context, orgID, id string, in AutonomyI
 	}
 	p.UpdatedAt = at
 	c := *p
-	return &c, nil
+	return &c, before, nil
 }
 
 func (m *memStore) UpdateExclusions(_ context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error) {

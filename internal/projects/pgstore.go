@@ -190,21 +190,30 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 
 // SetAutonomy implements Store. A nil field keeps the column's value, in
 // the same statement, so two changes to different fields can't lose each
-// other.
-func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, error) {
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
-		SET autonomous_promotion = COALESCE($3, autonomous_promotion),
-			min_staging_soak_seconds = COALESCE($4, min_staging_soak_seconds),
+// other. The values before come from the row the statement locked, so
+// they're the ones this change replaced.
+func (s *PgStore) SetAutonomy(ctx context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error) {
+	var before Autonomy
+	err := s.db.QueryRow(ctx, `WITH old AS (
+			SELECT autonomous_promotion, min_staging_soak_seconds FROM loomplane_projects
+			WHERE org_id = $1 AND id = $2 FOR UPDATE
+		)
+		UPDATE loomplane_projects p
+		SET autonomous_promotion = COALESCE($3, p.autonomous_promotion),
+			min_staging_soak_seconds = COALESCE($4, p.min_staging_soak_seconds),
 			updated_at = $5
-		WHERE org_id = $1 AND id = $2`,
-		orgID, id, in.AutonomousPromotion, in.MinStagingSoakSeconds, at)
+		FROM old
+		WHERE p.org_id = $1 AND p.id = $2
+		RETURNING old.autonomous_promotion, old.min_staging_soak_seconds`,
+		orgID, id, in.AutonomousPromotion, in.MinStagingSoakSeconds, at).Scan(&before.AutonomousPromotion, &before.MinStagingSoakSeconds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, Autonomy{}, ErrNotFound
+	}
 	if err != nil {
-		return nil, fmt.Errorf("update autonomy: %w", err)
+		return nil, Autonomy{}, fmt.Errorf("update autonomy: %w", err)
 	}
-	if rerr := requireOneRow(res); rerr != nil {
-		return nil, rerr
-	}
-	return s.GetProject(ctx, orgID, id)
+	p, err := s.GetProject(ctx, orgID, id)
+	return p, before, err
 }
 
 // DeleteProject removes the project; its environments go with it.

@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -81,8 +82,15 @@ func TestSetAutonomyNeedsApprove(t *testing.T) {
 	if e.Action != "project.autonomy.update" || e.ProjectID != p.ID || e.Principal.UserID != admin.UserID {
 		t.Fatalf("audit event %+v", e)
 	}
-	if e.Attributes["autonomous_promotion"] != true || e.Attributes["min_staging_soak_seconds"] != int64(1800) {
-		t.Fatalf("audit attributes %v", e.Attributes)
+	want := map[string]any{
+		"fields":                            []string{"autonomous_promotion", "min_staging_soak_seconds"},
+		"autonomous_promotion":              true,
+		"previous_autonomous_promotion":     false,
+		"min_staging_soak_seconds":          int64(1800),
+		"previous_min_staging_soak_seconds": int64(0),
+	}
+	if !reflect.DeepEqual(e.Attributes, want) {
+		t.Fatalf("audit attributes %v, want %v", e.Attributes, want)
 	}
 
 	// A field left out keeps its value.
@@ -200,5 +208,62 @@ func TestUpdateLeavesAutonomyAlone(t *testing.T) {
 	}
 	if !read.AutonomousPromotion || read.MinStagingSoakSeconds != 600 {
 		t.Fatalf("a stale UpdateProject changed autonomy: %+v", read)
+	}
+}
+
+// The trail says what each change was: only the fields it changed, each
+// with the value before it. A change to nothing records nothing.
+func TestAutonomyAuditRecordsWhatChanged(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.SetAutonomy(ctx, admin, p.ID, AutonomyInput{AutonomousPromotion: ptr(true), MinStagingSoakSeconds: ptr(int64(600))}); err != nil {
+		t.Fatal(err)
+	}
+	f.audit.actions, f.audit.events = nil, nil
+
+	// Both fields sent, only the soak differs.
+	if _, err = f.svc.SetAutonomy(ctx, admin, p.ID, AutonomyInput{AutonomousPromotion: ptr(true), MinStagingSoakSeconds: ptr(int64(1200))}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.audit.events) != 1 {
+		t.Fatalf("audit %v", f.audit.actions)
+	}
+	want := map[string]any{
+		"fields":                            []string{"min_staging_soak_seconds"},
+		"min_staging_soak_seconds":          int64(1200),
+		"previous_min_staging_soak_seconds": int64(600),
+	}
+	if got := f.audit.events[0].Attributes; !reflect.DeepEqual(got, want) {
+		t.Fatalf("attributes %v, want %v", got, want)
+	}
+	// Turning promotion off is info; it was a warning while it let the
+	// agent promote alone.
+	if f.audit.events[0].Severity != "warning" {
+		t.Fatalf("severity %q while promotion is on", f.audit.events[0].Severity)
+	}
+	if _, err = f.svc.SetAutonomy(ctx, admin, p.ID, AutonomyInput{AutonomousPromotion: ptr(false)}); err != nil {
+		t.Fatal(err)
+	}
+	e := f.audit.events[1]
+	want = map[string]any{
+		"fields":                        []string{"autonomous_promotion"},
+		"autonomous_promotion":          false,
+		"previous_autonomous_promotion": true,
+	}
+	if !reflect.DeepEqual(e.Attributes, want) || e.Severity != "info" {
+		t.Fatalf("turning it off: %s %v", e.Severity, e.Attributes)
+	}
+
+	// Sending what's already there changes nothing and records nothing.
+	if _, err = f.svc.SetAutonomy(ctx, admin, p.ID, AutonomyInput{AutonomousPromotion: ptr(false), MinStagingSoakSeconds: ptr(int64(1200))}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.audit.events) != 2 {
+		t.Fatalf("a change to nothing was audited: %v", f.audit.actions)
 	}
 }
