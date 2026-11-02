@@ -555,6 +555,10 @@ func (roleAuthz) Allowed(_ context.Context, p security.Principal, perm security.
 	return false, nil
 }
 
+func (roleAuthz) AllowedOn(ctx context.Context, p security.Principal, perm security.Permission, _ string) (bool, error) {
+	return roleAuthz{}.Allowed(ctx, p, perm)
+}
+
 func as(role string) *security.Principal {
 	return &security.Principal{OrgID: "org_1", UserID: role}
 }

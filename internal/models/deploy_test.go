@@ -151,7 +151,7 @@ var (
 )
 
 const (
-	projectID  = "prj_shop"
+	projectID  = "proj_01m6ewhnbyee9a11m8kax5xr1a"
 	stagingID  = "env_staging"
 	productID  = "env_production"
 	gpuConn    = "conn_gpu"
