@@ -50,11 +50,11 @@ function authTitle(path: string) {
 }
 
 export function App() {
-  const { isLoading, isAuthenticated } = useAuth()
+  const { isLoading, isAuthenticated, user } = useAuth()
   const path = usePath()
 
   const invite = usePendingInvite()
-  const { setupPending } = useInstance()
+  const { setupPending, requireEmailVerification } = useInstance()
 
   if (isLoading) return <PageLoading />
   // A fresh instance has nobody to sign in as: every address leads to setup,
@@ -76,6 +76,18 @@ export function App() {
       <AuthLayout title={authTitle(path)}>
         <Outlet />
       </AuthLayout>
+    )
+  }
+  // Sign-up leaves a session behind before the email is verified, so a
+  // second tab arrives signed in. The API refuses that session; send it to
+  // verify its email instead of into pages that would all fail.
+  if (isAuthenticated && requireEmailVerification && !user?.email_verified) {
+    return (
+      <Navigate
+        to="/verify-email"
+        search={{ email: user?.email ?? "" }}
+        replace
+      />
     )
   }
   if (!isAuthenticated) {

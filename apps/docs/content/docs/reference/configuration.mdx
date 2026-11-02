@@ -112,7 +112,7 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `orchestration.concurrency` | `4` | Jobs one process runs at once. At least 1 |
 | `orchestration.poll_interval` | `1s` | How often idle workers look for jobs |
 | `identity.base_path` | `/authsome` | Where authsome's API is mounted |
-| `identity.require_email_verification` | `false` | Whether sign-in waits for a verified email |
+| `identity.require_email_verification` | `false` | Whether an account must verify its email before it can sign in or use the API. Sign-up's own session is refused too, until the email is verified |
 | `providers.plugins` | `[]` | A list of `{url, token}`. See [Provider plugins](/docs/extending/provider-plugins) |
 
 `providers.paused` also accepts a YAML list, in place of the variable.

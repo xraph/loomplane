@@ -36,8 +36,14 @@ func (e *Extension) revalidateStream(ctx context.Context, request *http.Request)
 		if err != nil || sess.AppID.String() != e.cfg.Identity.AppID {
 			return p, security.ErrUnauthenticated
 		}
-		if _, userErr := e.engine.ResolveUser(ctx, sess.UserID.String()); userErr != nil {
+		u, userErr := e.engine.ResolveUser(ctx, sess.UserID.String())
+		if userErr != nil {
 			return p, security.ErrUnauthenticated
+		}
+		// The same rule as principalFor: a sign-up's session isn't enough
+		// until its email is verified.
+		if e.cfg.Identity.RequireEmailVerification && !u.EmailVerified {
+			return p, security.ErrEmailNotVerified
 		}
 		p, err = security.Resolve(sess.UserID.String(), sess.OrgID.String(), request.Header.Get(security.HeaderOrganization))
 		if err != nil {

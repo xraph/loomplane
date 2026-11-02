@@ -37,6 +37,9 @@ type PublicConfig struct {
 	// Waitlist means sign-up needs an invitation or an approved waitlist
 	// entry.
 	Waitlist bool `json:"waitlist"`
+	// RequireEmailVerification means a signed-in account can't use the
+	// dashboard until its email is verified.
+	RequireEmailVerification bool `json:"require_email_verification"`
 	// SetupTokenRequired means setup is pending and needs the setup token
 	// from the API's log. It is never true in development.
 	SetupTokenRequired bool `json:"setup_token_required"`
@@ -93,6 +96,8 @@ func (e *Extension) staticPublicConfig() PublicConfig {
 		AppID:          e.cfg.Identity.AppID,
 		AuthBasePath:   e.cfg.Identity.BasePath,
 		Features:       Features{AI: e.cfg.AI.Enabled},
+
+		RequireEmailVerification: e.cfg.Identity.RequireEmailVerification,
 	}
 }
 

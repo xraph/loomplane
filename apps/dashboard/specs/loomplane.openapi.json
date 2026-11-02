@@ -26092,7 +26092,8 @@
           "features",
           "setup_pending",
           "waitlist",
-          "setup_token_required"
+          "setup_token_required",
+          "require_email_verification"
         ],
         "properties": {
           "app_id": {
@@ -26122,6 +26123,9 @@
         }
       },
       "PushConfig": {
+          "require_email_verification": {
+            "type": "boolean"
+          },
         "type": "object",
         "required": [
           "enabled",

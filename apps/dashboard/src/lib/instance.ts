@@ -9,6 +9,8 @@ export type Instance = {
   waitlist: boolean
   /** Setup needs the one-time token from the API's log. */
   setupTokenRequired: boolean
+  /** A signed-in account can't go further until its email is verified. */
+  requireEmailVerification?: boolean
   /** Where the instance console lives. Platform admins only. */
   consolePath?: string
 }

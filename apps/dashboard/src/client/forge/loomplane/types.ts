@@ -3689,6 +3689,7 @@ export interface PublicConfig {
   publishableKey: string;
   setupPending: boolean;
   setupTokenRequired: boolean;
+  requireEmailVerification: boolean;
   waitlist: boolean;
 }
 
