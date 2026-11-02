@@ -1,8 +1,9 @@
 // The bar above every page of the dashboard: the shared top bar, with the
 // organization first in the breadcrumbs, what's in flight, search opening
-// the command menu, and the New deployment button.
-import { BellIcon, KeyboardIcon } from "lucide-react"
+// the command menu, and the notification bell.
+import { KeyboardIcon } from "lucide-react"
 
+import { NotificationBell } from "@/components/notification-bell"
 import { EnvBadge, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { TopBar } from "@/components/top-bar"
@@ -43,6 +44,7 @@ export type Crumb = {
     | "/services"
     | "/clouds"
     | "/notifications"
+    | "/webhooks"
     | "/domains"
     | "/ai/models"
 }
@@ -64,15 +66,7 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
       before={<InFlight />}
       after={
         <>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Activity"
-            nativeButton={false}
-            render={<Link to="/activity" />}
-          >
-            <BellIcon />
-          </Button>
+          <NotificationBell />
           <Button
             variant="ghost"
             size="icon-sm"

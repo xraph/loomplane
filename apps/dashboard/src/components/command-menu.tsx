@@ -29,6 +29,7 @@ import {
   ShortcutsIcon,
   ThemeIcon,
   VariablesIcon,
+  WebhooksIcon,
 } from "@/components/icons"
 import { RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
@@ -212,6 +213,8 @@ type Page = {
     | "/variables"
     | "/members"
     | "/notifications"
+    | "/notifications/settings"
+    | "/webhooks"
     | "/integrations"
     | "/api-keys"
   label: string
@@ -289,7 +292,19 @@ const pages: Page[] = [
     to: "/notifications",
     label: "Notifications",
     icon: <NotificationsIcon />,
-    search: "notifications inbox email webhooks",
+    search: "notifications inbox",
+  },
+  {
+    to: "/notifications/settings",
+    label: "Notification settings",
+    icon: <NotificationsIcon />,
+    search: "notification settings email preferences",
+  },
+  {
+    to: "/webhooks",
+    label: "Webhooks",
+    icon: <WebhooksIcon />,
+    search: "webhooks endpoints relay signing secret deliveries",
   },
   {
     to: "/integrations",

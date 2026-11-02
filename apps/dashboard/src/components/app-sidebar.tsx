@@ -71,7 +71,8 @@ const settingsPaths = [
   "/integrations",
   "/cloud-sign-in",
   "/api-keys",
-  "/notifications",
+  "/notifications/settings",
+  "/webhooks",
   "/ai/settings",
 ]
 
@@ -185,6 +186,10 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/activity" />,
       isActive: path.startsWith("/activity"),
     },
+  ]
+
+  // Settings sit at the foot of the sidebar, apart from the pages you work in.
+  const settings: NavItem[] = [
     {
       title: "Settings",
       icon: <Settings2Icon />,
@@ -192,9 +197,18 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       items: [
         {
           title: "Notifications",
-          link: <Link to="/notifications" />,
-          isActive: path.startsWith("/notifications"),
+          link: <Link to="/notifications/settings" />,
+          isActive: path.startsWith("/notifications/settings"),
         },
+        ...(can("member:manage")
+          ? [
+              {
+                title: "Webhooks",
+                link: <Link to="/webhooks" />,
+                isActive: path.startsWith("/webhooks"),
+              },
+            ]
+          : []),
         {
           title: "Members",
           link: <Link to="/members" />,
@@ -250,6 +264,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
+        <NavMain items={settings} label="" className="mt-auto" />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
         <Account />
