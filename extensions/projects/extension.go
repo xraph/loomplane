@@ -36,6 +36,7 @@ type Extension struct {
 	cfg      config.Config
 	engineOf func() *engine.Engine
 	svc      *projects.Service
+	authz    *security.Authorizer
 }
 
 // New returns the projects extension. engineOf returns the dispatch
@@ -94,6 +95,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return errors.New("projects needs the dispatch extension to have registered")
 	}
 	store := projects.NewPgStore(pgdriver.Unwrap(db))
+	e.authz = authz
 	e.svc = projects.NewService(store, authz, orchestration.NewEnqueuer(eng), NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
 	// Deleting a project takes its team grants with it, so the people
 	// they reached are synced once it's gone.
@@ -129,7 +131,7 @@ func fail(err error) error {
 	case errors.Is(err, projects.ErrSlugTaken), errors.Is(err, projects.ErrEnvironmentExists),
 		errors.Is(err, projects.ErrLastEnvironment):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, projects.ErrRepository):
+	case errors.Is(err, projects.ErrRepository), errors.Is(err, projects.ErrTeamNotFound):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, projects.ErrInvalid):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())

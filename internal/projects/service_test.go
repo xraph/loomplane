@@ -24,10 +24,28 @@ type memStore struct {
 	mu       sync.Mutex
 	projects map[string]*Project
 	envs     map[string]*Environment
+	teams    map[string]string // team ID to its organization
+	teamSets []string          // "org/project/team" for every SetResponsibleTeam
 }
 
 func newMemStore() *memStore {
-	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}}
+	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}, teams: map[string]string{}}
+}
+
+func (m *memStore) SetResponsibleTeam(_ context.Context, orgID, id, teamID string) (*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.teamSets = append(m.teamSets, orgID+"/"+id+"/"+teamID)
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, ErrNotFound
+	}
+	if teamID != "" && m.teams[teamID] != orgID {
+		return nil, ErrTeamNotFound
+	}
+	p.ResponsibleTeamID = teamID
+	c := *p
+	return &c, nil
 }
 
 func (m *memStore) CreateProject(_ context.Context, p *Project, envs []*Environment) error {
@@ -815,5 +833,104 @@ func TestService_reapersRunAroundDeletion(t *testing.T) {
 	}
 	if !slices.Equal(reaper.reaped, []string{whole}) || !slices.Equal(reaper.finished, []string{whole}) {
 		t.Fatalf("after deleting the project: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+}
+
+// checkRecorder is an Authorizer that records every check as
+// "permission resource" and allows them all, unless deny is set.
+type checkRecorder struct {
+	checks []string
+	deny   bool
+}
+
+func (r *checkRecorder) Require(_ context.Context, _ security.Principal, perm security.Permission, resourceID string) error {
+	r.checks = append(r.checks, perm.Name()+" "+resourceID)
+	if r.deny {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+func TestSetTeamNeedsProjectUpdateOnTheProject(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org}
+	store.teams["team_1"] = org
+	authz := &checkRecorder{}
+	svc := NewService(store, authz, &initRecorder{}, &auditRecorder{})
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+	team := "team_1"
+
+	got, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &team})
+	if err != nil {
+		t.Fatalf("SetTeam: %v", err)
+	}
+	if got.ResponsibleTeamID != "team_1" {
+		t.Fatalf("responsible team %q", got.ResponsibleTeamID)
+	}
+	if !slices.Equal(authz.checks, []string{"project:update proj_1"}) {
+		t.Fatalf("checks %v, want project:update on proj_1", authz.checks)
+	}
+
+	denied := &checkRecorder{deny: true}
+	store.teamSets = nil
+	svc = NewService(store, denied, &initRecorder{}, &auditRecorder{})
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &team}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("denied SetTeam: %v", err)
+	}
+	if len(store.teamSets) != 0 {
+		t.Fatalf("a refused SetTeam reached the store: %v", store.teamSets)
+	}
+}
+
+func TestSetTeamClearsAndAudits(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org, ResponsibleTeamID: "team_1"}
+	store.teams["team_1"] = org
+	store.teams["team_other"] = "aorg_other"
+	audit := &auditRecorder{}
+	svc := NewService(store, &checkRecorder{}, &initRecorder{}, audit)
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+
+	got, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: nil})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got.ResponsibleTeamID != "" {
+		t.Fatalf("after clearing: %q", got.ResponsibleTeamID)
+	}
+	blank := "  "
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &blank}); err != nil {
+		t.Fatalf("clear with a blank ID: %v", err)
+	}
+	if want := []string{org + "/proj_1/", org + "/proj_1/"}; !slices.Equal(store.teamSets, want) {
+		t.Fatalf("store calls %v, want %v", store.teamSets, want)
+	}
+	if len(audit.events) != 2 {
+		t.Fatalf("audit %v", audit.actions)
+	}
+	e := audit.events[0]
+	if e.Action != "project.team.set" || e.ProjectID != "proj_1" || e.Principal.UserID != "ausr_dev" {
+		t.Fatalf("audit event %+v", e)
+	}
+	if v, ok := e.Attributes["team_id"]; !ok || v != "" {
+		t.Fatalf("team_id attribute %v (present %v)", v, ok)
+	}
+
+	// Another workspace's team is refused, and nothing is audited.
+	other := "team_other"
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &other}); !errors.Is(err, ErrTeamNotFound) {
+		t.Fatalf("another workspace's team: %v", err)
+	}
+	if len(audit.events) != 2 {
+		t.Fatalf("a refused change was audited: %v", audit.actions)
+	}
+	mine := "team_1"
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &mine}); err != nil {
+		t.Fatal(err)
+	}
+	if last := audit.events[len(audit.events)-1]; last.Attributes["team_id"] != "team_1" {
+		t.Fatalf("team_id attribute %v", last.Attributes["team_id"])
 	}
 }

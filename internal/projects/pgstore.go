@@ -33,7 +33,7 @@ const projectColumns = `id, org_id, name, slug, description, icon, color, status
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
 const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
-	p.created_by, p.created_at, p.updated_at, p.exclusions,
+	p.created_by, p.created_at, p.updated_at, p.exclusions, coalesce(p.responsible_team_id, ''),
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
 		FROM (SELECT s.repository, min(s.alias) AS first_alias FROM loomplane_project_sources s
 			WHERE s.project_id = p.id AND s.removed_at IS NULL GROUP BY s.repository) r), '{}')
@@ -43,7 +43,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
 	var exclusions []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.Repositories); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.ResponsibleTeamID, &p.Repositories); err != nil {
 		return nil, err
 	}
 	if len(exclusions) > 0 {
@@ -183,6 +183,32 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return p, nil
+}
+
+// SetResponsibleTeam implements Store. The team must be in the project's
+// organization; when nothing changes, one more read tells a missing project
+// from a team that isn't there.
+func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error) {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_projects
+		SET responsible_team_id = NULLIF($3, ''), updated_at = now()
+		WHERE org_id = $1 AND id = $2
+			AND ($3 = '' OR EXISTS (SELECT 1 FROM loomplane_teams t WHERE t.id = $3 AND t.org_id = $1))`,
+		orgID, id, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("set responsible team: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("rows affected: %w", err)
+	}
+	p, err := s.GetProject(ctx, orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrTeamNotFound
 	}
 	return p, nil
 }

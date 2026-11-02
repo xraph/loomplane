@@ -369,6 +369,31 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, i
 	return proj, nil
 }
 
+// SetTeamInput names a project's responsible team. A null or empty TeamID
+// clears it.
+type SetTeamInput struct {
+	TeamID *string `json:"team_id"`
+}
+
+// SetTeam names the team responsible for a project, or clears it. Anyone
+// who may update the project may; the team must be in the same workspace.
+func (s *Service) SetTeam(ctx context.Context, p security.Principal, id string, in SetTeamInput) (*Project, error) {
+	if err := s.authz.Require(ctx, p, security.ProjectUpdate, id); err != nil {
+		return nil, err
+	}
+	teamID := ""
+	if in.TeamID != nil {
+		teamID = strings.TrimSpace(*in.TeamID)
+	}
+	proj, err := s.store.SetResponsibleTeam(ctx, p.OrgID, id, teamID)
+	if err != nil {
+		return nil, err
+	}
+	s.record(ctx, AuditEvent{Action: "project.team.set", Severity: "info", ProjectID: proj.ID, Principal: p,
+		Attributes: map[string]any{"team_id": teamID}})
+	return proj, nil
+}
+
 // Delete removes a project and its environments.
 func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
 	if err := s.authz.Require(ctx, p, security.ProjectDelete, id); err != nil {
