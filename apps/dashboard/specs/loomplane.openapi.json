@@ -31878,7 +31878,8 @@
             }
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "x-forge-id": true
           },
           "identity_generation": {
             "type": "integer"

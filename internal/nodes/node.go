@@ -36,7 +36,7 @@ var (
 
 // Node is one machine in an org.
 type Node struct {
-	ID                 string               `json:"id"`
+	ID                 string               `json:"id" forge:"id"`
 	OrgID              string               `json:"org_id"`
 	Name               string               `json:"name"`
 	PublicKey          []byte               `json:"-"`

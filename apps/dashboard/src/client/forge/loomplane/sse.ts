@@ -415,6 +415,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('node.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Node = decode(JSON.parse(event.data), "Node");
+            this.emit('node.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('notification.created', (event: MessageEvent) => {
           try {
             const data: types.NotificationCreated = decode(JSON.parse(event.data), "NotificationCreated");
@@ -940,6 +949,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offManifestUpdated(handler: (data: types.Revision) => void): void {
     this.off('manifest.updated', handler);
+  }
+
+  /**
+   * Register a handler for node.updated events.
+   * @param handler - Function to call when node.updated event is received
+   */
+  onNodeUpdated(handler: (data: types.Node) => void): void {
+    this.on('node.updated', handler);
+  }
+
+  /**
+   * Remove a handler for node.updated events.
+   * @param handler - The handler to remove
+   */
+  offNodeUpdated(handler: (data: types.Node) => void): void {
+    this.off('node.updated', handler);
   }
 
   /**

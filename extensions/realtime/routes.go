@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
@@ -57,6 +58,7 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[cloudinfra.ClusterChange]("cloud_cluster.updated").Invalidates("CloudCluster", "CloudClusterPage", "CloudClusterOperation", "CloudClusterOperationPage", "Target", "Target[]", "Connection", "Connection[]", "Profile", "Profile[]"),
 		forge.Emits[cloudinfra.CapacityChange]("cloud_capacity.updated").Invalidates("CapacityPolicyView:{cloud_id}", "CapacityUsage:{cloud_id}", "Expansion[]"),
 		forge.Emits[notifications.NotificationCreated]("notification.created").Invalidates("NotificationList"),
+		forge.Emits[nodes.Node]("node.updated").As(forge.StreamUpsert),
 		forge.Emits[store.Log]("build.log").As(forge.StreamUpsert), forge.Emits[store.Collection]("build.collection").As(forge.StreamUpsert),
 	)
 }
@@ -83,7 +85,7 @@ func (e *Extension) routes(router forge.Router) error {
 		"release_watch.updated": releasewatch.Watch{}, "release_watch.deleted": releasewatch.Watch{}, "build.log": store.Log{}, "build.collection": store.Collection{},
 		"cloud.updated": cloudprofiles.Profile{}, "cloud.deleted": cloudprofiles.Profile{}, "cloud_target.updated": cloudprofiles.Target{}, "cloud_target.deleted": cloudprofiles.Target{},
 		"environment_cloud.updated": cloudprofiles.EnvironmentCloudEvent{}, "cloud_sync.updated": cloudprofiles.CloudSyncEvent{},
-		"cloud_cluster.updated": cloudinfra.ClusterChange{}, "cloud_capacity.updated": cloudinfra.CapacityChange{}, "notification.created": notifications.NotificationCreated{}, "realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
+		"cloud_cluster.updated": cloudinfra.ClusterChange{}, "cloud_capacity.updated": cloudinfra.CapacityChange{}, "notification.created": notifications.NotificationCreated{}, "node.updated": nodes.Node{}, "realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
 	}), streamBindings())
 }
 
