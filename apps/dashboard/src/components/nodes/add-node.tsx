@@ -285,7 +285,10 @@ function Panel({ onClose }: { onClose: () => void }) {
             </p>
             <p className="text-xs leading-relaxed text-muted-foreground">
               Logged in with loomctl already? Run{" "}
-              <code className="font-mono">sudo loomctl node join</code> instead.
+              <code className="font-mono">sudo loomctl node join</code> on
+              Linux, or <code className="font-mono">loomctl node join</code> on
+              a Mac, instead. It makes its own token from your login and asks
+              what to allow, so the choices above don&apos;t apply.
             </p>
           </div>
         ) : (
@@ -401,6 +404,13 @@ function Connected({
           )}
           {runtime && <Row label="Runtime">{runtime}</Row>}
           {gpus && <Row label="GPUs">{gpus}</Row>}
+          <Row label="Public address" mono={hasPublicAddress(n)}>
+            {hasPublicAddress(n) ? (
+              (i?.publicAddresses ?? []).join(", ")
+            ) : (
+              <span className="text-muted-foreground">Not checked yet</span>
+            )}
+          </Row>
           <Row label="Allowed">
             <span className="flex flex-wrap gap-1">
               {n.endpoints.map((e) => (
@@ -415,14 +425,6 @@ function Connected({
           </Row>
         </dl>
       </div>
-
-      {!hasPublicAddress(n) && (
-        <p className="rounded-lg bg-brand-tint p-3 text-xs leading-relaxed text-brand-ink">
-          No public address answered from outside, so this node sits behind a
-          router. Once domain routing to nodes arrives, its domains will reach
-          it through an edge.
-        </p>
-      )}
 
       <div className="flex flex-wrap gap-2">
         <Button

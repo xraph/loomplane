@@ -125,12 +125,13 @@ it("flips to the inventory when a node.updated arrives for a new node", async ()
     "href",
     "/nodes/$id"
   )
-  // A public address answered, so there is no router to explain.
-  expect(screen.queryByText(/sits behind a router/)).not.toBeInTheDocument()
+  // The node reported a public address, so it is shown as is.
+  expect(screen.getByText("Public address")).toBeInTheDocument()
+  expect(screen.queryByText("Not checked yet")).not.toBeInTheDocument()
   live.stop()
 })
 
-it("explains the router only when no public address answered", async () => {
+it("says the public address is not checked when none was reported", async () => {
   const live = await connect({
     inventory: {
       os: "linux",
@@ -142,7 +143,9 @@ it("explains the router only when no public address answered", async () => {
     },
   })
   expect(await screen.findByText("home-nuc is online")).toBeInTheDocument()
-  expect(screen.getByText(/sits behind a router/)).toBeInTheDocument()
+  expect(screen.getByText("Not checked yet")).toBeInTheDocument()
+  // Nothing checks reachability yet, so nothing claims a router.
+  expect(screen.queryByText(/behind a router/)).not.toBeInTheDocument()
   live.stop()
 })
 
