@@ -197,7 +197,9 @@ export default function AgentsPage() {
               <li>Secrets are set but never shown back</li>
               <li>
                 Works with Claude Code:{" "}
-                <code>claude mcp add loomplane -- loomctl mcp</code>
+                <code className="whole">
+                  claude mcp add loomplane -- loomctl mcp
+                </code>
               </li>
             </ul>
           </div>

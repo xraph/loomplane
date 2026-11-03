@@ -1076,18 +1076,24 @@
   display: grid;
   gap: 10px;
 }
+/* The diamond sits outside the text, so an item can hold inline code and still read as one line. */
 .lp .ticks li {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
+  position: relative;
+  padding-left: 28px;
   color: var(--ink-2);
   font-size: 15px;
 }
+/* A command in a tick moves to its own line whole, never split mid-way. */
+.lp .ticks code.whole {
+  white-space: nowrap;
+}
 .lp .ticks li::before {
   content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
   width: 7px;
   height: 7px;
-  margin-top: 8px;
   border-radius: 2px;
   background: var(--blue);
   transform: rotate(45deg);
