@@ -28,8 +28,9 @@ var (
 	ErrTooLarge = errors.New("the repository is larger than Loomplane analyzes")
 )
 
-// ErrRateLimited means GitHub refused for now. It's worth retrying later.
-var ErrRateLimited = errors.New("GitHub's rate limit was reached; try again later")
+// ErrRateLimited means the repository host (GitHub or Bitbucket) refused for
+// now. It's worth retrying later.
+var ErrRateLimited = errors.New("the repository host's rate limit was reached; try again later")
 
 // DefaultAPIURL is github.com's REST API.
 const DefaultAPIURL = "https://api.github.com"
