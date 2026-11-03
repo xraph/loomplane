@@ -30,11 +30,17 @@ func TestHubOverPostgres(t *testing.T) {
 	if m := n.next(); !slices.Equal(m.(nodeproto.Narrow).Endpoints, []nodeproto.Endpoint{nodeproto.EndpointProbe}) {
 		t.Fatalf("narrow %#v", m)
 	}
+	if m := n.next(); m != (nodeproto.SetIngress{Mode: nodeproto.IngressNone}) {
+		t.Fatalf("ingress %#v", m)
+	}
 	got := r.node("node_1")
 	if got.Inventory.CPUs != 2 || got.Version != "v1.9.0" || !slices.Equal(got.Endpoints, []nodeproto.Endpoint{nodeproto.EndpointProbe}) {
 		t.Fatalf("node %+v", got)
 	}
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	if m := n.next(); !slices.Equal(m.(nodeproto.Narrow).Ack, []nodeproto.Endpoint{nodeproto.EndpointDocker}) {
+		t.Fatalf("allowed answer %#v", m)
+	}
 	waitFor(t, "widened", func() bool { return len(r.node("node_1").Endpoints) == 2 })
 	echo(t, r.hub, "node_1", "pg:")
 

@@ -33,9 +33,39 @@ var (
 	ErrMintNewToken = errors.New("the join token was used but the node could not be created; mint a new join token and try again")
 )
 
-// JoinTokens spends node join tokens.
+// JoinTokens reads and spends node join tokens.
 type JoinTokens interface {
+	// PeekNodeJoinToken reads what a live token grants without spending it.
+	PeekNodeJoinToken(ctx context.Context, raw string) (*apikeys.NodeJoinClaim, error)
 	ConsumeNodeJoinToken(ctx context.Context, raw string) (*apikeys.NodeJoinClaim, error)
+}
+
+// JoinConflict is a join refused because its name or its key already belongs
+// to a node. Its text tells the operator what to do. Spent says whether the
+// join token was used up on the way, in which case they need a new one.
+type JoinConflict struct {
+	Spent bool
+	msg   string
+	cause error
+}
+
+func (e *JoinConflict) Error() string { return e.msg }
+func (e *JoinConflict) Unwrap() error { return e.cause }
+
+func nameConflict(name string, spent bool) *JoinConflict {
+	msg := fmt.Sprintf("the name %q belongs to a live node in this organization: revoke that node, or pick another --name, then run the join again. The join token was not used", name)
+	if spent {
+		msg = fmt.Sprintf("the name %q was taken by another node while this one joined: revoke that node, or pick another --name, then mint a new join token and join again", name)
+	}
+	return &JoinConflict{Spent: spent, msg: msg, cause: ErrNameTaken}
+}
+
+func keyConflict(spent bool) *JoinConflict {
+	msg := "this machine's key already belongs to a node Loomplane knows, live or revoked, and a key never joins twice: move identity.key out of the node's state directory so the join makes a fresh one, then run the join again. The join token was not used"
+	if spent {
+		msg = "this machine's key already belongs to a node Loomplane knows, live or revoked: move identity.key out of the node's state directory so the join makes a fresh one, then mint a new join token and join again"
+	}
+	return &JoinConflict{Spent: spent, msg: msg, cause: ErrKeyKnown}
 }
 
 // Authorizer is the part of security.Authorizer this package uses.
@@ -102,7 +132,10 @@ type Update struct {
 }
 
 // Join spends the token and creates a pending node. The checks that need no
-// token run first, so a node that must update does not burn its token.
+// token run first, so a node that must update does not burn its token. A key
+// that already belongs to a node, revoked ones included, and an explicit
+// name a live node holds are refused before the token is spent too. A join
+// racing another for the name or key is caught again after.
 func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error) {
 	if in.ProtocolVersion > nodeproto.Version {
 		return nil, ErrNodeNewer
@@ -119,6 +152,23 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	}
 	if err := validateLabels(in.Labels); err != nil {
 		return nil, err
+	}
+	fp := nodeproto.Fingerprint(ed25519.PublicKey(in.PublicKey))
+	peek, err := s.Tokens.PeekNodeJoinToken(ctx, in.Token)
+	if err != nil {
+		return nil, err
+	}
+	if known, kerr := s.Store.KeyKnown(ctx, fp); kerr != nil {
+		return nil, kerr
+	} else if known {
+		return nil, keyConflict(false)
+	}
+	if name != "" {
+		if taken, terr := s.Store.NameTaken(ctx, peek.OrgID, name); terr != nil {
+			return nil, terr
+		} else if taken {
+			return nil, nameConflict(name, false)
+		}
 	}
 	claim, err := s.Tokens.ConsumeNodeJoinToken(ctx, in.Token)
 	if err != nil {
@@ -142,7 +192,7 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	maps.Copy(labels, claim.Scope.Labels)
 	n := &Node{
 		ID: id, OrgID: claim.OrgID, Name: name, PublicKey: in.PublicKey,
-		KeyFingerprint: nodeproto.Fingerprint(ed25519.PublicKey(in.PublicKey)), IdentityGeneration: 1,
+		KeyFingerprint: fp, IdentityGeneration: 1,
 		Status: StatusPending, Endpoints: joinEndpoints(in.Endpoints, claim.Scope.Endpoints), IngressMode: nodeproto.IngressNone,
 		Role: role, EdgeScope: claim.Scope.EdgeScope, Labels: labels, Version: in.NodeVersion,
 		ProtocolVersion: in.ProtocolVersion, Inventory: in.Inventory,
@@ -158,7 +208,12 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		n.Name = suffixed(name, id)
 		err = s.Store.Create(ctx, n)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrKeyKnown):
+		return nil, keyConflict(true)
+	case errors.Is(err, ErrNameTaken):
+		return nil, nameConflict(n.Name, true)
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrMintNewToken, err)
 	}
 	if s.Adopt != nil {

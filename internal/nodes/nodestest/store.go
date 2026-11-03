@@ -64,12 +64,37 @@ func (s *Store) Create(_ context.Context, n *nodes.Node) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, o := range s.nodes {
+		if n.KeyFingerprint != "" && o.KeyFingerprint == n.KeyFingerprint {
+			return nodes.ErrKeyKnown
+		}
 		if o.OrgID == n.OrgID && o.Name == n.Name && o.Status != nodes.StatusRevoked {
 			return nodes.ErrNameTaken
 		}
 	}
 	s.nodes[n.ID] = clone(n)
 	return nil
+}
+
+func (s *Store) KeyKnown(_ context.Context, fingerprint string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, o := range s.nodes {
+		if o.KeyFingerprint == fingerprint {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Store) NameTaken(_ context.Context, org, name string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, o := range s.nodes {
+		if o.OrgID == org && o.Name == name && o.Status != nodes.StatusRevoked {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Store) Get(_ context.Context, org, id string) (*nodes.Node, error) {

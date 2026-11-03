@@ -30,6 +30,9 @@ type fakeStore struct {
 	allowErr error
 	// afterClaim runs after ClaimSession commits, outside the lock.
 	afterClaim func(nodeID string)
+	// skipPrecheck makes KeyKnown and NameTaken answer false, as a join
+	// racing another one would see.
+	skipPrecheck bool
 }
 
 func newFakeStore() *fakeStore {
@@ -50,12 +53,43 @@ func (f *fakeStore) Create(_ context.Context, n *Node) error {
 		return f.fail
 	}
 	for _, o := range f.nodes {
+		if n.KeyFingerprint != "" && o.KeyFingerprint == n.KeyFingerprint {
+			return ErrKeyKnown
+		}
 		if o.OrgID == n.OrgID && o.Name == n.Name && o.Status != StatusRevoked {
 			return ErrNameTaken
 		}
 	}
 	f.nodes[n.ID] = clone(n)
 	return nil
+}
+
+func (f *fakeStore) KeyKnown(_ context.Context, fingerprint string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.skipPrecheck {
+		return false, nil
+	}
+	for _, o := range f.nodes {
+		if o.KeyFingerprint == fingerprint {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeStore) NameTaken(_ context.Context, org, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.skipPrecheck {
+		return false, nil
+	}
+	for _, o := range f.nodes {
+		if o.OrgID == org && o.Name == name && o.Status != StatusRevoked {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (f *fakeStore) Get(_ context.Context, org, id string) (*Node, error) {
 	f.mu.Lock()
@@ -270,9 +304,20 @@ func (f *fakeStore) DeleteExpiredNonces(_ context.Context, now time.Time) error 
 }
 
 type fakeTokens struct {
-	claim *apikeys.NodeJoinClaim
-	err   error
-	calls int
+	claim   *apikeys.NodeJoinClaim
+	err     error
+	peekErr error
+	calls   int
+}
+
+func (t *fakeTokens) PeekNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {
+	if t.peekErr != nil {
+		return nil, t.peekErr
+	}
+	if t.err != nil {
+		return nil, t.err
+	}
+	return t.claim, nil
 }
 
 func (t *fakeTokens) ConsumeNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {
@@ -376,10 +421,10 @@ func TestJoinNameFromRequest(t *testing.T) {
 	}
 	in3 := joinReq()
 	in3.Name = "web"
-	// The token is spent by now, so the operator needs a new one, and the
-	// name conflict is still visible.
+	// The name is checked before the token is spent, so the operator keeps
+	// the token and is told why.
 	_, err = r.svc.Join(context.Background(), in3)
-	if !errors.Is(err, ErrNameTaken) || !errors.Is(err, ErrMintNewToken) {
+	if !errors.Is(err, ErrNameTaken) || errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -882,5 +927,105 @@ func TestReadOnlyPrincipalCannotWrite(t *testing.T) {
 	}
 	if _, err := r.svc.Get(context.Background(), ro, id); err != nil {
 		t.Fatalf("get: %v", err)
+	}
+}
+
+func TestJoinRefusesAKnownKeyBeforeSpending(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	first := joinReq()
+	res, err := r.svc.Join(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.svc.Revoke(context.Background(), admin, res.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	spent := r.tokens.calls
+	again := joinReq()
+	again.PublicKey = first.PublicKey
+	_, err = r.svc.Join(context.Background(), again)
+	var jc *JoinConflict
+	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || jc.Spent {
+		t.Fatalf("err %v", err)
+	}
+	if !strings.Contains(err.Error(), "identity.key") || !strings.Contains(err.Error(), "not used") {
+		t.Fatalf("message %q", err)
+	}
+	if r.tokens.calls != spent {
+		t.Fatal("the token was spent on a key Loomplane already knows")
+	}
+}
+
+func TestJoinKnownKeyRaceAfterSpending(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	r.store.skipPrecheck = true
+	first := joinReq()
+	if _, err := r.svc.Join(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	again := joinReq()
+	again.PublicKey = first.PublicKey
+	_, err := r.svc.Join(context.Background(), again)
+	var jc *JoinConflict
+	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || !jc.Spent || !strings.Contains(err.Error(), "mint a new join token") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestJoinTakenNameRefusedBeforeSpending(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.Name = "web"
+	if _, err := r.svc.Join(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	spent := r.tokens.calls
+	in2 := joinReq()
+	in2.Name = "web"
+	_, err := r.svc.Join(context.Background(), in2)
+	var jc *JoinConflict
+	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || jc.Spent {
+		t.Fatalf("err %v", err)
+	}
+	for _, want := range []string{`"web"`, "--name", "not used"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("message %q lacks %q", err, want)
+		}
+	}
+	if r.tokens.calls != spent {
+		t.Fatal("the token was spent on a name that is taken")
+	}
+}
+
+func TestJoinTakenNameRaceSaysSoAfterSpending(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.Name = "web"
+	if _, err := r.svc.Join(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	r.store.skipPrecheck = true
+	in2 := joinReq()
+	in2.Name = "web"
+	_, err := r.svc.Join(context.Background(), in2)
+	var jc *JoinConflict
+	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || !jc.Spent {
+		t.Fatalf("err %v", err)
+	}
+	for _, want := range []string{`"web"`, "--name", "mint a new join token"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("message %q lacks %q", err, want)
+		}
+	}
+}
+
+func TestJoinPeekErrorsPassThroughWithoutSpending(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	r.tokens.peekErr = apikeys.ErrRejected
+	if _, err := r.svc.Join(context.Background(), joinReq()); !errors.Is(err, apikeys.ErrRejected) {
+		t.Fatalf("err %v", err)
+	}
+	if r.tokens.calls != 0 {
+		t.Fatal("a token the peek refused was spent")
 	}
 }

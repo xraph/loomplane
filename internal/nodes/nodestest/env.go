@@ -34,6 +34,11 @@ func (t *Tokens) Spent() int {
 	return t.spent
 }
 
+// PeekNodeJoinToken implements nodes.JoinTokens.
+func (t *Tokens) PeekNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {
+	return &apikeys.NodeJoinClaim{OrgID: Org, MintedBy: User, MintedByKeyID: "key_1"}, nil
+}
+
 // ConsumeNodeJoinToken implements nodes.JoinTokens.
 func (t *Tokens) ConsumeNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {
 	t.mu.Lock()

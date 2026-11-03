@@ -634,3 +634,42 @@ func TestMarkOfflineIfEpoch(t *testing.T) {
 		t.Fatalf("revoked: %s", got.Status)
 	}
 }
+
+// A key belongs to one node for good, revoked or not. NameTaken looks at live
+// nodes of one org only.
+func TestKeyNeverJoinsTwice(t *testing.T) {
+	s, _ := testStore(t)
+	ctx := t.Context()
+	first := newNode("node_1", "org_1", "web-1")
+	if err := s.Create(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	first.Status, first.RevokedAt, first.RevokedBy = StatusRevoked, &now, "usr_1"
+	if err := s.Update(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := s.KeyKnown(ctx, "fp-node_1"); err != nil || !known {
+		t.Fatalf("revoked key known: %v %v", known, err)
+	}
+	if known, err := s.KeyKnown(ctx, "fp-other"); err != nil || known {
+		t.Fatalf("unknown key known: %v %v", known, err)
+	}
+	again := newNode("node_2", "org_2", "web-2")
+	again.KeyFingerprint = "fp-node_1"
+	if err := s.Create(ctx, again); !errors.Is(err, ErrKeyKnown) {
+		t.Fatalf("a revoked node's key joined again: %v", err)
+	}
+	if taken, err := s.NameTaken(ctx, "org_1", "web-1"); err != nil || taken {
+		t.Fatalf("a revoked node's name is taken: %v %v", taken, err)
+	}
+	if err := s.Create(ctx, newNode("node_3", "org_1", "web-3")); err != nil {
+		t.Fatal(err)
+	}
+	if taken, err := s.NameTaken(ctx, "org_1", "web-3"); err != nil || !taken {
+		t.Fatalf("live name: %v %v", taken, err)
+	}
+	if taken, err := s.NameTaken(ctx, "org_2", "web-3"); err != nil || taken {
+		t.Fatalf("name in another org: %v %v", taken, err)
+	}
+}

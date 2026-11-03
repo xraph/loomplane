@@ -196,18 +196,7 @@ func validNodeJoinScope(sc *NodeJoinScope) error {
 // that fails the token is burned all the same. Anything that isn't a live
 // join token is ErrRejected; a failing backend is ErrUnavailable.
 func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJoinClaim, error) {
-	if !IsNodeJoinToken(raw) {
-		return nil, ErrRejected
-	}
-	res, err := s.engine.ValidateKey(ctx, raw)
-	if err != nil {
-		if errors.Is(err, keysmith.ErrInvalidKey) || errors.Is(err, keysmith.ErrKeyInactive) || errors.Is(err, keysmith.ErrKeyExpired) {
-			return nil, ErrRejected
-		}
-		return nil, ErrUnavailable
-	}
-	k := res.Key
-	claim, err := s.nodeJoinClaim(k)
+	k, claim, err := s.liveNodeJoinKey(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +214,35 @@ func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJo
 		return nil, ErrRejected
 	}
 	return claim, nil
+}
+
+// PeekNodeJoinToken returns what a live join token grants, without spending
+// it, so a join can be refused for a reason the operator can fix (a name or
+// key already in use) while the token still works. It answers like
+// ConsumeNodeJoinToken: ErrRejected for anything that isn't a live join
+// token, ErrUnavailable for a failing backend. Only Consume decides.
+func (s *Service) PeekNodeJoinToken(ctx context.Context, raw string) (*NodeJoinClaim, error) {
+	_, claim, err := s.liveNodeJoinKey(ctx, raw)
+	return claim, err
+}
+
+// liveNodeJoinKey checks raw and reads the claim of the live join token it is.
+func (s *Service) liveNodeJoinKey(ctx context.Context, raw string) (*key.Key, *NodeJoinClaim, error) {
+	if !IsNodeJoinToken(raw) {
+		return nil, nil, ErrRejected
+	}
+	res, err := s.engine.ValidateKey(ctx, raw)
+	if err != nil {
+		if errors.Is(err, keysmith.ErrInvalidKey) || errors.Is(err, keysmith.ErrKeyInactive) || errors.Is(err, keysmith.ErrKeyExpired) {
+			return nil, nil, ErrRejected
+		}
+		return nil, nil, ErrUnavailable
+	}
+	claim, err := s.nodeJoinClaim(res.Key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return res.Key, claim, nil
 }
 
 func (s *Service) spendNodeJoinKey(tctx context.Context, k *key.Key) error {

@@ -37,8 +37,11 @@ func storeError(err error) error {
 	if errors.As(err, &pe) {
 		switch pe.Code {
 		case "23505":
-			if pe.ConstraintName == "loomplane_nodes_live_name" {
+			switch pe.ConstraintName {
+			case "loomplane_nodes_live_name":
 				return ErrNameTaken
+			case "loomplane_nodes_key_fingerprint":
+				return ErrKeyKnown
 			}
 		case "23503":
 			return ErrNotFound
@@ -98,7 +101,7 @@ func encode(n *Node) (endpoints, labels, inventory []byte, err error) {
 }
 
 // Create inserts n. It returns ErrNameTaken when a live node of the org has
-// the name.
+// the name, and ErrKeyKnown when any node has the key.
 func (s *PgStore) Create(ctx context.Context, n *Node) error {
 	if n.IdentityGeneration == 0 {
 		n.IdentityGeneration = 1
@@ -118,6 +121,20 @@ func (s *PgStore) Create(ctx context.Context, n *Node) error {
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_nodes(`+nodeColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		n.ID, n.OrgID, n.Name, n.PublicKey, n.KeyFingerprint, n.IdentityGeneration, string(n.Status), endpoints, n.IngressMode, n.Role, n.EdgeScope, labels, n.Version, n.ProtocolVersion, inventory, n.LastSeenAt, n.JoinedBy, n.JoinedByKeyID, n.RevokedAt, n.RevokedBy, n.CreatedAt, n.UpdatedAt)
 	return storeError(err)
+}
+
+// KeyKnown reports whether any node, revoked or not, has the key.
+func (s *PgStore) KeyKnown(ctx context.Context, fingerprint string) (bool, error) {
+	var known bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_nodes WHERE key_fingerprint=$1)`, fingerprint).Scan(&known)
+	return known, err
+}
+
+// NameTaken reports whether a live node of org has the name.
+func (s *PgStore) NameTaken(ctx context.Context, org, name string) (bool, error) {
+	var taken bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_nodes WHERE org_id=$1 AND name=$2 AND revoked_at IS NULL)`, org, name).Scan(&taken)
+	return taken, err
 }
 
 // Get returns a node of org.

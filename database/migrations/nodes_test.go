@@ -36,7 +36,7 @@ func TestNodeEventsIgnoreHeartbeats(t *testing.T) {
 		t.Fatalf("payload: %v", got)
 	}
 
-	if _, err := conn.Exec(t.Context(), `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,role,edge_scope,created_at,updated_at) VALUES ('node_2','org','web-2','\x01','fp','node','org',now(),now())`); err == nil {
+	if _, err := conn.Exec(t.Context(), `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,role,edge_scope,created_at,updated_at) VALUES ('node_2','org','web-2','\x01','fp2','node','org',now(),now())`); err == nil {
 		t.Fatal("edge scope accepted on a plain node")
 	}
 	down(t, ex, "node_events")
@@ -62,4 +62,23 @@ func TestNodeNoncesAreSingleUse(t *testing.T) {
 	if got := strs(t, conn, `SELECT count(*)::text FROM pg_tables WHERE tablename='loomplane_node_nonces'`); got[0] != "0" {
 		t.Fatalf("down left the table: %v", got)
 	}
+}
+
+func TestNodeKeysAreNeverReused(t *testing.T) {
+	conn, ex := scratch(t)
+	if _, err := migrate.NewOrchestrator(ex, Group()).Migrate(t.Context()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	up(t, ex, "node_key_fingerprint")
+	exec(t, conn, `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,status,revoked_at,created_at,updated_at) VALUES ('node_1','org','web-1','\x01','fp','revoked',now(),now(),now())`)
+	// A revoked node's key is still its own: another node can't take it,
+	// in this org or another.
+	if _, err := conn.Exec(t.Context(), `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_2','other','web-1','\x01','fp',now(),now())`); err == nil {
+		t.Fatal("a second node joined with a revoked node's key")
+	}
+	down(t, ex, "node_key_fingerprint")
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_indexes WHERE indexname='loomplane_nodes_key_fingerprint'`); got[0] != "0" {
+		t.Fatalf("down left the index: %v", got)
+	}
+	exec(t, conn, `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_2','other','web-1','\x01','fp',now(),now())`)
 }

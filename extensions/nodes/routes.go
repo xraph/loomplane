@@ -264,7 +264,11 @@ func (e *Extension) join(c forge.Context) error {
 // after the join token was spent says to mint a new one, and keeps the cause
 // out of the response.
 func (e *Extension) fail(c forge.Context, err error) error {
+	var conflict *nodes.JoinConflict
 	switch {
+	case errors.As(err, &conflict):
+		// The text says which name or key, and whether to mint a new token.
+		return c.JSON(http.StatusConflict, map[string]string{"error": conflict.Error()})
 	case errors.Is(err, nodes.ErrMintNewToken):
 		e.Logger().Error("a node could not be created after its join token was spent", forge.F("error", err.Error()))
 		// Forge hides the message of a 5xx, and this one is for the operator.

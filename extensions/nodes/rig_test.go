@@ -42,6 +42,28 @@ func (m *memStore) Create(_ context.Context, n *nodes.Node) error {
 	return nil
 }
 
+func (m *memStore) KeyKnown(_ context.Context, fingerprint string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, n := range m.nodes {
+		if n.KeyFingerprint == fingerprint {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *memStore) NameTaken(_ context.Context, org, name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, n := range m.nodes {
+		if n.OrgID == org && n.Name == name && n.RevokedAt == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *memStore) Get(_ context.Context, org, id string) (*nodes.Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -175,6 +197,10 @@ type tokens struct {
 	claim *apikeys.NodeJoinClaim
 	err   error
 	spent int
+}
+
+func (t *tokens) PeekNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {
+	return t.claim, t.err
 }
 
 func (t *tokens) ConsumeNodeJoinToken(context.Context, string) (*apikeys.NodeJoinClaim, error) {

@@ -419,3 +419,28 @@ func TestListLeavesOutJoinTokens(t *testing.T) {
 		t.Fatalf("join token listed: %+v", keys)
 	}
 }
+
+// A peek reads the claim and leaves the token live; a spent token can't be
+// peeked at.
+func TestPeekJoinTokenDoesNotSpend(t *testing.T) {
+	svc := joinService(t, nil)
+	tok, err := svc.CreateNodeJoinToken(t.Context(), security.Principal{UserID: "admin", OrgID: "org"}, NodeJoinScope{Labels: map[string]string{"zone": "a"}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		claim, perr := svc.PeekNodeJoinToken(t.Context(), tok.Secret)
+		if perr != nil || claim.OrgID != "org" || claim.Scope.Labels["zone"] != "a" {
+			t.Fatalf("peek: %+v %v", claim, perr)
+		}
+	}
+	if _, err = svc.ConsumeNodeJoinToken(t.Context(), tok.Secret); err != nil {
+		t.Fatalf("the token was spent by a peek: %v", err)
+	}
+	if _, err = svc.PeekNodeJoinToken(t.Context(), tok.Secret); !errors.Is(err, ErrRejected) {
+		t.Fatalf("peek of a spent token: %v", err)
+	}
+	if _, err = svc.PeekNodeJoinToken(t.Context(), "lp_live_nope"); !errors.Is(err, ErrRejected) {
+		t.Fatalf("peek of an API key: %v", err)
+	}
+}

@@ -179,6 +179,28 @@ func TestJoinRouteErrors(t *testing.T) {
 	}
 }
 
+// A name a live node holds is refused before the token is spent, and the
+// operator is told which name and what to do.
+func TestJoinRouteTakenNameKeepsTheToken(t *testing.T) {
+	r := newRig(t)
+	r.seed(t)
+	out := r.do(t, http.MethodPost, "/api/v1/nodes/join", joinBody(t, nil), nil)
+	var msg struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &msg); err != nil || out.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", out.Code, out.Body)
+	}
+	for _, want := range []string{`"web-1"`, "--name", "not used"} {
+		if !strings.Contains(msg.Error, want) {
+			t.Fatalf("message %q lacks %q", msg.Error, want)
+		}
+	}
+	if r.tokens.spent != 0 {
+		t.Fatal("a join with a taken name spent its token")
+	}
+}
+
 func TestPatchWidenIs422(t *testing.T) {
 	r := newRig(t)
 	r.seed(t, nodeproto.EndpointProbe)

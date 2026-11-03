@@ -27,6 +27,9 @@ var (
 	ErrNotFound = errors.New("nodes: not found")
 	// ErrNameTaken is returned when a live node of the org already has the name.
 	ErrNameTaken = errors.New("nodes: name taken")
+	// ErrKeyKnown is returned when a joining key already belongs to a node,
+	// live or revoked. A key never gets a second node.
+	ErrKeyKnown = errors.New("nodes: key already belongs to a node")
 	// ErrWidenRemotely is returned when an update would add endpoints. Only
 	// the machine's owner can widen what it serves.
 	ErrWidenRemotely = errors.New("add endpoints on the machine with: loomctl node allow <endpoint>")
@@ -81,7 +84,15 @@ type Session struct {
 
 // Store persists nodes and their sessions.
 type Store interface {
+	// Create inserts n. It returns ErrNameTaken when a live node of the org
+	// has the name, and ErrKeyKnown when any node, revoked ones included,
+	// has the key.
 	Create(ctx context.Context, n *Node) error
+	// KeyKnown reports whether any node, revoked ones included, has the key
+	// with this fingerprint.
+	KeyKnown(ctx context.Context, fingerprint string) (bool, error)
+	// NameTaken reports whether a live node of org has the name.
+	NameTaken(ctx context.Context, org, name string) (bool, error)
 	Get(ctx context.Context, org, id string) (*Node, error)
 	GetByID(ctx context.Context, id string) (*Node, error)
 	List(ctx context.Context, org string) ([]Node, error)
