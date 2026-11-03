@@ -381,19 +381,33 @@ func TestSignInCloudsSkipsTheCounts(t *testing.T) {
 
 type failingGet struct {
 	*fakeAppStore
+	err error
 }
 
-func (failingGet) GetApp(context.Context, string) (*StoredApp, error) {
-	return nil, errors.New("db down")
-}
+func (f failingGet) GetApp(context.Context, string) (*StoredApp, error) { return nil, f.err }
 
 func TestAppRejectedWarnsWhenItCannotReadTheApp(t *testing.T) {
 	s, store, _, _ := signInService(nil)
+	store.problems = map[string]string{}
 	var warned []string
 	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
-	s.Apps = failingGet{store}
+	s.Apps = failingGet{store, errors.New("db down")}
 	s.appRejected(t.Context(), GCP, "platform")
 	if len(warned) != 1 {
+		t.Fatalf("warned %v", warned)
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("a problem was recorded on a read error: %v", got)
+	}
+}
+
+func TestAppRejectedIsQuietWhenThereIsNoApp(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	var warned []string
+	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
+	s.Apps = failingGet{store, ErrNotFound}
+	s.appRejected(t.Context(), GCP, "platform")
+	if len(warned) != 0 {
 		t.Fatalf("warned %v", warned)
 	}
 }

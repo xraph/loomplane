@@ -55,6 +55,7 @@ func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("platformCloudSignInApps.list"),
 		forge.WithSummary("The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register"),
 		forge.WithResponseSchema(http.StatusOK, "Sign-in apps", SignInAppList{}),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
 	); err != nil {
 		return err
 	}
@@ -63,6 +64,9 @@ func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithSummary("Set the platform's sign-in app for a cloud. The secret is never returned"),
 		forge.WithRequestSchema(connections.AppInput{}),
 		forge.WithResponseSchema(http.StatusOK, "The sign-in app", connections.SignInApp{}),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
+		forge.WithResponseSchema(http.StatusConflict, "The cloud's app comes from configuration", nil),
+		forge.WithResponseSchema(http.StatusUnprocessableEntity, "The app is missing something", nil),
 	); err != nil {
 		return err
 	}
@@ -70,6 +74,8 @@ func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("platformCloudSignInApps.delete"),
 		forge.WithSummary("Remove the platform's sign-in app for a cloud"),
 		forge.WithNoContentResponse(),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user, or the cloud has no platform app", nil),
+		forge.WithResponseSchema(http.StatusConflict, "The cloud's app comes from configuration", nil),
 	); err != nil {
 		return err
 	}

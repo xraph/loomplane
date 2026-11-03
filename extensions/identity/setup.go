@@ -120,6 +120,7 @@ func (e *Extension) setupRoutes(r forge.Router) error {
 		forge.WithTags("Identity"),
 		forge.WithMiddleware(e.guard()),
 		forge.WithNoContentResponse(),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
 		forge.WithoutEntity(),
 	)
 }

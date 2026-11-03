@@ -558,8 +558,7 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	}
 }
 
-// A Vercel app is installed by its slug, so the platform refuses one saved
-// without it, and the slug of a configured app comes back and names the
+// A Vercel app's configured slug comes back in the app list and names the
 // install page.
 func TestCloudSignIn_vercelInstallUsesTheAppSlug(t *testing.T) {
 	cfg := config.Defaults()
