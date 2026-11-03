@@ -289,3 +289,32 @@ func TestRemoveAllocationThatFailedBeforeReservation(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+func TestPerOrgBackstopRefusesOneOrgFillingTheHost(t *testing.T) {
+	h, _, q := testHost(t)
+	h.Limits = Limits{VMs: 8, VCPUs: 16, MemoryMiB: 16384, DiskMiB: 65536, PerOrg: OrgLimits{VMs: 2, VCPUs: 2, MemoryMiB: 4096}}
+	apply := func(org, resource string, gen int64, digest string) error {
+		in := q
+		in.Scope.Org, in.Scope.Resource = org, resource
+		in.Authority.Generation = gen
+		in.Authority.Operation = "op-" + org + resource + digest
+		in.Spec.Service = "api"
+		in.Spec.Image = "registry.example/app@sha256:" + strings.Repeat(digest, 64)
+		_, err := h.Apply(t.Context(), in)
+		return err
+	}
+	for _, r := range []string{"r1", "r2"} {
+		if err := apply("a", r, 1, "a"); err != nil {
+			t.Fatal(r, err)
+		}
+	}
+	if err := apply("a", "r3", 1, "a"); !errors.Is(err, ErrCapacity) {
+		t.Fatal("third VM for org a accepted", err)
+	}
+	if err := apply("b", "r1", 1, "a"); err != nil {
+		t.Fatal("org b blocked by org a", err)
+	}
+	if err := apply("a", "r1", 2, "b"); err != nil {
+		t.Fatal("redeploy refused", err)
+	}
+}

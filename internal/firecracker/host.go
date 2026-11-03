@@ -201,6 +201,7 @@ func (h *Host) reserve(ctx context.Context, scope Scope, s Spec) (int, error) {
 	}
 	used := map[int]bool{}
 	cpus, mem, disk := s.VCPUs, s.MemoryMiB+128, s.DiskMiB
+	orgVMs, orgCPUs, orgMem := 1, s.VCPUs, s.MemoryMiB+128
 	for _, r := range all {
 		if r.Scope != scope && r.Current != nil && s.PublishedPort != 0 && r.Current.Spec.PublishedPort == s.PublishedPort {
 			return 0, ErrConflict
@@ -220,7 +221,17 @@ func (h *Host) reserve(ctx context.Context, scope Scope, s Spec) (int, error) {
 			cpus += v.Spec.VCPUs
 			mem += v.Spec.MemoryMiB + 128
 			disk += v.Spec.DiskMiB
+			// The backstop leaves out the scope's own Current VM, which the
+			// replacement supersedes, so a redeploy may briefly hold one extra.
+			if r.Scope.Org == scope.Org && !(r.Scope == scope && r.Current != nil && v.ID == r.Current.ID) {
+				orgVMs++
+				orgCPUs += v.Spec.VCPUs
+				orgMem += v.Spec.MemoryMiB + 128
+			}
 		}
+	}
+	if o := h.Limits.PerOrg; o.VMs > 0 && (orgVMs > o.VMs || orgCPUs > o.VCPUs || orgMem > o.MemoryMiB) {
+		return 0, ErrCapacity
 	}
 	if len(used) >= h.Limits.VMs || cpus > h.Limits.VCPUs || mem > h.Limits.MemoryMiB || disk > h.Limits.DiskMiB {
 		return 0, ErrCapacity
