@@ -763,6 +763,54 @@ func TestOnOnlineFiresAfterFirstInventory(t *testing.T) {
 	}
 }
 
+// A node that floods its control stream is closed with a log line, and the
+// message that went over the limit is not stored.
+func TestHubClosesANodeThatFloodsControl(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1")
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	for range controlBurst {
+		n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux", Hostname: "within"}})
+	}
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux", Hostname: "flood"}})
+	n.closedWithin(3 * time.Second)
+	waitFor(t, "the session to end", func() bool { return !r.hub.Online("node_1") })
+	if got := r.node("node_1").Inventory.Hostname; got != "within" {
+		t.Fatalf("stored hostname %q, want the last one inside the limit", got)
+	}
+	if !strings.Contains(r.logs.String(), "faster than allowed") {
+		t.Fatalf("no log line:\n%s", r.logs.String())
+	}
+}
+
+func TestControlBucketRefills(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	b := newBucket(start)
+	for i := range controlBurst {
+		if !b.take(start) {
+			t.Fatalf("refused message %d of the burst", i)
+		}
+	}
+	if b.take(start) {
+		t.Fatal("took one past the burst")
+	}
+	if !b.take(start.Add(time.Second / controlPerSecond)) {
+		t.Fatal("did not refill")
+	}
+	if b.take(start.Add(time.Second / controlPerSecond)) {
+		t.Fatal("refilled more than the time allows")
+	}
+	// A long quiet spell refills to the burst, no further.
+	later := start.Add(time.Hour)
+	for range controlBurst {
+		b.take(later)
+	}
+	if b.take(later) {
+		t.Fatal("refilled past the burst")
+	}
+}
+
 func TestOnInventoryFiresOnChange(t *testing.T) {
 	r := newHubRig(t, newFakeStore(), "a")
 	priv := seedNode(t, r.store, "node_1", "web-1")

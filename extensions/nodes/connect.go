@@ -47,11 +47,15 @@ func (e *Extension) mountNodeEndpoints(r forge.Router) error {
 }
 
 // challenge hands out a challenge for a node to sign. It needs no session:
-// the nonce is useless without the node's key.
+// the nonce is useless without the node's key. Each address may ask
+// nodes.challenge_rate_limit times a minute.
 func (e *Extension) challenge(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if e.limited(w, r, limitChallenge, e.cfg.Nodes.ChallengeRateLimit) {
 		return
 	}
 	id := r.URL.Query().Get("node")

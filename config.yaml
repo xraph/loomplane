@@ -81,6 +81,11 @@ nodes:
   # A PEM file of the roots that verify the other replicas' certificates on
   # an https hop. Empty uses the system roots.
   hop_ca_file: "${LOOMPLANE_NODES_HOP_CA_FILE:-}"
+  # How many joins one address may send a minute, and how many connect
+  # challenges it may ask for. Every node behind one NAT shares the challenge
+  # budget, and each asks once per reconnect. 0 turns a limit off.
+  join_rate_limit: "${LOOMPLANE_NODES_JOIN_RATE_LIMIT:-10}"
+  challenge_rate_limit: "${LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT:-120}"
 
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).

@@ -448,7 +448,8 @@ func Defaults() Config {
 			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
 			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
 		},
-		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
 	}
 }
 
@@ -615,6 +616,8 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
 	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
+	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
+	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err

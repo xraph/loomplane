@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	authsome "github.com/xraph/authsome"
+	"github.com/xraph/authsome/ratelimit"
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
@@ -34,6 +36,11 @@ type Extension struct {
 	hubErr error
 	svc    *nodes.Service
 	minter JoinTokenMinter
+	// limiter counts the public node endpoints per address. It is the
+	// identity extension's, which sign-in counts on too, kept in the shared
+	// store so a caller can't spread over replicas to get more. Nil means no
+	// limits.
+	limiter ratelimit.Limiter
 
 	guard identity.Guard
 
@@ -104,6 +111,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("nodes needs the identity extension: %w", err)
 	}
+	engine, err := forge.InjectType[*authsome.Engine](c)
+	if err != nil {
+		return fmt.Errorf("nodes needs the identity extension's auth engine: %w", err)
+	}
+	e.limiter = engine.RateLimiter()
 	store := nodes.NewPgStore(pgdriver.Unwrap(db))
 	e.minter = keys
 	e.svc = &nodes.Service{

@@ -254,6 +254,11 @@ func (e *Extension) installCommand(token string, allow []nodeproto.Endpoint) str
 const joinTokenEnv = "LOOMPLANE_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
 
 func (e *Extension) join(c forge.Context) error {
+	// Counted before the body is read: the join is the one route anyone can
+	// call, and each one can cost a token lookup.
+	if e.limited(c.Response(), c.Request(), limitJoin, e.cfg.Nodes.JoinRateLimit) {
+		return nil
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, maxJoinBody))
 	var tooBig *http.MaxBytesError
 	switch {
