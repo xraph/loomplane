@@ -46,14 +46,18 @@ vi.mock("@tanstack/react-router", async (original) => ({
     select: (s: { location: { pathname: string; search: object } }) => unknown
   }) => select({ location: { pathname: "/", search: {} } }),
 }))
+const signedIn = vi.hoisted(() => ({
+  user: null as null | { email: string; first_name: string; last_name: string },
+}))
 vi.mock("@authsome/ui-react", () => ({
-  useAuth: () => ({ user: null, signOut: async () => {} }),
+  useAuth: () => ({ user: signedIn.user, signOut: async () => {} }),
 }))
 afterEach(() => {
   vi.unstubAllGlobals()
   navigate.mockReset()
   forgeClient.clear()
   access.denied = []
+  signedIn.user = null
 })
 
 function stubEmpty() {
@@ -174,4 +178,17 @@ it("adds Models to the AI group", () => {
   access.denied = ["ai:manage"]
   sidebar(true)
   expect(aiLinks()).toEqual([["Models", "/ai/models"]])
+})
+
+it("opens your account from the account menu", async () => {
+  signedIn.user = {
+    email: "rex@xraph.com",
+    first_name: "Rex",
+    last_name: "Raphael",
+  }
+  sidebar(false)
+  await userEvent.click(screen.getByText("rex@xraph.com"))
+  expect(
+    await screen.findByRole("menuitem", { name: "Your account" })
+  ).toHaveAttribute("href", "/account/profile")
 })

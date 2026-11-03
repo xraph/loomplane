@@ -25,6 +25,10 @@ import { Route as TeamsRouteImport } from "./routes/teams"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
 import { Route as WebhooksRouteImport } from "./routes/webhooks"
+import { Route as AccountIndexRouteImport } from "./routes/account.index"
+import { Route as AccountProfileRouteImport } from "./routes/account.profile"
+import { Route as AccountSecurityRouteImport } from "./routes/account.security"
+import { Route as AccountSessionsRouteImport } from "./routes/account.sessions"
 import { Route as AgentRequestsRouteImport } from "./routes/agent.requests"
 import { Route as AiSettingsRouteImport } from "./routes/ai.settings"
 import { Route as CloudsIndexRouteImport } from "./routes/clouds.index"
@@ -143,6 +147,26 @@ const VerifyEmailRoute = VerifyEmailRouteImport.update({
 const WebhooksRoute = WebhooksRouteImport.update({
   id: "/webhooks",
   path: "/webhooks",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountIndexRoute = AccountIndexRouteImport.update({
+  id: "/account/",
+  path: "/account/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountProfileRoute = AccountProfileRouteImport.update({
+  id: "/account/profile",
+  path: "/account/profile",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountSecurityRoute = AccountSecurityRouteImport.update({
+  id: "/account/security",
+  path: "/account/security",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountSessionsRoute = AccountSessionsRouteImport.update({
+  id: "/account/sessions",
+  path: "/account/sessions",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentRequestsRoute = AgentRequestsRouteImport.update({
@@ -365,6 +389,9 @@ export interface FileRoutesByFullPath {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/account/profile": typeof AccountProfileRoute
+  "/account/security": typeof AccountSecurityRoute
+  "/account/sessions": typeof AccountSessionsRoute
   "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
@@ -384,6 +411,7 @@ export interface FileRoutesByFullPath {
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
+  "/account/": typeof AccountIndexRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
@@ -422,6 +450,9 @@ export interface FileRoutesByTo {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/account/profile": typeof AccountProfileRoute
+  "/account/security": typeof AccountSecurityRoute
+  "/account/sessions": typeof AccountSessionsRoute
   "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
@@ -441,6 +472,7 @@ export interface FileRoutesByTo {
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
+  "/account": typeof AccountIndexRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
   "/domains": typeof DomainsIndexRoute
@@ -480,6 +512,9 @@ export interface FileRoutesById {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/account/profile": typeof AccountProfileRoute
+  "/account/security": typeof AccountSecurityRoute
+  "/account/sessions": typeof AccountSessionsRoute
   "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
@@ -499,6 +534,7 @@ export interface FileRoutesById {
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
+  "/account/": typeof AccountIndexRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
@@ -539,6 +575,9 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/account/profile"
+    | "/account/security"
+    | "/account/sessions"
     | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
@@ -558,6 +597,7 @@ export interface FileRouteTypes {
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
     | "/workspaces/new"
+    | "/account/"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
@@ -596,6 +636,9 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/account/profile"
+    | "/account/security"
+    | "/account/sessions"
     | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
@@ -615,6 +658,7 @@ export interface FileRouteTypes {
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
     | "/workspaces/new"
+    | "/account"
     | "/clouds"
     | "/deployments"
     | "/domains"
@@ -653,6 +697,9 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/account/profile"
+    | "/account/security"
+    | "/account/sessions"
     | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
@@ -672,6 +719,7 @@ export interface FileRouteTypes {
     | "/settings/api-keys"
     | "/setup_/cloud-sign-in"
     | "/workspaces/new"
+    | "/account/"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
@@ -711,6 +759,9 @@ export interface RootRouteChildren {
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   WebhooksRoute: typeof WebhooksRoute
+  AccountProfileRoute: typeof AccountProfileRoute
+  AccountSecurityRoute: typeof AccountSecurityRoute
+  AccountSessionsRoute: typeof AccountSessionsRoute
   AgentRequestsRoute: typeof AgentRequestsRoute
   AiSettingsRoute: typeof AiSettingsRoute
   CloudsIdRoute: typeof CloudsIdRoute
@@ -730,6 +781,7 @@ export interface RootRouteChildren {
   SettingsApiKeysRoute: typeof SettingsApiKeysRoute
   SetupCloudSignInRoute: typeof SetupCloudSignInRoute
   WorkspacesNewRoute: typeof WorkspacesNewRoute
+  AccountIndexRoute: typeof AccountIndexRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   DomainsIndexRoute: typeof DomainsIndexRoute
@@ -864,6 +916,34 @@ declare module "@tanstack/react-router" {
       path: "/webhooks"
       fullPath: "/webhooks"
       preLoaderRoute: typeof WebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/account/": {
+      id: "/account/"
+      path: "/account"
+      fullPath: "/account/"
+      preLoaderRoute: typeof AccountIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/account/profile": {
+      id: "/account/profile"
+      path: "/account/profile"
+      fullPath: "/account/profile"
+      preLoaderRoute: typeof AccountProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/account/security": {
+      id: "/account/security"
+      path: "/account/security"
+      fullPath: "/account/security"
+      preLoaderRoute: typeof AccountSecurityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/account/sessions": {
+      id: "/account/sessions"
+      path: "/account/sessions"
+      fullPath: "/account/sessions"
+      preLoaderRoute: typeof AccountSessionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/agent/requests": {
@@ -1159,6 +1239,9 @@ const rootRouteChildren: RootRouteChildren = {
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   WebhooksRoute: WebhooksRoute,
+  AccountProfileRoute: AccountProfileRoute,
+  AccountSecurityRoute: AccountSecurityRoute,
+  AccountSessionsRoute: AccountSessionsRoute,
   AgentRequestsRoute: AgentRequestsRoute,
   AiSettingsRoute: AiSettingsRoute,
   CloudsIdRoute: CloudsIdRoute,
@@ -1178,6 +1261,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsApiKeysRoute: SettingsApiKeysRoute,
   SetupCloudSignInRoute: SetupCloudSignInRoute,
   WorkspacesNewRoute: WorkspacesNewRoute,
+  AccountIndexRoute: AccountIndexRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
   DomainsIndexRoute: DomainsIndexRoute,
