@@ -8,9 +8,10 @@ import (
 
 // A node that joined with a token scoped to a Cloud waits here to be adopted
 // into it. The token's minter is the approval: approved_by and
-// approved_by_key_id are who the adoption runs as. One row per node, which
-// is how a second connect knows the node was adopted already. A row records
-// an approval, so down refuses to drop rows that hold one.
+// approved_by_key_id are who the adoption runs as. build_workers is the join
+// scope's build setting, for the node's server connection. One row per node,
+// which is how a second connect knows the node was adopted already. A row
+// records an approval, so down refuses to drop rows that hold one.
 func init() {
 	App.Add(func(ctx context.Context, db *migrate.DB) error {
 		if _, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS loomplane_node_adoptions (
@@ -19,6 +20,7 @@ func init() {
 	cloud_id TEXT NOT NULL DEFAULT '',
 	approved_by TEXT NOT NULL,
 	approved_by_key_id TEXT NOT NULL DEFAULT '',
+	build_workers TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL CHECK (status IN ('waiting','applied','review','failed')),
 	reason TEXT NOT NULL DEFAULT '',
 	server_id TEXT NOT NULL DEFAULT '',

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -616,6 +617,24 @@ func TestJoinAdoptHook(t *testing.T) {
 	res, err := r.svc.Join(context.Background(), joinReq())
 	if err != nil || got != "cld_1"+res.NodeID {
 		t.Fatalf("err %v got %q", err, got)
+	}
+}
+
+func TestJoinAdoptRefusedJoinsWithoutCloud(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{CloudID: "cld_other_org"}, true)
+	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error {
+		return fmt.Errorf("refused: %w", ErrAdoptionRefused)
+	}
+	res, err := r.svc.Join(context.Background(), joinReq())
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if res.CloudID != "" {
+		t.Fatalf("join result names the refused Cloud %q", res.CloudID)
+	}
+	n, err := r.store.GetByID(context.Background(), res.NodeID)
+	if err != nil || n.Status == StatusRevoked || n.RevokedAt != nil {
+		t.Fatalf("node %+v err %v", n, err)
 	}
 }
 

@@ -15,6 +15,10 @@ import (
 // Only the machine's owner can allow it.
 var ErrDockerNotAllowed = errors.New("this node doesn't serve Docker; allow it on the machine with: loomctl node allow docker")
 
+// ErrAdoptionRefused is the Adopt hook refusing the Cloud a join token
+// names. The node joins all the same, without a Cloud.
+var ErrAdoptionRefused = errors.New("the join token's Cloud isn't one of this organization's Clouds; the node joined without one")
+
 // NodeConnectionWriter writes the connection that reaches what runs on a
 // node. *connections.Service satisfies it.
 type NodeConnectionWriter interface {

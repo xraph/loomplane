@@ -90,6 +90,7 @@ type Service struct {
 	// The hub fills it. It may be nil.
 	Notify func(nodeID string, msg any)
 	// Adopt links a joined node to its cloud account. Phase 2 fills it. It may be nil.
+	// ErrAdoptionRefused from it means the node joins without a Cloud.
 	Adopt func(ctx context.Context, n *Node, claim *apikeys.NodeJoinClaim) error
 	// Log receives failures nobody else sees. Nil means slog.Default().
 	Log *slog.Logger
@@ -219,8 +220,14 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrMintNewToken, err)
 	}
+	cloudID := claim.Scope.CloudID
 	if s.Adopt != nil {
-		if err := s.Adopt(ctx, n, claim); err != nil {
+		err := s.Adopt(ctx, n, claim)
+		if errors.Is(err, ErrAdoptionRefused) {
+			// The node joins all the same, into no Cloud.
+			cloudID, err = "", nil
+		}
+		if err != nil {
 			// Free the name even when the caller has gone, and say so if
 			// that fails: a pending node would hold it otherwise.
 			rb := security.Principal{OrgID: n.OrgID, UserID: joinRollback}
@@ -231,7 +238,7 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		}
 	}
 	s.record(ctx, "node.joined", security.ActorPrincipal(claim.OrgID, claim.MintedBy), *n, map[string]string{"role": role})
-	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: claim.Scope.CloudID}, nil
+	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: cloudID}, nil
 }
 
 const joinRollback = "system:join-rollback"

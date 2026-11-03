@@ -34,6 +34,9 @@ type adoptionStore struct {
 	adoptions map[string]*NodeAdoption
 	previews  int
 	accepts   int
+	// failSaves fails the next adoption saves after an accept.
+	failSaves      int
+	failAfterApply int
 }
 
 func newAdoptionStore() *adoptionStore {
@@ -82,6 +85,7 @@ func (s *adoptionStore) Accept(_ context.Context, o *Operation) error {
 	copied := *o
 	s.ops[o.ID] = &copied
 	s.accepts++
+	s.failSaves, s.failAfterApply = s.failAfterApply, 0
 	// The real store claims the host in the same transaction.
 	s.servers[o.ServerID] = &Server{ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, RuntimeConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Status: "provisioning", Revision: 1, CreationOperationID: o.ID}
 	return nil
@@ -149,15 +153,36 @@ func (s *adoptionStore) GetNodeAdoption(_ context.Context, org, nodeID string) (
 	return &copied, nil
 }
 
-func (s *adoptionStore) SaveNodeAdoption(_ context.Context, a *NodeAdoption) error {
+func (s *adoptionStore) SaveNodeAdoption(ctx context.Context, a *NodeAdoption) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Like Postgres, a write on an ended context doesn't happen.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.failSaves > 0 {
+		s.failSaves--
+		return errors.New("the database went away")
+	}
 	if _, ok := s.adoptions[a.NodeID]; !ok {
 		return ErrNotFound
 	}
 	copied := *a
 	s.adoptions[a.NodeID] = &copied
 	return nil
+}
+
+func (s *adoptionStore) ListNodeAdoptions(_ context.Context, org, cloud string) ([]*NodeAdoption, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []*NodeAdoption{}
+	for _, a := range s.adoptions {
+		if a.OrgID == org && a.CloudID == cloud {
+			copied := *a
+			out = append(out, &copied)
+		}
+	}
+	return out, nil
 }
 
 func (s *adoptionStore) adoption(nodeID string) *NodeAdoption {
@@ -299,12 +324,17 @@ func (r *adoptionRuntime) Inspect(_ context.Context, raw []byte, settings map[st
 type adoptionWorkflow struct {
 	mu      sync.Mutex
 	started []string
+	// cancel, when set, ends the hook's context once the apply committed.
+	cancel context.CancelFunc
 }
 
 func (w *adoptionWorkflow) StartInfrastructure(_ context.Context, _ string, id string, _ int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.started = append(w.started, id)
+	if w.cancel != nil {
+		w.cancel()
+	}
 	return nil
 }
 
@@ -361,7 +391,7 @@ func cloudClaim(cloud string) *apikeys.NodeJoinClaim {
 // join records the claim the way the Adopt hook does and connects once.
 func (r *adoptionRig) join(t *testing.T, claim *apikeys.NodeJoinClaim) *NodeAdoption {
 	t.Helper()
-	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, claim); err != nil {
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, claim); err != nil && !errors.Is(err, nodes.ErrAdoptionRefused) {
 		t.Fatalf("record: %v", err)
 	}
 	if err := r.svc.AdoptOnline(t.Context(), r.node); err != nil {
@@ -402,6 +432,15 @@ func TestCleanNodeAdoptsOnFirstConnect(t *testing.T) {
 	}
 	if !slices.Contains(r.audit.actions(), "cloud.node_adoption.applied") {
 		t.Fatalf("audit %v", r.audit.actions())
+	}
+	// The trail says it happened by itself, on the approver's authority.
+	for _, e := range r.audit.events {
+		if !strings.HasPrefix(e.Action, "cloud.node_adoption.") {
+			continue
+		}
+		if e.Principal != security.ActorPrincipal("org", "user_admin") || e.Attributes["automatic"] != true || e.Attributes["via"] != "node_join_token" {
+			t.Fatalf("audit event %+v", e)
+		}
 	}
 }
 
@@ -498,8 +537,11 @@ func TestApproverLostRoleLeavesReview(t *testing.T) {
 	// A revoked API key behind the approval counts the same.
 	r2 := newAdoptionRig(t, "amd64")
 	r2.svc.CapacityPrincipal = rejectKeys{}
-	if a2 := r2.join(t, cloudClaim("cloud")); a2.Status != NodeAdoptionReview || a2.Reason != "the person who approved this can no longer manage Clouds" {
+	if a2 := r2.join(t, cloudClaim("cloud")); a2.Status != NodeAdoptionReview || a2.Reason != "the API key that approved this was revoked or expired" {
 		t.Fatalf("revoked key: %+v", a2)
+	}
+	if r2.conns.created() != 0 || r2.store.previews != 0 {
+		t.Fatal("acted for a revoked key")
 	}
 }
 
@@ -521,6 +563,9 @@ func TestClaimCloudFromAnotherOrgRefused(t *testing.T) {
 		t.Run(cloud, func(t *testing.T) {
 			r := newAdoptionRig(t, "amd64")
 			r.svc.CapacityPrincipal = acceptKeys{}
+			if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim(cloud)); !errors.Is(err, nodes.ErrAdoptionRefused) {
+				t.Fatalf("record: %v, want the refusal the join answers without a Cloud", err)
+			}
 			a := r.join(t, cloudClaim(cloud))
 			if a == nil || a.Status != NodeAdoptionFailed || a.CloudID != "" || !strings.Contains(a.Reason, "isn't one of this organization's Clouds") {
 				t.Fatalf("adoption %+v", a)
@@ -626,6 +671,120 @@ func TestAdoptLeavesANodeToTheAttemptHoldingIt(t *testing.T) {
 	}
 	if a := r.store.adoption(r.node.ID); a.Status != NodeAdoptionApplied {
 		t.Fatalf("adoption %+v", a)
+	}
+}
+
+func TestAdoptRecordsAnApplyItsDeadlineCutOff(t *testing.T) {
+	r := newAdoptionRig(t, "amd64")
+	r.svc.CapacityPrincipal = acceptKeys{}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	// The hook's deadline passes right after the apply commits.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r.workflow.cancel = cancel
+	if err := r.svc.AdoptOnline(ctx, r.node); err != nil {
+		t.Fatal(err)
+	}
+	if a := r.store.adoption(r.node.ID); a.Status != NodeAdoptionApplied || a.OperationID == "" {
+		t.Fatalf("adoption %+v, want applied", a)
+	}
+}
+
+func TestAdoptRetryReadsTheSavedOperation(t *testing.T) {
+	r := newAdoptionRig(t, "amd64")
+	r.svc.CapacityPrincipal = acceptKeys{}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	// The apply commits, then recording it fails.
+	r.store.failAfterApply = 1
+	if err := r.svc.AdoptOnline(t.Context(), r.node); err == nil {
+		t.Fatal("a lost save was reported as done")
+	}
+	a := r.store.adoption(r.node.ID)
+	if a.Status != NodeAdoptionWaiting || a.OperationID == "" {
+		t.Fatalf("adoption %+v, want waiting with its operation saved", a)
+	}
+	// The next connect reads that operation instead of adopting again.
+	if err := r.svc.AdoptOnline(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	got := r.store.adoption(r.node.ID)
+	if got.Status != NodeAdoptionApplied || got.OperationID != a.OperationID {
+		t.Fatalf("retry %+v", got)
+	}
+	if r.store.previews != 1 || r.store.accepts != 1 || r.workflow.count() != 1 || r.conns.created() != 1 {
+		t.Fatalf("adopted again: %d previews, %d accepts, %d starts, %d connections", r.store.previews, r.store.accepts, r.workflow.count(), r.conns.created())
+	}
+}
+
+func TestAdoptRetryAppliesASavedPreview(t *testing.T) {
+	r := newAdoptionRig(t, "amd64")
+	r.svc.CapacityPrincipal = acceptKeys{}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	// An attempt saved its clean preview, then stopped before applying it.
+	p := security.Principal{UserID: "user_admin", OrgID: "org", KeyID: "key_admin"}
+	conn, err := r.svc.Nodes.AdoptDocker(t.Context(), p, r.node, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := r.svc.PreviewServer(t.Context(), p, "cloud", ServerInput{Kind: "adopt", ConnectionID: conn.ID, Name: "web-1", CloudRevision: 3, ConfirmAdoption: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := r.store.adoption(r.node.ID)
+	a.OperationID, a.ServerID = o.ID, o.ServerID
+	if err = r.store.SaveNodeAdoption(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.svc.AdoptOnline(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.store.adoption(r.node.ID); got.Status != NodeAdoptionApplied || got.OperationID != o.ID {
+		t.Fatalf("adoption %+v", got)
+	}
+	if r.store.previews != 1 || r.store.accepts != 1 {
+		t.Fatalf("%d previews, %d accepts", r.store.previews, r.store.accepts)
+	}
+	// One that expired is forgotten and the adoption starts over.
+	r2 := newAdoptionRig(t, "amd64")
+	r2.svc.CapacityPrincipal = acceptKeys{}
+	if err = r2.svc.RecordNodeAdoption(t.Context(), r2.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	r2.store.ops["infraop_old"] = &Operation{ID: "infraop_old", OrgID: "org", CloudID: "cloud", Status: "preview", ExpiresAt: time.Now().Add(-time.Minute)}
+	a2 := r2.store.adoption(r2.node.ID)
+	a2.OperationID = "infraop_old"
+	if err = r2.store.SaveNodeAdoption(t.Context(), a2); err != nil {
+		t.Fatal(err)
+	}
+	if err = r2.svc.AdoptOnline(t.Context(), r2.node); err != nil {
+		t.Fatal(err)
+	}
+	if got := r2.store.adoption(r2.node.ID); got.Status != NodeAdoptionApplied || got.OperationID == "infraop_old" {
+		t.Fatalf("expired preview: %+v", got)
+	}
+}
+
+func TestAdoptCopiesTheJoinScopesBuildWorkers(t *testing.T) {
+	r := newAdoptionRig(t, "amd64")
+	r.svc.CapacityPrincipal = acceptKeys{}
+	r.node.Inventory.Docker = &nodeproto.Runtime{Socket: "/run/docker.sock"}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	a := r.store.adoption(r.node.ID)
+	a.BuildWorkers = "dedicated"
+	r.store.adoptions[r.node.ID] = a
+	if err := r.svc.AdoptOnline(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.conns.creates[0].Settings; got["build_workers"] != "dedicated" || got["docker_socket"] != "/run/docker.sock" {
+		t.Fatalf("settings %v", got)
 	}
 }
 

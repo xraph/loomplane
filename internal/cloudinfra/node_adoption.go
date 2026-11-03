@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -37,6 +39,7 @@ const (
 // The reasons an adoption stops, as an admin reads them.
 const (
 	reasonApproverLost  = "the person who approved this can no longer manage Clouds"
+	reasonKeyRevoked    = "the API key that approved this was revoked or expired"
 	reasonPortsInUse    = "ports 80/443 are in use"
 	reasonWorkloads     = "Docker already runs containers on this node; move them off, or adopt it by review"
 	reasonForeignCloud  = "the join token names a Cloud that isn't one of this organization's Clouds, so the node joined without one"
@@ -49,17 +52,24 @@ const (
 // named. The token's minter is the approval: the adoption runs as them,
 // and only while they may still manage Clouds.
 type NodeAdoption struct {
-	NodeID          string    `json:"node_id"`
-	OrgID           string    `json:"org_id"`
-	CloudID         string    `json:"cloud_id"`
-	ApprovedBy      string    `json:"approved_by"`
-	ApprovedByKeyID string    `json:"approved_by_key_id"`
-	Status          string    `json:"status"`
-	Reason          string    `json:"reason"`
-	ServerID        string    `json:"server_id"`
-	OperationID     string    `json:"operation_id"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	NodeID string `json:"node_id"`
+	// NodeName is the node's name, filled in by listings.
+	NodeName   string `json:"node_name"`
+	OrgID      string `json:"org_id"`
+	CloudID    string `json:"cloud_id"`
+	ApprovedBy string `json:"approved_by"`
+	// ApprovedByKeyID is the API key the token was minted with, if any. It
+	// is never shown.
+	ApprovedByKeyID string `json:"-"`
+	// BuildWorkers is the join scope's build_workers setting, copied into
+	// the node's server connection.
+	BuildWorkers string    `json:"-"`
+	Status       string    `json:"status"`
+	Reason       string    `json:"reason"`
+	ServerID     string    `json:"server_id"`
+	OperationID  string    `json:"operation_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // approver is the principal the adoption acts as.
@@ -75,6 +85,23 @@ type NodeAdoptionStore interface {
 	// GetNodeAdoption is ErrNotFound for a node without one.
 	GetNodeAdoption(ctx context.Context, orgID, nodeID string) (*NodeAdoption, error)
 	SaveNodeAdoption(ctx context.Context, a *NodeAdoption) error
+	// ListNodeAdoptions lists the adoptions into a Cloud, with node names.
+	ListNodeAdoptions(ctx context.Context, orgID, cloudID string) ([]*NodeAdoption, error)
+}
+
+// ListNodeAdoptions lists the nodes joined into a Cloud by their join
+// tokens, and where each one stands, for whoever may read the Cloud's
+// servers. An adoption refused for naming another org's Cloud belongs to
+// no Cloud and isn't listed.
+func (s *Service) ListNodeAdoptions(ctx context.Context, p security.Principal, cloud string) ([]*NodeAdoption, error) {
+	if _, err := s.authorize(ctx, p, cloud); err != nil {
+		return nil, err
+	}
+	st, err := s.nodeAdoptions()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListNodeAdoptions(ctx, p.OrgID, cloud)
 }
 
 // NodeConnectionSource lists the connections that reach a node.
@@ -117,9 +144,10 @@ func (s *Service) nodeAdoptions() (NodeAdoptionStore, error) {
 // RecordNodeAdoption is the nodes service's Adopt hook. It records that the
 // node joined with a token scoped to a Cloud, which is the approval, so its
 // first connect adopts it. A claim without a Cloud does nothing. A Cloud
-// that isn't one of the node's own org's is refused: the node joins
-// without one, nothing is ever applied, and the refusal is recorded and
-// audited. An error fails the join.
+// that isn't one of the node's own org's is refused: the refusal is
+// recorded and audited, nothing is ever applied, and the call returns
+// nodes.ErrAdoptionRefused so the node joins without a Cloud. Any other
+// error fails the join.
 func (s *Service) RecordNodeAdoption(ctx context.Context, n *nodes.Node, claim *apikeys.NodeJoinClaim) error {
 	if claim == nil || strings.TrimSpace(claim.Scope.CloudID) == "" {
 		return nil
@@ -142,6 +170,10 @@ func (s *Service) RecordNodeAdoption(ctx context.Context, n *nodes.Node, claim *
 		a.CloudID, a.Status, a.Reason = "", NodeAdoptionFailed, reasonForeignCloud
 		s.warn("A node's join token named a Cloud outside its organization; the node joined without one", fmt.Errorf("node %s of org %s named Cloud %q", n.ID, n.OrgID, claim.Scope.CloudID))
 		s.recordNodeAdoption(ctx, "cloud.node_adoption.refused", a, map[string]any{"claimed_cloud_id": claim.Scope.CloudID})
+		if createErr := st.CreateNodeAdoption(ctx, a); createErr != nil {
+			return createErr
+		}
+		return nodes.ErrAdoptionRefused
 	}
 	return st.CreateNodeAdoption(ctx, a)
 }
@@ -196,20 +228,34 @@ func (s *Service) adoptNode(ctx context.Context, st NodeAdoptionStore, n *nodes.
 	if err != nil {
 		return err
 	}
+	// An earlier attempt saved its operation before applying it. If the
+	// apply went through, that attempt just didn't live to record it.
+	pending, err := s.savedAdoptOperation(ctx, st, a)
+	if err != nil {
+		return err
+	}
+	if pending != nil && pending.Status != "preview" {
+		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionApplied, "")
+	}
 	// Everything from here runs as the approver, whose live role and API
 	// key are checked first and again by every call that follows.
 	p := a.approver()
 	if _, err = s.authorizeCapacityPrincipal(ctx, p, a.CloudID); err != nil {
-		if lostAuthority(err) {
-			return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reasonApproverLost)
+		if reason, lost := authorityLost(err); lost {
+			return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reason)
 		}
 		return err
 	}
-	conn, err := s.nodeDocker(ctx, p, n)
+	if pending != nil {
+		// Its preflight was clean when it was previewed.
+		return s.applyNodeAdoption(ctx, st, a, p, pending)
+	}
+	conn, err := s.nodeDocker(ctx, p, n, a)
+	if reason, lost := authorityLost(err); lost {
+		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reason)
+	}
 	switch {
 	case err == nil:
-	case lostAuthority(err):
-		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reasonApproverLost)
 	case errors.Is(err, nodes.ErrDockerNotAllowed):
 		return s.keepWaiting(ctx, st, a, err.Error())
 	case errors.Is(err, connections.ErrUnavailable):
@@ -243,17 +289,45 @@ func (s *Service) adoptNode(ctx context.Context, st NodeAdoptionStore, n *nodes.
 		if reason, finding := vacancyFinding(err); finding {
 			return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reason)
 		}
-		if lostAuthority(err) {
-			return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reasonApproverLost)
+		if reason, lost := authorityLost(err); lost {
+			return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reason)
 		}
 		return s.keepWaiting(ctx, st, a, err.Error())
 	}
-	a.OperationID, a.ServerID = o.ID, o.ServerID
-	if _, err = s.ApplyServerOperation(ctx, p, a.CloudID, o.ID, ApplyInput{Review: o.Review}); err != nil {
+	// The operation goes on the row before it's applied, so an attempt cut
+	// off after the apply commits leaves the next one something to read.
+	a.OperationID, a.ServerID, a.UpdatedAt = o.ID, o.ServerID, s.now().UTC()
+	if saveErr := st.SaveNodeAdoption(context.WithoutCancel(ctx), a); saveErr != nil {
+		return saveErr
+	}
+	return s.applyNodeAdoption(ctx, st, a, p, o)
+}
+
+// savedAdoptOperation is the operation an earlier attempt saved on the
+// row, or nil. A preview that expired, or one that's gone, is forgotten,
+// and the attempt starts over.
+func (s *Service) savedAdoptOperation(ctx context.Context, st NodeAdoptionStore, a *NodeAdoption) (*Operation, error) {
+	if a.OperationID == "" {
+		return nil, nil
+	}
+	o, err := s.Store.GetOperation(ctx, a.OrgID, a.CloudID, a.OperationID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if err == nil && (o.Status != "preview" || s.now().Before(o.ExpiresAt)) {
+		return o, nil
+	}
+	a.OperationID, a.ServerID, a.UpdatedAt = "", "", s.now().UTC()
+	return nil, st.SaveNodeAdoption(context.WithoutCancel(ctx), a)
+}
+
+// applyNodeAdoption applies the adoption's preview as its approver.
+func (s *Service) applyNodeAdoption(ctx context.Context, st NodeAdoptionStore, a *NodeAdoption, p security.Principal, o *Operation) error {
+	if _, err := s.ApplyServerOperation(ctx, p, a.CloudID, o.ID, ApplyInput{Review: o.Review}); err != nil {
 		// The preview is still open for an admin.
-		reason := "Loomplane couldn't apply the adoption: " + err.Error()
-		if lostAuthority(err) {
-			reason = reasonApproverLost
+		reason, lost := authorityLost(err)
+		if !lost {
+			reason = "Loomplane couldn't apply the adoption: " + err.Error()
 		}
 		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionReview, reason)
 	}
@@ -262,7 +336,7 @@ func (s *Service) adoptNode(ctx context.Context, st NodeAdoptionStore, n *nodes.
 
 // nodeDocker is the node's server connection: the one an earlier attempt
 // wrote, or a new one written as p.
-func (s *Service) nodeDocker(ctx context.Context, p security.Principal, n *nodes.Node) (*connections.Connection, error) {
+func (s *Service) nodeDocker(ctx context.Context, p security.Principal, n *nodes.Node, a *NodeAdoption) (*connections.Connection, error) {
 	if s.Nodes == nil || s.NodeConnections == nil {
 		return nil, fmt.Errorf("%w: node adoption isn't wired", ErrInvalid)
 	}
@@ -275,13 +349,16 @@ func (s *Service) nodeDocker(ctx context.Context, p security.Principal, n *nodes
 			return c, nil
 		}
 	}
-	return s.Nodes.AdoptDocker(ctx, p, n, nodeDockerSettings(n))
+	return s.Nodes.AdoptDocker(ctx, p, n, nodeDockerSettings(n, a))
 }
 
-// nodeDockerSettings are the server settings a node's own report gives:
-// the socket its runtime listens on.
-func nodeDockerSettings(n *nodes.Node) map[string]string {
+// nodeDockerSettings are the server settings for a node's Docker: the
+// socket its own report names, and how the join scope said it builds.
+func nodeDockerSettings(n *nodes.Node, a *NodeAdoption) map[string]string {
 	settings := map[string]string{}
+	if a != nil && a.BuildWorkers != "" {
+		settings["build_workers"] = a.BuildWorkers
+	}
 	switch {
 	case n.Inventory.Docker != nil && n.Inventory.Docker.Socket != "":
 		settings["docker_socket"] = n.Inventory.Docker.Socket
@@ -374,10 +451,18 @@ func (s *Service) poolArchitecture(ctx context.Context, a *NodeAdoption, servers
 	return first, nil
 }
 
-// lostAuthority says err means the approver may not do this any more, as
-// opposed to a check that couldn't run.
-func lostAuthority(err error) bool {
-	return errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrNotMember) || errors.Is(err, security.ErrUnauthenticated) || errors.Is(err, apikeys.ErrRejected)
+// authorityLost says err means the approver may not do this any more, as
+// opposed to a check that couldn't run, and why.
+func authorityLost(err error) (string, bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, apikeys.ErrRejected):
+		return reasonKeyRevoked, true
+	case errors.Is(err, security.ErrForbidden), errors.Is(err, security.ErrNotMember), errors.Is(err, security.ErrUnauthenticated):
+		return reasonApproverLost, true
+	}
+	return "", false
 }
 
 // keepWaiting leaves the adoption waiting and says why, for the next
@@ -393,6 +478,8 @@ func (s *Service) keepWaiting(ctx context.Context, st NodeAdoptionStore, a *Node
 // settleNodeAdoption ends the waiting: applied, left for review, or failed.
 func (s *Service) settleNodeAdoption(ctx context.Context, st NodeAdoptionStore, a *NodeAdoption, status, reason string) error {
 	a.Status, a.Reason, a.UpdatedAt = status, reason, s.now().UTC()
+	// What already happened is recorded even when the hook's time is up.
+	ctx = context.WithoutCancel(ctx)
 	if err := st.SaveNodeAdoption(ctx, a); err != nil {
 		return err
 	}
@@ -412,27 +499,61 @@ func (s *Service) recordNodeAdoption(ctx context.Context, action string, a *Node
 	if a.Status != NodeAdoptionApplied {
 		severity = "warning"
 	}
-	s.Audit.Record(ctx, projects.AuditEvent{Action: action, Severity: severity, Principal: security.SystemPrincipal(a.OrgID), Attributes: attributes})
+	// The effects ran by themselves, on the authority of whoever minted the
+	// join token.
+	actor := security.SystemPrincipal(a.OrgID)
+	if a.ApprovedBy != "" {
+		actor = security.ActorPrincipal(a.OrgID, a.ApprovedBy)
+	}
+	attributes["automatic"], attributes["via"] = true, "node_join_token"
+	s.Audit.Record(ctx, projects.AuditEvent{Action: action, Severity: severity, Principal: actor, Attributes: attributes})
 }
 
 var _ NodeAdoptionStore = (*PgStore)(nil)
 
-const nodeAdoptionColumns = `node_id,org_id,cloud_id,approved_by,approved_by_key_id,status,reason,server_id,operation_id,created_at,updated_at`
+const nodeAdoptionColumns = `node_id,org_id,cloud_id,approved_by,approved_by_key_id,build_workers,status,reason,server_id,operation_id,created_at,updated_at`
 
 // CreateNodeAdoption inserts a, leaving a node's existing row alone.
 func (s *PgStore) CreateNodeAdoption(ctx context.Context, a *NodeAdoption) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_node_adoptions(`+nodeAdoptionColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (node_id) DO NOTHING`,
-		a.NodeID, a.OrgID, a.CloudID, a.ApprovedBy, a.ApprovedByKeyID, a.Status, a.Reason, a.ServerID, a.OperationID, a.CreatedAt, a.UpdatedAt)
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_node_adoptions(`+nodeAdoptionColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (node_id) DO NOTHING`,
+		a.NodeID, a.OrgID, a.CloudID, a.ApprovedBy, a.ApprovedByKeyID, a.BuildWorkers, a.Status, a.Reason, a.ServerID, a.OperationID, a.CreatedAt, a.UpdatedAt)
 	return storeError(err)
 }
 
 // GetNodeAdoption reads the node's adoption in org.
 func (s *PgStore) GetNodeAdoption(ctx context.Context, orgID, nodeID string) (*NodeAdoption, error) {
-	var a NodeAdoption
-	err := s.db.QueryRow(ctx, `SELECT `+nodeAdoptionColumns+` FROM loomplane_node_adoptions WHERE org_id=$1 AND node_id=$2`, orgID, nodeID).
-		Scan(&a.NodeID, &a.OrgID, &a.CloudID, &a.ApprovedBy, &a.ApprovedByKeyID, &a.Status, &a.Reason, &a.ServerID, &a.OperationID, &a.CreatedAt, &a.UpdatedAt)
+	a, err := scanNodeAdoption(s.db.QueryRow(ctx, `SELECT `+nodeAdoptionColumns+`,'' FROM loomplane_node_adoptions WHERE org_id=$1 AND node_id=$2`, orgID, nodeID))
 	if err != nil {
 		return nil, storeError(err)
+	}
+	return a, nil
+}
+
+// ListNodeAdoptions lists the adoptions into a Cloud with their nodes'
+// names, newest first.
+func (s *PgStore) ListNodeAdoptions(ctx context.Context, orgID, cloudID string) ([]*NodeAdoption, error) {
+	rows, err := s.db.Query(ctx, `SELECT a.node_id,a.org_id,a.cloud_id,a.approved_by,a.approved_by_key_id,a.build_workers,a.status,a.reason,a.server_id,a.operation_id,a.created_at,a.updated_at,n.name
+FROM loomplane_node_adoptions a JOIN loomplane_nodes n ON n.id=a.node_id AND n.org_id=a.org_id
+WHERE a.org_id=$1 AND a.cloud_id=$2 ORDER BY a.created_at DESC, a.node_id`, orgID, cloudID)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	defer rows.Close()
+	out := []*NodeAdoption{}
+	for rows.Next() {
+		a, scanErr := scanNodeAdoption(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func scanNodeAdoption(row pgx.Row) (*NodeAdoption, error) {
+	var a NodeAdoption
+	if err := row.Scan(&a.NodeID, &a.OrgID, &a.CloudID, &a.ApprovedBy, &a.ApprovedByKeyID, &a.BuildWorkers, &a.Status, &a.Reason, &a.ServerID, &a.OperationID, &a.CreatedAt, &a.UpdatedAt, &a.NodeName); err != nil {
+		return nil, err
 	}
 	a.CreatedAt, a.UpdatedAt = a.CreatedAt.UTC(), a.UpdatedAt.UTC()
 	return &a, nil
