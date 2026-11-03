@@ -33,7 +33,7 @@ import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
-import { useFeatures } from "@/lib/features"
+import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
   Dialog,
@@ -65,6 +65,8 @@ import { Link, usePath } from "@/lib/router"
 import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
+const agentPath = "/agent/requests"
+
 const settingsPaths = [
   "/members",
   "/teams",
@@ -81,6 +83,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { can } = useOrganization()
   const { openNewProject } = useShell()
   const features = useFeatures()
+  const agent = useAgent()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -104,7 +107,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     {
       title: "Deployments",
       icon: <DeploymentsIcon />,
-      isActive: path.startsWith("/deployments"),
+      isActive: path.startsWith("/deployments") || path.startsWith(agentPath),
       badge: waiting > 0 && (
         <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
           {waiting}
@@ -130,6 +133,19 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
             <span className="text-weld-ink">{waiting}</span>
           ),
         },
+        // The agent's requests, only where the agent is on for this person.
+        ...(features.ai && agent.enabled && can("agent:use")
+          ? [
+              {
+                title: "Agent",
+                link: <Link to="/agent/requests" />,
+                isActive: path.startsWith(agentPath),
+                badge: agent.pending > 0 && (
+                  <span className="text-weld-ink">{agent.pending}</span>
+                ),
+              },
+            ]
+          : []),
         {
           title: "Failed",
           link: <Link to="/deployments" search={{ status: "failed" }} />,

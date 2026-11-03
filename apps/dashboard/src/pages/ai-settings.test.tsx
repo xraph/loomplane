@@ -282,3 +282,168 @@ it("renders loading, denied and failed distinctly", async () => {
     ).toBeInTheDocument()
   )
 })
+
+function agent(over: Record<string, unknown> = {}) {
+  return {
+    org_id: "org",
+    enabled: false,
+    provider_key: "",
+    model: "",
+    knowledge: false,
+    nexus_tenant_id: "",
+    revision: 3,
+    updated_at: "2026-10-20T10:00:00Z",
+    server: {
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      key_set: true,
+    },
+    effective: {
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+      summary_model: "claude-haiku-5-5",
+    },
+    budget: { limit_usd: "0.00", spent_usd: "1.25", exhausted: false },
+    knowledge_status: { configured: true, available: true },
+    available: true,
+    ...over,
+  }
+}
+
+it("saves a workspace key without ever showing it again", async () => {
+  let current = agent()
+  const writes = stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () => Response.json(current),
+    "PUT /api/v1/ai/settings/provider-keys/anthropic": () =>
+      Response.json({
+        id: "pk_1",
+        org_id: "org",
+        name: "anthropic",
+        type: "anthropic",
+        projects: [],
+        revision: 1,
+        created_by: "u",
+        updated_by: "u",
+        created_at: "2026-10-20T10:00:00Z",
+        updated_at: "2026-10-20T10:00:00Z",
+      }),
+    "PATCH /api/v1/ai/settings/agent": () => {
+      current = agent({
+        provider_key: "anthropic",
+        revision: 4,
+        key: { name: "anthropic", type: "anthropic", hint: "wxyz" },
+      })
+      return Response.json(current)
+    },
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(within(section).getByText("Server default")).toBeInTheDocument()
+  expect(
+    within(section).getByText("Anthropic, claude-sonnet-5-5")
+  ).toBeInTheDocument()
+  await userEvent.click(within(section).getByLabelText("Anthropic"))
+  const field = within(section).getByLabelText("API key")
+  expect(field).toHaveAttribute("type", "password")
+  await userEvent.type(field, "sk-ant-secret-wxyz")
+  await userEvent.click(
+    within(section).getByRole("button", { name: "Save provider" })
+  )
+
+  // The form starts over from what was saved, so it's a new element.
+  expect(await screen.findByText("Key set, ends in wxyz")).toBeInTheDocument()
+  expect(writes.map((w) => [w.method, w.path, w.body]).slice(0, 2)).toEqual([
+    [
+      "PUT",
+      "/api/v1/ai/settings/provider-keys/anthropic",
+      { type: "anthropic", fields: { api_key: "sk-ant-secret-wxyz" } },
+    ],
+    [
+      "PATCH",
+      "/api/v1/ai/settings/agent",
+      { provider_key: "anthropic", model: "claude-sonnet-5-5", revision: 3 },
+    ],
+  ])
+  expect(document.body.textContent).not.toContain("sk-ant-secret")
+  for (const input of document.querySelectorAll("input[type=password]"))
+    expect((input as HTMLInputElement).value).toBe("")
+})
+
+it("needs a budget before turning the agent on", async () => {
+  stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+    "PATCH /api/v1/ai/settings/agent": () =>
+      Response.json(
+        {
+          message:
+            "invalid agent setting: give the agent a monthly budget first",
+        },
+        { status: 422 }
+      ),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  await userEvent.click(
+    within(section).getByRole("switch", { name: "Turn the agent on" })
+  )
+  const budget = within(section).getByLabelText("Monthly budget (USD)")
+  const alert = await within(section).findByRole("alert")
+  expect(alert).toHaveTextContent("give the agent a monthly budget first")
+  // It sits with the budget field, not in a banner on top.
+  expect(budget.closest("[data-slot=field]")).toContainElement(alert)
+})
+
+it("explains why knowledge is off", async () => {
+  stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () =>
+      Response.json(
+        agent({
+          knowledge_status: {
+            configured: false,
+            available: false,
+            reason: "This server has no embedding model set.",
+          },
+        })
+      ),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(
+    within(section).getByRole("switch", {
+      name: "Search the workspace's documents",
+    })
+  ).toHaveAttribute("aria-disabled", "true")
+  expect(
+    within(section).getByText("This server has no embedding model set.")
+  ).toBeInTheDocument()
+})
+
+it("shows no agent settings to someone without ai:manage", async () => {
+  access.manage = false
+  const writes = stub({
+    "GET /api/v1/ai/settings": () => Response.json(view({ can_manage: false })),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  await screen.findByRole("heading", { name: "AI settings" })
+  expect(screen.queryByRole("region", { name: "AI agent" })).toBeNull()
+  expect(writes).toEqual([])
+})

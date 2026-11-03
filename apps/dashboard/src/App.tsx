@@ -17,6 +17,7 @@ import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
+import { AgentProvider } from "@/lib/features"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
@@ -153,14 +154,17 @@ function Shell() {
   }
   return (
     <ShellProvider>
-      <SidebarProvider>
-        <AppSidebar />
-        {/* Keyed on the organization, so switching remounts every page. */}
-        <SidebarInset key={session.orgId} className="min-w-0">
-          <Outlet />
-          <AppStatusBar />
-        </SidebarInset>
-      </SidebarProvider>
+      {/* Keyed on the organization: the agent is on or off per workspace. */}
+      <AgentProvider key={session.orgId}>
+        <SidebarProvider>
+          <AppSidebar />
+          {/* Keyed on the organization, so switching remounts every page. */}
+          <SidebarInset key={session.orgId} className="min-w-0">
+            <Outlet />
+            <AppStatusBar />
+          </SidebarInset>
+        </SidebarProvider>
+      </AgentProvider>
     </ShellProvider>
   )
 }

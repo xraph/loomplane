@@ -51,6 +51,7 @@ import {
   ProjectServices,
 } from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
+import { ProjectAutonomy } from "@/components/project-autonomy"
 import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { EnvBadge } from "@/components/runs"
@@ -530,6 +531,7 @@ function Body({
         )}
         <TabsContent value="settings" className="grid max-w-[760px] gap-3">
           <ProjectTeam project={project} />
+          <ProjectAutonomy project={project} />
           <ProjectGeneral
             key={`${project.id}:${project.updatedAt}`}
             project={project}
