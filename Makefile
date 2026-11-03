@@ -1,6 +1,6 @@
 .PHONY: help up up-knowledge down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
 	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
-	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
+	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client docs-bundle setup clean \
 	h b r t ti c f l lf v d
 
 .DEFAULT_GOAL := help
@@ -192,6 +192,9 @@ gen-client: ## Refresh the API specs from the running API, then regenerate the d
 
 check-client: ## Fail if the generated clients drifted from the specs
 	pnpm --dir $(DASHBOARD_DIR) check:client
+
+docs-bundle: ## Rebuild the docs bundle the built-in agent searches (run after editing apps/docs/content)
+	go generate ./internal/agentknowledge
 
 clean: ## Remove build output
 	rm -rf bin $(DASHBOARD_DIR)/dist .forge
