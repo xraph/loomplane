@@ -224,7 +224,7 @@ func (s *Service) createKeyless(ctx context.Context, p security.Principal, r *Re
 	if err != nil {
 		return nil, err
 	}
-	return s.create(ctx, p, r.ID, r.Cloud, name, nil, handout, settings, MethodKeyless)
+	return s.create(ctx, p, r.ID, r.Cloud, name, nil, handout, settings, MethodKeyless, "")
 }
 
 // keepReservation puts back a reservation a create took but didn't use.
@@ -266,7 +266,7 @@ func (s *Service) ReplaceKeyless(ctx context.Context, p security.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	if c, err = s.replace(ctx, p, id, nil, handout, settings, MethodKeyless); err != nil {
+	if c, err = s.replace(ctx, p, id, nil, handout, settings, MethodKeyless, ""); err != nil {
 		return nil, err
 	}
 	s.dropSecret(ctx, c)

@@ -4,6 +4,7 @@ package integration
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -215,6 +216,32 @@ func TestConnectionKeepsItsOAuthClientID(t *testing.T) {
 	}
 	if got, err = store.GetConnection(ctx, "org_1", "conn_1"); err != nil || got.OAuthClientID != "client-2" {
 		t.Fatalf("updated: %+v %v", got, err)
+	}
+}
+
+// Counting an app's sign-ins skips other apps, other clouds, tokens and
+// sign-ins waiting to be redone, and counts each organization once.
+func TestSignedInWithCountsWorkingSignIns(t *testing.T) {
+	store, _ := signInStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	for i, c := range []connections.Connection{
+		{OrgID: "org_1", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+		{OrgID: "org_1", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "incomplete"},
+		{OrgID: "org_2", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+		{OrgID: "org_3", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: connections.StatusSignInNeeded},
+		{OrgID: "org_4", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "other", Status: "ready"},
+		{OrgID: "org_5", Cloud: "gcp", Method: connections.MethodToken, Status: "ready"},
+		{OrgID: "org_6", Cloud: "azure", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+	} {
+		c.ID, c.Name, c.CreatedAt, c.UpdatedAt = fmt.Sprintf("conn_%d", i), fmt.Sprintf("n%d", i), now, now
+		if err := store.CreateConnection(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, orgs, err := store.SignedInWith(ctx, "gcp", "app")
+	if err != nil || n != 3 || orgs != 2 {
+		t.Fatalf("got %d connections in %d orgs: %v", n, orgs, err)
 	}
 }
 
