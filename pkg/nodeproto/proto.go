@@ -71,8 +71,9 @@ type Fence struct {
 	Daemon     string `json:"daemon,omitempty"`
 }
 
-// StreamHeader opens every stream after stream 0. Arg, Mode and Daemon are
-// carried in phase 1 and given meaning later.
+// StreamHeader opens every stream after stream 0. Arg is a short probe
+// argument, Fence.Mode one of the Fence* constants and Fence.Daemon the
+// expected docker_id. See probes.go.
 type StreamHeader struct {
 	Endpoint    Endpoint `json:"endpoint"`
 	Target      string   `json:"target,omitempty"`
