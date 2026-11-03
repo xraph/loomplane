@@ -3,7 +3,7 @@ title: Nodes
 description: Join a machine to Loomplane as a node, choose what Loomplane may use on it, update it with signed releases and cut it off when you're done.
 ---
 
-A node is a machine that joins your organization and keeps one connection open to Loomplane. It doesn't open a port. The node dials out, so a laptop behind a router and a server behind a firewall join the same way.
+A node is a machine that joins your organization and keeps one connection open to Loomplane. It dials out and opens no port, so a laptop behind a router and a server behind a firewall join the same way.
 
 <Callout>
   Right now a node can join, report on itself, update and be revoked. Deploying to nodes, Docker or Kubernetes through a node, and routing domains to a node come in the next phases.
@@ -19,7 +19,7 @@ If you already ran `loomctl login`, run this on the machine:
 sudo loomctl node join
 ```
 
-`node join` uses your saved login (or `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`) to mint a single-use join token, then spends it. Only an owner's or admin's write key, or a signed-in session, can mint one. Your API key goes to Loomplane to make the token and nowhere else. It is never stored on the machine.
+`node join` uses your saved login (or `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`) to mint a single-use join token, then spends it. Only an owner's or admin's write key, or a signed-in session, can mint one. Your API key goes to Loomplane to make the token and nowhere else, and the machine never stores it.
 
 The machine may not have `loomctl` yet. Mint a token somewhere you are logged in, and run the install command on the new machine:
 
@@ -41,19 +41,19 @@ Use your own instance's address. The script downloads the `loomctl` release your
 | `--name` | The node's name. Loomplane uses the hostname if you don't |
 | `--label key=value` | A label. Repeat it for each |
 | `--allow` | What Loomplane may use here, such as `docker,probe`. See below |
-| `--cloud` | The Cloud this node joins. Can't be combined with `--token` |
-| `--builder dedicated` | Makes the node a dedicated build worker |
-| `--edge` | Makes the node an edge, which serves traffic. Can't be combined with `--token` |
+| `--cloud` | The Cloud this node will join. Recorded now; the node joins it once deploying to nodes arrives. Can't be combined with `--token` |
+| `--builder dedicated` | Marks the node as a dedicated build worker. Recorded now; builds run on it once deploying to nodes arrives |
+| `--edge` | Marks the node as an edge, which will serve traffic. Recorded now; edges start working once domain routing to nodes arrives. Can't be combined with `--token` |
 | `--foreground` | Runs in your terminal and installs no service |
 | `--state-dir` | Where the node keeps its files |
 
-When you pass `--token`, mint it with `--cloud` or `--edge` already set, since the token carries them.
+If you pass `--token`, mint it with `--cloud` or `--edge` already set, because the token carries them.
 
 Check the result with `sudo loomctl node status`. It shows the node ID, the key fingerprint, the allowed endpoints and whether the service is running.
 
 ## The node's key and its state
 
-The node makes its own Ed25519 key the first time it joins and keeps it in its state directory, `/var/lib/loomplane-node` on Linux. Loomplane learns the public half. The private half never leaves the machine, and the directory belongs to the service user, which is why `status`, `allow` and `leave` want `sudo`.
+The node creates its own Ed25519 key when it first joins and keeps it in its state directory, `/var/lib/loomplane-node` on Linux. Loomplane learns the public half. The private half stays on the machine, in a directory owned by the service user, which is why `status`, `allow` and `leave` want `sudo`.
 
 Join refuses a directory that already holds files that aren't a node's own, so it can't take over `/var/lib`. Pass `--state-dir` an empty absolute path to keep a second node somewhere else.
 
@@ -69,7 +69,7 @@ Each node has an allowlist of endpoints. There are five names:
 | `kube` | A local Kubernetes API |
 | `firecracker` | Firecracker microVMs |
 
-Today only `probe` does anything. The others are accepted and stored so the next phases don't ask you again.
+Today only `probe` does anything. The rest are accepted and stored, so you won't have to answer again when deploying to nodes arrives.
 
 An interactive `node join` shows what it found and asks whether to allow it. Say anything but yes and it allows nothing. Without a terminal, such as a script or a cloud-init run, it allows nothing unless you pass `--allow`:
 
@@ -112,7 +112,7 @@ Releases are signed with cosign keyless, by the Release workflow of `github.com/
 - With cosign 2.4 or newer installed, it verifies the signature on the release checksums itself and then checks the archive against them. This doesn't trust your Loomplane at all.
 - Without cosign, it checks the archive against a checksum your Loomplane already verified against the same signature. In that case Loomplane is vouching for the sum, and the script says so. Install cosign if you want to take Loomplane out of the chain.
 
-With neither, the script stops. Set `LOOMPLANE_SKIP_SIGNATURE=1` to install anyway. It installs unverified, prints a warning that it did, and you should only do it on purpose.
+With neither, the script stops. Set `LOOMPLANE_SKIP_SIGNATURE=1` to install anyway. The install goes ahead unverified and prints a warning saying so.
 
 To move a running node to another release:
 
@@ -138,6 +138,6 @@ There are three ways, and each cuts the node off the same way:
 - Run `loomctl node revoke NAME` from anywhere you're logged in.
 - Run `sudo loomctl node leave` on the machine.
 
-The node can't reconnect afterwards. If you revoke an API key as compromised, Loomplane lists the nodes that joined with a token that key made and offers to revoke them too. Take the offer unless you know the machines are fine.
+The node can't reconnect afterwards. If you revoke an API key as compromised, Loomplane lists the nodes that joined with a token that key made and offers to revoke them too. Take the offer unless you're sure those machines are fine.
 
 [Security model](/docs/operations/security-model#nodes) covers what a node can and can't do.

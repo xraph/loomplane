@@ -66,7 +66,7 @@ A node is a machine you joined with `loomctl node join`. It dials out to Loompla
 
 What a node can do is whatever its allowlist says, and the allowlist can only get smaller from Loomplane's side. Widening it takes `sudo loomctl node allow` on the machine itself. Today only `probe` does anything, which reports what the machine has. Nothing Loomplane sends can add an endpoint to the list.
 
-Allowing `docker` is a bigger step than it looks. Access to the Docker socket is root access on that host, so allow it only on machines you'd let Loomplane administer.
+Access to the Docker socket is root access on that host, so allow `docker` only on machines you'd let Loomplane administer.
 
 Revoking a node, from the dashboard, with `loomctl node revoke`, or with `node leave` on the machine, ends its trust. Revoking an API key as compromised lists the nodes that joined with a token it made and offers to revoke them. Releases are signed with cosign keyless, and `node update` verifies one before replacing the binary. [Nodes](/docs/clouds/nodes) has the steps.
 
