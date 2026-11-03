@@ -109,7 +109,9 @@ func (a *App) agentRequests(ctx cli.CommandContext) error {
 			sentTo(r), person(r.AskedFor), age(now, r.CreatedAt),
 		})
 		if r.Kind == "approve_plan" && r.Status == "pending" && r.Target.PlanID != "" {
-			approvals = append(approvals, fmt.Sprintf("approve with: loomctl approve %s --revision %s", r.Target.PlanID, r.Target.PlanRevision))
+			if line := approveLine(ctxOf(ctx), c, r); line != "" {
+				approvals = append(approvals, line)
+			}
 		}
 	}
 	a.table([]string{"ID", "KIND", "PROJECT", "QUESTION", "SENT TO", "ASKED FOR", "AGE"}, table)
@@ -117,6 +119,22 @@ func (a *App) agentRequests(ctx cli.CommandContext) error {
 		a.printf("\n%s\n", strings.Join(approvals, "\n"))
 	}
 	return nil
+}
+
+// approveLine is the command that approves r's plan, for pasting. Its
+// revision is the one the plan has, read from the plan: a request whose
+// plan changed since the agent asked gets a pointer to read it again
+// instead, and one whose plan can't be read gets nothing.
+func approveLine(ctx context.Context, c *client.Client, r client.AgentRequest) string {
+	plan, err := c.Plan(ctx, r.Target.PlanID)
+	if err != nil || plan.ID == "" {
+		return ""
+	}
+	id := oneLine(plan.ID, 80)
+	if plan.Revision == "" || plan.Revision != r.Target.PlanRevision {
+		return fmt.Sprintf("%s changed since the agent asked; read it with: loomctl show %s", id, id)
+	}
+	return fmt.Sprintf("approve with: loomctl approve %s --revision %s", id, oneLine(plan.Revision, 128))
 }
 
 // agentNames names the projects and people a list of requests mentions. It

