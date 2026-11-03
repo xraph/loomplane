@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -910,7 +911,7 @@ func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, 2)
 	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
-	f.source(t, "proj_bare", "bb", "bitbucket.org/acme/api", "")
+	f.source(t, "proj_bare", "bb", "bitbucket.org/Acme/API", "")
 
 	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
 	if !errors.Is(err, ErrRootsOverlap) {
@@ -936,4 +937,45 @@ func TestRunner_unparseableKeyFailsPermanently(t *testing.T) {
 	if got.Status != StatusFailed || got.Error != repositories.ErrInvalidURL.Error() {
 		t.Fatalf("analysis %+v", got)
 	}
+}
+
+func TestAddSource_aHostNothingReadsIsAnInvalidSource(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	// The URL parses, since Bitbucket is a static host, but the wired
+	// readers only know GitHub.
+	f.svc.SetAccess(Access{
+		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{"github.com": &fakeReader{}}},
+	})
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, ErrInvalidSource) || !errors.Is(err, repositories.ErrUnsupportedHost) {
+		t.Fatalf("AddSource: %v", err)
+	}
+	_, _, err = f.svc.AttachRepository(ctx, dev, &projects.Project{ID: "proj_bare", OrgID: org}, projects.RepositoryInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("AttachRepository: %v", err)
+	}
+	// Changing the branch of a stored source on such a host is refused the same way.
+	f.source(t, "proj_bare", "bb", "bitbucket.org/acme/api", "")
+	ref := "main"
+	if _, err = f.svc.UpdateSource(ctx, dev, "proj_bare", "bb", UpdateSourceInput{Ref: &ref}); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("UpdateSource: %v", err)
+	}
+}
+
+// fakeReader is a Reader that finds every repository.
+type fakeReader struct{}
+
+func (*fakeReader) Resolve(context.Context, repositories.Repository, string, string) (string, error) {
+	return commit, nil
+}
+
+func (*fakeReader) Fetch(context.Context, repositories.Repository, string, string, string) (repositories.Stats, error) {
+	return repositories.Stats{}, nil
+}
+
+func (*fakeReader) Download(context.Context, repositories.Repository, string, string, io.Writer) (int64, error) {
+	return 0, nil
 }

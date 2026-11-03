@@ -193,7 +193,8 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 }
 
 // check reads the repository the way an analysis would. A 404 from GitHub
-// means no access as often as no repository, so it says both.
+// means no access as often as no repository, so it says both. A host
+// nothing reads is the caller's mistake, like any other invalid source.
 func (s *Service) check(ctx context.Context, orgID string, repo repositories.Repository, ref string) error {
 	if s.access == nil {
 		return nil
@@ -201,6 +202,9 @@ func (s *Service) check(ctx context.Context, orgID string, repo repositories.Rep
 	err := s.access.Check(ctx, orgID, repo, ref)
 	if errors.Is(err, repositories.ErrNotFound) {
 		return ErrSourceInaccessible
+	}
+	if errors.Is(err, repositories.ErrUnsupportedHost) || errors.Is(err, repositories.ErrInvalidURL) {
+		return fmt.Errorf("%w: %w", ErrInvalidSource, err)
 	}
 	return err
 }
