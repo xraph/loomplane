@@ -62,7 +62,8 @@ func TestBitbucketStore_workspacesPerOrganization(t *testing.T) {
 	}
 
 	// Connecting the same workspace again in one organization refreshes the
-	// row and keeps its ID, and its creation time and author.
+	// row and keeps its ID and creation time. The member who reconnects is the
+	// one whose sign-in is stored now, so they replace the first author.
 	again := workspace("org_1", "{ws-1}", "acme-renamed")
 	again.WorkspaceName = "Acme Inc"
 	again.CreatedBy = "usr_2"
@@ -78,7 +79,7 @@ func TestBitbucketStore_workspacesPerOrganization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.WorkspaceSlug != "acme-renamed" || got.WorkspaceName != "Acme Inc" || !got.CreatedAt.Equal(one.CreatedAt) || got.CreatedBy != "usr_1" || !got.UpdatedAt.Equal(again.UpdatedAt) {
+	if got.WorkspaceSlug != "acme-renamed" || got.WorkspaceName != "Acme Inc" || !got.CreatedAt.Equal(one.CreatedAt) || got.CreatedBy != "usr_2" || !got.UpdatedAt.Equal(again.UpdatedAt) {
 		t.Fatalf("reconnected row %+v", got)
 	}
 	if other, err := store.GetBitbucketWorkspace(ctx, "org_2", one.ID); !errors.Is(err, repositories.ErrWorkspaceNotFound) {
@@ -203,6 +204,22 @@ func TestBitbucketStore_hookPerOrgAndRepository(t *testing.T) {
 	}
 	if hooks, _ := store.BitbucketHooksIn(ctx, "org_1", "bbw_2"); len(hooks) != 0 {
 		t.Fatalf("another workspace's hooks: %+v", hooks)
+	}
+
+	// An off hook turns on in place: same ID, new UUID and status.
+	later := now.Add(time.Hour)
+	turnOn := &repositories.BitbucketHook{HookID: "hook_4", ConnectionID: "bbw_2", BitbucketHookUUID: "{hook_4}", Status: repositories.HookOn, UpdatedAt: later}
+	if err := store.UpdateBitbucketHook(ctx, turnOn); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.GetBitbucketHook(ctx, "hook_4")
+	if err != nil || updated.Status != repositories.HookOn || updated.Reason != "" || updated.BitbucketHookUUID != "{hook_4}" ||
+		updated.ConnectionID != "bbw_2" || !updated.UpdatedAt.Equal(later) || !updated.CreatedAt.Equal(now) ||
+		updated.OrgID != "org_1" || updated.Repository != "bitbucket.org/acme/web" {
+		t.Fatalf("hook after turning it on: %+v %v", updated, err)
+	}
+	if err := store.UpdateBitbucketHook(ctx, &repositories.BitbucketHook{HookID: "nope", Status: repositories.HookOn}); !errors.Is(err, repositories.ErrHookNotFound) {
+		t.Fatalf("updating an unknown hook: %v", err)
 	}
 
 	if err := store.DeleteBitbucketHook(ctx, "hook_1"); err != nil {

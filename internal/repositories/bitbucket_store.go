@@ -52,7 +52,9 @@ type BitbucketConnection struct {
 	BitbucketUserName string
 	Status            string
 	// Message says why the status is reconnect_needed. It's empty when ready.
-	Message   string
+	Message string
+	// CreatedBy is the Loomplane member whose sign-in is stored. Whoever
+	// reconnects takes it over, so it stays a member who can still be asked.
 	CreatedBy string
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -82,6 +84,10 @@ type HookStore interface {
 	SaveBitbucketHook(ctx context.Context, h *BitbucketHook) error
 	// GetBitbucketHook returns ErrHookNotFound for an unknown ID.
 	GetBitbucketHook(ctx context.Context, hookID string) (*BitbucketHook, error)
+	// UpdateBitbucketHook changes a hook's connection, Bitbucket UUID, status,
+	// reason and update time in place, such as turning an off hook on. It
+	// returns ErrHookNotFound for an unknown ID.
+	UpdateBitbucketHook(ctx context.Context, h *BitbucketHook) error
 	// BitbucketHookFor returns ErrHookNotFound when the repository has none.
 	BitbucketHookFor(ctx context.Context, orgID, repository string) (*BitbucketHook, error)
 	BitbucketHooksIn(ctx context.Context, orgID, connectionID string) ([]*BitbucketHook, error)
@@ -95,8 +101,9 @@ type HookStore interface {
 type BitbucketStore interface {
 	HookStore
 	// SaveBitbucketWorkspace connects a workspace, or refreshes it if the
-	// organization already has it, keeping its ID. It sets c.ID, CreatedBy
-	// and CreatedAt to what the row holds.
+	// organization already has it, keeping its ID and CreatedAt and taking
+	// c.CreatedBy as the member whose sign-in is now stored. It sets c.ID and
+	// c.CreatedAt to what the row holds.
 	SaveBitbucketWorkspace(ctx context.Context, c *BitbucketConnection) error
 	ListBitbucketWorkspaces(ctx context.Context, orgID string) ([]*BitbucketConnection, error)
 	// GetBitbucketWorkspace returns ErrWorkspaceNotFound for another
@@ -151,11 +158,11 @@ func (s *PgStore) SaveBitbucketWorkspace(ctx context.Context, c *BitbucketConnec
 			workspace_slug = EXCLUDED.workspace_slug, workspace_name = EXCLUDED.workspace_name,
 			avatar_url = EXCLUDED.avatar_url, bitbucket_user_uuid = EXCLUDED.bitbucket_user_uuid,
 			bitbucket_user_name = EXCLUDED.bitbucket_user_name, status = EXCLUDED.status,
-			message = EXCLUDED.message, updated_at = EXCLUDED.updated_at
-		RETURNING id, created_by, created_at`,
+			message = EXCLUDED.message, created_by = EXCLUDED.created_by, updated_at = EXCLUDED.updated_at
+		RETURNING id, created_at`,
 		id, c.OrgID, c.WorkspaceUUID, c.WorkspaceSlug, c.WorkspaceName, c.AvatarURL,
 		c.BitbucketUserUUID, c.BitbucketUserName, c.Status, c.Message, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
-	).Scan(&c.ID, &c.CreatedBy, &c.CreatedAt)
+	).Scan(&c.ID, &c.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("save Bitbucket workspace: %w", err)
 	}
@@ -291,6 +298,20 @@ func (s *PgStore) GetBitbucketHook(ctx context.Context, hookID string) (*Bitbuck
 		return nil, fmt.Errorf("get Bitbucket webhook: %w", err)
 	}
 	return h, nil
+}
+
+// UpdateBitbucketHook implements HookStore.
+func (s *PgStore) UpdateBitbucketHook(ctx context.Context, h *BitbucketHook) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_bitbucket_webhooks
+		SET connection_id = $2, bitbucket_hook_uuid = $3, status = $4, reason = $5, updated_at = $6
+		WHERE hook_id = $1`, h.HookID, h.ConnectionID, h.BitbucketHookUUID, h.Status, h.Reason, h.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("update Bitbucket webhook: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrHookNotFound
+	}
+	return nil
 }
 
 // BitbucketHookFor implements HookStore. It compares the repository
