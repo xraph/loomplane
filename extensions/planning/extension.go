@@ -528,7 +528,10 @@ func (e *Extension) Register(fapp forge.App) error {
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.RepositorySources{
-			Readers:   repositories.Readers{Static: map[string]repositories.Reader{"github.com": repositories.NewGitHub(e.cfg.GitHub.APIURL)}},
+			Readers: repositories.Readers{Static: map[string]repositories.Reader{
+				"github.com":            repositories.NewGitHub(e.cfg.GitHub.APIURL),
+				repositories.HostGitLab: repositories.NewGitLab(e.cfg.GitLab.APIURL, nil),
+			}},
 			Tokens:    repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": github}},
 			Artifacts: e.artifacts,
 		},

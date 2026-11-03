@@ -671,7 +671,7 @@ func TestSources_refusals(t *testing.T) {
 	}{
 		{"viewer", viewer, "proj_bare", AddSourceInput{Repository: "acme/site"}, security.ErrForbidden},
 		{"another org's project", dev, "proj_elsewhere", AddSourceInput{Repository: "acme/site"}, projects.ErrNotFound},
-		{"not GitHub", dev, "proj_bare", AddSourceInput{Repository: "https://gitlab.com/acme/site"}, ErrInvalidSource},
+		{"a host nothing reads", dev, "proj_bare", AddSourceInput{Repository: "https://git.example.com/acme/site"}, ErrInvalidSource},
 		{"reserved alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "go"}, ErrAliasReserved},
 		{"bad alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "Web"}, ErrInvalidSource},
 		{"root climbs out", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Root: "../x"}, ErrInvalidSource},
@@ -705,7 +705,7 @@ func TestSources_attachingANewProjectsRepositorySaysWhatsWrongWithIt(t *testing.
 		name, url string
 		want      error
 	}{
-		{"not GitHub", "https://gitlab.com/acme/site", ErrInvalidSource},
+		{"a host nothing reads", "https://git.example.com/acme/site", ErrInvalidSource},
 		{"alias taken", "acme/platform", ErrAliasTaken},
 		{"overlapping root", "acme/mono", ErrRootsOverlap},
 	}
@@ -916,6 +916,18 @@ func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
 	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
 	if !errors.Is(err, ErrRootsOverlap) {
 		t.Fatalf("the same Bitbucket repository in another case: %v", err)
+	}
+}
+
+func TestAddSource_mixedCaseGitLabDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "gl", "gitlab.com/acme/api", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://GitLab.com/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same GitLab project in another case: %v", err)
 	}
 }
 

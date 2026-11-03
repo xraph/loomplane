@@ -198,8 +198,8 @@ func TestDiscovery_theWorkerAnalyzesAProjectsRepository(t *testing.T) {
 		ID string `json:"id"`
 	}
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &mono)
-	// Only GitHub is supported, so a GitLab project isn't created at all.
-	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab", "repository_url": "https://gitlab.com/acme/lab"}, nil)
+	// A host nothing reads can't be attached, so the project isn't created.
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab", "repository_url": "https://git.example.com/acme/lab"}, nil)
 
 	var queued struct {
 		Analyses []analysisBody `json:"analyses"`
