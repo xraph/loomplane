@@ -37,6 +37,14 @@ var workspaceChecks = map[string]int{
 	"internal/repositories/connections.go:Connect":                            1,
 	"internal/repositories/connections.go:Disconnect":                         1,
 	"internal/repositories/connections.go:Repositories":                       1,
+	"internal/repositories/gitlab_connections.go:AddHost":                     1,
+	"internal/repositories/gitlab_connections.go:Disconnect":                  1,
+	"internal/repositories/gitlab_connections.go:RemoveHost":                  1,
+	"internal/repositories/gitlab_connections.go:Repositories":                1,
+	"internal/repositories/gitlab_connections.go:SetWebhookSecret":            1,
+	"internal/repositories/gitlab_connections.go:Status":                      1,
+	"internal/repositories/gitlab_signin.go:Connect":                          1,
+	"internal/repositories/gitlab_signin.go:StartSignIn":                      1,
 	"internal/models/custom.go:Inspect":                                       1,
 	"internal/models/browse.go:Registry":                                      1,
 	"internal/models/browse.go:Entry":                                         1,
@@ -183,8 +191,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 78 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls and the 6 workspace checks main added", total)
+	if total != 86 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the 8 GitLab ones", total)
 	}
 
 	var models []string
