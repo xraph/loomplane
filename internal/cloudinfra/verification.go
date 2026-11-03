@@ -192,6 +192,10 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	if checkErr := c.ArmEffectFence(ctx, server.EffectFence{Operation: route.OrgID + "/ingress/" + route.Binding.ServerID, Generation: op.Generation}); checkErr != nil {
 		return checkErr
 	}
+	// A node's new address moves DNS alone; the proxy config stays.
+	if op.Kind == "address" {
+		return s.followRouteAddress(ctx, st, c, op, state, zone)
+	}
 	if op.Kind == "release" {
 		if checkErr := s.recoverHandoffConfig(ctx, st, c, op, state); checkErr != nil {
 			return checkErr

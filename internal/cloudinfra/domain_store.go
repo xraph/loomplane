@@ -521,6 +521,11 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if current != route.Revision {
 			return ErrConflict
 		}
+		if op.Kind == "address" {
+			if checkErr := acceptAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
+		}
 		if op.Kind == "cutover" || op.Kind == "rollback" || op.Kind == "release" {
 			var released bool
 			if checkErr := tx.QueryRow(ctx, `SELECT released FROM loomplane_route_handoffs WHERE org_id=$1 AND id=$2 AND route_id=$3 FOR UPDATE`, route.OrgID, op.HandoffID, route.ID).Scan(&released); checkErr != nil {

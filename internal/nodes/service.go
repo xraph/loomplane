@@ -509,6 +509,14 @@ func (s *Service) SetIngress(ctx context.Context, nodeID, mode, publicAddress st
 	return nil
 }
 
+// RecordIngressDetail records what a later address check found without
+// settling anything: the mode, the confirmed address and when the mode was
+// sent all stay, and nothing goes to the node. The next settled check
+// replaces the detail.
+func (s *Service) RecordIngressDetail(ctx context.Context, nodeID, detail string) error {
+	return s.Store.SetIngressDetail(ctx, nodeID, detail)
+}
+
 // sendIngress tells a live node its stored ingress mode.
 func (s *Service) sendIngress(n *Node) {
 	if s.Notify != nil {

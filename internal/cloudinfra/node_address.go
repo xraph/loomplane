@@ -150,35 +150,9 @@ func fetchNodeNonce(ctx context.Context, url string) ([]byte, error) {
 // such as a server that isn't ready or a proxy that can't be changed now,
 // changes nothing and can be retried.
 func (s *Service) ConfirmNodeAddress(ctx context.Context, org, connectionID string, candidates []string) (string, error) {
-	if s.NodeIngress == nil || s.NodeAddresses == nil {
-		return "", fmt.Errorf("%w: node ingress isn't wired", ErrInvalid)
-	}
-	conn, raw, err := s.Connections.Credential(ctx, org, connectionID)
+	conn, nodeID, found, err := s.checkNodeAddress(ctx, org, connectionID, candidates)
 	if err != nil {
 		return "", err
-	}
-	nodeID := conn.Details["node_id"]
-	if conn.OrgID != org || conn.Cloud != connections.Server || conn.Method != connections.MethodNode || nodeID == "" {
-		return "", fmt.Errorf("%w: only a node's server connection has its address checked", ErrInvalid)
-	}
-	v, err := s.nodeServer(ctx, conn)
-	if err != nil {
-		return "", err
-	}
-	found := ""
-	if addresses := publicNodeAddresses(candidates); len(addresses) > 0 {
-		nonce, nonceErr := newNodeNonce()
-		if nonceErr != nil {
-			return "", nonceErr
-		}
-		target := nodeNonceTarget{OrgID: org, ServerID: v.ID, Connection: conn, Credential: raw}
-		err = s.serveNodeNonce(ctx, target, nonce, func(ctx context.Context) error {
-			found = s.firstAnswering(ctx, addresses, nonce)
-			return ctx.Err()
-		})
-		if err != nil {
-			return "", err
-		}
 	}
 	if found == "" {
 		if noneErr := s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressNone, ""); noneErr != nil {
@@ -186,15 +160,57 @@ func (s *Service) ConfirmNodeAddress(ctx context.Context, org, connectionID stri
 		}
 		return "", ErrNoPublicAddress
 	}
-	// The connection names the address before the node marks it confirmed,
-	// so a route never reads a confirmed node with an older address.
-	if hostErr := s.NodeAddresses.SetNodeAdvertiseHost(ctx, org, conn.ID, found); hostErr != nil {
-		return "", hostErr
-	}
-	if directErr := s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressDirect, found); directErr != nil {
-		return "", directErr
+	if settleErr := s.settleNodeAddress(ctx, conn, nodeID, found); settleErr != nil {
+		return "", settleErr
 	}
 	return found, nil
+}
+
+// checkNodeAddress is ConfirmNodeAddress without the settling: it returns
+// the node's server connection, the node and the first public candidate
+// that answered with the nonce, "" when none did. It changes nothing but
+// the proxy, and only while the check runs.
+func (s *Service) checkNodeAddress(ctx context.Context, org, connectionID string, candidates []string) (conn *connections.Connection, nodeID, found string, err error) {
+	if s.NodeIngress == nil || s.NodeAddresses == nil {
+		return nil, "", "", fmt.Errorf("%w: node ingress isn't wired", ErrInvalid)
+	}
+	conn, raw, err := s.Connections.Credential(ctx, org, connectionID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	nodeID = conn.Details["node_id"]
+	if conn.OrgID != org || conn.Cloud != connections.Server || conn.Method != connections.MethodNode || nodeID == "" {
+		return nil, "", "", fmt.Errorf("%w: only a node's server connection has its address checked", ErrInvalid)
+	}
+	v, err := s.nodeServer(ctx, conn)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if addresses := publicNodeAddresses(candidates); len(addresses) > 0 {
+		nonce, nonceErr := newNodeNonce()
+		if nonceErr != nil {
+			return nil, "", "", nonceErr
+		}
+		target := nodeNonceTarget{OrgID: org, ServerID: v.ID, Connection: conn, Credential: raw}
+		err = s.serveNodeNonce(ctx, target, nonce, func(ctx context.Context) error {
+			found = s.firstAnswering(ctx, addresses, nonce)
+			return ctx.Err()
+		})
+		if err != nil {
+			return nil, "", "", err
+		}
+	}
+	return conn, nodeID, found, nil
+}
+
+// settleNodeAddress makes a confirmed address the node's: the connection
+// names it before the node marks it confirmed, so a route never reads a
+// confirmed node with an older address.
+func (s *Service) settleNodeAddress(ctx context.Context, conn *connections.Connection, nodeID, address string) error {
+	if err := s.NodeAddresses.SetNodeAdvertiseHost(ctx, conn.OrgID, conn.ID, address); err != nil {
+		return err
+	}
+	return s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressDirect, address)
 }
 
 // firstAnswering is the first address whose answer is exactly the nonce,

@@ -710,6 +710,14 @@ func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
 	if err != nil || got.PublicAddress != "" || got.PublicAddressConfirmedAt != nil || got.IngressDetail != "no public address answered" || got.IngressApplied != "direct" {
 		t.Fatalf("none: %+v %v", got, err)
 	}
+	// A detail alone keeps the rest and appends no event.
+	count := events()
+	if err = s.SetIngressDetail(ctx, "node_1", "address changed to 198.51.100.9 but it doesn't answer on port 80"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.GetByID(ctx, "node_1"); n.IngressDetail != "address changed to 198.51.100.9 but it doesn't answer on port 80" || n.IngressMode != "none" || !n.IngressSentAt.Equal(at) || events() != count {
+		t.Fatalf("detail %+v, %d events", n, events())
+	}
 	// A settings change of the mode sends it again and drops the old detail.
 	mode := "direct"
 	got, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{IngressMode: &mode})
@@ -733,5 +741,8 @@ func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
 	}
 	if err = s.RecordIngressApplied(ctx, "node_1", "none"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked applied: %v", err)
+	}
+	if err = s.SetIngressDetail(ctx, "node_1", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked detail: %v", err)
 	}
 }

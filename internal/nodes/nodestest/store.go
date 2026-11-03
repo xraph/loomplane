@@ -207,6 +207,17 @@ func (s *Store) RecordIngressApplied(_ context.Context, id, mode string) error {
 	return nil
 }
 
+func (s *Store) SetIngressDetail(_ context.Context, id, detail string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nodes.ErrNotFound
+	}
+	n.IngressDetail = detail
+	return nil
+}
+
 func (s *Store) Touch(_ context.Context, id string, at time.Time, _ nodeproto.Usage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

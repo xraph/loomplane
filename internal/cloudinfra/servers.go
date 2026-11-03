@@ -200,8 +200,11 @@ type Deps struct {
 	NodeConnections NodeConnectionSource
 	// NodeIngress and NodeAddresses record what a node's address check
 	// found. Nil leaves an adopted node's address unchecked.
-	NodeIngress          NodeIngress
-	NodeAddresses        NodeAddressWriter
+	NodeIngress   NodeIngress
+	NodeAddresses NodeAddressWriter
+	// NodeRecords reads a node as stored, for following a changed
+	// address. Nil follows the node the hook passed.
+	NodeRecords          NodeReader
 	Audit                projects.Auditor
 	EnrollmentURL        string
 	AllowLocalEnrollment bool

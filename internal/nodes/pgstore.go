@@ -241,6 +241,13 @@ func (s *PgStore) RecordIngressApplied(ctx context.Context, id, mode string) err
 	return affected(res, err)
 }
 
+// SetIngressDetail writes the detail alone. The column is out of the event
+// payload, like the applied mode.
+func (s *PgStore) SetIngressDetail(ctx context.Context, id, detail string) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET ingress_detail=$2 WHERE id=$1 AND revoked_at IS NULL`, id, detail)
+	return affected(res, err)
+}
+
 func affected(res interface{ RowsAffected() (int64, error) }, err error) error {
 	if err != nil {
 		return storeError(err)

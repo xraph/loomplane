@@ -6,6 +6,7 @@ package nodes
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -124,7 +125,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	// An adopted node's address check settles its ingress through the
 	// service, which sends the mode the way an update does.
 	infra.NodeIngress = e.svc
+	// A node whose address changes is followed from the node as stored.
+	infra.NodeRecords = store
 	e.adoptOnConnect(infra)
+	e.followAddressChanges(infra)
 	// Bind makes the hub the service's notifier and refuses an empty
 	// audience or secret.
 	if err = e.hub.Bind(store, e.svc); err != nil {
@@ -154,6 +158,21 @@ func (e *Extension) adoptOnConnect(infra *cloudinfra.Service) {
 	}
 	e.hub.OnOnline(adopt)
 	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, _, _ nodeproto.Inventory) { adopt(ctx, n) })
+}
+
+// followAddressChanges follows a node whose public addresses change to its
+// new address. The follow outlasts the hook's deadline, so it gets its own.
+func (e *Extension) followAddressChanges(infra *cloudinfra.Service) {
+	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
+		if slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloudinfra.NodeAddressFollowWait)
+		defer cancel()
+		if err := infra.FollowNodeAddress(ctx, n); err != nil {
+			e.Logger().Warn("Follow a node to its new address; the next address change tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+		}
+	})
 }
 
 // Start runs the hub's sweep, which marks silent nodes offline.

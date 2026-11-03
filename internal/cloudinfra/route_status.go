@@ -80,12 +80,14 @@ func DeriveRouteStatus(route Route, zone *Zone, latest *RouteOperation, now time
 		return all(DomainCleanupPending)
 	case zone == nil || !zone.verified():
 		return all(DomainAwaitingVerification)
-	case latest != nil && (latest.Status == "pending" || latest.Status == "running") && len(latest.receipts()) == 0 && zone.Mode == "managed":
+	// A route following its node's new address still has its certificate.
+	case latest != nil && latest.Kind != "address" && (latest.Status == "pending" || latest.Status == "running") && len(latest.receipts()) == 0 && zone.Mode == "managed":
 		return all(DomainProvisioning)
 	}
 	out.DNS, out.Certificate, out.Route = DomainProvisioning, DomainProvisioning, DomainProvisioning
 	switch {
-	case v.DNS:
+	// Its last check found DNS on the old address.
+	case v.DNS && route.Status != RouteRoutingPending:
 		out.DNS = DomainReady
 	case zone.Mode == "external":
 		// Nobody but the zone's owner can create the record.

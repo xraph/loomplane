@@ -105,3 +105,34 @@ func TestSetIngressMismatchShowsAfter30Seconds(t *testing.T) {
 		t.Fatalf("detail once applied: %q", d)
 	}
 }
+
+func TestRecordIngressDetailKeepsTheAddress(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	if err := r.svc.SetIngress(context.Background(), id, nodeproto.IngressDirect, "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := r.store.GetByID(context.Background(), id)
+	const detail = "address changed to 198.51.100.9 but it doesn't answer on port 80"
+	if err := r.svc.RecordIngressDetail(context.Background(), id, detail); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.store.GetByID(context.Background(), id)
+	if n.IngressDetail != detail || n.IngressMode != nodeproto.IngressDirect || n.PublicAddress != "203.0.113.7" || !n.PublicAddressConfirmedAt.Equal(*before.PublicAddressConfirmedAt) || !n.IngressSentAt.Equal(*before.IngressSentAt) {
+		t.Fatalf("node %+v", n)
+	}
+	// Only the detail changed, so nothing goes to the node.
+	if len(r.sent) != 1 {
+		t.Fatalf("sent %+v", r.sent)
+	}
+	// A later confirmed address clears it.
+	if err := r.svc.SetIngress(context.Background(), id, nodeproto.IngressDirect, "198.51.100.9"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ = r.store.GetByID(context.Background(), id); n.IngressDetail != "" {
+		t.Fatalf("detail %q", n.IngressDetail)
+	}
+	if err := r.svc.RecordIngressDetail(context.Background(), "node_missing", detail); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing node: %v", err)
+	}
+}

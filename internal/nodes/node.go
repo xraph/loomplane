@@ -131,6 +131,9 @@ type Store interface {
 	SetIngress(ctx context.Context, id string, in IngressSetting) (*Node, error)
 	// RecordIngressApplied writes the mode the node says it now runs.
 	RecordIngressApplied(ctx context.Context, id, mode string) error
+	// SetIngressDetail writes only the detail an admin reads on a node that
+	// is not revoked, such as an address check's finding.
+	SetIngressDetail(ctx context.Context, id, detail string) error
 	// Touch writes last_seen_at and usage only, so a heartbeat appends no event.
 	Touch(ctx context.Context, id string, at time.Time, usage nodeproto.Usage) error
 	SetStatus(ctx context.Context, id string, s Status) error
