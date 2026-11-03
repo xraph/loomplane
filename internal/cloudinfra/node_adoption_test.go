@@ -720,6 +720,45 @@ func TestAdoptRetryReadsTheSavedOperation(t *testing.T) {
 	}
 }
 
+func TestAdoptRetrySettlesByTheOperationsOutcome(t *testing.T) {
+	for _, c := range []struct {
+		status, message, want, reason string
+	}{
+		{"pending", "", NodeAdoptionApplied, ""},
+		{"running", "", NodeAdoptionApplied, ""},
+		{"waiting", "", NodeAdoptionApplied, ""},
+		{"succeeded", "", NodeAdoptionApplied, ""},
+		{"failed", "docker runtime checks failed: docker:access", NodeAdoptionReview, "the adopt operation failed: docker runtime checks failed: docker:access"},
+		{"failed", "", NodeAdoptionReview, "the adopt operation failed"},
+		{"cancelled", "", NodeAdoptionReview, "the adopt operation was cancelled"},
+		{"exploded", "", NodeAdoptionReview, `the adopt operation is "exploded", which Loomplane doesn't recognize`},
+	} {
+		t.Run(c.status+c.message, func(t *testing.T) {
+			r := newAdoptionRig(t, "amd64")
+			r.svc.CapacityPrincipal = acceptKeys{}
+			if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+				t.Fatal(err)
+			}
+			// An earlier attempt's apply committed and its save was lost; the
+			// operation has moved on since.
+			r.store.ops["infraop_1"] = &Operation{ID: "infraop_1", OrgID: "org", CloudID: "cloud", ServerID: "server_1", Status: c.status, Message: c.message, Input: ServerInput{Kind: "adopt"}}
+			a := r.store.adoption(r.node.ID)
+			a.OperationID, a.ServerID = "infraop_1", "server_1"
+			r.store.adoptions[r.node.ID] = a
+			if err := r.svc.AdoptOnline(t.Context(), r.node); err != nil {
+				t.Fatal(err)
+			}
+			got := r.store.adoption(r.node.ID)
+			if got.Status != c.want || got.Reason != c.reason || got.OperationID != "infraop_1" {
+				t.Fatalf("adoption %+v, want %s %q", got, c.want, c.reason)
+			}
+			if r.store.previews != 0 || r.store.accepts != 0 || r.conns.created() != 0 {
+				t.Fatalf("started over: %d previews, %d accepts, %d connections", r.store.previews, r.store.accepts, r.conns.created())
+			}
+		})
+	}
+}
+
 func TestAdoptRetryAppliesASavedPreview(t *testing.T) {
 	r := newAdoptionRig(t, "amd64")
 	r.svc.CapacityPrincipal = acceptKeys{}

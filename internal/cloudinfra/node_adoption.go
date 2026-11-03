@@ -241,7 +241,8 @@ func (s *Service) adoptNode(ctx context.Context, st NodeAdoptionStore, n *nodes.
 		return err
 	}
 	if pending != nil && pending.Status != "preview" {
-		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionApplied, "")
+		status, reason := savedOperationOutcome(pending)
+		return s.settleNodeAdoption(ctx, st, a, status, reason)
 	}
 	// Everything from here runs as the approver, whose live role and API
 	// key are checked first and again by every call that follows.
@@ -325,6 +326,29 @@ func (s *Service) savedAdoptOperation(ctx context.Context, st NodeAdoptionStore,
 	}
 	a.OperationID, a.ServerID, a.UpdatedAt = "", "", s.now().UTC()
 	return nil, st.SaveNodeAdoption(context.WithoutCancel(ctx), a)
+}
+
+// savedOperationOutcome is where an adoption stands once its saved
+// operation was accepted. Accepted work that is queued, running, waiting on
+// the host or done means the adoption took. One that failed or was
+// cancelled goes to an admin with the operation kept on the row: a failed
+// one can be retried from the Cloud, and a cancelled one was a person's
+// call, which starting over would undo. A status this code doesn't know is
+// never taken for success.
+func savedOperationOutcome(o *Operation) (status, reason string) {
+	switch o.Status {
+	case "pending", "running", "waiting", "succeeded":
+		return NodeAdoptionApplied, ""
+	case "failed":
+		reason = "the adopt operation failed"
+		if o.Message != "" {
+			reason += ": " + o.Message
+		}
+		return NodeAdoptionReview, reason
+	case "cancelled":
+		return NodeAdoptionReview, "the adopt operation was cancelled"
+	}
+	return NodeAdoptionReview, fmt.Sprintf("the adopt operation is %q, which Loomplane doesn't recognize", o.Status)
 }
 
 // applyNodeAdoption applies the adoption's preview as its approver.
@@ -478,7 +502,7 @@ func (s *Service) keepWaiting(ctx context.Context, st NodeAdoptionStore, a *Node
 		return nil
 	}
 	a.Reason, a.UpdatedAt = reason, s.now().UTC()
-	return st.SaveNodeAdoption(ctx, a)
+	return st.SaveNodeAdoption(context.WithoutCancel(ctx), a)
 }
 
 // settleNodeAdoption ends the waiting: applied, left for review, or failed.
