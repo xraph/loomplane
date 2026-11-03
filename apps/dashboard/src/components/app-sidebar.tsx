@@ -3,7 +3,12 @@
 // It collapses to icons (⌘B) and the projects stay visible when it does.
 import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
-import { CopyIcon, FolderGit2Icon, KeyboardIcon } from "lucide-react"
+import {
+  CopyIcon,
+  FolderGit2Icon,
+  KeyboardIcon,
+  UserRoundIcon,
+} from "lucide-react"
 import { type ComponentProps } from "react"
 import { toast } from "sonner"
 
@@ -469,6 +474,10 @@ function Account() {
       }}
     >
       <DropdownMenuGroup>
+        <DropdownMenuItem render={<Link to="/account/profile" />}>
+          <UserRoundIcon />
+          Your account
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={openShortcuts}>
           <KeyboardIcon />
           Keyboard shortcuts

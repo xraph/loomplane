@@ -2633,6 +2633,7 @@ export interface HuggingFaceTokenInputBody {
 export interface IdentitySession {
   orgId: string;
   permissions: string[];
+  sessionId?: string;
   userId: string;
 }
 
