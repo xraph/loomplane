@@ -10,10 +10,6 @@ import { Device, formatCode } from "@/pages/device"
 vi.mock("@authsome/ui-react", () => ({
   useAuth: () => ({ user: { email: "ada@example.com" }, signOut: vi.fn() }),
 }))
-// The frame needs the router and theme; the card is what's under test.
-vi.mock("@/components/auth-layout", () => ({
-  AuthLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}))
 
 afterEach(() => {
   cleanup()
@@ -60,12 +56,16 @@ test("approves the code from the link only when you say so", async () => {
   expect(screen.getByLabelText("The code loomctl showed you")).toHaveValue(
     "BCDF-GHJK"
   )
-  expect(screen.getByText(/ada@example\.com/)).toBeInTheDocument()
+  // The onboarding frame: who's signed in, and signing out, above the card.
+  expect(screen.getByText("ada@example.com")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument()
   // Opening the link sends nothing.
   expect(sent).toHaveLength(0)
 
   await userEvent.click(screen.getByRole("button", { name: "Approve" }))
-  expect(await screen.findByText("loomctl is signed in")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "loomctl is signed in" })
+  ).toBeInTheDocument()
   expect(sent).toEqual([
     {
       path: "/authsome/v1/oauth/device/complete",
@@ -87,7 +87,9 @@ test("denies, and waits for a whole code before either", async () => {
   )
   expect(approve).toBeEnabled()
   await userEvent.click(deny)
-  expect(await screen.findByText("Sign-in denied")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("heading", { name: "Sign-in denied" })
+  ).toBeInTheDocument()
   expect(sent[0].body).toEqual({ user_code: "BCDF-GHJK", action: "deny" })
 })
 
