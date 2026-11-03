@@ -121,9 +121,13 @@ type Connection struct {
 	CreatedBy string     `json:"created_by"`
 	// SignedInBy is the Loomplane user who signed in to the cloud, for a
 	// connection made that way. Empty for a pasted token.
-	SignedInBy string    `json:"signed_in_by,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	SignedInBy string `json:"signed_in_by,omitempty"`
+	// OAuthClientID is the client ID of the sign-in app this connection's
+	// grant came from. Empty for a pasted token and for a connection that
+	// predates it.
+	OAuthClientID string    `json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (c *Connection) normalize() {

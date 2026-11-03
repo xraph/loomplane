@@ -97,7 +97,7 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 		return nil, err
 	}
 	pending.Settings = settings
-	app, err := s.app(ctx, p.OrgID, cloud)
+	app, err := s.app(ctx, cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	if providerErr := s.provider(pending.Cloud); providerErr != nil {
 		return nil, providerErr
 	}
-	app, err := s.app(ctx, p.OrgID, pending.Cloud)
+	app, err := s.app(ctx, pending.Cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -205,14 +205,14 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	})
 	switch {
 	case errors.Is(err, oauth.ErrAppRejected):
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, p.OrgID, pending.Cloud))
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, pending.Cloud))
 	case errors.Is(err, oauth.ErrRefused):
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	// The cloud took the app, so whatever it refused before is fixed.
-	if clearErr := s.Apps.ClearAppProblem(ctx, p.OrgID, pending.Cloud); clearErr != nil {
+	if clearErr := s.Apps.ClearAppProblem(ctx, pending.Cloud); clearErr != nil {
 		s.warn("clear the problem of a sign-in app that worked", clearErr)
 	}
 	cred, err := json.Marshal(grant) // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
@@ -245,7 +245,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 // Either is a secret.
 func (s *Service) checkable(ctx context.Context, c *Connection, g oauth.Grant) ([]byte, error) {
 	if h, ok := s.Providers[c.Cloud].(Handout); ok {
-		app, err := s.app(ctx, c.OrgID, c.Cloud)
+		app, err := s.app(ctx, c.Cloud)
 		if err != nil {
 			return nil, err
 		}

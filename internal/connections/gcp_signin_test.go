@@ -88,6 +88,8 @@ func googleSignIn(t *testing.T, s *Service) *gcp.Client {
 	s.Providers[GCP] = google
 	s.checkers[GCP] = GCPChecker{Client: google}
 	s.ConfigApps[GCP] = oauth.App{ClientID: "g-id.apps.googleusercontent.com", ClientSecret: "g-secret"}
+	// A problem is recorded on the platform's row, so the cloud has one.
+	s.Apps.(*fakeAppStore).apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "g-id.apps.googleusercontent.com"}
 	return google
 }
 
@@ -270,14 +272,14 @@ func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	r := newRefreshRig(t)
 	googleSignIn(t, r.s)
 	googleSignedIn(t, r, "conn_gcp", "1//app")
-	const why = "Loomplane's Google Cloud sign-in app was refused; check its client ID and secret on Cloud sign-in"
+	const why = "Loomplane's Google Cloud sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
 	for range 2 {
 		c, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
 		if err != nil || c.Status != StatusSignInNeeded || c.Message != why || c.Generation != 2 {
 			t.Fatalf("recheck %+v: %v", c, err)
 		}
 	}
-	if r.apps.problems["org/"+GCP] != why || len(r.lapsed) != 1 {
+	if r.apps.problems[GCP] != why || len(r.lapsed) != 1 {
 		t.Fatalf("problems %v, lapsed %d", r.apps.problems, len(r.lapsed))
 	}
 	noGoogleSecrets(t, "the row", r.store.rows["conn_gcp"])
@@ -286,13 +288,14 @@ func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	a := newRefreshRig(t)
 	azureSignIn(t, a.s)
 	a.s.ConfigApps[Azure] = oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"}
+	a.apps.apps[Azure] = &StoredApp{Cloud: Azure, ClientID: azureApp.ClientID}
 	a.store.rows["conn_az"] = Connection{ID: "conn_az", OrgID: "org", Cloud: Azure, Name: "Shop", Method: MethodOAuth, Account: "Acme production",
 		Details: map[string]string{"tenant_id": azuretest.Tenant, "subscription_id": azuretest.Subscription, "resource_group": "loomplane", "signed_in_as": "ada@contoso.com"},
 		Status:  StatusReady, Generation: 2}
 	a.keep(t, "conn_az", oauth.Grant{AccessToken: "fake-token", RefreshToken: "rt-ada-1", Expiry: a.clock.Add(time.Hour), Account: map[string]string{"email": "ada@contoso.com"}})
 	c, err := a.s.Recheck(t.Context(), starter, "conn_az")
-	const azureWhy = "Loomplane's Microsoft Azure sign-in app was refused; check its client ID and secret on Cloud sign-in"
-	if err != nil || c.Status != StatusSignInNeeded || c.Message != azureWhy || a.apps.problems["org/"+Azure] != azureWhy || len(a.lapsed) != 1 {
+	const azureWhy = "Loomplane's Microsoft Azure sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
+	if err != nil || c.Status != StatusSignInNeeded || c.Message != azureWhy || a.apps.problems[Azure] != azureWhy || len(a.lapsed) != 1 {
 		t.Fatalf("azure recheck %+v: %v, problems %v", c, err, a.apps.problems)
 	}
 	noAzureSecrets(t, "the row", a.store.rows["conn_az"])
@@ -321,8 +324,8 @@ func TestLapseMessagesNameTheCloud(t *testing.T) {
 		{c.Message, "Google Cloud refused the sign-in. Sign in again."},
 		{r.store.rows["conn_do"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
 		{r.store.rows["conn_quiet"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
-		{noAppWhy(Azure), "Microsoft Azure has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again."},
-		{r.s.appRejected(t.Context(), "org", Vercel), "Loomplane's Vercel sign-in app was refused; check its client ID and secret on Cloud sign-in"},
+		{noAppWhy(Azure), "Loomplane's Microsoft Azure sign-in app was removed, so this sign-in can't be renewed. Sign in again once it's back, or connect with a token."},
+		{r.s.appRejected(t.Context(), Vercel), "Loomplane's Vercel sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."},
 	} {
 		if m.got != m.want {
 			t.Errorf("got %q, want %q", m.got, m.want)
@@ -349,7 +352,7 @@ func TestGoogleHandoutWithoutAnAppNeedsSignIn(t *testing.T) {
 	}
 	for _, id := range []string{"conn_deploy", "conn_check"} {
 		row := r.store.rows[id]
-		if row.Status != StatusSignInNeeded || !strings.Contains(row.Message, "no sign-in app set up") || row.Generation != 2 {
+		if row.Status != StatusSignInNeeded || !strings.Contains(row.Message, "sign-in app was removed") || row.Generation != 2 {
 			t.Fatalf("%s: %+v", id, row)
 		}
 	}

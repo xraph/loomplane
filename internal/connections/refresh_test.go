@@ -714,6 +714,8 @@ func (r *refreshRig) vercelSignIn(t *testing.T, checked *time.Time) {
 	t.Helper()
 	r.s.Providers[Vercel] = r.renewer
 	r.s.ConfigApps[Vercel] = oauth.App{ClientID: "vercel-id", ClientSecret: "vercel-secret", Slug: "loomplane"}
+	// A problem is recorded on the platform's row, so the cloud has one.
+	r.apps.apps[Vercel] = &StoredApp{Cloud: Vercel, ClientID: "vercel-id"}
 	const id, token = "conn_vercel", "vt-1"
 	r.store.rows[id] = Connection{ID: id, OrgID: "org", Cloud: Vercel, Name: id, Method: MethodOAuth, Account: "Acme",
 		Details: map[string]string{"team_id": "team_1"}, Status: StatusReady, Generation: 3, CheckedAt: checked}
@@ -807,7 +809,7 @@ func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
 	if report != (RefreshReport{Lapsed: 1}) || r.store.rows["conn_vercel"].Status != StatusSignInNeeded || len(r.lapsed) != 1 {
 		t.Fatalf("report %+v row %+v", report, r.store.rows["conn_vercel"])
 	}
-	if r.apps.problems["org/"+Vercel] == "" {
+	if r.apps.problems[Vercel] == "" {
 		t.Fatalf("no app problem recorded: %v", r.apps.problems)
 	}
 }
