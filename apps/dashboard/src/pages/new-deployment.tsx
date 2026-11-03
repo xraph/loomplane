@@ -1,15 +1,11 @@
+import { CloudEmpty } from "@/components/cloud-targets/infrastructure-ui"
 import { DeploymentForm, type DeployPreset } from "@/components/deploy-dialog"
-import { Page, PageHeading } from "@/components/page"
+import { Page } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
-import {
-  Empty,
-  EmptyHeader,
-  EmptyTitle,
-  EmptyDescription,
-} from "@/components/ui/empty"
 import { useOrganization } from "@/lib/organization"
 import { useNavigate } from "@/lib/router"
 
+/** NewDeploymentPage is the deploy screen at /deployments/new. */
 export function NewDeploymentPage({ preset }: { preset: DeployPreset }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
@@ -21,30 +17,26 @@ export function NewDeploymentPage({ preset }: { preset: DeployPreset }) {
           { label: "New deployment" },
         ]}
       />
-      <Page className="gap-5">
-        <PageHeading
-          title="New deployment"
-          description="Choose your services and infrastructure. Review every change before deploying."
-        />
+      <Page className="gap-6">
         {can("deployment:create") ? (
           <DeploymentForm
             key={JSON.stringify(preset)}
             preset={preset}
-            page
             done={() => {
-              void navigate({ to: "/deployments" })
+              // Cancel goes back to the project it came from.
+              if (preset.project)
+                void navigate({
+                  to: "/projects/$id",
+                  params: { id: preset.project },
+                })
+              else void navigate({ to: "/deployments" })
             }}
           />
         ) : (
-          <Empty preview={false}>
-            <EmptyHeader>
-              <EmptyTitle>Deployment access required</EmptyTitle>
-              <EmptyDescription>
-                Ask your workspace administrator for permission to create
-                deployments.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <CloudEmpty kind="notice" title="Deployment access required">
+            Ask your workspace administrator for permission to create
+            deployments.
+          </CloudEmpty>
         )}
       </Page>
     </>

@@ -44,7 +44,7 @@ require (
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.8.3
+	github.com/xraph/authsome v1.9.0
 	github.com/xraph/bastion v1.4.1
 	github.com/xraph/chronicle v1.9.1
 	github.com/xraph/confy v1.1.0
@@ -59,8 +59,8 @@ require (
 	github.com/xraph/grove/drivers/pgdriver v1.10.1
 	github.com/xraph/grove/drivers/sqlitedriver v1.10.1
 	github.com/xraph/grove/extension v1.10.0
-	github.com/xraph/herald v1.9.0
-	github.com/xraph/herald/drivers/apns v1.9.0
+	github.com/xraph/herald v1.10.0
+	github.com/xraph/herald/drivers/apns v1.10.0
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/nexus v1.9.1
 	github.com/xraph/nexus/providers/anthropic v1.9.1

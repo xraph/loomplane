@@ -29,6 +29,7 @@ import {
   ShortcutsIcon,
   ThemeIcon,
   VariablesIcon,
+  WebhooksIcon,
 } from "@/components/icons"
 import { RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
@@ -206,13 +207,17 @@ type Page = {
     | "/deployments"
     | "/projects"
     | "/services"
+    | "/services/catalog"
     | "/clouds"
     | "/infrastructure"
     | "/activity"
     | "/variables"
     | "/members"
     | "/notifications"
+    | "/notifications/settings"
+    | "/webhooks"
     | "/integrations"
+    | "/integrations/resources"
     | "/api-keys"
   label: string
   icon: ReactNode
@@ -247,8 +252,15 @@ const pages: Page[] = [
     to: "/services",
     label: "Services",
     icon: <ServicesIcon />,
-    search: "services catalog databases caches postgres redis",
+    search: "services deployed running managed",
     keys: "G S",
+  },
+  {
+    to: "/services/catalog",
+    label: "Service catalog",
+    icon: <ServicesIcon />,
+    search:
+      "services catalog databases caches postgres redis managed provider one click create deploy",
   },
   {
     to: "/clouds",
@@ -289,13 +301,31 @@ const pages: Page[] = [
     to: "/notifications",
     label: "Notifications",
     icon: <NotificationsIcon />,
-    search: "notifications inbox email webhooks",
+    search: "notifications inbox",
+  },
+  {
+    to: "/notifications/settings",
+    label: "Notification settings",
+    icon: <NotificationsIcon />,
+    search: "notification settings email preferences",
+  },
+  {
+    to: "/webhooks",
+    label: "Webhooks",
+    icon: <WebhooksIcon />,
+    search: "webhooks endpoints relay signing secret deliveries",
   },
   {
     to: "/integrations",
     label: "Integrations",
     icon: <IntegrationsIcon />,
     search: "integrations github catalog",
+  },
+  {
+    to: "/integrations/resources",
+    label: "Provider resources",
+    icon: <IntegrationsIcon />,
+    search: "resources provider managed inventory buckets databases sync",
   },
   {
     to: "/api-keys",

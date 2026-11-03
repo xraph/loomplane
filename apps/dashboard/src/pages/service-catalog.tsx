@@ -35,7 +35,7 @@ import { Card } from "@/components/ui/card"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
 import { cn } from "@/lib/utils"
-import { catalog } from "@/pages/services"
+import { catalog } from "@/pages/services-catalog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -107,12 +107,13 @@ export function ServiceCatalog({
       <SiteHeader
         crumbs={[
           { label: "Services", to: "/services" },
+          { label: "Catalog", to: "/services/catalog" },
           { label: recipe.title },
         ]}
       />
       <Page>
         <Link
-          to="/services"
+          to="/services/catalog"
           className="-mb-2 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
         >
           <ChevronLeftIcon className="size-3.5" />

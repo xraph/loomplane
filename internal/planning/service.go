@@ -243,6 +243,11 @@ type CreatePlanInput struct {
 	// successful deployment of it recorded, and the plan uses the manifest
 	// revision that environment last deployed with; the rest are held.
 	From string `json:"from,omitempty"`
+	// Services names the manifest services the plan moves. Empty means all
+	// of them. One it doesn't name stays as it runs, and one that doesn't
+	// run yet isn't created, so a deploy of one service never touches the
+	// others.
+	Services []string `json:"services,omitempty"`
 }
 
 // DecideInput approves or rejects a plan.
@@ -295,7 +300,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	var pinned []PlanSource
 	if in.Catalog {
-		if len(in.Scope) > 0 || !catalogOnly(rev.Manifest) {
+		if len(in.Scope) > 0 || len(in.Services) > 0 || !catalogOnly(rev.Manifest) {
 			return nil, fmt.Errorf("%w: standalone catalog plans contain resources only", ErrInvalid)
 		}
 	} else {
@@ -304,9 +309,14 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 			return nil, err
 		}
 	}
+	services, err := pickServices(rev.Manifest, in.Services)
+	if err != nil {
+		return nil, err
+	}
 	return s.start(ctx, p, &Plan{
 		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
 		Sources: pinned, Catalog: in.Catalog, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+		Services: services,
 	})
 }
 
@@ -347,11 +357,37 @@ func (s *Service) createFrom(ctx context.Context, p security.Principal, projectI
 			return nil, err
 		}
 	}
+	// The names are checked against the manifest the promotion deploys
+	// with, which may be older than the latest.
+	services, err := pickServices(rev.Manifest, in.Services)
+	if err != nil {
+		return nil, err
+	}
 	return s.start(ctx, p, &Plan{
 		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
 		Kind: KindPromotion, From: source.Name, FromEnvironmentID: source.ID,
-		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision, Services: services,
 	})
+}
+
+// pickServices checks the services a plan names against the manifest it
+// plans from, and returns them sorted and without repeats, so the same
+// choice always gives the same revision. Naming none means every service,
+// which is nil.
+func pickServices(m *manifest.Manifest, names []string) ([]string, error) {
+	var out []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || slices.Contains(out, name) {
+			continue
+		}
+		if _, ok := m.Services[name]; !ok {
+			return nil, fmt.Errorf("%w: the manifest has no service called %q", ErrInvalid, name)
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // start stores a new plan, superseding the environment's open plan, and
@@ -387,7 +423,7 @@ func (s *Service) start(ctx context.Context, p security.Principal, plan *Plan) (
 			Attributes: map[string]any{
 				"plan_id": plan.ID, "environment": plan.Environment, "sources": lockDescription(plan.Sources),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
-				"kind": plan.Kind, "from": plan.From,
+				"kind": plan.Kind, "from": plan.From, "services": plan.Services,
 			},
 		}
 		if rb := plan.Rollback; rb != nil {
@@ -670,6 +706,10 @@ type revisionInput struct {
 	// excluding or including one makes a plan stale. Omitted when empty,
 	// so plans from before exclusions keep their revision.
 	Exclusions []string `json:"exclusions,omitempty"`
+	// Services are the services the plan names, so moving a different set
+	// is a different plan. Omitted when it names none, so a plan of every
+	// service keeps the revision it had before plans could name them.
+	Services []string `json:"services,omitempty"`
 }
 
 type deployedRef struct {
@@ -753,7 +793,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held, Only: loaded.only})
 	// A composed resource on one of the Cloud's targets is placed there too.
 	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
 	var assignment *cloudprofiles.Assignment
@@ -860,7 +900,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
-			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
+			Connections: options, Chosen: chosen, Held: held, Excluded: excluded, Only: loaded.only,
 			Kinds: s.kinds, Endpoints: endpointChecks,
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
 		})
@@ -927,7 +967,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
 		From: plan.From, Rollback: plan.Rollback,
-		Exclusions: exclusions,
+		Exclusions: exclusions, Services: plan.Services,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{

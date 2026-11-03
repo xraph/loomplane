@@ -45,15 +45,18 @@ export type NavItem = {
 export function NavMain({
   items,
   label = "Platform",
+  className,
 }: {
   items: NavItem[]
+  /** The group's heading; leave it empty for a group that needs none. */
   label?: string
+  className?: string
 }) {
   // A section opens while you're in it, unless you've toggled it yourself.
   const [manual, setManual] = useState<Record<string, boolean>>({})
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+    <SidebarGroup className={className}>
+      {label && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
       <SidebarMenu>
         {items.map((item) =>
           item.items?.length ? (

@@ -19,7 +19,7 @@ const authPaths = new Set([
 ])
 
 /**
- * Shared frame for account access and the first organization setup, in the
+ * Shared frame for signing in and recovering an account, in the
  * landing site's look: the logo top left, the form in a double-bezel card,
  * and the hero's light beside it. It follows the app's light and dark themes.
  *

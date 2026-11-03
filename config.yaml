@@ -31,7 +31,10 @@ identity:
   base_path: /authsome
   app_id: "${LOOMPLANE_AUTHSOME_APP_ID:-}"
   publishable_key: "${LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY:-}"
-  require_email_verification: false
+  # Unset, accounts must verify their email wherever the instance can send
+  # mail, and needn't where it can't. true or false forces it. The account
+  # that runs first-time setup is verified by setup itself.
+  require_email_verification: "${LOOMPLANE_REQUIRE_EMAIL_VERIFICATION:-}"
   # The HttpOnly cookie the dashboard's session lives in. Cookies are shared
   # by every port on a host, so another authsome app on the same host needs
   # a different name, or each signs the other out.
@@ -46,7 +49,11 @@ notifications:
   # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
   # "from" on a domain verified in Resend.
   resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
-  # Empty host (with no Resend key) disables email. For local Mailpit use 127.0.0.1:1025.
+  # Writes each email to this folder as an .eml file instead of sending it, so
+  # you can read local mail without a mail server. Set this, resend_api_key or
+  # smtp_host, only one. Production refuses it. .forge/mail is gitignored.
+  mail_dir: "${LOOMPLANE_NOTIFICATIONS_MAIL_DIR:-}"
+  # Empty host (with no Resend key or mail_dir) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"

@@ -398,26 +398,45 @@ func (e *Extension) Health(ctx context.Context) error {
 // bearer token for API clients), keeps it alive (sessions.go) and resolves
 // the principal.
 func (e *Extension) middleware() []forge.Middleware {
-	return append(e.sessionMiddleware(), requirePrincipal)
+	return append(e.sessionMiddleware(), e.requirePrincipal)
 }
 
-func requirePrincipal(next forge.Handler) forge.Handler {
+func (e *Extension) requirePrincipal(next forge.Handler) forge.Handler {
 	return func(c forge.Context) error {
 		ctx := c.Request().Context()
-		var userID, orgID string
-		if u, ok := authmw.UserIDFrom(ctx); ok {
-			userID = u.String()
-		}
-		if o, ok := authmw.OrgIDFrom(ctx); ok {
-			orgID = o.String()
-		}
-		p, err := security.Resolve(userID, orgID, c.Request().Header.Get(security.HeaderOrganization))
+		p, err := e.principalFor(ctx, c.Request().Header.Get(security.HeaderOrganization))
 		if err != nil {
 			return forge.NewHTTPError(security.StatusFor(err), err.Error())
 		}
 		c.WithContext(security.WithPrincipal(ctx, p))
 		return next(c)
 	}
+}
+
+// principalFor is the principal of a request authsome's middleware has
+// authenticated. Sign-up hands out a session before the email is
+// verified, and authsome only checks verification at sign-in, so when
+// it's required every request checks it here.
+func (e *Extension) principalFor(ctx context.Context, orgHeader string) (security.Principal, error) {
+	var userID, orgID string
+	if u, ok := authmw.UserIDFrom(ctx); ok {
+		userID = u.String()
+	}
+	if o, ok := authmw.OrgIDFrom(ctx); ok {
+		orgID = o.String()
+	}
+	p, err := security.Resolve(userID, orgID, orgHeader)
+	if err != nil {
+		return security.Principal{}, err
+	}
+	if e.cfg.Identity.RequireEmailVerification {
+		// The middleware loads the user for every session; one it couldn't
+		// load isn't let through as verified.
+		if u, ok := authmw.UserFrom(ctx); !ok || u == nil || !u.EmailVerified {
+			return security.Principal{}, security.ErrEmailNotVerified
+		}
+	}
+	return p, nil
 }
 
 // membership is a user's role in an organization, if they're in it. The
@@ -456,6 +475,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 	// After authsome's bootstrap, which applies the platform roles.
 	e.grantConsoleReads(ctx)
 	if err := e.recordEarlierSetup(ctx); err != nil {
+		return err
+	}
+	if err := e.verifyPlatformOwners(ctx); err != nil {
 		return err
 	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {

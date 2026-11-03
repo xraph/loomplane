@@ -40,9 +40,19 @@ export function isOpen(status: string): boolean {
 
 export type Tone = "ok" | "wait" | "bad" | "quiet"
 
+// The words below follow the cloud pages' statusWord, so a plan, a
+// deployment and a step never name the same state two ways: "Done" for a
+// step, "Deployed" for a deployment, "Waiting for you" and "Cancelled".
+
+/** humanize names a status nobody mapped yet, rather than showing its key. */
+function humanize(status: string): string {
+  const word = status.replace(/_/g, " ")
+  return word.charAt(0).toUpperCase() + word.slice(1)
+}
+
 const statuses: Record<string, { label: string; tone: Tone }> = {
   planning: { label: "Planning", tone: "wait" },
-  ready: { label: "Waiting for approval", tone: "wait" },
+  ready: { label: "Waiting for you", tone: "wait" },
   blocked: { label: "Blocked", tone: "bad" },
   approved: { label: "Approved", tone: "ok" },
   rejected: { label: "Rejected", tone: "quiet" },
@@ -54,7 +64,7 @@ const statuses: Record<string, { label: string; tone: Tone }> = {
 
 /** planStatus names a plan's status for people, with how it should look. */
 export function planStatus(status: string): { label: string; tone: Tone } {
-  return statuses[status] ?? { label: status, tone: "quiet" }
+  return statuses[status] ?? { label: humanize(status), tone: "quiet" }
 }
 
 const ops: Record<string, string> = {
@@ -143,6 +153,14 @@ export function toggleScope(
 }
 
 /**
+ * planServices is the manifest services a plan moves, when it was asked to
+ * move only some of them. Empty means every service.
+ */
+export function planServices(plan: Plan): string[] {
+  return (plan as Plan & { services?: string[] | null }).services ?? []
+}
+
+/**
  * changeCount says how much a plan would change, leaving out what it
  * keeps as it is.
  */
@@ -199,9 +217,11 @@ export function withIgnored(m: Manifest, kind: string): Manifest {
 
 const deploymentStatuses: Record<string, { label: string; tone: Tone }> = {
   running: { label: "Deploying", tone: "wait" },
+  paused: { label: "Paused for capacity", tone: "wait" },
   succeeded: { label: "Deployed", tone: "ok" },
   failed: { label: "Failed", tone: "bad" },
-  cancelled: { label: "Canceled", tone: "quiet" },
+  cancelled: { label: "Cancelled", tone: "quiet" },
+  canceled: { label: "Cancelled", tone: "quiet" },
 }
 
 /**
@@ -221,14 +241,17 @@ export function deploymentStatus(status: string): {
   label: string
   tone: Tone
 } {
-  return deploymentStatuses[status] ?? { label: status, tone: "quiet" }
+  return (
+    deploymentStatuses[status] ?? { label: humanize(status), tone: "quiet" }
+  )
 }
 
 const stepStatuses: Record<string, { label: string; tone: Tone }> = {
-  pending: { label: "Waiting", tone: "quiet" },
+  pending: { label: "Not started", tone: "quiet" },
   building: { label: "Building", tone: "wait" },
   deploying: { label: "Deploying", tone: "wait" },
-  verifying: { label: "Checking", tone: "wait" },
+  verifying: { label: "Verifying", tone: "wait" },
+  ramping: { label: "Taking a share of traffic", tone: "wait" },
   succeeded: { label: "Done", tone: "ok" },
   failed: { label: "Failed", tone: "bad" },
   skipped: { label: "Skipped", tone: "quiet" },
@@ -236,7 +259,7 @@ const stepStatuses: Record<string, { label: string; tone: Tone }> = {
 
 /** stepStatus names a deployment step's status, with how it should look. */
 export function stepStatus(status: string): { label: string; tone: Tone } {
-  return stepStatuses[status] ?? { label: status, tone: "quiet" }
+  return stepStatuses[status] ?? { label: humanize(status), tone: "quiet" }
 }
 
 /** isDeploying reports whether a deployment is still running. */

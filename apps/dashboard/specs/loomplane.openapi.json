@@ -19066,6 +19066,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -25964,6 +25970,12 @@
           "rollback": {
             "$ref": "#/components/schemas/Rollback"
           },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "sources": {
             "type": "array",
             "items": {
@@ -27521,7 +27533,8 @@
           "features",
           "setup_pending",
           "waitlist",
-          "setup_token_required"
+          "setup_token_required",
+          "require_email_verification"
         ],
         "properties": {
           "app_id": {
@@ -27538,6 +27551,9 @@
           },
           "publishable_key": {
             "type": "string"
+          },
+          "require_email_verification": {
+            "type": "boolean"
           },
           "setup_pending": {
             "type": "boolean"

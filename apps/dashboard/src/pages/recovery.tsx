@@ -141,7 +141,13 @@ function VerifyEmail({ initialEmail }: { initialEmail: string }) {
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            // The code went to an address sign-up or the session gave us,
+            // so that one stays. Arriving without one, you type it.
+            readOnly={!!initialEmail}
             disabled={pending}
+            className={
+              initialEmail ? "bg-muted text-muted-foreground" : undefined
+            }
           />
         </div>
         <div className="grid gap-1.5">

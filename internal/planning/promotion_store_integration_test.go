@@ -86,7 +86,7 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	p := &Plan{
 		ID: "plan_promo", OrgID: "org", ProjectID: "proj", EnvironmentID: "env_b", Environment: "production",
 		Status: StatusPlanning, ManifestID: "man_1", ManifestRevision: 1, CreatedBy: "usr", CreatedAt: now,
-		Kind: KindPromotion, From: "staging", FromEnvironmentID: "env_a",
+		Kind: KindPromotion, From: "staging", FromEnvironmentID: "env_a", Services: []string{"api", "web"},
 		Sources: []PlanSource{{
 			SourceID: "src_1", Alias: "mono", Repository: "acme/mono", AnalysisID: "anl_1", CommitSHA: "abc",
 			InScope: true, FromPlanID: "plan_staging",
@@ -112,6 +112,9 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got.Sources, p.Sources) {
 		t.Fatalf("sources %+v", got.Sources)
 	}
+	if !reflect.DeepEqual(got.Services, []string{"api", "web"}) {
+		t.Fatalf("services %q", got.Services)
+	}
 	if !reflect.DeepEqual(got.Leftovers, p.Leftovers) || !reflect.DeepEqual(got.Artifacts, p.Artifacts) {
 		t.Fatalf("leftovers %+v artifacts %+v", got.Leftovers, got.Artifacts)
 	}
@@ -124,7 +127,7 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.Kind != KindRelease || old.From != "" || old.FromEnvironmentID != "" || old.Rollback != nil {
+	if old.Kind != KindRelease || old.From != "" || old.FromEnvironmentID != "" || old.Rollback != nil || old.Services != nil {
 		t.Fatalf("old plan: %+v", old)
 	}
 	if old.Leftovers == nil || len(old.Leftovers) != 0 || old.Artifacts == nil || len(old.Artifacts) != 0 {

@@ -142,6 +142,32 @@ test("nothing deployed shows nothing once every environment answered", async () 
   ).not.toBeInTheDocument()
 })
 
+test("a resource shows its state in every environment", async () => {
+  serve({})
+  await screen.findByRole("link", { name: /db/ })
+  const table = screen.getByRole("table", { name: "Resources" })
+  expect(table).toHaveTextContent("Live")
+  expect(table).toHaveTextContent("Not deployed")
+  expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+    "href",
+    "/projects/$id/catalog/$resource"
+  )
+})
+
+test("old and unknown tabs open the page somewhere it has", async () => {
+  const { Route } = await import("@/routes/projects.$id")
+  const validate = Route.options.validateSearch as (
+    search: Record<string, unknown>
+  ) => Record<string, unknown>
+  expect(validate({ tab: "graph" })).toEqual({ tab: "overview" })
+  expect(validate({ tab: "deploy" })).toEqual({ tab: "deployments" })
+  expect(validate({ tab: "variables", environment: "staging" })).toEqual({
+    tab: "variables",
+    environment: "staging",
+  })
+  expect(validate({ tab: "nonsense" })).toEqual({})
+})
+
 test("a team grant on the project shows its buttons", async () => {
   // The workspace role can't deploy; a team gives this project the right.
   workspace.can = (permission) => permission !== "deployment:create"
@@ -166,7 +192,7 @@ test("a team grant on the project shows its buttons", async () => {
     </ClientProvider>
   )
   expect(
-    await screen.findByRole("button", { name: "Deploy" })
+    await screen.findByRole("link", { name: "Deploy" })
   ).toBeInTheDocument()
   await waitFor(() =>
     expect(asked.filter((p) => p.endsWith("/permissions"))).toHaveLength(1)
@@ -195,6 +221,6 @@ test("without the team grant the button stays hidden", async () => {
   )
   await screen.findByRole("heading", { name: /Shop/ })
   await waitFor(() =>
-    expect(screen.queryByRole("button", { name: "Deploy" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Deploy" })).toBeNull()
   )
 })

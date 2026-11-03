@@ -30,6 +30,12 @@ export function captureInvite(location: Location = window.location): void {
   const token = new URLSearchParams(location.search).get("token")
   if (!token) return
   window.sessionStorage.setItem(key, token)
+  // Session storage holds it now. Left in the URL, the token sits in
+  // history, gets saved as the address to come back to after sign-in, and
+  // shows in screenshots. The page keeps its own address without it.
+  if (location === window.location) {
+    window.history.replaceState(window.history.state, "", acceptPath)
+  }
   notify()
 }
 
@@ -37,9 +43,19 @@ export function pendingInvite(): string | null {
   return window.sessionStorage.getItem(key)
 }
 
+// Set once this tab has accepted or put off an invitation, so the accept
+// page can tell "you're done here" from a link that came without a token.
+let settled = false
+
 export function clearInvite(): void {
+  settled = true
   window.sessionStorage.removeItem(key)
   notify()
+}
+
+/** inviteSettled says whether this tab has already dealt with an invitation. */
+export function inviteSettled(): boolean {
+  return settled
 }
 
 /** usePendingInvite is pendingInvite, re-rendering when it changes. */

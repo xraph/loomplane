@@ -1,14 +1,16 @@
-import { DatabaseIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
+// Provider resources: what Loomplane found in your connected cloud
+// accounts. Each one is run by its provider, so this lives with the
+// integrations that reach it. New ones are created from the Services
+// catalog, next to the services Loomplane runs itself.
+import { DatabaseIcon, RefreshCwIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import { useMutation, useQuery } from "@/client/hooks"
-import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
 import { ResourceInventory } from "@/components/provider-resources/inventory"
 import { ResourceDetails } from "@/components/provider-resources/resource-details"
 import { ResourceReviewDialog } from "@/components/provider-resources/review-dialog"
 import { ResourceSyncDialog } from "@/components/provider-resources/sync-dialog"
-import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -21,6 +23,7 @@ import {
 } from "@/components/zero-state"
 import { useOrganization } from "@/lib/organization"
 import type { InventoryResource } from "@/lib/provider-resources"
+import { Link } from "@/lib/router"
 import { useNow } from "@/lib/use-runs"
 
 export function ProviderResources({
@@ -31,24 +34,17 @@ export function ProviderResources({
   const { session, can } = useOrganization()
   if (!can("infrastructure:read"))
     return (
-      <>
-        <SiteHeader crumbs={[{ label: "Resources" }]} />
-        <Page className="gap-3">
-          <PageHeading title="Resources" />
-          <ZeroState variant="compact" preview={false}>
-            <ZeroStateHeader>
-              <ZeroStateMedia variant="icon">
-                <DatabaseIcon />
-              </ZeroStateMedia>
-              <ZeroStateTitle>Resource access is restricted</ZeroStateTitle>
-              <ZeroStateDescription>
-                Ask your workspace owner for permission to view provider
-                resources.
-              </ZeroStateDescription>
-            </ZeroStateHeader>
-          </ZeroState>
-        </Page>
-      </>
+      <ZeroState variant="compact" preview={false}>
+        <ZeroStateHeader>
+          <ZeroStateMedia variant="icon">
+            <DatabaseIcon />
+          </ZeroStateMedia>
+          <ZeroStateTitle>Resource access is restricted</ZeroStateTitle>
+          <ZeroStateDescription>
+            Ask your workspace owner for permission to view provider resources.
+          </ZeroStateDescription>
+        </ZeroStateHeader>
+      </ZeroState>
     )
   return <ResourceWorkspace key={session.orgId} connection={connection} />
 }
@@ -68,7 +64,6 @@ function ResourceWorkspace({ connection }: { connection: string }) {
   const sync = useMutation(api.useProviderResourcesSync)
   const now = useNow()
   const [syncing, setSyncing] = useState(false)
-  const [creating, setCreating] = useState(false)
   const [selected, setSelected] = useState<InventoryResource>()
   const [attaching, setAttaching] = useState<InventoryResource>()
   const resources = (inventory.data?.resources ?? []).filter((r) => r !== null)
@@ -108,39 +103,34 @@ function ResourceWorkspace({ connection }: { connection: string }) {
   }
   return (
     <>
-      <SiteHeader crumbs={[{ label: "Resources" }]} />
-      <Page className="gap-3 pt-4">
-        <PageHeading
-          title="Resources"
-          description={`${resources.length} provider ${resources.length === 1 ? "resource" : "resources"}. Discover existing resources or create one through a reviewed deployment.`}
-          actions={
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  !can("cloud_account:manage") || inventory.status === "error"
-                }
-                onClick={() => setSyncing(true)}
-              >
-                <RefreshCwIcon />
-                Sync accounts
-              </Button>
-              <Button
-                size="sm"
-                disabled={
-                  !canReview ||
-                  providers.status !== "success" ||
-                  accounts.status !== "success"
-                }
-                onClick={() => setCreating(true)}
-              >
-                <PlusIcon />
-                Create resource
-              </Button>
-            </>
-          }
-        />
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+            {resources.length} provider{" "}
+            {resources.length === 1 ? "resource" : "resources"} found in your
+            connected accounts. Each one is run by its provider, not by
+            Loomplane. To create one, pick it from the{" "}
+            <Link
+              to="/services/catalog"
+              search={{ group: "managed" }}
+              className="text-foreground underline underline-offset-4"
+            >
+              catalog
+            </Link>
+            .
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              !can("cloud_account:manage") || inventory.status === "error"
+            }
+            onClick={() => setSyncing(true)}
+          >
+            <RefreshCwIcon />
+            Sync accounts
+          </Button>
+        </div>
         {inventory.status === "error" ? (
           <QueryError
             error={inventory.error}
@@ -202,7 +192,7 @@ function ResourceWorkspace({ connection }: { connection: string }) {
             />
           </>
         )}
-      </Page>
+      </div>
       {syncing && (
         <ResourceSyncDialog
           accounts={syncAccounts}
@@ -229,14 +219,11 @@ function ResourceWorkspace({ connection }: { connection: string }) {
           onSaved={() => inventory.refetch()}
         />
       )}
-      {(creating || attaching) && (
+      {attaching && (
         <ResourceReviewDialog
           open
           onOpenChange={(open) => {
-            if (!open) {
-              setCreating(false)
-              setAttaching(undefined)
-            }
+            if (!open) setAttaching(undefined)
           }}
           resource={attaching}
           providers={providers.data?.providers ?? []}

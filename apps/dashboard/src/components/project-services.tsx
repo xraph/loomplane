@@ -1,9 +1,4 @@
-import {
-  ChevronRightIcon,
-  EyeOffIcon,
-  SearchIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react"
+import { BoxIcon, EyeOffIcon, SlidersHorizontalIcon } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -27,8 +22,22 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { useQueries } from "@/client/queries"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import {
+  ActionsCell,
+  Cell,
+  CloudCallout,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  Segments,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
+import { QueryError } from "@/components/query-error"
+import { StatusPill } from "@/components/runs"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -38,18 +47,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
-import { kindLabel, resourceLabel } from "@/lib/architecture"
+import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
+import { kindLabel, shortSHA } from "@/lib/architecture"
 import { formatDate } from "@/lib/format"
 import { useProjectCan } from "@/lib/project-permissions"
 import {
   covering,
-  deployedConfig,
   exclusionOf,
+  filterExcluded,
   filterRows,
   isDeployed,
   locationOf,
@@ -58,7 +64,7 @@ import {
   type ServiceFilter,
   type ServiceRow,
   serviceRows,
-  stateOf,
+  serviceStatus,
   suggestedRule,
 } from "@/lib/project-services"
 import { Link } from "@/lib/router"
@@ -83,7 +89,7 @@ export function useServiceRows(
       })),
     [environments, project.id]
   )
-  const { states } = useQueries(useBindingsList, args)
+  const { states, refetch } = useQueries(useBindingsList, args)
   const routes = useQuery(useDomainRoutesList, {
     path: { projectId: project.id },
   })
@@ -97,7 +103,17 @@ export function useServiceRows(
   const rows = view?.graph
     ? serviceRows(view.graph, environments, bindings, list)
     : []
-  return { rows, bindings, routes: list }
+  return {
+    rows,
+    /** Each environment's bindings, undefined while they load. */
+    bindings,
+    routes: list,
+    /** The first environment whose bindings couldn't be read. */
+    bindingsFailed: states.find((s) => s.status === "error"),
+    refetchBindings: refetch,
+    /** The domain routes' read, for its loading and error states. */
+    routesQuery: routes,
+  }
 }
 
 /** useExclusions adds and removes exclusions, then rereads the graph. */
@@ -128,47 +144,23 @@ export function useExclusions(project: Project) {
   }
 }
 
-const stateDot = {
-  live: "bg-overdye",
-  drifted: "bg-weld",
-  none: "bg-warp",
-} as const
-
-/** ServiceState shows where a service stands in one environment. */
-export function ServiceStateLabel({
+/** ServiceStatePill shows where a service stands in one environment. */
+export function ServiceStatePill({
   binding,
-  className,
+  short,
 }: {
   binding?: Binding
-  className?: string
+  /** Shorter words for a table column. */
+  short?: boolean
 }) {
-  const state = stateOf(binding)
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 text-[12.5px] whitespace-nowrap",
-        state === "live" && "font-medium text-overdye-ink",
-        state === "drifted" && "font-medium text-weld-ink",
-        state === "none" && "text-muted-foreground",
-        className
-      )}
-    >
-      <span className={cn("size-1.5 rounded-full", stateDot[state])} />
-      {state === "live"
-        ? "Live"
-        : state === "drifted"
-          ? binding?.drift === "missing"
-            ? "Deleted outside Loomplane"
-            : "Changed outside Loomplane"
-          : "Not deployed"}
-    </span>
-  )
+  const { tone, label } = serviceStatus(binding, short)
+  return <StatusPill tone={tone}>{label}</StatusPill>
 }
 
 /**
- * ProjectServices is the Services tab: what the project deploys, where
- * each service runs, its domains and what it uses, with the services the
- * project excludes one filter away.
+ * ProjectServices is the Services tab: what the project deploys and where
+ * each service runs, with the services the project excludes one filter
+ * away. A service's domains and what it uses are on its own page.
  */
 export function ProjectServices({
   project,
@@ -181,18 +173,11 @@ export function ProjectServices({
 }) {
   const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
-  const { rows, bindings } = useServiceRows(project, environments, view)
-  // The resource of a kind that runs somewhere, the first environment
-  // first, so a service's Uses can open its page.
-  const resourceOf = (kind: string) => {
-    for (const environment of environments) {
-      const binding = (bindings[environment.name] ?? []).find(
-        (b) => b.subject === "resource" && deployedConfig(b).kind === kind
-      )
-      if (binding) return { binding, environment }
-    }
-    return undefined
-  }
+  const { rows, bindings, bindingsFailed, refetchBindings } = useServiceRows(
+    project,
+    environments,
+    view
+  )
   const excluded = view.excluded ?? []
   const [filter, setFilter] = useState<ServiceFilter>("all")
   const [search, setSearch] = useState("")
@@ -202,16 +187,7 @@ export function ProjectServices({
 
   const shown = filter === "excluded" ? [] : filterRows(rows, filter, search)
   const shownExcluded =
-    filter === "excluded"
-      ? excluded.filter((x) => {
-          const q = search.trim().toLowerCase()
-          return (
-            !q ||
-            x.service.name.toLowerCase().includes(q) ||
-            locationOf(x.service).toLowerCase().includes(q)
-          )
-        })
-      : []
+    filter === "excluded" ? filterExcluded(excluded, search) : []
   const ids =
     filter === "excluded"
       ? shownExcluded.map((x) => x.service.id)
@@ -255,65 +231,59 @@ export function ProjectServices({
     },
     { id: "excluded", label: "Excluded", count: excluded.length },
   ]
+  const q = search.trim()
+  const clearFilter = (
+    <Button size="sm" variant="outline" onClick={() => setSearch("")}>
+      Clear filter
+    </Button>
+  )
+
+  const check = mayEdit ? "22px " : ""
+  const columns = `${check}minmax(0,1.2fr) 120px ${environments
+    .map(() => "130px")
+    .join(" ")} 70px`
+  const excludedColumns = `${check}minmax(0,1fr) minmax(0,1fr) minmax(0,1.1fr) 150px 110px 120px`
 
   return (
-    <section aria-label="Services" className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2.5">
-        <div
-          role="radiogroup"
-          aria-label="Show services"
-          className="flex flex-wrap gap-0.5 rounded-[10px] bg-muted p-[3px]"
-        >
-          {filters.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              role="radio"
-              aria-checked={filter === f.id}
-              onClick={() => pick(f.id)}
-              className={cn(
-                "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium transition-colors",
-                filter === f.id
-                  ? "bg-card text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {f.label}
-              <span
-                className={cn(
-                  "font-mono text-[11px]",
-                  filter === f.id ? "text-primary" : "text-muted-foreground"
-                )}
-              >
-                {f.count}
-              </span>
-            </button>
-          ))}
-        </div>
-        <InputGroup className="h-8 w-full sm:w-60">
-          <InputGroupAddon>
-            <SearchIcon />
-          </InputGroupAddon>
-          <InputGroupInput
-            type="search"
-            aria-label="Filter services"
-            placeholder="Filter by name or path"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </InputGroup>
-      </div>
+    <section aria-label="Services" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Services"
+        description="Everything the analysis found that runs, and where it's deployed. Excluding one keeps it out of every plan."
+      >
+        <Segments
+          label="Show services"
+          value={filter}
+          onChange={pick}
+          items={filters}
+        />
+        <Input
+          type="search"
+          aria-label="Filter services"
+          placeholder="Filter by name or path"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-[30px] w-full sm:w-52"
+        />
+      </CloudSectionHead>
 
       {mayEdit && picked.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2.5 rounded-xl bg-primary/5 py-2 pr-2.5 pl-3.5 ring-1 ring-primary/25">
+        <div className="flex flex-wrap items-center gap-2.5 rounded-xl bg-muted py-2 pr-2.5 pl-3.5">
           <span className="flex-1 text-[13px] font-medium">
             {picked.length === 1
               ? "1 service selected"
               : `${picked.length} services selected`}
           </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSelected(new Set())}
+          >
+            Clear
+          </Button>
           {filter === "excluded" ? (
             <Button
               size="sm"
+              variant="outline"
               disabled={exclusions.pending}
               onClick={() =>
                 includeAgain(
@@ -327,6 +297,7 @@ export function ProjectServices({
             <Button
               size="sm"
               variant="outline"
+              className="text-destructive"
               onClick={() =>
                 setExcluding(rows.filter((r) => picked.includes(r.service.id)))
               }
@@ -334,300 +305,296 @@ export function ProjectServices({
               Exclude from project
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setSelected(new Set())}
-          >
-            Clear
-          </Button>
         </div>
       )}
 
-      {filter !== "excluded" && (
-        <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
-          <table className="w-full min-w-[920px] text-[13px]">
-            <thead>
-              <tr className="border-b bg-muted/40 text-left text-[11.5px] font-medium tracking-wide text-muted-foreground uppercase">
-                {mayEdit && (
-                  <th className="w-10 py-2 pl-4">
+      {filter !== "excluded" && bindingsFailed && (
+        <QueryError
+          error={bindingsFailed.error}
+          fallback="Where the services run couldn't be loaded."
+          retry={refetchBindings}
+        />
+      )}
+
+      {filter !== "excluded" &&
+        (shown.length === 0 ? (
+          rows.length === 0 ? (
+            <CloudEmpty kind="list" icon={BoxIcon} title="No services yet">
+              The analysis found nothing it recognizes as something that runs.
+            </CloudEmpty>
+          ) : q ? (
+            <CloudEmpty
+              kind="list"
+              icon={BoxIcon}
+              title={`No services match "${q}"`}
+              action={clearFilter}
+            >
+              The filter checks names and paths.
+            </CloudEmpty>
+          ) : (
+            <CloudEmpty
+              kind="list"
+              icon={BoxIcon}
+              title={
+                filter === "deployed"
+                  ? "No deployed services yet"
+                  : "Every service is deployed"
+              }
+              action={
+                <Button size="sm" variant="outline" onClick={() => pick("all")}>
+                  Show all
+                </Button>
+              }
+            >
+              {filter === "deployed"
+                ? "Nothing of this project runs in any environment yet."
+                : "Each service runs in at least one environment."}
+            </CloudEmpty>
+          )
+        ) : (
+          <CloudTable
+            head={[
+              ...(mayEdit
+                ? [
                     <Checkbox
+                      key="all"
                       aria-label="Select every service shown"
                       checked={allPicked}
                       onCheckedChange={() =>
                         setSelected(allPicked ? new Set() : new Set(ids))
                       }
-                    />
-                  </th>
+                    />,
+                  ]
+                : []),
+              "Service",
+              "Kind",
+              ...environments.map((e) => (
+                <span key={e.id} className="truncate normal-case">
+                  {e.name}
+                </span>
+              )),
+              <span key="open" className="sr-only">
+                Actions
+              </span>,
+            ]}
+            label="Services"
+            columns={columns}
+            minWidth={560 + environments.length * 140}
+            footer={
+              <>
+                <span>
+                  {shown.length === rows.length
+                    ? `Showing ${rows.length} ${rows.length === 1 ? "service" : "services"}`
+                    : `${shown.length} of ${rows.length} services match`}
+                </span>
+                {excluded.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-2">
+                    <EyeOffIcon className="size-3.5" aria-hidden="true" />
+                    {excluded.length === 1
+                      ? "1 excluded service is hidden here and in the graph."
+                      : `${excluded.length} excluded services are hidden here and in the graph.`}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => pick("excluded")}
+                    >
+                      Show excluded
+                    </Button>
+                  </span>
                 )}
-                <th className={cn("py-2 pr-3 font-medium", !mayEdit && "pl-4")}>
-                  Service
-                </th>
-                <th className="py-2 pr-3 font-medium">Kind</th>
-                {environments.map((e) => (
-                  <th key={e.id} className="py-2 pr-3 font-medium normal-case">
-                    {e.name}
-                  </th>
-                ))}
-                <th className="py-2 pr-3 font-medium">Domains</th>
-                <th className="py-2 pr-3 font-medium">Uses</th>
-                <th className="w-8" />
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r) => (
-                <tr
-                  key={r.service.id}
-                  className={cn(
-                    "border-b transition-colors last:border-b-0 hover:bg-muted/30",
-                    selected.has(r.service.id) && "bg-primary/5"
-                  )}
-                >
-                  {mayEdit && (
-                    <td className="py-2.5 pl-4">
-                      <Checkbox
-                        aria-label={`Select ${r.service.name}`}
-                        checked={selected.has(r.service.id)}
-                        onCheckedChange={() => toggle(r.service.id)}
-                      />
-                    </td>
-                  )}
-                  <td
-                    className={cn(
-                      "max-w-[280px] py-2.5 pr-3",
-                      !mayEdit && "pl-4"
-                    )}
-                  >
-                    <ServiceLink project={project} service={r.service} />
-                    <code className="block truncate font-mono text-[11.5px] text-muted-foreground">
+              </>
+            }
+          >
+            {shown.map((r) => (
+              <CloudTableRow
+                key={r.service.id}
+                className={cn(selected.has(r.service.id) && "bg-primary/5")}
+              >
+                {mayEdit && (
+                  <Cell className="flex">
+                    <Checkbox
+                      aria-label={`Select ${r.service.name}`}
+                      checked={selected.has(r.service.id)}
+                      onCheckedChange={() => toggle(r.service.id)}
+                    />
+                  </Cell>
+                )}
+                <NameCell
+                  name={<ServiceLink project={project} service={r.service} />}
+                  meta={
+                    <code className="font-mono text-[11.5px]">
                       {locationOf(r.service)}
                     </code>
-                  </td>
-                  <td
-                    className={cn(
-                      "py-2.5 pr-3 text-[12.5px]",
-                      !r.service.deployable && "text-muted-foreground"
-                    )}
-                  >
-                    {kindLabel(r.service.kind)}
-                  </td>
-                  {environments.map((e) => (
-                    <td key={e.id} className="py-2.5 pr-3">
-                      <ServiceStateLabel binding={r.deployed[e.name]} />
-                      {r.deployed[e.name] && (
-                        <span className="block text-[11.5px] whitespace-nowrap text-muted-foreground">
-                          {[
-                            r.deployed[e.name]?.commitSha.slice(0, 7),
-                            formatDate(r.deployed[e.name]?.updatedAt ?? ""),
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      )}
-                    </td>
-                  ))}
-                  <td className="max-w-[240px] py-2.5 pr-3">
-                    {r.domains.length > 0 ? (
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate font-mono text-xs">
-                          {r.domains[0]}
-                        </span>
-                        {r.domains.length > 1 && (
-                          <span
-                            className="shrink-0 rounded-full bg-muted px-1.5 font-mono text-[11px] text-muted-foreground"
-                            title={r.domains.slice(1).join(", ")}
-                          >
-                            +{r.domains.length - 1}
-                          </span>
-                        )}
-                      </span>
-                    ) : (
-                      <span className="text-[12.5px] text-muted-foreground">
-                        None
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2.5 pr-3">
-                    {r.uses.length > 0 ? (
-                      <span className="flex flex-wrap gap-1">
-                        {r.uses.map((u) => {
-                          const at = resourceOf(u)
-                          const badge = (
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "rounded-md font-normal",
-                                at && "hover:bg-muted"
-                              )}
-                            >
-                              {at ? at.binding.name : resourceLabel(u)}
-                            </Badge>
-                          )
-                          return at ? (
-                            <Link
-                              key={u}
-                              to="/projects/$id/catalog/$resource"
-                              params={{
-                                id: project.id,
-                                resource: at.binding.name,
-                              }}
-                              search={{ environment: at.environment.id }}
-                              title={`${resourceLabel(u)} in ${at.environment.name}`}
-                            >
-                              {badge}
-                            </Link>
-                          ) : (
-                            <span key={u}>{badge}</span>
-                          )
-                        })}
-                      </span>
-                    ) : (
-                      <span className="text-[12.5px] text-muted-foreground">
-                        Nothing
-                      </span>
-                    )}
-                  </td>
-                  <td className="pr-3">
-                    <Link
-                      to="/projects/$id/services/$service"
-                      params={{ id: project.id, service: r.service.name }}
-                      aria-label={`Open ${r.service.name}`}
-                      className="flex text-muted-foreground hover:text-foreground"
-                    >
-                      <ChevronRightIcon className="size-4" />
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {shown.length === 0 && (
-            <p className="px-4 py-4 text-[13px] text-muted-foreground">
-              {rows.length === 0
-                ? "No services found. The analysis found nothing it recognizes as something that runs."
-                : "No services match this filter."}
-            </p>
-          )}
-        </div>
-      )}
-
-      {filter !== "excluded" && excluded.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-xl border border-dashed px-3.5 py-2.5 text-[12.5px] text-muted-foreground">
-          <EyeOffIcon className="size-4" />
-          <span className="flex-1">
-            {excluded.length === 1
-              ? "1 excluded service is hidden here and in the graph."
-              : `${excluded.length} excluded services are hidden here and in the graph.`}
-          </span>
-          <Button size="sm" variant="outline" onClick={() => pick("excluded")}>
-            Show excluded
-          </Button>
-        </div>
-      )}
-
-      {filter === "excluded" && (
-        <div className="grid gap-2.5">
-          <div className="flex flex-wrap items-start gap-x-4 gap-y-2.5">
-            <p className="max-w-[760px] flex-1 text-[13px] leading-relaxed text-muted-foreground">
-              Excluded services stay out of the graph, the plans and every
-              deploy. Each analysis still finds them and keeps them excluded, on
-              every branch, so they stop coming back. A rule excludes everything
-              under a path, including services added later.
-            </p>
-            <span className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-              <SlidersHorizontalIcon className="size-3.5" />
-              Saved in project settings. Nothing changes in the repository.
-            </span>
-          </div>
-          <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
-            <table className="w-full min-w-[820px] text-[13px]">
-              <thead>
-                <tr className="border-b bg-muted/40 text-left text-[11.5px] font-medium tracking-wide text-muted-foreground uppercase">
-                  {mayEdit && <th className="w-10 py-2 pl-4" />}
-                  <th
-                    className={cn("py-2 pr-3 font-medium", !mayEdit && "pl-4")}
-                  >
-                    Service
-                  </th>
-                  <th className="py-2 pr-3 font-medium">Reason</th>
-                  <th className="py-2 pr-3 font-medium">Rule</th>
-                  <th className="py-2 pr-3 font-medium">Excluded</th>
-                  {mayEdit && <th className="w-32" />}
-                </tr>
-              </thead>
-              <tbody>
-                {shownExcluded.map((x) => {
-                  const rule = exclusionOf(x, project.exclusions ?? [])
+                  }
+                />
+                <Cell
+                  className={cn(
+                    "text-[12.5px]",
+                    !r.service.deployable && "text-muted-foreground"
+                  )}
+                >
+                  {kindLabel(r.service.kind)}
+                </Cell>
+                {environments.map((e) => {
+                  const b = r.deployed[e.name]
                   return (
-                    <tr key={x.service.id} className="border-b last:border-b-0">
-                      {mayEdit && (
-                        <td className="py-2.5 pl-4">
-                          <Checkbox
-                            aria-label={`Select ${x.service.name}`}
-                            checked={selected.has(x.service.id)}
-                            onCheckedChange={() => toggle(x.service.id)}
-                          />
-                        </td>
-                      )}
-                      <td
-                        className={cn(
-                          "max-w-[300px] py-2.5 pr-3",
-                          !mayEdit && "pl-4"
-                        )}
-                      >
-                        <span className="block font-medium text-muted-foreground">
-                          {x.service.name}
+                    <Cell key={e.id}>
+                      {bindings[e.name] === undefined && !bindingsFailed ? (
+                        <Skeleton className="h-5 w-20 rounded-full" />
+                      ) : (
+                        <span
+                          title={
+                            b
+                              ? [shortSHA(b.commitSha), formatDate(b.updatedAt)]
+                                  .filter(Boolean)
+                                  .join(" · ")
+                              : undefined
+                          }
+                        >
+                          <ServiceStatePill binding={b} short />
                         </span>
-                        <code className="block truncate font-mono text-[11.5px] text-muted-foreground">
-                          {locationOf(x.service)}
-                        </code>
-                      </td>
-                      <td className="py-2.5 pr-3">
-                        <Badge variant="secondary" className="font-normal">
-                          {reasonLabel(rule?.reason ?? "other")}
-                        </Badge>
-                      </td>
-                      <td className="py-2.5 pr-3">
-                        {x.rule.kind === "path" ? (
-                          <code className="font-mono text-xs">
-                            {x.rule.match}
-                          </code>
-                        ) : (
-                          <span className="text-[12.5px] text-muted-foreground">
-                            Only this service
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2.5 pr-3 text-[12.5px] text-muted-foreground">
-                        {rule ? formatDate(rule.createdAt) : ""}
-                        {rule?.keepRunning && " · left running"}
-                      </td>
-                      {mayEdit && (
-                        <td className="py-2.5 pr-4 text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={exclusions.pending}
-                            onClick={() => includeAgain([x])}
-                          >
-                            Include again
-                          </Button>
-                        </td>
                       )}
-                    </tr>
+                    </Cell>
                   )
                 })}
-              </tbody>
-            </table>
-            {shownExcluded.length === 0 && (
-              <p className="px-4 py-4 text-[13px] text-muted-foreground">
-                {excluded.length === 0
-                  ? "Nothing is excluded. Every service the analysis finds shows up in the graph and the plans."
-                  : "No excluded services match this filter."}
-              </p>
-            )}
-          </div>
-        </div>
+                <ActionsCell>
+                  <Link
+                    to="/projects/$id/services/$service"
+                    params={{ id: project.id, service: r.service.name }}
+                    aria-label={`Open ${r.service.name}`}
+                    className={buttonVariants({
+                      size: "sm",
+                      variant: "outline",
+                    })}
+                  >
+                    Open
+                  </Link>
+                </ActionsCell>
+              </CloudTableRow>
+            ))}
+          </CloudTable>
+        ))}
+
+      {filter === "excluded" && (
+        <>
+          <CloudCallout
+            tone="info"
+            icon={SlidersHorizontalIcon}
+            title="Saved in project settings. Nothing changes in the repository."
+          >
+            Excluded services stay out of the graph, the plans and every deploy.
+            Each analysis still finds them and keeps them excluded, on every
+            branch, so they stop coming back. A rule excludes everything under a
+            path, including services added later.
+          </CloudCallout>
+          {shownExcluded.length === 0 ? (
+            excluded.length === 0 ? (
+              <CloudEmpty
+                kind="list"
+                icon={EyeOffIcon}
+                title="No excluded services yet"
+              >
+                Every service the analysis finds shows up in the graph and the
+                plans.
+              </CloudEmpty>
+            ) : (
+              <CloudEmpty
+                kind="list"
+                icon={EyeOffIcon}
+                title={`No excluded services match "${q}"`}
+                action={clearFilter}
+              >
+                The filter checks names and paths.
+              </CloudEmpty>
+            )
+          ) : (
+            <CloudTable
+              head={[
+                ...(mayEdit ? [<span key="pick" />] : []),
+                "Service",
+                "Reason",
+                "Rule",
+                "If it runs",
+                "Excluded",
+                <span key="act" className="sr-only">
+                  Actions
+                </span>,
+              ]}
+              label="Excluded services"
+              columns={excludedColumns}
+              minWidth={860}
+              footer={
+                <span>
+                  {shownExcluded.length === excluded.length
+                    ? `Showing ${excluded.length} excluded ${excluded.length === 1 ? "service" : "services"}`
+                    : `${shownExcluded.length} of ${excluded.length} excluded services match`}
+                </span>
+              }
+            >
+              {shownExcluded.map((x) => {
+                const rule = exclusionOf(x, project.exclusions ?? [])
+                return (
+                  <CloudTableRow
+                    key={x.service.id}
+                    className={cn(selected.has(x.service.id) && "bg-primary/5")}
+                  >
+                    {mayEdit && (
+                      <Cell className="flex">
+                        <Checkbox
+                          aria-label={`Select ${x.service.name}`}
+                          checked={selected.has(x.service.id)}
+                          onCheckedChange={() => toggle(x.service.id)}
+                        />
+                      </Cell>
+                    )}
+                    <NameCell
+                      name={x.service.name}
+                      meta={
+                        <code className="font-mono text-[11.5px]">
+                          {locationOf(x.service)}
+                        </code>
+                      }
+                    />
+                    <Cell className="text-[12.5px]">
+                      {reasonLabel(rule?.reason ?? "other")}
+                    </Cell>
+                    <Cell>
+                      {x.rule.kind === "path" ? (
+                        <code className="font-mono text-xs break-all">
+                          {x.rule.match}
+                        </code>
+                      ) : (
+                        <span className="text-[12.5px] text-muted-foreground">
+                          Only this service
+                        </span>
+                      )}
+                    </Cell>
+                    <Cell className="text-[12.5px] text-muted-foreground">
+                      {rule?.keepRunning
+                        ? "Left running"
+                        : "Removed at next deploy"}
+                    </Cell>
+                    <Cell className="text-[12.5px] text-muted-foreground">
+                      {rule ? formatDate(rule.createdAt) : ""}
+                    </Cell>
+                    <ActionsCell>
+                      {mayEdit && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={exclusions.pending}
+                          onClick={() => includeAgain([x])}
+                        >
+                          Include again
+                        </Button>
+                      )}
+                    </ActionsCell>
+                  </CloudTableRow>
+                )
+              })}
+            </CloudTable>
+          )}
+        </>
       )}
 
       {excluding && (
@@ -656,7 +623,7 @@ function ServiceLink({
     <Link
       to="/projects/$id/services/$service"
       params={{ id: project.id, service: service.name }}
-      className="font-medium text-foreground underline-offset-4 hover:underline"
+      className="text-foreground underline-offset-2 hover:underline"
     >
       {service.name}
     </Link>

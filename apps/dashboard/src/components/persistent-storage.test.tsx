@@ -109,5 +109,5 @@ it("explains an empty inventory through the shared zero state", async () => {
   ).toBeInTheDocument()
   expect(
     screen.getByRole("link", { name: "Deploy a service" })
-  ).toHaveAttribute("href", "/services")
+  ).toHaveAttribute("href", "/services/catalog")
 })

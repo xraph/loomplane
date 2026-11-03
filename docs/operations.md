@@ -188,7 +188,9 @@ Open Notifications to read deployment results, change your deployment email pref
 
 Loomplane sends mail through Resend or SMTP. To use Resend, set `LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY` and `LOOMPLANE_NOTIFICATIONS_FROM`, with the sender on a domain verified in Resend. Set either the Resend key or an SMTP host, not both. Resend uses HTTPS, so it needs no SMTP port or TLS setting.
 
-With neither a Resend key nor an SMTP host, email is disabled. Invitations then show a manual link and explicitly report that email is disabled. To test delivery with Mailpit:
+With no Resend key, SMTP host or mail directory, email is disabled. Invitations then show a manual link and explicitly report that email is disabled.
+
+The quickest way to read local mail is `export LOOMPLANE_NOTIFICATIONS_MAIL_DIR=.forge/mail`: each email is written there as an `.eml` file, through Herald like any other provider, so it shows up in the console's message history too. Production refuses a mail directory. To test real SMTP delivery, use Mailpit:
 
 ```sh
 docker run --rm --name loomplane-mailpit \

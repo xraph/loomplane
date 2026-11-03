@@ -42,6 +42,7 @@ try {
     setupPending: config.setupPending,
     waitlist: config.waitlist,
     setupTokenRequired: config.setupTokenRequired,
+    requireEmailVerification: config.requireEmailVerification,
     consolePath: config.consolePath,
   })
   // Only a platform admin is told the console's path, and the console is its

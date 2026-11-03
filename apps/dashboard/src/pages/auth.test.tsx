@@ -21,11 +21,23 @@ vi.mock("@authsome/ui-components", () => ({
   SignInForm: ({ onSuccess }: { onSuccess?: () => void }) => (
     <button onClick={onSuccess}>Sign in</button>
   ),
-  SignUpForm: ({ onSuccess }: { onSuccess: () => void }) => (
+  SignUpForm: ({
+    onSuccess,
+    onVerificationRequired,
+  }: {
+    onSuccess: () => void
+    onVerificationRequired?: (email: string) => void
+  }) => (
     <form aria-label="Create account">
       <input type="password" aria-label="Password" />
       <button type="button" onClick={onSuccess}>
         Sign up
+      </button>
+      <button
+        type="button"
+        onClick={() => onVerificationRequired?.("ada@example.com")}
+      >
+        Sign up, verification needed
       </button>
     </form>
   ),
@@ -55,6 +67,19 @@ describe("AuthPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign up" }))
     expect(router.navigate).toHaveBeenCalledWith({
       to: "/sign-in",
+      replace: true,
+    })
+  })
+
+  // Sign-in would refuse the account until it enters the code it was sent.
+  it("goes to verify the email when sign-up needs it", async () => {
+    render(<AuthPage mode="sign-up" />)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Sign up, verification needed" })
+    )
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/verify-email",
+      search: { email: "ada@example.com" },
       replace: true,
     })
   })
