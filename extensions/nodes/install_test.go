@@ -41,7 +41,8 @@ func TestNodeShPinsIdentityLiterally(t *testing.T) {
 			t.Errorf("the script does not carry %q", want)
 		}
 	}
-	// Both ways of checking name them: cosign here, loomctl via its own pin.
+	// A release cut with workflow_dispatch is signed as main, so cosign
+	// must be offered that identity too.
 	if !strings.Contains(body, release.MainIdentity) {
 		t.Error("the script does not carry the identity of a release cut from main")
 	}

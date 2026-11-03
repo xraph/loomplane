@@ -9,8 +9,10 @@ import (
 
 // nodeSh serves the script that installs loomctl on a machine and joins it.
 // It needs no session: a new machine has nothing yet, and the script holds
-// only this instance's public URL and version, with the release identity it
-// must be signed by. The join token comes on the command line.
+// only this instance's public URL and version, the release identity it must
+// be signed by, and the archive checksums this instance verified against
+// that signature (none when it could not). The join token comes in
+// LOOMPLANE_JOIN_TOKEN, or --token.
 func (e *Extension) nodeSh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
