@@ -46,6 +46,9 @@ func TestHosts_ParseKeyRefusesUnregisteredHost(t *testing.T) {
 	if _, err := (repositories.Hosts{}).ParseKey(ctx, "org_a", "git.example.com/grp/api"); !errors.Is(err, repositories.ErrUnsupportedHost) {
 		t.Fatalf("nil Registry: %v", err)
 	}
+	if _, err := (repositories.Hosts{}).ParseKey(ctx, "org_a", "gitlab/team/api"); !errors.Is(err, repositories.ErrUnsupportedHost) {
+		t.Fatalf("a bare host name with nil Registry: %v", err)
+	}
 	if _, err := hosts.ParseKey(ctx, "org_a", "bitbucket.org/acme"); !errors.Is(err, repositories.ErrInvalidURL) {
 		t.Fatalf("a malformed key: %v", err)
 	}
@@ -71,5 +74,28 @@ func TestHosts_Parse(t *testing.T) {
 	}
 	if len(reg.asked) != 0 {
 		t.Fatalf("the registry was asked about a static host: %v", reg.asked)
+	}
+}
+
+// downRegistry fails every lookup.
+type downRegistry struct{ err error }
+
+func (d downRegistry) PathParser(context.Context, string, string) (repositories.PathParser, bool, error) {
+	return nil, false, d.err
+}
+
+func TestHosts_aRegistryErrorComesBackAsItself(t *testing.T) {
+	ctx := context.Background()
+	down := errors.New("registry down")
+	hosts := repositories.Hosts{Registry: downRegistry{err: down}}
+	if _, err := hosts.Parse(ctx, "org_a", "https://git.example.com/g/p"); !errors.Is(err, down) {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, err := hosts.ParseKey(ctx, "org_a", "git.example.com/g/p"); !errors.Is(err, down) {
+		t.Fatalf("ParseKey: %v", err)
+	}
+	// A static host never asks, so a registry that is down doesn't matter.
+	if _, err := hosts.Parse(ctx, "org_a", "bitbucket.org/acme/api"); err != nil {
+		t.Fatalf("a static host with the registry down: %v", err)
 	}
 }

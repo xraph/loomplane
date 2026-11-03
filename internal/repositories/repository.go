@@ -126,10 +126,11 @@ func ParseGitHubURL(raw string) (Repository, error) {
 	return r, nil
 }
 
-// ParseKey reads back a repository's Key. Exactly one slash with no dot in
-// the first segment is GitHub's owner/name. Anything else is
-// host/owner/.../name, and the host may carry a port. It doesn't check that
-// the host is one Loomplane reads: Hosts.ParseKey does.
+// ParseKey reads back a repository's Key. Two segments, the first with
+// neither a dot nor a colon, are GitHub's owner/name. Anything else is
+// host/owner/.../name with at least two segments after the host, and the
+// host may carry a port. It doesn't check that the host is one Loomplane
+// reads: Hosts.ParseKey does.
 func ParseKey(key string) (Repository, error) {
 	parts := strings.Split(key, "/")
 	for _, p := range parts {
@@ -137,15 +138,19 @@ func ParseKey(key string) (Repository, error) {
 			return Repository{}, ErrInvalidURL
 		}
 	}
-	if len(parts) == 2 && !strings.Contains(parts[0], ".") {
+	if len(parts) == 2 && !strings.ContainsAny(parts[0], ".:") {
 		return githubPath(HostGitHub, key)
 	}
 	host := strings.ToLower(parts[0])
-	if len(parts) < 3 || !strings.Contains(host, ".") {
+	if len(parts) < 3 {
 		return Repository{}, ErrInvalidURL
 	}
-	if host == githubDomain {
-		host = HostGitHub
+	if host == githubDomain || host == "www."+githubDomain {
+		// GitHub written with its host reads back bare, under GitHub's rules.
+		if len(parts) != 3 {
+			return Repository{}, ErrInvalidURL
+		}
+		return githubPath(HostGitHub, parts[1]+"/"+parts[2])
 	}
 	return Repository{
 		Host:  host,

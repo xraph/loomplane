@@ -75,7 +75,8 @@ func TestParseKey(t *testing.T) {
 		{"acme/api", repositories.Repository{Owner: "acme", Name: "api"}, nil},
 		{"bitbucket.org/acme/api", repositories.Repository{Host: "bitbucket.org", Owner: "acme", Name: "api"}, nil},
 		{"bitbucket.org/acme", repositories.Repository{}, repositories.ErrInvalidURL},
-		{"a/b/c", repositories.Repository{}, repositories.ErrInvalidURL},
+		{"gitlab:8443/api", repositories.Repository{}, repositories.ErrInvalidURL},
+		{"git.example.com/api", repositories.Repository{}, repositories.ErrInvalidURL},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -88,10 +89,13 @@ func TestParseKey(t *testing.T) {
 }
 
 func TestParseKey_roundTrips(t *testing.T) {
-	for _, k := range []string{"acme/api", "gitlab.com/grp/sub/api", "gitlab.example.com:8443/team/api", "bitbucket.org/w/r"} {
+	for _, k := range []string{"acme/api", "gitlab.com/grp/sub/api", "gitlab.example.com:8443/team/api", "bitbucket.org/w/r", "gitlab:8443/team/api", "gitlab/team/api"} {
 		r, err := repositories.ParseKey(k)
 		if err != nil || r.Key() != k {
 			t.Fatalf("ParseKey(%q) = %+v, %v; Key() = %q", k, r, err, r.Key())
+		}
+		if github := k == "acme/api"; github != (r.Host == "") {
+			t.Fatalf("ParseKey(%q) has host %q", k, r.Host)
 		}
 	}
 	// GitHub written with its host reads back bare.
@@ -141,5 +145,17 @@ func TestErrorsNameNoSingleHost(t *testing.T) {
 		if strings.Contains(err.Error(), "GitHub repository") || strings.Contains(err.Error(), "only GitHub") {
 			t.Fatalf("%q names a single host", err)
 		}
+	}
+}
+
+func TestParseKey_gitHubWrittenWithItsHost(t *testing.T) {
+	for _, k := range []string{"github.com/a/b/c", "github.com/a", "www.github.com/-bad/api"} {
+		if _, err := repositories.ParseKey(k); !errors.Is(err, repositories.ErrInvalidURL) {
+			t.Fatalf("ParseKey(%q): %v", k, err)
+		}
+	}
+	r, err := repositories.ParseKey("www.github.com/acme/api")
+	if err != nil || r.Host != "" || r.Key() != "acme/api" {
+		t.Fatalf("ParseKey(www.github.com/acme/api) = %+v, %v", r, err)
 	}
 }
