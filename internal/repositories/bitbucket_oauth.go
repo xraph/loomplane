@@ -100,10 +100,9 @@ type BitbucketOAuth struct {
 	webURL       string
 	apiURL       string
 
-	// HTTP makes every call. The token endpoint's calls go through a copy
-	// that never follows a redirect.
-	HTTP *http.Client
 	// api shares the public reader's request code and its status mapping.
+	// Its HTTP client makes every call: reads use it as it is, and the token
+	// endpoint and webhook calls use a copy that never follows a redirect.
 	api *Bitbucket
 }
 
@@ -116,7 +115,6 @@ func NewBitbucketOAuth(cfg config.BitbucketConfig) *BitbucketOAuth {
 		clientSecret: cfg.ClientSecret,
 		webURL:       api.WebURL,
 		apiURL:       api.APIURL,
-		HTTP:         api.HTTP,
 		api:          api,
 	}
 }
@@ -212,13 +210,13 @@ func (o *BitbucketOAuth) token(ctx context.Context, form url.Values, keep string
 	}, nil
 }
 
-// tokenClient is HTTP with redirects turned off. Go resends a POST's body
-// on a 307 or 308, and the body holds the code or the refresh token, so
-// the token endpoint's answer is taken as it comes.
+// tokenClient is the API's HTTP client with redirects turned off. Go
+// resends a POST's body on a 307 or 308, and the body holds the code or the
+// refresh token, so the token endpoint's answer is taken as it comes.
 func (o *BitbucketOAuth) tokenClient() *http.Client {
 	c := http.Client{}
-	if o.HTTP != nil {
-		c = *o.HTTP
+	if o.api.HTTP != nil {
+		c = *o.api.HTTP
 	}
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &c
