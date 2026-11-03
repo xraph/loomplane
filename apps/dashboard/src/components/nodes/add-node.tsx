@@ -80,6 +80,7 @@ function Panel({ onClose }: { onClose: () => void }) {
   const create = useMutation(useNodeJoinTokensCreate)
   const [cloud, setCloud] = useState(NO_CLOUD)
   const [labelsText, setLabelsText] = useState("")
+  const [builder, setBuilder] = useState(false)
   const [endpoints, setEndpoints] = useState<string[]>(["docker", "probe"])
   const [minted, setMinted] = useState<Minted>()
   const [error, setError] = useState("")
@@ -107,12 +108,16 @@ function Panel({ onClose }: { onClose: () => void }) {
     setError("")
     try {
       const before = new Set(nodes.data.nodes.map((n) => n.id))
+      // A dedicated builder is a label the token carries, the same one
+      // `loomctl node join --builder dedicated` sets.
+      const labels = {
+        ...parsed.labels,
+        ...(builder && { build_workers: "dedicated" }),
+      }
       const token = (await create.mutateAsync({
         body: {
           ...(cloud !== NO_CLOUD && { cloudId: cloud }),
-          ...(Object.keys(parsed.labels).length > 0 && {
-            labels: parsed.labels,
-          }),
+          ...(Object.keys(labels).length > 0 && { labels }),
           endpoints,
         },
       })) as JoinToken
@@ -125,6 +130,7 @@ function Panel({ onClose }: { onClose: () => void }) {
           Object.entries(parsed.labels)
             .map(([k, v]) => `${k}=${v}`)
             .join(", "),
+          builder ? "Dedicated builder" : "",
           endpoints.join(", "),
         ]
           .filter(Boolean)
@@ -140,6 +146,7 @@ function Panel({ onClose }: { onClose: () => void }) {
   const reset = () => {
     setMinted(undefined)
     setLabelsText("")
+    setBuilder(false)
     setCloud(NO_CLOUD)
     setEndpoints(["docker", "probe"])
     setError("")
@@ -196,8 +203,9 @@ function Panel({ onClose }: { onClose: () => void }) {
               </SelectContent>
             </Select>
             <span className="text-xs text-muted-foreground">
-              Recorded now. The node joins the Cloud once deploying to nodes
-              arrives.
+              The node&apos;s Docker joins this Cloud as a server once the node
+              connects. If it needs a look first, it waits on the Cloud&apos;s
+              Changes tab for you to adopt it.
             </span>
           </div>
           <div className="grid gap-1.5">
@@ -213,6 +221,22 @@ function Panel({ onClose }: { onClose: () => void }) {
               className="font-mono"
             />
           </div>
+          <label className="flex items-start gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={builder}
+              disabled={locked}
+              onChange={(e) => setBuilder(e.target.checked)}
+              className="mt-0.5 size-4 accent-[var(--primary)]"
+            />
+            <span>
+              <span className="font-medium">Dedicated builder</span>{" "}
+              <span className="text-muted-foreground">
+                (this machine only builds, so untrusted source never builds
+                beside your services)
+              </span>
+            </span>
+          </label>
           <fieldset className="grid gap-2" disabled={locked}>
             <legend className="mb-1 text-[13px] font-medium">
               What Loomplane may use

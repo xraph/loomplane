@@ -42,6 +42,7 @@ import type {
   Operation,
   DrainReview,
   Connection,
+  Node,
   Provider,
   ServerUsage,
   ServerImage,
@@ -65,6 +66,9 @@ import { formatDate, relative } from "@/lib/format"
 import { useNow } from "@/lib/use-runs"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
+import { NodeStatus } from "@/components/nodes/node-status"
+import { Badge } from "@/components/ui/badge"
+import { nodeIdOf } from "@/lib/nodes"
 import { useOrganization } from "@/lib/organization"
 import {
   acceleratorLabel,
@@ -131,6 +135,9 @@ export function Servers({
   )
 }
 
+/** NodeVia is the node a server runs on, once that node has loaded. */
+export type NodeVia = { id: string; node?: Node }
+
 /** A server action that opens the details dialog and starts there. */
 type ServerAction = "check" | "preview"
 
@@ -154,6 +161,9 @@ function ServerContent({
   const connections = useQuery(api.useConnectionsList)
   const providers = useQuery(api.useProvidersList)
   const pools = useQuery(api.useCloudPoolsList, { path: { cloudId: cloud.id } })
+  // A node server's state is its node's. Someone who can't read nodes still
+  // sees the server, just without the node's own words.
+  const nodes = useQuery(api.useNodesList)
   const [editing, setEditing] = useState<{
     kind: string
     server?: Server
@@ -172,6 +182,17 @@ function ServerContent({
   const create = accounts.some(
     (c) => c.status === "ready" && supports(capabilities, c, "server:provision")
   )
+  const nodeOf = (server: Server): NodeVia | undefined => {
+    const id = nodeIdOf(
+      accounts.find(
+        (c) =>
+          c.id === server.connectionId || c.id === server.runtimeConnectionId
+      )
+    )
+    return id
+      ? { id, node: nodes.data?.nodes.find((n) => n.id === id) }
+      : undefined
+  }
   const poolOf = (serverId: string) =>
     pools.data?.pools.find((p) =>
       p?.members.some((m) => m.serverId === serverId)
@@ -248,6 +269,7 @@ function ServerContent({
                     key={server.id}
                     cloudId={cloud.id}
                     server={server}
+                    via={nodeOf(server)}
                     pool={poolOf(server.id)}
                     canResize={
                       server.ownership === "managed" &&
@@ -285,6 +307,7 @@ function ServerContent({
           server={
             list.find((s) => s.id === selected.server.id) ?? selected.server
           }
+          via={nodeOf(selected.server)}
           action={selected.action}
           capabilities={capabilities}
           connections={accounts}
@@ -335,6 +358,16 @@ function Capacity({
   services?: boolean
 }) {
   const total = server.health.effectiveCpuMillis
+  // A checked host that reports no capacity, such as one on cgroup v1, is
+  // unknown, not empty.
+  if (
+    total === 0 &&
+    server.health.effectiveMemoryBytes === 0 &&
+    server.health.checkedAt
+  )
+    return (
+      <span className="text-xs text-muted-foreground">Capacity unknown</span>
+    )
   const reserved = usage?.reservedCpuMillis ?? 0
   const share = total > 0 ? Math.min(100, (reserved / total) * 100) : 0
   return (
@@ -391,11 +424,16 @@ function GpuSummary({ server }: { server: Server }) {
   )
 }
 /** ownedBy says who runs a server, never its raw ownership key. */
-const ownedBy = (server: Server) =>
-  server.ownership === "managed" ? "Created by Loomplane" : "Connected over SSH"
+const ownedBy = (server: Server, via?: NodeVia) =>
+  server.ownership === "managed"
+    ? "Created by Loomplane"
+    : via
+      ? "Connected by its owner"
+      : "Connected over SSH"
 function ServerRow({
   cloudId,
   server,
+  via,
   pool,
   canResize,
   canRemove,
@@ -404,6 +442,7 @@ function ServerRow({
 }: {
   cloudId: string
   server: Server
+  via?: NodeVia
   pool?: string
   canResize: boolean
   canRemove: boolean
@@ -443,7 +482,7 @@ function ServerRow({
               .join(" · ")}
           </span>
           <span className="truncate text-xs text-muted-foreground">
-            {ownedBy(server)} ·{" "}
+            {ownedBy(server, via)} ·{" "}
             {server.health.checkedAt
               ? `checked ${relative(Date.parse(server.health.checkedAt), now)}`
               : "never checked"}
@@ -461,7 +500,12 @@ function ServerRow({
       </Cell>
       <Cell>
         <span className="flex flex-wrap gap-1">
-          <StatePill status={server.draining ? "draining" : server.status} />
+          {via && <Badge variant="secondary">Node</Badge>}
+          {via?.node && ["offline", "revoked"].includes(via.node.status) ? (
+            <NodeStatus node={via.node} />
+          ) : (
+            <StatePill status={server.draining ? "draining" : server.status} />
+          )}
           {problem && (
             <span title={problem}>
               <StatusPill tone="waiting">No GPU runtime</StatusPill>
@@ -512,10 +556,11 @@ function ServerRow({
     </CloudTableRow>
   )
 }
-function ServerEditor({
+export function ServerEditor({
   cloud,
   kind,
   server,
+  initial,
   connections,
   providers,
   onClose,
@@ -524,6 +569,8 @@ function ServerEditor({
   cloud: Profile
   kind: string
   server?: Server
+  /** Fields to start the review with, such as the node being adopted. */
+  initial?: Partial<ServerInputBody>
   connections: Connection[]
   providers: Provider[]
   onClose: () => void
@@ -534,6 +581,7 @@ function ServerEditor({
   const [input, setInput] = useState<ServerInputBody>({
     kind,
     cloudRevision: cloud.revision,
+    ...initial,
     ...(server
       ? {
           serverId: server.id,
@@ -716,8 +764,10 @@ function ServerEditor({
                     checked={input.confirmAdoption ?? false}
                     onCheckedChange={(e) => update({ confirmAdoption: e })}
                   />
-                  Confirm pinned SSH access and Docker installation on this
-                  existing server
+                  {connections.find((c) => c.id === input.connectionId)
+                    ?.method === "node"
+                    ? "Confirm Docker on this node's machine as a server of this Cloud"
+                    : "Confirm pinned SSH access and Docker installation on this existing server"}
                 </FieldLabel>
               </FormField>
             )}
@@ -1005,6 +1055,7 @@ function estimatedCost(o: Operation) {
 function ServerDetails({
   cloud,
   server,
+  via,
   action,
   capabilities,
   connections,
@@ -1015,6 +1066,7 @@ function ServerDetails({
 }: {
   cloud: Profile
   server: Server
+  via?: NodeVia
   /** An action a row's menu started, run once when the dialog opens. */
   action?: ServerAction
   capabilities: Provider[]
@@ -1072,10 +1124,28 @@ function ServerDetails({
         <DialogHeader>
           <DialogTitle>{server.name}</DialogTitle>
           <DialogDescription>
-            {ownedBy(server)} · {statusWord(server.status)}. What runs on this
-            server and what it has reserved.
+            {ownedBy(server, via)} · {statusWord(server.status)}. What runs on
+            this server and what it has reserved.
           </DialogDescription>
         </DialogHeader>
+        {via && (
+          <p className="text-[13px]">
+            Runs on the node{" "}
+            <Link
+              to="/nodes/$id"
+              params={{ id: via.id }}
+              className="font-medium underline underline-offset-2"
+            >
+              {via.node?.name ?? via.id}
+            </Link>
+            {via.node && (
+              <>
+                {" "}
+                <NodeStatus node={via.node} />
+              </>
+            )}
+          </p>
+        )}
         {gpuCount(server) > 0 && (
           <div className="grid gap-2 text-[13px]">
             <p>
