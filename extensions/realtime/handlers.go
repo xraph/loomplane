@@ -166,6 +166,9 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			grants[key] = allowed
 		}
 		if allowed && strings.HasPrefix(event.Type, "agent_request.") {
+			// The same rule as reading the request: project:read on its
+			// project, or for a project-less one, the person asked, the
+			// routed team or an AI admin.
 			addressed, err := e.agentRequestReaches(ctx, p, event, grants)
 			if err != nil {
 				return nil, err
@@ -212,11 +215,25 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 	return out, nil
 }
 
-// agentRequestReaches says whether a request event reaches p: the person it
-// asks does, so do the current members of the team it was routed to, and
-// so does anyone who manages the workspace's AI. A payload whose fields
+// agentRequestReaches says whether a request event reaches p, by the rule
+// the request's GET uses. A project's request reaches anyone who may read
+// the project, and nobody else. A project-less one reaches the person it
+// asks, the current members of the team it was routed to, and anyone who
+// manages the workspace's AI. A payload whose fields
 // can't be read reaches only managers.
 func (e *Extension) agentRequestReaches(ctx context.Context, p security.Principal, event store.Event, grants map[string]bool) (bool, error) {
+	if event.ProjectID != "" {
+		key := security.ProjectRead.Name() + ":" + event.ProjectID
+		if allowed, checked := grants[key]; checked {
+			return allowed, nil
+		}
+		err := e.authz.Require(ctx, p, security.ProjectRead, event.ProjectID)
+		if err != nil && !errors.Is(err, security.ErrForbidden) {
+			return false, err
+		}
+		grants[key] = err == nil
+		return err == nil, nil
+	}
 	var ref struct {
 		AskedFor string `json:"asked_for"`
 		TeamID   string `json:"team_id"`

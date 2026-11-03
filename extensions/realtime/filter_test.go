@@ -370,3 +370,26 @@ func TestAgentRequestEventsReachTheRoutedTeam(t *testing.T) {
 		t.Fatalf("no lookup: %+v %v", got, err)
 	}
 }
+
+// A project request's event goes to whoever may read the request: anyone
+// with project:read there, as the GET checks, and nobody without it,
+// whether they were asked or are in the routed team. A project-less one
+// keeps the asker, team and AI-admin rule.
+func TestProjectRequestEventsFollowProjectRead(t *testing.T) {
+	book := &teamBook{members: map[string]bool{"org_a/team_pay/usr_a": true}}
+	project := func(data string) []store.Event {
+		return []store.Event{{OrgID: "org_a", ProjectID: "proj_a", Type: "agent_request.updated", EntityID: "areq_1", Data: json.RawMessage(data)}}
+	}
+	// A viewer of the project who wasn't asked and isn't in the team gets it.
+	e := &Extension{authz: permissionFixture{denied: security.AIManage}, teams: book}
+	got, err := e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_v"}, Subscription{}, project(`{"id":"areq_1","project_id":"proj_a","team_id":"team_pay","asked_for":"usr_x"}`))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("a project reader missed the event: %+v %v", got, err)
+	}
+	// A team member who can't read the project doesn't.
+	e = &Extension{authz: permissionFixture{denied: security.ProjectRead}, teams: book}
+	got, err = e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_a"}, Subscription{}, project(`{"id":"areq_1","project_id":"proj_a","team_id":"team_pay","asked_for":"usr_a"}`))
+	if err != nil || len(got) != 0 {
+		t.Fatalf("someone who can't read the project got its request: %+v %v", got, err)
+	}
+}
