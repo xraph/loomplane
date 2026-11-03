@@ -374,6 +374,11 @@ func (v IngressConfig) issuer(challenges map[string]any) map[string]any {
 	if v.ACMEDir != "" {
 		issuer["ca"] = v.ACMEDir
 		issuer["trusted_roots_pem_files"] = v.ACMERoots
+	} else if a := configuredACMEIssuer(); a != nil {
+		issuer["ca"] = a.Directory
+		if len(a.Roots) > 0 {
+			issuer["trusted_roots_pem_files"] = []string{"/config/" + ingressACMERoots}
+		}
 	}
 	return issuer
 }

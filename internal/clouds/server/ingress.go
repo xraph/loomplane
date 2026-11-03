@@ -204,6 +204,13 @@ func ApplyIngress(ctx context.Context, c *Client, expected *IngressSnapshot, v I
 	if err != nil {
 		return nil, err
 	}
+	// The config names the issuer's roots by their path in /config, so they
+	// are in place before Caddy loads it.
+	if a := configuredACMEIssuer(); a != nil && len(a.Roots) > 0 && v.ACMEDir == "" {
+		if fileErr := ingressFile(ctx, c, container.ID, ingressACMERoots, a.Roots); fileErr != nil {
+			return nil, fileErr
+		}
+	}
 	out, err := ingressAdmin(ctx, c, container.ID, "apply", expected.ETag, raw)
 	if err != nil {
 		return nil, err

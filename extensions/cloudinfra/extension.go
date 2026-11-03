@@ -4,6 +4,7 @@ package cloudinfra
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -105,6 +106,16 @@ func (e *Extension) Register(app forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	pg := pgdriver.Unwrap(db)
+	// Server proxies order certificates from the configured directory too.
+	issuer := server.ACMEIssuer{Directory: e.cfg.Clouds.ACMEDirectory}
+	if e.cfg.Clouds.ACMERootsFile != "" {
+		if issuer.Roots, err = os.ReadFile(e.cfg.Clouds.ACMERootsFile); err != nil {
+			return fmt.Errorf("read clouds.acme_roots_file: %w", err)
+		}
+	}
+	if err = server.SetACMEIssuer(issuer); err != nil {
+		return fmt.Errorf("clouds.acme_directory: %w", err)
+	}
 	endpoint := e.cfg.Clouds.EnrollmentURL
 	if endpoint == "" {
 		endpoint = e.cfg.PublicURL
