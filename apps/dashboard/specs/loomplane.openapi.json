@@ -14459,6 +14459,25 @@
       }
     },
     "/api/v1/nodes/join-tokens": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "The join tokens no machine has used yet: who made them, with which key, for what, and when they expire",
+        "operationId": "nodeJoinTokens.list",
+        "responses": {
+          "200": {
+            "description": "JoinTokenList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinTokenList"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Nodes"
@@ -14486,6 +14505,31 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/join-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Cancel a join token no machine has used, so none can",
+        "operationId": "nodeJoinTokens.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -34278,6 +34322,7 @@
         "required": [
           "token",
           "public_key",
+          "signature",
           "inventory",
           "node_version",
           "protocol_version"
@@ -34364,6 +34409,9 @@
             "type": "integer"
           },
           "public_key": {
+            "type": "string"
+          },
+          "signature": {
             "type": "string"
           },
           "token": {
@@ -34464,6 +34512,73 @@
             "additionalProperties": true
           },
           "name": {
+            "type": "string"
+          }
+        }
+      },
+      "JoinTokenList": {
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingNodeJoinToken"
+            }
+          }
+        }
+      },
+      "PendingNodeJoinToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "hint",
+          "minted_by",
+          "endpoints",
+          "edge",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edge": {
+            "type": "boolean"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "minted_by": {
+            "type": "string"
+          },
+          "minted_by_key_id": {
             "type": "string"
           }
         }

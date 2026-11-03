@@ -2663,6 +2663,10 @@ export interface JoinToken {
   token: string;
 }
 
+export interface JoinTokenList {
+  tokens: PendingNodeJoinToken[];
+}
+
 export interface JoinTokenRequestBody {
   cloudId?: string;
   edge?: boolean;
@@ -3268,6 +3272,7 @@ export interface NodeJoinBody {
   nodeVersion: string;
   protocolVersion: number;
   publicKey: string;
+  signature: string;
   token: string;
 }
 
@@ -3497,6 +3502,20 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PendingNodeJoinToken {
+  cloudId?: string;
+  createdAt: string;
+  edge: boolean;
+  edgeScope?: string;
+  endpoints: string[];
+  expiresAt: string;
+  hint: string;
+  id: string;
+  labels?: Record<string, any>;
+  mintedBy: string;
+  mintedByKeyId?: string;
 }
 
 export interface PinStatus {

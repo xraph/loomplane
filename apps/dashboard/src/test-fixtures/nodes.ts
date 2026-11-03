@@ -54,6 +54,8 @@ export function serve(state: {
   token?: { token: string; expires_at: string; command: string }
   keys?: unknown[]
   revokeKey?: unknown
+  /** The unused join tokens, in the API's snake_case. */
+  pending?: Record<string, unknown>[]
 }) {
   const calls: { method: string; url: string; body?: unknown }[] = []
   vi.stubGlobal(
@@ -66,6 +68,15 @@ export function serve(state: {
       const path = new URL(url, "http://localhost").pathname
       if (path === "/api/v1/nodes" && method === "GET")
         return json({ nodes: state.nodes })
+      if (path === "/api/v1/nodes/join-tokens" && method === "GET")
+        return json({ tokens: state.pending ?? [] })
+      const cancelled = path.match(/^\/api\/v1\/nodes\/join-tokens\/([^/]+)$/)
+      if (cancelled && method === "DELETE") {
+        state.pending = (state.pending ?? []).filter(
+          (t) => t.id !== cancelled[1]
+        )
+        return new Response(null, { status: 204 })
+      }
       const one = path.match(/^\/api\/v1\/nodes\/([^/]+)$/)
       if (one && method === "GET") {
         const n = state.nodes.find((x) => x.id === one[1])
