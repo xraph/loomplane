@@ -38,9 +38,9 @@ func IngestDocsJob(s *Service) *job.Definition[struct{}] {
 	}, DocsJobOptions()...)
 }
 
-// RecoverJob fails documents whose ingest went quiet (Recover). It does
-// nothing while knowledge is unavailable, so a schedule left from a boot
-// that had it costs nothing.
+// RecoverJob fails documents whose ingest went quiet, and indexes the docs
+// again when it failed any (Recover). It does nothing while knowledge is
+// unavailable, so a schedule left from a boot that had it costs nothing.
 func RecoverJob(s *Service) *job.Definition[struct{}] {
 	return job.NewDefinition(JobRecover, func(ctx context.Context, _ struct{}) error {
 		return s.Recover(ctx)

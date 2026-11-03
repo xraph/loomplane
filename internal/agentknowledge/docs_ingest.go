@@ -2,6 +2,7 @@ package agentknowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -27,7 +28,8 @@ const (
 // collection, under DocsTenant and billed to the system tenant, then
 // deletes every page the bundle no longer has. A page whose content is
 // unchanged is not embedded again, so a reboot of the same release embeds
-// nothing. It does nothing while knowledge is unavailable.
+// nothing. A page another run is still on counts in no field of the
+// result. It does nothing while knowledge is unavailable.
 //
 // An embedding model that returns vectors of another size turns knowledge
 // off with the reason, and the error is returned.
@@ -72,24 +74,41 @@ func (s *Service) ingestDocs(ctx context.Context) (DocsResult, error) {
 	if len(s.d.Schema) > 0 {
 		inputs = append(inputs, schemaInput(col.ID, s.d.Schema))
 	}
+	// A page that fails doesn't stop the others, nor the pruning of pages
+	// the bundle dropped. The errors come back joined, so the job retries.
+	var errs []error
+	pending := 0
 	keep := make(map[string]bool, len(inputs))
 	for _, in := range inputs {
 		keep[in.SourceKey] = true
 		out, ierr := s.ingest(ctx, eng, in)
 		if ierr != nil {
-			return res, fmt.Errorf("agentknowledge: index %s: %w", in.SourceKey, ierr)
+			errs = append(errs, fmt.Errorf("agentknowledge: index %s: %w", in.SourceKey, ierr))
+			if !s.Status().Available {
+				// Vectors of the wrong size: every other page would cost
+				// an embed to fail the same way.
+				return res, errors.Join(errs...)
+			}
+			continue
 		}
 		switch out {
 		case OutcomeIndexed:
 			res.Indexed++
 		case OutcomeUnchanged:
 			res.Unchanged++
+		case OutcomePending:
+			pending++
 		}
+	}
+	if pending > 0 {
+		s.warn("agentknowledge: some docs pages are still being indexed by another run; recovery indexes them if that run died",
+			fmt.Errorf("%d pages pending", pending))
 	}
 
 	docs, err := eng.ListDocuments(ctx, &document.ListFilter{CollectionID: col.ID})
 	if err != nil {
-		return res, fmt.Errorf("agentknowledge: list the docs: %w", err)
+		errs = append(errs, fmt.Errorf("agentknowledge: list the docs: %w", err))
+		return res, errors.Join(errs...)
 	}
 	for _, d := range docs {
 		key := d.SourceKey
@@ -98,11 +117,12 @@ func (s *Service) ingestDocs(ctx context.Context) (DocsResult, error) {
 		}
 		keep[key] = true // a source with several versions goes once
 		if derr := eng.DeleteBySource(ctx, col.ID, key); derr != nil {
-			return res, fmt.Errorf("agentknowledge: remove %s: %w", key, derr)
+			errs = append(errs, fmt.Errorf("agentknowledge: remove %s: %w", key, derr))
+			continue
 		}
 		res.Removed++
 	}
-	return res, nil
+	return res, errors.Join(errs...)
 }
 
 // pageInput is a docs page as weave ingests it.

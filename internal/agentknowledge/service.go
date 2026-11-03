@@ -50,15 +50,16 @@ const (
 const SystemOrg = "system"
 
 // stalledAfter is how long an ingest may go quiet before Recover fails
-// its document.
+// its document, unless Deps.StalledAfter says otherwise.
 const stalledAfter = 15 * time.Minute
 
 // reasonDimensionMismatch is why knowledge turns off when the embedding
 // model returns vectors of another size than configured.
 const reasonDimensionMismatch = "The embedding model (ai.knowledge.embedding_model %s) returned vectors of a different size than ai.knowledge.dimensions (%d)."
 
-// ErrInvalid is a document Ingest or Remove can't take: no source key, or
-// a kind that isn't a report or a runbook.
+// ErrInvalid is a document Ingest or Remove can't take: no workspace (or
+// the docs' tenant), no source key, or a kind that isn't a report or a
+// runbook.
 var ErrInvalid = errors.New("invalid knowledge document")
 
 // Document is one of a workspace's own documents, for its agent to search.
@@ -86,6 +87,11 @@ const (
 	OutcomeUnchanged Outcome = "unchanged"
 	// OutcomeSkipped: knowledge is off for the server or the workspace.
 	OutcomeSkipped Outcome = "skipped"
+	// OutcomePending: another ingest of the same content is still on it.
+	// Nothing is indexed yet. If that ingest died, Recover fails its
+	// document once it has been quiet for the stall window, and the
+	// content can be ingested again.
+	OutcomePending Outcome = "pending"
 )
 
 // DocsResult counts what IngestDocs did.
@@ -131,7 +137,10 @@ type Deps struct {
 	// Schema is the manifest's JSON Schema (manifest.Schema), indexed as
 	// source "schema/loomplane.json".
 	Schema []byte
-	Warn   func(msg string, err error)
+	// StalledAfter is how long an ingest may go quiet before Recover fails
+	// its document. 0 is 15 minutes, weave's own default.
+	StalledAfter time.Duration
+	Warn         func(msg string, err error)
 }
 
 // Service indexes Loomplane's docs for every workspace and each
@@ -183,6 +192,9 @@ func (s *Service) engine() Engine {
 // server or the workspace, and refused once the workspace has spent its
 // budget.
 func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome, error) {
+	if err := checkWorkspace(orgID); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(d.SourceKey) == "" {
 		return "", fmt.Errorf("%w: it has no source key", ErrInvalid)
 	}
@@ -217,6 +229,9 @@ func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome
 // yet has nothing to remove. It is skipped while knowledge is off for the
 // server or the workspace.
 func (s *Service) Remove(ctx context.Context, orgID, sourceKey string) error {
+	if err := checkWorkspace(orgID); err != nil {
+		return err
+	}
 	if strings.TrimSpace(sourceKey) == "" {
 		return fmt.Errorf("%w: it has no source key", ErrInvalid)
 	}
@@ -241,13 +256,36 @@ func (s *Service) Remove(ctx context.Context, orgID, sourceKey string) error {
 // Recover fails the documents whose ingest went quiet for 15 minutes, in
 // every tenant, so their source can be indexed again. It does nothing
 // while knowledge is unavailable.
+//
+// A failed document may be a docs page whose run died with it: the next
+// run, started within the stall window, found the page still processing
+// and left it. So when the sweep failed anything, Recover indexes the docs
+// again. Every page that is ready answers Unchanged before any embed, so
+// only the pages that aren't are embedded.
 func (s *Service) Recover(ctx context.Context) error {
 	eng := s.engine()
 	if eng == nil {
 		return nil
 	}
-	_, err := eng.RecoverStalled(ctx, stalledAfter)
+	after := s.d.StalledAfter
+	if after <= 0 {
+		after = stalledAfter
+	}
+	res, err := eng.RecoverStalled(ctx, after)
+	if err != nil || res.Failed == 0 {
+		return err
+	}
+	_, err = s.IngestDocs(ctx)
 	return err
+}
+
+// checkWorkspace refuses an org ID that can't be a workspace's: none, or
+// the docs' own tenant, so no workspace path ever writes the docs.
+func checkWorkspace(orgID string) error {
+	if strings.TrimSpace(orgID) == "" || orgID == DocsTenant {
+		return fmt.Errorf("%w: %q isn't a workspace", ErrInvalid, orgID)
+	}
+	return nil
 }
 
 // workspaceEngine is weave's engine when knowledge is on for the server
@@ -321,9 +359,11 @@ func (s *Service) ingest(ctx context.Context, eng Engine, in *weaveengine.Ingest
 		return "", err
 	case res != nil && res.Unchanged:
 		return OutcomeUnchanged, nil
+	case res != nil && res.State != document.StateReady:
+		// Another ingest of the same content is still on it, or was until
+		// its process died. Not done: Recover sees to the second case.
+		return OutcomePending, nil
 	}
-	// Indexed, or another ingest of the same content is still on it and
-	// finishes it.
 	return OutcomeIndexed, nil
 }
 

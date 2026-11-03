@@ -2,6 +2,7 @@ package agentknowledge_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,8 +70,9 @@ func (e *countingEmbedder) count() int {
 // spyEngine counts the calls that reach weave.
 type spyEngine struct {
 	agentknowledge.Engine
-	mu    sync.Mutex
-	calls int
+	mu      sync.Mutex
+	calls   int
+	failKey string // Ingest of this source key fails
 }
 
 func (s *spyEngine) touch() {
@@ -91,6 +93,9 @@ func (s *spyEngine) GetCollectionByName(ctx context.Context, name string) (*coll
 
 func (s *spyEngine) Ingest(ctx context.Context, in *weaveengine.IngestInput) (*weaveengine.IngestResult, error) {
 	s.touch()
+	if in.SourceKey == s.failKey {
+		return nil, errors.New("the provider refused it")
+	}
 	return s.Engine.Ingest(ctx, in)
 }
 
@@ -188,12 +193,20 @@ const dims = 8
 
 func newFixture(t *testing.T, out int) *fixture {
 	t.Helper()
+	return newStallFixture(t, out, 0)
+}
+
+// newStallFixture is newFixture with weave and Recover counting an ingest
+// stalled after stall (0: weave's default).
+func newStallFixture(t *testing.T, out int, stall time.Duration) *fixture {
+	t.Helper()
 	f := &fixture{emb: &countingEmbedder{dims: dims, out: out}, settings: &fakeSettings{}, bundle: threePages()}
 	eng, err := weaveengine.New(
 		weaveengine.WithStore(memstore.New()),
 		weaveengine.WithVectorStore(vecmemory.New()),
 		weaveengine.WithEmbedder(f.emb),
 		weaveengine.WithChunker(chunker.NewRecursiveChunker()),
+		weaveengine.WithRecovery(weaveengine.RecoveryConfig{StalledAfter: stall}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -212,9 +225,10 @@ func newFixture(t *testing.T, out int) *fixture {
 			f.locks = append(f.locks, name)
 			return fn(ctx)
 		},
-		Docs:   func() (agentknowledge.Bundle, error) { return f.bundle, nil },
-		Schema: []byte(`{"$id": "https://loomplane.dev/schemas/loomplane.json", "type": "object"}`),
-		Warn:   func(string, error) {},
+		Docs:         func() (agentknowledge.Bundle, error) { return f.bundle, nil },
+		Schema:       []byte(`{"$id": "https://loomplane.dev/schemas/loomplane.json", "type": "object"}`),
+		StalledAfter: stall,
+		Warn:         func(string, error) {},
 	})
 	f.svc.SetStatus(agentsettings.KnowledgeStatus{Configured: true, Available: true})
 	return f
@@ -594,5 +608,122 @@ func TestJobs(t *testing.T) {
 	}
 	if err := recoverJob.Handler(context.Background(), struct{}{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A run that dies mid-page leaves the page processing. A run started
+// within the stall window finds it so and leaves it, without counting it
+// indexed; once the page has gone quiet, recovery fails it and indexes the
+// docs again, embedding that page and nothing else.
+func TestCrashedPageIsIndexedAfterRecovery(t *testing.T) {
+	const stall = 500 * time.Millisecond
+	f := newStallFixture(t, dims, stall)
+	ctx := context.Background()
+	full := f.bundle
+	f.bundle = agentknowledge.Bundle{Version: 1, Pages: full.Pages[:1]}
+	if _, err := f.svc.IngestDocs(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// The crashed run's page: processing, with a fresh heartbeat.
+	models := full.Pages[2]
+	content := "# " + models.Title + "\n\n" + models.Description + "\n\n" + models.Text
+	dctx := weave.WithTenant(ctx, agentknowledge.DocsTenant)
+	col, err := f.weave.GetCollectionByName(dctx, agentknowledge.DocsCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashed := &document.Document{
+		Entity: weave.NewEntity(), ID: id.NewDocumentID(), CollectionID: col.ID, TenantID: agentknowledge.DocsTenant,
+		Title: models.Title, Source: models.URL, ContentHash: fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
+		ContentLength: len(content), SourceKey: "docs/ai/models", State: document.StateProcessing,
+	}
+	if err = f.weave.Store().CreateDocument(dctx, crashed); err != nil {
+		t.Fatal(err)
+	}
+
+	f.bundle = full
+	got, err := f.svc.IngestDocs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (agentknowledge.DocsResult{Indexed: 1, Unchanged: 2}); got != want {
+		t.Fatalf("with the page still processing %+v, want %+v (the page counted nowhere)", got, want)
+	}
+	state := func() document.State {
+		t.Helper()
+		docs := f.docs(t, "docs/ai/models")
+		if len(docs) != 1 {
+			t.Fatalf("%d documents for docs/ai/models", len(docs))
+		}
+		return docs[0].State
+	}
+	if st := state(); st != document.StateProcessing {
+		t.Fatalf("the crashed page is %s", st)
+	}
+	// Not quiet long enough yet: recovery leaves it.
+	if err = f.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st != document.StateProcessing {
+		t.Fatalf("recovery took a page that hadn't stalled: %s", st)
+	}
+
+	embeds := f.emb.count()
+	time.Sleep(stall + 200*time.Millisecond)
+	if err = f.svc.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st != document.StateReady {
+		t.Fatalf("after recovery the page is %s, want ready", st)
+	}
+	if n := f.emb.count() - embeds; n != 1 {
+		t.Fatalf("recovery made %d embed calls, want 1 (the crashed page alone)", n)
+	}
+}
+
+// No workspace path writes the docs: the docs' tenant, or no org at all,
+// isn't a workspace.
+func TestIngestRefusesTheDocsTenant(t *testing.T) {
+	f := newFixture(t, dims)
+	ctx := context.Background()
+	for _, org := range []string{agentknowledge.DocsTenant, "", " "} {
+		if _, err := f.svc.Ingest(ctx, org, report("x")); !errors.Is(err, agentknowledge.ErrInvalid) {
+			t.Errorf("Ingest(%q): %v, want ErrInvalid", org, err)
+		}
+		if err := f.svc.Remove(ctx, org, "docs/index"); !errors.Is(err, agentknowledge.ErrInvalid) {
+			t.Errorf("Remove(%q): %v, want ErrInvalid", org, err)
+		}
+	}
+	if n := f.eng.count(); n != 0 {
+		t.Fatalf("%d engine calls", n)
+	}
+}
+
+// One page that fails doesn't stop the rest: the other pages are indexed,
+// pages the bundle dropped are still removed, and the error names the
+// page, so the job retries.
+func TestIngestDocsKeepsGoingPastAPageError(t *testing.T) {
+	f := newFixture(t, dims)
+	ctx := context.Background()
+	if _, err := f.svc.IngestDocs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.bundle = agentknowledge.Bundle{Version: 1, Pages: []agentknowledge.DocPage{
+		f.bundle.Pages[0], page("ai/models", "Models", "Models are picked per workspace now."), page("ai/new", "New", "A new page."),
+	}}
+	f.eng.failKey = "docs/ai/models"
+	got, err := f.svc.IngestDocs(ctx)
+	if err == nil || !strings.Contains(err.Error(), "docs/ai/models") {
+		t.Fatalf("IngestDocs error %v, want one naming docs/ai/models", err)
+	}
+	if want := (agentknowledge.DocsResult{Indexed: 1, Unchanged: 2, Removed: 1}); got != want {
+		t.Fatalf("result %+v, want %+v", got, want)
+	}
+	if len(f.docs(t, "docs/ai/new")) != 1 || len(f.docs(t, "docs/agents/old")) != 0 {
+		t.Fatal("the pages after the failing one weren't indexed, or the dropped page wasn't removed")
+	}
+	if len(f.docs(t, "docs/ai/models")) != 1 {
+		t.Fatal("the failing page's old version is gone")
 	}
 }
