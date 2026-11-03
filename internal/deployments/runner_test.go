@@ -2107,7 +2107,13 @@ func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
 // with err, and returns the step it recorded and what Run returned.
 func runFailing(t *testing.T, err error) (Step, error) {
 	t.Helper()
-	exec := &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": err}}
+	return runOnce(t, &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": err}})
+}
+
+// runOnce runs the api action of webAndAPI once on exec, and returns the
+// step it recorded and what Run returned.
+func runOnce(t *testing.T, exec Executor) (Step, error) {
+	t.Helper()
 	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
 	ctx := t.Context()
 	id, _, startErr := r.Start(ctx, "org_1", "plan_1")

@@ -903,6 +903,9 @@ func nodeOfflineMessage(err error) (string, bool) {
 
 // nodeFailed is err in nodeOfflineMessage's words, or err itself.
 func nodeFailed(err error) error {
+	if already := (*nodeFailureError)(nil); errors.As(err, &already) {
+		return err
+	}
 	message, ok := nodeOfflineMessage(err)
 	if !ok {
 		return err

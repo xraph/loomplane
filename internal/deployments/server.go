@@ -103,6 +103,9 @@ type OwnedTarget struct {
 	// endpointDial dials from a target for an endpoint check. Nil is
 	// TargetDial.
 	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// reconnect is how long a deploy waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
@@ -149,7 +152,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
-		client, node, err := serverClientFor(ctx, c, raw, e.NodeStreams, e.ServerConnect)
+		client, node, err := serverClientFor(ctx, c, raw, e.NodeStreams, e.ServerConnect, e.reconnect)
 		if err != nil {
 			return nil, err
 		}
@@ -476,7 +479,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"
@@ -586,6 +589,12 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 			expectedRevision = labels[owned.LabelManagedRevisionBase] + "/" + applied.ReleaseID.String()
 		}
 		if err != nil {
+			// Ctrl Plane's deploy error is ErrDeploymentFailed alone, so a
+			// node that went offline mid-deploy is named by the restore
+			// below: its Apply opens a new session, which finds the node
+			// offline and returns the hub's error, typed, in backendErr.
+			// The preflight session above has already caught a node that
+			// was offline before the deploy started.
 			restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			backend, backendErr := e.registeredBackend(key)

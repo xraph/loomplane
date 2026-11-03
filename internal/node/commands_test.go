@@ -325,13 +325,14 @@ func TestJoinArgumentErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no token and no key": {[]string{"--url", js.URL}, "--token"},
-		"no url":              {[]string{"--token", "x"}, "--url"},
-		"bad allow":           {[]string{"--url", js.URL, "--token", "x", "--allow", "public"}, "public"},
-		"unknown allow":       {[]string{"--url", js.URL, "--token", "x", "--allow", "nonsense"}, "nonsense"},
-		"bad label":           {[]string{"--url", js.URL, "--token", "x", "--label", "nokey"}, "--label"},
-		"bad builder":         {[]string{"--url", js.URL, "--token", "x", "--builder", "shared"}, "dedicated"},
-		"builder with token":  {[]string{"--url", js.URL, "--token", "x", "--builder", "dedicated"}, "--builder go in the join token"},
+		"no token and no key":  {[]string{"--url", js.URL}, "--token"},
+		"no url":               {[]string{"--token", "x"}, "--url"},
+		"bad allow":            {[]string{"--url", js.URL, "--token", "x", "--allow", "public"}, "public"},
+		"unknown allow":        {[]string{"--url", js.URL, "--token", "x", "--allow", "nonsense"}, "nonsense"},
+		"bad label":            {[]string{"--url", js.URL, "--token", "x", "--label", "nokey"}, "--label"},
+		"bad builder":          {[]string{"--url", js.URL, "--token", "x", "--builder", "shared"}, "dedicated"},
+		"builder with token":   {[]string{"--url", js.URL, "--token", "x", "--builder", "dedicated"}, "--builder go in the join token"},
+		"builder label, token": {[]string{"--url", js.URL, "--token", "x", "--label", "build_workers=dedicated"}, "--builder go in the join token"},
 	} {
 		r := newCmdRig(t)
 		err := r.run(append([]string{"node", "join", "--state-dir", r.dir}, tc.args...)...)

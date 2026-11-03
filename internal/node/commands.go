@@ -394,7 +394,10 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 	if token == "" {
 		token = strings.TrimSpace(c.opts.Getenv(envToken))
 	}
-	if token != "" && (cloud != "" || edge || ctx.String("builder") != "") {
+	// The dedicated builder label counts as --builder: only a scope minted
+	// with it makes the node one, and a token's scope is already fixed.
+	_, builderLabel := labels[labelBuildWorkers]
+	if token != "" && (cloud != "" || edge || ctx.String("builder") != "" || builderLabel) {
 		return errors.New("--cloud, --edge and --builder go in the join token, so they cannot be used with a token (--token or " + envToken + "): mint the token with them, or drop the token and use your login")
 	}
 	dir, err := c.stateDir(ctx)

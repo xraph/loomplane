@@ -92,6 +92,9 @@ type ImageBuilder struct {
 	NodeStreams server.NodeStreams
 	// Connect replaces server.Connect, for tests. Nil is server.Connect.
 	Connect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
+	// reconnect is how long a build waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -401,7 +404,7 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 	if checkErr := buildpolicy.Check(builder.Details, false, pooled); checkErr != nil {
 		return nil, nil, nil, checkErr
 	}
-	client, node, err := serverClientFor(ctx, builder, raw, b.NodeStreams, b.Connect)
+	client, node, err := serverClientFor(ctx, builder, raw, b.NodeStreams, b.Connect, b.reconnect)
 	if err != nil {
 		return nil, nil, nil, err
 	}

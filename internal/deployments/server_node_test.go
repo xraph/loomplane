@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -12,14 +13,18 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
+	drt "github.com/xraph/dispatch/durable/runtime"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
@@ -33,6 +38,9 @@ type fakeNodeStreams struct {
 	t      *testing.T
 	daemon string
 	err    error
+	// failing, when set, is how many Opens fail with err before the node
+	// comes back. Zero with err set fails every Open.
+	failing int
 
 	mu     sync.Mutex
 	opened []nodeproto.StreamHeader
@@ -46,7 +54,10 @@ func (f *fakeNodeStreams) Open(ctx context.Context, orgID, nodeID string, hdr no
 		f.t.Errorf("a stream went to node %s of %s", nodeID, orgID)
 		return nil, errors.New("another node")
 	}
-	if f.err != nil {
+	f.mu.Lock()
+	fail := f.err != nil && (f.failing == 0 || len(f.opened) <= f.failing)
+	f.mu.Unlock()
+	if fail {
 		return nil, f.err
 	}
 	if hdr.Endpoint != nodeproto.EndpointDocker || hdr.Target != nodeproto.DockerTargetSocket {
@@ -198,5 +209,108 @@ func TestDedicatedNodeBuilderAllowed(t *testing.T) {
 				t.Fatalf("a %q node builder took an untrusted source: %d builds, %v", tc.workers, *rig.builds, err)
 			}
 		})
+	}
+}
+
+// instantReconnect is a reconnect wait that never sleeps, and counts how
+// often it would have.
+func instantReconnect(window time.Duration, slept *int) nodeReconnect {
+	return nodeReconnect{window: window, every: 5 * time.Second, sleep: func(ctx context.Context, _ time.Duration) error {
+		*slept++
+		return ctx.Err()
+	}}
+}
+
+// buildExecutor runs an action by building job's image on builder, the
+// way OwnedTarget.Apply does before it deploys.
+type buildExecutor struct {
+	builder *ImageBuilder
+	job     *Job
+}
+
+func (e *buildExecutor) Apply(ctx context.Context, _ *Job) (*Outcome, error) {
+	image, err := e.builder.Build(ctx, e.job, &ImageArtifact{}, func() error { return nil })
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: "ext-api", Image: image}, nil
+}
+
+func (*buildExecutor) Remove(context.Context, *Job, *planning.Binding) error { return nil }
+
+func (*buildExecutor) Observe(context.Context, *connections.Connection, []byte, *planning.Binding) (*Observation, error) {
+	return &Observation{Exists: true}, nil
+}
+
+// nodeBuild is a build of rig's job on node build-1, through streams.
+func nodeBuild(t *testing.T, streams *fakeNodeStreams, reconnect nodeReconnect) (*buildExecutor, *imageBuildRig) {
+	t.Helper()
+	rig := newImageBuildRig(t, false)
+	conn, raw := nodeConnection("conn_builder", "build-1", map[string]string{"build_workers": "dedicated", "docker_id": "build-fixture"})
+	rig.job.Action.Service.BuildTarget.BuilderSettings = planning.ReviewedBuildSettings(conn.Cloud, conn.Details)
+	rig.job.BuildCredentials = credentialsFor(conn, raw)
+	streams.daemon = rig.daemon
+	return &buildExecutor{builder: &ImageBuilder{NodeStreams: streams, reconnect: reconnect}, job: rig.job}, rig
+}
+
+// A build's log collector redacts its error, which once dropped the node's
+// refusal: the action recorded the raw stream error and was retried.
+func TestBuildOnRefusingNodeIsFinal(t *testing.T) {
+	slept := 0
+	exec, rig := nodeBuild(t, &fakeNodeStreams{t: t, err: fmt.Errorf("%w: docker isn't in the node's allow list", nodes.ErrEndpointRefused)}, instantReconnect(time.Minute, &slept))
+	step, runErr := runOnce(t, exec)
+	want := "node build-1 doesn't allow docker; allow it on the machine with: loomctl node allow docker"
+	if step.Status != StepFailed || step.Message != want {
+		t.Fatalf("the action recorded %q (%s)", step.Message, step.Status)
+	}
+	var final *drt.ApplicationError
+	if !errors.As(runErr, &final) || !final.NonRetryable || final.Message != want || !errors.Is(runErr, nodes.ErrEndpointRefused) {
+		t.Fatalf("a refused build endpoint isn't final: %+v (%v)", final, runErr)
+	}
+	if slept != 0 || *rig.builds != 0 {
+		t.Fatalf("a refusal waited %d times, or built %d times", slept, *rig.builds)
+	}
+}
+
+func TestBuildOnOfflineNodeWaitsThenFails(t *testing.T) {
+	since := time.Date(2026, 11, 3, 14, 2, 0, 0, time.UTC)
+	streams := &fakeNodeStreams{t: t, err: nodes.ErrNodeOffline{NodeID: testNodeID, Name: "hetzner-1", Since: since}}
+	slept := 0
+	exec, rig := nodeBuild(t, streams, instantReconnect(15*time.Second, &slept))
+	step, runErr := runOnce(t, exec)
+	want := "node hetzner-1 is offline since 14:02 UTC; its apps keep running, and the deploy continues when it reconnects"
+	if step.Status != StepFailed || step.Message != want || runErr == nil || runErr.Error() != want {
+		t.Fatalf("the action recorded %q (%s), run returned %v", step.Message, step.Status, runErr)
+	}
+	var final *drt.ApplicationError
+	if errors.As(runErr, &final) && final.NonRetryable {
+		t.Fatalf("an offline build node's failure was final: %+v", final)
+	}
+	// It waited out the window, 15 s at 5 s a try, then stopped trying.
+	if slept != 3 || len(streams.streams()) != 4 || *rig.builds != 0 {
+		t.Fatalf("waited %d times over %d opens, built %d times", slept, len(streams.streams()), *rig.builds)
+	}
+}
+
+func TestBuildWaitsForOfflineNodeToReconnect(t *testing.T) {
+	streams := &fakeNodeStreams{t: t, err: nodes.ErrNodeOffline{NodeID: testNodeID, Name: "hetzner-1", Since: time.Now()}, failing: 2}
+	slept := 0
+	exec, rig := nodeBuild(t, streams, instantReconnect(nodeReconnectWindow, &slept))
+	image, err := exec.builder.Build(security.WithDeploymentRun(t.Context()), exec.job, &ImageArtifact{}, func() error { return nil })
+	if err != nil || image == "" || *rig.builds != 1 {
+		t.Fatalf("the build didn't carry on once the node was back: %q %d %v", image, *rig.builds, err)
+	}
+	if slept != 2 {
+		t.Fatalf("waited %d times for a node that was back on the third try", slept)
+	}
+}
+
+// Outside a deploy, such as an API read, an offline node answers at once.
+func TestOfflineNodeWaitsOnlyInADeploy(t *testing.T) {
+	slept := 0
+	exec, _ := nodeBuild(t, &fakeNodeStreams{t: t, err: nodes.ErrNodeOffline{NodeID: testNodeID, Name: "hetzner-1", Since: time.Now()}}, instantReconnect(time.Minute, &slept))
+	var off nodes.ErrNodeOffline
+	if _, err := exec.builder.Build(t.Context(), exec.job, &ImageArtifact{}, func() error { return nil }); !errors.As(err, &off) || slept != 0 {
+		t.Fatalf("waited %d times, got %v", slept, err)
 	}
 }
