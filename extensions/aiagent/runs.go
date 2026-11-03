@@ -8,6 +8,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
@@ -17,7 +18,7 @@ import (
 
 // registerRuns builds the run driver: it registers its jobs on Dispatch,
 // gives cortex's hooks the service, lets turning the agent off cancel its
-// runs, counts a release asked for in a chat through the task record, and
+// runs, counts a release a person named through the task record, and
 // provides the service. The chat kind is registered here; 3c and 3d add
 // theirs.
 func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Service, projectSvc *projects.Service) error {
@@ -29,6 +30,10 @@ func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Serv
 	if err != nil {
 		return fmt.Errorf("the agent's runs need the identity extension's authorizer: %w", err)
 	}
+	plans, err := forge.InjectType[*planning.Service](c)
+	if err != nil {
+		return fmt.Errorf("the agent's runs need the planning service: %w", err)
+	}
 	wake, err := forge.InjectType[realtime.WakeSource](c)
 	if err != nil {
 		return fmt.Errorf("the agent's runs need the realtime wake source: %w", err)
@@ -36,7 +41,7 @@ func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Serv
 	log := e.Logger()
 	runs := agentruns.NewService(agentruns.Deps{
 		Store: agentruns.NewPgStore(pgdriver.Unwrap(e.db)), Engine: e.cortex.Engine, Jobs: e.jobs,
-		Settings: settings, Binder: e.binder, Registry: e.ops, Authz: authz, Projects: projectSvc,
+		Settings: settings, Binder: e.binder, Registry: e.ops, Authz: authz, Projects: projectSvc, Plans: plans,
 		Codec: e.codec, Wake: wake,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
@@ -48,7 +53,6 @@ func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Serv
 	dispatchengine.Register(eng, agentruns.SweepJob(runs))
 	e.hooks.Service = runs
 	e.authz.Requested = runs.Requested
-	e.deps.PlanCreated = runs.RecordPlan
 	settings.BindCanceller(runs)
 	e.runs = runs
 	if err = forge.ProvideValue(c, runs); err != nil {

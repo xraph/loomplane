@@ -46,6 +46,9 @@ const (
 	maxInputBytes = 64 << 10
 	// maxErrorBytes bounds the reason a failed task shows.
 	maxErrorBytes = 500
+	// startGiveUp is how long the sweep keeps queueing a start that never
+	// ran before it fails the task.
+	startGiveUp = time.Hour
 	// sweepLimit bounds the tasks one sweep queues again.
 	sweepLimit = 100
 	// watchPoll is how often a watch reads the log when no wake came.
@@ -68,6 +71,14 @@ type StartInput struct {
 	// refused.
 	MaxTokens int
 	Metadata  map[string]string
+	// ReleasePlanID names the plan the person asks the agent to release,
+	// at ReleaseRevision, the revision they saw. Only a route the person
+	// calls sets it: starting a release task for a plan, or confirming a
+	// release. Nothing copies it from metadata, a job payload or what the
+	// model said. Start checks the plan is the task's org's and project's,
+	// at that revision, and that the person may approve its deployments.
+	ReleasePlanID   string
+	ReleaseRevision string
 }
 
 // SuspensionHandler is told when a task's run waits on a person and when
@@ -88,6 +99,7 @@ type Deps struct {
 	Registry *agentops.Registry
 	Authz    *security.Authorizer
 	Projects *projects.Service
+	Plans    *planning.Service
 	// Codec writes a task's principal and reads it back, checking it may
 	// still act: agentauthz.Codec, the one cortex runs with.
 	Codec cortex.PrincipalCodec
@@ -118,6 +130,10 @@ type authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 }
 
+type planReader interface {
+	Get(ctx context.Context, p security.Principal, id string) (*planning.Plan, error)
+}
+
 type projectReader interface {
 	Get(ctx context.Context, p security.Principal, id string) (*projects.Project, error)
 	Environments(ctx context.Context, p security.Principal, projectID string) ([]*projects.Environment, error)
@@ -133,6 +149,7 @@ type Service struct {
 	registry *agentops.Registry
 	authz    authorizer
 	projects projectReader
+	plans    planReader
 	codec    cortex.PrincipalCodec
 	wake     realtime.WakeSource
 	now      func() time.Time
@@ -144,6 +161,10 @@ type Service struct {
 	handler SuspensionHandler
 	// running cancels the runs this process's jobs are driving, by task.
 	running map[string]context.CancelFunc
+
+	// beforeClaim and beforeDrive, when set, run at those points of a
+	// job: tests use them to land a cancel there.
+	beforeClaim, beforeDrive func()
 }
 
 // NewService returns a Service.
@@ -179,6 +200,9 @@ func NewService(d Deps) *Service {
 	}
 	if d.Projects != nil {
 		s.projects = d.Projects
+	}
+	if d.Plans != nil {
+		s.plans = d.Plans
 	}
 	return s
 }
@@ -245,8 +269,10 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 	case len(in.Input) > maxInputBytes:
 		return nil, invalid("a task's input is up to %d KiB", maxInputBytes>>10)
 	}
-	if _, reserved := in.Metadata[metaCreatedPlans]; reserved {
-		return nil, invalid("%s is Loomplane's to set", metaCreatedPlans)
+	for _, key := range []string{metaReleasePlan, metaReleaseRevision} {
+		if _, reserved := in.Metadata[key]; reserved {
+			return nil, invalid("%s is Loomplane's to set", key)
+		}
 	}
 	if s.settings == nil {
 		return nil, errors.New("agentruns: the agent's settings aren't configured")
@@ -280,6 +306,9 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 			}
 		}
 	}
+	if err := s.checkRelease(ctx, in, person); err != nil {
+		return nil, err
+	}
 	maxTokens := in.MaxTokens
 	switch {
 	case maxTokens == 0:
@@ -311,7 +340,8 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 	task := &Task{
 		ID: taskID.String(), OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, Kind: in.Kind,
 		RunID: id.NewAgentRunID().String(), SessionID: session, Status: StatusQueued, RequestedBy: requestedBy,
-		MaxTokens: maxTokens, Metadata: metadata, CreatedAt: now, UpdatedAt: now,
+		MaxTokens: maxTokens, Metadata: metadata, ReleasePlanID: in.ReleasePlanID, ReleaseRevision: in.ReleaseRevision,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if cerr := s.store.Create(ctx, task, Record{Principal: encoded, Input: in.Input}); cerr != nil {
 		return nil, cerr
@@ -321,6 +351,39 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 		return nil, fmt.Errorf("queue the agent's run: %w", err)
 	}
 	return task, nil
+}
+
+// checkRelease checks the release plan a person names: one of the task's
+// own workspace and project, still at the revision they saw, and one they
+// may approve.
+func (s *Service) checkRelease(ctx context.Context, in StartInput, person *security.Principal) error {
+	if in.ReleasePlanID == "" && in.ReleaseRevision == "" {
+		return nil
+	}
+	switch {
+	case person == nil:
+		return invalid("only a person names a release")
+	case in.ReleasePlanID == "" || in.ReleaseRevision == "":
+		return invalid("a release names its plan and the revision you saw")
+	case in.ProjectID == "":
+		return invalid("a release is about its plan's project")
+	case s.plans == nil:
+		return errors.New("agentruns: no planning service is configured")
+	}
+	plan, err := s.plans.Get(ctx, *person, in.ReleasePlanID)
+	if errors.Is(err, planning.ErrNotFound) {
+		return invalid("there's no plan %s in this workspace", in.ReleasePlanID)
+	}
+	if err != nil {
+		return err
+	}
+	if plan.OrgID != in.OrgID || plan.ProjectID != in.ProjectID {
+		return invalid("plan %s isn't this project's", in.ReleasePlanID)
+	}
+	if plan.Revision != in.ReleaseRevision {
+		return invalid("plan %s changed since you saw it", in.ReleasePlanID)
+	}
+	return s.require(ctx, *person, security.DeploymentApprove, in.ProjectID)
 }
 
 // checkScope checks the project and environment are the workspace's, as
@@ -518,21 +581,28 @@ func (s *Service) CancelAll(ctx context.Context, orgID string) error {
 	return errors.Join(errs...)
 }
 
-// cancel ends the task's run in cortex, stops it here if this process is
-// driving it, and marks the task cancelled.
+// cancel marks the task cancelled, stops its run here if this process is
+// driving it, and ends the run in cortex.
+//
+// The status moves first. A job claims its task after registering the run
+// it's about to drive here, so a job that claims before this move is
+// stopped by stopLocal, and one that claims after it finds the task
+// cancelled and never starts the run.
 func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
+	moved, err := s.finish(context.WithoutCancel(ctx), t, StatusCancelled, -1, "")
+	if err != nil {
+		return false, err
+	}
 	s.stopLocal(t.ID)
-	var runErr error
 	if eng := s.engine(); eng != nil {
-		if runID, err := id.ParseAgentRunID(t.RunID); err == nil {
-			err = eng.CancelRun(s.runContext(ctx, t), runID)
-			if err != nil && !errors.Is(err, cortex.ErrRunNotFound) && !errors.Is(err, cortex.ErrInvalidState) && !errors.Is(err, cortex.ErrNotSuspended) {
-				runErr = err
+		if runID, perr := id.ParseAgentRunID(t.RunID); perr == nil {
+			cerr := eng.CancelRun(s.runContext(ctx, t), runID)
+			if cerr != nil && !errors.Is(cerr, cortex.ErrRunNotFound) && !errors.Is(cerr, cortex.ErrInvalidState) && !errors.Is(cerr, cortex.ErrNotSuspended) {
+				return moved, cerr
 			}
 		}
 	}
-	moved, err := s.finish(context.WithoutCancel(ctx), t, StatusCancelled, -1, "")
-	return moved, errors.Join(runErr, err)
+	return moved, nil
 }
 
 // runContext is ctx bound to the task when it can be, and otherwise ctx
@@ -589,11 +659,13 @@ func (s *Service) bindTask(ctx context.Context, orgID, taskID string) (context.C
 	return agentops.WithTaskID(bound, t.ID), t, rec, nil
 }
 
-// Requested reports whether a stored record says the run's person asked
-// for plan: the task they started names it (MetaPlanID), or the agent
-// created it during their task. It's agentauthz.Authorizer.Requested.
-// Nothing the model passes counts, and the agent alone never has a
-// request.
+// Requested reports whether the task record says the run's person asked
+// for plan: the task they started names it as its release, at the plan's
+// current revision, in the task's project. It's agentauthz.Authorizer's
+// Requested, beside the plan's own creator. A plan the agent made in the
+// person's chat doesn't count: it pauses for them at the checkpoint, and
+// their decision there is the request. Nothing the model passes counts,
+// and the agent alone never has a request.
 func (s *Service) Requested(ctx context.Context, call agentops.Call, plan *planning.Plan) (bool, error) {
 	person, ok := call.Principal.Person()
 	if !ok || person.UserID == "" || call.TaskID == "" || plan == nil {
@@ -606,32 +678,9 @@ func (s *Service) Requested(ctx context.Context, call agentops.Call, plan *plann
 	if err != nil {
 		return false, err
 	}
-	if t.RunID != call.RunID || t.RequestedBy != person.UserID || plan.OrgID != t.OrgID {
-		return false, nil
-	}
-	if named := t.Metadata[MetaPlanID]; named != "" && named == plan.ID {
-		return true, nil
-	}
-	return plan.CreatedBy == security.AgentSubject(t.OrgID) && slices.Contains(strings.Fields(t.Metadata[metaCreatedPlans]), plan.ID), nil
-}
-
-// RecordPlan records on the call's task a plan the agent created during
-// it. It's agentops.Deps.PlanCreated.
-func (s *Service) RecordPlan(ctx context.Context, call agentops.Call, plan *planning.Plan) {
-	if call.TaskID == "" || plan == nil || plan.CreatedBy != security.AgentSubject(call.Principal.OrgID) {
-		return
-	}
-	t, err := s.store.Get(ctx, call.Principal.OrgID, call.TaskID)
-	if err != nil {
-		s.warn("agentruns: couldn't read the task a plan was created in", err)
-		return
-	}
-	if t.RunID != call.RunID {
-		return
-	}
-	if err = s.store.AddPlan(context.WithoutCancel(ctx), t.OrgID, t.ID, plan.ID); err != nil {
-		s.warn("agentruns: couldn't record the plan the agent created", err)
-	}
+	return t.RunID == call.RunID && t.RequestedBy == person.UserID && t.ReleasePlanID != "" &&
+		t.ReleasePlanID == plan.ID && t.ReleaseRevision == plan.Revision &&
+		plan.OrgID == t.OrgID && plan.ProjectID == t.ProjectID, nil
 }
 
 // Sweep queues again what was lost: a task queued longer than two
@@ -654,6 +703,10 @@ func (s *Service) Sweep(ctx context.Context) error {
 		}
 		if st.Queued {
 			if t.Status != StatusQueued {
+				continue
+			}
+			if now.Sub(t.CreatedAt) > startGiveUp {
+				s.fail(ctx, t, "the agent couldn't start this task; try again")
 				continue
 			}
 			if merr := s.store.MarkEnqueued(ctx, t.OrgID, t.ID, now); merr != nil {

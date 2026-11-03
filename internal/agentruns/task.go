@@ -79,9 +79,15 @@ type Task struct {
 	EventSeq      int64             `json:"event_seq"`
 	Error         string            `json:"error"`
 	Metadata      map[string]string `json:"metadata"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
-	FinishedAt    *time.Time        `json:"finished_at"`
+	// ReleasePlanID is the plan the person started the task to release,
+	// at ReleaseRevision. Only Start sets it, from the person's own call,
+	// and it's the one record that makes a plan the agent didn't get
+	// from the person count as their request.
+	ReleasePlanID   string     `json:"release_plan_id,omitempty"`
+	ReleaseRevision string     `json:"release_revision,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	FinishedAt      *time.Time `json:"finished_at"`
 }
 
 // TaskEvent is a task as the agent_task realtime events carry it. The
@@ -132,15 +138,11 @@ type ListFilter struct {
 	Limit       int // 1..100, default 50
 }
 
-// Metadata keys the run driver reads. A StartInput can't set the ones
-// Loomplane writes itself.
+// The metadata keys the store keeps a task's release plan under. Start
+// refuses them in a StartInput's Metadata: only its typed fields set them.
 const (
-	// MetaPlanID names the plan a person started the task for, which
-	// counts as their request for it.
-	MetaPlanID = "plan_id"
-	// metaCreatedPlans lists the plans the agent created during the
-	// task, space-separated. Only the run driver writes it.
-	metaCreatedPlans = "created_plans"
+	metaReleasePlan     = "release_plan_id"
+	metaReleaseRevision = "release_revision"
 )
 
 var (

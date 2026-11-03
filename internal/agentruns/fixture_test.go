@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -294,20 +294,6 @@ func (m *memStore) MarkEnqueued(_ context.Context, orgID, id string, at time.Tim
 	return nil
 }
 
-func (m *memStore) AddPlan(_ context.Context, orgID, id, planID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	t, err := m.find(orgID, id)
-	if err != nil {
-		return err
-	}
-	if t.Metadata == nil {
-		t.Metadata = map[string]string{}
-	}
-	t.Metadata[metaCreatedPlans] = strings.TrimSpace(t.Metadata[metaCreatedPlans] + " " + planID)
-	return nil
-}
-
 func (m *memStore) append(t *Task, in []NewEvent) int64 {
 	for _, e := range in {
 		t.EventSeq++
@@ -466,6 +452,63 @@ func (f *fakeProjects) Environments(ctx context.Context, p security.Principal, p
 	return f.envs[projectID], nil
 }
 
+// fakePlans is the planning service: plans by ID, read through the
+// principal's organization as the real store reads them.
+type fakePlans struct {
+	agentops.PlanService
+	authz *security.Authorizer
+
+	mu       sync.Mutex
+	plans    map[string]*planning.Plan
+	approved []string
+}
+
+func (f *fakePlans) add(p *planning.Plan) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.plans[p.ID] = p
+}
+
+func (f *fakePlans) Get(ctx context.Context, p security.Principal, id string) (*planning.Plan, error) {
+	f.mu.Lock()
+	plan, ok := f.plans[id]
+	f.mu.Unlock()
+	if !ok || plan.OrgID != p.OrgID {
+		return nil, planning.ErrNotFound
+	}
+	if err := f.authz.Require(ctx, p, security.DeploymentRead, plan.ProjectID); err != nil {
+		return nil, err
+	}
+	c := *plan
+	return &c, nil
+}
+
+func (f *fakePlans) Create(_ context.Context, p security.Principal, projectID string, in planning.CreatePlanInput) (*planning.Plan, error) {
+	plan := &planning.Plan{
+		ID: "plan_agent", OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: projectID + "_" + in.Environment,
+		Environment: in.Environment, Status: planning.StatusReady, Revision: "r1", Executable: true,
+		Actions: []planning.Action{{Op: planning.Update}}, CreatedBy: p.UserID,
+	}
+	f.add(plan)
+	c := *plan
+	return &c, nil
+}
+
+func (f *fakePlans) Approve(_ context.Context, _ security.Principal, id string, _ planning.DecideInput) (*planning.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.approved = append(f.approved, id)
+	plan := *f.plans[id]
+	plan.Status = planning.StatusApproved
+	return &plan, nil
+}
+
+func (f *fakePlans) approvals() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.approved)
+}
+
 // streamCall is one StreamAgent call the fake engine saw.
 type streamCall struct {
 	ctx       context.Context
@@ -489,6 +532,9 @@ type fakeEngine struct {
 	streamErr   error
 	continueErr error
 	events      []engine.StreamEvent
+	// onGetAgent, when set, runs inside GetAgentByName: a test's way in
+	// between a job binding its task and driving the run.
+	onGetAgent func()
 }
 
 func newFakeEngine() *fakeEngine {
@@ -545,6 +591,9 @@ func (f *fakeEngine) CancelRun(_ context.Context, runID id.AgentRunID) error {
 }
 
 func (f *fakeEngine) GetAgentByName(ctx context.Context, name string) (*cortexagent.Config, error) {
+	if f.onGetAgent != nil {
+		f.onGetAgent()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a, ok := f.agents[agentKey(ctx, name)]
@@ -662,6 +711,7 @@ type world struct {
 	engine   *fakeEngine
 	settings *fakeSettings
 	projects *fakeProjects
+	plans    *fakePlans
 	handler  *fakeHandler
 	authz    *security.Authorizer
 	jobs     *dispatchengine.Engine
@@ -686,6 +736,8 @@ func newWorld(t *testing.T) *world {
 	w.projects = &fakeProjects{authz: w.authz, projects: map[string]*projects.Project{}, envs: map[string][]*projects.Environment{}}
 	w.projects.add(orgA, "prj_mono")
 	w.projects.add(orgB, "prj_ledger")
+	w.projects.add(orgA, "prj_two")
+	w.plans = &fakePlans{authz: w.authz, plans: map[string]*planning.Plan{}}
 	agentops.Builtins(w.registry, &agentops.Deps{})
 	w.jobStore = dispatchmemory.New()
 	d, err := dispatch.New(dispatch.WithStore(w.jobStore))
@@ -707,6 +759,7 @@ func newWorld(t *testing.T) *world {
 	w.svc.settings = w.settings
 	w.svc.authz = w.authz
 	w.svc.projects = w.projects
+	w.svc.plans = w.plans
 	w.svc.SetSuspensionHandler(w.handler)
 	if err = w.svc.RegisterKind(ChatSpec()); err != nil {
 		t.Fatal(err)

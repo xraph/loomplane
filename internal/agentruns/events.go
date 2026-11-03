@@ -3,9 +3,11 @@ package agentruns
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/xraph/cortex"
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/suspension"
 
@@ -21,18 +23,70 @@ const (
 	eventsPerRead = 200
 )
 
+// errTaskCancelled is why a run this process drives was stopped for a
+// cancel: a plain cause, which cortex ends the run on.
+var errTaskCancelled = errors.New("agentruns: the task was cancelled")
+
+// begin is a job's hold on the task's run in this process. The run's
+// context keeps bound's values but not its end: when the Dispatch attempt
+// ends (its lease lost, its timeout, a shutdown) the run is cancelled with
+// cortex.ErrRunInterrupted, which cortex hands off for another worker to
+// continue, and a cancel of the task stops it with a plain cause, which
+// cortex ends it on. It's registered before the job claims the task, so a
+// cancel never misses it. release lets it go.
+func (s *Service) begin(bound context.Context, t *Task) (runCtx context.Context, release func()) {
+	if s.beforeClaim != nil {
+		s.beforeClaim()
+	}
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(bound))
+	s.trackLocal(t.ID, func() { cancel(errTaskCancelled) })
+	stop := context.AfterFunc(bound, func() { cancel(cortex.ErrRunInterrupted) })
+	return ctx, func() {
+		stop()
+		s.untrackLocal(t.ID)
+		cancel(nil)
+	}
+}
+
+// claim reports whether the job may drive the task's run. With from set
+// it first moves the task from one of from to to. Either way a task that
+// has finished, a cancel among them, is never driven.
+func (s *Service) claim(ctx context.Context, t *Task, from []string, to string) bool {
+	if len(from) > 0 {
+		moved, err := s.store.Transition(ctx, t.OrgID, t.ID, Transition{From: from, Status: to, Event: statusEvent(to, "")})
+		if err != nil {
+			s.warn("agentruns: couldn't record a task's status", err)
+		}
+		if moved {
+			return true
+		}
+	}
+	cur, err := s.store.Get(ctx, t.OrgID, t.ID)
+	if err != nil {
+		s.warn("agentruns: couldn't read a task before driving it", err)
+		return false
+	}
+	return !Terminal(cur.Status)
+}
+
 // drive starts a run with start, which closes events when the run ends,
-// writes its events until then, and lets this process stop it.
-func (s *Service) drive(ctx context.Context, t *Task, start func(ctx context.Context, events chan<- engine.StreamEvent) error) error {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	s.trackLocal(t.ID, cancel)
-	defer s.untrackLocal(t.ID)
+// and writes its events until then. A run whose context already ended (a
+// cancel, or the attempt over) isn't started.
+func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.Context, events chan<- engine.StreamEvent) error) error {
+	if s.beforeDrive != nil {
+		s.beforeDrive()
+	}
+	if runCtx.Err() != nil {
+		if cause := context.Cause(runCtx); !errors.Is(cause, errTaskCancelled) {
+			return cause
+		}
+		return nil
+	}
 	events := make(chan engine.StreamEvent, 64)
 	if err := start(runCtx, events); err != nil {
 		return err
 	}
-	s.pump(ctx, t, events)
+	s.pump(runCtx, t, events)
 	return nil
 }
 
@@ -198,6 +252,9 @@ func statusEvent(status, why string) *NewEvent {
 // finished and its last event is sent, or when stop is called or ctx
 // ends. The realtime bus wakes it when the task's row changes, which
 // every write to its log does.
+//
+// Who may see it is checked again before each read, so a watcher who
+// loses access stops getting events.
 func (s *Service) Watch(ctx context.Context, p security.Principal, taskID string, after int64) (events <-chan Event, stop func(), err error) {
 	t, gerr := s.Get(ctx, p, taskID)
 	if gerr != nil {
@@ -217,6 +274,9 @@ func (s *Service) Watch(ctx context.Context, p security.Principal, taskID string
 		defer ticker.Stop()
 		cursor, last := after, Event{}
 		for {
+			if ok, verr := s.visible(wctx, p, t); verr != nil || !ok {
+				return
+			}
 			evs, rerr := s.store.Events(wctx, t.OrgID, t.ID, cursor, eventsPerRead)
 			if rerr != nil {
 				if wctx.Err() != nil {

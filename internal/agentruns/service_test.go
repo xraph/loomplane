@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -155,7 +156,7 @@ func TestStartRefusesUnknownKindsAndReservedMetadata(t *testing.T) {
 		t.Fatalf("unregistered kind: %v", err)
 	}
 	_, err := w.svc.Start(context.Background(), StartInput{Kind: KindChat, OrgID: orgA, OnBehalfOf: personPtr(orgA, ada), Input: "hi",
-		Metadata: map[string]string{metaCreatedPlans: "plan_x"}})
+		Metadata: map[string]string{metaReleasePlan: "plan_x"}})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("reserved metadata: %v", err)
 	}
@@ -641,59 +642,105 @@ func TestSweepJobRunsWhatJoinsIt(t *testing.T) {
 	w := newWorld(t)
 	called := 0
 	def := SweepJob(w.svc, func(context.Context) error { called++; return nil })
-	if def.Name != JobSweep {
-		t.Fatalf("name %s", def.Name)
+	// The sweep runs on the default queue, which every server works, so
+	// with AI off its schedule lands on the do-nothing handler.
+	if def.Name != JobSweep || def.Opts.Queue != "default" {
+		t.Fatalf("name %s, queue %s", def.Name, def.Opts.Queue)
 	}
 	if err := def.Handler(context.Background(), struct{}{}); err != nil || called != 1 {
 		t.Fatalf("sweep: %v, called %d", err, called)
 	}
 }
 
-// A plan counts as a person's request only by a stored record: the task
-// they started names it, or the agent created it in their chat.
+// A plan counts as a person's request only by the task record's
+// ReleasePlanID, which Start sets from the person's own call and checks:
+// never from metadata, and never because the agent made the plan in their
+// chat.
 func TestRequestedComesFromTheTaskRecord(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	adaP := person(orgA, ada)
 	forAda := security.AgentPrincipal(orgA, &adaP)
-	chat := w.adaChat(t)
-	named := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), Metadata: map[string]string{MetaPlanID: "plan_named"}})
-	bg := w.start(t, StartInput{Metadata: map[string]string{MetaPlanID: "plan_bg"}})
-	agentPlan := func(id string) *planning.Plan {
-		return &planning.Plan{ID: id, OrgID: orgA, CreatedBy: security.AgentSubject(orgA)}
-	}
+	release := &planning.Plan{ID: "plan_release", OrgID: orgA, ProjectID: "prj_mono", Revision: "r1", CreatedBy: ben()}
+	w.plans.add(release)
+	named := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono", ReleasePlanID: "plan_release", ReleaseRevision: "r1"})
+	chat := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
+	bg := w.start(t, StartInput{ProjectID: "prj_mono"})
 	call := func(task *Task, p security.Principal) agentops.Call {
-		return agentops.Call{Principal: p, Scope: agentscope.Scope{OrgID: orgA}, TaskID: task.ID, RunID: task.RunID}
+		return agentops.Call{Principal: p, Scope: agentscope.Scope{OrgID: orgA, ProjectID: "prj_mono"}, TaskID: task.ID, RunID: task.RunID}
 	}
-	// The agent created plan_made in Ada's chat.
-	w.svc.RecordPlan(ctx, call(chat, forAda), agentPlan("plan_made"))
-	adaBo := person(orgA, bo)
-	forBo := security.AgentPrincipal(orgA, &adaBo)
+	agentPlan := &planning.Plan{ID: "plan_made", OrgID: orgA, ProjectID: "prj_mono", Revision: "r1", CreatedBy: security.AgentSubject(orgA)}
+	changed := *release
+	changed.Revision = "r2"
+	elsewhere := *release
+	elsewhere.ProjectID = "prj_two"
+	boP := person(orgA, bo)
 	for _, c := range []struct {
 		name string
 		call agentops.Call
 		plan *planning.Plan
 		want bool
 	}{
-		{"made in the chat", call(chat, forAda), agentPlan("plan_made"), true},
-		{"named by the task", call(named, forAda), agentPlan("plan_named"), true},
-		{"a plan the chat didn't make", call(chat, forAda), agentPlan("plan_other"), false},
-		{"made in the chat, created by a person", call(chat, forAda), &planning.Plan{ID: "plan_made", OrgID: orgA, CreatedBy: ben()}, false},
-		{"another person's call on the task", call(chat, forBo), agentPlan("plan_made"), false},
-		{"the agent alone", call(bg, security.AgentPrincipal(orgA, nil)), agentPlan("plan_bg"), false},
-		{"no task", agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA}, RunID: chat.RunID}, agentPlan("plan_made"), false},
-		{"another run's call", agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA}, TaskID: chat.ID, RunID: named.RunID}, agentPlan("plan_made"), false},
+		{"the plan the person named, at its revision", call(named, forAda), release, true},
+		{"the named plan after it changed", call(named, forAda), &changed, false},
+		{"the named plan in another project", call(named, forAda), &elsewhere, false},
+		{"a plan the agent made in the chat", call(chat, forAda), agentPlan, false},
+		{"a chat that names no plan", call(chat, forAda), release, false},
+		{"another person's call on the task", call(named, security.AgentPrincipal(orgA, &boP)), release, false},
+		{"the agent alone", call(bg, security.AgentPrincipal(orgA, nil)), release, false},
+		{"no task", agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA}, RunID: named.RunID}, release, false},
+		{"another run's call", agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA}, TaskID: named.ID, RunID: chat.RunID}, release, false},
 	} {
 		got, err := w.svc.Requested(ctx, c.call, c.plan)
 		if got != c.want || (c.want && err != nil) {
 			t.Errorf("%s: %v, %v; want %v", c.name, got, err, c.want)
 		}
 	}
-	// Another workspace's call never reads this one's tasks.
 	bobP := person(orgB, bob)
-	other := agentops.Call{Principal: security.AgentPrincipal(orgB, &bobP), Scope: agentscope.Scope{OrgID: orgB}, TaskID: chat.ID, RunID: chat.RunID}
-	if got, _ := w.svc.Requested(ctx, other, agentPlan("plan_made")); got {
+	other := agentops.Call{Principal: security.AgentPrincipal(orgB, &bobP), Scope: agentscope.Scope{OrgID: orgB}, TaskID: named.ID, RunID: named.RunID}
+	if got, _ := w.svc.Requested(ctx, other, release); got {
 		t.Error("Ledger's call counted Engines' task")
+	}
+}
+
+// Only a person who may approve the project's deployments names a release
+// plan, and only one of the task's own workspace and project, at the
+// revision they saw.
+func TestStartValidatesTheReleasePlan(t *testing.T) {
+	w := newWorld(t)
+	w.plans.add(&planning.Plan{ID: "plan_mono", OrgID: orgA, ProjectID: "prj_mono", Revision: "r1"})
+	w.plans.add(&planning.Plan{ID: "plan_two", OrgID: orgA, ProjectID: "prj_two", Revision: "r1"})
+	w.plans.add(&planning.Plan{ID: "plan_ledger", OrgID: orgB, ProjectID: "prj_ledger", Revision: "r1"})
+	ada := personPtr(orgA, ada)
+	for name, in := range map[string]StartInput{
+		"another org's plan":     {OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_ledger", ReleaseRevision: "r1"},
+		"another project's plan": {OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_two", ReleaseRevision: "r1"},
+		"no project":             {OnBehalfOf: ada, ReleasePlanID: "plan_mono", ReleaseRevision: "r1"},
+		"no revision":            {OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_mono"},
+		"a stale revision":       {OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_mono", ReleaseRevision: "r0"},
+		"no plan":                {OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_none", ReleaseRevision: "r1"},
+		"the agent alone":        {ProjectID: "prj_mono", ReleasePlanID: "plan_mono", ReleaseRevision: "r1"},
+		"through metadata":       {OnBehalfOf: ada, ProjectID: "prj_mono", Metadata: map[string]string{metaReleasePlan: "plan_mono"}},
+	} {
+		in.Kind, in.OrgID, in.Input = KindChat, orgA, "Release it."
+		if _, err := w.svc.Start(context.Background(), in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+	for _, user := range []string{bo, vi} {
+		_, err := w.svc.Start(context.Background(), StartInput{Kind: KindChat, OrgID: orgA, Input: "Release it.",
+			OnBehalfOf: personPtr(orgA, user), ProjectID: "prj_mono", ReleasePlanID: "plan_mono", ReleaseRevision: "r1"})
+		if !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("%s without deployment:approve: %v", user, err)
+		}
+	}
+	if w.store.count() != 0 {
+		t.Fatal("a task was written")
+	}
+	task := w.start(t, StartInput{OnBehalfOf: ada, ProjectID: "prj_mono", ReleasePlanID: "plan_mono", ReleaseRevision: "r1"})
+	got := w.store.task(t, task.ID)
+	if got.ReleasePlanID != "plan_mono" || got.ReleaseRevision != "r1" {
+		t.Fatalf("task %+v", got)
 	}
 }
 
@@ -733,11 +780,10 @@ func (allowAll) Evaluate(context.Context, agentauthz.PromotionRequest) (agentaut
 	return agentauthz.GateDecision{Allowed: true}, nil
 }
 
-// With Requested wired to the task record, a release the agent prepared in
-// a person's chat counts as that person's request, and reaches the
-// project's autonomy and the gate. One it made in another task, or one
-// nobody's chat made, still needs a person.
-func TestAReleaseAskedForInAChatCountsThroughTheTask(t *testing.T) {
+// Through the real authorizer, with autonomy on and every gate green: a
+// release the person named when they started the task reaches the gate
+// and is allowed; a plan the agent made in their chat is "nobody asked".
+func TestOnlyTheReleaseAPersonNamedCounts(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	w.projects.projects["prj_mono"].AutonomousPromotion = true
@@ -745,23 +791,74 @@ func TestAReleaseAskedForInAChatCountsThroughTheTask(t *testing.T) {
 	a.SetGate(allowAll{})
 	adaP := person(orgA, ada)
 	forAda := security.AgentPrincipal(orgA, &adaP)
-	chat, other := w.adaChat(t), w.adaChat(t)
+	release := &planning.Plan{ID: "plan_release", OrgID: orgA, ProjectID: "prj_mono", Revision: "r1", CreatedBy: security.AgentSubject(orgA)}
+	w.plans.add(release)
+	named := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono", ReleasePlanID: release.ID, ReleaseRevision: "r1"})
+	chat := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
 	callIn := func(task *Task) agentops.Call {
-		return agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA}, TaskID: task.ID, RunID: task.RunID}
+		return agentops.Call{Principal: forAda, Scope: agentscope.Scope{OrgID: orgA, ProjectID: "prj_mono"}, TaskID: task.ID, RunID: task.RunID}
 	}
-	plan := &planning.Plan{ID: "plan_release", OrgID: orgA, ProjectID: "prj_mono", Environment: "production", CreatedBy: security.AgentSubject(orgA)}
-	w.svc.RecordPlan(ctx, callIn(chat), plan)
-
-	allowed, failed, err := a.Promote(ctx, callIn(chat), plan)
-	if err != nil || !allowed {
-		t.Fatalf("the chat's own release: %v %v %v", allowed, failed, err)
+	if allowed, failed, err := a.Promote(ctx, callIn(named), release); err != nil || !allowed {
+		t.Fatalf("the named release: %v %v %v", allowed, failed, err)
 	}
-	allowed, failed, err = a.Promote(ctx, callIn(other), plan)
+	allowed, failed, err := a.Promote(ctx, callIn(chat), release)
 	if err != nil || allowed || len(failed) != 1 || !strings.Contains(failed[0], "nobody asked") {
-		t.Fatalf("another chat's release: %v %v %v", allowed, failed, err)
+		t.Fatalf("the chat's own plan: %v %v %v", allowed, failed, err)
 	}
-	alone := agentops.Call{Principal: security.AgentPrincipal(orgA, nil), Scope: agentscope.Scope{OrgID: orgA}, TaskID: chat.ID, RunID: chat.RunID}
-	if allowed, _, _ = a.Promote(ctx, alone, plan); allowed {
+	alone := agentops.Call{Principal: security.AgentPrincipal(orgA, nil), Scope: agentscope.Scope{OrgID: orgA}, TaskID: named.ID, RunID: named.RunID}
+	if allowed, _, _ = a.Promote(ctx, alone, release); allowed {
 		t.Fatal("the agent alone promoted")
+	}
+}
+
+// A cancel that lands after the job bound its task and before it drives
+// the run stops the run from starting, wherever it lands.
+func TestACancelDuringStartStopsTheRun(t *testing.T) {
+	for _, when := range []string{"between bind and claim", "while the agent is ensured", "just before the stream"} {
+		w := newWorld(t)
+		task := w.adaChat(t)
+		var once sync.Once
+		cancel := func() {
+			once.Do(func() {
+				if err := w.svc.Cancel(context.Background(), person(orgA, ada), task.ID); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		switch when {
+		case "between bind and claim":
+			w.svc.beforeClaim = cancel
+		case "while the agent is ensured":
+			w.engine.onGetAgent = cancel
+		default:
+			w.svc.beforeDrive = cancel
+		}
+		if err := w.runStart(t, task); err != nil {
+			t.Fatal(err)
+		}
+		if streams, _, _, _, _ := w.engine.calls(); len(streams) != 0 {
+			t.Fatalf("%s: the cancelled task's run started", when)
+		}
+		if got := w.store.task(t, task.ID); got.Status != StatusCancelled {
+			t.Fatalf("%s: status %s", when, got.Status)
+		}
+	}
+}
+
+// A task that still can't start an hour after it was asked for fails,
+// rather than being queued again every two minutes forever.
+func TestSweepGivesUpOnATaskThatNeverStarts(t *testing.T) {
+	w := newWorld(t)
+	task := w.adaChat(t)
+	w.clock.advance(61 * time.Minute)
+	if err := w.svc.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusFailed || !strings.Contains(got.Error, "couldn't start") {
+		t.Fatalf("task %+v", got)
+	}
+	if n := len(w.pendingNamed(t, JobStart)); n != 1 {
+		t.Fatalf("%d starts queued", n)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/weave/vectorstore"
 	vectormemory "github.com/xraph/weave/vectorstore/memory"
 
+	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/security"
@@ -323,5 +324,14 @@ func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
 	}
 	if err := ai.toolAuthorizer.Authorize(context.Background(), s, llm.ToolCall{Name: "list_projects"}); err == nil {
 		t.Fatal("an unbound authorizer allowed a call")
+	}
+}
+
+// The sweep is scheduled on the default queue, which every server works:
+// a server that runs with AI off later hands its ticks to the AI-off
+// handler instead of piling them on a queue nobody works.
+func TestTheSweepRunsOnTheDefaultQueue(t *testing.T) {
+	if c := sweepCron(); c.Queue != "default" || c.JobName != agentruns.JobSweep || c.Schedule != "@every 15s" {
+		t.Fatalf("cron %+v", c)
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -277,7 +278,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	if err = off.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels} {
+	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels, agentruns.JobSweep} {
 		run, ok := eng.Registry().Get(name)
 		if !ok {
 			t.Fatalf("no %s handler with AI off: %v", name, eng.Registry().Names())
@@ -289,7 +290,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 			}
 		}
 	}
-	if names := eng.Registry().Names(); len(names) != 2 {
+	if names := eng.Registry().Names(); len(names) != 3 {
 		t.Errorf("AI off registers %v", names)
 	}
 	crons, err := eng.CronStore().ListCrons(ctx)

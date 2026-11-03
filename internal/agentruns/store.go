@@ -69,8 +69,6 @@ type Store interface {
 	ClaimContinue(ctx context.Context, orgID, id string, now time.Time, stale time.Duration) (bool, error)
 	ClearContinue(ctx context.Context, orgID, id string) error
 	MarkEnqueued(ctx context.Context, orgID, id string, at time.Time) error
-	// AddPlan records a plan the agent created during the task.
-	AddPlan(ctx context.Context, orgID, id, planID string) error
 	// AppendEvents numbers events after the task's last and bumps its
 	// event_seq, in one transaction, and returns the last number.
 	AppendEvents(ctx context.Context, orgID, taskID string, events []NewEvent) (int64, error)

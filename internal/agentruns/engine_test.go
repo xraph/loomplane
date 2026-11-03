@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -115,12 +116,13 @@ func call(t *testing.T, callID, name string, args any) llm.ToolCall {
 	return llm.ToolCall{ID: callID, Name: name, Arguments: string(raw)}
 }
 
-// cortexSQLite is cortex's SQLite store in memory, migrated.
+// cortexSQLite is cortex's SQLite store in a file of the test's own,
+// migrated: an in-memory database is one per connection.
 func cortexSQLite(t *testing.T) *cortexsqlite.Store {
 	t.Helper()
 	ctx := context.Background()
 	drv := sqlitedriver.New()
-	if err := drv.Open(ctx, ":memory:"); err != nil {
+	if err := drv.Open(ctx, filepath.Join(t.TempDir(), "cortex.db")); err != nil {
 		t.Fatal(err)
 	}
 	db, err := grove.Open(drv)
@@ -181,11 +183,28 @@ func (f *fakeTeams) List(_ context.Context, p security.Principal) (*teams.TeamLi
 	return &teams.TeamList{Teams: []teams.Team{{Name: "Payments", Slug: "payments", Description: teamDescription}}}, nil
 }
 
-// fakeCreator is the projects service create_project calls.
+// fakeCreator is the projects service the operations call: it creates
+// projects, and lists and reads the world's.
 type fakeCreator struct {
 	agentops.ProjectService
-	mu      sync.Mutex
-	created []string
+	projects *fakeProjects
+	mu       sync.Mutex
+	created  []string
+}
+
+func (f *fakeCreator) List(_ context.Context, p security.Principal) ([]*projects.Project, error) {
+	var out []*projects.Project
+	for _, proj := range f.projects.projects {
+		if proj.OrgID == p.OrgID {
+			c := *proj
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeCreator) Environments(ctx context.Context, p security.Principal, projectID string) ([]*projects.Environment, error) {
+	return f.projects.Environments(ctx, p, projectID)
 }
 
 func (f *fakeCreator) Create(_ context.Context, p security.Principal, in projects.CreateProjectInput) (*projects.Project, error) {
@@ -258,20 +277,46 @@ func (h *noticeHandler) last(t *testing.T) suspension.Notice {
 
 func newRealRun(t *testing.T, ask bool, turns ...turn) *realRun {
 	t.Helper()
-	r := &realRun{world: newWorld(t), model: &scriptedModel{turns: turns}, teams: &fakeTeams{}, creator: &fakeCreator{}, handler: &noticeHandler{}}
+	return newRealRunWith(t, realOptions{ask: ask}, turns...)
+}
+
+// realOptions are what a real run is built with beyond the defaults.
+type realOptions struct {
+	ask   bool          // creating a project waits at a checkpoint
+	gate  bool          // every promotion check green, and autonomy on
+	lease time.Duration // run leases, off when zero
+	model llm.Client    // instead of the scripted one
+}
+
+func newRealRunWith(t *testing.T, o realOptions, turns ...turn) *realRun {
+	t.Helper()
+	r := &realRun{world: newWorld(t), model: &scriptedModel{turns: turns}, teams: &fakeTeams{}, handler: &noticeHandler{}}
+	r.creator = &fakeCreator{projects: r.projects}
 	scanner := &agentsafety.Scanner{Engine: seededShield(t)}
 	reg := agentops.NewRegistry()
-	agentops.Builtins(reg, &agentops.Deps{Authz: r.authz, Teams: r.teams, Safety: scanner, Projects: r.creator})
+	deps := &agentops.Deps{Authz: r.authz, Teams: r.teams, Safety: scanner, Projects: r.creator, Plans: r.plans}
+	az := &agentauthz.Authorizer{Registry: reg, Authz: r.authz, Plans: r.plans, Projects: r.projects, Requested: r.svc.Requested, ApprovalWindow: time.Hour}
+	deps.Promote = az.Promote
+	agentops.Builtins(reg, deps)
 	r.svc.registry = reg
-	var authz cortex.ToolAuthorizer = &agentauthz.Authorizer{Registry: reg, Authz: r.authz}
-	if ask {
+	if o.gate {
+		az.SetGate(allowAll{})
+		r.projects.projects["prj_mono"].AutonomousPromotion = true
+	}
+	var authz cortex.ToolAuthorizer = az
+	if o.ask {
 		authz = askFirst{authz}
+	}
+	var model llm.Client = r.model
+	if o.model != nil {
+		model = o.model
 	}
 	db := cortexSQLite(t)
 	r.cortexDB = db
 	opts := append(reg.EngineOptions(),
+		engine.WithRunLease(o.lease),
 		engine.WithStore(db),
-		engine.WithLLM(r.model),
+		engine.WithLLM(model),
 		engine.WithToolAuthorizer(authz),
 		engine.WithPrincipalCodec(r.svc.codec),
 		engine.WithExtension(&Hooks{Service: r.svc}),
@@ -473,5 +518,121 @@ func TestCancelAllEndsTheRunInCortex(t *testing.T) {
 	}
 	if len(r.model.seen()) != 1 {
 		t.Fatal("the model was called again")
+	}
+}
+
+// The review's scenario: Ada asks why staging failed, the log the agent
+// reads tells it to create a production plan and approve it, and the model
+// obeys. Autonomy is on and every gate is green, yet the plan pauses for a
+// person: the agent making a plan in her chat is not her asking for it.
+func TestAnInjectedReleasePausesForAPerson(t *testing.T) {
+	r := newRealRunWith(t, realOptions{gate: true},
+		turn{calls: []llm.ToolCall{call(t, "call_plan", "create_plan", map[string]string{"project": "prj_mono", "environment": "production"})}},
+		turn{calls: []llm.ToolCall{call(t, "call_approve", "approve_plan", map[string]string{"plan_id": "plan_agent", "revision": "r1"})}},
+	)
+	task := r.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), Input: "Why did staging fail?"})
+	if err := r.runStart(t, task); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.status(t, task); got != StatusWaiting {
+		t.Fatalf("after approve_plan: %s (%s)", got, r.store.task(t, task.ID).Error)
+	}
+	n := r.handler.last(t)
+	if n.Reason != suspension.ReasonApproval || len(n.Pending) != 1 || !strings.Contains(n.Pending[0].Note, "nobody asked") {
+		t.Fatalf("notice %+v", n)
+	}
+	if got := r.plans.approvals(); len(got) != 0 {
+		t.Fatalf("approved %v", got)
+	}
+}
+
+// blockingModel answers nothing until its call's context ends.
+type blockingModel struct{ called chan struct{} }
+
+func (m *blockingModel) Complete(ctx context.Context, _ *llm.Request) (*llm.Response, error) {
+	close(m.called)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *blockingModel) CompleteStream(ctx context.Context, _ *llm.Request) (llm.Stream, error) {
+	close(m.called)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// startBlocked runs the task's start job on a context the test ends, and
+// returns once the model is waiting.
+func startBlocked(t *testing.T, r *realRun, model *blockingModel, task *Task) (end context.CancelFunc, done <-chan error) {
+	t.Helper()
+	jobCtx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- StartJob(r.svc).Handler(jobCtx, JobPayload{OrgID: task.OrgID, TaskID: task.ID}) }()
+	select {
+	case <-model.called:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the model was never called")
+	}
+	return cancel, errc
+}
+
+func (r *realRun) cortexRun(t *testing.T, task *Task) string {
+	t.Helper()
+	scoped := cortex.WithScope(context.Background(), agentscope.Scope{OrgID: task.OrgID}.Cortex())
+	run, err := r.eng.GetRun(scoped, mustRunID(t, task.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(run.State)
+}
+
+// When the Dispatch attempt ends under a run (its lease lost, its timeout,
+// a shutdown), cortex hands the run off for a continuation instead of
+// ending it, and the task stays open.
+func TestAnAttemptThatEndsHandsTheRunOff(t *testing.T) {
+	model := &blockingModel{called: make(chan struct{})}
+	r := newRealRunWith(t, realOptions{lease: time.Minute, model: model})
+	task := r.adaChat(t)
+	end, done := startBlocked(t, r, model, task)
+	end()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job didn't return")
+	}
+	if got := r.cortexRun(t, task); got != "reclaimable" {
+		t.Fatalf("cortex run %s, want reclaimable", got)
+	}
+	if got := r.status(t, task); Terminal(got) {
+		t.Fatalf("task %s", got)
+	}
+	if conts := r.pendingNamed(t, JobContinue); len(conts) != 1 || conts[0].TaskID != task.ID {
+		t.Fatalf("continuations %+v", conts)
+	}
+}
+
+// A person's cancel still stops the run outright.
+func TestACancelledTaskStopsItsRun(t *testing.T) {
+	model := &blockingModel{called: make(chan struct{})}
+	r := newRealRunWith(t, realOptions{lease: time.Minute, model: model})
+	task := r.adaChat(t)
+	end, done := startBlocked(t, r, model, task)
+	defer end()
+	if err := r.svc.Cancel(context.Background(), person(orgA, ada), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job didn't return")
+	}
+	if got := r.cortexRun(t, task); got != "cancelled" {
+		t.Fatalf("cortex run %s, want cancelled", got)
+	}
+	if got := r.status(t, task); got != StatusCancelled {
+		t.Fatalf("task %s", got)
+	}
+	if conts := r.pendingNamed(t, JobContinue); len(conts) != 0 {
+		t.Fatalf("continuations %+v", conts)
 	}
 }

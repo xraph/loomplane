@@ -1,7 +1,6 @@
 package agentops
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -226,22 +225,5 @@ func TestAnotherOrgsAgentReadsNoEvidence(t *testing.T) {
 	}
 	if len(w.health.asked) != 0 {
 		t.Fatalf("the reader was asked for org B: %+v", w.health.asked)
-	}
-}
-
-// The run driver hears of every plan the agent creates, with the call it
-// was made in, so a release asked for in a chat counts as asked for.
-func TestCreatedPlansAreReported(t *testing.T) {
-	w := newWorld(t)
-	w.project(orgA, ada, "Mono")
-	var heard []string
-	w.deps.PlanCreated = func(_ context.Context, call Call, plan *planning.Plan) {
-		heard = append(heard, call.Principal.OrgID+"/"+plan.ID)
-	}
-	var plan, rollback planning.Plan
-	w.callOK(orgA, ada, "create_plan", map[string]any{"project": "mono", "environment": "production"}, &plan)
-	w.callOK(orgA, ada, "create_rollback", map[string]string{"project": "mono", "environment": "production", "reason": "errors doubled", "deployment_id": "dep_9"}, &rollback)
-	if len(heard) != 2 || heard[0] != orgA+"/"+plan.ID || heard[1] != orgA+"/"+rollback.ID {
-		t.Fatalf("heard %v", heard)
 	}
 }

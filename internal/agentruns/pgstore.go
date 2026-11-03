@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -45,6 +46,9 @@ func scanTask(row driver.Row) (*Task, error) {
 			return nil, fmt.Errorf("read agent task metadata: %w", err)
 		}
 	}
+	t.ReleasePlanID, t.ReleaseRevision = t.Metadata[metaReleasePlan], t.Metadata[metaReleaseRevision]
+	delete(t.Metadata, metaReleasePlan)
+	delete(t.Metadata, metaReleaseRevision)
 	t.CreatedAt, t.UpdatedAt = t.CreatedAt.UTC(), t.UpdatedAt.UTC()
 	if t.FinishedAt != nil {
 		f := t.FinishedAt.UTC()
@@ -63,12 +67,14 @@ func one(row driver.Row) (*Task, error) {
 
 // Create implements Store.
 func (s *PgStore) Create(ctx context.Context, t *Task, rec Record) error {
-	metadata, err := json.Marshal(t.Metadata)
+	stored := map[string]string{}
+	maps.Copy(stored, t.Metadata)
+	if t.ReleasePlanID != "" {
+		stored[metaReleasePlan], stored[metaReleaseRevision] = t.ReleasePlanID, t.ReleaseRevision
+	}
+	metadata, err := json.Marshal(stored)
 	if err != nil {
 		return err
-	}
-	if t.Metadata == nil {
-		metadata = []byte("{}")
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_agent_tasks (id, org_id, project_id, environment_id, kind, run_id,
 			session_id, status, requested_by, principal, input, max_tokens, metadata, enqueued_at, created_at, updated_at)
@@ -203,15 +209,6 @@ func (s *PgStore) ClearContinue(ctx context.Context, orgID, id string) error {
 // MarkEnqueued implements Store.
 func (s *PgStore) MarkEnqueued(ctx context.Context, orgID, id string, at time.Time) error {
 	_, err := s.db.Exec(ctx, `UPDATE loomplane_agent_tasks SET enqueued_at = $3 WHERE org_id = $1 AND id = $2`, orgID, id, at.UTC())
-	return err
-}
-
-// AddPlan implements Store.
-func (s *PgStore) AddPlan(ctx context.Context, orgID, id, planID string) error {
-	_, err := s.db.Exec(ctx, `UPDATE loomplane_agent_tasks
-		SET metadata = jsonb_set(metadata, '{`+metaCreatedPlans+`}',
-			to_jsonb(btrim(COALESCE(metadata->>'`+metaCreatedPlans+`', '') || ' ' || $3)))
-		WHERE org_id = $1 AND id = $2`, orgID, id, planID)
 	return err
 }
 

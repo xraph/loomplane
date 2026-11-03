@@ -29,6 +29,10 @@ const (
 	CronSweep   = "loomplane.agent.sweep"
 )
 
+// SweepQueue is the queue the sweep runs on: the default one, which every
+// server works, AI on or off.
+const SweepQueue = "default"
+
 // JobPayload names a task. Its job reads everything else from the task's
 // row.
 type JobPayload struct{ OrgID, TaskID string }
@@ -60,7 +64,7 @@ func SweepJob(s *Service, also ...func(context.Context) error) *job.Definition[s
 			errs = append(errs, fn(ctx))
 		}
 		return errors.Join(errs...)
-	}, job.WithQueue(Queue), job.WithMaxRetries(0))
+	}, job.WithQueue(SweepQueue), job.WithMaxRetries(0))
 }
 
 // runStart is the start job: it binds the task from its row, makes sure
@@ -104,8 +108,13 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 		s.fail(ctx, t, "the task's run ID can't be read")
 		return nil
 	}
+	runCtx, release := s.begin(bound, t)
+	defer release()
+	if !s.claim(runCtx, t, []string{StatusQueued}, StatusRunning) {
+		return nil
+	}
 	tools := s.tools(spec)
-	if aerr := s.ensureAgent(bound, eng, spec, tools); aerr != nil {
+	if aerr := s.ensureAgent(runCtx, eng, spec, tools); aerr != nil {
 		return aerr
 	}
 	overrides := &engine.RunOverrides{
@@ -122,8 +131,7 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 			return nil
 		}
 	}
-	s.move(bound, t, []string{StatusQueued}, StatusRunning)
-	err = s.drive(bound, t, func(ctx context.Context, events chan<- engine.StreamEvent) error {
+	err = s.drive(runCtx, t, func(ctx context.Context, events chan<- engine.StreamEvent) error {
 		return eng.StreamAgent(ctx, spec.Agent, rec.Input, overrides, events)
 	})
 	switch {
@@ -131,8 +139,8 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 		return nil
 	case errors.Is(err, cortex.ErrAlreadyExists):
 		// A retried job: the run exists, so carry it on.
-		return s.continueTask(bound, t)
-	case ctx.Err() != nil:
+		return s.continueTask(runCtx, t)
+	case runCtx.Err() != nil:
 		return err
 	}
 	s.fail(ctx, t, err.Error())
@@ -159,10 +167,15 @@ func (s *Service) runContinue(ctx context.Context, in JobPayload) error {
 	if err != nil {
 		return s.unbound(ctx, t, err)
 	}
-	return s.continueTask(bound, t)
+	runCtx, release := s.begin(bound, t)
+	defer release()
+	if !s.claim(runCtx, t, nil, "") {
+		return nil
+	}
+	return s.continueTask(runCtx, t)
 }
 
-// continueTask continues the task's run on a bound context. A run another
+// continueTask continues the task's run on a context begin made. A run another
 // worker holds, one that isn't ready, or one that already ended is left
 // alone; one that can't go on fails the task with why.
 func (s *Service) continueTask(bound context.Context, t *Task) error {

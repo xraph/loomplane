@@ -172,7 +172,6 @@ func registerPlans(r *Registry, d *Deps) {
 		if err != nil {
 			return nil, err
 		}
-		d.planCreated(ctx, call, plan)
 		if plan, err = d.waitPlan(ctx, call, plan); err != nil {
 			return nil, err
 		}

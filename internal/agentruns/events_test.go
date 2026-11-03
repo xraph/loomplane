@@ -203,3 +203,39 @@ func TestWatchFollowsUntilDone(t *testing.T) {
 		t.Fatal("the watch didn't close after the task finished")
 	}
 }
+
+// A watcher who loses the right to see the task stops getting its events.
+func TestWatchStopsWhenTheWatcherLosesAccess(t *testing.T) {
+	w := newWorld(t)
+	wake := &fakeWake{subs: map[string][]chan struct{}{}}
+	w.svc.wake = wake.source()
+	w.svc.poll = time.Hour
+	if err := w.svc.RegisterKind(KindSpec{Kind: KindInvestigation, Agent: "loomplane-investigation", MaxSteps: 1, DefaultMaxTokens: 1, MaxTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	task := w.start(t, StartInput{Kind: KindInvestigation, ProjectID: "prj_mono"})
+	ch, stop, err := w.svc.Watch(context.Background(), person(orgA, vi), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for !wake.subscribed(orgA) {
+		time.Sleep(time.Millisecond)
+	}
+	w.members.set(orgA, vi, "")
+	if err = w.authz.Revoke(context.Background(), orgA, vi); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.store.AppendEvents(context.Background(), orgA, task.ID, []NewEvent{{Kind: "token", Data: json.RawMessage(`{"text":"x"}`)}}); err != nil {
+		t.Fatal(err)
+	}
+	wake.wake(orgA)
+	select {
+	case e, ok := <-ch:
+		if ok {
+			t.Fatalf("an event after access went: %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the watch kept going")
+	}
+}

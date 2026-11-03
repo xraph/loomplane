@@ -31,7 +31,8 @@ func pgStore(t *testing.T) (*agentruns.PgStore, *pgdriver.PgDB) {
 func newTask(org, id, runID string, at time.Time) *agentruns.Task {
 	return &agentruns.Task{
 		ID: id, OrgID: org, Kind: agentruns.KindChat, RunID: runID, SessionID: "sess_" + id, Status: agentruns.StatusQueued,
-		RequestedBy: "usr_ada", MaxTokens: 1000, Metadata: map[string]string{agentruns.MetaPlanID: "plan_1"},
+		RequestedBy: "usr_ada", MaxTokens: 1000, Metadata: map[string]string{"source": "chat"},
+		ReleasePlanID: "plan_1", ReleaseRevision: "r1",
 		CreatedAt: at, UpdatedAt: at,
 	}
 }
@@ -58,7 +59,8 @@ func TestPgStoreKeepsTasksAndEvents(t *testing.T) {
 		t.Fatalf("o2 reads o's run: %v", err)
 	}
 	got, err := st.ByRun(ctx, "o", a.RunID)
-	if err != nil || got.ID != a.ID || got.Metadata[agentruns.MetaPlanID] != "plan_1" || got.SessionID != a.SessionID {
+	if err != nil || got.ID != a.ID || got.ReleasePlanID != "plan_1" || got.ReleaseRevision != "r1" ||
+		got.Metadata["source"] != "chat" || len(got.Metadata) != 1 || got.SessionID != a.SessionID {
 		t.Fatalf("by run %+v, %v", got, err)
 	}
 	rec, err := st.Record(ctx, "o", a.ID)
@@ -155,15 +157,6 @@ func TestPgStoreKeepsTasksAndEvents(t *testing.T) {
 		t.Fatalf("open %+v, %v", open, err)
 	}
 
-	// Plans the agent created accumulate on the task.
-	for _, p := range []string{"plan_x", "plan_y"} {
-		if err = st.AddPlan(ctx, "o", a.ID, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got, _ = st.Get(ctx, "o", a.ID); got.Metadata["created_plans"] != "plan_x plan_y" || got.Metadata[agentruns.MetaPlanID] != "plan_1" {
-		t.Fatalf("metadata %+v", got.Metadata)
-	}
 	list, err := st.List(ctx, "o", agentruns.StoreFilter{Kind: agentruns.KindChat, RequestedBy: "usr_ada"})
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list %+v, %v", list, err)

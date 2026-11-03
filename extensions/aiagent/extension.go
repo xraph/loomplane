@@ -204,6 +204,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	return mountRoutes(fapp.Router(), guard, settings, projectSvc)
 }
 
+// sweepCron schedules the run driver's sweep. It runs on the default
+// queue, which every server works: Dispatch keeps the schedule, and a
+// server later run with AI off answers it with the AI-off handler instead
+// of piling ticks on the agent queue, which nothing would work.
+func sweepCron() *cron.Definition[struct{}] {
+	return &cron.Definition[struct{}]{Name: agentruns.CronSweep, JobName: agentruns.JobSweep, Schedule: sweepEvery, Queue: agentruns.SweepQueue}
+}
+
 // Start records whether this server can give the agent knowledge. The
 // library extensions have started by now, and no agent job has run.
 func (e *Extension) Start(ctx context.Context) error {
@@ -211,10 +219,9 @@ func (e *Extension) Start(ctx context.Context) error {
 		s.SetKnowledge(bootKnowledge(ctx, e.cfg.AI, e.db))
 	}
 	// Only here: with AI off this extension doesn't exist, and nothing is
-	// scheduled.
+	// scheduled; a schedule left from when AI was on lands on aiext.Off.
 	if eng := e.jobs(); eng != nil {
-		sweep := &cron.Definition[struct{}]{Name: agentruns.CronSweep, JobName: agentruns.JobSweep, Schedule: sweepEvery, Queue: Queue}
-		if err := dispatchengine.RegisterCron(ctx, eng, sweep); err != nil {
+		if err := dispatchengine.RegisterCron(ctx, eng, sweepCron()); err != nil {
 			return fmt.Errorf("schedule the agent's sweep: %w", err)
 		}
 	}
