@@ -10,7 +10,7 @@ import { useCallback, useEffect } from "react"
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
-import { AuthRedirect } from "@/components/auth-redirect"
+import { AuthRedirect, FreshLoad } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
 import { SystemAddress, SystemPage } from "@/components/system-page"
@@ -31,6 +31,12 @@ import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
 const stepPath = "/setup/cloud-sign-in"
 const authPaths = ["/sign-in", "/sign-up"]
+// Full-load callbacks that carry a code or state in their query. The step
+// must not take them over; it shows on the next ordinary navigation.
+const callbackPaths = [
+  "/integrations/oauth/callback",
+  "/integrations/github/setup",
+]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
 // Every signed-out screen shares one AuthLayout, returned from the same place
@@ -80,8 +86,10 @@ export function App() {
   }
   // A signed-in account whose email is already verified has no code to
   // enter, so the verify page would only ask for one that doesn't exist.
+  // A full load: the public config was read before this account verified,
+  // so it can't yet say whether to offer cloud sign-in.
   if (path === "/verify-email" && isAuthenticated && user?.email_verified) {
-    return <Navigate to="/" replace />
+    return <FreshLoad to="/" />
   }
   if (recoveryPaths.includes(path)) {
     return (
@@ -119,7 +127,12 @@ export function App() {
   }
   // A new instance's first platform admin is offered cloud sign-in apps once,
   // on a page of its own, before anything else.
-  if (platformAdmin && cloudSignInOffer && path !== stepPath) {
+  if (
+    platformAdmin &&
+    cloudSignInOffer &&
+    path !== stepPath &&
+    !callbackPaths.includes(path)
+  ) {
     return <Navigate to={stepPath} replace />
   }
   if (path === stepPath) {

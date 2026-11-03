@@ -10,9 +10,10 @@ const auth = vi.hoisted(() => ({
   user: { email_verified: true, email: "a@example.com" },
 }))
 const route = vi.hoisted(() => ({ path: "/" }))
+const invite = vi.hoisted(() => ({ token: undefined as string | undefined }))
 
 vi.mock("@authsome/ui-react", () => ({ useAuth: () => auth }))
-vi.mock("@/lib/invite", () => ({ usePendingInvite: () => undefined }))
+vi.mock("@/lib/invite", () => ({ usePendingInvite: () => invite.token }))
 vi.mock("@/lib/router", async (original) => ({
   ...(await original<typeof import("@/lib/router")>()),
   usePath: () => route.path,
@@ -22,7 +23,14 @@ vi.mock("@tanstack/react-router", async (original) => ({
   Navigate: ({ to }: { to: string }) => <p>location {to}</p>,
   Outlet: () => <p>outlet</p>,
   useRouter: () => ({ navigate: () => undefined }),
-  useRouterState: () => ({ pathname: "/", search: "", href: "/" }),
+  useRouterState: ({
+    select,
+  }: {
+    select?: (s: { location: object }) => unknown
+  }) => {
+    const location = { pathname: "/", search: "", href: "/", publicHref: "/" }
+    return select ? select({ location }) : location
+  },
 }))
 vi.mock("@/pages/cloud-sign-in-step", () => ({
   CloudSignInStep: () => <p>cloud sign-in step</p>,
@@ -45,6 +53,8 @@ const base = { setupPending: false, waitlist: false, setupTokenRequired: false }
 
 beforeEach(() => {
   auth.isAuthenticated = true
+  auth.user = { email_verified: true, email: "a@example.com" }
+  invite.token = undefined
 })
 
 describe("cloud sign-in setup step gating", () => {
@@ -79,5 +89,40 @@ describe("cloud sign-in setup step gating", () => {
     route.path = "/setup/cloud-sign-in"
     render(<App />)
     expect(screen.getByText("location /")).toBeTruthy()
+  })
+
+  it.each(["/integrations/oauth/callback", "/integrations/github/setup"])(
+    "leaves the full-load callback %s alone",
+    (path) => {
+      setInstance({ ...base, platformAdmin: true, cloudSignInOffer: true })
+      route.path = path
+      render(<App />)
+      expect(screen.queryByText(/^location/)).toBeNull()
+      expect(screen.getByText("signed-in shell")).toBeTruthy()
+    }
+  )
+
+  it("verifies an unverified admin's email before the step", () => {
+    setInstance({
+      ...base,
+      requireEmailVerification: true,
+      platformAdmin: true,
+      cloudSignInOffer: true,
+    })
+    auth.user = { email_verified: false, email: "a@example.com" }
+    route.path = "/"
+    render(<App />)
+    expect(screen.getByText("location /verify-email")).toBeTruthy()
+  })
+
+  it("still reaches a pending invitation once the step is skipped", () => {
+    setInstance({ ...base, platformAdmin: true, cloudSignInOffer: false })
+    invite.token = "invite_1"
+    route.path = "/"
+    render(<App />)
+    expect(screen.getByText("location /invitations/accept")).toBeTruthy()
+    route.path = "/invitations/accept"
+    render(<App />)
+    expect(screen.getByText("outlet")).toBeTruthy()
   })
 })
