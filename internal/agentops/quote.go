@@ -96,3 +96,10 @@ func (d *Deps) quoteAnalysis(ctx context.Context, a *discovery.Analysis) discove
 	out.Error = d.quote(ctx, agentsafety.SourceReadme, a.Error)
 	return out
 }
+
+// planCreated tells the run driver about a plan the agent created.
+func (d *Deps) planCreated(ctx context.Context, call Call, plan *planning.Plan) {
+	if d.PlanCreated != nil && plan != nil {
+		d.PlanCreated(ctx, call, plan)
+	}
+}

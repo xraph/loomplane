@@ -14,8 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	cortexext "github.com/xraph/cortex/extension"
+	"github.com/xraph/dispatch/cron"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
@@ -34,6 +36,7 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/agentops"
+	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
@@ -46,7 +49,14 @@ const Name = "loomplane-ai-agent"
 
 // Queue is the Dispatch queue agent jobs run on. The platform works it only
 // when AI is on.
-const Queue = "agent"
+const Queue = agentruns.Queue
+
+// runLease is how long a worker's lease on a running run lasts before
+// another replica may reclaim it (engine.WithRunLease).
+const runLease = time.Minute
+
+// sweepEvery is how often the run driver's sweep runs.
+const sweepEvery = "@every 15s"
 
 // RunsPerProcess caps the agent runs one process works at once
 // (engine.WithRunConcurrency). Cortex's extension leaves it at 0, no
@@ -87,6 +97,11 @@ type Extension struct {
 	authz          *agentauthz.Authorizer
 	codec          *agentauthz.Codec
 	toolAuthorizer *lateAuthorizer
+
+	// hooks are cortex's run hooks, which cortex takes when it builds its
+	// engine; Register gives them the run driver, runs.
+	hooks *agentruns.Hooks
+	runs  *agentruns.Service
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -101,6 +116,7 @@ func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 		deps:           &agentops.Deps{},
 		codec:          &agentauthz.Codec{},
 		toolAuthorizer: &lateAuthorizer{},
+		hooks:          &agentruns.Hooks{},
 	}
 	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow}
 	// approve_plan asks the same question as the authorizer just before it
@@ -182,6 +198,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if authzErr := e.bindAuthorization(c, settings, projectSvc); authzErr != nil {
 		return authzErr
 	}
+	if runsErr := e.registerRuns(c, settings, projectSvc); runsErr != nil {
+		return runsErr
+	}
 	return mountRoutes(fapp.Router(), guard, settings, projectSvc)
 }
 
@@ -190,6 +209,14 @@ func (e *Extension) Register(fapp forge.App) error {
 func (e *Extension) Start(ctx context.Context) error {
 	if s := e.agentSettings(); s != nil {
 		s.SetKnowledge(bootKnowledge(ctx, e.cfg.AI, e.db))
+	}
+	// Only here: with AI off this extension doesn't exist, and nothing is
+	// scheduled.
+	if eng := e.jobs(); eng != nil {
+		sweep := &cron.Definition[struct{}]{Name: agentruns.CronSweep, JobName: agentruns.JobSweep, Schedule: sweepEvery, Queue: Queue}
+		if err := dispatchengine.RegisterCron(ctx, eng, sweep); err != nil {
+			return fmt.Errorf("schedule the agent's sweep: %w", err)
+		}
 	}
 	e.MarkStarted()
 	return nil

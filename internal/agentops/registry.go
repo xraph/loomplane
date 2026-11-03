@@ -480,6 +480,11 @@ type Deps struct {
 	// aiagent sets it to the tool authorizer's Promote, which reads the
 	// gate installed at call time. Nil never allows.
 	Promote func(ctx context.Context, call Call, plan *planning.Plan) (allowed bool, failed []string, err error)
+	// PlanCreated, when set, hears of each plan create_plan and
+	// create_rollback make, with the call that made it: the run driver
+	// records it on the agent task, so a release a person asked for in a
+	// chat counts as asked for.
+	PlanCreated func(ctx context.Context, call Call, plan *planning.Plan)
 }
 
 // BindingLookup is *planning.PgStore's binding read.

@@ -89,7 +89,7 @@ func (e *Extension) LibraryExtensions() []forge.Extension {
 // what nexus and shield provided: the nexus adapter maps a run's scope to
 // its workspace's tenant and provider, the shield adapter scans under
 // agentscope.App, and the engine options come last, so they win over
-// cortex's config. Leasing and the run hooks come with the run driver.
+// cortex's config.
 func (e *Extension) cortexOptions() []cortexext.ExtOption {
 	opts := []cortexext.ExtOption{
 		// No WithDisableRoutes: cortex's REST handlers are a module of
@@ -108,14 +108,20 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 }
 
 // engineOptions are the engine's own options: how long a run waits on a
-// person, rejections the model reads, the per-process run cap, the tool
-// authorizer with the principal codec it needs (cortex refuses the first
-// without the second), and the agent's operations.
+// person, run leases and the run driver's hooks, rejections the model
+// reads, the per-process run cap, the tool authorizer with the principal
+// codec it needs (cortex refuses the first without the second), and the
+// agent's operations.
 func (e *Extension) engineOptions() []cortexengine.Option {
 	tools := e.toolOptions()
-	opts := make([]cortexengine.Option, 0, 5+len(tools))
+	opts := make([]cortexengine.Option, 0, 7+len(tools))
 	opts = append(opts,
 		cortexengine.WithSuspensionTTL(suspensionTTL),
+		// Runs are leased, so one whose worker dies or drains is left for
+		// another replica. The run driver's hooks continue it: nothing in
+		// cortex does.
+		cortexengine.WithRunLease(runLease),
+		cortexengine.WithExtension(e.hooks),
 		cortexengine.WithRejectionsReturnToModel(),
 		cortexengine.WithRunConcurrency(RunsPerProcess),
 		cortexengine.WithToolAuthorizer(e.toolAuthorizer),
