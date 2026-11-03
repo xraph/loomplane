@@ -242,11 +242,15 @@ func TestGitLabHandle_ignoresOtherBranchesDeletesAndEvents(t *testing.T) {
 			t.Fatalf("%s: started %d %v, %v", name, n, g.started, err)
 		}
 	}
-	// A body that isn't JSON is an error, not a silent drop, once signed.
+	// A signed body that isn't JSON is taken and ignored, so GitLab doesn't
+	// retry it; an unsigned one is still refused.
 	g := newGLHooks("org-a", src)
 	bad := []byte(`not json`)
-	if _, err := g.hooks.Handle(context.Background(), "glc_1", glHeaders(glSecret, bad, "Push Hook"), bad); err == nil || errors.Is(err, ErrBadSignature) {
-		t.Fatalf("a body that isn't JSON: %v", err)
+	if n, err := g.hooks.Handle(context.Background(), "glc_1", glHeaders(glSecret, bad, "Push Hook"), bad); err != nil || n != 0 || len(g.started) != 0 {
+		t.Fatalf("a signed body that isn't JSON: started %d %v, %v", n, g.started, err)
+	}
+	if _, err := g.hooks.Handle(context.Background(), "glc_1", http.Header{"X-Gitlab-Event": {"Push Hook"}}, bad); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("an unsigned body that isn't JSON: %v", err)
 	}
 }
 

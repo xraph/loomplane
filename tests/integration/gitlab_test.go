@@ -559,6 +559,10 @@ func TestGitLab_pushReanalyzes(t *testing.T) {
 	if a := analyses(grace, graceProj.ID); len(a) != 0 {
 		t.Fatalf("a push through Ada's connection started analyses in another organization: %+v", a)
 	}
+	var by string
+	if err = db.QueryRow(context.Background(), `SELECT created_by FROM loomplane_analyses WHERE project_id = $1`, proj.ID).Scan(&by); err != nil || by != "gitlab-push" {
+		t.Fatalf("created by %q, %v; want gitlab-push", by, err)
+	}
 	// GitLab before 19 sends the secret token instead. With an analysis
 	// already under way the source is left alone, but the delivery is taken.
 	if code, _, n := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": secret.SecretToken}); code != http.StatusAccepted || n != 0 {

@@ -149,7 +149,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	return e.gitlabWebhookRoute(fapp.Router(), &discovery.GitLabWebhooks{
 		Target:  e.gitlab.WebhookTarget,
 		Sources: discovery.NewPgStore(pg).SourcesByRepository,
-		Start:   e.svc.StartFromPush,
+		Start:   e.svc.StartFromGitLabPush,
 	})
 }
 

@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -105,7 +104,8 @@ type gitlabPush struct {
 // Handle verifies a delivery for connection id and acts on it, returning
 // how many analyses it started. The verdict on an unknown connection is
 // repositories.ErrGitLabConnectionNotFound, and on a delivery its secret
-// doesn't vouch for, ErrBadSignature. Only a push to a project's default
+// doesn't vouch for, ErrBadSignature. A verified body that isn't a readable
+// push starts nothing and isn't an error. Only a push to a project's default
 // branch does anything, and only among the connection's own organization's
 // sources.
 func (w *GitLabWebhooks) Handle(ctx context.Context, id string, h http.Header, body []byte) (int, error) {
@@ -123,9 +123,12 @@ func (w *GitLabWebhooks) Handle(ctx context.Context, id string, h http.Header, b
 	if h.Get("X-Gitlab-Event") != "Push Hook" {
 		return 0, nil
 	}
+	// A delivery its secret vouches for but that isn't a push we can read
+	// is taken and ignored: an error would make GitLab retry it, and
+	// disable the hook after enough of them.
 	var push gitlabPush
 	if err = json.Unmarshal(body, &push); err != nil {
-		return 0, fmt.Errorf("read the push: %w", err)
+		return 0, nil
 	}
 	project := push.Project
 	if orgID == "" || host == "" || project.PathWithNamespace == "" || project.DefaultBranch == "" ||
