@@ -88,6 +88,10 @@ type (
 		Status    string `json:"status"`
 		DecidedBy string `json:"decided_by,omitempty"`
 		Revision  string `json:"revision"`
+		// Decision says who decided a plan someone else decided, by name,
+		// such as "approved by Ada", quoted: a name is what the person
+		// typed.
+		Decision string `json:"decision,omitempty"`
 	}
 )
 
@@ -206,7 +210,9 @@ func registerPlans(r *Registry, d *Deps) {
 		}
 		if plan.Status != planning.StatusReady {
 			if plan.DecidedBy != "" {
-				return decisionOf(plan), nil
+				out := decisionOf(plan)
+				out.Decision = d.decidedBy(ctx, plan)
+				return out, nil
 			}
 			return decisionOutput{}, fmt.Errorf("plan %s is %s: %w", plan.ID, plan.Status, planning.ErrNotReady)
 		}
@@ -283,6 +289,28 @@ func (d *Deps) plan(ctx context.Context, call Call, id string) (*planning.Plan, 
 		return nil, scopeErr
 	}
 	return plan, nil
+}
+
+// personText is the source a person's own words are quoted with, as
+// agentrequests quotes their answers.
+const personText = "person_answer"
+
+// decidedBy is "approved by <name>" or "rejected by <name>" for a plan a
+// person decided, quoted, or "" when nobody can name them or no person
+// decided it (the agent or Loomplane automation did).
+func (d *Deps) decidedBy(ctx context.Context, plan *planning.Plan) string {
+	by := plan.DecidedBy
+	if d.People == nil || by == "" || strings.Contains(by, ":") {
+		return ""
+	}
+	if _, agent := security.IsAgentSubject(by); agent {
+		return ""
+	}
+	verb := "approved"
+	if plan.Status == planning.StatusRejected {
+		verb = "rejected"
+	}
+	return d.quote(ctx, personText, verb+" by "+d.People.Name(ctx, by))
 }
 
 // promote asks Promote whether the agent may approve a production plan

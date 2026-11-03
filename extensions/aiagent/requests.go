@@ -52,12 +52,15 @@ func (e *Extension) registerRequests(c forge.Container, runs *agentruns.Service,
 	}
 	pg := pgdriver.Unwrap(e.db)
 	log := e.Logger()
+	people := agentrequests.PgPeople{DB: pg, AppID: e.cfg.Identity.AppID}
+	// approve_plan names whoever decided a plan the agent asked about.
+	d.People = people
 	requests := agentrequests.NewService(agentrequests.Deps{
 		Store:  agentrequests.NewPgStore(pg),
 		Engine: e.resumer,
 		Runs:   runs, Plans: d.Plans, Projects: projectSvc, Variables: vars, GitHub: d.GitHub, Connections: conns,
 		Authz: d.Authz, Safety: e.scanner, Teams: teamSvc,
-		People: agentrequests.PgPeople{DB: pg, AppID: e.cfg.Identity.AppID},
+		People: people,
 		DB:     pg, Audit: d.Audit,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})

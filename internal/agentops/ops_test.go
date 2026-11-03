@@ -477,3 +477,45 @@ func TestCreateProjectTakesARepositoryByOwnerAndName(t *testing.T) {
 		}
 	}
 }
+
+// namedPeople names people by their user ID.
+type namedPeople map[string]string
+
+func (n namedPeople) Name(_ context.Context, userID string) string {
+	if name, ok := n[userID]; ok {
+		return name
+	}
+	return "someone"
+}
+
+// approve_plan on a plan someone already decided says who, by name, so the
+// agent can tell the person: "approved by Ada". The agent's own decision,
+// or Loomplane's, names nobody.
+func TestApprovePlanNamesThePersonWhoDecided(t *testing.T) {
+	w := newWorld(t)
+	w.deps.People = namedPeople{ada: "Ada"}
+	p := w.project(orgA, ada, "Mono")
+	for id, c := range map[string]struct {
+		status, by, want string
+	}{
+		"plan_approved": {planning.StatusApproved, ada, "approved by Ada"},
+		"plan_rejected": {planning.StatusRejected, ada, "rejected by Ada"},
+		"plan_agent":    {planning.StatusApproved, security.AgentSubject(orgA), ""},
+		"plan_system":   {planning.StatusApproved, "loomplane:" + orgA, ""},
+	} {
+		w.plans.plans[id] = &planning.Plan{ID: id, OrgID: orgA, ProjectID: p.ID, EnvironmentID: w.env(p, "production").ID, Status: c.status, DecidedBy: c.by, Revision: "r1"}
+		var out decisionOutput
+		w.callOK(orgA, ada, "approve_plan", map[string]string{"plan_id": id, "revision": "r1"}, &out)
+		switch {
+		case c.want == "" && out.Decision != "":
+			t.Errorf("%s: decision %q", id, out.Decision)
+		case c.want != "" && out.Decision != quoted("person_answer", c.want):
+			t.Errorf("%s: decision %q, want %q quoted", id, out.Decision, c.want)
+		case out.DecidedBy != c.by || out.Status != c.status:
+			t.Errorf("%s: %+v", id, out)
+		}
+	}
+	if len(w.plans.approved) != 0 {
+		t.Fatalf("approved %v", w.plans.approved)
+	}
+}
