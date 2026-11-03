@@ -96,6 +96,7 @@ func normalize(r *discovery.Report) {
 		return r.Resources[i].Evidence.Path < r.Resources[j].Evidence.Path
 	})
 	sort.SliceStable(r.BuildSystems, func(i, j int) bool { return r.BuildSystems[i].Path < r.BuildSystems[j].Path })
+	sort.SliceStable(r.Env, func(i, j int) bool { return r.Env[i].Name < r.Env[j].Name })
 	sort.SliceStable(r.Notes, func(i, j int) bool { return r.Notes[i].Path < r.Notes[j].Path })
 	if r.Units == nil {
 		r.Units = []discovery.Unit{}
@@ -111,6 +112,9 @@ func normalize(r *discovery.Report) {
 	}
 	if r.BuildSystems == nil {
 		r.BuildSystems = []discovery.BuildSystem{}
+	}
+	if r.Env == nil {
+		r.Env = []discovery.EnvUse{}
 	}
 	if r.Notes == nil {
 		r.Notes = []discovery.Note{}

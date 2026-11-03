@@ -2040,6 +2040,13 @@ export interface EnvLink {
   subject: string;
 }
 
+export interface EnvUse {
+  confidence: string;
+  evidence: Evidence[];
+  example?: string;
+  name: string;
+}
+
 export interface EnvVar {
   from?: Ref;
   name: string;
@@ -4823,6 +4830,7 @@ export interface Service {
   deployable: boolean;
   ecosystem: string;
   entrypoint: string;
+  env?: EnvUse[];
   evidence: Evidence[];
   framework?: string;
   id: string;

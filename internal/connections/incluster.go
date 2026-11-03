@@ -31,7 +31,7 @@ func (s *Service) CreateInCluster(ctx context.Context, p security.Principal, in 
 	if !InClusterAvailable() {
 		return nil, fmt.Errorf("%w: this Loomplane doesn't connect the cluster it runs in", ErrInvalid)
 	}
-	return s.create(ctx, p, "", Kubernetes, in.Name, nil, kubernetes.InClusterCredential(), in.Settings, MethodInCluster)
+	return s.create(ctx, p, "", Kubernetes, in.Name, nil, kubernetes.InClusterCredential(), in.Settings, MethodInCluster, "")
 }
 
 // PastedGrant implements pastedGrantAdvice. A Kubernetes connection's

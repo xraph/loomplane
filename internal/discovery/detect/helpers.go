@@ -1,6 +1,7 @@
 // Package detect holds Loomplane's detectors: Go, Rust, Node, Python, the
 // JVM, Dockerfiles and Compose files. Each reads manifests and source headers from a
-// checkout and reports what it finds with the line it found it on. None of
+// checkout and reports what it finds with the line it found it on, and the
+// environment variables the code reads. None of
 // them runs anything.
 package detect
 
@@ -21,7 +22,7 @@ const maxManifestBytes = 1 << 20
 
 // All returns every detector, in the order they run.
 func All() []discovery.Detector {
-	return []discovery.Detector{Go{}, Forge{}, Rust{}, Node{}, Python{}, JVM{}, Docker{}, Compose{}}
+	return []discovery.Detector{Go{}, Forge{}, Rust{}, Node{}, Python{}, JVM{}, Docker{}, Compose{}, Env{}}
 }
 
 // read returns a file's contents, or a note saying why it couldn't.
