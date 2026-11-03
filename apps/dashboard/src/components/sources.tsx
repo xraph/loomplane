@@ -59,6 +59,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
 import { relative, repositoryHost, repositoryURL } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
 import { useNow } from "@/lib/use-runs"
 
@@ -119,7 +120,9 @@ export function Repositories({ project }: { project: Project }) {
   const list = sources.data?.sources ?? []
   const mayEdit = can("project:update")
   const mayRun = can("analysis:run")
-  const mayConnect = can("repository:connect")
+  // Connecting repositories is a workspace permission, which a project's
+  // own permissions never list, and what the server checks to turn push on.
+  const mayConnect = useOrganization().can("repository:connect")
 
   const analyze = (alias?: string) =>
     start

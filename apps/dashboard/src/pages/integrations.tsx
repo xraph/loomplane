@@ -1095,13 +1095,17 @@ const bitbucketGuide =
 function BitbucketPanel() {
   const { can } = useOrganization()
   const status = useQuery(useBitbucketStatus)
-  const { signIn, pending } = useBitbucketSignIn()
+  const { signIn } = useBitbucketSignIn()
   const [adding, setAdding] = useState(false)
+  // The workspace whose sign-in is being asked for, so only its row spins.
+  const [reconnecting, setReconnecting] = useState<string | null>(null)
   const data = status.data
   const workspaces = data?.workspaces ?? []
   const problems = data?.problems ?? []
   // The server says whether this person may connect, and their role must too.
   const mayConnect = !!data?.canConnect && can("repository:connect")
+  // Without a consumer there is nothing to approve, so no sign-in can start.
+  const maySignIn = mayConnect && !!data?.configured
   const connect = (
     <Button
       variant="outline"
@@ -1147,8 +1151,13 @@ function BitbucketPanel() {
               ))}
             </div>
           )}
-          {!data.configured && workspaces.length === 0 ? (
-            <p className="px-4 py-4 text-[13px] leading-relaxed text-muted-foreground">
+          {!data.configured && (
+            <p
+              className={cn(
+                "px-4 py-4 text-[13px] leading-relaxed text-muted-foreground",
+                workspaces.length > 0 && "border-b"
+              )}
+            >
               Only public repositories: no Bitbucket OAuth consumer is set up.
               Ask your operator to create one to read private ones. The{" "}
               <a
@@ -1161,21 +1170,24 @@ function BitbucketPanel() {
               </a>{" "}
               has the steps.
             </p>
-          ) : workspaces.length === 0 ? (
-            <Empty variant="inline">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <BitbucketMark className="size-4" />
-                </EmptyMedia>
-                <EmptyTitle>No Bitbucket workspaces yet</EmptyTitle>
-                <EmptyDescription>
-                  {mayConnect
-                    ? "Connect a workspace to let Loomplane read the private repositories you can see there."
-                    : "An admin can connect a workspace."}
-                </EmptyDescription>
-              </EmptyHeader>
-              {mayConnect && <EmptyContent>{connect}</EmptyContent>}
-            </Empty>
+          )}
+          {workspaces.length === 0 ? (
+            data.configured && (
+              <Empty variant="inline">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <BitbucketMark className="size-4" />
+                  </EmptyMedia>
+                  <EmptyTitle>No Bitbucket workspaces yet</EmptyTitle>
+                  <EmptyDescription>
+                    {mayConnect
+                      ? "Connect a workspace to let Loomplane read the private repositories you can see there."
+                      : "An admin can connect a workspace."}
+                  </EmptyDescription>
+                </EmptyHeader>
+                {mayConnect && <EmptyContent>{connect}</EmptyContent>}
+              </Empty>
+            )
           ) : (
             <ul className="divide-y">
               {workspaces.map((w) => (
@@ -1183,11 +1195,17 @@ function BitbucketPanel() {
                   key={w.id}
                   workspace={w}
                   mayConnect={mayConnect}
+                  maySignIn={maySignIn}
                   onReconnect={async () => {
+                    setReconnecting(w.workspace)
                     const failure = await signIn(w.workspace)
-                    if (failure) toast.error(failure)
+                    if (failure) {
+                      setReconnecting(null)
+                      toast.error(failure)
+                    }
                   }}
-                  reconnecting={pending}
+                  reconnecting={reconnecting === w.workspace}
+                  busy={reconnecting !== null}
                 />
               ))}
             </ul>
@@ -1202,13 +1220,20 @@ function BitbucketPanel() {
 function BitbucketWorkspaceRow({
   workspace: w,
   mayConnect,
+  maySignIn,
   onReconnect,
   reconnecting,
+  busy,
 }: {
   workspace: BitbucketWorkspaceView
   mayConnect: boolean
+  /** Whether a sign-in can start: allowed, and a consumer is set up. */
+  maySignIn: boolean
   onReconnect: () => Promise<void>
+  /** This row's sign-in is being asked for. */
   reconnecting: boolean
+  /** Some row's is, so no other starts meanwhile. */
+  busy: boolean
 }) {
   const [disconnecting, setDisconnecting] = useState(false)
   const name = w.name || w.workspace
@@ -1230,11 +1255,11 @@ function BitbucketWorkspaceRow({
         ) : (
           <StatusPill tone="live">Connected</StatusPill>
         )}
-        {lapsed && mayConnect && (
+        {lapsed && maySignIn && (
           <Button
             size="sm"
             aria-label={`Reconnect ${name}`}
-            disabled={reconnecting}
+            disabled={busy}
             onClick={() => void onReconnect()}
           >
             {reconnecting && <Spinner />}

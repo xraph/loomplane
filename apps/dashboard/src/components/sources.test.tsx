@@ -7,6 +7,8 @@ import type { Project } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
 import { Repositories } from "@/components/sources"
 
+// The workspace's permissions, as the session lists them. A project's own
+// list (below) never holds repository:connect.
 const may = vi.hoisted(() => ({ edit: true, connect: true }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
@@ -54,6 +56,16 @@ function serve(
           headers: { "Content-Type": "application/json" },
         })
       if (method === "DELETE") return new Response(null, { status: 204 })
+      // What a project's page is told: workspace-only permissions such as
+      // repository:connect are not in it.
+      if (url.pathname === "/api/v1/projects/p/permissions")
+        return json({
+          permissions: [
+            "project:read",
+            ...(may.edit ? ["project:update"] : []),
+            "analysis:run",
+          ],
+        })
       if (url.pathname === "/api/v1/bitbucket/webhooks" && enable)
         return new Response(JSON.stringify(enable.body), {
           status: enable.status,

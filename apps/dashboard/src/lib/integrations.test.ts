@@ -261,6 +261,21 @@ describe("Bitbucket groups", () => {
     ).toEqual(["bitbucket.org/acme/api", "bitbucket.org/tools/cli"])
   })
 
+  it("doesn't take a GitHub-style key as an exact match for a Bitbucket one", () => {
+    const only = [fromBitbucket(bb("acme/api")), fromBitbucket(bb("acme/web"))]
+    // Typing acme/api narrows, as any text does, instead of listing everything.
+    expect(
+      repositoryChoices(only, label, "acme/api").flatMap((g) =>
+        g.items.map((c) => c.repository.key)
+      )
+    ).toEqual(["bitbucket.org/acme/api"])
+    expect(
+      repositoryChoices(only, label, "bitbucket.org/acme/api").flatMap((g) =>
+        g.items.map((c) => c.repository.key)
+      )
+    ).toHaveLength(2)
+  })
+
   it("marks an added bitbucket.org/Acme/API whatever its case", () => {
     const offered = repositoryChoices(all, label, "", [
       "bitbucket.org/Acme/API",

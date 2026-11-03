@@ -1058,3 +1058,72 @@ it("gives a viewer no way to change a workspace", async () => {
   expect(await within(card).findByText("Acme Inc")).toBeInTheDocument()
   expect(within(card).queryAllByRole("button")).toEqual([])
 })
+
+it("spins only the Reconnect that was pressed, and holds the others", async () => {
+  fixture({
+    reply: {},
+    bitbucket: {
+      ...configured,
+      workspaces: [
+        { ...bitbucketWorkspace, status: "reconnect_needed", message: "a" },
+        {
+          ...bitbucketWorkspace,
+          id: "w2",
+          workspace: "tools",
+          name: "Tooling",
+          status: "reconnect_needed",
+          message: "b",
+        },
+      ],
+    },
+  })
+  // The link never comes back, so the first row stays pending.
+  const real = globalThis.fetch
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).includes("/bitbucket/authorize")
+      ? new Promise<Response>(() => {})
+      : real(input, init)
+  )
+  show()
+  const card = bitbucketCard()
+  const first = await within(card).findByRole("button", {
+    name: "Reconnect Acme Inc",
+  })
+  const second = within(card).getByRole("button", {
+    name: "Reconnect Tooling",
+  })
+  await userEvent.click(first)
+  await waitFor(() => expect(second).toBeDisabled())
+  expect(
+    first.querySelector('[role="status"], svg.animate-spin')
+  ).not.toBeNull()
+  expect(second.querySelector('[role="status"], svg.animate-spin')).toBeNull()
+})
+
+it("keeps listing workspaces without a consumer, with the note and no Reconnect", async () => {
+  fixture({
+    bitbucket: {
+      ...noBitbucket,
+      workspaces: [
+        { ...bitbucketWorkspace, status: "reconnect_needed", message: "gone" },
+      ],
+    },
+  })
+  show()
+  const card = bitbucketCard()
+  expect(await within(card).findByText("Acme Inc")).toBeInTheDocument()
+  expect(
+    within(card).getByText(
+      /Only public repositories: no Bitbucket OAuth consumer is set up/
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(card).queryByRole("button", { name: /Reconnect/ })
+  ).not.toBeInTheDocument()
+  expect(
+    within(card).queryByRole("button", { name: "Connect workspace" })
+  ).not.toBeInTheDocument()
+  expect(
+    within(card).getByRole("button", { name: "Disconnect Acme Inc" })
+  ).toBeInTheDocument()
+})

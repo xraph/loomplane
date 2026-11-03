@@ -273,9 +273,9 @@ export function repositoryChoices(
   exclude: string[] = []
 ): ChoiceGroup[] {
   const t = typed.trim().toLowerCase()
-  const exact = repositories.some(
-    (r) => r.key.toLowerCase() === t || r.fullName.toLowerCase() === t
-  )
+  // A key is what a field holds. Only GitHub's key is its fullName, so a
+  // GitHub-style acme/api isn't an exact match for a Bitbucket repository.
+  const exact = repositories.some((r) => r.key.toLowerCase() === t)
   const added = new Set(
     exclude.map((e) => e.trim().toLowerCase()).filter(Boolean)
   )
