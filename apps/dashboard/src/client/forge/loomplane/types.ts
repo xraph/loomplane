@@ -121,6 +121,16 @@ export interface AgentView {
   updatedBy?: string;
 }
 
+export interface AgentrequestsTarget {
+  cloud?: string;
+  environment?: string;
+  key?: string;
+  planId?: string;
+  planRevision?: string;
+  repository?: string;
+  service?: string;
+}
+
 export interface AgentsettingsStatus {
   enabled: boolean;
   knowledge: boolean;
@@ -174,6 +184,10 @@ export interface AnalysisGraph {
 
 export interface AnalysisList {
   analyses: Analysis[];
+}
+
+export interface AnswerInputBody {
+  text: string;
 }
 
 export interface AppInputBody {
@@ -1582,6 +1596,10 @@ export interface DecideInputBody {
   revision?: string;
 }
 
+export interface DeclineInputBody {
+  reason?: string;
+}
+
 export interface DefaultPlacement {
   connectionId: string;
   provider: string;
@@ -2618,6 +2636,11 @@ export interface LicenseInfo {
   note?: string;
   title: string;
   url: string;
+}
+
+export interface Link {
+  label: string;
+  path: string;
 }
 
 export interface LinkedService {
@@ -4050,6 +4073,52 @@ export interface ReplaceInputBody {
   settings?: Record<string, any>;
 }
 
+export interface Request {
+  answer: string;
+  answeredAt?: string;
+  answeredBy: string;
+  askedFor: string;
+  context: Link[];
+  createdAt: string;
+  environmentId: string;
+  expiresAt: string;
+  id: string;
+  kind: string;
+  options: string[];
+  orgId: string;
+  outcome: string;
+  projectId: string;
+  question: string;
+  routeNote: string;
+  routeSource: string;
+  runId: string;
+  status: string;
+  target: AgentrequestsTarget;
+  taskId: string;
+  teamId: string;
+  teamName: string;
+  teamReason: string;
+  updatedAt: string;
+}
+
+export interface RequestEvent {
+  askedFor: string;
+  createdAt: string;
+  id: string;
+  kind: string;
+  orgId: string;
+  projectId: string;
+  routeSource: string;
+  status: string;
+  teamId: string;
+  teamName: string;
+  updatedAt: string;
+}
+
+export interface RequestList {
+  requests: (Request | null)[];
+}
+
 export interface Requirement {
   evidence: Evidence;
   git?: string;
@@ -4611,6 +4680,10 @@ export interface ScalingPoolInputBody {
 };
 }
 
+export interface SecretInputBody {
+  value: string;
+}
+
 export interface Server {
   accelerator?: Accelerator;
   accountId: string;
@@ -5120,6 +5193,24 @@ export interface TargetChoice {
   region?: string;
   sizeId?: string;
   source: string;
+}
+
+export interface TaskEvent {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  orgId: string;
+  projectId: string;
+  requestedBy: string;
+  runId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
 }
 
 export interface Team {

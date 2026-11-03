@@ -346,6 +346,42 @@
           "name": "source.updated",
           "title": "source.updated event",
           "summary": "SSE event: source.updated"
+        },
+        "agent_request.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.updated",
+          "title": "agent_request.updated event",
+          "summary": "SSE event: agent_request.updated"
+        },
+        "agent_request.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.deleted",
+          "title": "agent_request.deleted event",
+          "summary": "SSE event: agent_request.deleted"
+        },
+        "agent_task.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.updated",
+          "title": "agent_task.updated event",
+          "summary": "SSE event: agent_task.updated"
+        },
+        "agent_task.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.deleted",
+          "title": "agent_task.deleted event",
+          "summary": "SSE event: agent_task.deleted"
         }
       },
       "tags": [
@@ -665,6 +701,44 @@
           ],
           "message": "build.collection",
           "type": "github.com/xraph/loomplane/internal/realtime.Collection"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentTask",
+            "AgentTask[]"
+          ],
+          "message": "agent_task.updated",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "evict",
+          "invalidates": [
+            "TaskEvent[]"
+          ],
+          "message": "agent_task.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentRequest",
+            "AgentRequest[]"
+          ],
+          "message": "agent_request.updated",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "evict",
+          "invalidates": [
+            "RequestEvent[]"
+          ],
+          "message": "agent_request.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         }
       ]
     },
@@ -5532,6 +5606,129 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "RequestEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "kind",
+          "status",
+          "team_id",
+          "team_name",
+          "route_source",
+          "asked_for",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "asked_for": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "route_source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "kind",
+          "run_id",
+          "status",
+          "requested_by",
+          "event_seq",
+          "tokens",
+          "max_tokens",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

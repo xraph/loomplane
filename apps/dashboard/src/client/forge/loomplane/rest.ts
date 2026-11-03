@@ -31,6 +31,132 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentRequests = {
+    /**
+     * Answer the agent's question
+     * The person asked, a member of the team it was sent to, or someone who manages the workspace's AI may answer. The first answer counts.
+     */
+    answer: async (id: string, body: types.AnswerInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/answer`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AnswerInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * Say the GitHub or cloud connection the agent asked for is made
+     * Loomplane checks the connection exists before the agent goes on.
+     */
+    complete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/complete`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * Decline the agent's request
+     * Declining a plan approval rejects the plan.
+     */
+    decline: async (id: string, body: types.DeclineInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/decline`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeclineInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * One request the agent made
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * What the agent is asking of people in your workspace
+     */
+    list: async (status?: string | undefined, projectId?: string | undefined, forParam?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RequestList> => {
+      let __path = `/api/v1/agent/requests`;
+      const queryParams: Record<string, any> = {};
+      if (status !== undefined) {
+        queryParams['status'] = status;
+      }
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (forParam !== undefined) {
+        queryParams['for'] = forParam;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RequestList"],
+      };
+
+      return this.request<types.RequestList>(config);
+    },
+
+    /**
+     * Set the secret the agent asked for
+     * Needs variable:manage on the request's project. The value is stored as a secret variable, as you; the agent only hears that it's set.
+     */
+    provideSecret: async (id: string, body: types.SecretInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/secret`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SecretInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+  };
+
   public readonly agentStatus = {
     /**
      * Whether the AI agent is on, on this server and in the workspace

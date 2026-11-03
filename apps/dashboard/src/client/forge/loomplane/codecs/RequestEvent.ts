@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_RequestEvent: Codec = {"kind": "object", "fields": {"asked_for": {"ts": "askedFor"}, "created_at": {"ts": "createdAt"}, "id": {"ts": "id"}, "kind": {"ts": "kind"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "route_source": {"ts": "routeSource"}, "status": {"ts": "status"}, "team_id": {"ts": "teamId"}, "team_name": {"ts": "teamName"}, "updated_at": {"ts": "updatedAt"}}, "required": ["asked_for", "created_at", "id", "kind", "org_id", "project_id", "route_source", "status", "team_id", "team_name", "updated_at"]};

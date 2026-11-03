@@ -37,6 +37,254 @@
         }
       }
     },
+    "/api/v1/agent/requests": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "What the agent is asking of people in your workspace",
+        "operationId": "agentRequests.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "for",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requests, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One request the agent made",
+        "operationId": "agentRequests.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/answer": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Answer the agent's question",
+        "description": "The person asked, a member of the team it was sent to, or someone who manages the workspace's AI may answer. The first answer counts.",
+        "operationId": "agentRequests.answer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answered request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/complete": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Say the GitHub or cloud connection the agent asked for is made",
+        "description": "Loomplane checks the connection exists before the agent goes on.",
+        "operationId": "agentRequests.complete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/decline": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Decline the agent's request",
+        "description": "Declining a plan approval rejects the plan.",
+        "operationId": "agentRequests.decline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclineInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The declined request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/secret": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Set the secret the agent asked for",
+        "description": "Needs variable:manage on the request's project. The value is stored as a secret variable, as you; the agent only hears that it's set.",
+        "operationId": "agentRequests.provideSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/status": {
       "get": {
         "tags": [
@@ -32753,6 +33001,219 @@
             "type": "string"
           },
           "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentrequestsTarget": {
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentrequests.Target"
+      },
+      "AnswerInputBody": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "DeclineInputBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Link": {
+        "type": "object",
+        "required": [
+          "label",
+          "path"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "Request": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "task_id",
+          "run_id",
+          "kind",
+          "status",
+          "question",
+          "context",
+          "options",
+          "target",
+          "asked_for",
+          "answered_by",
+          "answer",
+          "outcome",
+          "team_id",
+          "team_name",
+          "route_source",
+          "team_reason",
+          "route_note",
+          "expires_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "answered_at": {
+            "type": "string"
+          },
+          "answered_by": {
+            "type": "string"
+          },
+          "asked_for": {
+            "type": "string"
+          },
+          "context": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "route_note": {
+            "type": "string"
+          },
+          "route_source": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentrequestsTarget"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "team_reason": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RequestList": {
+        "type": "object",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Request"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "SecretInputBody": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
             "type": "string"
           }
         }

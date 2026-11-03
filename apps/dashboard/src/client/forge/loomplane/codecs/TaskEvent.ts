@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_TaskEvent: Codec = {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "environment_id": {"ts": "environmentId"}, "error": {"ts": "error"}, "event_seq": {"ts": "eventSeq"}, "finished_at": {"ts": "finishedAt"}, "id": {"ts": "id"}, "kind": {"ts": "kind"}, "max_tokens": {"ts": "maxTokens"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "requested_by": {"ts": "requestedBy"}, "run_id": {"ts": "runId"}, "status": {"ts": "status"}, "tokens": {"ts": "tokens"}, "updated_at": {"ts": "updatedAt"}}, "required": ["created_at", "environment_id", "error", "event_seq", "id", "kind", "max_tokens", "org_id", "project_id", "requested_by", "run_id", "status", "tokens", "updated_at"]};
