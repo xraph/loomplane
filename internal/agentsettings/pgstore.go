@@ -12,7 +12,7 @@ import (
 )
 
 // PgStore is the Postgres Store, over the agent's columns of
-// loomplane_ai_settings (database/migrations 20261209000100). It reads and
+// loomplane_ai_settings (database/migrations 20261220000100). It reads and
 // writes those columns, updated_by, updated_at and revision, and nothing
 // else of the row.
 type PgStore struct {

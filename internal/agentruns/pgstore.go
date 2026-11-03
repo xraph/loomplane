@@ -14,7 +14,7 @@ import (
 )
 
 // PgStore is the Postgres Store, over loomplane_agent_tasks and
-// loomplane_agent_run_events (database/migrations 20261209000200).
+// loomplane_agent_run_events (database/migrations 20261220000200).
 type PgStore struct {
 	db  *pgdriver.PgDB
 	now func() time.Time

@@ -14,7 +14,7 @@ import (
 )
 
 // PgStore is the Postgres Store, over loomplane_agent_requests
-// (database/migrations 20261209000200).
+// (database/migrations 20261220000200).
 type PgStore struct {
 	db *pgdriver.PgDB
 }

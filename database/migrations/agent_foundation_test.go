@@ -13,7 +13,7 @@ import (
 
 func TestAgentTablesAndTriggers(t *testing.T) {
 	// Databases record the version and name, so the filename can't drift.
-	if m := migration(t, "agent_foundation"); m.Version != "20261209000200" {
+	if m := migration(t, "agent_foundation"); m.Version != "20261220000200" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, ex := scratch(t)

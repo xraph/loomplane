@@ -10,7 +10,7 @@ import (
 
 func TestAgentRequestDueIndex(t *testing.T) {
 	// Inside 3a's range, after project autonomy and before 3b's 0400.
-	if m := migration(t, "agent_request_due"); m.Version != "20261209000310" {
+	if m := migration(t, "agent_request_due"); m.Version != "20261220000310" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, ex := scratch(t)

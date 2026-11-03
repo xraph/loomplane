@@ -11,7 +11,7 @@ import (
 
 func TestAISettingsAgentColumns(t *testing.T) {
 	// Databases record the version and name, so the filename can't drift.
-	if m := migration(t, "ai_settings_agent"); m.Version != "20261209000100" {
+	if m := migration(t, "ai_settings_agent"); m.Version != "20261220000100" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, ex := scratch(t)
