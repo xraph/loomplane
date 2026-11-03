@@ -435,7 +435,12 @@ func TestRecheckNodeNextToSSHStaysNotReady(t *testing.T) {
 	}
 }
 
-func TestRecheckNextToAnotherOrgsNodeStaysNotReady(t *testing.T) {
+// A daemon ID is what the host reports, so another organization's node
+// can claim any daemon. Its claim refuses only new connections: a check
+// of one that exists here never fails it over another organization's
+// connection, whether it was failed (the host was down when the claim
+// was made) or ready.
+func TestRecheckNextToAnotherOrgsNodeIgnoresIt(t *testing.T) {
 	s, store, _, _, checker := nodeRig(t)
 	checker.daemon = "daemon-a"
 	ssh, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"})
@@ -447,8 +452,22 @@ func TestRecheckNextToAnotherOrgsNodeStaysNotReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Recheck(t.Context(), orgPrincipal, ssh.ID)
-	if err != nil || got.Status == StatusReady || got.Message != "this Docker daemon is already connected in another organization" {
+	if err != nil || got.Status != StatusReady || got.Message != "" || store.rows[ssh.ID].Status != StatusReady {
 		t.Fatalf("recheck next to their node: %+v %v", got, err)
+	}
+	// Ready next to their node, a recheck keeps it ready.
+	if got, err = s.Recheck(t.Context(), orgPrincipal, ssh.ID); err != nil || got.Status != StatusReady {
+		t.Fatalf("second recheck next to their node: %+v %v", got, err)
+	}
+	// Their node's own recheck is the same: our SSH doesn't fail it.
+	theirs := ""
+	for id, c := range store.rows {
+		if c.OrgID == "org_2" {
+			theirs = id
+		}
+	}
+	if got, err = s.Recheck(t.Context(), security.Principal{OrgID: "org_2", UserID: "user_2"}, theirs); err != nil || got.Status != StatusReady {
+		t.Fatalf("their node's recheck next to our SSH: %+v %v", got, err)
 	}
 }
 
@@ -468,10 +487,14 @@ func TestReplaceNextToNodeStaysNotReady(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", org, err)
 		}
-		want := "this Docker daemon is already connected as node web-1; remove it from the node first"
 		if org != "org_1" {
-			want = "this Docker daemon is already connected in another organization"
+			// Another organization's node never holds back a replacement.
+			if got.Status != StatusReady || store.rows[ssh.ID].Status != StatusReady {
+				t.Fatalf("%s: replace next to their node: %s %q", org, got.Status, got.Message)
+			}
+			continue
 		}
+		want := "this Docker daemon is already connected as node web-1; remove it from the node first"
 		if got.Status == StatusReady || got.Message != want || store.rows[ssh.ID].Status != got.Status {
 			t.Fatalf("%s: replace next to a node: %s %q", org, got.Status, got.Message)
 		}

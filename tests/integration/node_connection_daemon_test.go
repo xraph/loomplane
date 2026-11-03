@@ -158,8 +158,9 @@ func (v *keptVault) Reveal(_ context.Context, org, id string) ([]byte, error) {
 func (v *keptVault) Delete(context.Context, string, string) error { return nil }
 
 // One daemon is one daemon whichever organization connects it: a node
-// connection next to anything on it is refused, and a check can't turn a
-// connection ready next to another organization's node.
+// connection next to anything on it is refused. A daemon ID is what the
+// host reports, though, so a check of a connection that exists never
+// fails it over another organization's: only creating one is refused.
 func TestOneDaemonAcrossOrganizations(t *testing.T) {
 	const other = ": this Docker daemon is already connected in another organization"
 	store, _ := signInStore(t)
@@ -199,8 +200,9 @@ func TestOneDaemonAcrossOrganizations(t *testing.T) {
 		t.Fatalf("their SSH next to our node: %v", err)
 	}
 
-	// Their SSH connection from before the node, failed since, can't
-	// recheck itself ready next to our node.
+	// Their SSH connection from before the node, failed since, rechecks
+	// itself ready next to our node: our node's claim on the daemon can't
+	// keep their working connection down.
 	now := time.Now().UTC()
 	stale := &connections.Connection{ID: "conn_stale", OrgID: "org_2", Cloud: connections.Server, Name: "stale ssh", Method: connections.MethodToken, Account: "deploy@web.example.com:22", Status: connections.StatusFailed,
 		Details: map[string]string{"host": "web.example.com", "port": "22", "user": "deploy", "host_key": "ssh-ed25519 AAAA", "docker_socket": "/var/run/docker.sock", "docker_id": "daemon-shared", "architecture": "amd64"}, CreatedAt: now, UpdatedAt: now}
@@ -214,7 +216,7 @@ func TestOneDaemonAcrossOrganizations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status == connections.StatusReady || got.Message != strings.TrimPrefix(other, ": ") {
+	if got.Status != connections.StatusReady {
 		t.Fatalf("their recheck next to our node: %s %q", got.Status, got.Message)
 	}
 	if kept, _ := store.GetConnection(t.Context(), "org_2", stale.ID); kept.Status != got.Status {

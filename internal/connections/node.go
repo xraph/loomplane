@@ -250,14 +250,21 @@ func (s *Service) readyOnDaemon(ctx context.Context, orgID, daemon string) ([]*C
 // journal on the host that the daemon ID names, while each node keeps a
 // journal of its own, so any pair with a node connection in it is
 // refused, and SSH next to SSH is not. Another organization's connection
-// is never named.
-func (s *Service) daemonFree(ctx context.Context, orgID, self, daemon, method string) error {
+// is never named, and counts only when crossOrg is set: a daemon ID is
+// what the host says it is, so a node could claim another organization's
+// daemon. Creating a connection checks every organization; a check or a
+// replacement of one that exists checks only its own, so a forged ID can
+// stop its own organization's connection, never another's working one.
+func (s *Service) daemonFree(ctx context.Context, orgID, self, daemon, method string, crossOrg bool) error {
 	held, err := s.readyOnDaemon(ctx, orgID, daemon)
 	if err != nil {
 		return err
 	}
 	for _, c := range held {
 		if c.ID == self || c.Cloud != Server || c.Status != StatusReady || c.Details["docker_id"] != daemon {
+			continue
+		}
+		if c.OrgID != orgID && !crossOrg {
 			continue
 		}
 		switch {
@@ -276,16 +283,18 @@ func (s *Service) daemonFree(ctx context.Context, orgID, self, daemon, method st
 
 // holdDaemon runs save for c, a connection a check or a replacement is
 // about to store. When c is a server connection that would be ready on a
-// daemon the one-daemon rule gives to another connection, c is stored
-// failed with the rule's reason instead. The daemon stays locked
-// throughout, so the rule and the write are one step.
+// daemon the one-daemon rule gives to another connection of its own
+// organization, c is stored failed with the rule's reason instead.
+// Another organization's connection on the daemon never fails it (see
+// daemonFree). The daemon stays locked throughout, so the rule and the
+// write are one step.
 func (s *Service) holdDaemon(ctx context.Context, c *Connection, save func() error) error {
 	daemon := c.Details["docker_id"]
 	if c.Cloud != Server || c.Status != StatusReady || daemon == "" {
 		return save()
 	}
 	return s.withDaemonLock(ctx, daemon, func() error {
-		if err := s.daemonFree(ctx, c.OrgID, c.ID, daemon, c.Method); err != nil {
+		if err := s.daemonFree(ctx, c.OrgID, c.ID, daemon, c.Method, false); err != nil {
 			if !errors.Is(err, ErrInvalid) {
 				return err
 			}

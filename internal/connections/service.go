@@ -283,7 +283,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	}
 	if daemon := c.Details["docker_id"]; cloud == Server && daemon != "" {
 		err = s.withDaemonLock(ctx, daemon, func() error {
-			if freeErr := s.daemonFree(ctx, p.OrgID, c.ID, daemon, method); freeErr != nil {
+			if freeErr := s.daemonFree(ctx, p.OrgID, c.ID, daemon, method, true); freeErr != nil {
 				return freeErr
 			}
 			return save()
