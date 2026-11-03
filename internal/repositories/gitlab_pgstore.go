@@ -122,7 +122,7 @@ func (s *GitLabPgStore) SaveSignIn(ctx context.Context, in *GitLabSignIn) error 
 	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_gitlab_sign_ins
 		(state, org_id, user_id, host, verifier, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		in.State, in.OrgID, in.UserID, in.Host, in.Verifier, in.ExpiresAt, in.CreatedAt)
+		in.State, in.OrgID, in.UserID, canonicalGitLabHost(in.Host), in.Verifier, in.ExpiresAt, in.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("save GitLab sign-in: %w", err)
 	}

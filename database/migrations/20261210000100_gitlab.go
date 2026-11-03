@@ -24,6 +24,7 @@ func init() {
 				Column("created_by", migrate.Text, migrate.NotNull()).
 				Column("created_at", migrate.Timestamp, migrate.NotNull()).
 				Unique("org_id", "host").Named("loomplane_gitlab_hosts_org_host").
+				Unique("org_id", "id").Named("loomplane_gitlab_hosts_org_id").
 				Exec(ctx)
 			if err != nil {
 				return err
@@ -57,14 +58,17 @@ func init() {
 			}
 
 			// host_id is NULL for gitlab.com and the operator's hosts, and
-			// names a registered host otherwise. A host with connections
-			// can't be deleted: the foreign key restricts it.
+			// names a registered host otherwise. The foreign key is over
+			// (org_id, host_id), so a connection can only use its own
+			// organization's host, and an organization's host can't be
+			// held by another's connection. A host with connections can't
+			// be deleted: the foreign key restricts it. A NULL host_id
+			// leaves the key unchecked.
 			err = db.NewCreateTable("loomplane_gitlab_connections").IfNotExists().
 				Column("id", migrate.Text, migrate.PrimaryKey()).
 				Column("org_id", migrate.Text, migrate.NotNull()).
 				Column("host", migrate.Text, migrate.NotNull()).
-				Column("host_id", migrate.Text,
-					migrate.References("loomplane_gitlab_hosts", "id"), migrate.OnDelete(migrate.Restrict)).
+				Column("host_id", migrate.Text).
 				Column("kind", migrate.Text, migrate.NotNull(), migrate.Default("oauth")).
 				Column("gitlab_user_id", migrate.BigInt, migrate.NotNull()).
 				Column("username", migrate.Text, migrate.NotNull(), migrate.Default("")).
@@ -75,6 +79,8 @@ func init() {
 				Column("lapsed_at", migrate.Timestamp).
 				Column("webhook_set", migrate.Boolean, migrate.NotNull(), migrate.Default(false)).
 				Unique("org_id", "host", "gitlab_user_id").Named("loomplane_gitlab_connections_org_host_user").
+				ForeignKey("org_id", "host_id").References("loomplane_gitlab_hosts", "org_id", "id").
+				OnDelete(migrate.Restrict).Named("loomplane_gitlab_connections_org_host_fk").
 				Exec(ctx)
 			if err != nil {
 				return err

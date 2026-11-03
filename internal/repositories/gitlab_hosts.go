@@ -76,8 +76,26 @@ func canonicalGitLabHost(host string) string {
 // downloadTimeout, which a client-wide timeout would cut short.
 const orgClientTimeout = 30 * time.Second
 
+// errOrgRedirect means an organization's host answered with a redirect
+// Loomplane won't follow.
+var errOrgRedirect = errors.New("an organization's GitLab host redirected somewhere Loomplane won't follow")
+
+// orgRedirect follows a redirect only to https on the same host. The
+// request carries a bearer token, so a redirect to plain http would send it
+// in the clear and one to another host would hand it over.
+func orgRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" || canonicalGitLabHost(req.URL.Host) != canonicalGitLabHost(via[0].URL.Host) {
+		return errOrgRedirect
+	}
+	return nil
+}
+
 var orgClient = sync.OnceValue(func() *http.Client {
 	return &http.Client{
+		CheckRedirect: orgRedirect,
 		Transport: &http.Transport{
 			DialContext:           PublicDialer(),
 			TLSHandshakeTimeout:   orgClientTimeout,

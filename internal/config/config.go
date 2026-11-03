@@ -222,16 +222,16 @@ func (g GitLabConfig) Validate() error {
 	seen := map[string]bool{}
 	for i, h := range g.Hosts {
 		key := fmt.Sprintf("gitlab.hosts[%d]", i)
-		webURL, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
+		_, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
 		if err != nil || h.WebURL == "" {
 			if err == nil {
 				err = errors.New("it is required")
 			}
 			errs = append(errs, fmt.Errorf("%s.web_url must be the address of a GitLab with no path, such as https://git.example.com: %w", key, err))
-		} else if seen[webURL] {
+		} else if seen[host] {
 			errs = append(errs, fmt.Errorf("%s.web_url lists %s twice", key, host))
 		} else {
-			seen[webURL] = true
+			seen[host] = true
 		}
 		if (h.ClientID == "") != (h.ClientSecret == "") {
 			missing := "client_secret"

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,5 +72,84 @@ func TestRefusePrivate(t *testing.T) {
 				t.Fatalf("refusePrivate(%q) = %v, want refused %v", tt.address, err, tt.refused)
 			}
 		})
+	}
+}
+
+// getWithOrgRedirects sends a request carrying a bearer token through the organization
+// client's redirect policy. The transport is the test server's, which trusts
+// its certificate; the policy under test is the real client's.
+func getWithOrgRedirects(t *testing.T, trust *http.Client, rawURL string) (*http.Response, error) {
+	t.Helper()
+	c := &http.Client{CheckRedirect: orgClient().CheckRedirect, Transport: trust.Transport}
+	req, err := http.NewRequest(http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	return c.Do(req)
+}
+
+func TestOrgClient_refusesRedirectsToHttp(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainHits.Add(1)
+	}))
+	defer plain.Close()
+	tls1 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/steal", http.StatusFound)
+	}))
+	defer tls1.Close()
+
+	resp, err := getWithOrgRedirects(t, tls1.Client(), tls1.URL)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, errOrgRedirect) {
+		t.Fatalf("redirect to http = %v, want errOrgRedirect", err)
+	}
+	if plainHits.Load() != 0 {
+		t.Fatalf("the http server saw %d requests, want none", plainHits.Load())
+	}
+}
+
+func TestOrgClient_refusesRedirectsToAnotherHost(t *testing.T) {
+	var otherHits atomic.Int32
+	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherHits.Add(1)
+	}))
+	defer other.Close()
+	tls1 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/steal", http.StatusFound)
+	}))
+	defer tls1.Close()
+
+	resp, err := getWithOrgRedirects(t, tls1.Client(), tls1.URL)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, errOrgRedirect) {
+		t.Fatalf("redirect to another host = %v, want errOrgRedirect", err)
+	}
+	if otherHits.Load() != 0 {
+		t.Fatalf("the other server saw %d requests, want none", otherHits.Load())
+	}
+}
+
+func TestOrgClient_followsRedirectsWithinTheHost(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			http.Redirect(w, r, "/here", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	resp, err := getWithOrgRedirects(t, srv.Client(), srv.URL+"/moved")
+	if err != nil {
+		t.Fatalf("redirect within the host = %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 }

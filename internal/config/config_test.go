@@ -372,6 +372,12 @@ func TestConfig_gitLabHostValidation(t *testing.T) {
 		{"the same host twice", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
 			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "HTTPS://Git.Example.com/"},
 		}}, "twice"},
+		{"the same host over http and https", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "http://git.example.com"}, map[string]any{"web_url": "https://git.example.com"},
+		}}, "twice"},
+		{"the same host with its default port", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "https://git.example.com:443"},
+		}}, "twice"},
 		{"gitlab.com id without secret", mapGetter{"database.url": testDSN, "gitlab.client_id": "a"}, "gitlab.client_secret"},
 		{"relative api url", mapGetter{"database.url": testDSN, "gitlab.api_url": "gitlab.com"}, "gitlab.api_url"},
 		{"relative webhook url", mapGetter{"database.url": testDSN, "gitlab.webhook_url": "/hook"}, "gitlab.webhook_url"},

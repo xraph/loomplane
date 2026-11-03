@@ -304,3 +304,91 @@ func TestGitLabStore_grantLockSerializes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGitLabStore_aConnectionCantUseAnotherOrganizationsHost(t *testing.T) {
+	s, _, _ := gitlabStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	hostB := &repositories.GitLabHost{
+		OrgID: "org-b", WebURL: "https://git.b.com", Host: "git.b.com", ClientID: "client", CreatedBy: "usr-2", CreatedAt: now,
+	}
+	if err := s.SaveHost(ctx, hostB); err != nil {
+		t.Fatal(err)
+	}
+	// Org A names org B's host ID, whatever host name it claims.
+	c := &repositories.GitLabConnection{
+		OrgID: "org-a", Host: "git.b.com", HostID: hostB.ID, Kind: "oauth", GitLabUserID: 1, Username: "mallory",
+		CreatedBy: "usr-1", CreatedAt: now,
+	}
+	if _, err := s.SaveConnection(ctx, c); err == nil {
+		t.Fatal("org-a saved a connection through org-b's host")
+	}
+	// So org B is not held up by it.
+	if err := s.DeleteHost(ctx, "org-b", hostB.ID); err != nil {
+		t.Fatalf("org-b's own delete = %v", err)
+	}
+
+	// A connection with no host ID, as gitlab.com and the operator's hosts
+	// have, round-trips as none.
+	c.Host, c.HostID = "gitlab.com", ""
+	id, err := s.SaveConnection(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetConnection(ctx, id)
+	if err != nil || got.HostID != "" {
+		t.Fatalf("connection without a host ID = %+v, %v", got, err)
+	}
+	list, err := s.ListConnections(ctx, "org-a")
+	if err != nil || len(list) != 1 || list[0].HostID != "" {
+		t.Fatalf("listed %+v, %v", list, err)
+	}
+}
+
+func TestGitLabStore_hostsAreStoredCanonical(t *testing.T) {
+	s, _, conn := gitlabStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	h := &repositories.GitLabHost{
+		OrgID: "org-a", WebURL: "https://git.a.com", Host: "Git.A.com:443", ClientID: "client", CreatedBy: "usr-1", CreatedAt: now,
+	}
+	if err := s.SaveHost(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	if h.Host != "git.a.com" {
+		t.Fatalf("SaveHost left Host %q", h.Host)
+	}
+	for _, name := range []string{"git.a.com", "GIT.A.COM:443", "Git.A.com"} {
+		named, err := s.HostsNamed(ctx, name)
+		if err != nil || len(named) != 1 || named[0].Host != "git.a.com" {
+			t.Fatalf("HostsNamed(%q) = %+v, %v", name, named, err)
+		}
+	}
+	// The same host spelled another way is the same registration.
+	dup := *h
+	dup.ID, dup.Host = "", "GIT.a.com"
+	if err := s.SaveHost(ctx, &dup); !errors.Is(err, repositories.ErrGitLabHostExists) {
+		t.Fatalf("saving it again = %v, want ErrGitLabHostExists", err)
+	}
+
+	// Sign-ins and connections store the canonical host too.
+	if err := s.SaveSignIn(ctx, &repositories.GitLabSignIn{
+		State: "s", OrgID: "org-a", UserID: "usr-1", Host: "GitLab.com:443", Verifier: "v", ExpiresAt: now.Add(time.Minute), CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var signInHost string
+	if err := conn.QueryRow(ctx, `SELECT host FROM loomplane_gitlab_sign_ins WHERE state = 's'`).Scan(&signInHost); err != nil || signInHost != "gitlab.com" {
+		t.Fatalf("sign-in host %q, %v", signInHost, err)
+	}
+	id, err := s.SaveConnection(ctx, &repositories.GitLabConnection{
+		OrgID: "org-a", Host: "GitLab.com:443", Kind: "oauth", GitLabUserID: 9, CreatedBy: "usr-1", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetConnection(ctx, id)
+	if err != nil || got.Host != "gitlab.com" {
+		t.Fatalf("connection host %+v, %v", got, err)
+	}
+}
