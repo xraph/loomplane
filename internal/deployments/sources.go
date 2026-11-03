@@ -32,7 +32,7 @@ func (g *RepositorySources) Store(ctx context.Context, orgID, repository, sha, k
 	}
 	token, err := g.Tokens.Token(ctx, orgID, repo)
 	if err != nil {
-		return fmt.Errorf("get a token for %s: %w", repo.FullName(), err)
+		return fmt.Errorf("get a token for %s: %w", repo.Key(), err)
 	}
 	pr, pw := io.Pipe()
 	go func() {
