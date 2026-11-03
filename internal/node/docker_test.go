@@ -80,6 +80,10 @@ func startDaemon(t *testing.T, id string) *fakeDaemon {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"Id":"c1"}`)
 	})
+	mux.HandleFunc("POST /containers/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		d.record(r)
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		e, ok := d.execs[r.PathValue("id")]
@@ -415,6 +419,73 @@ func TestFencedStreamDropLeavesDirty(t *testing.T) {
 			d.set(func(d *fakeDaemon) { d.hold = nil })
 			if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 3), newRequest(t, http.MethodPost, "/", "")); code != http.StatusConflict {
 				t.Fatalf("advance over a dirty journal: %d", code)
+			}
+		})
+	}
+}
+
+// A response HTTP gives no body, a 204 or the answer to a HEAD, is relayed
+// as its head alone. A caller reads no body after it, so chunked framing and
+// a last chunk would wait unread, and a caller that closes after the head
+// would leave the journal dirty. The journal ends clean once the head is
+// written.
+func TestFencedBodilessResponseIsHeadOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		method, path string
+		code         int
+		// closeEarly closes the stream as soon as the head is read, as Go's
+		// client does for a response with no body.
+		closeEarly bool
+	}{
+		{name: "204", method: http.MethodPost, path: "/containers/c1/start", code: http.StatusNoContent},
+		{name: "204 caller closes after the head", method: http.MethodPost, path: "/containers/c1/start", code: http.StatusNoContent, closeEarly: true},
+		{name: "HEAD", method: http.MethodHead, path: "/_ping", code: http.StatusOK},
+		{name: "HEAD caller closes after the head", method: http.MethodHead, path: "/_ping", code: http.StatusOK, closeEarly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := startDaemon(t, "daemon-1")
+			j, _ := openJournal(t)
+			h := DockerHandler(d.socket, j)
+			if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 2), newRequest(t, http.MethodPost, "/", "")); code != http.StatusOK {
+				t.Fatalf("advance: %d", code)
+			}
+			hub, node := yamuxPair(t)
+			c, s := openStream(t, hub, node)
+			f := fence(nodeproto.FenceRequest, deployOp, 2)
+			done := serveStream(h, nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker, Target: nodeproto.DockerTargetFenced, Fence: &f}, s)
+			req := newRequest(t, tc.method, tc.path, "")
+			if err := req.Write(c); err != nil {
+				t.Fatal(err)
+			}
+			br := bufio.NewReader(c)
+			resp, err := http.ReadResponse(br, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.code || len(resp.TransferEncoding) != 0 {
+				t.Fatalf("%d %v, want %d with no transfer encoding", resp.StatusCode, resp.TransferEncoding, tc.code)
+			}
+			if tc.closeEarly {
+				_ = c.Close()
+			} else {
+				// The node closes the stream after the head: nothing follows it.
+				rest, readErr := io.ReadAll(br)
+				if readErr != nil || len(rest) != 0 {
+					t.Fatalf("after the head: %q %v", rest, readErr)
+				}
+				_ = c.Close()
+			}
+			if err = wait(t, done); err != nil {
+				t.Fatalf("handler: %v", err)
+			}
+			if got := d.seen(); tc.method == http.MethodPost && !slices.Equal(got, []string{"POST " + tc.path}) {
+				t.Fatalf("daemon saw %v", got)
+			}
+			got, err := loadJournal(t, j)
+			if err != nil || got.Dirty || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
+				t.Fatalf("journal %+v %v", got, err)
 			}
 		})
 	}

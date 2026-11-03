@@ -299,16 +299,21 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 	if err != nil {
 		return err
 	}
-	err = d.forward(ctx, daemonReq, streamed, inspect, container, out)
+	bodiless, err := d.forward(ctx, daemonReq, streamed, inspect, container, out)
 	if err != nil {
 		return err
 	}
-	if out.lost() {
-		return errCallerGone
+	// A response with no body is whole once its head is written. Its caller
+	// may close as soon as it has read the head, so only a failed write of it
+	// counts.
+	if !bodiless {
+		if out.lost() {
+			return errCallerGone
+		}
+		// A caller that read the last chunk may close at once, so only a
+		// failed write of it counts now.
+		out.write(lastChunk)
 	}
-	// A caller that read the last chunk may close at once, so only a failed
-	// write of it counts now.
-	out.write(lastChunk)
 	if out.failed {
 		return errCallerGone
 	}
@@ -429,26 +434,30 @@ func outgoing(ctx context.Context, in *http.Request, body *os.File, size int64) 
 
 // forward sends req to the daemon on a connection of its own and relays the
 // response. The response must have a length or chunked framing, except an
-// exec's close-delimited output stream.
-func (d *dockerFence) forward(ctx context.Context, req *http.Request, streamed bool, inspect, container string, out *relay) error {
+// exec's close-delimited output stream. A response that HTTP gives no body
+// (1xx, 204, 304, or the answer to a HEAD) is relayed as its head alone,
+// with no chunked framing, as a caller reads no body after it; forward then
+// reports it bodiless and run writes no last chunk.
+func (d *dockerFence) forward(ctx context.Context, req *http.Request, streamed bool, inspect, container string, out *relay) (bodiless bool, err error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", d.socket)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = conn.Close() }()
 	err = req.Write(conn)
 	if err != nil {
-		return fmt.Errorf("sending the fenced request: %w", err)
+		return false, fmt.Errorf("sending the fenced request: %w", err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
-		return fmt.Errorf("reading the daemon's response: %w", err)
+		return false, fmt.Errorf("reading the daemon's response: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	bodiless = noBody(req.Method, resp.StatusCode)
 	chunked := len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked"
 	frames := streamed && resp.StatusCode == http.StatusOK
-	if !chunked && resp.ContentLength < 0 && !frames {
-		return errors.New("the daemon's response has no length")
+	if !bodiless && !chunked && resp.ContentLength < 0 && !frames {
+		return false, errors.New("the daemon's response has no length")
 	}
 
 	out.responding = true
@@ -463,15 +472,26 @@ func (d *dockerFence) forward(ctx context.Context, req *http.Request, streamed b
 			head.WriteString(k + ": " + v + "\r\n")
 		}
 	}
+	if bodiless {
+		head.WriteString("Connection: close\r\n\r\n")
+		out.write([]byte(head.String()))
+		return true, nil
+	}
 	head.WriteString("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
 	out.write([]byte(head.String()))
 	if frames {
 		if err := relayFrames(resp.Body, out); err != nil {
-			return err
+			return false, err
 		}
-		return d.waitExit(ctx, inspect, container)
+		return false, d.waitExit(ctx, inspect, container)
 	}
-	return relayBody(resp.Body, out)
+	return false, relayBody(resp.Body, out)
+}
+
+// noBody reports whether HTTP gives the response to a method request with
+// this status no body.
+func noBody(method string, status int) bool {
+	return method == http.MethodHead || status/100 == 1 || status == http.StatusNoContent || status == http.StatusNotModified
 }
 
 // relayBody relays a framed body. Go's reader refuses a short body and a

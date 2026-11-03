@@ -107,9 +107,11 @@ func (a *nodeAccess) FencedRequest(ctx context.Context, mode string, f EffectFen
 		return nil, errFenceOutcomeUnknown
 	}
 	// Only a length or chunked framing proves the whole response arrived;
-	// the node sends one or the other.
+	// the node sends one or the other. A response HTTP gives no body (1xx,
+	// 204, 304, or the answer to a HEAD) is whole with its head, and the
+	// node sends that head alone.
 	chunked := len(response.TransferEncoding) > 0 && response.TransferEncoding[0] == "chunked"
-	if !chunked && response.ContentLength < 0 {
+	if !chunked && response.ContentLength < 0 && !noResponseBody(method, response.StatusCode) {
 		stop()
 		_ = conn.Close()
 		_ = response.Body.Close()
@@ -117,6 +119,12 @@ func (a *nodeAccess) FencedRequest(ctx context.Context, mode string, f EffectFen
 	}
 	response.Body = &nodeFenceBody{body: response.Body, conn: conn, stop: stop}
 	return response, nil
+}
+
+// noResponseBody reports whether HTTP gives the response to a method request
+// with this status no body.
+func noResponseBody(method string, status int) bool {
+	return method == http.MethodHead || status/100 == 1 || status == http.StatusNoContent || status == http.StatusNotModified
 }
 
 // nodeFenceBody is a fenced response's body. A read that fails before the

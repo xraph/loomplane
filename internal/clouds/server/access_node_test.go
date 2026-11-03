@@ -404,6 +404,39 @@ func TestNodeFencedUnknownOutcome(t *testing.T) {
 	})
 }
 
+// A response HTTP gives no body comes from the node as its head alone, with
+// no length and no chunked framing, and is whole.
+func TestNodeFencedBodilessResponseIsWhole(t *testing.T) {
+	fence := EffectFence{Operation: "org_1/runtime/web", Generation: 3}
+	for _, tc := range []struct {
+		name, method, reply string
+		code                int
+	}{
+		{"204", http.MethodPost, "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n", http.StatusNoContent},
+		{"HEAD", http.MethodHead, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &nodeStub{t: t, serve: func(_ nodeproto.StreamHeader, conn net.Conn) {
+				if _, ok := readFenced(t, conn); ok {
+					_, _ = io.WriteString(conn, tc.reply)
+				}
+			}}
+			c := nodeClient(t, stub, "daemon-1")
+			response, err := c.fencedRequest(t.Context(), "request", fence, tc.method, "/containers/abc/start", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil || len(body) != 0 || response.StatusCode != tc.code {
+				t.Fatalf("%d %q %v", response.StatusCode, body, err)
+			}
+			if err = response.Body.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+		})
+	}
+}
+
 // sshGPUFixture is TestParseGPUProbe's ready-through-runtime SSH output.
 const sshGPUFixture = `{"smi_exit":0,"smi":"0, GPU-aaa, NVIDIA L4, 23034\n1, GPU-bbb, NVIDIA L4, 23034\n","nvidia_pci":true,"toolkit":false}`
 
