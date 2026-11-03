@@ -80,12 +80,7 @@ func DockerHandler(socket string, journal *FenceJournal) Handler {
 // dockerHandler is DockerHandler with the journal looked up by the daemon's
 // verified ID.
 func dockerHandler(socket string, journalFor func(daemonID string) (*FenceJournal, error)) Handler {
-	f := &dockerFence{socket: socket, journalFor: journalFor, api: &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-		},
-		DisableCompression: true,
-	}}}
+	f := &dockerFence{socket: socket, journalFor: journalFor, api: dockerAPI(socket)}
 	return func(ctx context.Context, hdr nodeproto.StreamHeader, stream net.Conn) error {
 		switch hdr.Target {
 		case nodeproto.DockerTargetSocket:
@@ -127,21 +122,7 @@ func (r *Runtime) registerDocker(ctx context.Context) string {
 	if !cfg.Allows(nodeproto.EndpointDocker) {
 		return ""
 	}
-	socket := cfg.DockerSocket
-	if socket == "" {
-		docker, podman := r.detectBase.DockerSockets, r.detectBase.PodmanSockets
-		if docker == nil {
-			docker = dockerSockets()
-		}
-		if podman == nil {
-			podman = podmanSockets()
-		}
-		if rt := pingRuntime(ctx, docker); rt != nil {
-			socket = rt.Socket
-		} else if rt := pingRuntime(ctx, podman); rt != nil {
-			socket = rt.Socket
-		}
-	}
+	socket := findSocket(ctx, cfg.DockerSocket, r.detectBase)
 	if socket == "" {
 		r.log().Warn("loomplane-node: docker is allowed, but no Docker or Podman socket answered, so this node refuses docker streams until it restarts")
 		return ""
@@ -151,6 +132,29 @@ func (r *Runtime) registerDocker(ctx context.Context) string {
 	return socket
 }
 
+// findSocket is the configured socket, or else the first Docker, then
+// Podman, socket in o (the usual places when o leaves them nil) that answers.
+// It is "" when none does.
+func findSocket(ctx context.Context, configured string, o DetectOptions) string {
+	if configured != "" {
+		return configured
+	}
+	docker, podman := o.DockerSockets, o.PodmanSockets
+	if docker == nil {
+		docker = dockerSockets()
+	}
+	if podman == nil {
+		podman = podmanSockets()
+	}
+	if rt := pingRuntime(ctx, docker); rt != nil {
+		return rt.Socket
+	}
+	if rt := pingRuntime(ctx, podman); rt != nil {
+		return rt.Socket
+	}
+	return ""
+}
+
 // splice copies the stream to the daemon socket and back. The caller closing
 // its side half-closes the daemon's, so a response in flight still returns.
 func splice(ctx context.Context, socket string, stream net.Conn) error {
@@ -158,15 +162,22 @@ func splice(ctx context.Context, socket string, stream net.Conn) error {
 	if err != nil {
 		return err
 	}
+	return pipe(stream, daemon)
+}
+
+// pipe copies stream to conn and back until conn's side ends, then closes
+// conn. The caller closing its side half-closes conn's, so a response in
+// flight still returns.
+func pipe(stream, conn net.Conn) error {
 	go func() {
-		_, cerr := io.Copy(daemon, stream)
-		if hc, ok := daemon.(interface{ CloseWrite() error }); ok && cerr == nil && hc.CloseWrite() == nil {
+		_, cerr := io.Copy(conn, stream)
+		if hc, ok := conn.(interface{ CloseWrite() error }); ok && cerr == nil && hc.CloseWrite() == nil {
 			return
 		}
-		_ = daemon.Close()
+		_ = conn.Close()
 	}()
-	_, err = io.Copy(stream, daemon)
-	_ = daemon.Close()
+	_, err := io.Copy(stream, conn)
+	_ = conn.Close()
 	return err
 }
 
@@ -526,12 +537,28 @@ func (d *dockerFence) waitExit(ctx context.Context, inspect, container string) e
 }
 
 func (d *dockerFence) getJSON(ctx context.Context, path string, v any) error {
+	return dockerGetJSON(ctx, d.api, path, v)
+}
+
+// dockerAPI is an HTTP client that reaches only the daemon at socket.
+func dockerAPI(socket string) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+		DisableCompression: true,
+	}}
+}
+
+// dockerGetJSON decodes the daemon's answer to GET path into v. Anything but
+// a 200 is an error.
+func dockerGetJSON(ctx context.Context, api *http.Client, path string, v any) error {
 	// The host is a placeholder: api dials only the daemon socket.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, http.NoBody) //nolint:gosec // G704: see above
 	if err != nil {
 		return err
 	}
-	resp, err := d.api.Do(req) //nolint:gosec // G704: as above
+	resp, err := api.Do(req) //nolint:gosec // G704: as above
 	if err != nil {
 		return err
 	}

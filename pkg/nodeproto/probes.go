@@ -35,8 +35,9 @@ const (
 // MaxArgSize is the longest StreamHeader.Arg, in bytes.
 const MaxArgSize = 4096
 
-// CgroupLimits are the CPU (nano-CPUs) and memory (bytes) limits the node's
-// cgroup allows, the same shape the SSH effective capacity command prints.
+// CgroupLimits are the CPU (millicpus) and memory (bytes) limits the node's
+// cgroup allows, the same shape and units the SSH effective capacity command
+// prints.
 type CgroupLimits struct {
 	CPU    int64 `json:"cpu"`
 	Memory int64 `json:"memory"`

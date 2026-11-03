@@ -592,7 +592,7 @@ func (c *cmds) runForeground(ctx context.Context, st State, o RuntimeOptions) er
 	}
 	rt.Log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	rt.detectBase = c.opts.detect
-	rt.registerDocker(ctx)
+	rt.registerDial(ctx, rt.registerDocker(ctx))
 	return rt.Run(ctx)
 }
 
