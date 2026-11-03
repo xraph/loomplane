@@ -60,6 +60,16 @@ Nothing from a repository runs on a Loomplane machine. Analysis only reads files
 
 Provider plugins are trusted with the credentials of the cloud they deploy to, so only configure ones you run or trust. Each needs its own token, and a plugin refuses any request without it.
 
+## Nodes
+
+A node is a machine you joined with `loomctl node join`. It dials out to Loomplane over one WebSocket and opens no inbound port. It proves who it is with its own Ed25519 key, which stays in its state directory (`/var/lib/loomplane-node` on Linux). Your API key is used once to mint a single-use join token, and the machine never stores it. Only an owner's or admin's write key, or a session, can mint one.
+
+What a node can do is whatever its allowlist says, and the allowlist can only get smaller from Loomplane's side. Widening it takes `sudo loomctl node allow` on the machine itself. Today only `probe` does anything, which reports what the machine has. Nothing Loomplane sends can add an endpoint to the list.
+
+Allowing `docker` is a bigger step than it looks. Access to the Docker socket is root access on that host, so allow it only on machines you'd let Loomplane administer.
+
+Revoking a node, from the dashboard, with `loomctl node revoke`, or with `node leave` on the machine, ends its trust. Revoking an API key as compromised lists the nodes that joined with a token it made and offers to revoke them. Releases are signed with cosign keyless, and `node update` verifies one before replacing the binary. [Nodes](/docs/clouds/nodes) has the steps.
+
 ## Private repositories
 
 For a private repository the worker mints a GitHub App installation token limited to that one repository and to reading its contents, and stores it nowhere. An organization's analyses only use installations that organization connected, and connecting one needs GitHub to confirm the person connecting can see it. See [Private repositories](/docs/guides/private-repositories).

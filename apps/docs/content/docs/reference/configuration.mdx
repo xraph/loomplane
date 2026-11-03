@@ -83,9 +83,9 @@ Machines that join an organization hold one connection to a replica. When you ru
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LOOMPLANE_NODES_ADVERTISE_URL` | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. Set each replica's own address. Use `https`, or a private network with the setting below |
-| `LOOMPLANE_NODES_HOP_INSECURE` | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
-| `LOOMPLANE_NODES_HOP_CA_FILE` | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+| `LOOMPLANE_NODES_ADVERTISE_URL` (`nodes.advertise_url`) | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. It must be an absolute http or https URL with no user, query or fragment, or startup stops. Set each replica's own address. Use `https`, or a private network with the setting below |
+| `LOOMPLANE_NODES_HOP_INSECURE` (`nodes.hop_insecure`) | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
+| `LOOMPLANE_NODES_HOP_CA_FILE` (`nodes.hop_ca_file`) | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
 
 ## Cloud sign-in
 

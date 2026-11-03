@@ -84,6 +84,24 @@ Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default
 
 Most of these review before they act and apply only with `--yes`. Many take `--wait`, `--timeout` and `--request-id`. [Cloud targets](/docs/clouds/cloud-targets), [Adopting and moving services](/docs/clouds/adopting-and-moving) and [Your own servers](/docs/clouds/your-own-servers) show them in context.
 
+## Nodes
+
+`loomctl node` joins and manages machines that connect to Loomplane. `loomplane node` has the same subcommands. See [Nodes](/docs/clouds/nodes).
+
+| Command | What it does |
+|---|---|
+| `node join [--token TOKEN] [--name NAME] [--label K=V] [--allow ENDPOINTS] [--cloud ID] [--builder dedicated] [--edge] [--foreground] [--state-dir DIR]` | Joins this machine and installs the service. Without `--token` it mints one with your login. Needs root on Linux |
+| `node run [--state-dir DIR]` | Runs the node in the foreground |
+| `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
+| `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Needs root |
+| `node leave` | Revokes this node, stops its service and removes its config |
+| `node list [--json]` | Lists the organization's nodes |
+| `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
+| `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start |
+| `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
+
+`join`, `list` and `revoke` take `--url` and `--key` too. A node that Loomplane revoked exits with code 77.
+
 ## AI agents
 
 | Command | What it does |
