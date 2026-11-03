@@ -6,7 +6,7 @@
 //     CodeBlock part: a step's arguments are a few lines, and Shiki's
 //     grammars and engine aren't worth their weight for them.
 //   - ToolHeader takes children, shown after the status, for the step's
-//     risk badge.
+//     risk badge, and a statusLabel to say instead of the state's own.
 //   - The status labels are Loomplane's words.
 "use client"
 
@@ -45,6 +45,8 @@ export type ToolHeaderProps = {
   title?: string
   className?: string
   children?: ReactNode
+  /** Says this instead of the state's own label. */
+  statusLabel?: string
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
   | {
@@ -74,10 +76,10 @@ const statusIcons: Record<ToolPart["state"], ReactNode> = {
   "output-error": <XCircleIcon className="size-4 text-destructive" />,
 }
 
-export const getStatusBadge = (status: ToolPart["state"]) => (
+export const getStatusBadge = (status: ToolPart["state"], label?: string) => (
   <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
-    {statusIcons[status]}
-    {statusLabels[status]}
+    {label ? <CircleIcon className="size-4" /> : statusIcons[status]}
+    {label ?? statusLabels[status]}
   </Badge>
 )
 
@@ -88,6 +90,7 @@ export const ToolHeader = ({
   state,
   toolName,
   children,
+  statusLabel,
   ...props
 }: ToolHeaderProps) => {
   const derivedName =
@@ -106,7 +109,7 @@ export const ToolHeader = ({
         <span className="truncate font-mono text-[13px] font-medium">
           {title ?? derivedName}
         </span>
-        {getStatusBadge(state)}
+        {getStatusBadge(state, statusLabel)}
         {children}
       </div>
       <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-open:rotate-180" />

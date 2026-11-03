@@ -14,13 +14,27 @@ import { toolMeta } from "@/lib/agent-events"
 import { riskLabel, riskTone, riskToneClass } from "@/lib/risk"
 import { cn } from "@/lib/utils"
 
-export function ToolStep({ part }: { part: DynamicToolUIPart }) {
+export function ToolStep({
+  part,
+  live = true,
+}: {
+  part: DynamicToolUIPart
+  /** Whether the turn is still running; a call of a finished turn with no
+   * result isn't running any more. */
+  live?: boolean
+}) {
   const meta = toolMeta(part)
+  const unsettled = part.state === "input-available" && !live
   // A refused call is an error to the AI SDK; the header says it was refused.
   const state = meta.outcome === "denied" ? "output-denied" : part.state
   return (
     <Tool>
-      <ToolHeader type="dynamic-tool" toolName={part.toolName} state={state}>
+      <ToolHeader
+        type="dynamic-tool"
+        toolName={part.toolName}
+        state={state}
+        statusLabel={unsettled ? "No result" : undefined}
+      >
         <Badge
           variant="outline"
           className={cn("rounded-full", riskToneClass[riskTone(meta.risk)])}

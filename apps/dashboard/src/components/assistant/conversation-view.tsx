@@ -331,7 +331,11 @@ function AgentTurn({
               return <AgentMarkdown key={i} text={p.text} />
             case "dynamic-tool":
               return (
-                <ToolStep key={p.toolCallId} part={p as DynamicToolUIPart} />
+                <ToolStep
+                  key={p.toolCallId}
+                  part={p as DynamicToolUIPart}
+                  live={live}
+                />
               )
             case "data-request":
               return (
@@ -364,7 +368,13 @@ function AgentTurn({
               return null
           }
         })}
-        {live && <Working status={status} />}
+        {live && (
+          // A task that has written something is under way, whatever its
+          // last status event said.
+          <Working
+            status={status === "queued" && parts.length ? "running" : status}
+          />
+        )}
         {!live && status === "failed" && !explained && (
           <p role="alert" className="text-[13px] text-destructive">
             {error || "The agent couldn't finish this answer."}
