@@ -71,6 +71,12 @@ func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 		r.refuse(stream, fmt.Sprintf("endpoint %s is not allowed on this node", hdr.Endpoint))
 		return
 	}
+	// The rules every handler shares, such as a fenced docker stream
+	// carrying a whole fence, are checked once here.
+	if err := hdr.Validate(); err != nil {
+		r.refuse(stream, err.Error())
+		return
+	}
 	r.mu.RLock()
 	h := r.handlers[hdr.Endpoint]
 	r.mu.RUnlock()
