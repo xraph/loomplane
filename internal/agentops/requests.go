@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // QuestionTTL is how long a run waits for a person to answer one of its
@@ -28,6 +29,13 @@ func registerRequests(r *Registry) {
 // The model reads it and can ask again.
 var ErrTeamWithoutReason = errors.New("say why this team: a request that names a team needs team_reason")
 
+// MaxTeamRunes is the longest team a request may name: a team's name is
+// at most 80 characters, and its slug is shorter.
+const MaxTeamRunes = 80
+
+// ErrTeamTooLong is a team longer than any team's name.
+var ErrTeamTooLong = errors.New("name the team by its slug from list_teams: at most 80 characters")
+
 // ValidateRequest checks a request to a person before cortex suspends the
 // run on it. A team needs a reason that isn't blank; whether the team
 // exists is decided when the request is routed, which falls back to the
@@ -44,6 +52,9 @@ func ValidateRequest(name string, args json.RawMessage) error {
 		if err := json.Unmarshal(args, &in); err != nil {
 			return fmt.Errorf("invalid arguments: %w", err)
 		}
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(in.Team)) > MaxTeamRunes {
+		return ErrTeamTooLong
 	}
 	if strings.TrimSpace(in.Team) != "" && strings.TrimSpace(in.TeamReason) == "" {
 		return ErrTeamWithoutReason

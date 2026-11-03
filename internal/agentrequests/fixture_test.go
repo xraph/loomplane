@@ -55,6 +55,9 @@ type memStore struct {
 	rows map[string]*Request
 	// failInsert fails the next Insert.
 	failInsert error
+	// isDue says whether a pending request's plan or connection has moved:
+	// what the Postgres store's Due reads from the plans and connections.
+	isDue func(*Request) bool
 }
 
 func newMemStore() *memStore { return &memStore{rows: map[string]*Request{}} }
@@ -217,21 +220,31 @@ func (s *memStore) CancelTask(_ context.Context, orgID, taskID string, at time.T
 	return out, nil
 }
 
-func (s *memStore) Due(_ context.Context, now time.Time, limit int) ([]Ref, error) {
+func (s *memStore) Due(_ context.Context, now time.Time, after Cursor, limit int) ([]Ref, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := []Ref{}
+	rows := make([]*Request, 0, len(s.rows))
 	for _, r := range s.rows {
-		if r.Status != StatusPending {
+		rows = append(rows, clone(r))
+	}
+	due := s.isDue
+	s.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+			return rows[i].CreatedAt.Before(rows[j].CreatedAt)
+		}
+		return rows[i].ID < rows[j].ID
+	})
+	out := []Ref{}
+	for _, r := range rows {
+		if r.Status != StatusPending || !after.Before(r.CreatedAt, r.ID) {
 			continue
 		}
-		if r.Kind == KindApprovePlan || r.Kind == KindConnectGitHub || r.Kind == KindCreateConnection || r.ExpiresAt.Before(now) {
-			out = append(out, Ref{OrgID: r.OrgID, ID: r.ID})
+		if r.ExpiresAt.Before(now) || (due != nil && due(r)) {
+			out = append(out, Ref{OrgID: r.OrgID, ID: r.ID, CreatedAt: r.CreatedAt})
 		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	if len(out) > limit {
-		out = out[:limit]
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
 }
@@ -307,6 +320,18 @@ func (f *fakeResumer) DecideCheckpoint(ctx context.Context, cp id.CheckpointID, 
 	return nil
 }
 
+func (f *fakeResumer) GetCheckpoint(_ context.Context, cp id.CheckpointID) (*checkpoint.Checkpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, prior := range f.decisions {
+		if prior.checkpoint == cp.String() {
+			d := prior.d
+			return &checkpoint.Checkpoint{ID: cp, State: "resolved", Decision: &d}, nil
+		}
+	}
+	return &checkpoint.Checkpoint{ID: cp, State: "pending"}, nil
+}
+
 func (f *fakeResumer) ProvideResults(ctx context.Context, runID id.AgentRunID, in engine.ResumeInput) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -341,7 +366,9 @@ type fakeRuns struct {
 	mu      sync.Mutex
 	tasks   map[string]*agentruns.Task // by run ID
 	bindErr error
-	events  []string
+	// bindFail fails Bind for these tasks.
+	bindFail map[string]bool
+	events   []string
 }
 
 func (f *fakeRuns) ByRun(_ context.Context, orgID, runID string) (*agentruns.Task, error) {
@@ -356,6 +383,12 @@ func (f *fakeRuns) ByRun(_ context.Context, orgID, runID string) (*agentruns.Tas
 }
 
 func (f *fakeRuns) Bind(ctx context.Context, t *agentruns.Task) (context.Context, error) {
+	f.mu.Lock()
+	failed := f.bindFail[t.ID]
+	f.mu.Unlock()
+	if failed {
+		return ctx, errors.New("this task can't be bound")
+	}
 	if f.bindErr != nil {
 		return ctx, f.bindErr
 	}
@@ -754,12 +787,13 @@ func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{
 		store: newMemStore(), resumer: &fakeResumer{}, safety: &fakeSafety{}, audit: &fakeAudit{},
-		runs:  &fakeRuns{tasks: map[string]*agentruns.Task{}},
+		runs:  &fakeRuns{tasks: map[string]*agentruns.Task{}, bindFail: map[string]bool{}},
 		plans: &fakePlans{plans: map[string]*planning.Plan{}},
 		vars:  &fakeVariables{}, github: &fakeGitHub{}, clouds: &fakeConnections{},
 		teams: &fakeTeams{responsible: map[string]string{}},
 		now:   time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC),
 	}
+	r.store.isDue = r.moved
 	r.chat = r.task("atask_chat", orgA, projA, ada)
 	r.background = r.task("atask_bg", orgA, projA, "")
 	r.plans.plans["plan_1"] = &planning.Plan{ID: "plan_1", OrgID: orgA, ProjectID: projA, EnvironmentID: "env_prod", Environment: "production", Status: planning.StatusReady, Revision: "rev1"}
@@ -786,6 +820,33 @@ func newRig(t *testing.T) *rig {
 		}
 	})
 	return r
+}
+
+// moved is what the Postgres store's Due reads: an approval whose plan
+// has left ready, or a GitHub or cloud request whose connection exists.
+func (r *rig) moved(req *Request) bool {
+	switch req.Kind {
+	case KindApprovePlan:
+		r.plans.mu.Lock()
+		defer r.plans.mu.Unlock()
+		pl, ok := r.plans.plans[req.Target.PlanID]
+		return !ok || pl.OrgID != req.OrgID || (pl.Status != planning.StatusReady && pl.Status != planning.StatusPlanning)
+	case KindConnectGitHub:
+		st, _ := r.github.Status(context.Background(), person(req.OrgID, ""))
+		for _, i := range st.Installations {
+			if !i.CreatedAt.Before(req.CreatedAt) {
+				return true
+			}
+		}
+	case KindCreateConnection:
+		conns, _ := r.clouds.List(context.Background(), person(req.OrgID, ""))
+		for _, c := range conns {
+			if strings.EqualFold(c.Cloud, req.Target.Cloud) && !c.CreatedAt.Before(req.CreatedAt) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *rig) clock() time.Time {

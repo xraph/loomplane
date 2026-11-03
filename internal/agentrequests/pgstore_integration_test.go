@@ -5,6 +5,7 @@ package agentrequests
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -153,12 +154,12 @@ func TestPgStoreKeepsRequests(t *testing.T) {
 	}
 
 	// Due: pending questions only once past their expiry.
-	due, err := r.store.Due(ctx, now, 10)
+	due, err := r.store.Due(ctx, now, Cursor{}, 10)
 	if err != nil || len(due) != 0 {
 		t.Fatalf("due now %+v, %v", due, err)
 	}
-	due, _ = r.store.Due(ctx, now.Add(25*time.Hour), 10)
-	if len(due) != 2 || due[0] != (Ref{OrgID: orgA, ID: a.ID}) {
+	due, _ = r.store.Due(ctx, now.Add(25*time.Hour), Cursor{}, 10)
+	if len(due) != 2 || due[0].OrgID != orgA || due[0].ID != a.ID {
 		t.Fatalf("due later %+v", due)
 	}
 	if pause, perr := r.store.Pause(ctx, orgA, "arun_a", "susp_1"); perr != nil || len(pause) != 1 {
@@ -228,5 +229,103 @@ func TestRequestStoreAndNoticesShareATransaction(t *testing.T) {
 	req, err := pr.store.Pause(ctx, orgA, task.RunID, n.SuspensionID.String())
 	if err != nil || len(req) != 1 || req[0].RouteSource != "admins" || req[0].TeamName != teams.AdminsName {
 		t.Fatalf("request %+v, %v", req, err)
+	}
+}
+
+// I1: Due reads only what can settle now, and pages through it, so 150
+// old requests in other workspaces that are still waiting, or that are due
+// but never settle, don't keep a due one from the sweep.
+func TestDueReadsOnlyWhatCanSettle(t *testing.T) {
+	r := newPgRig(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	r.task(orgB, "atask_b", "arun_b", "")
+	r.task(orgA, "atask_a", "arun_a", ada)
+	r.exec(`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('proj_b','org_b','B','b','ready','x',now(),now())`)
+	r.exec(`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('env_b','org_b','proj_b','production','production',now(),now())`)
+	r.exec(`INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('man_b','org_b','proj_b',1,'{}','d','x',now())`)
+	r.exec(`INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,kind,manifest_id,manifest_revision,created_by,created_at)
+		VALUES('plan_ready','org_b','proj_b','env_b','production','ready','release','man_b',1,'x',now())`)
+	old := now.Add(-48 * time.Hour)
+	waiting := func(i int, kind Kind, target Target) {
+		at := old.Add(time.Duration(i) * time.Second)
+		req := pgRequest(fmt.Sprintf("areq_w%03d", i), orgB, "atask_b", "arun_b", fmt.Sprintf("call_w%03d", i), at)
+		req.Kind, req.Target, req.ExpiresAt = kind, target, now.Add(time.Hour)
+		r.insert(req)
+	}
+	for i := range 150 {
+		switch i % 3 {
+		case 0:
+			waiting(i, KindApprovePlan, Target{PlanID: "plan_ready"})
+		case 1:
+			waiting(i, KindConnectGitHub, Target{Repository: "acme/api"})
+		default:
+			waiting(i, KindCreateConnection, Target{Cloud: "aws"})
+		}
+	}
+	due := pgRequest("areq_due", orgA, "atask_a", "arun_a", "call_due", now.Add(-time.Hour))
+	due.Kind, due.Target, due.ExpiresAt = KindApprovePlan, Target{PlanID: "plan_gone"}, now.Add(time.Hour)
+	r.insert(due)
+	got, err := r.store.Due(ctx, now, Cursor{}, 100)
+	if err != nil || len(got) != 1 || got[0].ID != "areq_due" {
+		t.Fatalf("due %+v, %v", got, err)
+	}
+
+	// Once their connection is made the waiting requests are due, and the
+	// sweep pages through them oldest first to the one behind them.
+	r.exec(`INSERT INTO loomplane_github_installations(org_id,installation_id,account,created_by,created_at) VALUES('org_b',1,'acme','x',now())`)
+	r.exec(`UPDATE loomplane_agent_requests SET expires_at = $1 WHERE kind = 'create_connection'`, now.Add(-time.Minute))
+	var seen []string
+	cursor := Cursor{}
+	for range 5 {
+		page, perr := r.store.Due(ctx, now, cursor, 40)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		for _, ref := range page {
+			seen = append(seen, ref.ID)
+			cursor = Cursor{At: ref.CreatedAt, ID: ref.ID}
+		}
+		if len(page) < 40 {
+			break
+		}
+	}
+	if len(seen) != 101 || seen[len(seen)-1] != "areq_due" {
+		t.Fatalf("paged %d, last %q", len(seen), seen[len(seen)-1])
+	}
+}
+
+// M10: an answer and a cancel race on one row and exactly one wins.
+func TestAnAnswerAndACancelSettleOnce(t *testing.T) {
+	r := newPgRig(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	r.task(orgA, "atask_a", "arun_a", ada)
+	r.insert(pgRequest("areq_1", orgA, "atask_a", "arun_a", "call_1", now))
+	r.insert(pgRequest("areq_2", orgA, "atask_a", "arun_a", "call_2", now))
+	st := Settlement{Status: StatusAnswered, Outcome: OutcomeAnswered, AnsweredBy: ada, At: now}
+	if moved, err := r.store.Settle(ctx, orgA, "areq_1", st); err != nil || !moved {
+		t.Fatalf("settle: %v %v", moved, err)
+	}
+	cancelled, err := r.store.CancelTask(ctx, orgA, "atask_a", now)
+	if err != nil || len(cancelled) != 1 || cancelled[0].ID != "areq_2" {
+		t.Fatalf("cancel %+v, %v", cancelled, err)
+	}
+	if moved, _ := r.store.Settle(ctx, orgA, "areq_2", st); moved {
+		t.Fatal("answered a cancelled request")
+	}
+}
+
+// M6: a person with no name is "a teammate" to the model, never their
+// email.
+func TestPeopleAreNeverNamedByEmail(t *testing.T) {
+	r := newPgRig(t)
+	r.exec(`INSERT INTO authsome_users(id,app_id,env_id,email,first_name,last_name) VALUES('usr_anon','app','env','anon@acme.com','','')`)
+	people := PgPeople{DB: r.pg, AppID: "app"}
+	if got := people.Name(context.Background(), "usr_anon"); got != "a teammate" {
+		t.Fatalf("name %q", got)
+	}
+	if got := people.Name(context.Background(), ada); got != "Ada" {
+		t.Fatalf("name %q", got)
 	}
 }

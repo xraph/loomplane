@@ -2,10 +2,14 @@ package agentrequests
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/xraph/cortex"
+	"github.com/xraph/cortex/checkpoint"
+	"github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/suspension"
 
 	"github.com/xraph/loomplane/internal/agentauthz"
@@ -25,22 +29,22 @@ func TestSettleApprovesWhenAPersonApproved(t *testing.T) {
 	r := newRig(t)
 	n := approval(t, "plan_1", "rev1")
 	r.suspend(t, r.chat, n)
-	r.plans.set(planning.StatusApproved, ada)
+	r.plans.set(planning.StatusApproved, cy)
 	r.settle(t)
 	d := r.resumer.decided(t)
 	if len(d) != 1 {
 		t.Fatalf("decisions %+v", d)
 	}
 	got := d[0]
-	if !got.d.Approved || got.d.DecidedBy != ada || got.d.Reason != "approved by Ada" || got.checkpoint != n.CheckpointID.String() || !got.bound {
+	if !got.d.Approved || got.d.DecidedBy != cy || got.d.Reason != "approved by Cy" || got.checkpoint != n.CheckpointID.String() || !got.bound {
 		t.Fatalf("decision %+v", got)
 	}
 	// Cortex records the person who decided, through the codec.
-	if dec, ok := got.principal.(agentauthz.Decider); !ok || dec.Person != person(orgA, ada) {
+	if dec, ok := got.principal.(agentauthz.Decider); !ok || dec.Person != person(orgA, cy) {
 		t.Fatalf("decider %#v", got.principal)
 	}
 	req := r.store.only(t)
-	if req.Status != StatusAnswered || req.Outcome != OutcomeApproved || req.AnsweredBy != ada {
+	if req.Status != StatusAnswered || req.Outcome != OutcomeApproved || req.AnsweredBy != cy {
 		t.Fatalf("request %+v", req)
 	}
 }
@@ -117,7 +121,7 @@ func TestSettleApprovesOnlyAPersonsApproval(t *testing.T) {
 func TestSettleIsIdempotent(t *testing.T) {
 	r := newRig(t)
 	r.suspend(t, r.chat, approval(t, "plan_1", "rev1"))
-	r.plans.set(planning.StatusApproved, ada)
+	r.plans.set(planning.StatusApproved, cy)
 	r.settle(t)
 	r.settle(t)
 	if d := r.resumer.decided(t); len(d) != 1 {
@@ -137,8 +141,8 @@ func TestSettleIsIdempotent(t *testing.T) {
 	r2 := newRig(t)
 	n := approval(t, "plan_1", "rev1")
 	r2.suspend(t, r2.chat, n)
-	r2.plans.set(planning.StatusApproved, ada)
-	r2.resumer.decisions = append(r2.resumer.decisions, decision{checkpoint: n.CheckpointID.String()})
+	r2.plans.set(planning.StatusApproved, cy)
+	r2.resumer.decisions = append(r2.resumer.decisions, decision{checkpoint: n.CheckpointID.String(), d: checkpoint.Decision{Approved: true, DecidedBy: cy}})
 	r2.settle(t)
 	if req := r2.store.only(t); req.Status != StatusAnswered {
 		t.Fatalf("request %+v", req)
@@ -209,5 +213,90 @@ func TestSettleNoticesAConnectionMadeElsewhere(t *testing.T) {
 	}
 	if req := r2.store.only(t); req.AnsweredBy != cy || req.Outcome != OutcomeConnected {
 		t.Fatalf("request %+v", req)
+	}
+}
+
+// ---- fix round 1 ----
+
+// I1: the sweep reads only what is due, a page at a time from where it
+// stopped, so rows that never settle can't hold back one that can.
+func TestSettleReachesADueRowPastManyStuckOnes(t *testing.T) {
+	r := newRig(t)
+	stuck := r.task("atask_stuck", orgB, projB, "")
+	r.runs.bindFail[stuck.ID] = true
+	r.plans.plans["plan_b"] = &planning.Plan{ID: "plan_b", OrgID: orgB, ProjectID: projB, Status: planning.StatusApproved, DecidedBy: bea, Revision: "r"}
+	old := r.now.Add(-time.Hour)
+	r.store.mu.Lock()
+	for i := range 150 {
+		at := old.Add(time.Duration(i) * time.Second)
+		reqID := fmt.Sprintf("areq_stuck_%03d", i)
+		r.store.rows[reqID] = &Request{ID: reqID, OrgID: orgB, ProjectID: projB, TaskID: stuck.ID, RunID: stuck.RunID, Kind: KindApprovePlan,
+			Status: StatusPending, Target: Target{PlanID: "plan_b", PlanRevision: "r"}, ExpiresAt: r.now.Add(time.Hour),
+			CreatedAt: at, UpdatedAt: at, SuspensionID: id.NewSuspensionID().String(), CheckpointID: id.NewCheckpointID().String(), ToolCallID: reqID}
+	}
+	r.store.mu.Unlock()
+	n := approval(t, "plan_1", "rev1")
+	r.suspend(t, r.chat, n)
+	r.plans.set(planning.StatusApproved, cy)
+	if err := r.svc.Settle(context.Background()); err == nil {
+		t.Fatal("the stuck rows' failures were hidden")
+	}
+	found := false
+	for _, d := range r.resumer.decided(t) {
+		found = found || (d.checkpoint == n.CheckpointID.String() && d.d.Approved)
+	}
+	if !found {
+		t.Fatal("the due row behind 150 stuck ones was never settled")
+	}
+}
+
+// M1: only an approval of the revision the agent asked about, by someone
+// who may still approve deployments on the project, counts.
+func TestSettleCountsOnlyACurrentApprovalOfTheRevisionAsked(t *testing.T) {
+	r := newRig(t)
+	r.suspend(t, r.chat, approval(t, "plan_1", "rev_old"))
+	r.plans.set(planning.StatusApproved, cy)
+	r.settle(t)
+	if d := r.resumer.decided(t); len(d) != 1 || d[0].d.Approved {
+		t.Fatalf("another revision's approval: %+v", d)
+	}
+	r2 := newRig(t)
+	r2.suspend(t, r2.chat, approval(t, "plan_1", "rev1"))
+	r2.plans.set(planning.StatusApproved, ada) // a developer: no deployment:approve
+	r2.settle(t)
+	if d := r2.resumer.decided(t); len(d) != 1 || d[0].d.Approved {
+		t.Fatalf("an approval by someone who can't approve: %+v", d)
+	}
+	r3 := newRig(t)
+	n := approval(t, "plan_1", "rev1")
+	r3.suspend(t, r3.chat, n)
+	before := r3.now.Add(-time.Minute)
+	r3.plans.mu.Lock()
+	r3.plans.plans["plan_1"].Status, r3.plans.plans["plan_1"].DecidedBy, r3.plans.plans["plan_1"].DecidedAt = planning.StatusApproved, cy, &before
+	r3.plans.mu.Unlock()
+	r3.settle(t)
+	if d := r3.resumer.decided(t); len(d) != 1 || !d[0].d.Approved || d[0].d.Reason != "the plan was already approved by Cy" {
+		t.Fatalf("an approval before the request: %+v", d)
+	}
+}
+
+// M2: a checkpoint cortex already closed (expired, or decided some other
+// way) settles the request expired, not with the plan's verdict.
+func TestSettleDoesntClaimACheckpointCortexClosed(t *testing.T) {
+	for name, setup := range map[string]func(r *rig, n suspension.Notice){
+		"expired": func(r *rig, _ suspension.Notice) { r.resumer.decideErr = cortex.ErrSuspensionExpired },
+		"decided otherwise": func(r *rig, n suspension.Notice) {
+			r.resumer.decisions = append(r.resumer.decisions, decision{checkpoint: n.CheckpointID.String(), d: checkpoint.Decision{Approved: false, DecidedBy: "engine"}})
+		},
+	} {
+		r := newRig(t)
+		n := approval(t, "plan_1", "rev1")
+		r.suspend(t, r.chat, n)
+		r.plans.set(planning.StatusApproved, cy)
+		setup(r, n)
+		r.settle(t)
+		if req := r.store.only(t); req.Status != StatusExpired || req.Outcome != OutcomeExpired {
+			t.Fatalf("%s: %+v", name, req)
+		}
 	}
 }

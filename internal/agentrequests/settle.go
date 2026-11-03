@@ -15,8 +15,14 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// settleLimit bounds the requests one sweep looks at.
-const settleLimit = 100
+const (
+	// settlePage is how many due requests the sweep reads at a time, and
+	// settlePages how many pages one pass reads at most. A pass that stops
+	// short resumes after the last request it read, so requests that keep
+	// failing never hold the rest back.
+	settlePage  = 100
+	settlePages = 10
+)
 
 // Settle is the sweep's half of requests, run every 15 seconds with the
 // run driver's sweep. It settles what a person did elsewhere and what ran
@@ -31,27 +37,45 @@ const settleLimit = 100
 // Each step is safe to repeat, and each request is read through its own
 // workspace.
 func (s *Service) Settle(ctx context.Context) error {
-	refs, err := s.d.Store.Due(ctx, s.now().UTC(), settleLimit)
+	s.mu.Lock()
+	cursor := s.dueCursor
+	s.mu.Unlock()
+	var errs []error
+	for range settlePages {
+		refs, err := s.d.Store.Due(ctx, s.now().UTC(), cursor, settlePage)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		for _, ref := range refs {
+			cursor = Cursor{At: ref.CreatedAt, ID: ref.ID}
+			if serr := s.settleRef(ctx, ref); serr != nil {
+				errs = append(errs, fmt.Errorf("settle agent request %s: %w", ref.ID, serr))
+			}
+		}
+		if len(refs) < settlePage {
+			// The end: the next pass starts again from the oldest.
+			cursor = Cursor{}
+			break
+		}
+	}
+	s.mu.Lock()
+	s.dueCursor = cursor
+	s.mu.Unlock()
+	return errors.Join(errs...)
+}
+
+func (s *Service) settleRef(ctx context.Context, ref Ref) error {
+	r, err := s.d.Store.Get(ctx, ref.OrgID, ref.ID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	var errs []error
-	for _, ref := range refs {
-		r, gerr := s.d.Store.Get(ctx, ref.OrgID, ref.ID)
-		if gerr != nil {
-			if !errors.Is(gerr, ErrNotFound) {
-				errs = append(errs, gerr)
-			}
-			continue
-		}
-		if r.Status != StatusPending {
-			continue
-		}
-		if serr := s.settleOne(ctx, r); serr != nil {
-			errs = append(errs, fmt.Errorf("settle agent request %s: %w", r.ID, serr))
-		}
+	if r.Status != StatusPending {
+		return nil
 	}
-	return errors.Join(errs...)
+	return s.settleOne(ctx, r)
 }
 
 func (s *Service) settleOne(ctx context.Context, r *Request) error {
@@ -104,18 +128,33 @@ type planVerdict struct {
 // verdict reads plan's decision. Only a person's approval approves: one by
 // the agent or Loomplane automation while the run waited is not a person
 // approving this run's action.
-func (s *Service) verdict(ctx context.Context, plan *planning.Plan) planVerdict {
+//
+// The approval must be of the revision the agent asked about, by someone
+// who may still approve deployments on the plan's project.
+func (s *Service) verdict(ctx context.Context, r *Request, plan *planning.Plan) planVerdict {
 	by := plan.DecidedBy
 	name := s.name(ctx, by)
 	v := planVerdict{by: by, st: Settlement{AnsweredBy: by}}
 	switch plan.Status {
 	case planning.StatusApproved:
-		if isPerson(by) {
+		switch {
+		case !isPerson(by):
+			v.by, v.reason = "", "the plan was approved by "+name+", not by a person"
+		case r.Target.PlanRevision != "" && plan.Revision != r.Target.PlanRevision:
+			v.by, v.reason = "", "the plan was approved at a revision other than the one the agent asked about"
+		default:
+			ok, err := s.allowed(ctx, security.Principal{OrgID: plan.OrgID, UserID: by}, security.DeploymentApprove, plan.ProjectID)
+			if err != nil || !ok {
+				v.by, v.reason = "", name+" may no longer approve deployments in this project"
+				break
+			}
 			v.approved, v.reason = true, "approved by "+name
+			if plan.DecidedAt != nil && plan.DecidedAt.Before(r.CreatedAt) {
+				v.reason = "the plan was already approved by " + name
+			}
 			v.st.Status, v.st.Outcome = StatusAnswered, OutcomeApproved
 			return v
 		}
-		v.reason = "the plan was approved by " + name + ", not by a person"
 	case planning.StatusRejected:
 		v.reason = "the plan was rejected by " + name
 		v.st.Status, v.st.Outcome = StatusDeclined, OutcomeRejected
@@ -192,7 +231,7 @@ func (s *Service) settleApproval(ctx context.Context, r *Request) error {
 			}
 			return nil
 		}
-		items = append(items, item{other, s.verdict(ctx, plan)})
+		items = append(items, item{other, s.verdict(ctx, other, plan)})
 	}
 	if len(items) == 0 {
 		return nil
@@ -233,14 +272,31 @@ func (s *Service) settleApproval(ctx context.Context, r *Request) error {
 	if err != nil {
 		return err
 	}
-	// A checkpoint already decided (by an earlier pass whose request write
-	// was lost, or by another replica) keeps its first decision.
-	if err = eng.DecideCheckpoint(decideCtx, cpID, decision); err != nil && !errors.Is(err, cortex.ErrInvalidState) {
-		return err
+	// A checkpoint already decided keeps its first decision. When that was
+	// this decision (an earlier pass whose request write was lost, or
+	// another replica) the requests settle as decided; when cortex closed
+	// it some other way, such as its own expiry, they expired.
+	expired := false
+	if err = eng.DecideCheckpoint(decideCtx, cpID, decision); err != nil {
+		switch {
+		case errors.Is(err, cortex.ErrSuspensionExpired):
+			expired = true
+		case errors.Is(err, cortex.ErrInvalidState):
+			cp, gerr := eng.GetCheckpoint(bound, cpID)
+			if gerr != nil {
+				return gerr
+			}
+			expired = cp.Decision == nil || cp.Decision.Approved != decision.Approved || cp.Decision.DecidedBy != decision.DecidedBy
+		default:
+			return err
+		}
 	}
 	now := s.now().UTC()
 	for _, it := range items {
 		st := it.v.st
+		if expired {
+			st = Settlement{Status: StatusExpired, Outcome: OutcomeExpired}
+		}
 		st.At = now
 		moved, serr := s.d.Store.Settle(ctx, it.req.OrgID, it.req.ID, st)
 		if serr != nil {

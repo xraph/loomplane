@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/xraph/cortex/id"
 
 	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/notifications"
@@ -36,6 +38,7 @@ const (
 // Resumer continues a paused run. *engine.Engine is the real one.
 type Resumer interface {
 	DecideCheckpoint(ctx context.Context, checkpointID id.CheckpointID, d checkpoint.Decision) error
+	GetCheckpoint(ctx context.Context, checkpointID id.CheckpointID) (*checkpoint.Checkpoint, error)
 	ProvideResults(ctx context.Context, runID id.AgentRunID, in engine.ResumeInput) error
 }
 
@@ -132,6 +135,10 @@ type Deps struct {
 
 // Service turns the agent's pauses into requests, and settles them.
 type Service struct {
+	mu sync.Mutex
+	// dueCursor is where the next sweep pass reads due requests from.
+	dueCursor Cursor
+
 	d       Deps
 	enqueue func(ctx context.Context, q notifications.Execer, n notifications.Notice) error
 	now     func() time.Time
@@ -203,8 +210,11 @@ func (s *Service) person(ctx context.Context, p security.Principal) error {
 	return s.require(ctx, p, security.AgentUse, "")
 }
 
-// Get returns a request p may see: anyone who may use the agent sees the
-// workspace's requests, on the projects they can read.
+// Get returns a request p may see. A request about a project is seen by
+// anyone who may use the agent and read the project. One about no project
+// (a workspace-wide chat, or GitHub or a cloud) can carry anything the run
+// read, so it's seen only by the person asked, the current members of the
+// team it was routed to, and those who manage the workspace's AI.
 func (s *Service) Get(ctx context.Context, p security.Principal, reqID string) (*Request, error) {
 	if err := s.person(ctx, p); err != nil {
 		return nil, err
@@ -213,16 +223,48 @@ func (s *Service) Get(ctx context.Context, p security.Principal, reqID string) (
 	if err != nil {
 		return nil, err
 	}
-	if r.ProjectID != "" {
-		ok, aerr := s.allowed(ctx, p, security.ProjectRead, r.ProjectID)
-		if aerr != nil {
-			return nil, aerr
-		}
-		if !ok {
-			return nil, ErrNotFound
-		}
+	ok, err := s.visible(ctx, p, r, map[string]bool{})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrNotFound
 	}
 	return r, nil
+}
+
+// visible says whether p may see r; checks caches what it asked, for a
+// list.
+func (s *Service) visible(ctx context.Context, p security.Principal, r *Request, checks map[string]bool) (bool, error) {
+	if r.OrgID != p.OrgID {
+		return false, nil
+	}
+	cached := func(key string, ask func() (bool, error)) (bool, error) {
+		if ok, seen := checks[key]; seen {
+			return ok, nil
+		}
+		ok, err := ask()
+		if err != nil {
+			return false, err
+		}
+		checks[key] = ok
+		return ok, nil
+	}
+	if r.ProjectID != "" {
+		return cached("project:"+r.ProjectID, func() (bool, error) { return s.allowed(ctx, p, security.ProjectRead, r.ProjectID) })
+	}
+	if r.AskedFor != "" && r.AskedFor == p.UserID {
+		return true, nil
+	}
+	if r.TeamID != "" && s.d.Teams != nil {
+		member, err := cached("team:"+r.TeamID, func() (bool, error) {
+			return s.d.Teams.IsMember(ctx, s.d.DB, r.OrgID, r.TeamID, p.UserID)
+		})
+		if err != nil || member {
+			return member, err
+		}
+	}
+	return cached("ai:manage", func() (bool, error) { return s.allowed(ctx, p, security.AIManage, "") })
 }
 
 // List returns the newest requests p may see. With For "me", only those
@@ -260,22 +302,16 @@ func (s *Service) List(ctx context.Context, p security.Principal, f ListFilter) 
 	if err != nil {
 		return nil, err
 	}
-	readable := map[string]bool{}
+	checks := map[string]bool{}
 	out := make([]*Request, 0, len(rows))
 	for _, r := range rows {
-		if r.ProjectID != "" {
-			ok, seen := readable[r.ProjectID]
-			if !seen {
-				if ok, err = s.allowed(ctx, p, security.ProjectRead, r.ProjectID); err != nil {
-					return nil, err
-				}
-				readable[r.ProjectID] = ok
-			}
-			if !ok {
-				continue
-			}
+		ok, verr := s.visible(ctx, p, r, checks)
+		if verr != nil {
+			return nil, verr
 		}
-		out = append(out, r)
+		if ok {
+			out = append(out, r)
+		}
 	}
 	return &RequestList{Requests: out}, nil
 }
@@ -491,6 +527,9 @@ func (s *Service) declinePlan(ctx context.Context, p security.Principal, r *Requ
 	if s.d.Plans == nil {
 		return nil, errors.New("agentrequests: the planning service isn't configured")
 	}
+	if aerr := s.maySettle(ctx, p, r); aerr != nil {
+		return nil, aerr
+	}
 	_, err := s.d.Plans.Reject(ctx, p, r.Target.PlanID, planning.DecideInput{Note: reason})
 	decided := errors.Is(err, planning.ErrNotReady) || errors.Is(err, planning.ErrSuperseded)
 	if err != nil && !decided {
@@ -533,6 +572,17 @@ func (s *Service) settle(ctx context.Context, p security.Principal, r *Request, 
 		}
 	}
 	if err = s.resume(ctx, r, true); err != nil {
+		if errors.Is(err, errRunEnded) {
+			// The run ended while this was being settled: nothing waits on
+			// the request any more, so it's cancelled, not left pending.
+			if _, rerr := s.d.Store.Reopen(context.WithoutCancel(ctx), r.OrgID, r.ID, st); rerr != nil {
+				return nil, errors.Join(err, rerr)
+			}
+			if _, cerr := s.d.Store.CancelTask(context.WithoutCancel(ctx), r.OrgID, r.TaskID, s.now().UTC()); cerr != nil {
+				return nil, cerr
+			}
+			return nil, fmt.Errorf("%w: the agent's run ended before this reached it", ErrNotPending)
+		}
 		return nil, reopen(err)
 	}
 	s.audit(ctx, p, r, st)
@@ -561,11 +611,20 @@ func (s *Service) resume(ctx context.Context, r *Request, strict bool) error {
 		}
 		return err
 	}
+	if agentruns.Terminal(task.Status) {
+		if !strict {
+			return nil
+		}
+		return errRunEnded
+	}
 	bound, err := s.d.Runs.Bind(ctx, task)
 	if err != nil {
 		if !strict {
 			s.warn("agentrequests: a settled request's run can't be resumed", err)
 			return nil
+		}
+		if errors.Is(err, cortex.ErrPrincipalRevoked) || errors.Is(err, agentsettings.ErrDisabled) {
+			return errRunEnded
 		}
 		return err
 	}
@@ -587,6 +646,10 @@ func (s *Service) resume(ctx context.Context, r *Request, strict bool) error {
 	}
 	return err
 }
+
+// errRunEnded is a run that has finished, or can never continue: its
+// person was revoked or the agent was turned off.
+var errRunEnded = errors.New("agentrequests: the run has ended")
 
 // movedOn reports whether err says the run no longer waits on this pause.
 func movedOn(err error) bool {

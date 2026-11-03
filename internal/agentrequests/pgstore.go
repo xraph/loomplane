@@ -189,11 +189,23 @@ func (s *PgStore) CancelTask(ctx context.Context, orgID, taskID string, at time.
 
 // Due implements Store. It's the one read across workspaces, for the
 // sweep: it returns only which requests, which the sweep then reads each
-// through its own workspace.
-func (s *PgStore) Due(ctx context.Context, now time.Time, limit int) ([]Ref, error) {
-	rows, err := s.db.Query(ctx, `SELECT org_id, id FROM loomplane_agent_requests
-		WHERE status = 'pending' AND (kind IN ('approve_plan', 'connect_github', 'create_connection') OR expires_at < $1)
-		ORDER BY created_at LIMIT $2`, now.UTC(), limit)
+// through its own workspace. Each kind's condition reads the row it waits
+// on in the request's own workspace.
+func (s *PgStore) Due(ctx context.Context, now time.Time, after Cursor, limit int) ([]Ref, error) {
+	at := after.At
+	if at.IsZero() {
+		at = time.Unix(0, 0)
+	}
+	rows, err := s.db.Query(ctx, `SELECT r.org_id, r.id, r.created_at FROM loomplane_agent_requests r
+		WHERE r.status = 'pending' AND (r.created_at, r.id) > ($2, $3)
+			AND (r.expires_at < $1
+				OR (r.kind = 'approve_plan' AND NOT EXISTS (SELECT 1 FROM loomplane_plans p
+					WHERE p.org_id = r.org_id AND p.id = r.target->>'plan_id' AND p.status IN ('ready', 'planning')))
+				OR (r.kind = 'connect_github' AND EXISTS (SELECT 1 FROM loomplane_github_installations i
+					WHERE i.org_id = r.org_id AND i.created_at >= r.created_at))
+				OR (r.kind = 'create_connection' AND EXISTS (SELECT 1 FROM loomplane_cloud_connections c
+					WHERE c.org_id = r.org_id AND lower(c.cloud) = r.target->>'cloud' AND c.created_at >= r.created_at)))
+		ORDER BY r.created_at, r.id LIMIT $4`, now.UTC(), at.UTC(), after.ID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -201,9 +213,10 @@ func (s *PgStore) Due(ctx context.Context, now time.Time, limit int) ([]Ref, err
 	out := []Ref{}
 	for rows.Next() {
 		var ref Ref
-		if serr := rows.Scan(&ref.OrgID, &ref.ID); serr != nil {
+		if serr := rows.Scan(&ref.OrgID, &ref.ID, &ref.CreatedAt); serr != nil {
 			return nil, serr
 		}
+		ref.CreatedAt = ref.CreatedAt.UTC()
 		out = append(out, ref)
 	}
 	return out, rows.Err()
@@ -215,22 +228,23 @@ type PgPeople struct {
 	AppID string
 }
 
-// Name returns the person's name, or their username or email, or
-// "someone".
+// Name returns the person's name or display name, or "a teammate". Never
+// their email or username: what it returns may go to the model, and the
+// agent is never shown people's emails.
 func (p PgPeople) Name(ctx context.Context, userID string) string {
 	if p.DB == nil || userID == "" {
 		return "someone"
 	}
-	var first, last, display, username, email string
-	err := p.DB.QueryRow(ctx, `SELECT first_name, last_name, display_username, username, email FROM authsome_users
-		WHERE id = $1 AND app_id = $2 AND deleted_at IS NULL`, userID, p.AppID).Scan(&first, &last, &display, &username, &email)
+	var first, last, display string
+	err := p.DB.QueryRow(ctx, `SELECT first_name, last_name, display_username FROM authsome_users
+		WHERE id = $1 AND app_id = $2 AND deleted_at IS NULL`, userID, p.AppID).Scan(&first, &last, &display)
 	if err != nil {
 		return "someone"
 	}
-	for _, name := range []string{strings.TrimSpace(first + " " + last), strings.TrimSpace(display), strings.TrimSpace(username), strings.TrimSpace(email)} {
-		if name != "" {
+	for _, name := range []string{strings.TrimSpace(first + " " + last), strings.TrimSpace(display)} {
+		if name != "" && !strings.Contains(name, "@") {
 			return name
 		}
 	}
-	return "someone"
+	return "a teammate"
 }

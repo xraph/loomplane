@@ -33,8 +33,12 @@ var _ cortex.PrincipalCodec = (*Codec)(nil)
 // Decider is a person deciding a checkpoint of an agent run, as
 // agentrequests puts them on the context it decides with: cortex encodes
 // the decider through the codec to record who decided. It's never a run's
-// principal: EncodePrincipal takes it, and DecodePrincipal refuses what it
-// wrote for good, so no run continues as a decider.
+// principal: EncodePrincipal takes it wherever it's called, a run's start
+// included, and safety rests on the rest: DecodePrincipal refuses what it
+// wrote for good, so no run continues as a decider, and the tool
+// authorizer refuses any call whose principal isn't the agent, so a run
+// started under one can do nothing. Only agentrequests puts a Decider on
+// a context, and only to decide a checkpoint.
 type Decider struct {
 	Person security.Principal
 }

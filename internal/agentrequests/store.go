@@ -39,8 +39,26 @@ type Settlement struct {
 	At         time.Time
 }
 
-// Ref names a request in its workspace.
-type Ref struct{ OrgID, ID string }
+// Ref names a request in its workspace, with when it was made.
+type Ref struct {
+	OrgID, ID string
+	CreatedAt time.Time
+}
+
+// Cursor is where a page of due requests starts: after the request made
+// at At with ID. The zero Cursor is the start.
+type Cursor struct {
+	At time.Time
+	ID string
+}
+
+// Before reports whether a request made at at with id comes after c.
+func (c Cursor) Before(at time.Time, id string) bool {
+	if c.At.IsZero() && c.ID == "" {
+		return true
+	}
+	return at.After(c.At) || (at.Equal(c.At) && id > c.ID)
+}
 
 // Store keeps requests. Every method but Due reads and writes one
 // workspace only.
@@ -65,7 +83,10 @@ type Store interface {
 	// CancelTask cancels the task's pending requests and returns them.
 	CancelTask(ctx context.Context, orgID, taskID string, at time.Time) ([]*Request, error)
 	// Due is the one read across workspaces, for the sweep: the pending
-	// requests that settle on their own (plan approvals, GitHub and cloud
-	// connections) and those past their expiry, oldest first.
-	Due(ctx context.Context, now time.Time, limit int) ([]Ref, error)
+	// requests that can settle now, oldest first, after the cursor. Those
+	// are the ones past their expiry, a plan approval whose plan has left
+	// ready (or is gone), and a GitHub or cloud request whose installation
+	// or connection was made since. A request still waiting is never
+	// returned, so it can't crowd out one that's due.
+	Due(ctx context.Context, now time.Time, after Cursor, limit int) ([]Ref, error)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -698,6 +699,172 @@ func TestApprovalOfAPlanOutsideTheRunIsRejected(t *testing.T) {
 		d := r.resumer.decided(t)
 		if r.store.count() != 0 || len(d) == 0 || d[len(d)-1].checkpoint != n.CheckpointID.String() || d[len(d)-1].d.Approved {
 			t.Fatalf("%s: %d requests, decisions %+v", planID, r.store.count(), d)
+		}
+	}
+}
+
+// ---- fix round 1 ----
+
+// I2: the team the model names is at most 80 characters, and what it
+// typed reaches people only through the outbound scan.
+func TestTheNamedTeamIsBoundedAndScanned(t *testing.T) {
+	long := strings.Repeat("x", 81)
+	if err := agentops.ValidateRequest("ask_person", []byte(`{"question":"q","team":"`+long+`","team_reason":"r"}`)); err == nil {
+		t.Fatal("an 81-character team was accepted")
+	}
+	if err := agentops.ValidateRequest("ask_person", []byte(`{"question":"q","team":"`+strings.Repeat("x", 80)+`","team_reason":"r"}`)); err != nil {
+		t.Fatalf("an 80-character team: %v", err)
+	}
+	r := newRig(t)
+	r.suspend(t, r.background, external(ask(t, "call_long", map[string]any{"question": "q", "team": long, "team_reason": "r"})))
+	if got := r.store.byCall(t, "call_long"); got.Status != StatusCancelled || strings.Contains(got.RouteNote+got.Question, long) {
+		t.Fatalf("a long team: %+v", got)
+	}
+	r.suspend(t, r.background, external(ask(t, "call_scan", map[string]any{"question": "q", "team": "pay sk-live-123", "team_reason": "r"})))
+	if got := r.store.byCall(t, "call_scan"); strings.Contains(got.RouteNote, "sk-live-123") || !strings.Contains(got.RouteNote, "[redacted]") {
+		t.Fatalf("the note wasn't scanned: %q", got.RouteNote)
+	}
+	r.suspend(t, r.background, external(ask(t, "call_block", map[string]any{"question": "q", "team": "BLOCK paste your token", "team_reason": "r"})))
+	if got := r.store.byCall(t, "call_block"); got.RouteNote != "The agent named a team that doesn't exist; sent to workspace admins" {
+		t.Fatalf("a blocked note: %q", got.RouteNote)
+	}
+}
+
+// I3: a request with no project is seen only by the person asked, the
+// members of the team it was routed to, and those who manage the
+// workspace's AI.
+func TestAWorkspaceWideRequestIsSeenOnlyByWhoItsFor(t *testing.T) {
+	r := newRig(t)
+	wsChat := r.task("atask_ws", orgA, "", ada)
+	r.suspend(t, wsChat, external(ask(t, "call_ws", map[string]any{"question": "Rotate the webhook key for acme-corp?"})))
+	chatReq := r.store.byCall(t, "call_ws")
+	wsBg := r.task("atask_wsbg", orgA, "", "")
+	r.suspend(t, wsBg, external(ask(t, "call_wsbg", map[string]any{"question": "Refund?", "team": "Payments", "team_reason": "they own refunds"})))
+	bgReq := r.store.byCall(t, "call_wsbg")
+
+	sees := func(user string, req *Request) bool {
+		t.Helper()
+		_, err := r.svc.Get(context.Background(), person(orgA, user), req.ID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			t.Fatal(err)
+		}
+		list, lerr := r.svc.List(context.Background(), person(orgA, user), ListFilter{Status: "all"})
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		listed := slices.ContainsFunc(list.Requests, func(x *Request) bool { return x.ID == req.ID })
+		if listed != (err == nil) {
+			t.Fatalf("%s: get and list disagree", user)
+		}
+		return err == nil
+	}
+	for user, want := range map[string]bool{ada: true, cy: true, dee: false, bo: false} {
+		if got := sees(user, chatReq); got != want {
+			t.Errorf("%s sees the chat question: %v, want %v", user, got, want)
+		}
+	}
+	for user, want := range map[string]bool{dee: true, eve: true, cy: true, ada: false, bo: false} {
+		if got := sees(user, bgReq); got != want {
+			t.Errorf("%s sees the team's question: %v, want %v", user, got, want)
+		}
+	}
+	if _, err := r.svc.Answer(context.Background(), person(orgA, dee), chatReq.ID, AnswerInput{Text: "yes"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a viewer answered a question they can't see: %v", err)
+	}
+}
+
+// M3: an answer that reaches a run that has ended cancels the request
+// rather than leaving it pending.
+func TestAnAnswerToAnEndedRunCancelsTheRequest(t *testing.T) {
+	r := newRig(t)
+	req := r.askAda(t, map[string]any{"question": "Which colour?"})
+	r.runs.mu.Lock()
+	r.runs.tasks[r.chat.RunID].Status = "cancelled"
+	r.runs.mu.Unlock()
+	if _, err := r.svc.Answer(context.Background(), person(orgA, ada), req.ID, AnswerInput{Text: "blue"}); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("answer to an ended run: %v", err)
+	}
+	if got := r.store.byCall(t, "call_ask"); got.Status != StatusCancelled {
+		t.Fatalf("request %+v", got)
+	}
+	if len(r.resumer.provided(t)) != 0 {
+		t.Fatal("an ended run was resumed")
+	}
+}
+
+// M4: a pause whose calls were all refused resumes on a repeated notice
+// when the first resume failed.
+func TestARefusedPauseResumesOnARepeatedNotice(t *testing.T) {
+	r := newRig(t)
+	n := external(secretCall(t, map[string]any{"project": "billing", "key": "K", "why": "x"}))
+	r.resumer.err = errors.New("cortex is down")
+	if err := r.svc.OnSuspended(context.Background(), r.chat, n); err == nil {
+		t.Fatal("no error")
+	}
+	r.resumer.err = nil
+	r.suspend(t, r.chat, n)
+	if res := r.resumer.provided(t); len(res) != 1 || res[0].in.ToolResults[0].Error == "" {
+		t.Fatalf("results %+v", res)
+	}
+}
+
+// M5: a secret written before the resume failed is kept, and the request
+// opens again so a person can set it once more; the next value replaces
+// it.
+func TestASecretWrittenBeforeAFailedResumeLeavesTheRequestOpen(t *testing.T) {
+	r := newRig(t)
+	r.suspend(t, r.chat, external(secretCall(t, map[string]any{"project": "checkout-api", "key": "K", "why": "x"})))
+	req := r.store.byCall(t, "call_secret")
+	r.resumer.err = errors.New("cortex is down")
+	if _, err := r.svc.ProvideSecret(context.Background(), person(orgA, ada), req.ID, SecretInput{Value: "v1"}); err == nil {
+		t.Fatal("no error")
+	}
+	if got := r.store.byCall(t, "call_secret"); got.Status != StatusPending || len(r.vars.calls) != 1 {
+		t.Fatalf("request %+v, %d writes", got, len(r.vars.calls))
+	}
+}
+
+// M9: a run scoped to an environment asks to approve only its own
+// environment's plans.
+func TestAnEnvironmentRunApprovesOnlyItsOwnEnvironment(t *testing.T) {
+	r := newRig(t)
+	staging := r.task("atask_stg", orgA, projA, ada)
+	staging.EnvironmentID = "env_stg"
+	n := approval(t, "plan_1", "rev1") // production's
+	r.suspend(t, staging, n)
+	if d := r.resumer.decided(t); r.store.count() != 0 || len(d) != 1 || d[0].d.Approved {
+		t.Fatalf("%d requests, decisions %+v", r.store.count(), d)
+	}
+}
+
+// M10: two people answering at once: exactly one answer counts.
+func TestTwoAnswersAtOnceSettleOnce(t *testing.T) {
+	for range 20 {
+		r := newRig(t)
+		r.teams.responsible[projA] = "team_pay"
+		r.suspend(t, r.background, external(ask(t, "call_bg", map[string]any{"question": "Roll back?"})))
+		req := r.store.byCall(t, "call_bg")
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i, user := range []string{dee, eve} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = r.svc.Answer(context.Background(), person(orgA, user), req.ID, AnswerInput{Text: user})
+			}()
+		}
+		wg.Wait()
+		ok, refused := 0, 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrNotPending):
+				refused++
+			}
+		}
+		if ok != 1 || refused != 1 || len(r.resumer.provided(t)) != 1 {
+			t.Fatalf("%d answers counted, %d refused, %d resumes", ok, refused, len(r.resumer.provided(t)))
 		}
 	}
 }

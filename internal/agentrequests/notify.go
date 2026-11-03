@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 	pkgops "github.com/xraph/loomplane/pkg/agentops"
 )
 
@@ -117,14 +118,18 @@ func (s *Service) OnSuspended(ctx context.Context, task *agentruns.Task, n suspe
 			s.warn("agentrequests: couldn't log a request on its run", rerr)
 		}
 	}
-	for _, r := range made {
-		if r.Status != StatusPending {
-			// A call that couldn't become a request was settled as made; the
-			// run goes on once the rest are.
-			return s.resume(ctx, r, true)
-		}
+	if n.Reason != suspension.ReasonExternalTool {
+		return nil
 	}
-	return nil
+	// The run goes on once every request of the pause is settled: calls
+	// that couldn't become requests are settled as they're made. This
+	// reads the stored pause, so a notice repeated after a failed resume
+	// still resumes it.
+	pause, err := s.d.Store.Pause(ctx, task.OrgID, task.RunID, n.SuspensionID.String())
+	if err != nil || len(pause) == 0 {
+		return err
+	}
+	return s.resume(ctx, pause[0], true)
 }
 
 // reject decides an approval pause rejected, with why.
@@ -155,7 +160,7 @@ func (s *Service) create(ctx, bound context.Context, task *agentruns.Task, draft
 	for _, d := range drafts {
 		var recipients []string
 		if d.req.Status == StatusPending {
-			if recipients, err = s.route(ctx, tx, task, &d); err != nil {
+			if recipients, err = s.route(ctx, bound, tx, task, &d); err != nil {
 				return nil, err
 			}
 		}
@@ -183,7 +188,7 @@ func (s *Service) create(ctx, bound context.Context, task *agentruns.Task, draft
 // Plan approvals go to the project's team, then the admins; the agent
 // names no team for them. A question or a secret in a chat goes to the
 // asker, plus the team the agent named when it has members.
-func (s *Service) route(ctx context.Context, tx Tx, task *agentruns.Task, d *draft) ([]string, error) {
+func (s *Service) route(ctx, bound context.Context, tx Tx, task *agentruns.Task, d *draft) ([]string, error) {
 	r := d.req
 	if s.d.Teams == nil {
 		return nil, errors.New("agentrequests: teams aren't configured")
@@ -201,7 +206,7 @@ func (s *Service) route(ctx context.Context, tx Tx, task *agentruns.Task, d *dra
 	if err != nil {
 		return nil, fmt.Errorf("route the request: %w", err)
 	}
-	r.RouteNote = route.Note
+	r.RouteNote = s.routeNote(bound, route)
 	if chat && route.Source != "named" {
 		r.RouteSource = RouteAsker
 		return []string{task.RequestedBy}, nil
@@ -213,6 +218,25 @@ func (s *Service) route(ctx context.Context, tx Tx, task *agentruns.Task, d *dra
 	}
 	slices.Sort(recipients)
 	return slices.Compact(recipients), nil
+}
+
+// unknownTeamNote is a route note that didn't pass the outbound scan.
+const unknownTeamNote = "The agent named a team that doesn't exist; sent to workspace admins"
+
+// routeNote is the route's note as people may read it. It can quote the
+// team the model named, so it goes through the outbound scan, and a note
+// that doesn't pass becomes a fixed one.
+func (s *Service) routeNote(bound context.Context, route teams.Route) string {
+	if strings.TrimSpace(route.Note) == "" {
+		return ""
+	}
+	if out, err := s.outbound(bound, route.Note); err == nil && strings.TrimSpace(out) != "" {
+		return out
+	}
+	if route.Source == "admins" {
+		return unknownTeamNote
+	}
+	return "The agent named a team that doesn't exist; sent to " + route.Team
 }
 
 // notice tells the recipients about r. Its title is Loomplane's; its body
@@ -334,7 +358,8 @@ func (s *Service) draft(bound context.Context, actor security.Principal, task *a
 			return d, "approve_plan needs the plan's ID"
 		}
 		plan, gerr := s.d.Plans.Get(bound, security.AgentPrincipal(task.OrgID, nil), in.PlanID)
-		if gerr != nil || plan.OrgID != task.OrgID || (task.ProjectID != "" && plan.ProjectID != task.ProjectID) {
+		if gerr != nil || plan.OrgID != task.OrgID || (task.ProjectID != "" && plan.ProjectID != task.ProjectID) ||
+			(task.EnvironmentID != "" && plan.EnvironmentID != task.EnvironmentID) {
 			return d, "the plan isn't one this run can reach"
 		}
 		r.ProjectID, r.EnvironmentID = plan.ProjectID, plan.EnvironmentID
