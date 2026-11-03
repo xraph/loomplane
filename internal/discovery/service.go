@@ -51,6 +51,7 @@ type Service struct {
 	audit    projects.Auditor
 	access   Checker
 	hosts    repositories.Hosts
+	hooks    SourceHooks
 	now      func() time.Time
 }
 
@@ -139,7 +140,8 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	return out, nil
 }
 
-// PushActor is who an analysis a push started is recorded as created by.
+// PushActor is who an analysis a GitHub push started is recorded as
+// created by.
 const PushActor = "github-push"
 
 // StartFromPush queues an analysis of a source's tracked branch because
@@ -147,6 +149,16 @@ const PushActor = "github-push"
 // the webhook's signature is the authority. A source with an analysis
 // already under way is left alone, and that's ErrAlreadyActive.
 func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, PushActor)
+}
+
+// StartFromBitbucketPush is StartFromPush for a push Bitbucket signed, which
+// the analysis records as BitbucketPushActor's.
+func (s *Service) StartFromBitbucketPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, BitbucketPushActor)
+}
+
+func (s *Service) startFromPush(ctx context.Context, src *Source, actor string) (*Analysis, error) {
 	now := s.now().UTC()
 	switch _, err := s.store.ActiveAnalysis(ctx, src.OrgID, src.ID, now.Add(-activeWindow)); {
 	case err == nil:
@@ -154,7 +166,7 @@ func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, er
 	case !errors.Is(err, ErrNotFound):
 		return nil, err
 	}
-	return s.queue(ctx, security.Principal{OrgID: src.OrgID, UserID: PushActor}, src, src.Ref, now)
+	return s.queue(ctx, security.Principal{OrgID: src.OrgID, UserID: actor}, src, src.Ref, now)
 }
 
 // pick finds the sources aliases name, in alias order. No aliases means all

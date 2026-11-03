@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -339,4 +340,109 @@ func (o *BitbucketOAuth) sameAPI(u string) bool {
 	}
 	b, err := url.Parse(u)
 	return err == nil && b.Scheme == a.Scheme && b.Host == a.Host
+}
+
+// ErrHookNotAdmin means Bitbucket refused to add or remove a webhook
+// because the account that connected the workspace isn't an admin of the
+// repository.
+var ErrHookNotAdmin = errors.New("Bitbucket only lets a repository admin add a webhook. Someone who is an admin of this repository can connect the workspace and turn push re-analysis on")
+
+// CreateHook adds a push webhook to repo that posts to url, signed with
+// secret, and returns Bitbucket's UUID for it
+// (POST /2.0/repositories/{workspace}/{repo}/hooks). Neither the token nor
+// the secret, nor anything Bitbucket answered, goes into an error.
+func (o *BitbucketOAuth) CreateHook(ctx context.Context, token string, repo Repository, hookURL, secret string) (string, error) {
+	if !bitbucketSlug.MatchString(repo.Owner) || !bitbucketSlug.MatchString(repo.Name) {
+		return "", fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrNotFound, repo.FullName())
+	}
+	body, err := json.Marshal(map[string]any{
+		"description": "Loomplane",
+		"url":         hookURL,
+		"active":      true,
+		"secret":      secret,
+		"events":      []string{"repo:push"},
+	})
+	if err != nil {
+		return "", errors.New("build the Bitbucket webhook request failed")
+	}
+	resp, err := o.send(ctx, http.MethodPost, o.api.repoAPI(repo)+"/hooks", token, body)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close() // read-only body
+	if err := hookStatus(resp, "add a webhook"); err != nil {
+		return "", err
+	}
+	var out struct {
+		UUID string `json:"uuid"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(&out); err != nil || out.UUID == "" {
+		return "", errors.New("Bitbucket added the webhook but didn't say which it was")
+	}
+	return out.UUID, nil
+}
+
+// DeleteHook removes the webhook with that UUID from repo
+// (DELETE /2.0/repositories/{workspace}/{repo}/hooks/{uuid}). One that's
+// already gone is no error.
+func (o *BitbucketOAuth) DeleteHook(ctx context.Context, token string, repo Repository, uuid string) error {
+	if !bitbucketSlug.MatchString(repo.Owner) || !bitbucketSlug.MatchString(repo.Name) {
+		return fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrNotFound, repo.FullName())
+	}
+	if !bitbucketUUID.MatchString(uuid) {
+		return fmt.Errorf("%q isn't a Bitbucket webhook UUID", uuid)
+	}
+	resp, err := o.send(ctx, http.MethodDelete, o.api.repoAPI(repo)+"/hooks/"+url.PathEscape(uuid), token, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close() // read-only body
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return hookStatus(resp, "remove a webhook")
+}
+
+// send makes an API call that writes, with the token in the header only.
+// The caller closes the body of the response it gets.
+func (o *BitbucketOAuth) send(ctx context.Context, method, u, token string, body []byte) (*http.Response, error) {
+	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	var rd io.Reader = http.NoBody
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(rctx, method, u, rd)
+	if err != nil {
+		cancel()
+		return nil, errors.New("build Bitbucket request failed")
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "loomplane")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := o.tokenClient().Do(req)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("call Bitbucket: %w", err)
+	}
+	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+// hookStatus maps the status of a webhook call to an error, or nil for a
+// 2xx. It reads none of the body.
+func hookStatus(resp *http.Response, what string) error {
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return nil
+	case resp.StatusCode == http.StatusForbidden:
+		return ErrHookNotAdmin
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrNotFound
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return ErrRateLimited
+	}
+	return fmt.Errorf("Bitbucket answered %d when asked to %s", resp.StatusCode, what)
 }

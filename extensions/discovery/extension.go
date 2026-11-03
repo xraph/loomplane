@@ -53,6 +53,8 @@ type Extension struct {
 	// bitbucket is the Bitbucket workspaces, which read public repositories
 	// even where no OAuth consumer is configured.
 	bitbucket *repositories.BitbucketConnections
+	// bitbucketHooks keeps the push webhooks on Bitbucket repositories.
+	bitbucketHooks *discovery.BitbucketWebhooks
 }
 
 // New returns the API extension. engineOf returns the dispatch
@@ -117,6 +119,14 @@ func (e *Extension) Register(fapp forge.App) error {
 			"bitbucket.org": repositories.NewBitbucket(e.cfg.Bitbucket.APIURL, e.cfg.Bitbucket.WebURL),
 		}},
 	})
+	if e.bitbucketHooks, err = bitbucketWebhooks(e.cfg, pg, e.bitbucket, authz, e.svc,
+		bitbucketHookAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+		return err
+	}
+	e.svc.SetSourceHooks(e.bitbucketHooks.SourceHooks())
+	// A disconnect removes the workspace's webhooks before its row and
+	// sign-in go.
+	e.bitbucket.SetOnDisconnect(e.bitbucketHooks.ReleaseAll)
 	// A new project's repository is attached as its first source, which
 	// only discovery knows how to do.
 	projectSvc, err := forge.InjectType[*projects.Service](c)
@@ -138,6 +148,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	if err := e.bitbucketRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.bitbucketWebhookRoute(fapp.Router(), e.bitbucketHooks); err != nil {
 		return err
 	}
 	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{

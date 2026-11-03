@@ -6,6 +6,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
@@ -14,6 +15,13 @@ type AuthorizeBitbucketInput struct {
 	// Workspace is the slug of the workspace to connect, the acme in
 	// bitbucket.org/acme.
 	Workspace string `json:"workspace"`
+}
+
+// EnableBitbucketWebhookInput is the body of POST /api/v1/bitbucket/webhooks.
+type EnableBitbucketWebhookInput struct {
+	// Repository is the Bitbucket repository, such as
+	// bitbucket.org/acme/api or its URL.
+	Repository string `json:"repository"`
 }
 
 // BitbucketAuthorization is where to send someone to approve the OAuth
@@ -55,11 +63,35 @@ func (e *Extension) bitbucketRoutes(r forge.Router, guard identity.Guard) error 
 	); err != nil {
 		return err
 	}
-	return g.GET("/repositories", e.bitbucketRepositories,
+	if err := g.GET("/repositories", e.bitbucketRepositories,
 		forge.WithName("bitbucket.repositories"),
 		forge.WithSummary("The repositories the organization's workspaces can read"),
 		forge.WithResponseSchema(http.StatusOK, "Repositories", repositories.BitbucketRepositoryList{}),
+	); err != nil {
+		return err
+	}
+	return g.POST("/webhooks", e.bitbucketEnableWebhook,
+		forge.WithName("bitbucket.webhook.enable"),
+		forge.WithSummary("Try again to add the push webhook that re-analyzes a repository's sources"),
+		forge.WithRequestSchema(EnableBitbucketWebhookInput{}),
+		forge.WithResponseSchema(http.StatusOK, "Whether pushes re-analyze the repository now", discovery.PushState{}),
 	)
+}
+
+func (e *Extension) bitbucketEnableWebhook(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in EnableBitbucketWebhookInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON with a repository")
+	}
+	st, err := e.bitbucketHooks.Enable(c.Request().Context(), p, in.Repository)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, st)
 }
 
 func (e *Extension) bitbucketStatus(c forge.Context) error {

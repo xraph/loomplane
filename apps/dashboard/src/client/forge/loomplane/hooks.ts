@@ -29,6 +29,7 @@ export const useApiKeysRevoke = mutation(ops['apiKeys.revoke']);
 export const useBitbucketStatus = query<BitbucketStatus>(ops['bitbucket.status']);
 export const useBitbucketAuthorize = mutation(ops['bitbucket.authorize']);
 export const useBitbucketRepositories = query<BitbucketRepositoryList>(ops['bitbucket.repositories']);
+export const useBitbucketWebhookEnable = mutation(ops['bitbucket.webhook.enable']);
 export const useBitbucketConnect = mutation<BitbucketWorkspaceView, BitbucketWorkspaceView>(ops['bitbucket.connect']);
 export const useBitbucketDisconnect = mutation(ops['bitbucket.disconnect']);
 export const useCatalogEndpointsList = query<EndpointList>(ops['catalogEndpoints.list']);

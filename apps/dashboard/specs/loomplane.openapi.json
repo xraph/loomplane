@@ -514,6 +514,38 @@
         }
       }
     },
+    "/api/v1/bitbucket/webhooks": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "Try again to add the push webhook that re-analyzes a repository's sources",
+        "operationId": "bitbucket.webhook.enable",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableBitbucketWebhookInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Whether pushes re-analyze the repository now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/bitbucket/workspaces": {
       "post": {
         "tags": [
@@ -19683,6 +19715,9 @@
           "project_id": {
             "type": "string"
           },
+          "push": {
+            "$ref": "#/components/schemas/PushState"
+          },
           "ref": {
             "type": "string"
           },
@@ -20061,6 +20096,17 @@
             "items": {
               "$ref": "#/components/schemas/EdgeRule"
             }
+          }
+        }
+      },
+      "EnableBitbucketWebhookInputBody": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string"
           }
         }
       },
@@ -27096,6 +27142,20 @@
             "additionalProperties": true
           },
           "time_zone": {
+            "type": "string"
+          }
+        }
+      },
+      "PushState": {
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "reason": {
             "type": "string"
           }
         }

@@ -637,6 +637,27 @@ export class RESTClient extends Client {
       return this.request<types.BitbucketStatus>(config);
     },
 
+    webhook: {
+      /**
+       * Try again to add the push webhook that re-analyzes a repository's sources
+       */
+      enable: async (body: types.EnableBitbucketWebhookInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushState> => {
+        let __path = `/api/v1/bitbucket/webhooks`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["EnableBitbucketWebhookInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushState"],
+        };
+
+        return this.request<types.PushState>(config);
+      },
+
+    },
+
   };
 
   public readonly catalogAdmin = {

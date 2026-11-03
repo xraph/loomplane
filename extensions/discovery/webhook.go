@@ -1,12 +1,14 @@
 package discovery
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/discovery"
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 // maxDelivery is the largest webhook body read. GitHub caps payloads at
@@ -38,4 +40,32 @@ func (e *Extension) webhookRoute(r forge.Router, hooks *discovery.Webhooks) erro
 		}
 		return c.JSON(http.StatusAccepted, map[string]int{"analyses_started": started})
 	}, forge.WithName("github.webhook"), forge.WithSchemaExclude())
+}
+
+// bitbucketWebhookRoute serves Bitbucket's deliveries, one address per
+// hook. It's outside the guard like GitHub's: the hook's own signature is
+// what's checked, and a hook only ever starts analyses in its organization.
+func (e *Extension) bitbucketWebhookRoute(r forge.Router, hooks *discovery.BitbucketWebhooks) error {
+	return r.POST("/api/v1/bitbucket/webhook/:hook_id", func(c forge.Context) error {
+		req := c.Request()
+		body, err := io.ReadAll(io.LimitReader(req.Body, maxDelivery))
+		if err != nil {
+			return forge.NewHTTPError(http.StatusBadRequest, "read the delivery")
+		}
+		started, err := hooks.Deliver(req.Context(), c.Param("hook_id"), req.Header.Get("X-Event-Key"), req.Header.Get("X-Hub-Signature"), body)
+		switch {
+		case errors.Is(err, repositories.ErrHookNotFound):
+			return forge.NewHTTPError(http.StatusNotFound, "there's no such webhook")
+		case errors.Is(err, discovery.ErrBadSignature):
+			return forge.NewHTTPError(http.StatusUnauthorized, err.Error())
+		case errors.Is(err, discovery.ErrInvalid):
+			return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+		case err != nil && started == 0:
+			e.Logger().Warn("handle a Bitbucket webhook", forge.F("error", err.Error()))
+			return forge.NewHTTPError(http.StatusInternalServerError, "the delivery couldn't be handled")
+		case err != nil:
+			e.Logger().Warn("some projects weren't re-analyzed", forge.F("error", err.Error()))
+		}
+		return c.JSON(http.StatusAccepted, map[string]int{"analyses_started": started})
+	}, forge.WithName("bitbucket.webhook"), forge.WithSchemaExclude())
 }

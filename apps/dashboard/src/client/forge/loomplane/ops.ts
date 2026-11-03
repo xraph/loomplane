@@ -215,6 +215,14 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['BitbucketRepositoryList'],
   },
+  'bitbucket.webhook.enable': {
+    method: 'POST',
+    path: '/api/v1/bitbucket/webhooks',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['EnableBitbucketWebhookInputBody'],
+    responseCodec: CODECS['PushState'],
+  },
   'bitbucket.connect': {
     method: 'POST',
     path: '/api/v1/bitbucket/workspaces',

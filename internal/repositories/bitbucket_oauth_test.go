@@ -532,3 +532,102 @@ func TestBitbucketOAuth_workspaceByUUID(t *testing.T) {
 		}
 	}
 }
+
+func TestBitbucketOAuth_createHook(t *testing.T) {
+	f, o, _ := newFakeOAuth(t)
+	var got struct {
+		Method, Path, Auth, ContentType string
+		Body                            map[string]any
+	}
+	f.api = func(w http.ResponseWriter, r *http.Request) {
+		got.Method, got.Path, got.Auth, got.ContentType = r.Method, r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&got.Body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"uuid":"{5e0c1f7a-2b3d-4e5f-8a9b-0c1d2e3f4a5b}","url":"x"}`))
+	}
+	repo := repositories.Repository{Host: repositories.HostBitbucket, Owner: "acme", Name: "api"}
+	uuid, err := o.CreateHook(context.Background(), oauthAccessToken, repo, "https://loomplane.example/api/v1/bitbucket/webhook/bbhook_1", "hook-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uuid != "{5e0c1f7a-2b3d-4e5f-8a9b-0c1d2e3f4a5b}" {
+		t.Fatalf("uuid %q", uuid)
+	}
+	if got.Method != http.MethodPost || got.Path != "/repositories/acme/api/hooks" || got.Auth != "Bearer "+oauthAccessToken || !strings.HasPrefix(got.ContentType, "application/json") {
+		t.Fatalf("request %+v", got)
+	}
+	events, _ := got.Body["events"].([]any)
+	if got.Body["description"] != "Loomplane" || got.Body["url"] != "https://loomplane.example/api/v1/bitbucket/webhook/bbhook_1" ||
+		got.Body["active"] != true || got.Body["secret"] != "hook-secret" || len(events) != 1 || events[0] != "repo:push" {
+		t.Fatalf("body %+v", got.Body)
+	}
+}
+
+func TestBitbucketOAuth_createHookFailures(t *testing.T) {
+	f, o, _ := newFakeOAuth(t)
+	repo := repositories.Repository{Host: repositories.HostBitbucket, Owner: "acme", Name: "api"}
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{http.StatusForbidden, repositories.ErrHookNotAdmin},
+		{http.StatusNotFound, repositories.ErrNotFound},
+		{http.StatusTooManyRequests, repositories.ErrRateLimited},
+		{http.StatusInternalServerError, nil},
+	} {
+		f.api = func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(`{"error":{"message":"` + oauthAccessToken + `"}}`))
+		}
+		_, err := o.CreateHook(context.Background(), oauthAccessToken, repo, "https://x/y", "hook-secret")
+		if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Fatalf("%d: err = %v, want %v", tc.status, err, tc.want)
+		}
+		if strings.Contains(err.Error(), oauthAccessToken) || strings.Contains(err.Error(), "hook-secret") {
+			t.Fatalf("%d: a secret leaked into the error: %v", tc.status, err)
+		}
+	}
+	// A 201 without a UUID can't be removed later, so it's a failure.
+	f.api = func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}
+	if _, err := o.CreateHook(context.Background(), oauthAccessToken, repo, "https://x/y", "s"); err == nil {
+		t.Fatal("a hook without a UUID was accepted")
+	}
+	// A slug that isn't one never reaches Bitbucket.
+	calls := len(f.queries)
+	if _, err := o.CreateHook(context.Background(), oauthAccessToken, repositories.Repository{Owner: "../x", Name: "api"}, "https://x/y", "s"); err == nil || len(f.queries) != calls {
+		t.Fatalf("a bad slug: %v, %d calls", err, len(f.queries)-calls)
+	}
+}
+
+func TestBitbucketOAuth_deleteHook(t *testing.T) {
+	f, o, _ := newFakeOAuth(t)
+	repo := repositories.Repository{Host: repositories.HostBitbucket, Owner: "acme", Name: "api"}
+	var method, path string
+	status := http.StatusNoContent
+	f.api = func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.EscapedPath()
+		w.WriteHeader(status)
+	}
+	if err := o.DeleteHook(context.Background(), oauthAccessToken, repo, "{5e0c1f7a-2b3d}"); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodDelete || path != "/repositories/acme/api/hooks/%7B5e0c1f7a-2b3d%7D" || f.auth[len(f.auth)-1] != "Bearer "+oauthAccessToken {
+		t.Fatalf("%s %s", method, path)
+	}
+	// One already gone is what was asked for.
+	status = http.StatusNotFound
+	if err := o.DeleteHook(context.Background(), oauthAccessToken, repo, "{5e0c1f7a-2b3d}"); err != nil {
+		t.Fatalf("a hook already gone: %v", err)
+	}
+	status = http.StatusForbidden
+	if err := o.DeleteHook(context.Background(), oauthAccessToken, repo, "{5e0c1f7a-2b3d}"); !errors.Is(err, repositories.ErrHookNotAdmin) {
+		t.Fatalf("403: %v", err)
+	}
+	calls := len(f.queries)
+	if err := o.DeleteHook(context.Background(), oauthAccessToken, repo, "not-a-uuid/../x"); err == nil || len(f.queries) != calls {
+		t.Fatalf("a bad UUID: %v", err)
+	}
+}

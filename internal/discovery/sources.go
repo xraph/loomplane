@@ -189,6 +189,10 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 		return nil, err
 	}
 	s.record(ctx, p, projectID, "source.add", "info", map[string]any{"alias": alias, "repository": src.Repository, "root": root})
+	// The source is saved; what hears about it can't take that back.
+	if s.hooks.Added != nil {
+		s.hooks.Added(ctx, p.OrgID, src)
+	}
 	return src, nil
 }
 
@@ -217,7 +221,22 @@ func (s *Service) Sources(ctx context.Context, p security.Principal, projectID s
 	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
 		return nil, err
 	}
-	return s.store.ListSources(ctx, p.OrgID, projectID, false)
+	list, err := s.store.ListSources(ctx, p.OrgID, projectID, false)
+	if err != nil || s.hooks.Push == nil {
+		return list, err
+	}
+	// Sources on one repository share its webhook, so it's read once.
+	seen := map[string]*PushState{}
+	for _, src := range list {
+		k := strings.ToLower(src.Repository)
+		st, ok := seen[k]
+		if !ok {
+			st = s.hooks.Push(ctx, p.OrgID, src)
+			seen[k] = st
+		}
+		src.Push = st
+	}
+	return list, nil
 }
 
 // UpdateSource changes a source's directory or branch.
@@ -283,5 +302,11 @@ func (s *Service) RemoveSource(ctx context.Context, p security.Principal, projec
 		return err
 	}
 	s.record(ctx, p, projectID, "source.remove", "warning", map[string]any{"alias": alias})
+	if s.hooks.Removed != nil {
+		// GetSource reads removed sources too, so it finds this one.
+		if src, err := s.store.GetSource(ctx, p.OrgID, projectID, alias); err == nil {
+			s.hooks.Removed(ctx, p.OrgID, src)
+		}
+	}
 	return nil
 }

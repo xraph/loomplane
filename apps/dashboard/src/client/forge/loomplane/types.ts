@@ -1749,6 +1749,7 @@ export interface DiscoverySource {
   id: string;
   orgId: string;
   projectId: string;
+  push?: PushState;
   ref: string;
   removedAt?: string;
   repository: string;
@@ -1948,6 +1949,10 @@ export interface Embeddings {
   mode: string;
   model: string;
   provider?: string;
+}
+
+export interface EnableBitbucketWebhookInputBody {
+  repository: string;
 }
 
 export interface EndpointList {
@@ -3767,6 +3772,11 @@ export interface PushDevice {
   quietHours?: QuietHours;
   settings: Record<string, any>;
   timeZone: string;
+}
+
+export interface PushState {
+  on: boolean;
+  reason?: string;
 }
 
 export interface QuantizationView {

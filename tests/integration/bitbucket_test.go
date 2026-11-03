@@ -95,8 +95,9 @@ const (
 // fakePrivateBitbucket plays Bitbucket Cloud for an OAuth consumer: it
 // signs the person in, says who they are and which workspace they belong
 // to, and serves acme/api to a bearer token only. API calls, the token
-// endpoint and archives share one address.
-func fakePrivateBitbucket(t *testing.T) *httptest.Server {
+// endpoint and archives share one address. extra adds routes, each behind
+// the same bearer check.
+func fakePrivateBitbucket(t *testing.T, extra ...func(mux *http.ServeMux, guarded func(http.HandlerFunc) http.HandlerFunc)) *httptest.Server {
 	t.Helper()
 	tgz := tarball(t, "acme-api-fedcba9", siteFiles)
 	bearer := func(r *http.Request) bool {
@@ -155,6 +156,9 @@ func fakePrivateBitbucket(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /acme/api/get/"+exampleSHA+".tar.gz", guarded(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(tgz)
 	}))
+	for _, add := range extra {
+		add(mux, guarded)
+	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
