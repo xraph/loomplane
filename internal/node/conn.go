@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -105,13 +106,17 @@ type Runtime struct {
 	tls                             *tls.Config
 }
 
-// NewRuntime loads node.json and returns a Runtime that serves streams from
+// NewRuntime reads node.json and returns a Runtime that serves streams from
 // reg. It registers ProbeHandler on reg for the probe endpoint, replacing
 // any handler there; the caller registers the other handlers.
 func NewRuntime(st State, reg *Registry) (*Runtime, error) {
-	cfg, err := st.LoadConfig()
+	// ReadConfig never creates or changes the state dir: only join does that.
+	cfg, err := st.ReadConfig()
 	if err != nil {
-		return nil, fmt.Errorf("reading this node's config (has it joined? run loomctl node join): %w", err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, errors.New("this machine hasn't joined; run loomctl node join first")
+		}
+		return nil, fmt.Errorf("reading this node's config (run loomctl node join if this machine has not joined): %w", err)
 	}
 	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{})}
 	r.live = NewLive(r.sanitized(cfg))

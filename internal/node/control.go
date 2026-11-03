@@ -162,6 +162,8 @@ func (r *Runtime) Leave(ctx context.Context) error {
 	case <-r.revoked:
 		return nil
 	case <-t.C:
+		// Not revoked as far as this node knows: a later refusal is not ours.
+		r.leaving.Store(false)
 		return errors.New("Loomplane did not confirm that it revoked this node within " + leaveWait.String())
 	case <-ctx.Done():
 		return ctx.Err()

@@ -339,6 +339,15 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 			return fmt.Errorf("%w: %w; pass --foreground to run it in this terminal", ErrUnsupported, serr)
 		}
 	}
+	if !foreground {
+		bin, berr := c.opts.binary()
+		if berr != nil {
+			return fmt.Errorf("finding the running binary: %w", berr)
+		}
+		if uerr := checkUnit(Unit{Binary: bin, StateDir: dir}, c.opts.goos == "linux"); uerr != nil {
+			return uerr
+		}
+	}
 	if cerr := checkJoinDir(dir); cerr != nil {
 		return cerr
 	}
@@ -429,6 +438,21 @@ func checkJoinDir(dir string) error {
 	for _, e := range entries {
 		if !ownStateFile(e.Name()) {
 			return fmt.Errorf("%s already holds %q, which is not a node's file; give --state-dir an empty or new directory", dir, e.Name())
+		}
+		fi, ierr := e.Info() // lstat: a symlink shows as one
+		if ierr != nil {
+			return ierr
+		}
+		m := fi.Mode()
+		ok := m.IsRegular()
+		switch e.Name() {
+		case "bin":
+			ok = m.IsDir()
+		case controlSocket:
+			ok = m&fs.ModeSocket != 0
+		}
+		if !ok {
+			return fmt.Errorf("%s holds %q, which is not the kind of file a node keeps there (%s); remove it or use another --state-dir", dir, e.Name(), m.Type())
 		}
 	}
 	return nil

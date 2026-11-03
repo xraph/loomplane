@@ -168,6 +168,9 @@ func TestLeaveIsAnErrorWhenTheSessionEndsWithoutRevoked(t *testing.T) {
 		t.Fatal("a dropped connection was taken for a revoke")
 	default:
 	}
+	if rt.leaving.Load() {
+		t.Fatal("a timed-out leave left the node 'leaving', so a later 401 would read as a revoke")
+	}
 }
 
 func TestControlRefusesToStartBesideALiveNode(t *testing.T) {

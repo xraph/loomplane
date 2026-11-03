@@ -864,3 +864,72 @@ func TestMacJoinAndLeaveRefuseRoot(t *testing.T) {
 		t.Fatal("the token was spent")
 	}
 }
+
+func TestRunTouchesNothingInADirThatHasNotJoined(t *testing.T) {
+	r := newCmdRig(t)
+	dir := filepath.Join(shortDir(t), "state")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := r.run("node", "run", "--state-dir", dir)
+	if err == nil || !strings.Contains(err.Error(), "hasn't joined") {
+		t.Fatalf("run: %v", err)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("run changed the dir to %v", fi.Mode())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("run created %v", entries)
+	}
+	missing := filepath.Join(shortDir(t), "never")
+	if err := r.run("node", "run", "--state-dir", missing); err == nil {
+		t.Fatal("run without a state dir succeeded")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Fatal("run created the state dir")
+	}
+}
+
+func TestJoinChecksUnitValuesBeforeSpendingTheToken(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	bad := filepath.Join(shortDir(t), "my state")
+	err := r.run("node", "join", "--state-dir", bad, "--url", js.URL, "--token", "x")
+	if err == nil || !strings.Contains(err.Error(), "systemd unit") {
+		t.Fatalf("odd dir: %v", err)
+	}
+	r.opts.binary = func() (string, error) { return "/usr/local/bin/lo omctl", nil }
+	err = r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x")
+	if err == nil || !strings.Contains(err.Error(), "binary name") {
+		t.Fatalf("odd binary: %v", err)
+	}
+	if js.join.Load() != nil {
+		t.Fatal("the token was spent")
+	}
+}
+
+func TestJoinRefusesAPlantedSymlinkOrWrongKind(t *testing.T) {
+	js := newJoinServer(t)
+	for name, plant := range map[string]func(dir string) error{
+		"bin symlink":    func(d string) error { return os.Symlink("/etc", filepath.Join(d, "bin")) },
+		"bin file":       func(d string) error { return os.WriteFile(filepath.Join(d, "bin"), nil, 0o600) },
+		"key symlink":    func(d string) error { return os.Symlink("/etc/passwd", filepath.Join(d, "identity.key")) },
+		"config as dir":  func(d string) error { return os.Mkdir(filepath.Join(d, "node.json"), 0o700) },
+		"socket as file": func(d string) error { return os.WriteFile(filepath.Join(d, controlSocket), nil, 0o600) },
+	} {
+		r := newCmdRig(t)
+		if err := os.MkdirAll(r.dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := plant(r.dir); err != nil {
+			t.Fatal(err)
+		}
+		err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x")
+		if err == nil || !strings.Contains(err.Error(), "not the kind of file") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if js.join.Load() != nil {
+		t.Fatal("the token was spent")
+	}
+}
