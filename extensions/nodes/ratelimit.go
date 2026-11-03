@@ -28,6 +28,10 @@ func (e *Extension) limited(w http.ResponseWriter, r *http.Request, route string
 		return false
 	}
 	ip := authmw.ClientIP(r)
+	if ip == "" {
+		// Never one bucket for every caller whose address didn't parse.
+		ip = r.RemoteAddr
+	}
 	ok, err := e.limiter.Allow(r.Context(), "loomplane-nodes:"+route+":"+ip, perMinute, rateWindow)
 	switch {
 	case err != nil:
