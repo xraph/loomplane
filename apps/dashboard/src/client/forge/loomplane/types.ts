@@ -3228,6 +3228,8 @@ export interface Node {
   endpoints: string[];
   id: string;
   identityGeneration: number;
+  ingressApplied: string;
+  ingressDetail: string;
   ingressMode: string;
   inventory: Inventory;
   joinedBy: string;
@@ -3238,12 +3240,32 @@ export interface Node {
   name: string;
   orgId: string;
   protocolVersion: number;
+  publicAddress: string;
+  publicAddressConfirmedAt?: string;
   revokedAt?: string;
   revokedBy: string;
   role: string;
   status: string;
   updatedAt: string;
   version: string;
+}
+
+export interface NodeAdoption {
+  approvedBy: string;
+  cloudId: string;
+  createdAt: string;
+  nodeId: string;
+  nodeName: string;
+  operationId: string;
+  orgId: string;
+  reason: string;
+  serverId: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface NodeAdoptionList {
+  adoptions: (NodeAdoption | null)[];
 }
 
 export interface NodeJoinBody {
@@ -3275,6 +3297,7 @@ export interface NodeJoined {
   cloudId?: string;
   endpoints: string[];
   identityGeneration: number;
+  name?: string;
   nodeId: string;
   orgId: string;
 }
@@ -3307,6 +3330,19 @@ export interface NodeUpdateBody {
   ingressMode?: string;
   labels?: Record<string, any>;
   name?: string;
+}
+
+export interface NodeWorkload {
+  bindingId: string;
+  environment: string;
+  hasBackupPolicy: boolean;
+  kind: string;
+  projectId: string;
+  service: string;
+}
+
+export interface NodeWorkloadList {
+  workloads: NodeWorkload[];
 }
 
 export interface NodeprotoGPU {
@@ -4703,6 +4739,7 @@ export interface RouteInputBody {
 
 export interface RouteOperation {
   attempt: number;
+  automatic?: boolean;
   cost?: RouteCost;
   createdAt: string;
   desiredRecord: DNSRecord;
@@ -4716,6 +4753,7 @@ export interface RouteOperation {
   message: string;
   notBefore: string;
   notices?: string[];
+  previousAddress?: string;
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   receipts?: DNSRecord[];

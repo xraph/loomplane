@@ -5786,7 +5786,10 @@
           "joined_by_key_id",
           "revoked_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "public_address",
+          "ingress_applied",
+          "ingress_detail"
         ],
         "properties": {
           "created_at": {
@@ -5808,6 +5811,12 @@
           },
           "identity_generation": {
             "type": "integer"
+          },
+          "ingress_applied": {
+            "type": "string"
+          },
+          "ingress_detail": {
+            "type": "string"
           },
           "ingress_mode": {
             "type": "string"
@@ -5839,6 +5848,12 @@
           },
           "protocol_version": {
             "type": "integer"
+          },
+          "public_address": {
+            "type": "string"
+          },
+          "public_address_confirmed_at": {
+            "type": "string"
           },
           "revoked_at": {
             "type": "string"
@@ -7674,7 +7689,10 @@
             "joined_by_key_id",
             "revoked_by",
             "created_at",
-            "updated_at"
+            "updated_at",
+            "public_address",
+            "ingress_applied",
+            "ingress_detail"
           ],
           "properties": {
             "created_at": {
@@ -7696,6 +7714,12 @@
             },
             "identity_generation": {
               "type": "integer"
+            },
+            "ingress_applied": {
+              "type": "string"
+            },
+            "ingress_detail": {
+              "type": "string"
             },
             "ingress_mode": {
               "type": "string"
@@ -7727,6 +7751,12 @@
             },
             "protocol_version": {
               "type": "integer"
+            },
+            "public_address": {
+              "type": "string"
+            },
+            "public_address_confirmed_at": {
+              "type": "string"
             },
             "revoked_at": {
               "type": "string"

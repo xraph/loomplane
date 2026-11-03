@@ -3070,6 +3070,38 @@
         }
       }
     },
+    "/api/v1/clouds/{cloudId}/node-adoptions": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudNodeAdoptions.list",
+        "operationId": "cloudNodeAdoptions.list",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeAdoptionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clouds/{cloudId}/placements/accept-move": {
       "post": {
         "tags": [
@@ -14563,6 +14595,81 @@
         }
       }
     },
+    "/api/v1/nodes/{id}/drain": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Review draining the Cloud server a node was adopted as: what it holds now",
+        "operationId": "nodes.drain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DrainReview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrainReview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/drain/apply": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Drain a node's server as reviewed, so nothing new is placed on it",
+        "operationId": "nodes.drainApply",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{id}/revoke": {
       "post": {
         "tags": [
@@ -14588,6 +14695,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/workloads": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "What Loomplane runs on a node, and which databases have no backups",
+        "operationId": "nodes.workloads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NodeWorkloadList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeWorkloadList"
                 }
               }
             }
@@ -30441,6 +30580,9 @@
           "attempt": {
             "type": "integer"
           },
+          "automatic": {
+            "type": "boolean"
+          },
           "cost": {
             "$ref": "#/components/schemas/RouteCost"
           },
@@ -30489,6 +30631,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "previous_address": {
+            "type": "string"
           },
           "previous_receipt": {
             "$ref": "#/components/schemas/DNSRecord"
@@ -34088,7 +34233,10 @@
           "joined_by_key_id",
           "revoked_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "public_address",
+          "ingress_applied",
+          "ingress_detail"
         ],
         "properties": {
           "created_at": {
@@ -34110,6 +34258,12 @@
           },
           "identity_generation": {
             "type": "integer"
+          },
+          "ingress_applied": {
+            "type": "string"
+          },
+          "ingress_detail": {
+            "type": "string"
           },
           "ingress_mode": {
             "type": "string"
@@ -34142,6 +34296,12 @@
           "protocol_version": {
             "type": "integer"
           },
+          "public_address": {
+            "type": "string"
+          },
+          "public_address_confirmed_at": {
+            "type": "string"
+          },
           "revoked_at": {
             "type": "string"
           },
@@ -34162,6 +34322,85 @@
             "type": "string"
           }
         }
+      },
+      "NodeAdoption": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "node_name",
+          "org_id",
+          "cloud_id",
+          "approved_by",
+          "status",
+          "reason",
+          "server_id",
+          "operation_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "approved_by": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NodeAdoptionList": {
+        "properties": {
+          "adoptions": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NodeAdoption"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "adoptions"
+        ],
+        "type": "object",
+        "x-forge-envelope": "adoptions"
       },
       "Inventory": {
         "type": "object",
@@ -34392,6 +34631,9 @@
           "identity_generation": {
             "type": "integer"
           },
+          "name": {
+            "type": "string"
+          },
           "node_id": {
             "type": "string"
           },
@@ -34467,6 +34709,52 @@
             "type": "string"
           }
         }
+      },
+      "NodeWorkload": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "project_id",
+          "environment",
+          "service",
+          "kind",
+          "has_backup_policy"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "has_backup_policy": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeWorkloadList": {
+        "properties": {
+          "workloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeWorkload"
+            }
+          }
+        },
+        "required": [
+          "workloads"
+        ],
+        "type": "object",
+        "x-forge-envelope": "workloads"
       }
     },
     "securitySchemes": {

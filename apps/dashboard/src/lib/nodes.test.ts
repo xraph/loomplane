@@ -22,6 +22,9 @@ const base: Node = {
   endpoints: ["docker", "probe"],
   identityGeneration: 1,
   ingressMode: "direct",
+  ingressApplied: "direct",
+  ingressDetail: "",
+  publicAddress: "",
   inventory: {
     arch: "amd64",
     cpus: 8,
