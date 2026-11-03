@@ -18,6 +18,7 @@ var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 func (a *App) commands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
+		a.agentCommand(),
 		a.federationCommand(),
 		a.cloudsCommand(),
 		a.cloudTargetsCommand(),
@@ -80,8 +81,9 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
 			cli.WithUsage("show <plan-id>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("approve", "Approve a plan, which deploys it", a.approve,
-			cli.WithUsage("approve <plan-id> [--yes] [--note ...]"),
+			cli.WithUsage("approve <plan-id> [--revision <rev>] [--yes] [--note ...]"),
 			cli.WithFlags(
+				cli.NewStringFlag("revision", "", "Approve only if the plan is still at this revision, such as the one the agent asked about", ""),
 				cli.NewStringFlag("note", "", "Why, for the record", ""),
 				cli.NewBoolFlag("yes", "y", "Don't ask first", false),
 				cli.NewBoolFlag("no-wait", "", "Approve and return without following the deployment", false))),
@@ -482,6 +484,9 @@ func (a *App) approve(ctx cli.CommandContext) error {
 	}
 	if plan.Status != "ready" {
 		return fmt.Errorf("plan %s is %s, so there's nothing to approve", plan.ID, plan.Status)
+	}
+	if want := ctx.String("revision"); want != "" && want != plan.Revision {
+		return fmt.Errorf("plan %s is at revision %s now, not %s; read it again before you approve", plan.ID, plan.Revision, want)
 	}
 	a.printPlan(plan)
 	if !ctx.Bool("yes") {
