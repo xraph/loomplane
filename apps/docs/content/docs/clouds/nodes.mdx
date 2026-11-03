@@ -109,7 +109,7 @@ The ingress mode is the one setting that comes from the dashboard and could open
 
 ## Deploy to a node
 
-Join the node with `docker` allowed and a Cloud, and Loomplane connects its Docker as a server in that Cloud. Most nodes adopt on their own. One that needs a look first, say because its Docker is old or it reports odd capacity, shows up on the Cloud's Changes tab with the reason and an Adopt button. Adopt goes through the same reviewed steps as any server you connect, so you see what changes before it does.
+Join the node with `docker` allowed and a Cloud, and Loomplane connects its Docker as a server in that Cloud. Most nodes adopt on their own. One that needs a look first shows up on the Cloud's Changes tab with the reason and an Adopt button. The reasons are ports 80 and 443 already in use on the machine, an architecture that doesn't match the Cloud's pools, a server with that name already in the Cloud, or a token whose minter can no longer manage Clouds (or whose API key was revoked or expired). Adopt goes through the same reviewed steps as any server you connect, so you see what changes before it does.
 
 After that the node is an ordinary server target. A pool can use it, a service can place on it, and the dashboard marks it with a Node badge and says it was connected by its owner. You can disconnect it from the Cloud, but you can't delete it, because Loomplane didn't create the machine.
 
