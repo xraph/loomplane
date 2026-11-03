@@ -51,6 +51,7 @@ import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
 import { Route as IntegrationsConnectCloudRouteImport } from "./routes/integrations.connect.$cloud"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
+import { Route as IntegrationsGitlabCallbackRouteImport } from "./routes/integrations.gitlab.callback"
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
 import { Route as ProjectsIdServicesServiceRouteImport } from "./routes/projects.$id_.services.$service"
@@ -267,6 +268,12 @@ const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
   path: "/integrations/github/setup",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsGitlabCallbackRoute =
+  IntegrationsGitlabCallbackRouteImport.update({
+    id: "/integrations/gitlab/callback",
+    path: "/integrations/gitlab/callback",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const IntegrationsOauthCallbackRoute =
   IntegrationsOauthCallbackRouteImport.update({
     id: "/integrations/oauth/callback",
@@ -334,6 +341,7 @@ export interface FileRoutesByFullPath {
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
@@ -382,6 +390,7 @@ export interface FileRoutesByTo {
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
@@ -431,6 +440,7 @@ export interface FileRoutesById {
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
@@ -481,6 +491,7 @@ export interface FileRouteTypes {
     | "/clouds/accounts/$id"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
+    | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/ai/models/"
     | "/projects/$id/catalog/$resource"
@@ -529,6 +540,7 @@ export interface FileRouteTypes {
     | "/clouds/accounts/$id"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
+    | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/ai/models"
     | "/projects/$id/catalog/$resource"
@@ -577,6 +589,7 @@ export interface FileRouteTypes {
     | "/clouds/accounts/$id"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
+    | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/ai/models/"
     | "/projects/$id_/catalog/$resource"
@@ -626,6 +639,7 @@ export interface RootRouteChildren {
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsConnectCloudRoute: typeof IntegrationsConnectCloudRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
+  IntegrationsGitlabCallbackRoute: typeof IntegrationsGitlabCallbackRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
   AiModelsIndexRoute: typeof AiModelsIndexRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
@@ -929,6 +943,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsGithubSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/gitlab/callback": {
+      id: "/integrations/gitlab/callback"
+      path: "/integrations/gitlab/callback"
+      fullPath: "/integrations/gitlab/callback"
+      preLoaderRoute: typeof IntegrationsGitlabCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/oauth/callback": {
       id: "/integrations/oauth/callback"
       path: "/integrations/oauth/callback"
@@ -1002,6 +1023,7 @@ const rootRouteChildren: RootRouteChildren = {
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsConnectCloudRoute: IntegrationsConnectCloudRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
+  IntegrationsGitlabCallbackRoute: IntegrationsGitlabCallbackRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
   AiModelsIndexRoute: AiModelsIndexRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,

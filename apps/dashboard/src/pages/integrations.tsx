@@ -12,12 +12,24 @@ import {
   useGithubDisconnect,
   useGithubRepositories,
   useGithubStatus,
+  useGitlabDisconnect,
+  useGitlabRepositories,
+  useGitlabStartSignIn,
+  useGitlabStatus,
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
-import type { GitHubInstallation } from "@/client/forge/loomplane/types"
+import type {
+  GitHubInstallation,
+  GitLabConnectionView,
+  GitLabHostView,
+  GitLabSignInStart,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { statusLabels } from "@/components/cloud-connections"
+import { GitLabHostDialog } from "@/components/gitlab-host-dialog"
+import { GitLabMark } from "@/components/gitlab-mark"
+import { GitLabWebhook } from "@/components/gitlab-webhook"
 import { IntegrationCatalog } from "@/components/integration-catalog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import { Page, PageHeading } from "@/components/page"
@@ -83,10 +95,14 @@ export function Integrations({
   const [starting, setStarting] = useState<string | null>(null)
   const forms = useQuery(useConnectionCloudsList)
   const github = useQuery(useGithubStatus)
+  const gitlab = useQuery(useGitlabStatus)
   const clouds = useQuery(useConnectionsList)
+  // GitLab is counted once it has answered, or failed to.
   const connectedCount =
-    github.data && clouds.data
-      ? github.data.installations.length + clouds.data.connections.length
+    github.data && clouds.data && (gitlab.data || gitlab.status === "error")
+      ? github.data.installations.length +
+        (gitlab.data?.connections.length ?? 0) +
+        clouds.data.connections.length
       : undefined
 
   return (
@@ -135,7 +151,10 @@ export function Integrations({
           <TabsContent value="connected" className="grid gap-4">
             <ConnectedStats />
             <div className="grid items-start gap-3 lg:grid-cols-2">
-              <GitHubPanel onStart={setStarting} />
+              <div className="grid gap-3">
+                <GitHubPanel onStart={setStarting} />
+                <GitLabPanel />
+              </div>
               <CloudsPanel onConnect={connect} />
             </div>
           </TabsContent>
@@ -205,14 +224,22 @@ function Stat({
 
 function ConnectedStats() {
   const github = useQuery(useGithubStatus)
+  const gitlab = useQuery(useGitlabStatus)
   const clouds = useQuery(useConnectionsList)
   const installs = github.data?.installations.length ?? 0
+  const gitlabs = gitlab.data?.connections.length ?? 0
   const accounts = clouds.data?.connections.length ?? 0
   const health = cloudHealth(clouds.data?.connections ?? [])
   const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
+  // A GitLab that can't be reached counts as none, as the tab's count does.
+  const loaded =
+    !!github.data &&
+    !!clouds.data &&
+    (!!gitlab.data || gitlab.status === "error")
+  const total = installs + gitlabs + accounts
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      {!github.data || !clouds.data ? (
+      {!loaded ? (
         [0, 1, 2].map((i) => (
           <Skeleton key={i} className="h-[92px] rounded-[14px]" />
         ))
@@ -220,21 +247,23 @@ function ConnectedStats() {
         <>
           <Stat
             label="Connected"
-            value={installs + accounts}
+            value={total}
             note={
-              installs + accounts === 0
+              total === 0
                 ? "Nothing connected yet"
-                : `${plural(installs, "GitHub account")} and ${plural(accounts, "cloud account")}`
+                : gitlabs === 0
+                  ? `${plural(installs, "GitHub account")} and ${plural(accounts, "cloud account")}`
+                  : `${plural(installs, "GitHub account")}, ${plural(gitlabs, "GitLab account")} and ${plural(accounts, "cloud account")}`
             }
           />
-          {installs > 0 ? (
-            <RepositoryStat />
+          {installs > 0 || gitlabs > 0 ? (
+            <RepositoryStat github={installs > 0} gitlab={gitlabs > 0} />
           ) : (
             <Stat
               label="Repositories"
               value={<span className="text-muted-foreground">Public</span>}
               note={
-                github.data.configured
+                github.data?.configured
                   ? "Only public ones, until an account is connected"
                   : "Only public ones: no GitHub App is set up"
               }
@@ -264,22 +293,96 @@ function ConnectedStats() {
   )
 }
 
-// RepositoryStat asks GitHub, so it's only shown once an account is in.
-function RepositoryStat() {
+/** What one host's list of repositories comes to. */
+type RepositoryCount = {
+  total: number
+  hidden: number
+  loading: boolean
+  failed: boolean
+}
+const noRepositories: RepositoryCount = {
+  total: 0,
+  hidden: 0,
+  loading: false,
+  failed: false,
+}
+
+function GitHubCount({
+  children,
+}: {
+  children: (count: RepositoryCount) => ReactNode
+}) {
   const repos = useQuery(useGithubRepositories)
-  if (repos.status === "error")
-    return <Stat label="Repositories" value="?" note="GitHub didn't answer" />
-  if (!repos.data) return <Skeleton className="h-[92px] rounded-[14px]" />
-  const list = repos.data.repositories
-  const hidden = list.filter((r) => r.private).length
-  return (
-    <Stat
-      label="Repositories"
-      value={list.length}
-      note={
-        hidden ? `Loomplane can read, ${hidden} private` : "Loomplane can read"
-      }
-    />
+  const list = repos.data?.repositories ?? []
+  return children({
+    total: list.length,
+    hidden: list.filter((r) => r.private).length,
+    loading: !repos.data && repos.status !== "error",
+    failed: repos.status === "error",
+  })
+}
+
+function GitLabCount({
+  children,
+}: {
+  children: (count: RepositoryCount) => ReactNode
+}) {
+  const repos = useQuery(useGitlabRepositories)
+  const list = repos.data?.repositories ?? []
+  return children({
+    total: list.length,
+    hidden: list.filter((r) => r.private).length,
+    loading: !repos.data && repos.status !== "error",
+    failed: repos.status === "error",
+  })
+}
+
+// RepositoryStat asks the hosts, so it's only shown once an account is in.
+function RepositoryStat({
+  github,
+  gitlab,
+}: {
+  github: boolean
+  gitlab: boolean
+}) {
+  const show = (counts: RepositoryCount[]) => {
+    const failed = counts.find((c) => c.failed)
+    if (failed)
+      return (
+        <Stat
+          label="Repositories"
+          value="?"
+          note={
+            github && !gitlab
+              ? "GitHub didn't answer"
+              : gitlab && !github
+                ? "GitLab didn't answer"
+                : "A host didn't answer"
+          }
+        />
+      )
+    if (counts.some((c) => c.loading))
+      return <Skeleton className="h-[92px] rounded-[14px]" />
+    const total = counts.reduce((n, c) => n + c.total, 0)
+    const hidden = counts.reduce((n, c) => n + c.hidden, 0)
+    return (
+      <Stat
+        label="Repositories"
+        value={total}
+        note={
+          hidden
+            ? `Loomplane can read, ${hidden} private`
+            : "Loomplane can read"
+        }
+      />
+    )
+  }
+  const withGitLab = (a: RepositoryCount) =>
+    gitlab ? <GitLabCount>{(b) => show([a, b])}</GitLabCount> : show([a])
+  return github ? (
+    <GitHubCount>{withGitLab}</GitHubCount>
+  ) : (
+    withGitLab(noRepositories)
   )
 }
 
@@ -584,6 +687,322 @@ function Repositories({ onStart }: { onStart: (repository: string) => void }) {
         </ul>
       )}
     </>
+  )
+}
+
+/* ------------------------------------------------------------------------ */
+/* GitLab                                                                     */
+
+/**
+ * useGitLabSignIn starts a GitLab sign-in on a host and leaves for GitLab,
+ * which sends the person back to the callback page.
+ */
+function useGitLabSignIn() {
+  const start = useMutation(useGitlabStartSignIn)
+  const [host, setHost] = useState<string | null>(null)
+  const signIn = async (hostId: string) => {
+    setHost(hostId)
+    try {
+      const started = (await start.mutateAsync({
+        body: { hostId },
+      })) as GitLabSignInStart
+      window.location.assign(started.authorizeUrl)
+    } catch (err) {
+      setHost(null)
+      toast.error(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+  return { signIn, pendingHost: start.isPending ? host : null }
+}
+
+function GitLabPanel() {
+  const { can } = useOrganization()
+  const status = useQuery(useGitlabStatus)
+  const { signIn, pendingHost } = useGitLabSignIn()
+  const [adding, setAdding] = useState(false)
+  const mayConnect = can("repository:connect")
+  const data = status.data
+  const hosts = data?.hosts ?? []
+  const connections = data?.connections ?? []
+  const mayAddHost = !!data?.organizationHosts && data.canConnect
+  // Hosts nobody has signed in to yet.
+  const open = hosts.filter((h) => !connections.some((c) => c.host === h.host))
+  const home = open.find((h) => h.instance && h.host === "gitlab.com")
+  const others = open.filter((h) => h !== home)
+  const addHost = mayAddHost && (
+    <Button
+      variant="outline"
+      size={connections.length ? "sm" : "default"}
+      onClick={() => setAdding(true)}
+    >
+      Add a self-managed GitLab
+    </Button>
+  )
+
+  return (
+    <Panel
+      title="GitLab"
+      media={
+        <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+          <GitLabMark className="size-4" />
+        </span>
+      }
+      action={connections.length > 0 && addHost}
+    >
+      {status.status === "error" ? (
+        <div className="p-4">
+          <QueryError
+            error={status.error}
+            fallback="The GitLab connection couldn't be loaded."
+            retry={status.refetch}
+          />
+        </div>
+      ) : !data ? (
+        <div className="p-4">
+          <Skeleton className="h-32 w-full" />
+        </div>
+      ) : hosts.length === 0 && !data.organizationHosts ? (
+        <p className="px-4 py-4 text-[13px] leading-relaxed text-muted-foreground">
+          Public gitlab.com projects can still be read. Ask your operator to set
+          up GitLab to read private ones.
+        </p>
+      ) : (
+        <>
+          {connections.length === 0 ? (
+            <Empty variant="inline">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <GitLabMark className="size-4" />
+                </EmptyMedia>
+                <EmptyTitle>No GitLab accounts yet</EmptyTitle>
+                <EmptyDescription>
+                  {mayConnect
+                    ? "Sign in with GitLab to let Loomplane read the projects you can see there."
+                    : "An admin can connect a GitLab."}
+                </EmptyDescription>
+              </EmptyHeader>
+              {(home || addHost) && (
+                <EmptyContent>
+                  {home && (
+                    <Button
+                      disabled={pendingHost !== null}
+                      onClick={() => void signIn(home.id)}
+                    >
+                      {pendingHost === home.id ? (
+                        <Spinner />
+                      ) : (
+                        <GitLabMark className="size-4" />
+                      )}
+                      Connect GitLab.com
+                    </Button>
+                  )}
+                  {addHost}
+                </EmptyContent>
+              )}
+            </Empty>
+          ) : (
+            <ul className="divide-y">
+              {connections.map((c) => (
+                <GitLabConnectionRow
+                  key={c.id}
+                  connection={c}
+                  host={hosts.find((h) => h.host === c.host)}
+                  mayConnect={mayConnect}
+                  onSignIn={signIn}
+                  signingIn={pendingHost !== null}
+                />
+              ))}
+            </ul>
+          )}
+          {(connections.length ? open : others).length > 0 && (
+            <ul
+              className={cn("divide-y", connections.length > 0 && "border-t")}
+            >
+              {(connections.length ? open : others).map((h) => (
+                <GitLabHostRow
+                  key={h.id}
+                  host={h}
+                  disabled={pendingHost !== null}
+                  pending={pendingHost === h.id}
+                  onConnect={() => void signIn(h.id)}
+                />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+      <GitLabHostDialog
+        open={adding}
+        onOpenChange={setAdding}
+        callbackUrl={data?.callbackUrl ?? ""}
+      />
+    </Panel>
+  )
+}
+
+function GitLabHostRow({
+  host,
+  disabled,
+  pending,
+  onConnect,
+}: {
+  host: GitLabHostView
+  disabled: boolean
+  pending: boolean
+  onConnect: () => void
+}) {
+  return (
+    <li className="flex items-center gap-3 px-4 py-2.5">
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">
+        {host.host}
+      </span>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        onClick={onConnect}
+      >
+        {pending && <Spinner />}
+        Connect
+      </Button>
+    </li>
+  )
+}
+
+function GitLabConnectionRow({
+  connection: c,
+  host,
+  mayConnect,
+  onSignIn,
+  signingIn,
+}: {
+  connection: GitLabConnectionView
+  host?: GitLabHostView
+  mayConnect: boolean
+  onSignIn: (hostId: string) => Promise<void>
+  signingIn: boolean
+}) {
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [webhook, setWebhook] = useState(false)
+  return (
+    <li className="grid gap-2.5 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <AccountAvatar account={c.username} src={c.avatarUrl} />
+        <span className="grid min-w-0 flex-[1_1_160px] gap-0.5">
+          <span className="truncate text-[13.5px] font-medium">
+            {c.username}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            <span>{c.host}</span> · connected{" "}
+            <time dateTime={c.createdAt}>{formatDate(c.createdAt)}</time>
+          </span>
+        </span>
+        {c.lapsed ? (
+          <StatusPill tone="waiting">Sign-in needed</StatusPill>
+        ) : (
+          <StatusPill tone="live">Connected</StatusPill>
+        )}
+        {c.lapsed && mayConnect && host && (
+          <Button
+            size="sm"
+            disabled={signingIn}
+            onClick={() => void onSignIn(host.id)}
+          >
+            Sign in again
+          </Button>
+        )}
+        {mayConnect && (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={webhook}
+            onClick={() => setWebhook((v) => !v)}
+          >
+            Webhook
+          </Button>
+        )}
+        {mayConnect && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive"
+            onClick={() => setDisconnecting(true)}
+          >
+            Disconnect
+          </Button>
+        )}
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Reads what this GitLab user can see. A dedicated GitLab user with
+        Reporter access is safest.
+      </p>
+      {!c.versionSupported && (
+        <p className="text-xs leading-relaxed text-weld-ink">
+          GitLab {c.version} is older than Loomplane supports; some things may
+          not work
+        </p>
+      )}
+      {/* Mounted only while open, so closing it drops a secret it showed. */}
+      {webhook && mayConnect && <GitLabWebhook connection={c} />}
+      <DisconnectGitLab
+        connection={c}
+        open={disconnecting}
+        onOpenChange={setDisconnecting}
+      />
+    </li>
+  )
+}
+
+function DisconnectGitLab({
+  connection,
+  open,
+  onOpenChange,
+}: {
+  connection: GitLabConnectionView
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const remove = useMutation(useGitlabDisconnect)
+  const invalidate = useInvalidate()
+
+  const confirm = async () => {
+    try {
+      await remove.mutateAsync({ path: { id: connection.id } })
+      toast.success(`Disconnected ${connection.username}`)
+    } catch (err) {
+      toast.error(messageOf(err, "It wasn't disconnected."))
+    } finally {
+      onOpenChange(false)
+      invalidate(useGitlabStatus)
+      invalidate(useGitlabRepositories)
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            Disconnect {connection.username} on {connection.host}?
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            Loomplane stops reading the projects this user can see. Analyses
+            already done stay.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => void confirm()}
+          >
+            {remove.isPending && <Spinner />}
+            Disconnect
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
