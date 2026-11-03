@@ -9,6 +9,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -18,6 +19,13 @@ import (
 
 func main() {
 	if err := ctl.New(ctl.Options{Version: buildinfo.Version}).Run(os.Args[1:]); err != nil {
+		var exit *ctl.ExitError
+		if errors.As(err, &exit) {
+			if exit.Err != nil {
+				fmt.Fprintln(os.Stderr, "loomctl:", exit.Err)
+			}
+			os.Exit(exit.Code)
+		}
 		fmt.Fprintln(os.Stderr, "loomctl:", err)
 		os.Exit(1)
 	}

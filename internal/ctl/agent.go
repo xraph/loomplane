@@ -28,11 +28,16 @@ func (a *App) agentCommand() cli.Command {
 	for _, sub := range a.agentSubcommands() {
 		opts = append(opts, cli.WithSubcommand(sub))
 	}
-	return cli.NewCommand("agent", "Work with the workspace's built-in AI agent", nil, opts...)
+	opts = append(opts,
+		cli.WithUsage("agent [--project <ref>] [--conversation <id>]"),
+		cli.WithFlags(
+			cli.NewStringFlag("project", "", "Scope a new conversation to this project: its slug, name or ID", ""),
+			cli.NewStringFlag("conversation", "", "Carry on this conversation", "")))
+	return cli.NewCommand("agent", "Talk to the workspace's built-in AI agent, or work with what it asks", a.agentChat, opts...)
 }
 
 func (a *App) agentSubcommands() []cli.Command {
-	return []cli.Command{a.agentRequestsCommand()}
+	return []cli.Command{a.agentAskCommand(), a.agentConversationsCommand(), a.agentRequestsCommand()}
 }
 
 func (a *App) agentRequestsCommand() cli.Command {
@@ -61,14 +66,19 @@ type sentence string
 func (s sentence) Error() string { return string(s) }
 
 // agentError says the agent is off when the server has no such route. A 404
-// on one request's ID is a different thing: that request isn't there.
+// on one request's, conversation's or task's ID is a different thing: that
+// one isn't there.
 func agentError(err error) error {
 	var e *client.Error
 	if !errors.As(err, &e) || e.Status != 404 {
 		return err
 	}
-	if strings.Contains(strings.ToLower(e.Message), "agent request") {
+	msg := strings.ToLower(e.Message)
+	if strings.Contains(msg, "agent request") {
 		return sentence("There's no agent request with that ID.")
+	}
+	if strings.Contains(msg, "conversation not found") || strings.Contains(msg, "agent task not found") {
+		return err
 	}
 	return sentence(agentOff)
 }
