@@ -198,7 +198,7 @@ func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, e
 	var all []GitLabProject
 	page := 1
 	for range gitlabMaxPages {
-		p := "/api/v4/projects?membership=true&min_access_level=20&archived=false&simple=true&order_by=path&sort=asc&per_page=100&page=" + strconv.Itoa(page)
+		p := "/api/v4/projects?membership=true&min_access_level=20&archived=false&order_by=path&sort=asc&per_page=100&page=" + strconv.Itoa(page)
 		resp, err := g.get(ctx, p, token, "application/json", requestTimeout)
 		if err != nil {
 			return nil, err

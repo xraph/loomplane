@@ -159,7 +159,7 @@ func TestGitLabStore_connectionUpsertKeepsID(t *testing.T) {
 
 	again := *c
 	again.ID = ""
-	again.Username, again.Version, again.WebhookSet = "rex-renamed", "v2", true
+	again.Username, again.Version, again.WebhookSet = "rex-renamed", "v2", true // WebhookSet is the store's to keep
 	id2, err := s.SaveConnection(ctx, &again)
 	if err != nil || id2 != id {
 		t.Fatalf("second save = %q, %v; want the kept ID %q", id2, err, id)
@@ -168,7 +168,7 @@ func TestGitLabStore_connectionUpsertKeepsID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LapsedAt != nil || got.Username != "rex-renamed" || got.Version != "v2" || !got.WebhookSet ||
+	if got.LapsedAt != nil || got.Username != "rex-renamed" || got.Version != "v2" || got.WebhookSet ||
 		got.GitLabUserID != 42 || got.Kind != "oauth" || got.CreatedBy != "usr-1" || !got.CreatedAt.Equal(now) {
 		t.Fatalf("upserted %+v", got)
 	}
@@ -205,6 +205,36 @@ func TestGitLabStore_connectionUpsertKeepsID(t *testing.T) {
 	}
 	if err = s.MarkLapsed(ctx, "org-a", id, now); !errors.Is(err, repositories.ErrGitLabConnectionNotFound) {
 		t.Fatalf("lapse after delete = %v", err)
+	}
+}
+
+func TestGitLabStore_reconnectKeepsWebhookSet(t *testing.T) {
+	s, _, conn := gitlabStore(t)
+	ctx := t.Context()
+	c := &repositories.GitLabConnection{
+		OrgID: "org-a", Host: "gitlab.com", Kind: "oauth", GitLabUserID: 42, Username: "rex",
+		CreatedBy: "usr-1", CreatedAt: time.Now().UTC(),
+		WebhookSet: true, // a new connection has no webhook, whatever it says
+	}
+	id, err := s.SaveConnection(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := s.GetConnection(ctx, id)
+	if err != nil || fresh.WebhookSet {
+		t.Fatalf("new connection %+v, %v; want no webhook", fresh, err)
+	}
+	if _, err = conn.Exec(ctx, `UPDATE loomplane_gitlab_connections SET webhook_set = TRUE WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	again := *c
+	again.ID, again.WebhookSet = "", false
+	if _, err = s.SaveConnection(ctx, &again); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetConnection(ctx, id)
+	if err != nil || !got.WebhookSet {
+		t.Fatalf("reconnected %+v, %v; want the webhook still set", got, err)
 	}
 }
 

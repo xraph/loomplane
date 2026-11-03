@@ -103,7 +103,8 @@ type GitLabStore interface {
 
 	// SaveConnection adds a connection, or refreshes the one the same
 	// GitLab account already has with the organization on that host. It
-	// returns the ID it kept and clears LapsedAt.
+	// returns the ID it kept and clears LapsedAt. A refresh keeps
+	// WebhookSet, and a new connection's is false.
 	SaveConnection(ctx context.Context, c *GitLabConnection) (string, error)
 	ListConnections(ctx context.Context, orgID string) ([]*GitLabConnection, error)
 	// GetConnection reads a connection whatever its organization, for the

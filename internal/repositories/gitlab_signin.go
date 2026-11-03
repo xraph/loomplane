@@ -124,9 +124,16 @@ func (c *GitLabConnections) Connect(ctx context.Context, p security.Principal, i
 		return nil, fmt.Errorf("encode the GitLab sign-in: %w", err)
 	}
 	// Under the grant lock, so a renewal of the same connection running
-	// now can't overwrite the new grant with one from the old sign-in.
+	// now can't overwrite the new grant with one from the old sign-in. A
+	// renewal GitLab refused while this waited for the lock has marked the
+	// old sign-in lapsed, so the connection is saved again once the new
+	// grant is in, which clears that.
 	err = c.cfg.Store.WithGrantLock(ctx, p.OrgID, id, func() error {
-		return c.cfg.Secrets.Put(ctx, p.OrgID, id, raw)
+		if putErr := c.cfg.Secrets.Put(ctx, p.OrgID, id, raw); putErr != nil {
+			return putErr
+		}
+		_, saveErr := c.cfg.Store.SaveConnection(ctx, conn)
+		return saveErr
 	})
 	if err != nil {
 		// Without its grant the connection can't read anything, so it

@@ -121,12 +121,18 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		for k, want := range map[string]string{
 			"membership": "true", "min_access_level": "20", "archived": "false",
-			"simple": "true", "order_by": "path", "sort": "asc", "per_page": "100",
+			"order_by": "path", "sort": "asc", "per_page": "100",
 		} {
 			if q.Get(k) != want {
 				http.Error(w, "want "+k+"="+want, http.StatusBadRequest)
 				return
 			}
+		}
+		// The simple representation leaves out visibility, which the
+		// picker needs to say whether a project is private.
+		if q.Has("simple") {
+			http.Error(w, "want no simple", http.StatusBadRequest)
+			return
 		}
 		page, _ := strconv.Atoi(q.Get("page"))
 		f.mu.Lock()

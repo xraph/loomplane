@@ -136,7 +136,7 @@ func (s *memGitLabStore) SaveConnection(_ context.Context, c *repositories.GitLa
 		s.seq++
 		cp.ID = "glc_" + strconv.Itoa(s.seq)
 	}
-	cp.LapsedAt = nil
+	cp.LapsedAt, cp.WebhookSet = nil, false
 	s.conns = append(s.conns, &cp)
 	return cp.ID, nil
 }
@@ -200,6 +200,16 @@ func (s *memGitLabStore) WithGrantLock(_ context.Context, orgID, id string, fn f
 	l.Lock()
 	defer l.Unlock()
 	return fn()
+}
+
+func (s *memGitLabStore) setWebhook(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.conns {
+		if c.ID == id {
+			c.WebhookSet = true
+		}
+	}
 }
 
 func (s *memGitLabStore) connection(t *testing.T, id string) *repositories.GitLabConnection {
@@ -329,6 +339,13 @@ type gcFake struct {
 	forms     []url.Values
 	seq       int
 	slow      time.Duration // delay on each refresh
+	// refreshStatus and refreshBody, when set, answer every refresh.
+	refreshStatus int
+	refreshBody   string
+	// refreshStarted, when set, hears of each refresh as it arrives.
+	refreshStarted chan struct{}
+	// public are the projects whose visibility is public.
+	public map[string]bool
 }
 
 func (f *gcFake) userOf(r *http.Request) (gcUser, bool) {
@@ -358,14 +375,25 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		f.mu.Lock()
 		f.forms = append(f.forms, r.PostForm)
-		refuse, slow := f.refuse, f.slow
+		refuse, slow, status, body, started := f.refuse, f.slow, f.refreshStatus, f.refreshBody, f.refreshStarted
 		f.mu.Unlock()
 		switch r.PostForm.Get("grant_type") {
 		case "authorization_code":
 			f.issue(w, strings.TrimPrefix(r.PostForm.Get("code"), "code-"))
 		case "refresh_token":
 			f.refreshes.Add(1)
+			if started != nil {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+			}
 			time.Sleep(slow)
+			if status != 0 {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+				return
+			}
 			if refuse {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"The provided authorization grant is invalid"}`))
@@ -401,10 +429,20 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out := make([]map[string]any, 0, len(u.projects))
 		for _, p := range u.projects {
 			ns := p[:strings.LastIndex(p, "/")]
-			out = append(out, map[string]any{
+			pr := map[string]any{
 				"id": 1, "path_with_namespace": p, "name": strings.ToUpper(p[strings.LastIndex(p, "/")+1:]),
-				"default_branch": "main", "visibility": "private", "namespace": map[string]string{"full_path": ns},
-			})
+				"default_branch": "main", "namespace": map[string]string{"full_path": ns},
+			}
+			// GitLab's simple representation has no visibility.
+			if !r.URL.Query().Has("simple") {
+				pr["visibility"] = "private"
+				f.mu.Lock()
+				if f.public[p] {
+					pr["visibility"] = "public"
+				}
+				f.mu.Unlock()
+			}
+			out = append(out, pr)
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	case strings.HasPrefix(r.URL.EscapedPath(), "/api/v4/projects/"):
@@ -438,7 +476,7 @@ func newGCFixture(t *testing.T, authz repositories.Authorizer, orgHosts bool) *g
 	t.Helper()
 	f := &gcFixture{
 		fake: &gcFake{
-			version: "17.4.2-ee", expiresIn: 7200,
+			version: "17.4.2-ee", expiresIn: 7200, public: map[string]bool{"Grp/a/web": true},
 			users: map[string]gcUser{
 				"alice": {id: 1, name: "alice", projects: []string{"grp/sub/api", "Grp/a/web"}},
 				"bob":   {id: 2, name: "bob", projects: []string{"grp/sub/api", "grp/secret"}},
@@ -1070,6 +1108,9 @@ func TestGitLabRepositories_groupedOrderAndSkipsLapsed(t *testing.T) {
 	if r.Key != gcHost+"/grp/sub/api" || r.Namespace != "grp/sub" || r.Name != "API" || !r.Private || r.DefaultBranch != "main" {
 		t.Fatalf("repository = %+v", r)
 	}
+	if repos[1].Private {
+		t.Fatalf("public project %+v reads as private", repos[1])
+	}
 	// The same project through two live connections shows once.
 	_ = f.connect(t, p, "instance:"+gcHost, "bob")
 	repos, err = f.svc.Repositories(context.Background(), p)
@@ -1102,4 +1143,107 @@ func TestGitLabLookup(t *testing.T) {
 
 func base64URLDecode(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
+}
+
+func TestGitLabConnect_reconnectKeepsWebhookSet(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	first := f.connect(t, p, "instance:"+gcHost, "alice")
+	if first.WebhookSet {
+		t.Fatal("a new connection has a webhook")
+	}
+	f.store.setWebhook(first.ID)
+	again := f.connect(t, p, "instance:"+gcHost, "alice")
+	if again.ID != first.ID || !again.WebhookSet {
+		t.Fatalf("reconnected %+v, want %s with its webhook still set", again, first.ID)
+	}
+}
+
+func TestGitLabConnect_reconnectDuringRefusedRenewalStaysLive(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	f.fake.expiresIn = 60
+	first := f.connect(t, p, "instance:"+gcHost, "alice")
+	started := make(chan struct{}, 1)
+	f.fake.mu.Lock()
+	f.fake.refuse, f.fake.slow, f.fake.refreshStarted = true, 300*time.Millisecond, started
+	f.fake.expiresIn = 7200
+	f.fake.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Token(context.Background(), "org-a", gcAPI)
+		done <- err
+	}()
+	// The renewal holds the grant lock while GitLab takes its time to
+	// refuse it; alice signs in again meanwhile.
+	<-started
+	again := f.connect(t, p, "instance:"+gcHost, "alice")
+	if err := <-done; !errors.Is(err, repositories.ErrGitLabSignInLapsed) {
+		t.Fatalf("the racing Token = %v, want ErrGitLabSignInLapsed", err)
+	}
+	if again.ID != first.ID {
+		t.Fatalf("reconnect made %s, want %s", again.ID, first.ID)
+	}
+	if rec := f.store.connection(t, first.ID); rec.LapsedAt != nil {
+		t.Fatal("the refused renewal of the old sign-in left the reconnected connection lapsed")
+	}
+	if again.Lapsed {
+		t.Fatal("Connect answered with a lapsed connection")
+	}
+	tok, err := f.svc.Token(context.Background(), "org-a", gcAPI)
+	if err != nil || tok != f.secrets.grant(t, first.ID).AccessToken {
+		t.Fatalf("Token after reconnecting = %q, %v; want the new grant's", tok, err)
+	}
+}
+
+func TestGitLabToken_refreshFailureIsNotALapse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"GitLab down", http.StatusBadGateway, `{}`},
+		{"app rejected", http.StatusUnauthorized, `{"error":"invalid_client"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGCFixture(t, allowAll, true)
+			f.fake.expiresIn = 60 // due, but unexpired
+			v := f.connect(t, gcPrincipal("org-a", "user-1"), "instance:"+gcHost, "alice")
+			held := f.secrets.grant(t, v.ID)
+			f.fake.mu.Lock()
+			f.fake.refreshStatus, f.fake.refreshBody = tc.status, tc.body
+			f.fake.mu.Unlock()
+			tok, err := f.svc.Token(context.Background(), "org-a", gcAPI)
+			if err != nil || tok != held.AccessToken {
+				t.Fatalf("Token = %q, %v; want the held, unexpired %q", tok, err, held.AccessToken)
+			}
+			if f.fake.refreshes.Load() == 0 {
+				t.Fatal("no refresh was tried")
+			}
+			if rec := f.store.connection(t, v.ID); rec.LapsedAt != nil {
+				t.Fatal("a refresh that failed for another reason than a refused grant lapsed the connection")
+			}
+			if g := f.secrets.grant(t, v.ID); g.AccessToken != held.AccessToken || g.RefreshToken != held.RefreshToken {
+				t.Fatalf("grant = %+v, want the held one kept", g)
+			}
+		})
+	}
+}
+
+func TestGitLabDisconnect_revokesWhenTheCallerHasGivenUp(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	v := f.connect(t, p, "instance:"+gcHost, "alice")
+	g := f.secrets.grant(t, v.ID)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.svc.Disconnect(ctx, p, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.fake.mu.Lock()
+	revoked := append([]string(nil), f.fake.revoked...)
+	f.fake.mu.Unlock()
+	if len(revoked) != 1 || revoked[0] != g.AccessToken {
+		t.Fatalf("revoked %v, want the access token even though the caller had gone", revoked)
+	}
 }

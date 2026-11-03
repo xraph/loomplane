@@ -151,8 +151,10 @@ func (s *GitLabPgStore) TakeSignIn(ctx context.Context, state string, now time.T
 }
 
 // SaveConnection implements GitLabStore. What a reconnect refreshes is the
-// account's name, picture, tokens' version and webhook state, and it clears
-// a lapse. Who first connected it, and when, stay.
+// account's name, picture and GitLab release, and it clears a lapse. Who
+// first connected it, when, and whether its webhook is set stay: signing in
+// again leaves the hook on GitLab and its secret in Vault. A new connection
+// has no webhook.
 func (s *GitLabPgStore) SaveConnection(ctx context.Context, c *GitLabConnection) (string, error) {
 	id := c.ID
 	if id == "" {
@@ -172,14 +174,13 @@ func (s *GitLabPgStore) SaveConnection(ctx context.Context, c *GitLabConnection)
 	var kept string
 	err := s.db.QueryRow(ctx, `INSERT INTO loomplane_gitlab_connections
 		(id, org_id, host, host_id, kind, gitlab_user_id, username, avatar_url, version, created_by, created_at, lapsed_at, webhook_set)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, FALSE)
 		ON CONFLICT (org_id, host, gitlab_user_id) DO UPDATE SET
 			host_id = EXCLUDED.host_id, kind = EXCLUDED.kind, username = EXCLUDED.username,
-			avatar_url = EXCLUDED.avatar_url, version = EXCLUDED.version,
-			webhook_set = EXCLUDED.webhook_set, lapsed_at = NULL
+			avatar_url = EXCLUDED.avatar_url, version = EXCLUDED.version, lapsed_at = NULL
 		RETURNING id`,
 		id, c.OrgID, canonicalGitLabHost(c.Host), hostID, kind, c.GitLabUserID, c.Username, c.AvatarURL, c.Version,
-		c.CreatedBy, c.CreatedAt, c.WebhookSet).Scan(&kept)
+		c.CreatedBy, c.CreatedAt).Scan(&kept)
 	if err != nil {
 		return "", fmt.Errorf("save GitLab connection: %w", err)
 	}

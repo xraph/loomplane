@@ -277,7 +277,12 @@ func (c *GitLabConnections) Disconnect(ctx context.Context, p security.Principal
 	// The grant lock keeps a renewal from writing a new grant after it's
 	// revoked and forgotten.
 	err = c.cfg.Store.WithGrantLock(ctx, conn.OrgID, conn.ID, func() error {
-		if revokeErr := c.revoke(ctx, conn); revokeErr != nil {
+		// The lock holds a database transaction, so a GitLab that hangs
+		// mustn't hold it for as long as the request lives. Nor should a
+		// caller giving up leave the grant unrevoked.
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitlabRenewTimeout)
+		defer cancel()
+		if revokeErr := c.revoke(revokeCtx, conn); revokeErr != nil {
 			details["revoke_error"] = revokeErr.Error()
 		}
 		if delErr := c.cfg.Secrets.Delete(ctx, conn.OrgID, conn.ID); delErr != nil {
