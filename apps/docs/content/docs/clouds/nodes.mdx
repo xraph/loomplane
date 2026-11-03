@@ -97,12 +97,14 @@ Loomplane can only narrow the list. If you remove `docker` in the dashboard, the
 sudo loomctl node allow docker
 ```
 
-That writes `allow.json` first and then tells the running node. The node serves only what both `allow.json` and `node.json` allow, so even code running as the service user can't widen it. If `allow.json` is missing, belongs to anyone else, or can be written by other users, the node serves nothing and logs why. Run `node allow` again to fix it.
+That writes `allow.json` first and then tells the running node. The node serves only what both `allow.json` and `node.json` allow, so code running as the service user can't widen it. The exception is `docker`, which is covered below. If `allow.json` is missing, belongs to anyone else, or can be written by other users, the node serves nothing and logs why. Run `node allow` again to fix it.
 
 The ingress mode is the one setting that comes from the dashboard and could open something up. It will decide whether public traffic reaches the node once domain routing to nodes arrives. Nothing serves `public` on a node yet.
 
 <Callout type="warn">
   Access to the Docker socket is root access on that host. Anything that can start a container can mount `/` into it. Allow `docker` only on a machine you'd let Loomplane administer.
+
+  `node allow docker` also adds the `loomplane-node` user to the `docker` group and restarts the service to pick that up. From then on, the service user is effectively root on that machine, and the ceiling in `allow.json` no longer holds it back. Removing `docker` in the dashboard stops the node using Docker, but the node isn't root and can't take the group back. To do that, run `sudo gpasswd -d loomplane-node docker` on the machine and restart the service.
 </Callout>
 
 ## Commands
