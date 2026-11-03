@@ -86,20 +86,29 @@ afterEach(() => {
   setFeatures({ ai: false })
 })
 
-it("redirects /ai/settings to / when AI is off", async () => {
+it("redirects /settings/ai to / when AI is off", async () => {
   setFeatures({ ai: false })
   const off = createDashboardRouter(
-    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+    createMemoryHistory({ initialEntries: ["/settings/ai"] })
   )
   await off.load()
   expect(off.state.location.pathname).toBe("/")
 
   setFeatures({ ai: true })
   const on = createDashboardRouter(
-    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+    createMemoryHistory({ initialEntries: ["/settings/ai"] })
   )
   await on.load()
-  expect(on.state.location.pathname).toBe("/ai/settings")
+  expect(on.state.location.pathname).toBe("/settings/ai")
+})
+
+it("sends the old /ai/settings address to /settings/ai", async () => {
+  setFeatures({ ai: true })
+  const router = createDashboardRouter(
+    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+  )
+  await router.load()
+  expect(router.state.location.pathname).toBe("/settings/ai")
 })
 
 it("keeps the Hugging Face token write-only", async () => {
@@ -343,7 +352,8 @@ it("saves a workspace key without ever showing it again", async () => {
     </Wrapped>
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
-  expect(within(section).getByText("Server default")).toBeInTheDocument()
+  // The section holds its place while the agent's settings load.
+  expect(await within(section).findByText("Server default")).toBeInTheDocument()
   expect(
     within(section).getByText("Anthropic, claude-sonnet-5-5")
   ).toBeInTheDocument()
@@ -394,7 +404,7 @@ it("needs a budget before turning the agent on", async () => {
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
   await userEvent.click(
-    within(section).getByRole("switch", { name: "Turn the agent on" })
+    await within(section).findByRole("switch", { name: "Turn the agent on" })
   )
   const budget = within(section).getByLabelText("Monthly budget (USD)")
   const alert = await within(section).findByRole("alert")
@@ -424,7 +434,7 @@ it("explains why knowledge is off", async () => {
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
   expect(
-    within(section).getByRole("switch", {
+    await within(section).findByRole("switch", {
       name: "Search the workspace's documents",
     })
   ).toHaveAttribute("aria-disabled", "true")

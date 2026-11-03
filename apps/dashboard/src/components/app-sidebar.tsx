@@ -3,12 +3,7 @@
 // It collapses to icons (⌘B) and the projects stay visible when it does.
 import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
-import {
-  CopyIcon,
-  FolderGit2Icon,
-  KeyboardIcon,
-  Settings2Icon,
-} from "lucide-react"
+import { CopyIcon, FolderGit2Icon, KeyboardIcon } from "lucide-react"
 import { type ComponentProps } from "react"
 import { toast } from "sonner"
 
@@ -17,18 +12,31 @@ import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import {
   ActivityIcon,
+  AISettingsIcon,
+  ApiKeysIcon,
+  CloudSignInIcon,
   CloudsIcon,
   DeploymentsIcon,
   DomainsIcon,
   InfrastructureIcon,
+  IntegrationsIcon,
+  MembersIcon,
   NodesIcon,
+  NotificationsIcon,
   OverviewIcon,
   ProjectsIcon,
   ServicesIcon,
+  TeamsIcon,
+  VariablesIcon,
+  WebhooksIcon,
 } from "@/components/icons"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
+import {
+  NavSettings,
+  type SettingsGroup,
+} from "@/components/sidebar/nav-settings"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
@@ -59,18 +67,6 @@ import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
 const agentPath = "/agent/requests"
-
-const settingsPaths = [
-  "/members",
-  "/teams",
-  "/variables",
-  "/integrations",
-  "/platform/cloud-sign-in",
-  "/api-keys",
-  "/notifications/settings",
-  "/webhooks",
-  "/ai/settings",
-]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
@@ -199,73 +195,90 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     },
   ]
 
-  // Settings sit at the foot of the sidebar, apart from the pages you work in.
-  const settings: NavItem[] = [
+  // Settings sit at the foot of the sidebar, apart from the pages you work
+  // in, and open beside it rather than pushing the projects up.
+  const at = (p: string) => path.startsWith(p)
+  const settings: SettingsGroup[] = [
     {
-      title: "Settings",
-      icon: <Settings2Icon />,
-      isActive: settingsPaths.some((p) => path.startsWith(p)),
+      label: "Workspace",
       items: [
         {
+          title: "Members",
+          icon: <MembersIcon />,
+          link: <Link to="/members" />,
+          isActive: at("/members"),
+        },
+        {
+          title: "Teams",
+          icon: <TeamsIcon />,
+          link: <Link to="/teams" />,
+          isActive: at("/teams"),
+        },
+        {
+          title: "Variables",
+          icon: <VariablesIcon />,
+          link: <Link to="/variables" />,
+          isActive: at("/variables"),
+        },
+        {
           title: "Notifications",
+          icon: <NotificationsIcon />,
           link: <Link to="/notifications/settings" />,
-          isActive: path.startsWith("/notifications/settings"),
+          isActive: at("/notifications/settings"),
         },
         ...(can("member:manage")
           ? [
               {
                 title: "Webhooks",
+                icon: <WebhooksIcon />,
                 link: <Link to="/webhooks" />,
-                isActive: path.startsWith("/webhooks"),
+                isActive: at("/webhooks"),
               },
             ]
           : []),
-        {
-          title: "Members",
-          link: <Link to="/members" />,
-          isActive: path.startsWith("/members"),
-        },
-        {
-          title: "Teams",
-          link: <Link to="/teams" />,
-          isActive: path.startsWith("/teams"),
-        },
-        {
-          title: "Variables",
-          link: <Link to="/variables" />,
-          isActive: path.startsWith("/variables"),
-        },
+      ],
+    },
+    {
+      label: "Connections",
+      items: [
         {
           title: "Integrations",
+          icon: <IntegrationsIcon />,
           link: <Link to="/integrations" />,
-          isActive: path.startsWith("/integrations"),
+          isActive: at("/integrations"),
         },
-        ...(platformAdmin
-          ? [
-              {
-                title: "Cloud sign-in",
-                link: <Link to="/platform/cloud-sign-in" />,
-                isActive: path.startsWith("/platform/cloud-sign-in"),
-              },
-            ]
-          : []),
         // The workspace's AI settings sit with its other settings, so the AI
-        // group below doesn't carry a second "Settings".
+        // group above doesn't carry a second "Settings".
         ...(features.ai && can("ai:read")
           ? [
               {
                 title: "AI",
-                link: <Link to="/ai/settings" />,
-                isActive: path.startsWith("/ai/settings"),
+                icon: <AISettingsIcon />,
+                link: <Link to="/settings/ai" />,
+                isActive: at("/settings/ai"),
               },
             ]
           : []),
         {
           title: "API keys",
-          link: <Link to="/api-keys" />,
-          isActive: path.startsWith("/api-keys"),
+          icon: <ApiKeysIcon />,
+          link: <Link to="/settings/api-keys" />,
+          isActive: at("/settings/api-keys"),
         },
       ],
+    },
+    {
+      label: "Platform",
+      items: platformAdmin
+        ? [
+            {
+              title: "Cloud sign-in",
+              icon: <CloudSignInIcon />,
+              link: <Link to="/platform/cloud-sign-in" />,
+              isActive: at("/platform/cloud-sign-in"),
+            },
+          ]
+        : [],
     },
   ]
 
@@ -284,7 +297,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
-        <NavMain items={settings} label="" className="mt-auto" />
+        <NavSettings groups={settings} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
         <Account />

@@ -152,7 +152,7 @@ export function HFInspect({
             )}
             {refusal.settings === "link" && (
               <Link
-                to="/ai/settings"
+                to="/settings/ai"
                 className={buttonVariants({
                   variant: "outline",
                   size: "sm",

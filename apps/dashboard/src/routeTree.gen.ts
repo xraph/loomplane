@@ -48,6 +48,8 @@ import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as SettingsAiRouteImport } from "./routes/settings.ai"
+import { Route as SettingsApiKeysRouteImport } from "./routes/settings.api-keys"
 import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
@@ -256,6 +258,16 @@ const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
   path: "/services/catalog",
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsAiRoute = SettingsAiRouteImport.update({
+  id: "/settings/ai",
+  path: "/settings/ai",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsApiKeysRoute = SettingsApiKeysRouteImport.update({
+  id: "/settings/api-keys",
+  path: "/settings/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SetupCloudSignInRoute = SetupCloudSignInRouteImport.update({
   id: "/setup_/cloud-sign-in",
   path: "/setup/cloud-sign-in",
@@ -354,6 +366,8 @@ export interface FileRoutesByFullPath {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/ai": typeof SettingsAiRoute
+  "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
@@ -407,6 +421,8 @@ export interface FileRoutesByTo {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/ai": typeof SettingsAiRoute
+  "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
@@ -461,6 +477,8 @@ export interface FileRoutesById {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/ai": typeof SettingsAiRoute
+  "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
@@ -516,6 +534,8 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/ai"
+    | "/settings/api-keys"
     | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
@@ -569,6 +589,8 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/ai"
+    | "/settings/api-keys"
     | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds"
@@ -622,6 +644,8 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/ai"
+    | "/settings/api-keys"
     | "/setup_/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
@@ -676,6 +700,8 @@ export interface RootRouteChildren {
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
+  SettingsAiRoute: typeof SettingsAiRoute
+  SettingsApiKeysRoute: typeof SettingsApiKeysRoute
   SetupCloudSignInRoute: typeof SetupCloudSignInRoute
   WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
@@ -974,6 +1000,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ServicesCatalogRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/settings/ai": {
+      id: "/settings/ai"
+      path: "/settings/ai"
+      fullPath: "/settings/ai"
+      preLoaderRoute: typeof SettingsAiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/settings/api-keys": {
+      id: "/settings/api-keys"
+      path: "/settings/api-keys"
+      fullPath: "/settings/api-keys"
+      preLoaderRoute: typeof SettingsApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/setup_/cloud-sign-in": {
       id: "/setup_/cloud-sign-in"
       path: "/setup/cloud-sign-in"
@@ -1092,6 +1132,8 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
+  SettingsAiRoute: SettingsAiRoute,
+  SettingsApiKeysRoute: SettingsApiKeysRoute,
   SetupCloudSignInRoute: SetupCloudSignInRoute,
   WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
