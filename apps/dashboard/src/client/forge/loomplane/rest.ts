@@ -2190,6 +2190,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Cancel a running deployment before its next step, or a paused one at once; steps that finished stay as they are
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeploymentsDeployment"],
+      };
+
+      return this.request<types.DeploymentsDeployment>(config);
+    },
+
+    /**
      * Cancel a deployment paused waiting for capacity; steps that finished stay as they are
      */
     cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {

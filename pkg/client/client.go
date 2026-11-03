@@ -941,6 +941,13 @@ func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, e
 	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/retry", nil, &d)
 }
 
+// Cancel cancels a running deployment, or one paused for capacity. The
+// action that's running finishes and nothing after it starts.
+func (c *Client) Cancel(ctx context.Context, deploymentID string) (*Deployment, error) {
+	var d Deployment
+	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/cancel", nil, &d)
+}
+
 // Binding is what runs a service or resource in an environment now.
 type Binding struct {
 	PhysicalID    string     `json:"physical_id,omitempty"`

@@ -111,6 +111,11 @@ func (r *Runner) AssessCapacity(ctx context.Context, orgID, deploymentID string)
 		}
 		return nil, err
 	}
+	// A deployment someone cancelled waits for nothing: it stops here,
+	// between actions, and its demands go with it.
+	if d.CancelRequestedAt != nil && d.Status == StatusRunning {
+		return nil, r.stopRequested(ctx, orgID, d.ID)
+	}
 	updated, err := st.SetCapacityWait(ctx, orgID, d.ID, d.CapacityRevision, blocks, r.now().UTC())
 	if err != nil {
 		return nil, err

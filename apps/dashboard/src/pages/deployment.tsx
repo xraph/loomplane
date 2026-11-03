@@ -35,6 +35,7 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
 import { CanaryPanel } from "@/components/canary"
+import { CancelDeployment } from "@/components/cancel-deployment"
 import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
 import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
@@ -417,6 +418,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
             Retry
           </Button>
         )}
+        {d && <CancelDeployment deployment={d} />}
         {rollback && d && <RollbackOffer run={run} deploymentId={d.id} />}
         {!isLive(run) && can("deployment:create") && (
           <Button

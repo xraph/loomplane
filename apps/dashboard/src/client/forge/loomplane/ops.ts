@@ -991,6 +991,15 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['CanaryReport'],
   },
+  'deployments.cancel': {
+    method: 'POST',
+    path: '/api/v1/deployments/{id}/cancel',
+    entity: 'DeploymentsDeployment',
+    rootType: 'DeploymentsDeployment',
+    provides: ['DeploymentsDeployment:{id}'],
+    invalidates: ['DeploymentsDeployment[]'],
+    responseCodec: CODECS['DeploymentsDeployment'],
+  },
   'deployments.cancelCapacity': {
     method: 'POST',
     path: '/api/v1/deployments/{id}/capacity/cancel',

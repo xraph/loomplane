@@ -103,6 +103,66 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 	return s.store.GetDeployment(ctx, p.OrgID, id)
 }
 
+// Canceller cancels deployments. *PgStore is the real one.
+type Canceller interface {
+	// CancelDeployment cancels a paused deployment, or records a cancel of
+	// a running one, which StopDeployment carries out before its next
+	// action.
+	CancelDeployment(ctx context.Context, orgID, id string, at time.Time) (*Deployment, error)
+}
+
+// StepClaimer marks an action started before it has any effect, or says to
+// stop instead when a cancel was requested. *PgStore is the real one.
+type StepClaimer interface {
+	ClaimStep(ctx context.Context, orgID, id, actionID string) (stop bool, err error)
+}
+
+// Stopper cancels a running deployment whose cancel was requested, as its
+// next action starts. *PgStore is the real one.
+type Stopper interface {
+	StopDeployment(ctx context.Context, orgID, id string, at time.Time) (*Deployment, error)
+}
+
+// Cancel stops a running or paused deployment. A paused one is cancelled at
+// once. A running one finishes the action it's on, since stopping that
+// halfway would leave its provider's work half done, and is cancelled
+// before the next: it needs a step that hasn't started. Steps that finished
+// stay as they are. Cancelling again answers it unchanged. Cancelling needs
+// the same role as retrying.
+func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if authErr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); authErr != nil {
+		return nil, authErr
+	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	if d.Status == StatusCancelled {
+		return d, nil
+	}
+	if d.Status != StatusRunning && d.Status != StatusPaused {
+		return nil, ErrNotRunning
+	}
+	c, ok := s.store.(Canceller)
+	if !ok {
+		return nil, errors.New("deployment cancellation is unavailable")
+	}
+	cancelled, err := c.CancelDeployment(ctx, p.OrgID, id, s.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if s.audit != nil {
+		s.audit.Record(ctx, projects.AuditEvent{
+			Action: "deployment.cancel", Severity: "warning", ProjectID: d.ProjectID, Principal: p,
+			Attributes: map[string]any{"deployment_id": d.ID, "plan_id": d.PlanID, "environment": d.Environment},
+		})
+	}
+	return cancelled, nil
+}
+
 // List returns a page of a project's deployments started before the
 // cursor, newest first, and where the next page starts: the zero cursor
 // when this is the last.

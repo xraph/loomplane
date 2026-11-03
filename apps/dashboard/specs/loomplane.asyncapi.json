@@ -4843,6 +4843,9 @@
           "canary": {
             "$ref": "#/components/schemas/Canary"
           },
+          "cancel_requested_at": {
+            "type": "string"
+          },
           "capacity_wait": {
             "$ref": "#/components/schemas/CapacityWait"
           },
