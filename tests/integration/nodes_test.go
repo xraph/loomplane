@@ -157,8 +157,8 @@ func getNode(t *testing.T, c *client, id string) nodes.Node {
 	return n
 }
 
-// waitFor polls cond until it holds or limit passes.
-func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) time.Duration {
+// waitUntil polls cond until it holds or limit passes.
+func waitUntil(t *testing.T, limit time.Duration, what string, cond func() bool) time.Duration {
 	t.Helper()
 	begin := time.Now()
 	for time.Since(begin) < limit {
@@ -362,7 +362,7 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 	})
 
 	var node nodes.Node
-	joined := waitFor(t, 30*time.Second, "the node coming online", func() bool {
+	joined := waitUntil(t, 30*time.Second, "the node coming online", func() bool {
 		var list struct {
 			Nodes []nodes.Node `json:"nodes"`
 		}
@@ -428,7 +428,7 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 		if !strings.Contains(out, "The running node told Loomplane") {
 			t.Fatalf("the allow did not go through the running node: %q", out)
 		}
-		took := waitFor(t, 10*time.Second, "docker appearing in the node's endpoints", func() bool {
+		took := waitUntil(t, 10*time.Second, "docker appearing in the node's endpoints", func() bool {
 			return slices.Contains(getNode(t, apiB, node.ID).Endpoints, nodeproto.EndpointDocker) &&
 				slices.Contains(getNode(t, apiA, node.ID).Endpoints, nodeproto.EndpointDocker)
 		})
