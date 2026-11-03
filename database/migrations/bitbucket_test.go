@@ -9,7 +9,7 @@ import (
 
 func TestBitbucketMigration(t *testing.T) {
 	// Databases record the version and name, so the filename can't drift.
-	if m := migration(t, "bitbucket"); m.Version != "20261209000200" {
+	if m := migration(t, "bitbucket"); m.Version != "20261222000100" {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, db := scratch(t)
