@@ -1,0 +1,66 @@
+name: Publish (Cloud)
+
+# Builds the private Cloud edition (Go build tag cloud, dashboard edition
+# cloud) and pushes it to a private GHCR package. Nothing here is public.
+#
+# Who may run it is the cloud-production environment's job: give that
+# environment a required reviewer and every run waits for approval.
+#
+# Stripe keys are runtime secrets of the Cloud deployment. They are never
+# build inputs, so this workflow never sees them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build and tag, e.g. v1.2.3.
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/xraph/loomplane-cloud
+
+jobs:
+  publish:
+    name: Build and push the Cloud image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: cloud-production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.version }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            VERSION=${{ inputs.version }}
+            GO_TAGS=cloud
+            LOOMPLANE_EDITION=cloud
+          cache-from: type=gha,scope=cloud
+          cache-to: type=gha,mode=max,scope=cloud
+      - name: Check the package is private
+        env:
+          # The workflow token can't read org package settings, so this needs
+          # a token with read:packages that can see the org.
+          GH_TOKEN: ${{ secrets.CLOUD_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          visibility=$(gh api /orgs/xraph/packages/container/loomplane-cloud --jq .visibility)
+          echo "loomplane-cloud visibility: ${visibility}"
+          if [ "$visibility" != "private" ]; then
+            echo "::error::ghcr.io/xraph/loomplane-cloud is ${visibility}, not private. Make it private in the package settings, then delete the pushed tags."
+            exit 1
+          fi

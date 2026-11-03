@@ -38,6 +38,21 @@ jobs:
       # findings without overriding this repository's documented exclusions.
       gosec-fail-on-findings: false
 
+  go-cloud:
+    name: Go (cloud tag)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build -tags cloud ./...
+      - run: go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/...
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --build-tags=cloud --timeout=10m ./extensions/billing/... ./internal/platform/...
+
   windows-build:
     name: Cross-build for Windows
     runs-on: ubuntu-24.04
@@ -101,7 +116,8 @@ jobs:
     with:
       working-directory: apps/dashboard
       node-version: "24"
-      scripts: '["typecheck","lint","test","build"]'
+      # The guard runs on this public build only. A cloud build is expected to fail it.
+      scripts: '["typecheck","lint","test","build","check:oss-bundle"]'
 
   client:
     name: Generated clients

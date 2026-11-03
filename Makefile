@@ -1,5 +1,5 @@
 .PHONY: help up down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
-	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes build-cloud test-cloud test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
 
@@ -69,6 +69,10 @@ build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
 	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
 
+build-cloud: ## Build bin/loomplane-cloud and bin/loomplane-cloud-worker with the cloud tag (private; needs the cloud dashboard separately)
+	go build -tags cloud $(LDFLAGS) -o bin/loomplane-cloud ./cmd/loomplane
+	go build -tags cloud $(LDFLAGS) -o bin/loomplane-cloud-worker ./cmd/loomplane-worker
+
 build-firecracker: ## Build standalone Firecracker host and guest agents for Linux
 	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-host-agent ./cmd/loomplane-host-agent
 	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-guest-agent ./cmd/loomplane-guest-agent
@@ -120,6 +124,9 @@ test: test-go test-dashboard ## Run the Go and dashboard unit tests
 
 test-go: ## Run the Go unit tests
 	go test ./...
+
+test-cloud: ## Run the Go tests that cover the cloud edition
+	go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/...
 
 test-dashboard: ## Run the dashboard's unit tests
 	pnpm --dir $(DASHBOARD_DIR) test
