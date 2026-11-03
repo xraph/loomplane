@@ -19,7 +19,7 @@ import (
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
-const gitlabMigration = "20261210000100"
+const gitlabMigration = "20261222000200"
 
 // gitlabStore migrates a fresh database and returns the store over it, the
 // pool, and a plain connection for checking what the store wrote.
