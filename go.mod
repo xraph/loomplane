@@ -98,6 +98,8 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
+require github.com/xraph/shield/integrations/nexusguard v1.9.0 // indirect
+
 require (
 	cloud.google.com/go/auth v0.24.1 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect

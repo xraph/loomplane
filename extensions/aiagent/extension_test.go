@@ -160,19 +160,10 @@ func TestServerKeyGoesOnlyToItsProvider(t *testing.T) {
 // Cortex's extension leaves run_concurrency at 0, no limit. The agent's
 // engine caps runs per process.
 func TestCortexRunConcurrencyIsCapped(t *testing.T) {
-	ai := New(config.Config{AI: serverAI()}, nil)
-	app := forge.New(forge.WithAppName("cortex-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
-	cx := ai.cortex
-	cx.SetDependencies(nil)
-	if err := app.RegisterExtension(cx); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if err := app.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
-	if got := cx.Engine().RunConcurrency(); got != RunsPerProcess {
+	// Cortex needs shield's segment checker to publish, so it starts with
+	// the other libraries.
+	ai := libraries(t, serverAI())
+	if got := ai.cortex.Engine().RunConcurrency(); got != RunsPerProcess {
 		t.Fatalf("run concurrency %d, want %d", got, RunsPerProcess)
 	}
 }
@@ -372,17 +363,8 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 // go in together: the engine the extension builds starts, and one without
 // the codec doesn't.
 func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
-	ai := New(config.Config{AI: serverAI()}, nil)
-	app := forge.New(forge.WithAppName("cortex-authz-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
-	cx := ai.cortex
-	cx.SetDependencies(nil)
-	if err := app.RegisterExtension(cx); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.Start(context.Background()); err != nil {
-		t.Fatalf("the extension's engine: %v", err)
-	}
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+	// The extension's engine starts (libraries fails the test if not).
+	ai := libraries(t, serverAI())
 
 	opts := ai.engineOptions()
 	if _, err := cortexengine.New(opts...); err != nil {

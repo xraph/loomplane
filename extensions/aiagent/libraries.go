@@ -8,6 +8,7 @@ import (
 	cortexengine "github.com/xraph/cortex/engine"
 	cortexext "github.com/xraph/cortex/extension"
 	nexusllm "github.com/xraph/cortex/llm/nexus"
+	"github.com/xraph/cortex/safety"
 	shieldsafety "github.com/xraph/cortex/safety/shield"
 	"github.com/xraph/forge"
 	groveext "github.com/xraph/grove/extension"
@@ -89,7 +90,8 @@ func (e *Extension) LibraryExtensions() []forge.Extension {
 // what nexus and shield provided: the nexus adapter maps a run's scope to
 // its workspace's tenant and provider, the shield adapter scans under
 // agentscope.App, and the engine options come last, so they win over
-// cortex's config.
+// cortex's config and its automatic wiring. The last of them is the
+// publication policy.
 func (e *Extension) cortexOptions() []cortexext.ExtOption {
 	opts := []cortexext.ExtOption{
 		// No WithDisableRoutes: cortex's REST handlers are a module of
@@ -99,13 +101,19 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 		cortexext.WithShieldOptions(shieldsafety.WithApp(agentscope.App)),
 	}
 	engineOpts := e.engineOptions()
-	out := make([]cortexext.ExtOption, 0, len(opts)+len(engineOpts))
+	out := make([]cortexext.ExtOption, 0, len(opts)+len(engineOpts)+1)
 	out = append(out, opts...)
 	for _, o := range engineOpts {
 		out = append(out, cortexext.WithEngineOption(o))
 	}
-	return out
+	return append(out, cortexext.WithEngineOption(cortexengine.WithPublicationPolicy(publicationPolicy)))
 }
+
+// publicationPolicy is how cortex lets the model's text out: in segments
+// shield has checked, as they arrive, so an answer streams token by token
+// and no unchecked text is published. Required: the engine refuses to run
+// without shield's segment checker rather than publish unchecked.
+var publicationPolicy = safety.Policy{Mode: safety.ModeCheckedSegments, Required: true}
 
 // engineOptions are the engine's own options: how long a run waits on a
 // person, run leases and the run driver's hooks, rejections the model

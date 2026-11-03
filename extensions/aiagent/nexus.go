@@ -40,9 +40,10 @@ const (
 const openAIBaseURL = "https://api.openai.com/v1"
 
 // nexusOptions are the nexus extension's options: the chat providers, the
-// embeddings provider when knowledge is configured, and the gateway
-// options. The credential resolver and the dial guard are e's, bound
-// late: nexus asks for neither before it starts.
+// embeddings provider when knowledge is configured, the gateway options
+// and shield's output guard. The credential resolver, the dial guard and
+// shield's engine are e's, bound late: nexus asks for none of them before
+// it starts.
 func (e *Extension) nexusOptions() []nexusext.Option {
 	ai := e.cfg.AI
 	// Nexus no longer mounts routes; disable_routes stays set so a release
@@ -57,7 +58,18 @@ func (e *Extension) nexusOptions() []nexusext.Option {
 	for _, o := range gatewayOptions(ai, lateCredentials{e}, e.providerTransport) {
 		opts = append(opts, nexusext.WithGatewayOption(o))
 	}
+	for _, o := range guardOptions(e.shieldEngine) {
+		opts = append(opts, nexusext.WithGatewayOption(o))
+	}
 	return opts
+}
+
+// shieldEngine is shield's engine, or nil before shield registers.
+func (e *Extension) shieldEngine() *shieldengine.Engine {
+	if e.shield == nil {
+		return nil
+	}
+	return e.shield.Engine()
 }
 
 // gatewayOptions are the gateway's own options: the workspace credential

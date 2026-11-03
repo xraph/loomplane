@@ -709,6 +709,8 @@ github.com/xraph/sentinel v1.10.0 h1:P1hx0g7mqWyJOTZpK/vlYbVwXvLJ04wWUVQfCRjVfn0
 github.com/xraph/sentinel v1.10.0/go.mod h1:cmoEKmoiu9InWm86MeW0TrrUkrSF7G0Sw6oLqE3Hlhg=
 github.com/xraph/shield v1.9.1 h1:ggXmywtBgLE129MBSLyDzrP2R7w+JmMzf4HF8qwzXf0=
 github.com/xraph/shield v1.9.1/go.mod h1:/SPTWW9z41QvgLYOMJ+++rhjsynWfYHoPc4oWE1krbM=
+github.com/xraph/shield/integrations/nexusguard v1.9.0 h1:IXcQoaiHyksbutayvcclNKvgx+KTimRV28bFgTdijFU=
+github.com/xraph/shield/integrations/nexusguard v1.9.0/go.mod h1:f9aje9hYApSi86xt8gqt7UuhQMl4cDaz0dcNJkYPHpI=
 github.com/xraph/trove v1.8.1 h1:7s644e8GsiMJd4hDza1/r7Hi4JBtkpYmYOt/wtKfZbQ=
 github.com/xraph/trove v1.8.1/go.mod h1:o4vj40DSHOgS5+uayf87zFiXhZ8b9owb3UXjZBYZOT8=
 github.com/xraph/trove/drivers/s3driver v1.8.1 h1:kCHc+Rs6oGwWTr1J32UBDDtlvzKIBdEwOQDKNluHwY8=
