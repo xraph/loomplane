@@ -22,6 +22,13 @@ const platformWriteSetting = "loomplane.platform_write"
 // driverTx is the transaction the store hands to callbacks.
 type driverTx = driver.Tx
 
+// querier is what the pool and a transaction share.
+type querier interface {
+	Exec(ctx context.Context, query string, args ...any) (driver.Result, error)
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+}
+
 type PgStore struct{ db *pgdriver.PgDB }
 
 func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
@@ -46,7 +53,10 @@ func newID(prefix string) string {
 }
 
 // WithTenantLock runs fn in a transaction that holds the organization's
-// tenant row. Placement decisions for one organization serialize on it.
+// tenant row. Placement decisions for one organization serialize on it. A
+// tenant that has suspend reasons still passes: callers check suspension.
+// Inside fn, read through the *Tx methods so the reads share fn's connection
+// and see its writes.
 func (s *PgStore) WithTenantLock(ctx context.Context, orgID string, fn func(driverTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -208,9 +218,24 @@ func (s *PgStore) GetHost(ctx context.Context, id string) (*Host, error) {
 	return scanHost(s.db.QueryRow(ctx, `SELECT `+hostColumns+` FROM loomplane_platform_hosts WHERE id=$1`, id))
 }
 
+// LockHost reads a host and holds its row until tx ends, so placements on it
+// serialize.
+func (s *PgStore) LockHost(ctx context.Context, tx driverTx, hostID string) (*Host, error) {
+	return scanHost(tx.QueryRow(ctx, `SELECT `+hostColumns+` FROM loomplane_platform_hosts WHERE id=$1 FOR UPDATE`, hostID))
+}
+
 // ListHosts returns every host, or the hosts of one region when regionID is set.
 func (s *PgStore) ListHosts(ctx context.Context, regionID string) ([]Host, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+hostColumns+` FROM loomplane_platform_hosts WHERE $1='' OR region_id=$1 ORDER BY created_at,id`, regionID)
+	return listHosts(ctx, s.db, regionID)
+}
+
+// ListHostsTx is ListHosts on tx.
+func (s *PgStore) ListHostsTx(ctx context.Context, tx driverTx, regionID string) ([]Host, error) {
+	return listHosts(ctx, tx, regionID)
+}
+
+func listHosts(ctx context.Context, q querier, regionID string) ([]Host, error) {
+	rows, err := q.Query(ctx, `SELECT `+hostColumns+` FROM loomplane_platform_hosts WHERE $1='' OR region_id=$1 ORDER BY created_at,id`, regionID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,8 +253,17 @@ func (s *PgStore) ListHosts(ctx context.Context, regionID string) ([]Host, error
 
 // HostUse adds up what live placements take from a host, builds included.
 func (s *PgStore) HostUse(ctx context.Context, hostID string) (Allotment, error) {
+	return hostUse(ctx, s.db, hostID)
+}
+
+// HostUseTx is HostUse on tx.
+func (s *PgStore) HostUseTx(ctx context.Context, tx driverTx, hostID string) (Allotment, error) {
+	return hostUse(ctx, tx, hostID)
+}
+
+func hostUse(ctx context.Context, q querier, hostID string) (Allotment, error) {
 	var a Allotment
-	err := s.db.QueryRow(ctx, `SELECT coalesce(sum(vcpus),0)::int,coalesce(sum(memory_mib),0)::int,coalesce(sum(disk_mib),0)::int,count(*)::int
+	err := q.QueryRow(ctx, `SELECT coalesce(sum(vcpus),0)::int,coalesce(sum(memory_mib),0)::int,coalesce(sum(disk_mib),0)::int,count(*)::int
 FROM loomplane_platform_placements WHERE host_id=$1 AND state<>'released'`, hostID).Scan(&a.VCPUs, &a.MemoryMiB, &a.DiskMiB, &a.VMs)
 	return a, err
 }
@@ -247,7 +281,7 @@ func scanTenant(row interface{ Scan(...any) error }) (*Tenant, error) {
 	if err := row.Scan(&t.OrgID, &t.Status, &limits, &reasons, &t.SuspendedAt, &t.Revision); err != nil {
 		return nil, storeError(err)
 	}
-	if len(limits) > 0 {
+	if len(limits) > 0 && string(limits) != "null" {
 		t.Limits = &Limits{}
 		if err := json.Unmarshal(limits, t.Limits); err != nil {
 			return nil, err
@@ -307,14 +341,23 @@ func (s *PgStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 
 // TenantUse adds up an organization's live placements. Services count toward
 // vCPUs, memory and VMs, whatever their state short of released (a suspended
-// service still holds its place). Only running builds count as concurrent.
+// service still holds its place). Reserved and running builds count as concurrent.
 func (s *PgStore) TenantUse(ctx context.Context, orgID string) (Use, error) {
+	return tenantUse(ctx, s.db, orgID)
+}
+
+// TenantUseTx is TenantUse on tx.
+func (s *PgStore) TenantUseTx(ctx context.Context, tx driverTx, orgID string) (Use, error) {
+	return tenantUse(ctx, tx, orgID)
+}
+
+func tenantUse(ctx context.Context, q querier, orgID string) (Use, error) {
 	var u Use
-	err := s.db.QueryRow(ctx, `SELECT
+	err := q.QueryRow(ctx, `SELECT
 coalesce(sum(vcpus) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
 coalesce(sum(memory_mib) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
 count(*) FILTER (WHERE kind='service' AND state<>'released')::int,
-count(*) FILTER (WHERE kind='build' AND state='running')::int
+count(*) FILTER (WHERE kind='build' AND state IN ('reserved','running'))::int
 FROM loomplane_platform_placements WHERE org_id=$1`, orgID).Scan(&u.VCPUs, &u.MemoryMiB, &u.VMs, &u.ConcurrentBuilds)
 	return u, err
 }

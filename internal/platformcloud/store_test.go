@@ -181,13 +181,14 @@ func TestStoreTenantUseAndHostUse(t *testing.T) {
 	addPlacement(t, pg, "d", "org1", "build", "running", &host, 4, 4096, 20)
 	addPlacement(t, pg, "e", "org1", "build", "stopped", &host, 4, 4096, 20)
 	addPlacement(t, pg, "f", "org1", "service", "reserved", nil, 3, 256, 3)
+	addPlacement(t, pg, "h", "org1", "build", "reserved", nil, 1, 1, 1)
 	addPlacement(t, pg, "g", "org2", "service", "running", &host, 1, 100, 1)
 
 	use, err := s.TenantUse(ctx, "org1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Use{VCPUs: 6, MemoryMiB: 1792, VMs: 3, ConcurrentBuilds: 1}
+	want := Use{VCPUs: 6, MemoryMiB: 1792, VMs: 3, ConcurrentBuilds: 2}
 	if use != want {
 		t.Fatalf("TenantUse = %+v, want %+v", use, want)
 	}
@@ -205,7 +206,7 @@ func TestStoreTenantUseAndHostUse(t *testing.T) {
 	}
 
 	ps, err := s.ListPlacements(ctx, "org1")
-	if err != nil || len(ps) != 5 {
+	if err != nil || len(ps) != 6 {
 		t.Fatalf("ListPlacements = %d, %v", len(ps), err)
 	}
 	on, err := s.PlacementsOnHost(ctx, host)
@@ -223,7 +224,7 @@ func TestStoreTenantUseAndHostUse(t *testing.T) {
 }
 
 func TestStoreTenantUpsertAndLock(t *testing.T) {
-	s, _ := scratchStore(t)
+	s, pg := scratchStore(t)
 	ctx := t.Context()
 	if _, err := s.GetTenant(ctx, "org1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetTenant missing err = %v", err)
@@ -257,6 +258,12 @@ func TestStoreTenantUpsertAndLock(t *testing.T) {
 	if got.Limits != nil || len(got.SuspendReasons) != 2 || got.SuspendReasons[0] != ReasonPastDue || got.SuspendedAt == nil || !got.SuspendedAt.Equal(now) {
 		t.Fatalf("GetTenant = %+v", got)
 	}
+	if _, err = pg.Exec(ctx, `UPDATE loomplane_platform_tenants SET limits='null'::json WHERE org_id='org1'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = s.GetTenant(ctx, "org1"); err != nil || got.Limits != nil {
+		t.Fatalf("JSON null limits = %+v, %v", got.Limits, err)
+	}
 	if err = s.UpsertTenant(ctx, &Tenant{OrgID: "org2", Status: "disabled"}); err != nil {
 		t.Fatal(err)
 	}
@@ -285,13 +292,16 @@ func TestStoreTenantUpsertAndLock(t *testing.T) {
 func TestStoreWithPlatformWrite(t *testing.T) {
 	s, pg := scratchStore(t)
 	ctx := t.Context()
-	const ins = `INSERT INTO loomplane_cloud_profiles(id,org_id,name,platform_owned) VALUES('p1','org1','Platform',true)`
+	const ins = `INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,platform_owned,revision,created_at,updated_at) VALUES('p0','org1','','Other',true,1,now(),now())`
 	_, err := pg.Exec(ctx, ins)
 	if err == nil {
 		t.Fatal("projection write without the setting succeeded")
 	}
 	var wrote bool
 	err = s.WithPlatformWrite(ctx, func(tx driverTx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,platform_owned,revision,created_at,updated_at) VALUES('p1','org1','','Platform',true,1,now(),now())`); err != nil {
+			return err
+		}
 		var on string
 		if err := tx.QueryRow(ctx, `SELECT current_setting('`+platformWriteSetting+`', true)`).Scan(&on); err != nil {
 			return err
@@ -302,9 +312,51 @@ func TestStoreWithPlatformWrite(t *testing.T) {
 	if err != nil || !wrote {
 		t.Fatalf("WithPlatformWrite: %v on=%v", err, wrote)
 	}
+	var n int
+	if err = pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_cloud_profiles WHERE id='p1' AND platform_owned`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("guarded write not committed: %d %v", n, err)
+	}
 	// The setting is local to the transaction.
 	var after string
 	if err = pg.QueryRow(ctx, `SELECT coalesce(current_setting('`+platformWriteSetting+`', true),'')`).Scan(&after); err != nil || after == "on" {
 		t.Fatalf("setting leaked: %q %v", after, err)
+	}
+}
+
+func TestStoreTxVariantsSeeUncommittedWrites(t *testing.T) {
+	s, _ := scratchStore(t)
+	ctx := t.Context()
+	seedHost(t, s)
+	if err := s.UpsertTenant(ctx, &Tenant{OrgID: "org1", Status: "enabled"}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.WithTenantLock(ctx, "org1", func(tx driverTx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_platform_placements(id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,created_at,updated_at)
+VALUES('x','org1','p','e','x','service','reg_1','host_1',2,512,5,'reserved',now(),now())`); err != nil {
+			return err
+		}
+		u, err := s.TenantUseTx(ctx, tx, "org1")
+		if err != nil || u.VCPUs != 2 || u.VMs != 1 {
+			t.Errorf("TenantUseTx = %+v, %v", u, err)
+		}
+		hu, err := s.HostUseTx(ctx, tx, "host_1")
+		if err != nil || hu.VMs != 1 || hu.DiskMiB != 5 {
+			t.Errorf("HostUseTx = %+v, %v", hu, err)
+		}
+		hs, err := s.ListHostsTx(ctx, tx, "reg_1")
+		if err != nil || len(hs) != 1 {
+			t.Errorf("ListHostsTx = %v, %v", hs, err)
+		}
+		h, err := s.LockHost(ctx, tx, "host_1")
+		if err != nil || h.ID != "host_1" {
+			t.Errorf("LockHost = %v, %v", h, err)
+		}
+		if _, err = s.LockHost(ctx, tx, "nope"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("LockHost missing err = %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
