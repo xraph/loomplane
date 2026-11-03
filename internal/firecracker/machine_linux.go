@@ -161,6 +161,14 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 			return Capabilities{}, ErrUnavailable
 		}
 	}
+	platform, smt := d.config.Platform != nil, false
+	fingerprint := ""
+	if platform {
+		fingerprint = d.config.Platform.Fingerprint
+		if smt, err = smtActive("/sys/devices/system/cpu/smt"); err != nil {
+			return Capabilities{}, err
+		}
+	}
 	raw, err := json.Marshal(struct {
 		Assets              []Asset
 		CNI                 map[string]string
@@ -168,7 +176,9 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 		DNS, Egress, Denied []string
 		UID                 int
 		Limits              Limits
-	}{[]Asset{d.config.Firecracker, d.config.Jailer, d.config.Kernel, d.config.RootFS}, d.config.CNIHashes, d.config.Subnet, d.config.DNS, d.config.EgressCIDRs, d.config.DeniedCIDRs, d.config.UIDBase, d.config.Limits})
+		Platform            string
+		DeniedPorts         []int
+	}{[]Asset{d.config.Firecracker, d.config.Jailer, d.config.Kernel, d.config.RootFS}, d.config.CNIHashes, d.config.Subnet, d.config.DNS, d.config.EgressCIDRs, d.config.DeniedCIDRs, d.config.UIDBase, d.config.Limits, fingerprint, d.config.DeniedPorts})
 	if err != nil {
 		return Capabilities{}, err
 	}
@@ -178,7 +188,7 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 	if d.config.HTTPSListen != "" && d.config.HTTPListen != "" {
 		ingress = d.config.AdvertiseHost
 	}
-	return Capabilities{IngressAddress: ingress, Version: ProtocolVersion, HostID: d.config.HostID, Architecture: runtime.GOARCH, RuntimeIdentity: identity, Isolation: true, Limits: d.config.Limits}, nil
+	return Capabilities{IngressAddress: ingress, Version: ProtocolVersion, HostID: d.config.HostID, Architecture: runtime.GOARCH, RuntimeIdentity: identity, Isolation: true, Limits: d.config.Limits, Platform: platform, SMTActive: smt, DeniedPorts: d.config.DeniedPorts}, nil
 }
 func (d *linuxDriver) dir(vm VM) string {
 	return filepath.Join(d.config.RuntimeDir, filepath.Base(d.config.Firecracker.Path), vm.ID, "root")

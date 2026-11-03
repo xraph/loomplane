@@ -21,8 +21,11 @@ func RunHost(ctx context.Context, path string) error {
 	if err := secureconfig.ReadJSON(path, MaxControlBytes, true, &cfg); err != nil {
 		return err
 	}
+	if err := ValidatePlatform(cfg); err != nil {
+		return err
+	}
 	key, err := hex.DecodeString(cfg.HostKey)
-	if err != nil || len(key) != 32 || len(cfg.Peers) == 0 {
+	if err != nil || len(key) != 32 || (len(cfg.Peers) == 0 && cfg.Platform == nil) {
 		return ErrInvalid
 	}
 	for _, peer := range cfg.Peers {
@@ -57,8 +60,19 @@ func RunHost(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	caps, err := driver.Check(ctx)
+	if err != nil {
+		return err
+	}
+	if err = platformReady(cfg, caps); err != nil {
+		return err
+	}
 	host := &Host{Store: store, Driver: driver, Limits: cfg.Limits, Key: key}
-	srv := &http.Server{Addr: cfg.Listen, Handler: Handler{Host: host, Peers: cfg.Peers}, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Minute, WriteTimeout: 35 * time.Minute, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
+	platform := ""
+	if cfg.Platform != nil {
+		platform = cfg.Platform.Fingerprint
+	}
+	srv := &http.Server{Addr: cfg.Listen, Handler: Handler{Host: host, Peers: cfg.Peers, Platform: platform}, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Minute, WriteTimeout: 35 * time.Minute, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
 	result := make(chan error, 3)
@@ -127,6 +141,9 @@ func CheckHost(ctx context.Context, path string) (Capabilities, error) {
 	if err := secureconfig.ReadJSON(path, MaxControlBytes, true, &cfg); err != nil {
 		return Capabilities{}, err
 	}
+	if err := ValidatePlatform(cfg); err != nil {
+		return Capabilities{}, err
+	}
 	key, err := hex.DecodeString(cfg.HostKey)
 	if err != nil {
 		return Capabilities{}, err
@@ -135,5 +152,21 @@ func CheckHost(ctx context.Context, path string) (Capabilities, error) {
 	if err != nil {
 		return Capabilities{}, err
 	}
-	return driver.Check(ctx)
+	caps, err := driver.Check(ctx)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	if err = platformReady(cfg, caps); err != nil {
+		return Capabilities{}, err
+	}
+	return caps, nil
+}
+
+// platformReady refuses a platform host that shares cores between hardware
+// threads, since co-resident tenants could then read each other's data.
+func platformReady(cfg HostConfig, c Capabilities) error {
+	if cfg.Platform != nil && c.SMTActive {
+		return fmt.Errorf("%w: a platform host must run with SMT off", ErrUnavailable)
+	}
+	return nil
 }

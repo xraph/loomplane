@@ -35,3 +35,16 @@ func TestValidatePlatform(t *testing.T) {
 		t.Fatal("non-platform config rejected")
 	}
 }
+
+func TestPlatformRefusesSMT(t *testing.T) {
+	platform := HostConfig{Platform: &PlatformPeer{Fingerprint: strings.Repeat("a", 64)}}
+	if err := platformReady(platform, Capabilities{SMTActive: true}); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("SMT accepted on a platform host", err)
+	}
+	if err := platformReady(platform, Capabilities{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformReady(HostConfig{}, Capabilities{SMTActive: true}); err != nil {
+		t.Fatal("SMT refused on a per-org host", err)
+	}
+}
