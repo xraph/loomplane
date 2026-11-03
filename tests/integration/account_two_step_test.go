@@ -262,7 +262,12 @@ func TestAccount_twoStepAndPasskeys(t *testing.T) {
 	var creation struct {
 		Options json.RawMessage `json:"options"`
 	}
-	ada.ok(http.MethodPost, "/authsome/v1/passkeys/register/begin", map[string]string{"display_name": "Laptop"}, &creation)
+	// With two-step on, adding one takes a code: a passkey that verifies
+	// its user signs in without one.
+	if status, _ := ada.call(http.MethodPost, "/authsome/v1/passkeys/register/begin", map[string]string{"display_name": "Laptop"}, nil); status != http.StatusUnauthorized {
+		t.Fatalf("adding a passkey without a code: %d, want 401", status)
+	}
+	ada.ok(http.MethodPost, "/authsome/v1/passkeys/register/begin", map[string]string{"display_name": "Laptop", "code": app.code()}, &creation)
 	attestation, err := device.Create(creation.Options)
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +319,9 @@ func TestAccount_twoStepAndPasskeys(t *testing.T) {
 	if status, _ := ada.call(http.MethodDelete, "/authsome/v1/mfa/enrollment", map[string]string{}, nil); status == http.StatusOK {
 		t.Fatal("two-step turned off without a code")
 	}
-	ada.ok(http.MethodDelete, "/authsome/v1/mfa/enrollment", map[string]string{"code": app.code()}, nil)
+	// A recovery code proves the factor here too, which is how someone who
+	// lost their phone turns it off.
+	ada.ok(http.MethodDelete, "/authsome/v1/mfa/enrollment", map[string]string{"code": fresh.Codes[0]}, nil)
 	if ada.twoStep() {
 		t.Fatal("two-step is still on after turning it off")
 	}
