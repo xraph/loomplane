@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,10 @@ var ErrNotAMember = errors.New("your Bitbucket account isn't a member of that wo
 // typed slug from rewriting the filter or the path it's put into.
 var bitbucketSlug = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 
+// bitbucketUUID is what a workspace UUID looks like, braces included. It's
+// checked for the same reason as the slug.
+var bitbucketUUID = regexp.MustCompile(`^\{[0-9A-Fa-f-]{1,64}\}$`)
+
 // BitbucketGrant is what Bitbucket hands back for a sign-in. Both tokens are
 // secrets, so every way of printing one is redacted.
 type BitbucketGrant struct {
@@ -46,6 +51,18 @@ func (BitbucketGrant) GoString() string { return "BitbucketGrant{redacted}" }
 
 // LogValue covers structured logging, which would otherwise walk the fields.
 func (BitbucketGrant) LogValue() slog.Value { return slog.StringValue("BitbucketGrant{redacted}") }
+
+// Format covers every verb, %d and %x included, which would otherwise
+// print the fields without asking String.
+func (BitbucketGrant) Format(f fmt.State, _ rune) {
+	if _, err := io.WriteString(f, "BitbucketGrant{redacted}"); err != nil {
+		return // fmt has nowhere to report it either
+	}
+}
+
+// MarshalJSON keeps the tokens out of JSON. The refresh token goes to Vault
+// in a struct of its own, never as a marshalled grant.
+func (BitbucketGrant) MarshalJSON() ([]byte, error) { return []byte(`"BitbucketGrant{redacted}"`), nil }
 
 // BitbucketUser is the account that signed in.
 type BitbucketUser struct {
@@ -77,7 +94,8 @@ type BitbucketOAuth struct {
 	webURL       string
 	apiURL       string
 
-	// HTTP makes every call, token endpoint included.
+	// HTTP makes every call. The token endpoint's calls go through a copy
+	// that never follows a redirect.
 	HTTP *http.Client
 	// api shares the public reader's request code and its status mapping.
 	api *Bitbucket
@@ -130,12 +148,17 @@ func (o *BitbucketOAuth) token(ctx context.Context, form url.Values, keep string
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "loomplane")
-	resp, err := o.HTTP.Do(req)
+	resp, err := o.tokenClient().Do(req)
 	if err != nil {
 		return BitbucketGrant{}, fmt.Errorf("call Bitbucket: %w", err)
 	}
 	defer resp.Body.Close() // read-only body
 	body := io.LimitReader(resp.Body, maxJSONBytes)
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// The redirect wasn't followed, and neither its body nor where it
+		// pointed goes into the error.
+		return BitbucketGrant{}, fmt.Errorf("Bitbucket answered the token request with a redirect (%d), which Loomplane doesn't follow", resp.StatusCode)
+	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
@@ -176,6 +199,18 @@ func (o *BitbucketOAuth) token(ctx context.Context, form url.Values, keep string
 	}, nil
 }
 
+// tokenClient is HTTP with redirects turned off. Go resends a POST's body
+// on a 307 or 308, and the body holds the code or the refresh token, so
+// the token endpoint's answer is taken as it comes.
+func (o *BitbucketOAuth) tokenClient() *http.Client {
+	c := http.Client{}
+	if o.HTTP != nil {
+		c = *o.HTTP
+	}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
+}
+
 // CurrentUser says who the token belongs to (GET /2.0/user).
 func (o *BitbucketOAuth) CurrentUser(ctx context.Context, token string) (BitbucketUser, error) {
 	var out struct {
@@ -202,27 +237,59 @@ func (o *BitbucketOAuth) Membership(ctx context.Context, token, slug string) (Bi
 	if !bitbucketSlug.MatchString(slug) {
 		return BitbucketWorkspace{}, ErrNotAMember
 	}
-	q := url.Values{"q": {`workspace.slug="` + slug + `"`}, "pagelen": {"10"}}
-	var out struct {
-		Values []struct {
-			Workspace struct {
-				UUID  string `json:"uuid"`
-				Slug  string `json:"slug"`
-				Name  string `json:"name"`
-				Links struct {
-					Avatar struct {
-						Href string `json:"href"`
-					} `json:"avatar"`
-				} `json:"links"`
-			} `json:"workspace"`
-		} `json:"values"`
+	return o.findWorkspace(ctx, token, `workspace.slug="`+slug+`"`, func(w BitbucketWorkspace) bool {
+		return strings.EqualFold(w.Slug, slug)
+	})
+}
+
+// Workspace returns the workspace with that UUID if the token's account
+// belongs to it, and ErrNotAMember if not. It's how a renamed workspace's
+// new slug is found: the UUID doesn't change. It asks the same endpoint as
+// Membership, filtered by UUID and checked on our side.
+func (o *BitbucketOAuth) Workspace(ctx context.Context, token, uuid string) (BitbucketWorkspace, error) {
+	if !bitbucketUUID.MatchString(uuid) {
+		return BitbucketWorkspace{}, ErrNotAMember
 	}
-	if err := o.api.getJSON(ctx, o.apiURL+"/user/workspaces?"+q.Encode(), token, &out); err != nil {
-		return BitbucketWorkspace{}, normalize(err)
-	}
-	for _, v := range out.Values {
-		if w := v.Workspace; strings.EqualFold(w.Slug, slug) {
-			return BitbucketWorkspace{UUID: w.UUID, Slug: w.Slug, Name: w.Name, AvatarURL: w.Links.Avatar.Href}, nil
+	return o.findWorkspace(ctx, token, `workspace.uuid="`+uuid+`"`, func(w BitbucketWorkspace) bool {
+		return strings.EqualFold(w.UUID, uuid)
+	})
+}
+
+// findWorkspace pages through the token's workspaces, filtered by q, for
+// the first that match accepts. Bitbucket may ignore the filter, so it
+// reads up to maxPages pages of 100 and decides on our side.
+func (o *BitbucketOAuth) findWorkspace(ctx context.Context, token, q string, match func(BitbucketWorkspace) bool) (BitbucketWorkspace, error) {
+	next := o.apiURL + "/user/workspaces?" + url.Values{"q": {q}, "pagelen": {strconv.Itoa(perPage)}}.Encode()
+	for page := 1; page <= maxPages && next != ""; page++ {
+		var out struct {
+			Values []struct {
+				Workspace struct {
+					UUID  string `json:"uuid"`
+					Slug  string `json:"slug"`
+					Name  string `json:"name"`
+					Links struct {
+						Avatar struct {
+							Href string `json:"href"`
+						} `json:"avatar"`
+					} `json:"links"`
+				} `json:"workspace"`
+			} `json:"values"`
+			Next string `json:"next"`
+		}
+		if err := o.api.getJSON(ctx, next, token, &out); err != nil {
+			return BitbucketWorkspace{}, normalize(err)
+		}
+		for _, v := range out.Values {
+			w := v.Workspace
+			ws := BitbucketWorkspace{UUID: w.UUID, Slug: w.Slug, Name: w.Name, AvatarURL: w.Links.Avatar.Href}
+			if match(ws) {
+				return ws, nil
+			}
+		}
+		next = out.Next
+		if next != "" && !o.sameAPI(next) {
+			// The token goes wherever we send it, as in Repositories.
+			return BitbucketWorkspace{}, errors.New("the next page pointed away from the Bitbucket API")
 		}
 	}
 	return BitbucketWorkspace{}, ErrNotAMember

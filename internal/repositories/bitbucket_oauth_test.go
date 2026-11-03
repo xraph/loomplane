@@ -2,6 +2,7 @@ package repositories_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -343,7 +344,7 @@ func TestBitbucketGrant_neverPrintsTokens(t *testing.T) {
 	g := repositories.BitbucketGrant{AccessToken: oauthAccessToken, RefreshToken: oauthRefreshToken, Expires: time.Now()}
 	for name, got := range map[string]string{
 		"%v/%+v":     fmt.Sprintf("%v %+v", g, g),
-		"%s":         fmt.Sprintf("%s", g), //nolint:staticcheck // checking the verb on purpose
+		"%s":         fmt.Sprintf("%s", g),
 		"%#v":        fmt.Sprintf("%#v", g),
 		"%v pointer": fmt.Sprintf("%v %+v %#v", &g, &g, &g),
 		"in a slice": fmt.Sprintf("%v %+v", []repositories.BitbucketGrant{g}, map[string]repositories.BitbucketGrant{"k": g}),
@@ -354,5 +355,180 @@ func TestBitbucketGrant_neverPrintsTokens(t *testing.T) {
 	}
 	if g.String() != "BitbucketGrant{redacted}" {
 		t.Fatalf("String() = %q", g.String())
+	}
+}
+
+// Go resends a POST body on a 307 or 308, so following one would hand the
+// code or the refresh token to wherever the token endpoint pointed.
+func TestBitbucketOAuth_tokenEndpointNeverFollowsRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect, http.StatusFound} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var mu sync.Mutex
+			var got []string
+			elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = r.ParseForm()
+				mu.Lock()
+				got = append(got, r.PostForm.Encode())
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{"access_token":"` + oauthAccessToken + `","expires_in":7200}`))
+			}))
+			t.Cleanup(elsewhere.Close)
+			f, o, _ := newFakeOAuth(t)
+			f.token = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", elsewhere.URL+"/site/oauth2/access_token")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`moved, see ` + oauthRefreshToken))
+			}
+			_, err := o.Refresh(context.Background(), oauthRefreshToken)
+			if err == nil {
+				t.Fatal("a redirect from the token endpoint should fail")
+			}
+			if strings.Contains(err.Error(), oauthRefreshToken) || strings.Contains(err.Error(), "moved") {
+				t.Fatalf("the redirect's body leaked into the error: %v", err)
+			}
+			if _, err = o.Exchange(context.Background(), "the-code"); err == nil {
+				t.Fatal("a redirect from the token endpoint should fail the exchange too")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(got) != 0 {
+				t.Fatalf("the redirect target received %v", got)
+			}
+		})
+	}
+}
+
+func TestBitbucketGrant_neverMarshalsOrFormatsTokens(t *testing.T) {
+	g := repositories.BitbucketGrant{AccessToken: oauthAccessToken, RefreshToken: oauthRefreshToken, Expires: time.Now()}
+	raw, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := json.Marshal(struct {
+		G  repositories.BitbucketGrant
+		P  *repositories.BitbucketGrant
+		Gs []repositories.BitbucketGrant
+	}{g, &g, []repositories.BitbucketGrant{g}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The verbs are in variables so vet lets the test use the wrong ones,
+	// which is the point.
+	d, x, q := "%d", "%x %X", "%q"
+	for name, got := range map[string]string{
+		"json":        string(raw),
+		"nested json": string(nested),
+		"%d":          fmt.Sprintf(d, g),
+		"%x":          fmt.Sprintf(x, g, g),
+		"%q":          fmt.Sprintf(q, g),
+		"%d pointer":  fmt.Sprintf(d+" "+x, &g, &g, &g),
+		"%d in slice": fmt.Sprintf(d+" "+x, []repositories.BitbucketGrant{g}, map[string]repositories.BitbucketGrant{"k": g}, g),
+	} {
+		if strings.Contains(got, oauthAccessToken) || strings.Contains(got, oauthRefreshToken) {
+			t.Fatalf("%s printed a token: %s", name, got)
+		}
+		// %x of the token would be hex, so look for that too.
+		if strings.Contains(got, fmt.Sprintf("%x", oauthAccessToken)) || strings.Contains(got, fmt.Sprintf("%x", oauthRefreshToken)) {
+			t.Fatalf("%s printed a token in hex: %s", name, got)
+		}
+	}
+}
+
+// Someone in more than one page of workspaces is still a member if
+// Bitbucket ignores the filter.
+func TestBitbucketOAuth_membershipPages(t *testing.T) {
+	f, o, base := newFakeOAuth(t)
+	f.api = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/workspaces" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(`{"values":[{"workspace":{"uuid":"{w-1}","slug":"acme","name":"Acme Inc"}}]}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"values":[{"workspace":{"uuid":"{w-9}","slug":"elsewhere"}}],"next":"%s/user/workspaces?page=2&pagelen=100"}`, base)
+	}
+	w, err := o.Membership(context.Background(), "tok", "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.UUID != "{w-1}" || w.Slug != "acme" {
+		t.Fatalf("workspace = %+v", w)
+	}
+	q, _ := url.ParseQuery(strings.SplitN(f.queries[0], "?", 2)[1])
+	if q.Get("pagelen") != "100" {
+		t.Fatalf("first query = %s, want pagelen=100", f.queries[0])
+	}
+	if f.auth[1] != "Bearer tok" {
+		t.Fatalf("page 2 Authorization = %q", f.auth[1])
+	}
+
+	// Pages stop at maxPages, and an endless list is no membership.
+	f.api = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"values":[{"workspace":{"uuid":"{w-9}","slug":"elsewhere"}}],"next":"%s/user/workspaces?again=1"}`, base)
+	}
+	f.mu.Lock()
+	f.queries = nil
+	f.mu.Unlock()
+	if _, err = o.Membership(context.Background(), "tok", "acme"); !errors.Is(err, repositories.ErrNotAMember) {
+		t.Fatalf("err = %v, want ErrNotAMember", err)
+	}
+	if len(f.queries) != 10 {
+		t.Fatalf("%d requests, want maxPages (10)", len(f.queries))
+	}
+}
+
+func TestBitbucketOAuth_membershipNeverSendsTheTokenElsewhere(t *testing.T) {
+	var mu sync.Mutex
+	var stolen []string
+	evil := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		stolen = append(stolen, r.Header.Get("Authorization"))
+		mu.Unlock()
+	}))
+	t.Cleanup(evil.Close)
+	f, o, _ := newFakeOAuth(t)
+	f.api = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"values":[],"next":"%s/steal"}`, evil.URL)
+	}
+	if _, err := o.Membership(context.Background(), "tok", "acme"); err == nil || errors.Is(err, repositories.ErrNotAMember) {
+		t.Fatalf("err = %v, want a refusal of the next link", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(stolen) != 0 {
+		t.Fatalf("the token went to another host: %v", stolen)
+	}
+}
+
+func TestBitbucketOAuth_workspaceByUUID(t *testing.T) {
+	f, o, _ := newFakeOAuth(t)
+	f.api = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user/workspaces" {
+			http.NotFound(w, r)
+			return
+		}
+		// Whatever the filter says, the answer is checked on our side.
+		_, _ = w.Write([]byte(`{"values":[{"workspace":{"uuid":"{w-2}","slug":"other"}},{"workspace":{"uuid":"{0F2B4A2C-0000-4000-8000-00000000000A}","slug":"acme-new","name":"Acme"}}]}`))
+	}
+	w, err := o.Workspace(context.Background(), "tok", "{0f2b4a2c-0000-4000-8000-00000000000a}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Slug != "acme-new" || w.Name != "Acme" {
+		t.Fatalf("workspace = %+v", w)
+	}
+	q, _ := url.ParseQuery(strings.SplitN(f.queries[0], "?", 2)[1])
+	if q.Get("q") != `workspace.uuid="{0f2b4a2c-0000-4000-8000-00000000000a}"` || q.Get("pagelen") != "100" {
+		t.Fatalf("query = %s", f.queries[0])
+	}
+	if _, err = o.Workspace(context.Background(), "tok", "{0f2b4a2c-0000-4000-8000-00000000000c}"); !errors.Is(err, repositories.ErrNotAMember) {
+		t.Fatalf("err = %v, want ErrNotAMember", err)
+	}
+	for _, bad := range []string{"", `{a"b}`, "0f2b4a2c", "{a b}", "{w-1}"} {
+		if _, err = o.Workspace(context.Background(), "tok", bad); !errors.Is(err, repositories.ErrNotAMember) {
+			t.Fatalf("uuid %q: err = %v, want ErrNotAMember", bad, err)
+		}
 	}
 }
