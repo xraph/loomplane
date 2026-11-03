@@ -18,11 +18,16 @@ var ErrPrivateAddress = errors.New("that address is on a private network, which 
 const dialTimeout = 10 * time.Second
 
 // sharedAddressSpace is the carrier-grade NAT range, 100.64.0.0/10, which
-// cloud providers use for their internal services.
+// cloud providers use for their internal services. benchmarking,
+// 198.18.0.0/15, is for testing networks and never public. localNAT64,
+// 64:ff9b:1::/48, is a NAT64 prefix a network sets up for itself, which may
+// put its IPv4 address anywhere, so all of it is refused.
 var (
 	sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
 	thisNetwork        = netip.MustParsePrefix("0.0.0.0/8")
+	benchmarking       = netip.MustParsePrefix("198.18.0.0/15")
 	nat64              = netip.MustParsePrefix("64:ff9b::/96")
+	localNAT64         = netip.MustParsePrefix("64:ff9b:1::/48")
 	sixToFour          = netip.MustParsePrefix("2002::/16")
 )
 
@@ -49,12 +54,15 @@ func refusePrivate(_, address string, _ syscall.RawConn) error {
 }
 
 // privateAddr reports whether a is loopback, private, link-local,
-// unspecified, multicast, or in the shared address space. An IPv4 address
-// carried inside an IPv6 one is judged as the IPv4 address it is.
+// unspecified, multicast, in the shared address space, for benchmarking, or
+// in a local-use NAT64 prefix. An IPv4 address carried inside an IPv6 one
+// is judged as the IPv4 address it is.
 func privateAddr(a netip.Addr) bool {
 	a = a.WithZone("").Unmap()
 	switch {
 	case !a.IsValid():
+		return true
+	case a.Is6() && localNAT64.Contains(a):
 		return true
 	case a.Is6() && nat64.Contains(a):
 		return privateAddr(embeddedIPv4(a, 12))
@@ -63,7 +71,7 @@ func privateAddr(a netip.Addr) bool {
 	}
 	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
 		a.IsInterfaceLocalMulticast() || a.IsMulticast() || a.IsUnspecified() ||
-		sharedAddressSpace.Contains(a) || thisNetwork.Contains(a)
+		sharedAddressSpace.Contains(a) || thisNetwork.Contains(a) || benchmarking.Contains(a)
 }
 
 // embeddedIPv4 reads the four bytes of a at offset.

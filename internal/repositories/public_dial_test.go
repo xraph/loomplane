@@ -59,11 +59,20 @@ func TestRefusePrivate(t *testing.T) {
 		{"[::ffff:127.0.0.1]:80", true},
 		{"[64:ff9b::a00:1]:80", true},
 		{"[2002:a00:1::]:80", true},
+		{"198.18.0.1:80", true},
+		{"198.19.255.254:80", true},
+		{"[::ffff:198.18.0.1]:80", true},
+		{"[64:ff9b::c612:1]:80", true},
+		{"[64:ff9b:1::5db8:d822]:443", true},
+		{"[64:ff9b:1:ffff::1]:443", true},
 		{"not an address", true},
 		{"100.128.0.1:80", false},
 		{"93.184.216.34:443", false},
 		{"[2606:4700:4700::1111]:443", false},
 		{"[64:ff9b::5db8:d822]:443", false},
+		{"198.17.255.255:443", false},
+		{"198.20.0.1:443", false},
+		{"[64:ff9b:2::1]:443", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.address, func(t *testing.T) {
