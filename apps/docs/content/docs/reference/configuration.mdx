@@ -56,6 +56,17 @@ Set the five App settings together, or none. Loomplane refuses to start with som
 | `LOOMPLANE_GITHUB_CLIENT_SECRET` | Unset | The App's OAuth client secret |
 | `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Unset | The secret GitHub signs deliveries with. Empty turns webhooks off |
 
+## Bitbucket
+
+Public Bitbucket Cloud repositories need none of this. To read private ones, set the client ID and secret together, or neither. Loomplane refuses to start with only one of them set.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_BITBUCKET_API_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud's REST API |
+| `LOOMPLANE_BITBUCKET_WEB_URL` | `https://bitbucket.org` | Where repository archives are served |
+| `LOOMPLANE_BITBUCKET_CLIENT_ID` | Unset | The OAuth consumer's key |
+| `LOOMPLANE_BITBUCKET_CLIENT_SECRET` | Unset | The OAuth consumer's secret |
+
 ## Email
 
 An empty host, with no Resend key or mail directory, disables email. Setting a username, password or sender without a host is an error.

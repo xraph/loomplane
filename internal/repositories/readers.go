@@ -25,6 +25,7 @@ type TokenSource interface {
 
 var (
 	_ Reader      = (*GitHub)(nil)
+	_ Reader      = (*Bitbucket)(nil)
 	_ Reader      = Readers{}
 	_ TokenSource = (*Connections)(nil)
 	_ TokenSource = Tokens{}

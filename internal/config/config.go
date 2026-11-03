@@ -64,6 +64,7 @@ type Config struct {
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
+	Bitbucket     BitbucketConfig
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
@@ -165,6 +166,27 @@ func (g GitHubConfig) appSettingsSet() int {
 		}
 	}
 	return n
+}
+
+// BitbucketConfig is how Loomplane reaches Bitbucket Cloud. Public
+// repositories need none of it.
+type BitbucketConfig struct {
+	// APIURL is Bitbucket Cloud's REST API: https://api.bitbucket.org/2.0.
+	APIURL string
+	// WebURL is Bitbucket itself, where repository archives are served:
+	// https://bitbucket.org.
+	WebURL string
+
+	// ClientID and ClientSecret are an OAuth consumer's key and secret,
+	// which connect an organization to its private repositories. Leave
+	// both empty to read public repositories only; set both otherwise.
+	ClientID     string
+	ClientSecret string
+}
+
+// Configured reports whether an OAuth consumer is set up.
+func (b BitbucketConfig) Configured() bool {
+	return b.ClientID != "" && b.ClientSecret != ""
 }
 
 // AnalysisConfig tunes repository analysis, which loomplane-worker runs.
@@ -357,13 +379,14 @@ func Defaults() Config {
 			Concurrency:  4,
 			PollInterval: time.Second,
 		},
-		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
-		Analysis: AnalysisConfig{Concurrency: 2},
-		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
-		Drift:    DriftConfig{Interval: 30 * time.Minute},
-		Worker:   WorkerConfig{HTTPAddr: ":8781"},
-		AI:       AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
-		Push:     PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		GitHub:    GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
+		Bitbucket: BitbucketConfig{APIURL: "https://api.bitbucket.org/2.0", WebURL: "https://bitbucket.org"},
+		Analysis:  AnalysisConfig{Concurrency: 2},
+		Planning:  PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:     DriftConfig{Interval: 30 * time.Minute},
+		Worker:    WorkerConfig{HTTPAddr: ":8781"},
+		AI:        AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
+		Push:      PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
 }
 
@@ -451,6 +474,10 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.GitHub.ClientID, "github.client_id")
 	r.str(&c.GitHub.ClientSecret, "github.client_secret")
 	r.str(&c.GitHub.WebhookSecret, "github.webhook_secret")
+	r.str(&c.Bitbucket.APIURL, "bitbucket.api_url")
+	r.str(&c.Bitbucket.WebURL, "bitbucket.web_url")
+	r.str(&c.Bitbucket.ClientID, "bitbucket.client_id")
+	r.str(&c.Bitbucket.ClientSecret, "bitbucket.client_secret")
 	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
@@ -589,6 +616,15 @@ func (c *Config) Validate() error {
 	}
 	if n := c.GitHub.appSettingsSet(); n != 0 && n != 5 {
 		errs = append(errs, errors.New("a GitHub App needs all of github.app_id, app_slug, private_key (or private_key_file), client_id and client_secret"))
+	}
+	if u, err := url.Parse(c.Bitbucket.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.api_url must be an absolute URL, got %q", c.Bitbucket.APIURL))
+	}
+	if u, err := url.Parse(c.Bitbucket.WebURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.web_url must be an absolute URL, got %q", c.Bitbucket.WebURL))
+	}
+	if (c.Bitbucket.ClientID == "") != (c.Bitbucket.ClientSecret == "") {
+		errs = append(errs, errors.New("a Bitbucket OAuth consumer needs both bitbucket.client_id and client_secret"))
 	}
 	if c.Analysis.Concurrency < 1 {
 		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))

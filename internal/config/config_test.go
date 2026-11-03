@@ -325,3 +325,46 @@ func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
 		}
 	}
 }
+
+func TestConfig_bitbucket(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://api.bitbucket.org/2.0" || c.Bitbucket.WebURL != "https://bitbucket.org" {
+		t.Errorf("defaults %+v", c.Bitbucket)
+	}
+	if c.Bitbucket.Configured() {
+		t.Error("a default config shouldn't have a Bitbucket consumer")
+	}
+
+	c, err = FromSource(mapGetter{
+		"database.url":            testDSN,
+		"bitbucket.api_url":       "https://bb.example.com/2.0",
+		"bitbucket.web_url":       "https://bb.example.com",
+		"bitbucket.client_id":     "key",
+		"bitbucket.client_secret": "secret",
+	})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://bb.example.com/2.0" || c.Bitbucket.WebURL != "https://bb.example.com" || !c.Bitbucket.Configured() {
+		t.Errorf("overrides %+v", c.Bitbucket)
+	}
+
+	for name, src := range map[string]mapGetter{
+		"client_id without client_secret": {"database.url": testDSN, "bitbucket.client_id": "key"},
+		"client_secret without client_id": {"database.url": testDSN, "bitbucket.client_secret": "secret"},
+	} {
+		_, err := FromSource(src)
+		if err == nil || !strings.Contains(err.Error(), "bitbucket.client_id and client_secret") {
+			t.Errorf("%s: error %v, want it to say both are needed", name, err)
+		}
+	}
+	for _, key := range []string{"bitbucket.api_url", "bitbucket.web_url"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, key: "bitbucket"})
+		if err == nil || !strings.Contains(err.Error(), key+" must be an absolute URL") {
+			t.Errorf("%s: error %v", key, err)
+		}
+	}
+}

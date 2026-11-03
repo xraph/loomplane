@@ -98,6 +98,17 @@ github:
   # branch moves. Empty turns webhooks off.
   webhook_secret: "${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}"
 
+bitbucket:
+  # Bitbucket Cloud's REST API.
+  api_url: "${LOOMPLANE_BITBUCKET_API_URL:-https://api.bitbucket.org/2.0}"
+  # Where Bitbucket serves repository archives.
+  web_url: "${LOOMPLANE_BITBUCKET_WEB_URL:-https://bitbucket.org}"
+  # An OAuth consumer that reads private repositories. Leave both empty
+  # to read public repositories only; set both otherwise. Keep the secret
+  # in the environment.
+  client_id: "${LOOMPLANE_BITBUCKET_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_BITBUCKET_CLIENT_SECRET:-}"
+
 # Repository analysis, which loomplane-worker runs.
 analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the
