@@ -45,6 +45,19 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteJSON(w, http.StatusOK, c)
 		return
 	}
+	if r.URL.Path == "/v1/usage" && r.Method == http.MethodGet {
+		org := ""
+		if !platform {
+			org = peer.Org
+		}
+		samples, err := a.Host.Usage(r.Context(), org)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, samples)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

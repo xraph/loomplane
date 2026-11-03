@@ -47,9 +47,9 @@ type managedMachine struct {
 }
 
 type runtimeReceipt struct {
-	ID, IP, Tap, NetNS string
-	PID                int
-	StartTime          string
+	ID, IP, Tap, NetNS, CounterID string
+	PID                           int
+	StartTime                     string
 }
 
 func NewDriver(cfg HostConfig, store *Store, key []byte) (MachineDriver, error) {
@@ -83,7 +83,7 @@ func NewDriver(cfg HostConfig, store *Store, key []byte) (MachineDriver, error) 
 			return nil, ErrInvalid
 		}
 	}
-	if _, e := networkPolicy("tap0", "10.0.0.2", nil, cfg.EgressCIDRs, nil, cfg.DeniedCIDRs...); e != nil {
+	if _, e := networkPolicy("tap0", "10.0.0.2", nil, cfg.EgressCIDRs, nil, cfg.DeniedPorts, cfg.DeniedCIDRs...); e != nil {
 		return nil, e
 	}
 	d := &linuxDriver{config: cfg, store: store, key: key}
@@ -421,6 +421,11 @@ func (d *linuxDriver) Start(ctx context.Context, vm VM, s Spec) error {
 		if e := d.installPolicy(call, vm, receipt); e != nil {
 			return e
 		}
+		id, e := d.installMeter(call, vm, receipt)
+		if e != nil {
+			return e
+		}
+		receipt.CounterID = id
 		raw, e := json.Marshal(receipt)
 		if e != nil {
 			return e
@@ -594,10 +599,11 @@ func (d *linuxDriver) removeRuntime(ctx context.Context, vm VM, disk bool) error
 		return err
 	}
 	if err == nil {
-		table := "loomplane_" + vm.ID
-		if exec.CommandContext(ctx, "nft", "list", "table", "netdev", table).Run() == nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
-			if e := exec.CommandContext(ctx, "nft", "delete", "table", "netdev", table).Run(); e != nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
-				return e
+		for _, table := range []string{"loomplane_" + vm.ID, meterTable(vm.ID)} {
+			if exec.CommandContext(ctx, "nft", "list", "table", "netdev", table).Run() == nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
+				if e := exec.CommandContext(ctx, "nft", "delete", "table", "netdev", table).Run(); e != nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
+					return e
+				}
 			}
 		}
 		conf, e := d.cni()

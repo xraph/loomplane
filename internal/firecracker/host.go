@@ -346,3 +346,38 @@ func (h *Host) Guest(ctx context.Context, q Request, action string, body io.Read
 }
 
 func firecrackerSameSpec(a, b Spec) bool { return reflect.DeepEqual(a, b) }
+
+// Usage reports egress for current VMs. org "" means every org.
+func (h *Host) Usage(ctx context.Context, org string) ([]UsageSample, error) {
+	reader, ok := h.Driver.(UsageReader)
+	if !ok || h.Store == nil {
+		return []UsageSample{}, nil
+	}
+	records, err := h.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var vms []VM
+	scopes := map[string]Scope{}
+	for _, r := range records {
+		if r.Current == nil || (org != "" && r.Scope.Org != org) {
+			continue
+		}
+		vms = append(vms, *r.Current)
+		scopes[r.Current.ID] = r.Scope
+	}
+	samples, err := reader.Usage(ctx, vms)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UsageSample, 0, len(samples))
+	for _, s := range samples {
+		scope, ok := scopes[s.VMID]
+		if !ok {
+			continue
+		}
+		s.Scope = scope
+		out = append(out, s)
+	}
+	return out, nil
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ type HostConfig struct {
 
 var deviceName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
 
-func networkPolicy(device, ip string, hostIPs, egress, peers []string, denied ...string) (string, error) {
+func networkPolicy(device, ip string, hostIPs, egress, peers []string, ports []int, denied ...string) (string, error) {
 	if !deviceName.MatchString(device) {
 		return "", ErrInvalid
 	}
@@ -53,6 +54,11 @@ func networkPolicy(device, ip string, hostIPs, egress, peers []string, denied ..
 		}
 		fmt.Fprintf(&b, " ip daddr %s drop\n", prefix.Masked())
 	}
+	for _, port := range ports {
+		if port < 1 || port > 65535 {
+			return "", ErrInvalid
+		}
+	}
 	b.WriteString(" ip daddr 100.64.0.0/10 drop\n ip daddr 169.254.0.0/16 drop\n ip daddr 127.0.0.0/8 drop\n ip daddr 0.0.0.0/8 drop\n ip daddr 224.0.0.0/4 drop\n")
 	for _, v := range peers {
 		addr, e := netip.ParseAddr(v)
@@ -62,6 +68,13 @@ func networkPolicy(device, ip string, hostIPs, egress, peers []string, denied ..
 		fmt.Fprintf(&b, " ip daddr %s accept\n", addr)
 	}
 	b.WriteString(" ip daddr 10.0.0.0/8 drop\n ip daddr 172.16.0.0/12 drop\n ip daddr 192.168.0.0/16 drop\n")
+	if len(ports) > 0 {
+		list := make([]string, len(ports))
+		for i, port := range ports {
+			list[i] = strconv.Itoa(port)
+		}
+		fmt.Fprintf(&b, " tcp dport { %s } drop\n", strings.Join(list, ", "))
+	}
 	for _, v := range egress {
 		prefix, e := netip.ParsePrefix(v)
 		if e != nil || !prefix.Addr().Is4() {

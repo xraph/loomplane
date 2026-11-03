@@ -35,6 +35,15 @@ func (d *testDriver) Remove(context.Context, VM) error    { return nil }
 func (d *testDriver) Guest(context.Context, VM, string, io.Reader) (GuestStatus, error) {
 	return GuestStatus{Ready: true, State: "running"}, nil
 }
+func (d *testDriver) Usage(_ context.Context, vms []VM) ([]UsageSample, error) {
+	var out []UsageSample
+	for _, vm := range vms {
+		if d.live[vm.ID] {
+			out = append(out, UsageSample{VMID: vm.ID, CounterID: "c", Bytes: 10, Packets: 1})
+		}
+	}
+	return out, nil
+}
 func testHost(t *testing.T) (*Host, *testDriver, Request) {
 	t.Helper()
 	s, err := OpenStore(t.TempDir() + "/state")

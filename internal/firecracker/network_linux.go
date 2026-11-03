@@ -48,6 +48,29 @@ func (d *linuxDriver) peerIPs(ctx context.Context, vm VM, excluded ...string) ([
 	}
 	return peers, nil
 }
+
+// hostVeth names the host side of the VM's veth pair, where TC redirects the TAP.
+func hostVeth(r runtimeReceipt) (string, error) {
+	ns, err := netns.GetFromPath(r.NetNS)
+	if err != nil {
+		return "", err
+	}
+	defer ns.Close()
+	handle, err := netlink.NewHandleAt(ns)
+	if err != nil {
+		return "", err
+	}
+	defer handle.Close()
+	link, err := handle.LinkByName("veth0")
+	if err != nil {
+		return "", err
+	}
+	peer, err := netlink.LinkByIndex(link.Attrs().ParentIndex)
+	if err != nil {
+		return "", err
+	}
+	return peer.Attrs().Name, nil
+}
 func (d *linuxDriver) installPolicy(ctx context.Context, vm VM, r runtimeReceipt, excluded ...string) error {
 	peers, err := d.peerIPs(ctx, vm, excluded...)
 	if err != nil {
@@ -65,25 +88,11 @@ func (d *linuxDriver) installPolicy(ctx context.Context, vm VM, r runtimeReceipt
 		}
 		hosts = append(hosts, ip.String())
 	}
-	ns, err := netns.GetFromPath(r.NetNS)
+	device, err := hostVeth(r)
 	if err != nil {
 		return err
 	}
-	defer ns.Close()
-	handle, err := netlink.NewHandleAt(ns)
-	if err != nil {
-		return err
-	}
-	defer handle.Close()
-	link, err := handle.LinkByName("veth0")
-	if err != nil {
-		return err
-	}
-	peer, err := netlink.LinkByIndex(link.Attrs().ParentIndex)
-	if err != nil {
-		return err
-	}
-	policy, err := networkPolicy(peer.Attrs().Name, r.IP, hosts, d.config.EgressCIDRs, peers, d.config.DeniedCIDRs...)
+	policy, err := networkPolicy(device, r.IP, hosts, d.config.EgressCIDRs, peers, d.config.DeniedPorts, d.config.DeniedCIDRs...)
 	if err != nil {
 		return err
 	}

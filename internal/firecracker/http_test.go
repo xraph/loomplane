@@ -148,3 +148,41 @@ func TestPlatformPeerCannotTouchAnotherOrgsRecord(t *testing.T) {
 		t.Fatal("org-a VM was stopped")
 	}
 }
+
+func TestUsageIsScopedToPeerOrg(t *testing.T) {
+	h, _, q := testHost(t)
+	orgCert := &x509.Certificate{Raw: []byte("org")}
+	orgSum := sha256.Sum256(orgCert.Raw)
+	platformCert := &x509.Certificate{Raw: []byte("platform")}
+	platformSum := sha256.Sum256(platformCert.Raw)
+	api := Handler{Host: h, Platform: hex.EncodeToString(platformSum[:]), Peers: []Peer{{Fingerprint: hex.EncodeToString(orgSum[:]), Org: q.Scope.Org, Connection: q.Scope.Connection}}}
+	if w := platformRequest(t, api, orgCert, "/v1/apply", q); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	other := q
+	other.Scope.Org = "other"
+	other.Authority.Operation = "deploy-other"
+	if _, err := h.Apply(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	get := func(cert *x509.Certificate) []UsageSample {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/usage", nil)
+		r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var out []UsageSample
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := get(orgCert); len(got) != 1 || got[0].Scope.Org != q.Scope.Org {
+		t.Fatalf("per-org peer saw %+v", got)
+	}
+	if got := get(platformCert); len(got) != 2 {
+		t.Fatalf("platform peer saw %+v", got)
+	}
+}
