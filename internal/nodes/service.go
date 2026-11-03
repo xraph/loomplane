@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"regexp"
 	"slices"
 	"strconv"
@@ -94,6 +95,15 @@ type Service struct {
 	Adopt func(ctx context.Context, n *Node, claim *apikeys.NodeJoinClaim) error
 	// Log receives failures nobody else sees. Nil means slog.Default().
 	Log *slog.Logger
+	// clock is what time it is. Nil means time.Now. Tests set it.
+	clock func() time.Time
+}
+
+func (s *Service) now() time.Time {
+	if s.clock != nil {
+		return s.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (s *Service) log() *slog.Logger {
@@ -356,7 +366,7 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]Node, error
 	if err := s.allow(ctx, p, security.NodeRead, false); err != nil {
 		return nil, err
 	}
-	return s.Store.List(ctx, p.OrgID)
+	return s.withDetails(s.Store.List(ctx, p.OrgID))
 }
 
 // Get returns one node of the org.
@@ -364,7 +374,12 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*No
 	if err := s.allow(ctx, p, security.NodeRead, false); err != nil {
 		return nil, err
 	}
-	return s.Store.Get(ctx, p.OrgID, id)
+	n, err := s.Store.Get(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	s.ingressDetail(n)
+	return n, nil
 }
 
 // JoinedByKey lists the nodes that joined with a token made by the API key.
@@ -372,7 +387,7 @@ func (s *Service) JoinedByKey(ctx context.Context, p security.Principal, keyID s
 	if err := s.allow(ctx, p, security.NodeManage, false); err != nil {
 		return nil, err
 	}
-	return s.Store.ListJoinedByKey(ctx, p.OrgID, keyID)
+	return s.withDetails(s.Store.ListJoinedByKey(ctx, p.OrgID, keyID))
 }
 
 // Update renames a node, relabels it, narrows its endpoints or sets its
@@ -432,20 +447,94 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 	}
 	narrowed := set.Endpoints != nil && !slices.Equal(n.Endpoints, old.Endpoints)
 	ingress := set.IngressMode != nil && n.IngressMode != old.IngressMode
-	if s.Notify != nil {
-		// Ruling R13: send every endpoints update, changed or not. Narrowing
-		// is idempotent on the node, and a node that missed one converges.
-		if set.Endpoints != nil {
-			s.Notify(n.ID, nodeproto.Narrow{Endpoints: n.Endpoints})
-		}
-		if ingress {
-			s.Notify(n.ID, nodeproto.SetIngress{Mode: n.IngressMode})
-		}
+	// Ruling R13: send every endpoints update, changed or not. Narrowing
+	// is idempotent on the node, and a node that missed one converges.
+	if set.Endpoints != nil && s.Notify != nil {
+		s.Notify(n.ID, nodeproto.Narrow{Endpoints: n.Endpoints})
+	}
+	if ingress {
+		s.sendIngress(n)
 	}
 	if narrowed || ingress || n.Name != old.Name || !maps.Equal(n.Labels, old.Labels) {
 		s.record(ctx, "node.updated", p, *n, nil)
 	}
+	s.ingressDetail(n)
 	return n, nil
+}
+
+// NoPublicAddressDetail is what a node without direct ingress says when no
+// public address of its answered the address check.
+const NoPublicAddressDetail = "no public address answered on port 80; relay arrives in a later release"
+
+// ingressApplyGrace is how long a node has to answer a SetIngress before
+// its detail says it didn't apply the mode.
+const ingressApplyGrace = 30 * time.Second
+
+// SetIngress settles a node's address check. Direct records publicAddress
+// as confirmed now; none records that no public address answered, and
+// takes any earlier address back. The stored mode then goes to the node
+// the way Update sends it, and the node's IngressApplied answer is
+// recorded by its session. Nothing waits for that answer: a mode the node
+// hasn't applied ingressApplyGrace later shows in its IngressDetail on
+// read. Relay comes in a later phase, so it is ErrInvalid here.
+func (s *Service) SetIngress(ctx context.Context, nodeID, mode, publicAddress string) error {
+	now := s.now()
+	set := IngressSetting{Mode: mode, SentAt: now}
+	switch mode {
+	case nodeproto.IngressDirect:
+		if net.ParseIP(publicAddress) == nil {
+			return fmt.Errorf("%w: direct ingress needs the confirmed public IP address", ErrInvalid)
+		}
+		set.PublicAddress, set.ConfirmedAt = publicAddress, &now
+	case nodeproto.IngressNone:
+		if publicAddress != "" {
+			return fmt.Errorf("%w: a node without direct ingress has no public address", ErrInvalid)
+		}
+		set.Detail = NoPublicAddressDetail
+	default:
+		return fmt.Errorf("%w: an address check sets ingress mode direct or none", ErrInvalid)
+	}
+	old, err := s.Store.GetByID(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	n, err := s.Store.SetIngress(ctx, nodeID, set)
+	if err != nil {
+		return err
+	}
+	s.sendIngress(n)
+	if n.IngressMode != old.IngressMode || n.PublicAddress != old.PublicAddress {
+		s.record(ctx, "node.updated", security.SystemPrincipal(n.OrgID), *n, map[string]string{"ingress_mode": n.IngressMode, "public_address": n.PublicAddress})
+	}
+	return nil
+}
+
+// sendIngress tells a live node its stored ingress mode.
+func (s *Service) sendIngress(n *Node) {
+	if s.Notify != nil {
+		s.Notify(n.ID, nodeproto.SetIngress{Mode: n.IngressMode})
+	}
+}
+
+// ingressDetail fills in, on read, a mode the node hasn't applied within
+// ingressApplyGrace of its being sent. It wins over a stored detail.
+func (s *Service) ingressDetail(n *Node) {
+	if n.Status == StatusRevoked || n.IngressSentAt == nil || n.IngressApplied == n.IngressMode {
+		return
+	}
+	if s.now().Sub(*n.IngressSentAt) >= ingressApplyGrace {
+		n.IngressDetail = fmt.Sprintf("the node didn't apply ingress mode %s", n.IngressMode)
+	}
+}
+
+func (s *Service) withDetails(list []Node, err error) ([]Node, error) {
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		s.ingressDetail(&list[i])
+	}
+	return list, nil
 }
 
 // Revoke ends a node's trust for good and tells a live session.

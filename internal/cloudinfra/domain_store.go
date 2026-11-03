@@ -209,7 +209,14 @@ const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_arr
  WHERE (b.subject='resource' OR svc->>'name'='main') AND EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$6)
  ORDER BY svc->>'name' LIMIT 1) routed ON true`
 
-var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+// routeServerAddress is where a server binding's route sends traffic: the
+// connection's advertise_host, else its SSH host. A node's connection has
+// no SSH host, and its advertise_host counts only once the node's public
+// address answered an address check; until then it is empty.
+const routeServerAddress = `CASE WHEN coalesce(c.details->>'node_id','')='' THEN coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+ ELSE coalesce((SELECT c.details->>'advertise_host' FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL AND n.public_address_confirmed_at IS NOT NULL),'') END`
+
+var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),` + routeServerAddress + `,coalesce(c.details->>'node_id','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
@@ -224,11 +231,15 @@ var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.exte
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
 	var config []byte
-	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address)
+	var node string
+	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address, &node)
 	if err != nil {
 		return out, storeError(err)
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
+	if node != "" && out.Address == "" {
+		return out, fmt.Errorf("%w: the node this service runs on has no confirmed public address yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+	}
 	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)
 	}

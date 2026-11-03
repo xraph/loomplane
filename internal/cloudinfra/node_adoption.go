@@ -212,7 +212,54 @@ func (s *Service) AdoptOnline(ctx context.Context, n *nodes.Node) error {
 	if errors.Is(err, ErrBusy) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	// The adoption this call applied goes on to check the node's address.
+	// What that finds, or fails to, never changes the adoption.
+	if applied, getErr := st.GetNodeAdoption(ctx, n.OrgID, n.ID); getErr == nil && applied.Status == NodeAdoptionApplied && s.NodeIngress != nil {
+		s.confirmAdoptedNode(ctx, n, applied)
+	}
+	return nil
+}
+
+// confirmAdoptedNode checks the address of a node it just adopted, once
+// the adopt operation has made its server ready: the operation checks
+// that ports 80 and 443 are free, so the proxy can't start before it. It
+// runs on its own deadline, past the hook's. A failure is reported, and
+// the node keeps ingress mode none until a later check.
+func (s *Service) confirmAdoptedNode(ctx context.Context, n *nodes.Node, a *NodeAdoption) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoptedNodeConfirmWait)
+	defer cancel()
+	v, err := s.waitServerReady(ctx, a)
+	if err == nil {
+		_, err = s.ConfirmNodeAddress(ctx, a.OrgID, v.RuntimeConnectionID, n.Inventory.PublicAddresses)
+	}
+	if err != nil && !errors.Is(err, ErrNoPublicAddress) {
+		s.warn("Couldn't check an adopted node's public address; it runs without direct ingress for now", fmt.Errorf("node %s: %w", n.ID, err))
+	}
+}
+
+// waitServerReady waits for the adoption's server to be ready. An adopt
+// operation that failed or was cancelled ends the wait.
+func (s *Service) waitServerReady(ctx context.Context, a *NodeAdoption) (*Server, error) {
+	for {
+		v, err := s.Store.GetServer(ctx, a.OrgID, a.CloudID, a.ServerID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		if v != nil && v.Status == "ready" {
+			return v, nil
+		}
+		if o, opErr := s.Store.GetOperation(ctx, a.OrgID, a.CloudID, a.OperationID); opErr == nil && (o.Status == "failed" || o.Status == "cancelled") {
+			return nil, fmt.Errorf("%w: the adopt operation %s", ErrConflict, o.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: the adopted server wasn't ready in time", ErrPending)
+		case <-time.After(s.serverReadyPoll):
+		}
+	}
 }
 
 // adoptNode runs one attempt while holding the node's adoption lock.

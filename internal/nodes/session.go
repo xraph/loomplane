@@ -158,7 +158,7 @@ func (s *session) readLoop() {
 		case nodeproto.NarrowApplied:
 			s.hub.log.Debug("nodes: node applied a narrow", "node", s.nodeID, "endpoints", m.Endpoints)
 		case nodeproto.IngressApplied:
-			s.hub.log.Debug("nodes: node applied an ingress mode", "node", s.nodeID, "mode", m.Mode)
+			s.hub.ingressApplied(s, m.Mode)
 		case nodeproto.Leave:
 			s.hub.leave(s)
 		}
@@ -394,6 +394,22 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 	}
 	if first {
 		h.fireOnline(n)
+	}
+}
+
+// ingressApplied records the ingress mode a node says it now runs. A mode
+// this Loomplane doesn't know is logged and dropped.
+func (h *Hub) ingressApplied(s *session, mode string) {
+	switch mode {
+	case nodeproto.IngressNone, nodeproto.IngressDirect, nodeproto.IngressRelay:
+	default:
+		h.log.Debug("nodes: skipping an ingress mode this Loomplane doesn't know", "node", s.nodeID)
+		return
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	if err := h.store.RecordIngressApplied(ctx, s.nodeID, mode); err != nil && !errors.Is(err, ErrNotFound) {
+		h.log.Warn("nodes: recording the ingress mode a node applied", "node", s.nodeID, "error", err)
 	}
 }
 

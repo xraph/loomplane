@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,7 +88,7 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 	if err := st.SaveServer(ctx, &Server{ID: "srv_1", OrgID: "org", CloudID: "cloud_1", Name: "web-1", Ownership: "adopted", Provider: "server", AccountID: "daemon", ResourceID: "daemon", ConnectionID: "runtime", RuntimeConnectionID: "runtime", Revision: 1, Status: "ready"}); err != nil {
 		t.Fatal(err)
 	}
-	exec(`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`)
+	exec(`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT,provider_name TEXT)`)
 	exec(`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`)
 	instance := func(id, service, ports string) {
 		t.Helper()
@@ -221,5 +222,22 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 		if cloud, cloudErr := st.RouteBindingCloud(ctx, missing[0], missing[1], missing[2], missing[3]); !errors.Is(cloudErr, ErrNotFound) {
 			t.Fatalf("%v: %q %v", missing, cloud, cloudErr)
 		}
+	}
+
+	// On a node's connection, advertise_host counts only once the node's
+	// public address answered an address check.
+	exec(`INSERT INTO loomplane_nodes(id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES('node_1','org','web-1','\x01','fp',now(),now())`)
+	exec(`UPDATE loomplane_cloud_connections SET details=details-'host'||'{"node_id":"node_1","identity_generation":"1","advertise_host":"203.0.113.7"}' WHERE org_id='org' AND id='runtime'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) || !strings.Contains(resolveErr.Error(), "no confirmed public address") {
+		t.Fatalf("unconfirmed node resolved: %+v %v", b, resolveErr)
+	}
+	exec(`UPDATE loomplane_nodes SET public_address='203.0.113.7',public_address_confirmed_at=now(),ingress_mode='direct' WHERE id='node_1'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); resolveErr != nil || b.Address != "203.0.113.7" {
+		t.Fatalf("confirmed node: %+v %v", b, resolveErr)
+	}
+	// A revoked node routes nowhere, confirmed or not.
+	exec(`UPDATE loomplane_nodes SET status='revoked',revoked_at=now() WHERE id='node_1'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) {
+		t.Fatalf("revoked node resolved: %+v %v", b, resolveErr)
 	}
 }

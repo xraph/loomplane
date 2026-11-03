@@ -173,10 +173,34 @@ func (f *fakeStore) UpdateSettings(_ context.Context, org, id string, u Settings
 	if u.Labels != nil {
 		n.Labels = u.Labels
 	}
-	if u.IngressMode != nil {
-		n.IngressMode = *u.IngressMode
+	if u.IngressMode != nil && *u.IngressMode != n.IngressMode {
+		now := time.Now().UTC()
+		n.IngressMode, n.IngressSentAt, n.IngressDetail = *u.IngressMode, &now, ""
 	}
 	return clone(n), nil
+}
+
+func (f *fakeStore) SetIngress(_ context.Context, id string, in IngressSetting) (*Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nil, ErrNotFound
+	}
+	sent := in.SentAt
+	n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt, n.IngressDetail, n.IngressSentAt = in.Mode, in.PublicAddress, in.ConfirmedAt, in.Detail, &sent
+	return clone(n), nil
+}
+
+func (f *fakeStore) RecordIngressApplied(_ context.Context, id, mode string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return ErrNotFound
+	}
+	n.IngressApplied = mode
+	return nil
 }
 func (f *fakeStore) Touch(_ context.Context, id string, at time.Time, _ nodeproto.Usage) error {
 	f.mu.Lock()

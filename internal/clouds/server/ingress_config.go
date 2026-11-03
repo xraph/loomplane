@@ -100,6 +100,27 @@ type IngressConfig struct {
 	// DNSResolvers find a challenge zone's nameservers in place of the
 	// system resolver. Restricted to isolated fixture callers too.
 	DNSResolvers []string `json:"-"`
+	// AddressCheck is a nonce the proxy serves on port 80 at
+	// NodeAddressPath, for the moment Loomplane checks a node's public
+	// address from outside. It is never stored with a config.
+	AddressCheck string `json:"-"`
+}
+
+// NodeAddressPath is where a node's proxy answers an address check. The
+// nonce follows it, and the answer is the nonce itself.
+const NodeAddressPath = "/.well-known/loomplane-node/"
+
+// addressCheckNonce is the shape of a nonce: 16 to 32 random bytes in hex.
+var addressCheckNonce = regexp.MustCompile(`^[0-9a-f]{32,64}$`)
+
+// addressCheckRoute answers GET NodeAddressPath<nonce> on any host with the
+// nonce.
+func addressCheckRoute(nonce string) map[string]any {
+	return map[string]any{
+		"match":    []any{map[string]any{"method": []string{"GET"}, "path": []string{NodeAddressPath + nonce}}},
+		"handle":   []any{map[string]any{"handler": "static_response", "status_code": 200, "body": nonce, "headers": map[string]any{"Content-Type": []string{"text/plain"}, "Cache-Control": []string{"no-store"}}}},
+		"terminal": true,
+	}
 }
 
 func IngressName(org, server string) string {
@@ -173,7 +194,7 @@ func validIngressHost(host string) bool {
 // JSON produces one complete configuration. The loopback probe follows the
 // same reverse proxy routes as HTTPS and cannot return a synthetic success.
 func (v IngressConfig) JSON() ([]byte, error) {
-	if v.OrgID == "" || v.ServerID == "" || v.Version == "" {
+	if v.OrgID == "" || v.ServerID == "" || v.Version == "" || (v.AddressCheck != "" && !addressCheckNonce.MatchString(v.AddressCheck)) {
 		return nil, ErrInvalid
 	}
 	// Exact hostnames match before any wildcard, so *.acme.dev never takes
@@ -220,6 +241,10 @@ func (v IngressConfig) JSON() ([]byte, error) {
 			}
 			challengeRoutes = append(challengeRoutes, map[string]any{"match": []any{map[string]any{"host": []string{r.Hostname}, "path": []string{"/.well-known/acme-challenge/*"}}}, "handle": []any{map[string]any{"handler": "reverse_proxy", "upstreams": []any{map[string]any{"dial": net.JoinHostPort(r.ChallengeAddress, "80")}}}}, "terminal": true})
 		}
+	}
+	if v.AddressCheck != "" {
+		// Port 80 has one server, so the check joins the challenge routes.
+		challengeRoutes = append(challengeRoutes, addressCheckRoute(v.AddressCheck))
 	}
 	servers := map[string]any{
 		"probe": map[string]any{"listen": []string{"127.0.0.1:8081"}, "routes": probeRoutes, "automatic_https": map[string]any{"disable": true}},

@@ -592,3 +592,29 @@ func TestCreateNodeConnectionNeedsTheDaemonID(t *testing.T) {
 		t.Fatal("a node connection with no daemon identity was kept, or never tried")
 	}
 }
+
+func TestSetNodeAdvertiseHost(t *testing.T) {
+	s, store, _, _, _ := nodeRig(t)
+	a, err := s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeA, "web-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := store.rows[a.ID].Generation
+	if err = s.SetNodeAdvertiseHost(t.Context(), "org_1", a.ID, "198.51.100.9"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.rows[a.ID]; got.Details["advertise_host"] != "198.51.100.9" || got.Generation != generation {
+		t.Fatalf("connection %+v", got)
+	}
+	if err = s.SetNodeAdvertiseHost(t.Context(), "org_1", a.ID, "web.example.com"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("hostname: %v", err)
+	}
+	if err = s.SetNodeAdvertiseHost(t.Context(), "org_2", a.ID, "198.51.100.9"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another org: %v", err)
+	}
+	ssh := &Connection{ID: "conn_ssh", OrgID: "org_1", Cloud: Server, Method: "ssh", Details: map[string]string{"host": "web.example.com"}, Status: StatusReady}
+	store.rows[ssh.ID] = *ssh
+	if err = s.SetNodeAdvertiseHost(t.Context(), "org_1", ssh.ID, "198.51.100.9"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ssh connection: %v", err)
+	}
+}

@@ -121,6 +121,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		// into it; the first connect does the adopting.
 		Adopt: infra.RecordNodeAdoption,
 	}
+	// An adopted node's address check settles its ingress through the
+	// service, which sends the mode the way an update does.
+	infra.NodeIngress = e.svc
 	e.adoptOnConnect(infra)
 	// Bind makes the hub the service's notifier and refuses an empty
 	// audience or secret.

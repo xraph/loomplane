@@ -22,7 +22,7 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const nodeColumns = `id,org_id,name,public_key,key_fingerprint,identity_generation,status,endpoints,ingress_mode,role,edge_scope,labels,version,protocol_version,inventory,last_seen_at,joined_by,joined_by_key_id,revoked_at,revoked_by,created_at,updated_at`
+const nodeColumns = `id,org_id,name,public_key,key_fingerprint,identity_generation,status,endpoints,ingress_mode,role,edge_scope,labels,version,protocol_version,inventory,last_seen_at,joined_by,joined_by_key_id,revoked_at,revoked_by,created_at,updated_at,public_address,public_address_confirmed_at,ingress_applied,ingress_sent_at,ingress_detail`
 
 type scanner interface{ Scan(...any) error }
 
@@ -54,7 +54,7 @@ func scanNode(row scanner) (*Node, error) {
 	var n Node
 	var status string
 	var endpoints, labels, inventory []byte
-	if err := row.Scan(&n.ID, &n.OrgID, &n.Name, &n.PublicKey, &n.KeyFingerprint, &n.IdentityGeneration, &status, &endpoints, &n.IngressMode, &n.Role, &n.EdgeScope, &labels, &n.Version, &n.ProtocolVersion, &inventory, &n.LastSeenAt, &n.JoinedBy, &n.JoinedByKeyID, &n.RevokedAt, &n.RevokedBy, &n.CreatedAt, &n.UpdatedAt); err != nil {
+	if err := row.Scan(&n.ID, &n.OrgID, &n.Name, &n.PublicKey, &n.KeyFingerprint, &n.IdentityGeneration, &status, &endpoints, &n.IngressMode, &n.Role, &n.EdgeScope, &labels, &n.Version, &n.ProtocolVersion, &inventory, &n.LastSeenAt, &n.JoinedBy, &n.JoinedByKeyID, &n.RevokedAt, &n.RevokedBy, &n.CreatedAt, &n.UpdatedAt, &n.PublicAddress, &n.PublicAddressConfirmedAt, &n.IngressApplied, &n.IngressSentAt, &n.IngressDetail); err != nil {
 		return nil, storeError(err)
 	}
 	n.Status = Status(status)
@@ -69,6 +69,7 @@ func scanNode(row scanner) (*Node, error) {
 	}
 	n.CreatedAt, n.UpdatedAt = n.CreatedAt.UTC(), n.UpdatedAt.UTC()
 	n.LastSeenAt, n.RevokedAt = utc(n.LastSeenAt), utc(n.RevokedAt)
+	n.PublicAddressConfirmedAt, n.IngressSentAt = utc(n.PublicAddressConfirmedAt), utc(n.IngressSentAt)
 	return &n, nil
 }
 
@@ -118,8 +119,9 @@ func (s *PgStore) Create(ctx context.Context, n *Node) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_nodes(`+nodeColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
-		n.ID, n.OrgID, n.Name, n.PublicKey, n.KeyFingerprint, n.IdentityGeneration, string(n.Status), endpoints, n.IngressMode, n.Role, n.EdgeScope, labels, n.Version, n.ProtocolVersion, inventory, n.LastSeenAt, n.JoinedBy, n.JoinedByKeyID, n.RevokedAt, n.RevokedBy, n.CreatedAt, n.UpdatedAt)
+	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_nodes(`+nodeColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
+		n.ID, n.OrgID, n.Name, n.PublicKey, n.KeyFingerprint, n.IdentityGeneration, string(n.Status), endpoints, n.IngressMode, n.Role, n.EdgeScope, labels, n.Version, n.ProtocolVersion, inventory, n.LastSeenAt, n.JoinedBy, n.JoinedByKeyID, n.RevokedAt, n.RevokedBy, n.CreatedAt, n.UpdatedAt,
+		n.PublicAddress, n.PublicAddressConfirmedAt, n.IngressApplied, n.IngressSentAt, n.IngressDetail)
 	return storeError(err)
 }
 
@@ -211,7 +213,7 @@ func (s *PgStore) UpdateSettings(ctx context.Context, org, id string, u Settings
 		v := string(b)
 		endpoints = &v
 	}
-	n, err := scanNode(s.db.QueryRow(ctx, `UPDATE loomplane_nodes SET name=COALESCE($3,name),labels=COALESCE($4::jsonb,labels),ingress_mode=COALESCE($5,ingress_mode),endpoints=COALESCE($6::jsonb,endpoints),updated_at=now() WHERE org_id=$1 AND id=$2 AND revoked_at IS NULL AND ($6::jsonb IS NULL OR $6::jsonb <@ endpoints) RETURNING `+nodeColumns,
+	n, err := scanNode(s.db.QueryRow(ctx, `UPDATE loomplane_nodes SET name=COALESCE($3,name),labels=COALESCE($4::jsonb,labels),ingress_mode=COALESCE($5,ingress_mode),endpoints=COALESCE($6::jsonb,endpoints),ingress_sent_at=CASE WHEN $5::text<>ingress_mode THEN now() ELSE ingress_sent_at END,ingress_detail=CASE WHEN $5::text<>ingress_mode THEN '' ELSE ingress_detail END,updated_at=now() WHERE org_id=$1 AND id=$2 AND revoked_at IS NULL AND ($6::jsonb IS NULL OR $6::jsonb <@ endpoints) RETURNING `+nodeColumns,
 		org, id, name, labels, ingress, endpoints))
 	if !errors.Is(err, ErrNotFound) {
 		return n, err
@@ -222,6 +224,21 @@ func (s *PgStore) UpdateSettings(ctx context.Context, org, id string, u Settings
 		return nil, ErrWidenRemotely
 	}
 	return nil, ErrNotFound
+}
+
+// SetIngress writes what an address check settled on a node that is not
+// revoked: the mode, the confirmed address and when, the detail, and when
+// the mode was sent. The applied mode is the node's to report, so it stays.
+func (s *PgStore) SetIngress(ctx context.Context, id string, in IngressSetting) (*Node, error) {
+	return scanNode(s.db.QueryRow(ctx, `UPDATE loomplane_nodes SET ingress_mode=$2,public_address=$3,public_address_confirmed_at=$4,ingress_detail=$5,ingress_sent_at=$6,updated_at=now() WHERE id=$1 AND revoked_at IS NULL RETURNING `+nodeColumns,
+		id, in.Mode, in.PublicAddress, in.ConfirmedAt, in.Detail, in.SentAt))
+}
+
+// RecordIngressApplied writes the mode a node says it runs. The column is
+// out of the event payload, so the answer appends no event.
+func (s *PgStore) RecordIngressApplied(ctx context.Context, id, mode string) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET ingress_applied=$2 WHERE id=$1 AND revoked_at IS NULL`, id, mode)
+	return affected(res, err)
 }
 
 func affected(res interface{ RowsAffected() (int64, error) }, err error) error {

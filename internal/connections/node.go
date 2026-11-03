@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"strconv"
 	"strings"
 
@@ -126,6 +127,43 @@ func (s *Service) refreshGeneration(ctx context.Context, c *Connection, generati
 			return err
 		}
 		if c, err = s.store.GetConnection(ctx, c.OrgID, c.ID); err != nil {
+			return err
+		}
+	}
+}
+
+// SetNodeAdvertiseHost writes address, a node's public IP address that
+// answered its address check, as the advertise_host of node connection
+// id. It isn't part of the connection's identity, so the generation and
+// the reviews that pin it stay. A connection that isn't a node's is
+// ErrInvalid. A write that raced a check is read again and retried.
+func (s *Service) SetNodeAdvertiseHost(ctx context.Context, orgID, id, address string) error {
+	if net.ParseIP(address) == nil {
+		return fmt.Errorf("%w: a node's advertised address is the IP address that answered", ErrInvalid)
+	}
+	c, err := s.store.GetConnection(ctx, orgID, id)
+	if err != nil {
+		return err
+	}
+	for try := 1; ; try++ {
+		if c.Method != MethodNode || c.Cloud != Server || c.Details["node_id"] == "" {
+			return fmt.Errorf("%w: %s isn't a node's server connection", ErrInvalid, c.Name)
+		}
+		if c.Details["advertise_host"] == address {
+			return nil
+		}
+		c.Details = maps.Clone(c.Details)
+		c.Details["advertise_host"] = address
+		c.UpdatedAt = s.now().UTC()
+		err = s.store.UpdateConnection(ctx, c)
+		if err == nil {
+			s.record(ctx, "cloud_connection.node_address", security.SystemPrincipal(c.OrgID), c)
+			return nil
+		}
+		if !errors.Is(err, ErrChanged) || try == refreshTries {
+			return err
+		}
+		if c, err = s.store.GetConnection(ctx, orgID, id); err != nil {
 			return err
 		}
 	}
