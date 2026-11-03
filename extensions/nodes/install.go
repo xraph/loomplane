@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/xraph/loomplane/internal/node/install"
+	"github.com/xraph/loomplane/internal/node/release"
 )
 
 // nodeSh serves the script that installs loomctl on a machine and joins it.
@@ -18,7 +19,8 @@ func (e *Extension) nodeSh(w http.ResponseWriter, r *http.Request) {
 	}
 	script, err := install.Render(install.Params{
 		PublicURL: e.cfg.PublicURL, Version: e.svc.Version,
-		Identity: install.ReleaseIdentity, Issuer: install.ReleaseIssuer,
+		Identity: release.ReleaseIdentity, MainIdentity: release.MainIdentity, Issuer: release.ReleaseIssuer,
+		Sums: e.verifiedSums(),
 	})
 	if err != nil {
 		e.Logger().Error("cannot render node.sh: " + err.Error())

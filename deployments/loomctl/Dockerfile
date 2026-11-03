@@ -8,8 +8,16 @@
 #
 # Join the machine first (node join --foreground, or with a token) so the
 # volume holds its identity. .goreleaser.yaml (dockers) builds this file.
-ARG ALPINE_VERSION=3.22
-FROM alpine:${ALPINE_VERSION}
+#
+# The container runs as root on purpose. A node that offers Docker needs the
+# host's Docker socket, which is mounted root-owned, and a non-root user with
+# no group on that socket could not use it. Mount only what the node needs.
+#
+# The base is pinned by digest (alpine 3.22, a multi-platform index), so a
+# moved tag cannot change the image. GoReleaser (dockers_v2) puts the binary
+# for each platform in $TARGETPLATFORM/ in the build context.
+FROM alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+ARG TARGETPLATFORM
 RUN apk add --no-cache ca-certificates
-COPY loomctl /usr/local/bin/loomctl
+COPY ${TARGETPLATFORM}/loomctl /usr/local/bin/loomctl
 ENTRYPOINT ["loomctl"]

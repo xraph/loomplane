@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"net/http"
@@ -85,6 +87,11 @@ type updateRig struct {
 	verr    error
 }
 
+func archiveSum(body string) string {
+	h := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(h[:])
+}
+
 const oldBinary = "OLD loomctl"
 
 // newUpdateRig is a Linux root machine with a node whose service runs a
@@ -139,8 +146,11 @@ func TestUpdateReplacesTheServiceBinaryAndRestarts(t *testing.T) {
 		t.Fatalf("mode %v, %v", fi, err)
 	}
 	entries, _ := os.ReadDir(filepath.Join(u.dir, "bin"))
-	if len(entries) != 1 {
-		t.Fatalf("bin holds %d files, want only loomctl: %v", len(entries), entries)
+	if len(entries) != 2 || entries[0].Name() != "loomctl" || entries[1].Name() != "loomctl.old" {
+		t.Fatalf("bin holds %v, want loomctl and the previous one as loomctl.old", entries)
+	}
+	if prev, err := os.ReadFile(u.binPath() + ".old"); err != nil || string(prev) != oldBinary {
+		t.Fatalf("the previous binary is %q, %v", prev, err)
 	}
 	if !slices.Equal(u.svc.calls, []string{"stop", "start"}) {
 		t.Fatalf("service calls %v", u.svc.calls)
@@ -204,19 +214,21 @@ func TestUpdateRefusals(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		"no version":     {func(*updateRig) {}, nil, "--release"},
-		"bad version":    {func(*updateRig) {}, []string{"--release", "v1;id"}, "not a release"},
-		"not root":       {func(u *updateRig) { u.opts.euid = func() int { return 1000 } }, []string{"--release", "v1.9.0"}, "needs root"},
-		"mac root":       {func(u *updateRig) { u.opts.goos = "darwin" }, []string{"--release", "v1.9.0"}, "without sudo"},
-		"no release":     {func(*updateRig) {}, []string{"--release", "v7.7.7"}, "404"},
-		"no service bin": {func(u *updateRig) { _ = os.Remove(u.binPath()) }, []string{"--release", "v1.9.0"}, "loomctl"},
+		"no version":     {func(*updateRig) {}, nil, "say which release with --release"},
+		"bad version":    {func(*updateRig) {}, []string{"--release", "v1;id"}, `--release "v1;id" is not a release version`},
+		"not root":       {func(u *updateRig) { u.opts.euid = func() int { return 1000 } }, []string{"--release", "v1.9.0"}, "node update needs root on Linux"},
+		"mac root":       {func(u *updateRig) { u.opts.goos = "darwin" }, []string{"--release", "v1.9.0"}, "node update as root would set the node up for root"},
+		"no release":     {func(*updateRig) {}, []string{"--release", "v7.7.7"}, "loomctl_7.7.7_linux_amd64.tar.gz: 404 Not Found"},
+		"no service bin": {func(u *updateRig) { _ = os.Remove(u.binPath()) }, []string{"--release", "v1.9.0"}, "this node does not run a copy of loomctl from"},
 		"no binary in the archive": {func(u *updateRig) {
 			u.rel.files["/v1.9.0/loomctl_1.9.0_linux_amd64.tar.gz"] = tarGz(t, map[string]string{"README.md": "x"})
-		}, []string{"--release", "v1.9.0"}, "does not hold loomctl"},
+		}, []string{"--release", "v1.9.0"}, "the release archive does not hold loomctl"},
 		"a directory as the binary": {func(u *updateRig) {
 			_ = os.Remove(u.binPath())
 			_ = os.Mkdir(u.binPath(), 0o700)
-		}, []string{"--release", "v1.9.0"}, "loomctl"},
+		}, []string{"--release", "v1.9.0"}, "is not a regular file, so node update leaves it alone"},
+		"a service it cannot ask about": {func(u *updateRig) { u.svc.runErr = errors.New("systemctl is gone") }, []string{"--release", "v1.9.0"},
+			"cannot tell whether the node service runs: systemctl is gone"},
 	} {
 		u := newUpdateRig(t)
 		tc.setup(u)
@@ -269,5 +281,27 @@ func TestVerifyReleaseCommandChecksTheDownload(t *testing.T) {
 	}
 	if err := u.run("node", "verify-release", "--release", "v1.9.0", "--archive", filepath.Join(dir, "missing"), "--checksums", "x", "--bundle", "y"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a missing file: %v", err)
+	}
+}
+
+func TestUpdateGoesBackWhenTheServiceWillNotStart(t *testing.T) {
+	u := newUpdateRig(t)
+	u.svc.running = true
+	u.svc.startErrs = []error{errors.New("exit status 1")}
+	err := u.run("node", "update", "--state-dir", u.dir, "--release", "v1.9.0")
+	if err == nil || !strings.Contains(err.Error(), "starting the service on v1.9.0 failed") || !strings.Contains(err.Error(), "previous binary is back in place") {
+		t.Fatalf("err %v", err)
+	}
+	if u.binary(t) != oldBinary {
+		t.Fatalf("the service binary is %q, want the old one back", u.binary(t))
+	}
+	if !slices.Equal(u.svc.calls, []string{"stop", "start", "start"}) {
+		t.Fatalf("service calls %v: it should start again on the old binary", u.svc.calls)
+	}
+	entries, _ := os.ReadDir(filepath.Join(u.dir, "bin"))
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("a temp file is left: %s", e.Name())
+		}
 	}
 }

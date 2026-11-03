@@ -1,11 +1,13 @@
 package nodes
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/xraph/loomplane/internal/node/install"
+	"github.com/xraph/loomplane/internal/node/release"
 )
 
 func TestNodeShRendersURLAndVersion(t *testing.T) {
@@ -34,14 +36,17 @@ func TestNodeShRendersURLAndVersion(t *testing.T) {
 func TestNodeShPinsIdentityLiterally(t *testing.T) {
 	r := newRig(t)
 	body := r.do(t, http.MethodGet, "/install/node.sh", "", nil).Body.String()
-	for _, want := range []string{install.ReleaseIdentity, install.ReleaseIssuer} {
+	for _, want := range []string{release.ReleaseIdentity, release.ReleaseIssuer} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the script does not carry %q", want)
 		}
 	}
 	// Both ways of checking name them: cosign here, loomctl via its own pin.
-	if !strings.Contains(body, `--certificate-identity "$RELEASE_IDENTITY$tag"`) || !strings.Contains(body, `--certificate-oidc-issuer "$RELEASE_ISSUER"`) {
-		t.Error("cosign is not asked for the identity and issuer")
+	if !strings.Contains(body, release.MainIdentity) {
+		t.Error("the script does not carry the identity of a release cut from main")
+	}
+	if !strings.Contains(body, `--certificate-identity "$identity"`) || !strings.Contains(body, `--certificate-oidc-issuer "$RELEASE_ISSUER"`) || strings.Contains(body, "regexp") {
+		t.Error("cosign is not asked for an exact identity and the issuer")
 	}
 }
 
@@ -59,5 +64,36 @@ func TestNodeShRefusesAValueThatNeedsEscaping(t *testing.T) {
 		if out.Code != http.StatusInternalServerError || strings.Contains(out.Body.String(), "#!/bin/sh") {
 			t.Errorf("%s: %d %s", name, out.Code, out.Body)
 		}
+	}
+}
+
+func TestNodeShCarriesOnlyVerifiedSums(t *testing.T) {
+	r := newRig(t)
+	if body := r.do(t, http.MethodGet, "/install/node.sh", "", nil).Body.String(); strings.Contains(body, "want_sum='") {
+		t.Fatal("a script served before any verification carries a sum")
+	}
+	sum := strings.Repeat("ab", 32)
+	calls := 0
+	r.ext.fetchSums = func(_ context.Context, version string) (map[string]string, error) {
+		calls++
+		if version != "v1.8.0" {
+			t.Errorf("verified %q, not the version this instance runs", version)
+		}
+		return map[string]string{"linux_amd64": sum}, nil
+	}
+	if !r.ext.refreshSums(t.Context()) || calls != 1 {
+		t.Fatal("the refresh did not verify")
+	}
+	if body := r.do(t, http.MethodGet, "/install/node.sh", "", nil).Body.String(); !strings.Contains(body, "linux_amd64) want_sum='"+sum+"' ;;") {
+		t.Fatalf("the verified sum is not in the script:\n%s", body)
+	}
+	// A failed refresh keeps what was verified, and serving never calls it.
+	r.ext.fetchSums = func(context.Context, string) (map[string]string, error) { return nil, errors.New("no route to GitHub") }
+	if r.ext.refreshSums(t.Context()) {
+		t.Fatal("a failed refresh reported success")
+	}
+	before := calls
+	if body := r.do(t, http.MethodGet, "/install/node.sh", "", nil).Body.String(); !strings.Contains(body, "want_sum='"+sum+"'") || calls != before {
+		t.Fatal("serving the script lost the sums or went to the network")
 	}
 }

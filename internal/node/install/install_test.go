@@ -10,7 +10,8 @@ import (
 
 func params() Params {
 	return Params{PublicURL: "https://loom.example.com", Version: "v1.8.0",
-		Identity: "https://github.com/xraph/loomplane/.github/workflows/release.yml@refs/tags/", Issuer: "https://token.actions.githubusercontent.com"}
+		Identity:     "https://github.com/xraph/loomplane/.github/workflows/release.yml@refs/tags/",
+		MainIdentity: "https://github.com/xraph/loomplane/.github/workflows/release.yml@refs/heads/main", Issuer: "https://token.actions.githubusercontent.com"}
 }
 
 func render(t *testing.T) string {
@@ -66,6 +67,31 @@ func TestScriptHasNoEmDash(t *testing.T) {
 	}
 }
 
+func TestRenderPutsVerifiedSumsInTheScript(t *testing.T) {
+	p := params()
+	sum := strings.Repeat("ab", 32)
+	p.Sums = map[string]string{"linux_amd64": sum, "darwin_arm64": strings.Repeat("cd", 32)}
+	s, err := Render(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "linux_amd64) want_sum='"+sum+"' ;;") || !strings.Contains(s, "darwin_arm64) want_sum='"+strings.Repeat("cd", 32)+"' ;;") {
+		t.Fatalf("sums missing:\n%s", s)
+	}
+	if without := render(t); strings.Contains(without, "want_sum='") {
+		t.Fatal("a script rendered without verified sums carries one")
+	}
+	for name, sums := range map[string]map[string]string{
+		"unknown platform": {"windows_amd64": sum}, "short sum": {"linux_amd64": "abc"}, "upper case": {"linux_amd64": strings.ToUpper(sum)},
+		"injection": {"linux_amd64": sum[:60] + "';id"},
+	} {
+		p.Sums = sums
+		if out, err := Render(p); err == nil {
+			t.Errorf("%s: rendered %q", name, out)
+		}
+	}
+}
+
 func TestScriptParsesAndPassesShellcheck(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "node.sh")
 	if err := os.WriteFile(path, []byte(render(t)), 0o600); err != nil {
@@ -80,6 +106,9 @@ func TestScriptParsesAndPassesShellcheck(t *testing.T) {
 	}
 	bin, err := exec.LookPath("shellcheck")
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("shellcheck is not installed, and CI must run it")
+		}
 		t.Skip("shellcheck is not installed")
 	}
 	if out, err := exec.CommandContext(t.Context(), bin, "--shell=sh", "--severity=style", path).CombinedOutput(); err != nil {

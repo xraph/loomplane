@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -16,26 +17,29 @@ var nodeSh string
 
 var tmpl = template.Must(template.New("node.sh").Parse(nodeSh))
 
-const (
-	// ReleaseIdentity is the start of the identity that signs a Loomplane
-	// release: the Release workflow, run on a tag. The tag follows it.
-	ReleaseIdentity = "https://github.com/xraph/loomplane/.github/workflows/release.yml@refs/tags/"
-	// ReleaseIssuer is the OIDC issuer of GitHub Actions, which vouches for
-	// that identity.
-	ReleaseIssuer = "https://token.actions.githubusercontent.com"
-)
-
 // Params are the only things an instance puts into the script.
 type Params struct {
 	// PublicURL is where this Loomplane is, such as https://loomplane.example.com.
 	PublicURL string
 	// Version is the release this Loomplane runs, such as v1.8.0.
 	Version string
-	// Identity and Issuer are what the release signature must name. They are
-	// fixed by the release workflow, so node.sh carries them as text.
-	Identity string
-	Issuer   string
+	// Identity (the tag follows it), MainIdentity and Issuer are what the
+	// release signature must name. node.sh carries them as text.
+	Identity     string
+	MainIdentity string
+	Issuer       string
+	// Sums is the sha256 of each loomctl archive this Loomplane has verified
+	// against the release signature, by platform (linux_amd64). Empty when
+	// it has not, and the script then refuses to install without cosign.
+	Sums map[string]string
 }
+
+// platforms node.sh knows.
+var platforms = map[string]bool{"linux_amd64": true, "linux_arm64": true, "darwin_amd64": true, "darwin_arm64": true}
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+type sum struct{ Platform, Sum string }
 
 // version is a release tag: letters, digits and . + _ - only.
 var version = regexp.MustCompile(`^v?\d[0-9A-Za-z.+_-]*$`)
@@ -67,7 +71,10 @@ func Render(p Params) (string, error) {
 	if !version.MatchString(p.Version) {
 		return "", fmt.Errorf("the version %q is not a release tag", p.Version)
 	}
-	var d struct{ URLComment, PublicURL, Version, Identity, Issuer string }
+	var d struct {
+		URLComment, PublicURL, Version, Identity, MainIdentity, Issuer string
+		Sums                                                           []sum
+	}
 	var err error
 	d.URLComment = u
 	if d.PublicURL, err = shQuote("the public URL", u); err != nil {
@@ -79,8 +86,22 @@ func Render(p Params) (string, error) {
 	if d.Identity, err = shQuote("the identity", p.Identity); err != nil {
 		return "", err
 	}
+	if d.MainIdentity, err = shQuote("the main identity", p.MainIdentity); err != nil {
+		return "", err
+	}
 	if d.Issuer, err = shQuote("the issuer", p.Issuer); err != nil {
 		return "", err
+	}
+	keys := make([]string, 0, len(p.Sums))
+	for k := range p.Sums {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		if !platforms[k] || !sha256Hex.MatchString(p.Sums[k]) {
+			return "", fmt.Errorf("the sum for %q is not a platform and a lower-case sha256", k)
+		}
+		d.Sums = append(d.Sums, sum{k, "'" + p.Sums[k] + "'"})
 	}
 	var b strings.Builder
 	if xerr := tmpl.Execute(&b, d); xerr != nil {

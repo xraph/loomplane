@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -35,6 +36,12 @@ type Extension struct {
 	minter JoinTokenMinter
 
 	guard identity.Guard
+
+	// sums are the sha256 of each loomctl archive of this release, verified
+	// against its signature; node.sh carries them. fetchSums is replaced in
+	// tests.
+	sums      atomic.Pointer[map[string]string]
+	fetchSums func(ctx context.Context, version string) (map[string]string, error)
 
 	// run ends when the extension stops, and with it every session.
 	mu     sync.Mutex
@@ -130,6 +137,11 @@ func (e *Extension) Start(context.Context) error {
 	go func() {
 		defer e.swept.Done()
 		e.hub.Sweep(ctx)
+	}()
+	e.swept.Add(1)
+	go func() {
+		defer e.swept.Done()
+		e.keepSums(ctx)
 	}()
 	e.MarkStarted()
 	return nil

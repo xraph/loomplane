@@ -3,20 +3,33 @@
 #
 #   curl -fsSL {{.URLComment}}/install/node.sh | sh -s -- --token lpj_...
 #
-# Everything after -- goes to loomctl node join. The script downloads the
-# loomctl release this Loomplane runs, checks that the Release workflow of
-# github.com/xraph/loomplane signed it, installs it in /usr/local/bin and
-# hands over to node join.
+# Everything after -- goes to loomctl node join. On Linux the join needs
+# root, so the script runs it through sudo unless you are root. On macOS it
+# runs as you, because a node there is for development and refuses root.
+#
+# The script downloads the loomctl release this Loomplane runs and checks it
+# before it unpacks anything:
+#   with cosign (2.4 or newer): that the release checksums are signed by the
+#     Release workflow of github.com/xraph/loomplane, and that the archive
+#     matches them. This check does not trust Loomplane.
+#   without cosign: that the archive matches the sha256 this Loomplane
+#     verified against the same signature and wrote into this script.
+#     Loomplane vouches for that sum, so install cosign if you want a check
+#     that does not depend on it.
+#   with neither, it stops, unless LOOMPLANE_SKIP_SIGNATURE=1 is set.
 set -eu
 
 LOOMPLANE_URL={{.PublicURL}}
 LOOMPLANE_VERSION={{.Version}}
 RELEASE_IDENTITY={{.Identity}}
+RELEASE_IDENTITY_MAIN={{.MainIdentity}}
 RELEASE_ISSUER={{.Issuer}}
 RELEASES=https://github.com/xraph/loomplane/releases/download
+BIN_DIR=${LOOMPLANE_BIN_DIR:-/usr/local/bin}
 
 say() { printf '%s\n' "$*"; }
-fail() { printf 'node.sh: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'node.sh: %s\n' "$*" >&2; }
+fail() { warn "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 case "$(uname -s)" in
@@ -36,11 +49,20 @@ v*) tag=$LOOMPLANE_VERSION ;;
 esac
 archive="loomctl_${tag#v}_${os}_${arch}.tar.gz"
 
+# The sha256 of this archive that Loomplane verified against the release
+# signature. Empty when it could not.
+case "${os}_${arch}" in
+{{- range .Sums}}
+{{.Platform}}) want_sum={{.Sum}} ;;
+{{- end}}
+*) want_sum= ;;
+esac
+
 fetch() {
 	if have curl; then
-		curl -fsSL -o "$2" "$1"
+		curl --proto '=https' --tlsv1.2 -fsSL -o "$2" "$1"
 	elif have wget; then
-		wget -q -O "$2" "$1"
+		wget --https-only -q -O "$2" "$1"
 	else
 		fail "install curl or wget first"
 	fi
@@ -56,58 +78,71 @@ sha256_of() {
 	fi
 }
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-
-say "Downloading loomctl $tag for $os/$arch"
-fetch "$RELEASES/$tag/$archive" "$tmp/$archive" || fail "could not download $RELEASES/$tag/$archive"
-fetch "$RELEASES/$tag/binaries-checksums.txt" "$tmp/binaries-checksums.txt" || fail "could not download the release checksums"
-fetch "$RELEASES/$tag/binaries-checksums.txt.sigstore.json" "$tmp/binaries-checksums.txt.sigstore.json" || fail "could not download the release signature"
-
-mkdir "$tmp/bin"
-tar -xzf "$tmp/$archive" -C "$tmp/bin" loomctl || fail "$archive does not hold loomctl"
-
-if have cosign; then
-	say "Checking the release signature with cosign"
-	cosign verify-blob \
-		--bundle "$tmp/binaries-checksums.txt.sigstore.json" \
-		--certificate-identity "$RELEASE_IDENTITY$tag" \
-		--certificate-oidc-issuer "$RELEASE_ISSUER" \
-		"$tmp/binaries-checksums.txt" >/dev/null 2>&1 || fail "the release checksums are not signed by the Loomplane release workflow"
-fi
-
-want=$(awk -v name="$archive" '$2 == name { print $1 }' "$tmp/binaries-checksums.txt")
-[ -n "$want" ] || fail "$archive is not in the release checksums"
-[ "$(sha256_of "$tmp/$archive")" = "$want" ] || fail "$archive does not match its checksum"
-
-if ! have cosign; then
-	say "Checking the release signature with the downloaded loomctl"
-	"$tmp/bin/loomctl" node verify-release \
-		--release "$tag" \
-		--archive "$tmp/$archive" \
-		--checksums "$tmp/binaries-checksums.txt" \
-		--bundle "$tmp/binaries-checksums.txt.sigstore.json" || fail "the release is not signed by the Loomplane release workflow"
-	say "Install cosign (https://docs.sigstore.dev/cosign/) to check this with a tool that is not part of the download."
-fi
-
-dest=/usr/local/bin/loomctl
 as_root() {
 	if [ "$(id -u)" -eq 0 ]; then
 		"$@"
 	elif have sudo; then
 		sudo "$@"
 	else
-		fail "installing $dest needs root, and sudo is not installed"
+		fail "this step needs root, and sudo is not installed"
 	fi
 }
-if [ -w /usr/local/bin ]; then
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+say "Downloading loomctl $tag for $os/$arch"
+fetch "$RELEASES/$tag/$archive" "$tmp/$archive" || fail "could not download $RELEASES/$tag/$archive"
+got_sum=$(sha256_of "$tmp/$archive")
+
+if have cosign; then
+	fetch "$RELEASES/$tag/binaries-checksums.txt" "$tmp/binaries-checksums.txt" || fail "could not download the release checksums"
+	fetch "$RELEASES/$tag/binaries-checksums.txt.sigstore.json" "$tmp/binaries-checksums.txt.sigstore.json" || fail "could not download the release signature"
+	say "Checking the release signature with cosign"
+	# A release cut from a tag push is signed as that tag; one cut with
+	# workflow_dispatch is signed as main. Each identity is exact.
+	signed=
+	for identity in "$RELEASE_IDENTITY$tag" "$RELEASE_IDENTITY_MAIN"; do
+		if cosign verify-blob \
+			--bundle "$tmp/binaries-checksums.txt.sigstore.json" \
+			--certificate-identity "$identity" \
+			--certificate-oidc-issuer "$RELEASE_ISSUER" \
+			"$tmp/binaries-checksums.txt" >/dev/null; then
+			signed=1
+			break
+		fi
+	done
+	[ -n "$signed" ] || fail "cosign did not accept the signature on the release checksums (this needs cosign 2.4 or newer)"
+	want=$(awk -v name="$archive" '$2 == name { print $1 }' "$tmp/binaries-checksums.txt")
+	[ -n "$want" ] || fail "$archive is not in the signed release checksums"
+	[ "$got_sum" = "$want" ] || fail "$archive does not match the checksum cosign verified"
+	say "Verified: $archive matches the checksum signed by the Loomplane release workflow."
+elif [ -n "$want_sum" ]; then
+	[ "$got_sum" = "$want_sum" ] || fail "$archive does not match the sha256 $LOOMPLANE_URL verified for it"
+	say "Checked: $archive matches the sha256 that $LOOMPLANE_URL verified against the release signature."
+	say "Install cosign (https://docs.sigstore.dev/cosign/) for a check that does not rely on $LOOMPLANE_URL."
+elif [ "${LOOMPLANE_SKIP_SIGNATURE:-}" = 1 ]; then
+	warn "WARNING: this install is NOT verified. cosign is not installed and $LOOMPLANE_URL has no verified checksum for $archive."
+else
+	fail "cannot check $archive: cosign is not installed and $LOOMPLANE_URL has no verified checksum for it. Install cosign (https://docs.sigstore.dev/cosign/), or set LOOMPLANE_SKIP_SIGNATURE=1 to install without a check."
+fi
+
+mkdir "$tmp/bin"
+tar -xzf "$tmp/$archive" -C "$tmp/bin" loomctl || fail "$archive does not hold loomctl"
+
+dest=$BIN_DIR/loomctl
+if [ -w "$BIN_DIR" ]; then
 	install -m 0755 "$tmp/bin/loomctl" "$dest"
 else
-	as_root mkdir -p /usr/local/bin
+	as_root mkdir -p "$BIN_DIR"
 	as_root install -m 0755 "$tmp/bin/loomctl" "$dest"
 fi
 say "Installed $dest"
 
 rm -rf "$tmp"
 trap - EXIT HUP INT TERM
+if [ "$os" = linux ] && [ "$(id -u)" -ne 0 ]; then
+	have sudo || fail "joining needs root on Linux, and sudo is not installed: run this script as root"
+	exec sudo "$dest" node join --url "$LOOMPLANE_URL" "$@"
+fi
 exec "$dest" node join --url "$LOOMPLANE_URL" "$@"

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -131,25 +132,55 @@ func (c *cmds) update(ctx cli.CommandContext) error {
 	if err = c.verify(ctx.Context(), tag, checksums, bundle, artifact, hex.EncodeToString(digest[:])); err != nil {
 		return fmt.Errorf("not installing %s: %w", tag, err)
 	}
-	if rerr := c.replaceBinary(archive, target, old); rerr != nil {
-		return rerr
+	// Ask before changing anything, so a service that cannot be asked about
+	// is reported while the old binary is still in place.
+	running, rerr := c.opts.svc.Running(ctx.Context())
+	if rerr != nil {
+		return fmt.Errorf("not changing anything: cannot tell whether the node service runs: %w", rerr)
 	}
-	c.printf("Replaced %s with loomctl %s\n", target, tag)
+	// The current binary stays beside the new one, as a hard link, so a
+	// service that fails to start on the new one goes back to it.
+	prev := target + ".old"
+	if lerr := os.Remove(prev); lerr != nil && !errors.Is(lerr, fs.ErrNotExist) {
+		return lerr
+	}
+	if lerr := os.Link(target, prev); lerr != nil {
+		return fmt.Errorf("keeping the current binary as %s: %w", prev, lerr)
+	}
+	if werr := c.replaceBinary(archive, target, old); werr != nil {
+		_ = os.Remove(prev)
+		return werr
+	}
+	c.printf("Replaced %s with loomctl %s (the previous one is %s)\n", target, tag, prev)
 
 	// A service that was not running stays stopped.
-	running, _ := c.opts.svc.Running(ctx.Context()) //nolint:errcheck // unknown counts as not running
 	if !running {
 		c.printf("The node is not running, so the new version starts the next time it does.\n")
 		return nil
 	}
 	if err = c.opts.svc.Stop(ctx.Context()); err != nil {
-		return fmt.Errorf("replaced the binary, but stopping the service failed: %w; restart it yourself", err)
+		return c.rollBack(ctx.Context(), target, prev, false, fmt.Errorf("stopping the service failed: %w", err))
 	}
 	if err = c.opts.svc.Start(ctx.Context()); err != nil {
-		return fmt.Errorf("replaced the binary, but starting the service failed: %w", err)
+		return c.rollBack(ctx.Context(), target, prev, true, fmt.Errorf("starting the service on %s failed: %w", tag, err))
 	}
 	c.printf("The node service restarted on %s.\n", tag)
 	return nil
+}
+
+// rollBack puts the previous binary back and, when the service was stopped,
+// starts it on that.
+func (c *cmds) rollBack(ctx context.Context, target, prev string, stopped bool, cause error) error {
+	if err := os.Rename(prev, target); err != nil {
+		return fmt.Errorf("%w; putting %s back also failed: %w", cause, prev, err)
+	}
+	_ = syncDir(filepath.Dir(target)) //nolint:errcheck // the rename happened; a failed sync only weakens durability
+	if stopped {
+		if err := c.opts.svc.Start(ctx); err != nil {
+			return fmt.Errorf("%w; the previous binary is back but the service would not start on it either: %w", cause, err)
+		}
+	}
+	return fmt.Errorf("%w; the previous binary is back in place", cause)
 }
 
 // replaceBinary writes loomctl from the archive next to target and renames it
@@ -197,6 +228,9 @@ func (c *cmds) writeBinary(src io.Reader, target string, old os.FileInfo) error 
 	if err = tmp.Chmod(0o755); err != nil {
 		return fail(err)
 	}
+	if err = tmp.Sync(); err != nil {
+		return fail(err)
+	}
 	if err = tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
@@ -210,6 +244,9 @@ func (c *cmds) writeBinary(src io.Reader, target string, old os.FileInfo) error 
 	if err = os.Rename(tmp.Name(), target); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
+	}
+	if err = syncDir(filepath.Dir(target)); err != nil {
+		return fmt.Errorf("syncing %s after the rename: %w", filepath.Dir(target), err)
 	}
 	return nil
 }

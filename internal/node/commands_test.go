@@ -32,6 +32,10 @@ type fakeService struct {
 	installed []Unit
 	calls     []string
 	running   bool
+	// startErrs are the errors the next Starts return, in order; runErr is
+	// what Running returns.
+	startErrs []error
+	runErr    error
 }
 
 func (f *fakeService) note(c string) {
@@ -47,13 +51,23 @@ func (f *fakeService) Install(_ context.Context, u Unit) error {
 	f.calls = append(f.calls, "install")
 	return nil
 }
-func (f *fakeService) Start(context.Context) error  { f.note("start"); return nil }
+func (f *fakeService) Start(context.Context) error {
+	f.note("start")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.startErrs) == 0 {
+		return nil
+	}
+	err := f.startErrs[0]
+	f.startErrs = f.startErrs[1:]
+	return err
+}
 func (f *fakeService) Stop(context.Context) error   { f.note("stop"); return nil }
 func (f *fakeService) Remove(context.Context) error { f.note("remove"); return nil }
 func (f *fakeService) Running(context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.running, nil
+	return f.running, f.runErr
 }
 
 func (f *fakeService) did(c string) bool {
