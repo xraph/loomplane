@@ -429,7 +429,7 @@ func TestFeaturesComeFromConfig(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		var cfg config.Config
 		cfg.AI.Enabled = on
-		e := New(cfg, nil, nil, nil, nil)
+		e := New(cfg, nil, nil, nil, nil, nil)
 		if got, ok := e.features[recipes.FeatureAI]; !ok || got != on {
 			t.Errorf("ai.enabled %t: features %v", on, e.features)
 		}

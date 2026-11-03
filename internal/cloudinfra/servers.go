@@ -190,6 +190,9 @@ type Deps struct {
 	Adapters                *Adapters
 	Workflow                Workflow
 	Runtime                 Runtime
+	// NodeStreams reach joined nodes, for routes on a node's Docker. Nil
+	// reaches only SSH servers.
+	NodeStreams server.NodeStreams
 	// Nodes connects what runs on a joined node, and NodeConnections finds
 	// what it already connected, for adopting a node into its Cloud. Nil
 	// leaves joined nodes waiting.

@@ -16,7 +16,10 @@ import (
 	"testing"
 	"time"
 
+	drt "github.com/xraph/dispatch/durable/runtime"
+
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
@@ -2097,5 +2100,77 @@ func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
 	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" ||
 		!slices.Contains(api.Warnings, "api warned while it deployed") {
 		t.Fatalf("api step %+v", api)
+	}
+}
+
+// runFailing runs the api action of webAndAPI once, its executor failing
+// with err, and returns the step it recorded and what Run returned.
+func runFailing(t *testing.T, err error) (Step, error) {
+	t.Helper()
+	exec := &recorder{url: answering(t, http.StatusOK), fail: map[string]error{"api": err}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
+	ctx := t.Context()
+	id, _, startErr := r.Start(ctx, "org_1", "plan_1")
+	if startErr != nil {
+		t.Fatal(startErr)
+	}
+	if fetchErr := r.FetchSource(ctx, "org_1", id); fetchErr != nil {
+		t.Fatal(fetchErr)
+	}
+	runErr := r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil })
+	d, _ := store.GetDeployment(ctx, "org_1", id)
+	return *d.Step("service:api"), runErr
+}
+
+func TestOfflineNodeMessage(t *testing.T) {
+	since := time.Date(2026, 11, 3, 14, 7, 0, 0, time.FixedZone("CET", 3600))
+	sessionErr := nodeSessionError(t, nodes.ErrNodeOffline{NodeID: testNodeID, Name: "web-1", Since: since})
+	var off nodes.ErrNodeOffline
+	if !errors.As(sessionErr, &off) {
+		t.Fatalf("the session hid the node being offline: %v", sessionErr)
+	}
+	want := "node web-1 is offline since 13:07 UTC; its apps keep running, and the deploy continues when it reconnects"
+	if got, ok := nodeOfflineMessage(sessionErr); !ok || got != want {
+		t.Fatalf("message %q %v", got, ok)
+	}
+	if _, ok := nodeOfflineMessage(errors.New("docker returned HTTP 500")); ok {
+		t.Fatal("an ordinary failure was taken for a node's")
+	}
+
+	step, runErr := runFailing(t, sessionErr)
+	if step.Status != StepFailed || step.Message != want {
+		t.Fatalf("the action recorded %q (%s), not the node's message", step.Message, step.Status)
+	}
+	if runErr == nil || runErr.Error() != want || !errors.As(runErr, &off) {
+		t.Fatalf("run returned %v", runErr)
+	}
+	// The activity's own attempts retry an offline node.
+	var final *drt.ApplicationError
+	if errors.As(runErr, &final) && final.NonRetryable {
+		t.Fatalf("an offline node's failure was final: %+v", final)
+	}
+}
+
+func TestRefusedEndpointNotRetried(t *testing.T) {
+	sessionErr := nodeSessionError(t, fmt.Errorf("%w: docker isn't in the node's allow list", nodes.ErrEndpointRefused))
+	if !errors.Is(sessionErr, nodes.ErrEndpointRefused) {
+		t.Fatalf("the session hid the refusal: %v", sessionErr)
+	}
+	want := "node web-1 doesn't allow docker; allow it on the machine with: loomctl node allow docker"
+	if got, ok := nodeOfflineMessage(sessionErr); !ok || got != want {
+		t.Fatalf("message %q %v", got, ok)
+	}
+
+	step, runErr := runFailing(t, sessionErr)
+	if step.Status != StepFailed || step.Message != want {
+		t.Fatalf("the action recorded %q (%s), not the node's message", step.Message, step.Status)
+	}
+	if !errors.Is(runErr, nodes.ErrEndpointRefused) {
+		t.Fatalf("run lost the refusal: %v", runErr)
+	}
+	// Retrying can't widen what the node allows, so the failure is final.
+	var final *drt.ApplicationError
+	if !errors.As(runErr, &final) || !final.NonRetryable || final.Message != want {
+		t.Fatalf("a refused endpoint would be retried: %+v (%v)", final, runErr)
 	}
 }

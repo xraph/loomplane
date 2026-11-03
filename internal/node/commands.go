@@ -394,8 +394,8 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 	if token == "" {
 		token = strings.TrimSpace(c.opts.Getenv(envToken))
 	}
-	if token != "" && (cloud != "" || edge) {
-		return errors.New("--cloud and --edge go in the join token, so they cannot be used with a token (--token or " + envToken + "): mint the token with them, or drop the token and use your login")
+	if token != "" && (cloud != "" || edge || ctx.String("builder") != "") {
+		return errors.New("--cloud, --edge and --builder go in the join token, so they cannot be used with a token (--token or " + envToken + "): mint the token with them, or drop the token and use your login")
 	}
 	dir, err := c.stateDir(ctx)
 	if err != nil {

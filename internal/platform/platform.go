@@ -174,7 +174,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		cloudinfraext.New(cfg, deployments, nodes.Hub()),
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs, nodes.Hub()),
 		octopusext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),

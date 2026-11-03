@@ -137,7 +137,7 @@ func sshFixture(t *testing.T) (*Config, ssh.Signer) {
 
 func TestClient_readsDockerThroughPinnedSSH(t *testing.T) {
 	cfg, _ := sshFixture(t)
-	c, err := Dial(t.Context(), cfg)
+	c, err := Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestClient_rejectsUnexpectedHostKeyAndUserKey(t *testing.T) {
 			} else {
 				cfg.Signer = wrong
 			}
-			if c, err := Dial(t.Context(), cfg); !errors.Is(err, ErrRejected) {
+			if c, err := Connect(t.Context(), cfg, nil); !errors.Is(err, ErrRejected) {
 				if c != nil {
 					_ = c.Close()
 				}
@@ -172,7 +172,7 @@ func TestClient_canceledDial(t *testing.T) {
 	cfg, _ := sshFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if c, err := Dial(ctx, cfg); !errors.Is(err, context.Canceled) {
+	if c, err := Connect(ctx, cfg, nil); !errors.Is(err, context.Canceled) {
 		if c != nil {
 			_ = c.Close()
 		}
@@ -195,7 +195,7 @@ func TestClient_dialsTCPThroughPinnedSSH(t *testing.T) {
 		_, _ = io.WriteString(conn, "seen from the server")
 		_ = conn.Close()
 	}()
-	c, err := Dial(t.Context(), cfg)
+	c, err := Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

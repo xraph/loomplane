@@ -331,6 +331,7 @@ func TestJoinArgumentErrors(t *testing.T) {
 		"unknown allow":       {[]string{"--url", js.URL, "--token", "x", "--allow", "nonsense"}, "nonsense"},
 		"bad label":           {[]string{"--url", js.URL, "--token", "x", "--label", "nokey"}, "--label"},
 		"bad builder":         {[]string{"--url", js.URL, "--token", "x", "--builder", "shared"}, "dedicated"},
+		"builder with token":  {[]string{"--url", js.URL, "--token", "x", "--builder", "dedicated"}, "--builder go in the join token"},
 	} {
 		r := newCmdRig(t)
 		err := r.run(append([]string{"node", "join", "--state-dir", r.dir}, tc.args...)...)

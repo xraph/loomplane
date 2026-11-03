@@ -51,7 +51,7 @@ func (e *OwnedTarget) PreparePoolEffects(ctx context.Context, job *Job) error {
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Dial: e.ServerDial}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams}
 	}
 	if err := builder.PrepareEffects(ctx, job); err != nil {
 		return err

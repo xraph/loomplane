@@ -15,16 +15,13 @@ import (
 // Client forwards HTTP over the selected server's Docker Unix socket.
 type Client struct {
 	RequireFence bool
+	// RequestsGPUs says the work this client runs asks for GPUs, so Check
+	// needs the daemon to name its runtimes.
+	RequestsGPUs bool
 	Config       *Config
 	HTTP         *http.Client
 	access       HostAccess
 	transport    *http.Transport
-}
-
-// Dial reaches cfg's host over pinned SSH. It is Connect without node
-// streams; prefer Connect, which also reaches joined nodes.
-func Dial(ctx context.Context, cfg *Config) (*Client, error) {
-	return Connect(ctx, cfg, nil)
 }
 
 // Close ends the authenticated transport and all its forwarded connections.
@@ -95,7 +92,11 @@ func (c *Client) Check(ctx context.Context) (details map[string]string, missing 
 		}
 		return details, []string{"docker:access"}, nil
 	}
-	var info struct{ ID, OSType, Architecture string }
+	// Podman's Docker-compatible API can leave out the ID and the runtimes.
+	var info struct {
+		ID, OSType, Architecture string
+		Runtimes                 map[string]json.RawMessage
+	}
 	if err := c.getJSON(ctx, "/info", &info); err != nil {
 		return details, []string{"docker:info"}, nil
 	}
@@ -124,6 +125,9 @@ func (c *Client) Check(ctx context.Context) (details map[string]string, missing 
 	}
 	if info.ID == "" || info.Architecture == "" {
 		missing = append(missing, "docker:identity")
+	}
+	if c.RequestsGPUs && len(info.Runtimes) == 0 {
+		missing = append(missing, "docker:runtimes")
 	}
 	return details, missing, nil
 }

@@ -788,6 +788,46 @@ func TestAdoptCopiesTheJoinScopesBuildWorkers(t *testing.T) {
 	}
 }
 
+// node join --builder dedicated puts build_workers in the join scope. The
+// minter's scope decides it, never the joining machine's own labels.
+func TestRecordTakesBuildWorkersFromTheJoinScope(t *testing.T) {
+	r := newAdoptionRig(t, "amd64")
+	r.svc.CapacityPrincipal = acceptKeys{}
+	r.node.Inventory.Docker = &nodeproto.Runtime{Socket: "/run/docker.sock"}
+	r.node.Labels = map[string]string{"build_workers": "dedicated"}
+	claim := cloudClaim("cloud")
+	claim.Scope.Labels = map[string]string{"build_workers": "dedicated"}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, claim); err != nil {
+		t.Fatal(err)
+	}
+	if a := r.store.adoption(r.node.ID); a == nil || a.BuildWorkers != "dedicated" {
+		t.Fatalf("adoption %+v", a)
+	}
+	if err := r.svc.AdoptOnline(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.conns.creates[0].Settings; got["build_workers"] != "dedicated" {
+		t.Fatalf("settings %v", got)
+	}
+
+	// The machine's own label isn't the minter's say-so.
+	r = newAdoptionRig(t, "amd64")
+	r.node.Labels = map[string]string{"build_workers": "dedicated"}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, cloudClaim("cloud")); err != nil {
+		t.Fatal(err)
+	}
+	if a := r.store.adoption(r.node.ID); a == nil || a.BuildWorkers != "" {
+		t.Fatalf("the node's own label made it a dedicated builder: %+v", a)
+	}
+
+	r = newAdoptionRig(t, "amd64")
+	claim = cloudClaim("cloud")
+	claim.Scope.Labels = map[string]string{"build_workers": "shared"}
+	if err := r.svc.RecordNodeAdoption(t.Context(), r.node, claim); !errors.Is(err, ErrInvalid) || r.store.adoption(r.node.ID) != nil {
+		t.Fatalf("build_workers=shared in a join scope: %v", err)
+	}
+}
+
 func TestAdoptRevokedNodeFails(t *testing.T) {
 	r := newAdoptionRig(t, "amd64")
 	r.svc.CapacityPrincipal = acceptKeys{}

@@ -517,7 +517,7 @@ func (s *Service) routeCredentialClient(ctx context.Context, route Route, cleanu
 		return nil, err
 	}
 	cfg.Details["docker_id"] = route.Binding.RuntimeID
-	c, err := server.Dial(ctx, cfg)
+	c, err := server.Connect(ctx, cfg, s.NodeStreams)
 	if err != nil {
 		return nil, err
 	}

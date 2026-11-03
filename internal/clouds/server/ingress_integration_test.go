@@ -73,7 +73,7 @@ func ingressFixture(t *testing.T) (*Client, string) {
 		t.Fatal(err)
 	}
 	cfg.Details["docker_id"] = ingressDocker(t, "exec", name, "docker", "info", "--format", "{{.ID}}")
-	c, err := Dial(t.Context(), cfg)
+	c, err := Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

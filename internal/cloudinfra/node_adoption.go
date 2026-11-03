@@ -159,8 +159,14 @@ func (s *Service) RecordNodeAdoption(ctx context.Context, n *nodes.Node, claim *
 	if err != nil {
 		return err
 	}
+	// node join --builder dedicated mints build_workers into the scope. The
+	// minter's scope decides it, never the joining machine's own labels.
+	workers := claim.Scope.Labels["build_workers"]
+	if workers != "" && workers != "dedicated" {
+		return fmt.Errorf("%w: a join token's build_workers can only be dedicated", ErrInvalid)
+	}
 	now := s.now().UTC()
-	a := &NodeAdoption{NodeID: n.ID, OrgID: n.OrgID, CloudID: claim.Scope.CloudID, ApprovedBy: claim.MintedBy, ApprovedByKeyID: claim.MintedByKeyID, Status: NodeAdoptionWaiting, CreatedAt: now, UpdatedAt: now}
+	a := &NodeAdoption{NodeID: n.ID, OrgID: n.OrgID, CloudID: claim.Scope.CloudID, ApprovedBy: claim.MintedBy, ApprovedByKeyID: claim.MintedByKeyID, BuildWorkers: workers, Status: NodeAdoptionWaiting, CreatedAt: now, UpdatedAt: now}
 	if _, cloudErr := s.nodeCloud(ctx, n.OrgID, a.CloudID); cloudErr != nil {
 		if !errors.Is(cloudErr, errNotNodeCloud) {
 			return cloudErr
