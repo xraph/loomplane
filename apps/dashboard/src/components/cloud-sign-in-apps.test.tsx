@@ -355,7 +355,7 @@ it("uses singular forms for one connection", async () => {
   await user.click(await screen.findByRole("button", { name: "Remove" }))
   expect(
     await screen.findByText(
-      "1 connection in 1 organization signed in with this app needs to sign in again."
+      "1 connection in 1 organization signed in with this app will need to sign in again."
     )
   ).toBeTruthy()
 })

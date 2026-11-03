@@ -15,7 +15,7 @@ export type Instance = {
   consolePath?: string
   /** The signed-in account is a platform owner or admin. */
   platformAdmin?: boolean
-  /** Setup should offer cloud sign-in apps. Platform owners only. */
+  /** Setup should offer cloud sign-in apps. Sent to platform owners and admins. */
   cloudSignInOffer?: boolean
 }
 

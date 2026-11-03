@@ -56,8 +56,7 @@ const plural = (n: number, one: string, many: string) =>
 function signedInWarning(app: SignInApp): string {
   const subject = plural(app.connections, "connection", "connections")
   const orgs = plural(app.organizations, "organization", "organizations")
-  const verb = app.connections === 1 ? "needs" : "will need"
-  return `${subject} in ${orgs} signed in with this app ${verb} to sign in again.`
+  return `${subject} in ${orgs} signed in with this app will need to sign in again.`
 }
 
 /**
