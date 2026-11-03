@@ -6264,6 +6264,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Stop offering to set up cloud sign-in
+     */
+    endCloudSignInOffer: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/setup/cloud-sign-in-offer`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * Whether this instance still waits for its first account
      */
     status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {

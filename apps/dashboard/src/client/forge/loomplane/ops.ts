@@ -2959,6 +2959,12 @@ export const ops = {
     bodyCodec: CODECS['SetupRequestBody'],
     responseCodec: CODECS['SetupResponse'],
   },
+  'setup.endCloudSignInOffer': {
+    method: 'DELETE',
+    path: '/api/v1/setup/cloud-sign-in-offer',
+    provides: [],
+    invalidates: [],
+  },
   'teams.list': {
     method: 'GET',
     path: '/api/v1/teams',

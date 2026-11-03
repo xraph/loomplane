@@ -3815,8 +3815,10 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  cloudSignInOffer?: boolean;
   consolePath?: string;
   features: Features;
+  platformAdmin?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;

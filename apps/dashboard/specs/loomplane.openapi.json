@@ -13618,6 +13618,23 @@
         "x-forge-no-entity": true
       }
     },
+    "/api/v1/setup/cloud-sign-in-offer": {
+      "delete": {
+        "operationId": "setup.endCloudSignInOffer",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        },
+        "summary": "Stop offering to set up cloud sign-in",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
     "/api/v1/teams": {
       "get": {
         "tags": [
@@ -27543,11 +27560,17 @@
           "auth_base_path": {
             "type": "string"
           },
+          "cloud_sign_in_offer": {
+            "type": "boolean"
+          },
           "console_path": {
             "type": "string"
           },
           "features": {
             "$ref": "#/components/schemas/Features"
+          },
+          "platform_admin": {
+            "type": "boolean"
           },
           "publishable_key": {
             "type": "string"
