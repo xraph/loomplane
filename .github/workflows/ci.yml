@@ -41,13 +41,34 @@ jobs:
   go-cloud:
     name: Go (cloud tag)
     runs-on: ubuntu-24.04
+    # The schema guard tests make a database of their own on this server.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: loomplane
+          POSTGRES_PASSWORD: loomplane
+          POSTGRES_DB: loomplane
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U loomplane -d loomplane"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      LOOMPLANE_TEST_DATABASE_URL: postgres://loomplane:loomplane@localhost:5432/loomplane?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: "1.26.10"
       - run: go build -tags cloud ./...
-      - run: go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/... ./extensions/identity/...
+      - run: go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
+      - name: Schema guards on the public build
+        run: go test -count=1 ./internal/platform/ -run TestGuard_
+      - name: Schema guards on the cloud build
+        run: go test -count=1 -tags cloud ./internal/platform/ -run TestGuard_
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2

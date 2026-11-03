@@ -72,7 +72,7 @@ func isCloudOnly(dependency string) bool {
 func TestPublicBuildHasNoCloudCode(t *testing.T) {
 	for _, dependency := range serverDeps(t, "") {
 		if isCloudOnly(dependency) {
-			t.Fatalf("public build links cloud code %s", dependency)
+			t.Fatalf("public build links cloud code %s. If it is a new ledger package, add it to ledgerCore only after checking it is not a store or provider", dependency)
 		}
 	}
 }
