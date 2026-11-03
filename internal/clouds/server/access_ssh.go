@@ -134,7 +134,7 @@ func (a *sshAccess) FencedRequest(ctx context.Context, mode string, f EffectFenc
 	if err != nil {
 		stop()
 		_ = session.Close()
-		return nil, errors.New("runtime effect fence outcome is unknown")
+		return nil, errFenceOutcomeUnknown
 	}
 	response.Body = &fenceBody{ReadCloser: response.Body, closeSession: session.Close, stop: stop}
 	return response, nil

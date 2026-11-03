@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,10 +40,6 @@ type NodeTarget struct {
 	IdentityGeneration int64
 }
 
-// errNodeAccessPending refuses node connections until node access exists.
-// It is temporary: nodeAccess replaces it.
-var errNodeAccessPending = errors.New("reaching Docker through a node is not available yet")
-
 // Connect reaches the host cfg describes: over pinned SSH, or through the
 // node's streams when cfg names a node.
 func Connect(ctx context.Context, cfg *Config, streams NodeStreams) (*Client, error) {
@@ -66,7 +61,7 @@ func connect(ctx context.Context, cfg *Config, streams NodeStreams, ssh func(con
 		if streams == nil {
 			return nil, fmt.Errorf("%w: a node connection needs the node streams", ErrInvalid)
 		}
-		return nil, errNodeAccessPending
+		return newClient(cfg, newNodeAccess(streams, *cfg.Node, cfg.Socket)), nil
 	}
 	access, err := ssh(ctx, cfg)
 	if err != nil {

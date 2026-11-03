@@ -17,6 +17,10 @@ type EffectFence struct {
 }
 type effectFenceKey struct{}
 
+// errFenceOutcomeUnknown is a fenced request whose response stopped before
+// it was whole, so whether the effect ran is unknown.
+var errFenceOutcomeUnknown = errors.New("runtime effect fence outcome is unknown")
+
 func WithEffectFence(ctx context.Context, f EffectFence) context.Context {
 	return context.WithValue(ctx, effectFenceKey{}, f)
 }
@@ -53,6 +57,9 @@ func (b *fenceBody) Close() error {
 }
 func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
 	if c.access == nil || c.Config.Details["docker_id"] == "" {
+		if c.Config != nil && c.Config.Node != nil {
+			return nil, errors.New("verified runtime fencing is unavailable")
+		}
 		return nil, errors.New("verified SSH runtime fencing is unavailable")
 	}
 	return c.access.FencedRequest(ctx, mode, f, c.Config.Details["docker_id"], c.Config.Socket, method, path, body, headers)
