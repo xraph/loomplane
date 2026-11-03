@@ -19,6 +19,7 @@ var (
 const (
 	HostGitHub    = ""
 	HostBitbucket = "bitbucket.org"
+	HostGitLab    = "gitlab.com"
 
 	githubDomain = "github.com"
 )
@@ -81,6 +82,7 @@ var staticPaths = map[string]PathParser{
 	githubDomain:     githubPath,
 	"www.github.com": githubPath,
 	HostBitbucket:    bitbucketPath,
+	HostGitLab:       gitlabPath,
 }
 
 // ParseURL reads a repository from the URLs people paste, on a host
