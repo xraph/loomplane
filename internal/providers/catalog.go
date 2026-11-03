@@ -262,7 +262,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 		{Name: "firecracker", Title: "Firecracker microVM", Cloud: "firecracker", BuildLogs: "polled", Description: "Runs stateless applications and isolated builds in microVMs on a Linux host.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true},
 		// Loomplane Cloud is reached only through the targets of the
 		// Loomplane Cloud a workspace is given, never by naming it.
-		{Name: "platform", Title: "Loomplane Cloud", Cloud: "platform", BuildLogs: "polled", Description: "Runs stateless applications in microVMs on hosts this Loomplane runs.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true},
+		{Name: "platform", Title: "Loomplane Cloud", Cloud: "platform", BuildLogs: "polled", Description: "Runs stateless applications in microVMs on hosts this Loomplane runs.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true, Unlisted: true},
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",

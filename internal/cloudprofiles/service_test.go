@@ -3,6 +3,7 @@ package cloudprofiles
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/connections"
@@ -395,5 +396,20 @@ func TestSyncTargetCheckRefusesPlatformTarget(t *testing.T) {
 	platform := Target{ID: "p", Runtime: "platform", Provider: "platform", Region: "fra", Revision: 1}
 	if err := checkSyncTarget(platform, 1, &platform); !errors.Is(err, ErrPlatformOwned) {
 		t.Fatalf("platform target: %v", err)
+	}
+}
+
+// A workspace's own Cloud never takes a Loomplane Cloud target or default,
+// and the refusal says why instead of blaming a missing connection.
+func TestServiceRefusesPlatformProviderOnUserCloud(t *testing.T) {
+	s, st, _ := fixture()
+	p := security.Principal{OrgID: "org_1"}
+	_, err := s.CreateTarget(t.Context(), p, "proj_1", "cloud_1", CreateTargetInput{Name: "fra", Provider: "platform", ConnectionID: "conn_1", Region: "fra"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Loomplane Cloud targets are created by this instance") || st.target != nil {
+		t.Fatalf("platform provider target: %v %+v", err, st.target)
+	}
+	_, err = s.SetDefaultPlacement(t.Context(), p, "proj_1", "cloud_1", SetDefaultPlacementInput{Revision: 1, DefaultPlacement: &DefaultPlacement{Provider: "platform", ConnectionID: "conn_1"}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Loomplane Cloud targets are created by this instance") {
+		t.Fatalf("platform default: %v", err)
 	}
 }

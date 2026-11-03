@@ -28,18 +28,25 @@ const (
 	// A manifest size has no disk, and this is what a Firecracker service
 	// VM gets (internal/deployments/firecracker.go).
 	platformServiceDiskMiB = 4096
+	// platformMinMemoryMiB is the least memory a Firecracker service VM
+	// gets (internal/deployments/firecracker.go), so a smaller service is
+	// previewed and reserved at this.
+	platformMinMemoryMiB = 128
 
 	platformUnavailable = "Loomplane Cloud isn't available on this instance."
 	platformLocation    = "Location constraints don't apply to Loomplane Cloud targets. Remove placement, or choose a target on a Cloud you connect."
 )
 
-// platformUnavailableError says this instance has no Loomplane Cloud. Its
-// text is shown to people as it is.
-type platformUnavailableError struct{}
+// platformMessageError is a refusal whose text is shown to people as written.
+type platformMessageError string
 
-func (platformUnavailableError) Error() string { return platformUnavailable }
+func (m platformMessageError) Error() string { return string(m) }
 
-var errPlatformUnavailable error = platformUnavailableError{}
+var (
+	errPlatformUnavailable error = platformMessageError(platformUnavailable)
+	// errPlatformSize is a size Loomplane Cloud can't run.
+	errPlatformSize error = platformMessageError("Loomplane Cloud needs a size with cpu of at least 0.001 vCPU, in steps of 0.001, and memory of at least 1 MiB.")
+)
 
 func isPlatformTarget(t *cloudprofiles.Target) bool {
 	return t != nil && t.Runtime == platformRuntime
@@ -50,11 +57,11 @@ func isPlatformTarget(t *cloudprofiles.Target) bool {
 func platformRequest(plan *Plan, name, region string, size *manifest.Size) (platformcloud.Request, error) {
 	cpu, memory, err := ServerResources(size)
 	if err != nil {
-		return platformcloud.Request{}, err
+		return platformcloud.Request{}, errPlatformSize
 	}
 	return platformcloud.Request{
 		OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Resource: name, Region: region, Kind: "service",
-		VCPUs: int((cpu + 999) / 1000), MemoryMiB: int(memory >> 20), DiskMiB: platformServiceDiskMiB,
+		VCPUs: int((cpu + 999) / 1000), MemoryMiB: max(platformMinMemoryMiB, int(memory>>20)), DiskMiB: platformServiceDiskMiB,
 	}, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // fakePlacer answers platform previews with a fixed error, or with a
@@ -209,5 +210,50 @@ func TestPlanPlatformTargetAppliedService(t *testing.T) {
 	}
 	if len(placer.requests) != 2 {
 		t.Fatalf("previews = %d", len(placer.requests))
+	}
+}
+
+// Loomplane Cloud is reached only through its targets: no hint suggests it
+// and no draft preselects it, while a platform target still plans.
+func TestPlatformProviderIsNeverSuggested(t *testing.T) {
+	for _, doc := range []string{
+		"version: 1\nservices:\n  web: {source: cmd/api}\n",
+		"version: 1\nservices:\n  web: {source: cmd/api, provider: nowhere}\n",
+	} {
+		r := Compute(Input{Environment: "production", Graph: cloudTargetGraph(), Manifest: parse(t, doc), Providers: providers.Registry()})
+		messages := findingMessages(r.Problems)
+		if !strings.Contains(messages, "These can: ") || strings.Contains(messages, "platform") || strings.Contains(messages, "Loomplane Cloud") {
+			t.Fatalf("hint for %q: %s", doc, messages)
+		}
+	}
+	for _, s := range Draft(cloudTargetGraph(), providers.Registry()).Services {
+		if s.Provider == "platform" {
+			t.Fatal("draft preselected Loomplane Cloud")
+		}
+	}
+	reg := providers.Registry()
+	if prov, err := reg.Get("platform"); err != nil || !prov.Unlisted || !prov.Available {
+		t.Fatalf("platform provider: %+v %v", prov, err)
+	}
+}
+
+func TestPlanPlatformTargetSizes(t *testing.T) {
+	p := &Plan{OrgID: "org", ProjectID: "project", EnvironmentID: "env"}
+	// A manifest asks for at least 128 MiB, but an applied size moved by a
+	// Cloud sync may be smaller: it gets the VM's floor.
+	req, err := platformRequest(p, "web", "fra", &manifest.Size{CPU: 0.25, Memory: 64})
+	if err != nil || req.MemoryMiB != platformMinMemoryMiB || req.VCPUs != 1 {
+		t.Fatalf("small service: %+v %v", req, err)
+	}
+	if _, err = platformRequest(p, "web", "fra", &manifest.Size{CPU: 0.0001, Memory: 256}); err == nil || err.Error() != errPlatformSize.Error() || !strings.HasPrefix(err.Error(), "Loomplane Cloud needs a size") {
+		t.Fatalf("bad size: %v", err)
+	}
+}
+
+func TestPlanPlatformTargetRefusesCapacityMode(t *testing.T) {
+	s, p := platformPlanningService(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: fra, capacity_mode: guaranteed}\n", &fakePlacer{})
+	result, _, err := s.compute(t.Context(), p)
+	if err != nil || result.Executable || !strings.Contains(findingMessages(result.Problems), "services.web.capacity_mode: Loomplane Cloud reserves room") {
+		t.Fatalf("capacity_mode: %+v %v", result.Problems, err)
 	}
 }

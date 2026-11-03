@@ -350,6 +350,9 @@ func (p *planner) configurePlatform(name, base string, set manifest.Settings, cf
 	if set.Placement != nil {
 		p.problem(Finding{Code: "platform-location-unsupported", Subject: ServiceSubject, Name: name, Path: base + ".placement", Message: platformLocation})
 	}
+	if set.CapacityMode != "" {
+		p.problem(Finding{Code: "platform-capacity-mode", Subject: ServiceSubject, Name: name, Path: base + ".capacity_mode", Message: "Loomplane Cloud reserves room for every service it runs, so capacity_mode has no meaning there. Remove it for this service."})
+	}
 	if set.Target != "" {
 		p.problem(Finding{Code: "platform-target-connection", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: "Loomplane Cloud chooses its own hosts. Remove target for this service."})
 	}

@@ -474,7 +474,13 @@ func couldUse(ps []*provider.Provider) string {
 	}
 	names := make([]string, 0, len(ps))
 	for _, p := range ps {
-		names = append(names, p.Name)
+		// An unlisted target, such as Loomplane Cloud, is never suggested.
+		if !p.Unlisted {
+			names = append(names, p.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "No provider Loomplane knows can."
 	}
 	return "These can: " + strings.Join(names, ", ") + "."
 }

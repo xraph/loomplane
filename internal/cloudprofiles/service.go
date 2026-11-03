@@ -368,6 +368,9 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if in.Runtime == "" {
 		in.Runtime = "managed"
 	}
+	if platformErr := refusePlatformProvider(in); platformErr != nil {
+		return nil, platformErr
+	}
 	if in.PoolID != "" && (in.Runtime != "server" || in.Provider != "server" || in.ConnectionID != "") {
 		return nil, ErrInvalid
 	}
@@ -407,6 +410,9 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	return target, nil
 }
 func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput, projectIDs ...string) error {
+	if err := refusePlatformProvider(in); err != nil {
+		return err
+	}
 	if in.PoolID != "" {
 		return nil
 	}
@@ -507,4 +513,14 @@ func (s *Service) EnvironmentCloud(ctx context.Context, p security.Principal, pr
 		return nil, 0, fmt.Errorf("%w: assignment storage unavailable", ErrInvalid)
 	}
 	return reader.EnvironmentCloud(ctx, p.OrgID, projectID, environmentID)
+}
+
+// refusePlatformProvider refuses a Loomplane Cloud target or default on a
+// Cloud a workspace runs. The instance makes those targets on its own
+// Loomplane Cloud, and no connection of the workspace's reaches them.
+func refusePlatformProvider(in CreateTargetInput) error {
+	if strings.TrimSpace(in.Provider) == "platform" || in.Runtime == "platform" {
+		return fmt.Errorf("%w: Loomplane Cloud targets are created by this instance on its own Loomplane Cloud; choose a provider you connect", ErrInvalid)
+	}
+	return nil
 }

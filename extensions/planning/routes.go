@@ -422,12 +422,19 @@ func (e *Extension) listProviders(c forge.Context) error {
 	if _, err := principal(c); err != nil {
 		return err
 	}
-	list := e.plans.Providers()
+	return c.JSON(http.StatusOK, listedProviders(e.plans.Providers()))
+}
+
+// listedProviders are the providers a person may pick from. An unlisted
+// one, such as Loomplane Cloud, is reached only through a Cloud target.
+func listedProviders(list []*provider.Provider) ProviderList {
 	out := ProviderList{Providers: make([]provider.Provider, 0, len(list))}
 	for _, p := range list {
-		out.Providers = append(out.Providers, *p)
+		if !p.Unlisted {
+			out.Providers = append(out.Providers, *p)
+		}
 	}
-	return c.JSON(http.StatusOK, out)
+	return out
 }
 
 func (e *Extension) listPlans(c forge.Context) error {
