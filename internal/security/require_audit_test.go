@@ -19,24 +19,32 @@ import (
 // project passes that project's ID instead, so a team's grant there
 // counts. A new Require(..., "") has to be added here on purpose.
 var workspaceChecks = map[string]int{
-	"internal/aisettings/service.go:Get":                                      2,
-	"internal/aisettings/service.go:Update":                                   1,
-	"internal/aisettings/service.go:PutProviderKey":                           1,
-	"internal/aisettings/service.go:DeleteProviderKey":                        1,
-	"internal/aisettings/huggingface.go:PutHuggingFaceToken":                  1,
-	"internal/aisettings/huggingface.go:DeleteHuggingFaceToken":               1,
-	"internal/activity/activity.go:Summary":                                   1,
-	"internal/environments/service.go:ListOrganization":                       1,
-	"internal/environments/service.go:CreateOrganization":                     1,
-	"internal/environments/service.go:manage":                                 1,
-	"internal/projects/service.go:Create":                                     1,
-	"internal/projects/service.go:List":                                       1,
-	"internal/usage/traffic.go:Traffic":                                       1,
-	"internal/usage/spend.go:Spend":                                           1,
-	"internal/repositories/connections.go:Status":                             1,
-	"internal/repositories/connections.go:Connect":                            1,
-	"internal/repositories/connections.go:Disconnect":                         1,
-	"internal/repositories/connections.go:Repositories":                       1,
+	"internal/aisettings/service.go:Get":                        2,
+	"internal/aisettings/service.go:Update":                     1,
+	"internal/aisettings/service.go:PutProviderKey":             1,
+	"internal/aisettings/service.go:DeleteProviderKey":          1,
+	"internal/aisettings/huggingface.go:PutHuggingFaceToken":    1,
+	"internal/aisettings/huggingface.go:DeleteHuggingFaceToken": 1,
+	"internal/activity/activity.go:Summary":                     1,
+	"internal/environments/service.go:ListOrganization":         1,
+	"internal/environments/service.go:CreateOrganization":       1,
+	"internal/environments/service.go:manage":                   1,
+	"internal/projects/service.go:Create":                       1,
+	"internal/projects/service.go:List":                         1,
+	"internal/usage/traffic.go:Traffic":                         1,
+	"internal/usage/spend.go:Spend":                             1,
+	"internal/repositories/connections.go:Status":               1,
+	"internal/repositories/connections.go:Connect":              1,
+	"internal/repositories/connections.go:Disconnect":           1,
+	"internal/repositories/connections.go:Repositories":         1,
+	// A Bitbucket workspace is connected to the whole organization, like a
+	// GitHub installation, and so is a repository's push webhook.
+	"internal/repositories/bitbucket_connections.go:Status":                   1,
+	"internal/repositories/bitbucket_connections.go:Authorize":                1,
+	"internal/repositories/bitbucket_connections.go:Connect":                  1,
+	"internal/repositories/bitbucket_connections.go:Disconnect":               1,
+	"internal/repositories/bitbucket_connections.go:Repositories":             1,
+	"internal/discovery/bitbucket_webhooks.go:Enable":                         1,
 	"internal/models/custom.go:Inspect":                                       1,
 	"internal/models/browse.go:Registry":                                      1,
 	"internal/models/browse.go:Entry":                                         1,
@@ -183,8 +191,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 78 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls and the 6 workspace checks main added", total)
+	if total != 84 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the 6 Bitbucket ones", total)
 	}
 
 	var models []string
