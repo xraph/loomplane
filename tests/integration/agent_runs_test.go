@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/nexus"
 	"github.com/xraph/nexus/tenant"
 
+	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agenttest"
@@ -157,10 +158,31 @@ func TestRunFailsClearlyWhenTheKeyCannotBeRead(t *testing.T) {
 	}
 }
 
-// Turning the agent off cancels its running and waiting runs, closes the
-// workspace's nexus tenant, and a late answer to the waiting run reaches
-// no model.
-func TestDisableCancelsRuns(t *testing.T) {
+// waitForRequests polls the owner's requests until there are n.
+func (a *agentOrg) waitForRequests(t *testing.T, n int) []agentrequests.Request {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		var list agentrequests.RequestList
+		a.owner.must(http.StatusOK, http.MethodGet, "/api/v1/agent/requests", nil, &list)
+		if len(list.Requests) >= n {
+			out := make([]agentrequests.Request, 0, len(list.Requests))
+			for _, r := range list.Requests {
+				out = append(out, *r)
+			}
+			return out
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d requests, want %d", len(list.Requests), n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Turning the agent off cancels every open run and its pending requests,
+// disables the workspace's nexus tenant, and reports the agent off; the
+// model hears nothing more.
+func TestDisableCancelsRunsAndRequests(t *testing.T) {
 	fake := agenttest.Anthropic(t, agenttest.Turn{ToolUses: []agenttest.ToolUse{{Name: "ask_person", Input: map[string]string{"question": "Which region?"}}}})
 	a := startAgentOrg(t, fake.AIConfig())
 	defer a.r.stop()
@@ -170,6 +192,11 @@ func TestDisableCancelsRuns(t *testing.T) {
 
 	runs, waiting := a.startChat(t, "Deploy to the right region.")
 	waitFor(t, runs, owner, waiting.ID, func(task *agentruns.Task) bool { return task.Status == agentruns.StatusWaiting || finished(task) })
+	asked := a.waitForRequests(t, 1)[0]
+	if asked.Kind != agentrequests.KindAnswer || asked.Status != agentrequests.StatusPending || asked.Question != "Which region?" ||
+		asked.AskedFor != owner.UserID || asked.TaskID != waiting.ID {
+		t.Fatalf("request %+v", asked)
+	}
 
 	// A running task, as one a worker is in the middle of looks.
 	pg := pgdriver.New()
@@ -192,6 +219,19 @@ func TestDisableCancelsRuns(t *testing.T) {
 		if err != nil || task.Status != agentruns.StatusCancelled {
 			t.Fatalf("%s: %+v, %v", id, task, err)
 		}
+	}
+	req, err := agentrequests.NewPgStore(pg).Get(context.Background(), a.orgID, asked.ID)
+	if err != nil || req.Status != agentrequests.StatusCancelled || req.Outcome != agentrequests.OutcomeCancelled {
+		t.Fatalf("request after the agent went off: %+v, %v", req, err)
+	}
+	// Its routes are gone with the agent.
+	a.owner.must(http.StatusConflict, http.MethodPost, "/api/v1/agent/requests/"+asked.ID+"/answer", map[string]string{"text": "eu-west-1"}, nil)
+	var st struct {
+		Enabled bool `json:"enabled"`
+	}
+	a.owner.must(http.StatusOK, http.MethodGet, "/api/v1/agent/status", nil, &st)
+	if st.Enabled {
+		t.Fatal("the status still says the agent is on")
 	}
 	gw := inject[*nexus.Gateway](t, a.container())
 	tn, err := gw.Tenants().Get(context.Background(), on.NexusTenantID)
@@ -216,5 +256,64 @@ func TestDisableCancelsRuns(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if n := len(fake.Requests()); n != 1 {
 		t.Fatalf("the model got %d requests", n)
+	}
+}
+
+// A question the agent asks in a chat becomes a request the owner answers
+// in Loomplane; the run goes on with the answer, and a second answer is
+// refused.
+func TestAnAnsweredRequestResumesTheRun(t *testing.T) {
+	fake := agenttest.Anthropic(t,
+		agenttest.Turn{ToolUses: []agenttest.ToolUse{{Name: "ask_person", Input: map[string]string{"question": "Which region?"}}}},
+		agenttest.Turn{Text: "Deploying to eu-west-1."},
+	)
+	a := startAgentOrg(t, fake.AIConfig())
+	defer a.r.stop()
+	a.budget("10")
+	a.enable(nil)
+	owner := a.ownerPrincipal()
+
+	runs, task := a.startChat(t, "Deploy to the right region.")
+	asked := a.waitForRequests(t, 1)[0]
+	var got agentrequests.Request
+	a.owner.must(http.StatusOK, http.MethodPost, "/api/v1/agent/requests/"+asked.ID+"/answer", map[string]string{"text": "eu-west-1"}, &got)
+	if got.Status != agentrequests.StatusAnswered || got.AnsweredBy != owner.UserID {
+		t.Fatalf("answered %+v", got)
+	}
+	a.owner.must(http.StatusConflict, http.MethodPost, "/api/v1/agent/requests/"+asked.ID+"/answer", map[string]string{"text": "us-east-1"}, nil)
+
+	done := waitFor(t, runs, owner, task.ID, finished)
+	if done.Status != agentruns.StatusCompleted {
+		t.Fatalf("task %+v", done)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("the model got %d requests", len(reqs))
+	}
+	last := string(reqs[1].Messages[len(reqs[1].Messages)-1])
+	if !strings.Contains(last, "eu-west-1") || strings.Contains(last, "us-east-1") {
+		t.Fatalf("the model read %s", last)
+	}
+	evs, err := runs.Events(context.Background(), owner, task.ID, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logged := false
+	for _, e := range evs {
+		logged = logged || (e.Kind == agentruns.EventRequest && strings.Contains(string(e.Data), asked.ID))
+	}
+	if !logged {
+		t.Fatal("the run's log doesn't name the request")
+	}
+	// The notice went to the owner, under agent:use.
+	pg := pgdriver.New()
+	if err = pg.Open(context.Background(), a.cfg.Database.URL); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pg.Close() }()
+	var n int
+	if err = pg.QueryRow(context.Background(), `SELECT count(*) FROM loomplane_notification_outbox WHERE kind = 'agent.request' AND subject_id = $1 AND user_id = $2 AND payload->>'need' = 'agent:use'`,
+		asked.ID, owner.UserID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d notices, %v", n, err)
 	}
 }

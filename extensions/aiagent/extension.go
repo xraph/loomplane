@@ -36,6 +36,7 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/agentops"
+	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
@@ -102,6 +103,8 @@ type Extension struct {
 	// engine; Register gives them the run driver, runs.
 	hooks *agentruns.Hooks
 	runs  *agentruns.Service
+	// requests are what the agent asks of people.
+	requests *agentrequests.Service
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -201,7 +204,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if runsErr := e.registerRuns(c, settings, projectSvc); runsErr != nil {
 		return runsErr
 	}
-	return mountRoutes(fapp.Router(), guard, settings, projectSvc)
+	if routesErr := mountRoutes(fapp.Router(), guard, settings, projectSvc); routesErr != nil {
+		return routesErr
+	}
+	return mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests)
 }
 
 // sweepCron schedules the run driver's sweep. It runs on the default

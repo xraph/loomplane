@@ -336,3 +336,16 @@ func isFinalStatus(e Event) bool {
 	}
 	return json.Unmarshal(e.Data, &data) == nil && Terminal(data.Status)
 }
+
+// RecordRequest writes a "request" event to the task's log: the request a
+// person was asked, by ID and kind only, so whoever follows the run sees it
+// and reads the rest through the requests API. agentrequests calls it once
+// per new request.
+func (s *Service) RecordRequest(ctx context.Context, t *Task, requestID, kind string) error {
+	raw, err := json.Marshal(map[string]string{"request_id": requestID, "kind": kind})
+	if err != nil {
+		return err
+	}
+	_, err = s.store.AppendEvents(ctx, t.OrgID, t.ID, []NewEvent{{Kind: EventRequest, Data: raw}})
+	return err
+}

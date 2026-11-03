@@ -213,15 +213,31 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 }
 
 // agentRequestReaches says whether a request event reaches p: the person it
-// asks does, and so does anyone who manages the workspace's AI. Task 16 adds
-// the members of the team a request is routed to. A payload whose asked_for
+// asks does, so do the current members of the team it was routed to, and
+// so does anyone who manages the workspace's AI. A payload whose fields
 // can't be read reaches only managers.
 func (e *Extension) agentRequestReaches(ctx context.Context, p security.Principal, event store.Event, grants map[string]bool) (bool, error) {
 	var ref struct {
 		AskedFor string `json:"asked_for"`
+		TeamID   string `json:"team_id"`
 	}
-	if json.Unmarshal(event.Data, &ref) == nil && ref.AskedFor != "" && ref.AskedFor == p.UserID {
+	readable := json.Unmarshal(event.Data, &ref) == nil
+	if readable && ref.AskedFor != "" && ref.AskedFor == p.UserID {
 		return true, nil
+	}
+	if readable && ref.TeamID != "" && e.teams != nil && event.OrgID == p.OrgID {
+		key := "team:" + ref.TeamID
+		member, checked := grants[key]
+		if !checked {
+			var err error
+			if member, err = e.teams.IsMember(ctx, p.OrgID, ref.TeamID, p.UserID); err != nil {
+				return false, err
+			}
+			grants[key] = member
+		}
+		if member {
+			return true, nil
+		}
 	}
 	key := security.AIManage.Name() + ":"
 	if allowed, checked := grants[key]; checked {

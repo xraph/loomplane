@@ -154,3 +154,23 @@ func TestFailureReasonsAreClear(t *testing.T) {
 		t.Errorf("a long reason is %d bytes", len(got))
 	}
 }
+
+// A request made for a paused run shows in its event log, by ID and kind
+// only, and only in its own workspace.
+func TestRecordRequestLogsTheRequest(t *testing.T) {
+	w := newWorld(t)
+	task := w.adaChat(t)
+	if err := w.svc.RecordRequest(t.Context(), task, "areq_1", "answer"); err != nil {
+		t.Fatal(err)
+	}
+	evs := w.store.eventsOf(task.ID)
+	last := evs[len(evs)-1]
+	if last.Kind != EventRequest || string(last.Data) != `{"kind":"answer","request_id":"areq_1"}` {
+		t.Fatalf("event %s %s", last.Kind, last.Data)
+	}
+	foreign := *task
+	foreign.OrgID = orgB
+	if err := w.svc.RecordRequest(t.Context(), &foreign, "areq_2", "answer"); err == nil {
+		t.Fatal("logged a request on another workspace's task")
+	}
+}

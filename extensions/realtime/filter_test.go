@@ -319,3 +319,54 @@ func TestPlanEgressExcludesPrivateLocationReview(t *testing.T) {
 		}
 	}
 }
+
+// teamBook is who is in which team, by org.
+type teamBook struct {
+	members map[string]bool // org/team/user
+	err     error
+	asked   int
+}
+
+func (b *teamBook) IsMember(_ context.Context, orgID, teamID, userID string) (bool, error) {
+	b.asked++
+	return b.members[orgID+"/"+teamID+"/"+userID], b.err
+}
+
+// A request event reaches the members of the team it was routed to, live,
+// as well as the person asked and those who manage the workspace's AI.
+func TestAgentRequestEventsReachTheRoutedTeam(t *testing.T) {
+	book := &teamBook{members: map[string]bool{"org_a/team_pay/usr_a": true, "org_b/team_pay/usr_c": true}}
+	e := &Extension{authz: permissionFixture{denied: security.AIManage}, teams: book}
+	event := func(data string) []store.Event {
+		return []store.Event{{OrgID: "org_a", Type: "agent_request.updated", EntityID: "areq_1", Data: json.RawMessage(data)}}
+	}
+	for name, tc := range map[string]struct {
+		user, data string
+		want       int
+	}{
+		"a member of the team":        {"usr_a", `{"id":"areq_1","team_id":"team_pay","asked_for":"usr_x"}`, 1},
+		"someone outside the team":    {"usr_b", `{"id":"areq_1","team_id":"team_pay","asked_for":"usr_x"}`, 0},
+		"another workspace's member":  {"usr_c", `{"id":"areq_1","team_id":"team_pay"}`, 0},
+		"no team":                     {"usr_a", `{"id":"areq_1","team_id":""}`, 0},
+		"team_id that isn't text":     {"usr_a", `{"id":"areq_1","team_id":["team_pay"]}`, 0},
+		"the asker, outside the team": {"usr_x", `{"id":"areq_1","team_id":"team_pay","asked_for":"usr_x"}`, 1},
+	} {
+		p := security.Principal{OrgID: "org_a", UserID: tc.user}
+		got, err := e.filter(t.Context(), p, Subscription{}, event(tc.data))
+		if err != nil || len(got) != tc.want {
+			t.Fatalf("%s: %+v %v", name, got, err)
+		}
+	}
+	// One check per team per batch.
+	book.asked = 0
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	batch := append(event(`{"id":"areq_1","team_id":"team_pay"}`), event(`{"id":"areq_2","team_id":"team_pay"}`)...)
+	if got, err := e.filter(t.Context(), p, Subscription{}, batch); err != nil || len(got) != 2 || book.asked != 1 {
+		t.Fatalf("batch: %d events, %d checks, %v", len(got), book.asked, err)
+	}
+	// Without a team lookup, a team's members get nothing live.
+	e.teams = nil
+	if got, err := e.filter(t.Context(), p, Subscription{}, event(`{"id":"areq_1","team_id":"team_pay"}`)); err != nil || len(got) != 0 {
+		t.Fatalf("no lookup: %+v %v", got, err)
+	}
+}

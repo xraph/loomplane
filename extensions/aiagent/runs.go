@@ -17,8 +17,9 @@ import (
 )
 
 // registerRuns builds the run driver: it registers its jobs on Dispatch,
-// gives cortex's hooks the service, lets turning the agent off cancel its
-// runs, counts a release a person named through the task record, and
+// with the requests' Settle joining its sweep, gives cortex's hooks the
+// service, lets turning the agent off cancel its runs (and with them their
+// pending requests), counts a release a person named through the task record, and
 // provides the service. The chat kind is registered here; 3c and 3d add
 // theirs.
 func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Service, projectSvc *projects.Service) error {
@@ -48,9 +49,13 @@ func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Serv
 	if kerr := runs.RegisterKind(agentruns.ChatSpec()); kerr != nil {
 		return kerr
 	}
+	requests, err := e.registerRequests(c, runs, projectSvc)
+	if err != nil {
+		return err
+	}
 	dispatchengine.Register(eng, agentruns.StartJob(runs))
 	dispatchengine.Register(eng, agentruns.ContinueJob(runs))
-	dispatchengine.Register(eng, agentruns.SweepJob(runs))
+	dispatchengine.Register(eng, agentruns.SweepJob(runs, requests.Settle))
 	e.hooks.Service = runs
 	e.authz.Requested = runs.Requested
 	settings.BindCanceller(runs)
