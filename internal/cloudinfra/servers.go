@@ -3,7 +3,6 @@ package cloudinfra
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
@@ -244,11 +243,10 @@ type Service struct {
 	fetchNodeNonce  func(ctx context.Context, url string) ([]byte, error)
 	serverReadyPoll time.Duration
 	// routeAddressProbe reaches an address operation's server and checks
-	// the route there. Tests replace it. nodeConfirms is when this process
-	// last checked each node's address while reconciling.
+	// the route there. Tests replace it. nodeFollows is this process's
+	// record of address checks and reconcile passes.
 	routeAddressProbe func(ctx context.Context, op *RouteOperation, state *IngressState) (func(context.Context, Route) RouteVerification, func(), error)
-	nodeConfirmsMu    sync.Mutex
-	nodeConfirms      map[string]time.Time
+	nodeFollows       *nodeFollowState
 }
 
 func NewService(d Deps) *Service {
@@ -259,7 +257,7 @@ func NewService(d Deps) *Service {
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
 	s.serveNodeNonce, s.fetchNodeNonce, s.serverReadyPoll = s.serveNodeNonceThroughIngress, fetchNodeNonce, 2*time.Second
-	s.routeAddressProbe, s.nodeConfirms = s.probeRouteAddress, map[string]time.Time{}
+	s.routeAddressProbe, s.nodeFollows = s.probeRouteAddress, &nodeFollowState{checked: map[string]time.Time{}}
 	return s
 }
 

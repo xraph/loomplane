@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/grove/driver"
@@ -34,16 +35,23 @@ const NodeAddressFollowWait = 3 * time.Minute
 
 const (
 	// nodeAddressReconcileWait bounds one node's follow in a reconcile
-	// pass, so one node with a busy route doesn't hold up the others.
-	nodeAddressReconcileWait = 30 * time.Second
-	// nodeAddressRecheckEvery is how often a reconcile checks again an
-	// address that didn't answer, or a check that couldn't run.
+	// pass, and nodeAddressReconcilePass the whole pass, which follows
+	// nodeAddressReconcileWorkers nodes at a time.
+	nodeAddressReconcileWait    = 30 * time.Second
+	nodeAddressReconcilePass    = 2 * time.Minute
+	nodeAddressReconcileWorkers = 4
+	// nodeAddressRecheckEvery is how often a reconcile, or a node coming
+	// back online, checks again an address that didn't answer, or a check
+	// that couldn't run.
 	nodeAddressRecheckEvery = 5 * time.Minute
-	// nodeAddressReconcileBatch is how many nodes one pass looks at.
+	// nodeAddressReconcileBatch is how many nodes one pass looks at. The
+	// next pass carries on after the last one.
 	nodeAddressReconcileBatch = 50
-	// nodeAddressSettleWait bounds the writes after a follow's operations
-	// are stored, which run whatever happened to the caller's context.
+	// nodeAddressSettleWait bounds each write after a follow's operations
+	// are stored, which runs whatever happened to the caller's context.
 	nodeAddressSettleWait = time.Minute
+	// nodeAddressRollbackWait bounds putting a connection's address back.
+	nodeAddressRollbackWait = 10 * time.Second
 )
 
 // heldRouteDetail starts what a node shows for routes another change held.
@@ -78,70 +86,108 @@ func UnansweredAddressDetail(address string) string {
 // approved envelope isn't. In a managed zone it rewrites the route's own
 // A or AAAA record and nothing else in the zone; in an external zone it
 // says which record to set and waits for it. The proxy config is left
-// alone, so a certificate that is renewing carries on. Only after every
-// operation is stored does the node's server connection name the new
+// alone, so a certificate that is renewing carries on. Only after the
+// operations are stored does the node's server connection name the new
 // address and the node record it as confirmed, and only then do the
 // operations start. An operation that runs first, as recovery may run it,
 // waits: its binding check reads the node's settled address, so none of
 // them can point DNS at an address that wasn't confirmed.
 //
-// A route another change holds is offered again until the context ends;
-// one still held then keeps its address, the node's detail names it, and
+// A route another change holds doesn't hold the node: it settles with the
+// routes that took their operation, and the held ones are offered again
+// until the context ends, each starting as soon as it is taken. One still
+// held then keeps its address, the node's detail names it, and
 // ReconcileNodeAddresses moves it later. So does a node whose follow
-// didn't finish.
+// didn't finish. A route whose last operation failed is left for a person.
 //
 // One follow runs per node at a time, here or on another replica. A second
 // one waits for the first, then works from the node as stored, so it finds
 // the address already followed or follows a newer one. The caller's
 // context bounds the wait and the follow; NodeAddressFollowWait is enough.
 func (s *Service) FollowNodeAddress(ctx context.Context, n *nodes.Node) error {
-	if n == nil {
-		return nil
-	}
-	return s.followNode(ctx, n, true, false)
+	return s.followNode(ctx, n, followMode{wait: true, retryHeld: true})
 }
+
+// CatchUpNodeAddress is FollowNodeAddress for a node that came back
+// online: its address is checked again at most every
+// nodeAddressRecheckEvery, like a reconcile's.
+func (s *Service) CatchUpNodeAddress(ctx context.Context, n *nodes.Node) error {
+	return s.followNode(ctx, n, followMode{wait: true, recheck: true, retryHeld: true})
+}
+
+// followMode is how a follow runs. wait waits for a follow that holds the
+// node, where otherwise that follow is left to it. recheck limits how often
+// the node's address is checked again. retryHeld offers held routes again
+// until the context ends.
+type followMode struct{ wait, recheck, retryHeld bool }
 
 // ReconcileNodeAddresses finishes what a follow left: a node whose
 // connection doesn't name its confirmed address, one whose inventory no
-// longer offers that address, and one with a route still on another
-// address and no operation moving it. A node that is consistent isn't
-// looked at, and a node's address is checked again at most every
-// nodeAddressRecheckEvery here. A node another follow holds is left for
-// the next pass. Each node gets nodeAddressReconcileWait.
+// longer offers that address, and one with a route on another address, or
+// routing pending, that no operation or handoff is moving. A node that is
+// consistent isn't looked at, a node another follow holds is left for the
+// next pass, and held routes aren't waited for. Each pass looks at the
+// nodes after the last pass's, a few at a time, each for at most
+// nodeAddressReconcileWait and all of them for nodeAddressReconcilePass.
 func (s *Service) ReconcileNodeAddresses(ctx context.Context) error {
 	if s.NodeRecords == nil || s.NodeIngress == nil || s.NodeAddresses == nil {
 		return nil
 	}
 	st, ok := s.Store.(interface {
-		NodesBehindAddress(ctx context.Context, limit int) ([]*nodes.Node, error)
+		NodesBehindAddress(ctx context.Context, after string, limit int) ([]*nodes.Node, error)
 	})
 	if !ok {
 		return nil
 	}
-	behind, err := st.NodesBehindAddress(ctx, nodeAddressReconcileBatch)
+	f := s.nodeFollows
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	after := f.after
+	f.mu.Unlock()
+	behind, err := st.NodesBehindAddress(ctx, after, nodeAddressReconcileBatch)
 	if err != nil {
 		return err
 	}
+	next := ""
+	if len(behind) == nodeAddressReconcileBatch {
+		next = behind[len(behind)-1].ID
+	}
+	f.mu.Lock()
+	f.after = next
+	f.mu.Unlock()
+
+	passCtx, cancel := context.WithTimeout(ctx, nodeAddressReconcilePass)
+	defer cancel()
+	var mu sync.Mutex
 	var errs []error
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, nodeAddressReconcileWorkers)
 	for _, n := range behind {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		nodeCtx, cancel := context.WithTimeout(ctx, nodeAddressReconcileWait)
-		err = s.followNode(nodeCtx, n, false, true)
-		cancel()
-		if err != nil && !errors.Is(err, ErrBusy) && !errors.Is(err, ErrPending) {
-			errs = append(errs, fmt.Errorf("node %s: %w", n.ID, err))
+		select {
+		case <-passCtx.Done():
+		case slots <- struct{}{}:
+			wg.Add(1)
+			go func() {
+				defer func() { <-slots; wg.Done() }()
+				nodeCtx, cancel := context.WithTimeout(passCtx, nodeAddressReconcileWait)
+				defer cancel()
+				if followErr := s.followNode(nodeCtx, n, followMode{recheck: true}); followErr != nil && !errors.Is(followErr, ErrBusy) && !errors.Is(followErr, ErrPending) {
+					mu.Lock()
+					errs = append(errs, fmt.Errorf("node %s: %w", n.ID, followErr))
+					mu.Unlock()
+				}
+			}()
 		}
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
-// followNode follows n under its lock. wait waits for a follow that holds
-// it; otherwise that follow is left to it. recheck limits how often the
-// node's address is checked again.
-func (s *Service) followNode(ctx context.Context, n *nodes.Node, wait, recheck bool) error {
-	if n.ID == "" || s.NodeIngress == nil || s.NodeAddresses == nil {
+// followNode follows n under its lock.
+func (s *Service) followNode(ctx context.Context, n *nodes.Node, mode followMode) error {
+	if n == nil || n.ID == "" || s.NodeIngress == nil || s.NodeAddresses == nil {
 		return nil
 	}
 	// The lock lasts the follow and the writes after it, whatever happens
@@ -153,10 +199,10 @@ func (s *Service) followNode(ctx context.Context, n *nodes.Node, wait, recheck b
 	for {
 		lockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockFor+nodeAddressSettleWait)
 		err := s.Store.WithOperationLock(lockCtx, "node-address/"+n.ID, func() error {
-			return s.followNodeAddress(ctx, n, recheck)
+			return s.followNodeAddress(ctx, n, mode)
 		})
 		cancel()
-		if !errors.Is(err, ErrBusy) || !wait {
+		if !errors.Is(err, ErrBusy) || !mode.wait {
 			return err
 		}
 		select {
@@ -167,7 +213,7 @@ func (s *Service) followNode(ctx context.Context, n *nodes.Node, wait, recheck b
 	}
 }
 
-func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, recheck bool) error {
+func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mode followMode) error {
 	n := hooked
 	if s.NodeRecords != nil {
 		stored, err := s.NodeRecords.GetByID(ctx, hooked.ID)
@@ -188,9 +234,13 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, rec
 	if err != nil || conn == nil {
 		return err
 	}
+	st, err := s.domainStore()
+	if err != nil {
+		return err
+	}
 	address := n.PublicAddress
 	if offered := publicNodeAddresses(n.Inventory.PublicAddresses); len(offered) > 0 && !slices.Contains(offered, n.PublicAddress) {
-		if recheck && !s.nodeCheckDue(n.ID) {
+		if mode.recheck && !s.nodeCheckDue(n.ID) {
 			return nil
 		}
 		_, _, found, checkErr := s.checkNodeAddress(ctx, n.OrgID, conn.ID, n.Inventory.PublicAddresses)
@@ -202,36 +252,81 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, rec
 		}
 		address = found
 	}
-	ops, held, err := s.addressOperations(ctx, n, conn, address)
+	offer := &routeOffer{done: map[string]bool{}}
+	if offerErr := s.offerAddressOperations(ctx, st, n, conn, address, offer); offerErr != nil {
+		return offerErr
+	}
+	// The operations are stored, so the node follows them even when the
+	// caller's time is up. The node settles now: routes that are held
+	// don't hold the others back.
+	detached := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.WithoutCancel(ctx), nodeAddressSettleWait)
+	}
+	settleCtx, cancel := detached()
+	err = s.settleNodeAddress(settleCtx, conn, n.ID, address, n.PublicAddress)
+	cancel()
 	if err != nil {
 		return err
 	}
-	// The operations are stored, so the node follows them even when the
-	// caller's time is up.
-	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodeAddressSettleWait)
+	moved := address != n.PublicAddress
+	start := func(ops []*RouteOperation) {
+		for _, op := range ops {
+			enqueueCtx, stop := detached()
+			s.enqueueRoute(enqueueCtx, op)
+			stop()
+		}
+	}
+	start(offer.accepted)
+	for mode.retryHeld && len(offer.held) > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(s.serverReadyPoll):
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		offer.accepted = nil
+		if err = s.offerAddressOperations(ctx, st, n, conn, address, offer); err != nil {
+			s.warn(fmt.Sprintf("Routes left busy stay where they are; node %s is on %s", n.Name, address), err)
+			break
+		}
+		// The node is settled, so these start right away.
+		start(offer.accepted)
+	}
+	reportCtx, cancel := detached()
 	defer cancel()
-	if settleErr := s.settleNodeAddress(settleCtx, conn, n.ID, address, n.PublicAddress); settleErr != nil {
-		return settleErr
-	}
-	for _, op := range ops {
-		s.enqueueRoute(settleCtx, op)
-	}
-	return s.reportHeldRoutes(settleCtx, n, held, address)
+	return s.reportHeldRoutes(reportCtx, n, offer, address, moved)
 }
 
-// nodeCheckDue reports whether a reconcile may check nodeID's address now,
-// and if so marks it checked.
+// nodeFollowState is this process's record of node follows: when each
+// node's address was last checked, and the last node a reconcile pass
+// reached, so the next pass carries on after it.
+type nodeFollowState struct {
+	mu      sync.Mutex
+	checked map[string]time.Time
+	after   string
+}
+
+// nodeCheckDue reports whether nodeID's address may be checked again now,
+// and if so marks it checked. Marks older than nodeAddressRecheckEvery are
+// dropped as it goes.
 func (s *Service) nodeCheckDue(nodeID string) bool {
-	s.nodeConfirmsMu.Lock()
-	defer s.nodeConfirmsMu.Unlock()
-	if s.nodeConfirms == nil {
-		s.nodeConfirms = map[string]time.Time{}
+	f := s.nodeFollows
+	if f == nil {
+		return true
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	now := s.now()
-	if last, ok := s.nodeConfirms[nodeID]; ok && now.Sub(last) < nodeAddressRecheckEvery {
+	for id, at := range f.checked {
+		if now.Sub(at) >= nodeAddressRecheckEvery {
+			delete(f.checked, id)
+		}
+	}
+	if _, ok := f.checked[nodeID]; ok {
 		return false
 	}
-	s.nodeConfirms[nodeID] = now
+	f.checked[nodeID] = now
 	return true
 }
 
@@ -271,39 +366,78 @@ func (s *Service) recordUnansweredAddress(ctx context.Context, n *nodes.Node, ad
 // HeldRouteDetail is what a node shows for a route another change held,
 // so it stayed on its old address.
 func HeldRouteDetail(hostname, old string) string {
-	return fmt.Sprintf("%s%s stays on %s; another change held it", heldRouteDetail, hostname, old)
+	return StuckRouteDetail(hostname, old, "another change held it")
+}
+
+// StuckRouteDetail is what a node shows for a route that stayed on its old
+// address, and why.
+func StuckRouteDetail(hostname, old, reason string) string {
+	return fmt.Sprintf("%s%s stays on %s; %s", heldRouteDetail, hostname, old, reason)
+}
+
+// routeOffer is what a follow's offers of address operations came to:
+// accepted operations, routes another change holds, and routes left for a
+// person with the reason. done is every route that needs no further offer.
+type routeOffer struct {
+	accepted []*RouteOperation
+	held     []*Route
+	stuck    []stuckRoute
+	done     map[string]bool
+}
+
+type stuckRoute struct {
+	route  *Route
+	reason string
 }
 
 // reportHeldRoutes says which routes stayed behind, on the node and in the
-// audit trail, or clears what an earlier follow said once none did.
-func (s *Service) reportHeldRoutes(ctx context.Context, n *nodes.Node, held []*Route, address string) error {
+// audit trail, or clears what an earlier follow said once none did. A route
+// the node's detail already names isn't reported again; after the node
+// moved, every route is.
+func (s *Service) reportHeldRoutes(ctx context.Context, n *nodes.Node, offer *routeOffer, address string, moved bool) error {
+	shown := n.IngressDetail
+	if moved {
+		shown = ""
+	}
 	d, ok := s.NodeIngress.(nodeIngressDetail)
-	if len(held) == 0 {
-		if ok && strings.HasPrefix(n.IngressDetail, heldRouteDetail) {
+	stayed := make([]stuckRoute, 0, len(offer.held)+len(offer.stuck))
+	for _, r := range offer.held {
+		stayed = append(stayed, stuckRoute{route: r, reason: "another change held it"})
+	}
+	stayed = append(stayed, offer.stuck...)
+	if len(stayed) == 0 {
+		if ok && strings.HasPrefix(shown, heldRouteDetail) {
 			return d.RecordIngressDetail(ctx, n.ID, "")
 		}
 		return nil
 	}
-	details := make([]string, 0, len(held))
-	for _, r := range held {
-		details = append(details, HeldRouteDetail(r.Input.Hostname, r.Binding.Address))
-		s.warn(fmt.Sprintf("Route %s stays on %s; another change holds it, so it didn't follow node %s to %s yet", r.Input.Hostname, r.Binding.Address, n.Name, address), ErrBusy)
+	details := make([]string, 0, len(stayed))
+	for _, r := range stayed {
+		line := StuckRouteDetail(r.route.Input.Hostname, r.route.Binding.Address, r.reason)
+		details = append(details, line)
+		if strings.Contains(shown, line) {
+			continue
+		}
+		s.warn(fmt.Sprintf("Route %s stays on %s and didn't follow node %s to %s", r.route.Input.Hostname, r.route.Binding.Address, n.Name, address), errors.New(r.reason))
 		if s.Audit != nil {
 			s.Audit.Record(ctx, projects.AuditEvent{Action: "domain.route.address_held", Severity: "warning", Principal: security.SystemPrincipal(n.OrgID), Attributes: map[string]any{
-				"resource_id": r.ID, "project_id": r.ProjectID, "hostname": r.Input.Hostname, "node_id": n.ID, "address": address, "previous_address": r.Binding.Address, "automatic": true, "via": "node_address",
+				"resource_id": r.route.ID, "project_id": r.route.ProjectID, "hostname": r.route.Input.Hostname, "node_id": n.ID, "address": address,
+				"previous_address": r.route.Binding.Address, "reason": r.reason, "automatic": true, "via": "node_address",
 			}})
 		}
 	}
-	if !ok {
+	detail := strings.Join(details, "; ")
+	if !ok || detail == shown {
 		return nil
 	}
-	return d.RecordIngressDetail(ctx, n.ID, strings.Join(details, "; "))
+	return d.RecordIngressDetail(ctx, n.ID, detail)
 }
 
-// followsNode reports a route an address change on conn moves to address.
+// followsNode reports a route on conn that an address change moves to
+// address: one on another address, or one still routing pending.
 func followsNode(r *Route, conn *connections.Connection, address string) bool {
 	return r.Binding.ConnectionID == conn.ID && r.Binding.BackendName() == RouteBackendServer &&
-		(r.Status == "ready" || r.Status == RouteRoutingPending) && r.Binding.Address != address
+		((r.Status == "ready" && r.Binding.Address != address) || r.Status == RouteRoutingPending)
 }
 
 // movingTo reports an operation that is already moving its route to
@@ -312,69 +446,77 @@ func movingTo(op *RouteOperation, address string) bool {
 	return op != nil && op.Kind == "address" && op.Route.Binding.Address == address && (op.Status == "pending" || op.Status == "running" || op.Status == "waiting")
 }
 
-// addressOperations stores an address operation for every route that
-// follows the node and isn't already moving there. A busy route is offered
-// again until ctx ends; the routes still held then are returned, and keep
-// their address. A route that can't take one at all is reported.
-func (s *Service) addressOperations(ctx context.Context, n *nodes.Node, conn *connections.Connection, address string) (accepted []*RouteOperation, held []*Route, err error) {
-	st, err := s.domainStore()
+// failedHold is why a failed operation keeps its route from following, or
+// "" when the next address operation may replace it. An earlier address
+// change or check that failed is replaced; one that failed on this very
+// address, one whose DNS write has no answer, or any other failed
+// operation needs a person.
+func failedHold(op *RouteOperation, address string) string {
+	if op == nil || op.Status != "failed" {
+		return ""
+	}
+	switch {
+	case op.DNSAttempted && op.Receipt == nil:
+		return "its " + op.Kind + " operation failed with a DNS write unanswered; retry it"
+	case op.Kind == "address" && op.Route.Binding.Address == address:
+		return "its move there failed; retry it, or remove the route and add it again"
+	case op.Kind != "address" && op.Kind != "verify":
+		return "its " + op.Kind + " operation failed; retry it or remove the route"
+	}
+	return ""
+}
+
+// offerAddressOperations offers an address operation, once, to every route
+// that follows the node and isn't done, and records in offer what came of
+// each.
+func (s *Service) offerAddressOperations(ctx context.Context, st DomainStore, n *nodes.Node, conn *connections.Connection, address string, offer *routeOffer) error {
+	routes, err := st.OrgRoutes(ctx, conn.OrgID)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	done := map[string]bool{}
-	for {
-		routes, listErr := st.OrgRoutes(ctx, conn.OrgID)
-		if listErr != nil && len(accepted) == 0 {
-			return nil, nil, listErr
-		}
-		if listErr != nil {
-			// Routes that already have their operation follow the node.
-			s.warn(fmt.Sprintf("Routes left busy stay where they are; node %s moves to %s", n.Name, address), listErr)
-			return accepted, held, nil
-		}
-		var follow []*Route
-		var ids []string
-		for _, r := range routes {
-			if !done[r.ID] && followsNode(r, conn, address) {
-				follow, ids = append(follow, r), append(ids, r.ID)
-			}
-		}
-		latest := map[string]*RouteOperation{}
-		if len(ids) > 0 {
-			if latest, err = st.LatestRouteOperations(ctx, conn.OrgID, ids); err != nil {
-				return accepted, nil, err
-			}
-		}
-		held = held[:0]
-		for _, r := range follow {
-			if movingTo(latest[r.ID], address) {
-				done[r.ID] = true
-				continue
-			}
-			op, opErr := s.newAddressOperation(ctx, st, r, address)
-			if opErr == nil {
-				opErr = st.AcceptRoute(ctx, op)
-			}
-			switch {
-			case opErr == nil:
-				done[r.ID] = true
-				accepted = append(accepted, op)
-				s.auditAddressOperation(ctx, op, n.ID)
-			case errors.Is(opErr, ErrBusy) || errors.Is(opErr, ErrConflict):
-				held = append(held, r)
-			default:
-				done[r.ID] = true
-				s.warn(fmt.Sprintf("Route %s stays on %s; it couldn't follow node %s to %s", r.Input.Hostname, r.Binding.Address, n.Name, address), opErr)
-			}
-		}
-		if len(held) == 0 || ctx.Err() != nil {
-			return accepted, held, nil
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(s.serverReadyPoll):
+	var follow []*Route
+	var ids []string
+	for _, r := range routes {
+		if !offer.done[r.ID] && followsNode(r, conn, address) {
+			follow, ids = append(follow, r), append(ids, r.ID)
 		}
 	}
+	latest := map[string]*RouteOperation{}
+	if len(ids) > 0 {
+		if latest, err = st.LatestRouteOperations(ctx, conn.OrgID, ids); err != nil {
+			return err
+		}
+	}
+	offer.held = offer.held[:0]
+	for _, r := range follow {
+		if movingTo(latest[r.ID], address) {
+			offer.done[r.ID] = true
+			continue
+		}
+		if reason := failedHold(latest[r.ID], address); reason != "" {
+			offer.done[r.ID] = true
+			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: reason})
+			continue
+		}
+		op, opErr := s.newAddressOperation(ctx, st, r, address)
+		if opErr != nil {
+			offer.done[r.ID] = true
+			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: opErr.Error()})
+			continue
+		}
+		switch opErr = st.AcceptRoute(ctx, op); {
+		case opErr == nil:
+			offer.done[r.ID] = true
+			offer.accepted = append(offer.accepted, op)
+			s.auditAddressOperation(ctx, op, n.ID)
+		case errors.Is(opErr, ErrBusy) || errors.Is(opErr, ErrConflict):
+			offer.held = append(offer.held, r)
+		default:
+			offer.done[r.ID] = true
+			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: opErr.Error()})
+		}
+	}
+	return nil
 }
 
 // newAddressOperation moves r to address, as Loomplane. Only the binding's
@@ -497,22 +639,53 @@ func (s *Service) probeRouteAddress(ctx context.Context, op *RouteOperation, sta
 	return check, func() { _ = c.Close() }, nil
 }
 
+// errAddressAbandoned is an address operation whose node no longer takes
+// traffic directly. It is cancelled, which frees its route.
+var errAddressAbandoned = errors.New("address change abandoned")
+
 // addressNotSettled makes an address operation that runs before its node
-// settled wait rather than fail: the binding still names the address it
-// moves from, or no address while the node's two writes land. It never
-// writes DNS, so recovery may run it early.
-func addressNotSettled(op *RouteOperation, current RouteBinding, err error) error {
+// settled on the operation's address wait rather than fail: the binding
+// differs from the operation's only in its address, or has none while the
+// node's two writes land. It never writes DNS, so recovery may run it
+// early. When the node no longer takes traffic directly, revoked or in
+// mode none, the operation is abandoned instead.
+func (s *Service) addressNotSettled(ctx context.Context, op *RouteOperation, current RouteBinding, err error) error {
+	waiting := &routeNoticeError{err: ErrPending, message: "Waiting for the node to settle on " + op.Route.Binding.Address + "."}
 	if errors.Is(err, errUnconfirmedNodeAddress) {
-		return &routeNoticeError{err: ErrPending, message: "Waiting for the node to settle on " + op.Route.Binding.Address + "."}
+		if s.nodeLeftDirect(ctx, op) {
+			return &routeNoticeError{err: errAddressAbandoned, message: "The node no longer takes traffic directly, so " + op.Route.Input.Hostname + " stays where it is."}
+		}
+		return waiting
 	}
-	if err != nil || current.Address != op.PreviousAddress || current.Address == op.Route.Binding.Address {
+	if err != nil || current.Address == op.Route.Binding.Address {
 		return nil
 	}
 	current.Address = op.Route.Binding.Address
 	if !reflect.DeepEqual(current, op.Route.Binding) {
 		return nil
 	}
-	return &routeNoticeError{err: ErrPending, message: "Waiting for the node to settle on " + op.Route.Binding.Address + "."}
+	return waiting
+}
+
+// nodeLeftDirect reports whether the node behind op's connection is gone,
+// revoked, or no longer in direct ingress mode with a confirmed address.
+// When that can't be read, it says no, and the operation waits.
+func (s *Service) nodeLeftDirect(ctx context.Context, op *RouteOperation) bool {
+	if s.NodeRecords == nil || s.Connections == nil {
+		return false
+	}
+	conn, _, err := s.Connections.Credential(ctx, op.Route.OrgID, op.Route.Binding.ConnectionID)
+	if err != nil || conn.Details["node_id"] == "" {
+		return false
+	}
+	n, err := s.NodeRecords.GetByID(ctx, conn.Details["node_id"])
+	if errors.Is(err, nodes.ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	return n.OrgID != op.Route.OrgID || n.Status == nodes.StatusRevoked || n.IngressMode != nodeproto.IngressDirect || n.PublicAddress == "" || n.PublicAddressConfirmedAt == nil
 }
 
 // settleRouteAddress publishes what the check v found. A route seen on its
@@ -638,21 +811,25 @@ func yieldAddressRoute(ctx context.Context, tx driver.Tx, op *RouteOperation) er
 	return nil
 }
 
-// NodesBehindAddress lists, across organizations, at most limit nodes in
-// direct ingress mode with a confirmed address that a follow left behind:
-// the node's server connection names another address, its inventory
-// doesn't offer that address, or a route on the connection names another
-// address and no operation is moving it.
-func (s *PgStore) NodesBehindAddress(ctx context.Context, limit int) ([]*nodes.Node, error) {
+// NodesBehindAddress lists, across organizations and after the node ID
+// after, at most limit nodes in direct ingress mode with a confirmed
+// address that a follow left behind: the node's server connection names
+// another address, its inventory doesn't offer that address, or a server
+// route on the connection is on another address or still routing pending
+// with no operation of any status but succeeded or cancelled, and no
+// handoff, on it. A route whose operation failed waits for a person, so it
+// doesn't bring its node back.
+func (s *PgStore) NodesBehindAddress(ctx context.Context, after string, limit int) ([]*nodes.Node, error) {
 	rows, err := s.db.Query(ctx, `SELECT n.id,n.org_id FROM loomplane_nodes n
  JOIN loomplane_cloud_connections c ON c.org_id=n.org_id AND c.details->>'node_id'=n.id AND c.cloud='server' AND c.status='ready'
- WHERE n.revoked_at IS NULL AND n.ingress_mode='direct' AND n.public_address<>'' AND n.public_address_confirmed_at IS NOT NULL
+ WHERE n.id>$1 AND n.revoked_at IS NULL AND n.ingress_mode='direct' AND n.public_address<>'' AND n.public_address_confirmed_at IS NOT NULL
  AND (coalesce(c.details->>'advertise_host','')<>n.public_address
   OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(coalesce(n.inventory->'public_addresses','[]'::jsonb)) a(address) WHERE a.address=n.public_address)
-  OR EXISTS(SELECT 1 FROM loomplane_domain_routes r WHERE r.org_id=n.org_id AND r.connection_id=c.id AND r.status IN ('ready','routing_pending') AND r.backend='server'
-   AND coalesce(r.body->'binding'->>'address','')<>n.public_address
-   AND NOT EXISTS(SELECT 1 FROM loomplane_route_operations o WHERE o.org_id=r.org_id AND o.route_id=r.id AND o.status IN ('pending','running','waiting'))))
- GROUP BY n.id,n.org_id ORDER BY n.id LIMIT $1`, limit)
+  OR EXISTS(SELECT 1 FROM loomplane_domain_routes r WHERE r.org_id=n.org_id AND r.connection_id=c.id AND r.backend='server'
+   AND (r.status='routing_pending' OR (r.status='ready' AND coalesce(r.body->'binding'->>'address','')<>n.public_address))
+   AND NOT EXISTS(SELECT 1 FROM loomplane_route_operations o WHERE o.org_id=r.org_id AND o.route_id=r.id AND o.status NOT IN ('preview','succeeded','cancelled'))
+   AND NOT EXISTS(SELECT 1 FROM loomplane_route_handoffs h WHERE h.org_id=r.org_id AND h.route_id=r.id AND NOT h.released)))
+ GROUP BY n.id,n.org_id ORDER BY n.id LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, err
 	}

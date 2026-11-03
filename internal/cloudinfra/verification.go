@@ -90,6 +90,9 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 			}
 			var notice *routeNoticeError
 			switch {
+			case errors.Is(err, errAddressAbandoned):
+				// Its node no longer takes traffic directly; the route is free.
+				op.Status = "cancelled"
 			case errors.Is(err, ErrPending):
 				op.Status, op.Message = "waiting", "DNS, certificate or backend verification is still pending."
 			case err != nil:
@@ -145,7 +148,7 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		default:
 			current, err := st.ResolveRouteBinding(ctx, route.OrgID, route.ProjectID, route.Input)
 			if op.Kind == "address" {
-				if waitErr := addressNotSettled(op, current, err); waitErr != nil {
+				if waitErr := s.addressNotSettled(ctx, op, current, err); waitErr != nil {
 					return waitErr
 				}
 			}

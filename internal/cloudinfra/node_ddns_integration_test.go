@@ -4,12 +4,14 @@ package cloudinfra
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/xraph/ctrlplane/id"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
@@ -156,6 +158,12 @@ func TestDDNSAcceptReplacesAnEarlierAddressChange(t *testing.T) {
 func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 	pg := routeBindingDatabase(t)
 	ctx := t.Context()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pg.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	ns := nodes.NewPgStore(pg)
 	cs := connections.NewPgStore(pg)
@@ -175,21 +183,71 @@ func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("node_settled", "203.0.113.7", []string{"203.0.113.7"})
+	settled := []string{"203.0.113.7"}
+	add("node_settled", "203.0.113.7", settled)
 	add("node_half", "198.51.100.9", []string{"198.51.100.9"})
 	add("node_moved", "203.0.113.7", []string{"198.51.100.9"})
-	behind, err := NewPgStore(pg).NodesBehindAddress(ctx, 10)
-	if err != nil {
+
+	// Settled nodes whose routes are, or aren't, behind.
+	exec(`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('shop','org','Shop','shop','ready','usr',now(),now())`)
+	exec(`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('prod','org','shop','production','production',now(),now())`)
+	exec(`INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES('zone','org','example.com','',1,'{"id":"zone","org_id":"org","name":"example.com","mode":"external"}')`)
+	if err := cs.CreateConnection(ctx, &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Name: "Runtime", Status: connections.StatusReady, Details: map[string]string{"host": "192.0.2.42", "docker_id": "daemon"}, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	ids := make([]string, 0, len(behind))
-	for _, n := range behind {
-		if n.OrgID != "org" {
-			t.Fatalf("node %+v", n)
-		}
-		ids = append(ids, n.ID)
+	if err := cloudprofiles.NewPgStore(pg).CreateProfile(ctx, &cloudprofiles.Profile{ID: "cloud_1", OrgID: "org", ProjectID: "shop", Name: "cloud_1", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
 	}
-	if !slices.Equal(ids, []string{"node_half", "node_moved"}) {
-		t.Fatalf("behind %v", ids)
+	st := NewPgStore(pg)
+	if err := st.SaveServer(ctx, &Server{ID: "srv_1", OrgID: "org", CloudID: "cloud_1", Name: "web-1", Ownership: "adopted", Provider: "server", AccountID: "daemon", ResourceID: "daemon", ConnectionID: "runtime", RuntimeConnectionID: "runtime", Revision: 1, Status: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	route := func(node, status, address string) string {
+		t.Helper()
+		add(node, "203.0.113.7", settled)
+		id := "route_" + node
+		raw := fmt.Sprintf(`{"id":%q,"org_id":"org","project_id":"shop","status":%q,"binding":{"connection_id":"conn_%s","server_id":"srv_1","address":%q}}`, id, status, node, address)
+		exec(`INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body,backend) VALUES($1,'org','shop','prod','cloud_1','srv_1',$2,'zone',$3,$4,1,$5,'server')`,
+			id, "conn_"+node, node+".example.com", status, raw)
+		return id
+	}
+	operation := func(routeID, node, kind, status string) {
+		t.Helper()
+		body := fmt.Sprintf(`{"kind":%q,"status":%q,"route":{"id":%q,"binding":{"connection_id":"conn_%s"}}}`, kind, status, routeID, node)
+		exec(`INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal) VALUES($1,'org','shop',$2,'srv_1','cloud_1',$3,1,$4::jsonb,'{}')`, "op_"+routeID, routeID, status, body)
+	}
+	route("node_r1", "ready", "192.0.2.1")                                           // on its old address: behind
+	operation(route("node_r2", "ready", "192.0.2.1"), "node_r2", "verify", "failed") // a failed operation waits for a person
+	route("node_r3", RouteRoutingPending, "203.0.113.7")                             // routing pending, nothing moving it: behind
+	operation(route("node_r4", RouteRoutingPending, "203.0.113.7"), "node_r4", "address", "waiting")
+	handed := route("node_r5", "ready", "192.0.2.1") // a handoff holds it
+	exec(`INSERT INTO loomplane_route_handoffs(id,org_id,route_id,source_connection_id,destination_connection_id) VALUES('handoff_1','org',$1,'conn_node_r5','conn_node_r5')`, handed)
+	route("node_r6", "ready", "203.0.113.7")                                             // on the node's address
+	operation(route("node_r7", "ready", "192.0.2.1"), "node_r7", "address", "succeeded") // a finished operation doesn't count
+
+	list := func(after string, limit int) []string {
+		t.Helper()
+		behind, err := st.NodesBehindAddress(ctx, after, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(behind))
+		for _, n := range behind {
+			if n.OrgID != "org" {
+				t.Fatalf("node %+v", n)
+			}
+			ids = append(ids, n.ID)
+		}
+		return ids
+	}
+	if got := list("", 10); !slices.Equal(got, []string{"node_half", "node_moved", "node_r1", "node_r3", "node_r7"}) {
+		t.Fatalf("behind %v", got)
+	}
+	// A pass carries on after the last node the one before it reached.
+	if got := list("", 2); !slices.Equal(got, []string{"node_half", "node_moved"}) {
+		t.Fatalf("first pass %v", got)
+	}
+	if got := list("node_moved", 2); !slices.Equal(got, []string{"node_r1", "node_r3"}) {
+		t.Fatalf("next pass %v", got)
 	}
 }

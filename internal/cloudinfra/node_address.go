@@ -280,9 +280,11 @@ func (s *Service) settleNodeAddress(ctx context.Context, conn *connections.Conne
 	}
 	err := s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressDirect, address)
 	if err != nil && previous != address && net.ParseIP(previous) != nil {
-		if backErr := s.NodeAddresses.SetNodeAdvertiseHost(context.WithoutCancel(ctx), conn.OrgID, conn.ID, previous); backErr != nil {
+		backCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodeAddressRollbackWait)
+		if backErr := s.NodeAddresses.SetNodeAdvertiseHost(backCtx, conn.OrgID, conn.ID, previous); backErr != nil {
 			err = errors.Join(err, backErr)
 		}
+		cancel()
 	}
 	return err
 }

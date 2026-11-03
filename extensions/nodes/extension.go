@@ -168,17 +168,19 @@ func (e *Extension) adoptOnConnect(infra *cloudinfra.Service) {
 // while away. The follow outlasts the hook's deadline, so it gets its own.
 // What a follow leaves unfinished, cloud infrastructure's reconcile picks up.
 func (e *Extension) followAddressChanges(infra *cloudinfra.Service) {
-	follow := func(ctx context.Context, n *nodes.Node) {
+	follow := func(ctx context.Context, n *nodes.Node, run func(context.Context, *nodes.Node) error) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloudinfra.NodeAddressFollowWait)
 		defer cancel()
-		if err := infra.FollowNodeAddress(ctx, n); err != nil {
+		if err := run(ctx, n); err != nil {
 			e.Logger().Warn("Follow a node to its new address; the reconcile tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
 		}
 	}
-	e.hub.OnOnline(follow)
+	// Coming back is no news by itself, so its address check is limited
+	// like a reconcile's.
+	e.hub.OnOnline(func(ctx context.Context, n *nodes.Node) { follow(ctx, n, infra.CatchUpNodeAddress) })
 	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
 		if !slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
-			follow(ctx, n)
+			follow(ctx, n, infra.FollowNodeAddress)
 		}
 	})
 }

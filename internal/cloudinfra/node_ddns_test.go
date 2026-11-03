@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/nodeproto"
@@ -251,11 +253,25 @@ func (a ddnsAddresses) SetNodeAdvertiseHost(ctx context.Context, org, id, addres
 type ddnsWorkflow struct {
 	*adoptionWorkflow
 	log *ddnsLog
+	mu  sync.Mutex
+	at  map[string]time.Time
 }
 
 func (w *ddnsWorkflow) StartRoute(_ context.Context, _, id string, _ int) error {
 	w.log.add("enqueue:" + id)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.at == nil {
+		w.at = map[string]time.Time{}
+	}
+	w.at[id] = time.Now()
 	return nil
+}
+
+func (w *ddnsWorkflow) startedAt(id string) time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.at[id]
 }
 
 type ddnsRig struct {
@@ -264,6 +280,8 @@ type ddnsRig struct {
 	records *ddnsNodes
 	nodeIn  *ddnsIngress
 	log     *ddnsLog
+	wf      *ddnsWorkflow
+	warnMu  sync.Mutex
 	warned  []string
 }
 
@@ -306,9 +324,14 @@ func newDDNSRig(t *testing.T) *ddnsRig {
 	a.svc.NodeRecords = r.records
 	a.svc.NodeIngress = r.nodeIn
 	a.svc.NodeAddresses = ddnsAddresses{inner: a.conns, log: log}
-	a.svc.Workflow = &ddnsWorkflow{adoptionWorkflow: a.workflow, log: log}
+	r.wf = &ddnsWorkflow{adoptionWorkflow: a.workflow, log: log}
+	a.svc.Workflow = r.wf
 	a.svc.serverReadyPoll = time.Millisecond
-	a.svc.Warn = func(msg string, err error) { r.warned = append(r.warned, msg+": "+err.Error()) }
+	a.svc.Warn = func(msg string, err error) {
+		r.warnMu.Lock()
+		defer r.warnMu.Unlock()
+		r.warned = append(r.warned, msg+": "+err.Error())
+	}
 	return r
 }
 
@@ -620,19 +643,22 @@ func TestDDNSHoldsABusyRouteUntilItsDeadline(t *testing.T) {
 	r := newDDNSRig(t)
 	r.answering[ddnsNew] = true
 	r.domains.busy["route_x"] = ErrBusy
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
+	began := time.Now()
 	if err := r.svc.FollowNodeAddress(ctx, r.node); err != nil {
 		t.Fatal(err)
 	}
+	took := time.Since(began)
 	ops := r.domains.ops()
 	if len(ops) != 1 || ops[0].Route.ID != "route_m" {
 		t.Fatalf("operations %+v", ops)
 	}
-	// The node still moves, so the routes that did follow match it, and
-	// the follow settled after its own deadline.
-	if r.advertised(t) != ddnsNew || len(r.ingress.list()) != 1 || r.log.index("enqueue:") < 0 {
-		t.Fatalf("a busy route held the node back: %v", r.log.list())
+	// The node settles and the free route starts at once; only the held
+	// one is offered until the deadline.
+	started := r.wf.startedAt(ops[0].ID)
+	if r.advertised(t) != ddnsNew || len(r.ingress.list()) != 1 || started.IsZero() || started.Sub(began) > 100*time.Millisecond || took < 250*time.Millisecond {
+		t.Fatalf("settled %v after, follow took %v: %v", started.Sub(began), took, r.log.list())
 	}
 	want := "node_1: route api.shop.dev stays on " + ddnsOld + "; another change held it"
 	if d := r.nodeIn.recorded(); !slices.Equal(d, []string{want}) {
@@ -652,6 +678,12 @@ func TestDDNSWaitsForARunningChange(t *testing.T) {
 	r.follow(t)
 	if len(r.domains.ops()) != 2 || r.domains.busyFor["route_x"] != 0 || len(r.nodeIn.recorded()) != 0 || len(r.warned) != 0 {
 		t.Fatalf("ops %d busy %d details %v warned %v", len(r.domains.ops()), r.domains.busyFor["route_x"], r.nodeIn.recorded(), r.warned)
+	}
+	// route_m started with the settle; route_x's operation, taken later,
+	// started as soon as it was taken.
+	late := r.domains.op(t, "route_x").ID
+	if r.log.index("ingress:") > r.log.index("enqueue:"+r.domains.op(t, "route_m").ID) || r.log.index("accept:route_x") < r.log.index("ingress:") || r.log.index("enqueue:"+late) < r.log.index("accept:route_x") {
+		t.Fatalf("order %v", r.log.list())
 	}
 }
 
@@ -771,6 +803,16 @@ func TestDDNSOperationRunBeforeSettleWaits(t *testing.T) {
 
 	// Settled: the record moves, and the route waits for DNS.
 	op.Status = "waiting"
+	defer func() {
+		// Once its node leaves direct ingress, a waiting change is
+		// cancelled, which frees the route.
+		st.op, st.binding, st.resolveErr = op, RouteBinding{}, errUnconfirmedNodeAddress
+		svc.Connections = nodeConnCredentials{routeDNSCredentials{"digitalocean"}}
+		svc.NodeRecords = &ddnsNodes{nodes: map[string]*nodes.Node{}}
+		if err := run(); err != nil || st.op.Status != "cancelled" || !strings.Contains(st.op.Message, "stays where it is") {
+			t.Fatalf("left node: %v, op %s %q", err, st.op.Status, st.op.Message)
+		}
+	}()
 	st.op, st.binding = op, moved.Binding
 	if err := run(); !errors.Is(err, ErrPending) {
 		t.Fatal(err)
@@ -788,14 +830,23 @@ func TestDDNSOperationRunBeforeSettleWaits(t *testing.T) {
 	}
 }
 
-// behindStore lists the nodes a reconcile looks at.
+// behindStore lists the nodes a reconcile looks at, and records where
+// each pass started.
 type behindStore struct {
 	*adoptionStore
 	behind []*nodes.Node
+	afters []string
 }
 
-func (s *behindStore) NodesBehindAddress(context.Context, int) ([]*nodes.Node, error) {
-	return s.behind, nil
+func (s *behindStore) NodesBehindAddress(_ context.Context, after string, limit int) ([]*nodes.Node, error) {
+	s.afters = append(s.afters, after)
+	out := []*nodes.Node{}
+	for _, n := range s.behind {
+		if n.ID > after && len(out) < limit {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 func TestDDNSSettleFailureLeavesTheConnectionAsItWas(t *testing.T) {
@@ -887,4 +938,154 @@ func TestDDNSHandoffProceedsOnARoutingPendingRoute(t *testing.T) {
 	if err != nil || op.Kind != "prepare" {
 		t.Fatalf("handoff on a routing pending route: %+v %v", op, err)
 	}
+}
+
+func TestDDNSReportsAHeldRouteOnce(t *testing.T) {
+	r := newDDNSRig(t)
+	// The node settled, but route_x was held, and is still.
+	r.records.set(func(n *nodes.Node) { n.PublicAddress = ddnsNew })
+	if err := r.conns.SetNodeAdvertiseHost(t.Context(), "org", r.conn.ID, ddnsNew); err != nil {
+		t.Fatal(err)
+	}
+	r.domains.busy["route_x"] = ErrBusy
+	r.domains.busy["route_m"] = ErrBusy
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	for range 3 {
+		began := time.Now()
+		if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		// A pass doesn't wait for held routes.
+		if took := time.Since(began); took > time.Second {
+			t.Fatalf("a pass took %v", took)
+		}
+		// The node's detail keeps naming them, as the stored node would.
+		if d := r.nodeIn.recorded(); len(d) > 0 {
+			r.records.set(func(n *nodes.Node) { n.IngressDetail = strings.TrimPrefix(d[len(d)-1], "node_1: ") })
+		}
+	}
+	var held int
+	for _, a := range r.audit.actions() {
+		if a == "domain.route.address_held" {
+			held++
+		}
+	}
+	if held != 2 || len(r.warned) != 2 || len(r.nodeIn.recorded()) != 1 {
+		t.Fatalf("held audits %d, warned %v, details %v", held, r.warned, r.nodeIn.recorded())
+	}
+}
+
+func TestDDNSLeavesAFailedOperationToAPerson(t *testing.T) {
+	r := newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	// route_m's move to the new address failed; route_x's last check failed.
+	moved := *r.domains.routes[0]
+	moved.Binding.Address = ddnsNew
+	r.domains.accepted = append(r.domains.accepted,
+		&RouteOperation{ID: "routeop_failed_m", Kind: "address", Status: "failed", Route: moved},
+		&RouteOperation{ID: "routeop_failed_x", Kind: "verify", Status: "failed", Route: *r.domains.routes[1]})
+	r.follow(t)
+	ops := r.domains.ops()
+	if len(ops) != 3 || ops[2].Route.ID != "route_x" || ops[2].Kind != "address" {
+		t.Fatalf("operations %+v", ops)
+	}
+	want := "node_1: " + StuckRouteDetail("app.example.com", ddnsOld, "its move there failed; retry it, or remove the route and add it again")
+	if d := r.nodeIn.recorded(); !slices.Equal(d, []string{want}) {
+		t.Fatalf("details %v", d)
+	}
+}
+
+func TestDDNSReportsAnOperationItCantMakeWithItsReason(t *testing.T) {
+	r := newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	r.domains.routes[0].Receipt = nil
+	r.follow(t)
+	d := r.nodeIn.recorded()
+	if len(d) != 1 || !strings.Contains(d[0], "route app.example.com stays on "+ddnsOld+"; ") || !strings.Contains(d[0], "Loomplane has no record of the DNS record it wrote for app.example.com") || strings.Contains(d[0], "held") {
+		t.Fatalf("details %v", d)
+	}
+}
+
+func TestDDNSReconcileMovesAStrandedRoutingPendingRoute(t *testing.T) {
+	r := newDDNSRig(t)
+	// A handoff cancelled route_x's address change after it published
+	// routing pending on the new address, and never cut over.
+	r.records.set(func(n *nodes.Node) { n.PublicAddress = ddnsNew })
+	if err := r.conns.SetNodeAdvertiseHost(t.Context(), "org", r.conn.ID, ddnsNew); err != nil {
+		t.Fatal(err)
+	}
+	r.domains.routes[0].Binding.Address = ddnsNew
+	r.domains.routes[1].Binding.Address, r.domains.routes[1].Status = ddnsNew, RouteRoutingPending
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ops := r.domains.ops()
+	if len(ops) != 1 || ops[0].Route.ID != "route_x" || ops[0].Route.Binding.Address != ddnsNew || r.log.index("enqueue:") < 0 {
+		t.Fatalf("operations %+v", ops)
+	}
+}
+
+func TestDDNSReconcileCarriesOnAfterTheLastNode(t *testing.T) {
+	r := newDDNSRig(t)
+	st := &behindStore{adoptionStore: r.store}
+	for i := range nodeAddressReconcileBatch + 5 {
+		st.behind = append(st.behind, &nodes.Node{ID: fmt.Sprintf("node_%03d", i), OrgID: "org"})
+	}
+	r.svc.Store = st
+	for range 3 {
+		if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := st.behind[nodeAddressReconcileBatch-1].ID
+	if !slices.Equal(st.afters, []string{"", last, ""}) {
+		t.Fatalf("passes started after %v", st.afters)
+	}
+}
+
+func TestDDNSOperationWaitsOnAnyAddressAndQuitsALeftNode(t *testing.T) {
+	r := newDDNSRig(t)
+	binding := RouteBinding{BindingID: "binding_web", ServerID: "srv_1", ConnectionID: r.conn.ID, ConnectionGeneration: 1, InstanceID: "instance", ReleaseID: "release", ContainerID: "container", RuntimeID: "daemon-1", Address: "192.0.2.99"}
+	op := &RouteOperation{Kind: "address", PreviousAddress: ddnsOld, Route: Route{OrgID: "org", Input: RouteInput{Hostname: "app.example.com"}, Binding: binding}}
+	op.Route.Binding.Address = ddnsNew
+	var notice *routeNoticeError
+	// A to B to C: the binding names C, which this operation never saw.
+	if err := r.svc.addressNotSettled(t.Context(), op, binding, nil); !errors.Is(err, ErrPending) {
+		t.Fatalf("another address: %v", err)
+	}
+	// Between the node's writes it waits too, while the node is direct.
+	if err := r.svc.addressNotSettled(t.Context(), op, RouteBinding{}, errUnconfirmedNodeAddress); !errors.Is(err, ErrPending) {
+		t.Fatalf("between writes: %v", err)
+	}
+	// A node that left direct ingress, or was revoked, abandons it.
+	for _, leave := range []func(n *nodes.Node){
+		func(n *nodes.Node) {
+			n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt = nodeproto.IngressNone, "", nil
+		},
+		func(n *nodes.Node) { n.Status = nodes.StatusRevoked },
+	} {
+		rig := newDDNSRig(t)
+		rig.records.set(leave)
+		err := rig.svc.addressNotSettled(t.Context(), op, RouteBinding{}, errUnconfirmedNodeAddress)
+		if !errors.Is(err, errAddressAbandoned) || errors.Is(err, ErrPending) || !errors.As(err, &notice) || !strings.Contains(notice.message, "app.example.com stays where it is") {
+			t.Fatalf("left node: %v", err)
+		}
+	}
+	// Anything else that changed is still a conflict for the caller.
+	other := binding
+	other.ReleaseID = "release_2"
+	if err := r.svc.addressNotSettled(t.Context(), op, other, nil); err != nil {
+		t.Fatalf("other change: %v", err)
+	}
+}
+
+// nodeConnCredentials answers for the node's connection too.
+type nodeConnCredentials struct{ routeDNSCredentials }
+
+func (c nodeConnCredentials) Credential(ctx context.Context, org, id string) (*connections.Connection, []byte, error) {
+	if id == "conn_node_1" {
+		return &connections.Connection{ID: id, OrgID: org, Cloud: connections.Server, Method: connections.MethodNode, Generation: 1, Details: map[string]string{"node_id": "node_gone"}}, nil, nil
+	}
+	return c.routeDNSCredentials.Credential(ctx, org, id)
 }
