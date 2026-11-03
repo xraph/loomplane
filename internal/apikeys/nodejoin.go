@@ -99,8 +99,8 @@ func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal,
 	if !allowed {
 		return nil, security.ErrForbidden
 	}
-	if err = validNodeJoinScope(&scope); err != nil {
-		return nil, err
+	if verr := validNodeJoinScope(&scope); verr != nil {
+		return nil, verr
 	}
 	if scope.EdgeScope == EdgeScopeInstance {
 		// Instance-wide authority is session-only, like the instance console.
@@ -203,8 +203,8 @@ func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJo
 	tctx := s.tenant(ctx, k.TenantID)
 	// Spend first, then check the minter: whoever wins the race owns the
 	// outcome, and a token that fails the check is burned.
-	if err = s.spendNodeJoinKey(tctx, k); err != nil {
-		return nil, err
+	if serr := s.spendNodeJoinKey(tctx, k); serr != nil {
+		return nil, serr
 	}
 	ok, err := s.minterStillAllowed(ctx, claim)
 	if err != nil {
@@ -320,7 +320,7 @@ func (s *Service) nodeJoinClaim(k *key.Key) (*NodeJoinClaim, error) {
 	if k == nil || k.AppID != s.appID || k.TenantID == "" || k.CreatedBy == "" || k.State != key.StateActive || k.RevokedAt != nil || k.ExpiresAt == nil || !k.ExpiresAt.After(s.now()) {
 		return nil, ErrRejected
 	}
-	if kind, _ := k.Metadata["kind"].(string); kind != string(security.KindNodeJoin) {
+	if kind, ok := k.Metadata["kind"].(string); !ok || kind != string(security.KindNodeJoin) {
 		return nil, ErrRejected
 	}
 	var meta struct {

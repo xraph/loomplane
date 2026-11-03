@@ -944,7 +944,7 @@ func TestJoinRefusesAKnownKeyBeforeSpending(t *testing.T) {
 	again := joinReq()
 	again.PublicKey = first.PublicKey
 	_, err = r.svc.Join(context.Background(), again)
-	var jc *JoinConflict
+	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || jc.Spent {
 		t.Fatalf("err %v", err)
 	}
@@ -966,7 +966,7 @@ func TestJoinKnownKeyRaceAfterSpending(t *testing.T) {
 	again := joinReq()
 	again.PublicKey = first.PublicKey
 	_, err := r.svc.Join(context.Background(), again)
-	var jc *JoinConflict
+	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || !jc.Spent || !strings.Contains(err.Error(), "mint a new join token") {
 		t.Fatalf("err %v", err)
 	}
@@ -983,7 +983,7 @@ func TestJoinTakenNameRefusedBeforeSpending(t *testing.T) {
 	in2 := joinReq()
 	in2.Name = "web"
 	_, err := r.svc.Join(context.Background(), in2)
-	var jc *JoinConflict
+	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || jc.Spent {
 		t.Fatalf("err %v", err)
 	}
@@ -1008,7 +1008,7 @@ func TestJoinTakenNameRaceSaysSoAfterSpending(t *testing.T) {
 	in2 := joinReq()
 	in2.Name = "web"
 	_, err := r.svc.Join(context.Background(), in2)
-	var jc *JoinConflict
+	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || !jc.Spent {
 		t.Fatalf("err %v", err)
 	}

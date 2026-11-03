@@ -247,7 +247,7 @@ func (e *Extension) installCommand(token string, allow []nodeproto.Endpoint) str
 }
 
 // joinTokenEnv is where node join and node.sh look for a join token.
-const joinTokenEnv = "LOOMPLANE_JOIN_TOKEN"
+const joinTokenEnv = "LOOMPLANE_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
 
 func (e *Extension) join(c forge.Context) error {
 	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, maxJoinBody))
@@ -283,7 +283,7 @@ func (e *Extension) join(c forge.Context) error {
 // after the join token was spent says to mint a new one, and keeps the cause
 // out of the response.
 func (e *Extension) fail(c forge.Context, err error) error {
-	var conflict *nodes.JoinConflict
+	var conflict *nodes.JoinConflictError
 	switch {
 	case errors.As(err, &conflict):
 		// The text says which name or key, and whether to mint a new token.

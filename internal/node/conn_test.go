@@ -743,7 +743,7 @@ func TestRootAllowlistTrustsOnlyRoot(t *testing.T) {
 	if os.Geteuid() != 0 && len(rt.live.Load().Endpoints) != 0 {
 		t.Fatalf("a user-owned allow.json was trusted: %+v", rt.live.Load())
 	}
-	if !rt.ceilingOwner(0) || rt.ceilingOwner(uint32(os.Geteuid())) && os.Geteuid() != 0 { //nolint:gosec // a uid
+	if !rt.ceilingOwner(0) || rt.ceilingOwner(uint32(os.Geteuid())) && os.Geteuid() != 0 {
 		t.Fatal("ceilingOwner with RootAllowlist")
 	}
 }

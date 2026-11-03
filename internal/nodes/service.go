@@ -40,32 +40,32 @@ type JoinTokens interface {
 	ConsumeNodeJoinToken(ctx context.Context, raw string) (*apikeys.NodeJoinClaim, error)
 }
 
-// JoinConflict is a join refused because its name or its key already belongs
+// JoinConflictError is a join refused because its name or its key already belongs
 // to a node. Its text tells the operator what to do. Spent says whether the
 // join token was used up on the way, in which case they need a new one.
-type JoinConflict struct {
+type JoinConflictError struct {
 	Spent bool
 	msg   string
 	cause error
 }
 
-func (e *JoinConflict) Error() string { return e.msg }
-func (e *JoinConflict) Unwrap() error { return e.cause }
+func (e *JoinConflictError) Error() string { return e.msg }
+func (e *JoinConflictError) Unwrap() error { return e.cause }
 
-func nameConflict(name string, spent bool) *JoinConflict {
+func nameConflict(name string, spent bool) *JoinConflictError {
 	msg := fmt.Sprintf("the name %q belongs to a live node in this organization: revoke that node, or pick another --name, then run the join again. The join token was not used", name)
 	if spent {
 		msg = fmt.Sprintf("the name %q was taken by another node while this one joined: revoke that node, or pick another --name, then mint a new join token and join again", name)
 	}
-	return &JoinConflict{Spent: spent, msg: msg, cause: ErrNameTaken}
+	return &JoinConflictError{Spent: spent, msg: msg, cause: ErrNameTaken}
 }
 
-func keyConflict(spent bool) *JoinConflict {
+func keyConflict(spent bool) *JoinConflictError {
 	msg := "this machine's key already belongs to a node Loomplane knows, live or revoked, and a key never joins twice: move identity.key out of the node's state directory so the join makes a fresh one, then run the join again. The join token was not used"
 	if spent {
 		msg = "this machine's key already belongs to a node Loomplane knows, live or revoked: move identity.key out of the node's state directory so the join makes a fresh one, then mint a new join token and join again"
 	}
-	return &JoinConflict{Spent: spent, msg: msg, cause: ErrKeyKnown}
+	return &JoinConflictError{Spent: spent, msg: msg, cause: ErrKeyKnown}
 }
 
 // Authorizer is the part of security.Authorizer this package uses.

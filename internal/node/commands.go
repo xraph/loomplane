@@ -37,7 +37,7 @@ const (
 	// envToken is a join token, so it stays out of the process's arguments,
 	// where any user on the machine can read it. node.sh passes it through
 	// sudo with --preserve-env.
-	envToken = "LOOMPLANE_JOIN_TOKEN"
+	envToken = "LOOMPLANE_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
 )
 
 // labelBuildWorkers is the label --builder dedicated puts on a node.
@@ -730,8 +730,8 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	}
 	// The ceiling first. It is ours alone (root's, on a Linux service), so a
 	// copy that isn't, or is another node's, counts for nothing.
-	if err = c.widenCeiling(st, dir, cfg.NodeID, eps); err != nil {
-		return err
+	if werr := c.widenCeiling(st, dir, cfg.NodeID, eps); werr != nil {
+		return werr
 	}
 	sock := filepath.Join(dir, controlSocket)
 	list := joinEndpoints(eps, ", ")

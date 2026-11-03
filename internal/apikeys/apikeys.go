@@ -187,7 +187,7 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]APIKey, err
 	}
 	out := make([]APIKey, 0, len(keys))
 	for _, k := range keys {
-		if kind, _ := k.Metadata["kind"].(string); kind == string(security.KindNodeJoin) {
+		if kind, ok := k.Metadata["kind"].(string); ok && kind == string(security.KindNodeJoin) {
 			continue
 		}
 		if k.AppID == s.appID && k.TenantID == p.OrgID {
