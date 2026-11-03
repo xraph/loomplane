@@ -362,8 +362,15 @@ func (s *Service) draft(bound context.Context, actor security.Principal, task *a
 			(task.EnvironmentID != "" && plan.EnvironmentID != task.EnvironmentID) {
 			return d, "the plan isn't one this run can reach"
 		}
+		// The request names the revision the stored plan has, never the
+		// model's string: a person approves it, and loomctl prints it in a
+		// command people paste. A model that read another revision is
+		// refused, the way approving a changed plan is.
+		if in.Revision != plan.Revision {
+			return d, "the plan is stale: it changed since you read it, so read it again with get_plan"
+		}
 		r.ProjectID, r.EnvironmentID = plan.ProjectID, plan.EnvironmentID
-		r.Target = Target{PlanID: plan.ID, PlanRevision: in.Revision}
+		r.Target = Target{PlanID: plan.ID, PlanRevision: plan.Revision}
 		r.Context = append(r.Context, Link{Label: "The plan", Path: "/deployments/" + plan.ID})
 		text := strings.TrimSpace(strings.Join(nonEmpty(in.Note, pc.Note), "\n\n"))
 		r.Question = s.scanned(bound, text, blockedQuestion[kind])
