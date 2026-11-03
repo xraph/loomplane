@@ -246,6 +246,20 @@ func (s *Service) authorize(ctx context.Context, p security.Principal, cloud str
 	}
 	return s.Clouds.GetProfile(ctx, p.OrgID, "", cloud)
 }
+
+// authorizeChange is authorize for a path that attaches organization
+// configuration to the Cloud: servers, pools, clusters or capacity policy.
+// The platform-owned Loomplane Cloud takes none of these.
+func (s *Service) authorizeChange(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {
+	profile, err := s.authorize(ctx, p, cloud)
+	if err != nil {
+		return nil, err
+	}
+	if profile.PlatformOwned {
+		return nil, cloudprofiles.ErrPlatformOwned
+	}
+	return profile, nil
+}
 func (s *Service) ListServers(ctx context.Context, p security.Principal, cloud string) ([]*Server, error) {
 	if _, err := s.authorize(ctx, p, cloud); err != nil {
 		return nil, err

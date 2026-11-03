@@ -811,6 +811,8 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrManagedFailedCleanupUnavailable), errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, cloudprofiles.ErrPlatformOwned):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
 	}
 	if status := security.StatusFor(err); status != http.StatusInternalServerError {
 		return forge.NewHTTPError(status, err.Error())

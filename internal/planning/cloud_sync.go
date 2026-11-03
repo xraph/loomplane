@@ -104,6 +104,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
+		// A shared change rewrites the Cloud's targets or default, which the
+		// platform-owned Loomplane Cloud never takes from an organization.
+		cloud, cloudErr := st.GetProfile(ctx, p.OrgID, "", in.CloudID)
+		if cloudErr != nil {
+			return nil, cloudErr
+		}
+		if cloud.PlatformOwned {
+			return nil, cloudprofiles.ErrPlatformOwned
+		}
 		snapshot.Shared = true
 	}
 	var desired *cloudprofiles.Assignment

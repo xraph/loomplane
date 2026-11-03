@@ -125,6 +125,9 @@ func (s *Service) SaveLocationPolicy(ctx context.Context, p security.Principal, 
 	if err := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
 		return nil, err
 	}
+	if _, err := s.writable(ctx, p.OrgID, "", cloud); err != nil {
+		return nil, err
+	}
 	st, ok := s.store.(LocationPolicyStore)
 	if !ok {
 		return nil, ErrInvalid

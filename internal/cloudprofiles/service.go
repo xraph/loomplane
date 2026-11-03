@@ -186,6 +186,19 @@ func (s *Service) record(ctx context.Context, p security.Principal, projectID, a
 	}
 }
 
+// writable reads a Cloud the caller is about to change and refuses the
+// platform-owned Loomplane Cloud, which only the control plane writes.
+func (s *Service) writable(ctx context.Context, orgID, projectID, id string) (*Profile, error) {
+	c, err := s.store.GetProfile(ctx, orgID, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.PlatformOwned {
+		return nil, ErrPlatformOwned
+	}
+	return c, nil
+}
+
 // List returns the project's Clouds ordered by name and ID.
 func (s *Service) List(ctx context.Context, p security.Principal, projectID string) ([]*Profile, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountRead); err != nil {
@@ -233,7 +246,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +275,7 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +300,9 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 // Delete removes an unassigned Cloud and its targets.
 func (s *Service) Delete(ctx context.Context, p security.Principal, projectID, id string) error {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return err
+	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, id); err != nil {
 		return err
 	}
 	if err := s.store.DeleteProfile(ctx, p.OrgID, projectID, id); err != nil {
@@ -320,7 +336,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.GetProfile(ctx, p.OrgID, projectID, cloudID); err != nil {
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
 		return nil, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
@@ -417,6 +433,9 @@ func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
+		return nil, err
+	}
 	target, err := s.store.GetTarget(ctx, p.OrgID, projectID, cloudID, id)
 	if err != nil {
 		return nil, err
@@ -451,6 +470,9 @@ func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projec
 // DeleteTarget removes a target only while its Cloud is unassigned.
 func (s *Service) DeleteTarget(ctx context.Context, p security.Principal, projectID, cloudID, id string) error {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return err
+	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
 		return err
 	}
 	if err := s.store.DeleteTarget(ctx, p.OrgID, projectID, cloudID, id); err != nil {

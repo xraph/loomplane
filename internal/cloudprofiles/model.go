@@ -14,6 +14,9 @@ var (
 	ErrExists   = errors.New("a cloud or target with that name already exists")
 	ErrConflict = errors.New("cloud configuration changed; reload and try again")
 	ErrInUse    = errors.New("this cloud or target is assigned to an environment")
+	// ErrPlatformOwned refuses any change to the Loomplane Cloud an instance
+	// projects into a workspace. Only the platform control plane writes it.
+	ErrPlatformOwned = errors.New("Loomplane Cloud is run by this instance and can't be changed here.") //nolint:revive,staticcheck // the message is shown as written
 )
 
 // Profile is a named set of targets owned by one organization. ProjectID records creation provenance.
@@ -26,9 +29,12 @@ type Profile struct {
 	ProjectID        string            `json:"project_id"`
 	Name             string            `json:"name"`
 	DefaultPlacement *DefaultPlacement `json:"default_placement" nullable:"true" required:"true"`
-	Revision         int64             `json:"revision"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	// PlatformOwned marks the read-only Loomplane Cloud the instance runs.
+	// The organization can grant and assign it but not change it.
+	PlatformOwned bool      `json:"platform_owned"`
+	Revision      int64     `json:"revision"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // DefaultPlacement is a single provider, verified account and optional region.

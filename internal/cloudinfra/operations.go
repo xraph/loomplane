@@ -42,7 +42,7 @@ func capability(kind string) provider.InfrastructureCapability {
 }
 
 func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud string, in ServerInput) (*Operation, error) {
-	profile, err := s.authorize(ctx, p, cloud)
+	profile, err := s.authorizeChange(ctx, p, cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +299,7 @@ func (s *Service) validateConnection(ctx context.Context, o *Operation) (*connec
 	return conn, raw, nil
 }
 func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal, cloud, id string, in ApplyInput) (*Operation, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {

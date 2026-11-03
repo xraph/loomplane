@@ -58,7 +58,7 @@ func (s *Service) ListPools(ctx context.Context, p security.Principal, cloud str
 	return st.ListPools(ctx, p.OrgID, cloud)
 }
 func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id string, in PoolInput) (*Pool, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {
