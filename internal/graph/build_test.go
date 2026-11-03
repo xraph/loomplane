@@ -193,3 +193,46 @@ func TestBuild_anEntrypointsOwnCommandsWin(t *testing.T) {
 		t.Fatalf("services %+v", g.Services)
 	}
 }
+
+func TestBuild_envGoesToTheServiceThatReadsIt(t *testing.T) {
+	ev := func(p string) pd.Evidence { return pd.Evidence{Path: p, Line: 1} }
+	r := &pd.Report{
+		Units: []pd.Unit{
+			{ID: "go:.", Ecosystem: pd.Go, Path: ".", Entrypoints: []pd.Entrypoint{{Name: "api", Path: "cmd/api"}, {Name: "worker", Path: "cmd/worker"}}},
+			{ID: "node:web", Ecosystem: pd.Node, Path: "web", Entrypoints: []pd.Entrypoint{{Name: "web", Path: "web"}}},
+		},
+		Env: []pd.EnvUse{
+			{Name: "API_ONLY", Evidence: []pd.Evidence{ev("cmd/api/main.go")}},
+			{Name: "SHARED", Evidence: []pd.Evidence{ev("internal/config/config.go")}},
+			{Name: "WEB_URL", Evidence: []pd.Evidence{ev("web/src/app.ts")}},
+			{Name: "ROOT_EXAMPLE", Example: "x", Evidence: []pd.Evidence{ev(".env.example"), ev("web/.env.example")}},
+		},
+	}
+	g := Build(r)
+	got := map[string]string{}
+	for _, s := range g.Services {
+		var names []string
+		for _, v := range s.Env {
+			names = append(names, v.Name)
+		}
+		got[s.Name] = strings.Join(names, " ")
+	}
+	want := map[string]string{
+		"api":    "API_ONLY SHARED ROOT_EXAMPLE",
+		"worker": "SHARED ROOT_EXAMPLE",
+		"web":    "WEB_URL ROOT_EXAMPLE",
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s env = %q, want %q", name, got[name], w)
+		}
+	}
+	for _, s := range g.Services {
+		for _, v := range s.Env {
+			// The root module's services hold the root file; web has its own.
+			if v.Name == "ROOT_EXAMPLE" && s.Name == "web" && (len(v.Evidence) != 1 || v.Evidence[0].Path != "web/.env.example") {
+				t.Errorf("web's ROOT_EXAMPLE evidence %+v", v.Evidence)
+			}
+		}
+	}
+}

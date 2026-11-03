@@ -30771,6 +30771,12 @@
           "entrypoint": {
             "type": "string"
           },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvUse"
+            }
+          },
           "evidence": {
             "type": "array",
             "items": {
@@ -33265,6 +33271,31 @@
         ],
         "properties": {
           "value": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvUse": {
+        "type": "object",
+        "required": [
+          "name",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "example": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }

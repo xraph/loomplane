@@ -204,6 +204,18 @@ type Image struct {
 	Evidence []Evidence `json:"evidence"`
 }
 
+// EnvUse is an environment variable the code reads, or an example file
+// lists, such as DATABASE_URL.
+type EnvUse struct {
+	Name string `json:"name"`
+	// Example is the value an example file (.env.example) or a default in
+	// the code gives it. A committed .env's values are never read.
+	Example    string     `json:"example,omitempty"`
+	Confidence Confidence `json:"confidence"`
+	// Evidence is the first place each file reads or lists it.
+	Evidence []Evidence `json:"evidence"`
+}
+
 // Note is something the analysis couldn't read, or chose not to.
 type Note struct {
 	Path string `json:"path,omitempty"`
@@ -219,6 +231,7 @@ type Report struct {
 	Images       []Image       `json:"images"`
 	Resources    []ResourceUse `json:"resources"`
 	BuildSystems []BuildSystem `json:"build_systems"`
+	Env          []EnvUse      `json:"env"`
 	Notes        []Note        `json:"notes"`
 }
 

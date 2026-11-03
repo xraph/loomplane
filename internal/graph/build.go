@@ -94,6 +94,7 @@ func Build(r *discovery.Report) *Graph {
 	for _, ru := range r.Resources {
 		b.resource(ru)
 	}
+	assignEnv(b.g.Services, r.Env)
 	b.finish()
 	return b.g
 }
@@ -257,6 +258,84 @@ func imageService(img discovery.Image) Service {
 		Path: img.Context, Entrypoint: img.Path, Image: img.Path, Context: img.Context, Ports: img.Ports, Confidence: conf,
 		Evidence: append([]discovery.Evidence(nil), img.Evidence...),
 	}
+}
+
+// assignEnv gives each service the variables read in its own code. A file
+// belongs to the services whose entrypoint directory holds it most
+// closely, then to those whose source directory does, and a file none of
+// them holds, such as a root .env.example beside apps/api and apps/web,
+// belongs to every service.
+func assignEnv(services []Service, vars []discovery.EnvUse) {
+	owners := map[string][]int{}
+	ownersOf := func(file string) []int {
+		if o, ok := owners[file]; ok {
+			return o
+		}
+		o := closest(services, file, entryDir)
+		if o == nil {
+			o = closest(services, file, func(s Service) string { return s.Path })
+		}
+		if o == nil {
+			for i := range services {
+				o = append(o, i)
+			}
+		}
+		owners[file] = o
+		return o
+	}
+	for _, v := range vars {
+		got := map[int]*discovery.EnvUse{}
+		var order []int
+		for _, ev := range v.Evidence {
+			for _, i := range ownersOf(ev.Path) {
+				if got[i] == nil {
+					got[i] = &discovery.EnvUse{Name: v.Name, Example: v.Example, Confidence: v.Confidence}
+					order = append(order, i)
+				}
+				got[i].Evidence = append(got[i].Evidence, ev)
+			}
+		}
+		for _, i := range order {
+			services[i].Env = append(services[i].Env, *got[i])
+		}
+	}
+}
+
+// entryDir is the directory a service's entrypoint is: the entrypoint
+// itself, unless it names a file such as a Rust binary or a Dockerfile.
+func entryDir(s Service) string {
+	if path.Ext(s.Entrypoint) != "" || strings.HasPrefix(path.Base(s.Entrypoint), "Dockerfile") {
+		return path.Dir(s.Entrypoint)
+	}
+	return s.Entrypoint
+}
+
+// closest returns the services whose directory, by dirOf, holds file
+// most closely, or nil when none does. A root directory holds a file
+// only for a service at the root.
+func closest(services []Service, file string, dirOf func(Service) string) []int {
+	var out []int
+	best := -1
+	for i, s := range services {
+		d := path.Clean(dirOf(s))
+		if d == "." || d == "" || !within(file, d) {
+			continue
+		}
+		switch n := len(d); {
+		case n > best:
+			best, out = n, []int{i}
+		case n == best:
+			out = append(out, i)
+		}
+	}
+	if out == nil {
+		for i, s := range services {
+			if d := path.Clean(dirOf(s)); d == "." || d == "" {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
 }
 
 // resource adds the use to its resource node and returns the node's ID.
