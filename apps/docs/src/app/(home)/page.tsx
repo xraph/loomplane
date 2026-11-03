@@ -347,7 +347,8 @@ export default function HomePage() {
               </ul>
               <div className="store-row">
                 <span className="store-soon">
-                  Deploying to nodes comes next
+                  Deploy with Docker is available now. Relay and Kubernetes
+                  come next
                 </span>
                 <Link className="store-link" href="/clouds#nodes">
                   How nodes work <span className="arr">↗</span>
@@ -746,8 +747,10 @@ export default function HomePage() {
                 Loomplane at it without changing Loomplane itself. A machine
                 with no public address can join as a node with{" "}
                 <code>loomctl node join</code>: it dials out, so there&apos;s no
-                port to open. Nodes join, report and update today, and deploying
-                to them comes next.
+                port to open. Nodes can run Docker deploys and builds today, and
+                serve a domain directly if they have a public address. Relaying
+                traffic for nodes behind NAT and Kubernetes through a node come
+                next.
               </p>
             </details>
             <details>
