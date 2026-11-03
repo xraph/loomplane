@@ -69,3 +69,62 @@ export function ownLayer(v: Variable, target: Target): boolean {
 export function keyValid(key: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && key.length <= 255
 }
+
+/**
+ * looksSecret guesses whether a variable should be set as a secret, from
+ * its key and, when there is one, its value. It's only the starting point
+ * of the Secret switch an import shows: people correct it before setting.
+ *
+ * Getting it wrong costs differently each way. A secret marked plain is
+ * shown to everyone who can see the project's variables; a plain value
+ * marked secret can't be read back, which is only an annoyance.
+ */
+export function looksSecret(key: string, value = ""): boolean {
+  const k = key.toUpperCase()
+  // A bundler ships these to every browser, so they can't be kept secret.
+  if (browserPrefixes.some((p) => k.startsWith(p))) return false
+  if (secretValues.some((re) => re.test(value))) return true
+  if (addressKeys.test(k)) return true
+  if (notSecretKeys.test(k)) return false
+  return secretKeys.test(k)
+}
+
+/** Prefixes bundlers inline into client code. */
+const browserPrefixes = [
+  "NEXT_PUBLIC_",
+  "VITE_",
+  "REACT_APP_",
+  "EXPO_PUBLIC_",
+  "NUXT_PUBLIC_",
+  "GATSBY_",
+  "PUBLIC_",
+]
+
+/** Values that are credentials whatever their key: tokens, keys, passwords in URLs. */
+const secretValues = [
+  /^(sk|rk)_(live|test)_/, // Stripe secret and restricted keys
+  /^(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/, // GitHub tokens
+  /^github_pat_/,
+  /^xox[abpors]-/, // Slack tokens
+  /^sk-[A-Za-z0-9_-]{20,}/, // OpenAI-style API keys
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]*:[^/\s@]+@/i, // a URL with a password
+]
+
+/**
+ * Connection strings, which carry their credentials. Loomplane sets the
+ * ones it provisions as secrets too.
+ */
+const addressKeys =
+  /(DATABASE_URL$|^(MONGODB_URI|MONGO_URL|REDIS_URL|AMQP_URL)$|_DSN$|^DSN$|CONNECTION_STRING)/
+
+/**
+ * Keys that name a secret thing without being one: its ID, its public
+ * half, where it's kept, or how long it lasts.
+ */
+const notSecretKeys =
+  /(PUBLIC|PUBLISHABLE|_ID$|_PATH$|_FILE$|_DIR$|_TTL$|_EXPIR|_LENGTH$|_ALGORITHM$|_ISSUER$|_URL$)/
+
+/** Words a secret's key holds. */
+const secretKeys =
+  /(SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|PRIVATE|CREDENTIAL|API_?KEY|ACCESS_KEY|_KEY$|^KEY$|SALT|SIGNING|ENCRYPTION)/

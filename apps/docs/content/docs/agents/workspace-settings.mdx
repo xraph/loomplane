@@ -1,0 +1,55 @@
+---
+title: Workspace settings
+description: Choose the agent's provider and key, set its monthly budget, decide about knowledge, and set per-project autonomy.
+---
+
+A workspace admin runs the agent from **Settings, AI**. You need `ai:manage` to see the agent's panel at all. Everyone else with `agent:use` can see the agent's requests, and nobody else sees the settings. Chatting with the agent comes in a later version. In this one you set it up here and answer what it asks on the requests page.
+
+## Provider and key
+
+Pick one of four.
+
+| Choice | Runs on |
+|---|---|
+| Server default | The provider, model and key the operator set under `ai`. The page shows which |
+| Anthropic | Your own Anthropic key |
+| OpenAI | Your own OpenAI key |
+| OpenAI-compatible | Any endpoint that speaks the OpenAI API. You add a base URL too |
+
+Paste the key into **API key** and choose **Save provider**. After that the page shows only `Key set, ends in wxyz`. Nobody can read it back, including you. **Replace** swaps it for a new one, and **Remove** deletes it and sends the agent back to the server default.
+
+Keys live in Vault, never in the database. A key the agent uses has to be available to every project, because the agent works across the workspace, so you can't narrow it to some. You can't delete it while the agent runs on it either.
+
+The base URL for an OpenAI-compatible endpoint is checked when you save. It has to be an absolute URL with no credentials in it, and in production it has to be https. Loomplane refuses addresses on private networks and loopback outside development, link-local and cloud metadata addresses everywhere, and anything in `planning.endpoint_denied_cidrs`, because the agent sends its key there. The refusal names the rule.
+
+The **Model** field starts from the model the agent runs on now. Type another to change it. Loomplane refuses a model it has no price for and says so under the field.
+
+## Budget
+
+Give the agent a monthly budget in USD and choose **Save budget**. It's the agent's share of the workspace's AI budget. The page shows what it has spent this month beside the limit.
+
+You need a budget before you can turn the agent on. When the month's spend reaches the limit, the agent's model calls are refused with a message that says the workspace has used its AI budget, and they stay refused until next month or until an admin raises the limit. Work that's already waiting on a person isn't lost. Setting the budget to `0` releases it, which you can only do while the agent is off.
+
+## Knowledge
+
+The **Knowledge** switch lets the agent search documents before it answers. When the server can't support it, the switch is disabled and the reason sits beside it: no embedding model configured, or no pgvector. See [the built-in agent](/docs/agents/built-in-agent#knowledge).
+
+## Turning it on and off
+
+The switch at the top of the panel turns the agent on for this workspace. If something stops it, the message appears under the field it's about: a missing budget under the budget, an unpriced model under the model. Turning it off cancels running work and pending requests, so don't do it in the middle of a release you care about.
+
+## Autonomy, per project
+
+Open a project's **Settings** tab. When the agent is on, an **Autonomy** card sits beside **Responsible team**.
+
+**Autonomous promotion** says whether the agent may promote a release to production without asking first, once someone has asked it to release and every gate is green. It starts off for every project, so new projects ask first. The **minimum staging soak** (none, 30 minutes, 1, 2, 6, 12 or 24 hours) is how long staging has to have run the same commits, healthy, before the agent may promote them.
+
+In this version both settings are stored and nothing more. The agent still asks a person before every production promotion, whatever the switch says. The settings take effect when the promotion gate ships, and until then turning the switch on changes nothing you'd notice.
+
+Both need `deployment:approve` on the project. Without it you see the card with the controls disabled. The agent can't change either setting, whatever it's asked. The same call is `PUT /api/v1/projects/{id}/autonomy` with `autonomous_promotion` and `min_staging_soak_seconds`, which must be a multiple of 60 up to a week.
+
+Deleting or replacing anything in production that holds data always waits for a person, and the switch never changes that.
+
+## Requests
+
+Anything the agent asks of a person lands on **Deployments, Agent**. Who sees what is on [What needs a person](/docs/agents/what-needs-a-person#requests).

@@ -334,9 +334,20 @@ export function isAutomation(userID: string): boolean {
   return userID.startsWith("loomplane:") && userID.length > "loomplane:".length
 }
 
+/** AGENT_NAME is who acts for the workspace's built-in agent. */
+export const AGENT_NAME = "Loomplane agent"
+
+/**
+ * isAgentActor reports whether a created_by, decided_by or started_by is
+ * the workspace's agent, which acts as agent:<org>.
+ */
+export function isAgentActor(id: string): boolean {
+  return id.startsWith("agent:") && id.length > "agent:".length
+}
+
 /**
  * usePeople names the organization's members by user ID, and Loomplane
- * automation by its own name.
+ * automation and the Loomplane agent by their own names.
  */
 export function usePeople(): (userID: string) => Person {
   const members = useQuery(useMembersList)
@@ -352,6 +363,8 @@ export function usePeople(): (userID: string) => Person {
     (id: string) => {
       if (isAutomation(id))
         return { name: AUTOMATION_NAME, initials: initialsOf(AUTOMATION_NAME) }
+      if (isAgentActor(id))
+        return { name: AGENT_NAME, initials: initialsOf(AGENT_NAME) }
       const m = byID.get(id)
       const name = m?.name || m?.email || "Someone"
       return { name, initials: initialsOf(name) }

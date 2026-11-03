@@ -88,8 +88,11 @@ type Service struct {
 	Image string `json:"image,omitempty"`
 	// Context is the directory the Dockerfile builds from: its own,
 	// unless a Compose file says another.
-	Context    string               `json:"context,omitempty"`
-	Ports      []int                `json:"ports,omitempty"`
+	Context string `json:"context,omitempty"`
+	Ports   []int  `json:"ports,omitempty"`
+	// Env are the environment variables its code reads or its example
+	// files list, which a deployment will likely need set.
+	Env        []discovery.EnvUse   `json:"env,omitempty"`
 	Commands   discovery.Commands   `json:"commands"`
 	Confidence discovery.Confidence `json:"confidence"`
 	Evidence   []discovery.Evidence `json:"evidence"`

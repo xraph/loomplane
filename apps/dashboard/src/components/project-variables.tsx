@@ -1,4 +1,4 @@
-import { LockIcon, PlusIcon } from "lucide-react"
+import { FileUpIcon, LockIcon, PlusIcon, SparklesIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -15,6 +15,7 @@ import type {
   Environment,
   Project,
   ResolvedVariable,
+  Graph,
   Variable,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
@@ -22,6 +23,7 @@ import {
   type VariableInput,
   VariableDialog,
 } from "@/components/variable-dialog"
+import { type ImportSource, VariableImport } from "@/components/variable-import"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -53,6 +55,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { detected } from "@/lib/env-import"
 import { useProjectCan } from "@/lib/project-permissions"
 import { cn } from "@/lib/utils"
 import { layerLabel, ownLayer, reachLabel, type Target } from "@/lib/variables"
@@ -96,6 +99,7 @@ export function ProjectVariables({
       project={project}
       environments={environments}
       services={services}
+      graph={graph}
       initialEnvironment={environment}
     />
   )
@@ -105,11 +109,14 @@ function Panel({
   project,
   environments,
   services,
+  graph,
   initialEnvironment = "",
 }: {
   project: Project
   environments: Environment[]
   services: ServiceOption[]
+  /** The project's graph: the variables the analysis found each service reading. */
+  graph?: Graph
   initialEnvironment?: string
 }) {
   const can = useProjectCan(project.id)
@@ -133,6 +140,19 @@ function Panel({
     | { kind: "edit"; variable: Variable }
     | null
   >(null)
+
+  const [importing, setImporting] = useState<ImportSource | null>(null)
+  // The same query the table below runs, so it's one request: what's set
+  // already isn't offered again.
+  const resolved = useQuery(useVariablesResolve, {
+    path: { id: project.id },
+    query: { environment: env, service: service || undefined },
+  })
+  const set = new Set((resolved.data?.variables ?? []).map((v) => v.key))
+  const found = detected(graph, service)
+  const unset = resolved.data
+    ? found.filter((v) => !set.has(v.name) && !v.providedBy)
+    : []
 
   const create = useMutation(useProjectVariablesCreate)
   const update = useMutation(useVariablesUpdate)
@@ -211,9 +231,18 @@ function Panel({
         {mayManage && env && (
           <Button
             size="sm"
+            variant="outline"
             className="ml-auto"
-            onClick={() => setDialog({ kind: "create" })}
+            onClick={() =>
+              setImporting(found.length > 0 ? "detected" : "paste")
+            }
           >
+            <FileUpIcon />
+            Import
+          </Button>
+        )}
+        {mayManage && env && (
+          <Button size="sm" onClick={() => setDialog({ kind: "create" })}>
             <PlusIcon />
             Set variable
           </Button>
@@ -226,6 +255,34 @@ function Panel({
         {services.length === 0 &&
           " Analyze the repository to set variables for one service."}
       </p>
+      {mayManage && env && unset.length > 0 && (
+        <Alert>
+          <SparklesIcon />
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              The analysis found {unset.length}{" "}
+              {unset.length === 1 ? "variable" : "variables"}{" "}
+              {target.serviceName ?? "this project's services"}{" "}
+              {unset.length === 1 ? "reads that isn't" : "read that aren't"} set
+              in {env}:{" "}
+              <span className="font-mono text-[12px]">
+                {unset
+                  .slice(0, 4)
+                  .map((v) => v.name)
+                  .join(", ")}
+                {unset.length > 4 ? ` and ${unset.length - 4} more` : ""}
+              </span>
+            </span>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setImporting("detected")}
+            >
+              Review them
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {env && (
         <Resolved
           project={project}
@@ -234,6 +291,37 @@ function Panel({
           mayManage={mayManage}
           onEdit={(variable) => setDialog({ kind: "edit", variable })}
           onOverride={(key) => setDialog({ kind: "create", presetKey: key })}
+        />
+      )}
+      {env && (
+        <VariableImport
+          open={importing !== null}
+          onOpenChange={(open) => !open && setImporting(null)}
+          where={where}
+          environment={env}
+          found={found}
+          set={set}
+          source={importing ?? "detected"}
+          submit={(v) =>
+            create
+              .mutateAsync({
+                path: { id: project.id },
+                body: {
+                  key: v.key,
+                  value: v.value,
+                  secret: v.secret,
+                  environment: v.environment || undefined,
+                  service: service || undefined,
+                },
+              })
+              .then(() => undefined)
+          }
+          onDone={(count) => {
+            toast.success(
+              `Set ${count} ${count === 1 ? "variable" : "variables"} ${where}`
+            )
+            refresh()
+          }}
         />
       )}
       {env && (

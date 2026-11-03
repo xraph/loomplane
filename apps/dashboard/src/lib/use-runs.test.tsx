@@ -212,4 +212,23 @@ describe("people", () => {
     expect(result.current("usr_1").name).toBe("Someone")
     expect(result.current("loomplane:").name).toBe("Someone")
   })
+
+  it("names the Loomplane agent, which no member is", async () => {
+    vi.stubGlobal("fetch", async () =>
+      json({
+        members: [
+          { user_id: "usr_2", name: "Pat Doe", email: "pat@example.com" },
+          // A member row can never make someone the agent either.
+          { user_id: "agent:aorg_1", name: "Mallory", email: "m@example.com" },
+        ],
+      })
+    )
+    const { result } = renderHook(() => usePeople(), { wrapper })
+    await waitFor(() => expect(result.current("usr_2").name).toBe("Pat Doe"))
+    expect(result.current("agent:aorg_1")).toEqual({
+      name: "Loomplane agent",
+      initials: "LA",
+    })
+    expect(result.current("agent:").name).toBe("Someone")
+  })
 })

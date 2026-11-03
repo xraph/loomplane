@@ -129,6 +129,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, registry); err != nil {
 		return fmt.Errorf("provide the GitLab hosts: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.svc); err != nil {
+		return fmt.Errorf("provide the discovery service: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}

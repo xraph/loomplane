@@ -67,7 +67,7 @@ func newRefreshFixture(t *testing.T) *refreshFixture {
 	f.svc = f.process(t)
 	now := time.Now().UTC()
 	c := &connections.Connection{ID: "conn_1", OrgID: "org_1", Cloud: connections.DigitalOcean, Name: "Main", Method: connections.MethodOAuth,
-		Account: "Acme", Details: map[string]string{"team_uuid": "team-1"}, Status: connections.StatusReady, CreatedAt: now, UpdatedAt: now}
+		Account: "Acme", Details: map[string]string{"team_uuid": "team-1"}, Status: connections.StatusReady, OAuthClientID: "id", CreatedAt: now, UpdatedAt: now}
 	if err := f.store.CreateConnection(ctx, c); err != nil {
 		t.Fatal(err)
 	}

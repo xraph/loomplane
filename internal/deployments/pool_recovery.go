@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 type poolWorkloadCleaner interface {
@@ -20,7 +21,9 @@ type poolWorkloadCleaner interface {
 // CleanupPoolReservation uses the reservation's retained cleanup authority. It
 // deliberately does not authorize a new deployment or resolve a current target.
 func (r *Runner) CleanupPoolReservation(ctx context.Context, org, planID, service string, checkpoint []byte, save func([]byte) error) error {
-	ctx = poolEffectContext(ctx)
+	// The removal runs as the deployment's approver, which may be the
+	// agent: cleaning up its own deployment is part of running it.
+	ctx = poolEffectContext(security.WithDeploymentRun(ctx))
 	plan, err := r.plans.GetPlan(ctx, org, planID)
 	if err != nil {
 		return err

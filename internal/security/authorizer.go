@@ -73,11 +73,29 @@ func NewAuthorizer(engine Engine, store Store, members MembershipFunc) *Authoriz
 }
 
 // Require returns nil when p may perform perm on the resource, ErrForbidden
-// when it may not, and any other error when Warden couldn't decide.
+// when it may not, and any other error when Warden couldn't decide. The AI
+// agent acting for a person needs the person to hold perm as well.
 func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, resourceID string) error {
-	if p.ReadOnly && !perm.Reads() {
-		return fmt.Errorf("%w (%s): this API key can only read", ErrForbidden, perm.Name())
+	person, acting, err := onBehalf(p, perm)
+	if err != nil {
+		return err
 	}
+	if err := a.require(ctx, p, perm, resourceID); err != nil {
+		return err
+	}
+	if !acting {
+		return nil
+	}
+	if err := a.require(ctx, person, perm, resourceID); err != nil {
+		if errors.Is(err, ErrForbidden) {
+			return fmt.Errorf("%w (%s): the person the agent acts for lacks it", ErrForbidden, perm.Name())
+		}
+		return err
+	}
+	return nil
+}
+
+func (a *Authorizer) require(ctx context.Context, p Principal, perm Permission, resourceID string) error {
 	res, err := a.check(ctx, p, perm, resourceID)
 	if err != nil {
 		return err
@@ -86,7 +104,7 @@ func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, 
 		return nil
 	}
 	// Only people have memberships to repair from. A service account's
-	// role comes from EnsureTenant alone.
+	// role comes from EnsureTenant or AssignAgent alone.
 	if res.Decision == warden.DecisionDenyNoRoles && a.members != nil && !p.IsServiceAccount() {
 		repaired, err := a.repair(ctx, p)
 		if err != nil {
@@ -105,17 +123,32 @@ func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, 
 }
 
 // Allowed reports whether p may perform perm across the workspace, for
-// answers such as which buttons the dashboard shows. It never repairs.
+// answers such as which buttons the dashboard shows. It never repairs. The
+// AI agent acting for a person is allowed only what both may do.
 func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) (bool, error) {
 	return a.AllowedOn(ctx, p, perm, "")
 }
 
 // AllowedOn is Allowed on one project, where the person's team grants on
-// that project count too. It never repairs.
+// that project count too. It never repairs. The AI agent acting for a
+// person is allowed only what both may do there, so a person's team grant
+// on one project never lends the agent another.
 func (a *Authorizer) AllowedOn(ctx context.Context, p Principal, perm Permission, projectID string) (bool, error) {
-	if p.ReadOnly && !perm.Reads() {
+	person, acting, err := onBehalf(p, perm)
+	if errors.Is(err, ErrForbidden) {
 		return false, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	ok, err := a.allowedOn(ctx, p, perm, projectID)
+	if !ok || err != nil || !acting {
+		return ok, err
+	}
+	return a.allowedOn(ctx, person, perm, projectID)
+}
+
+func (a *Authorizer) allowedOn(ctx context.Context, p Principal, perm Permission, projectID string) (bool, error) {
 	res, err := a.check(ctx, p, perm, projectID)
 	if errors.Is(err, ErrForbidden) {
 		return false, nil
@@ -124,6 +157,26 @@ func (a *Authorizer) AllowedOn(ctx context.Context, p Principal, perm Permission
 		return false, err
 	}
 	return res.Allowed, nil
+}
+
+// onBehalf returns the person an agent principal acts for, and refuses,
+// before asking Warden about either of them, what a read-only key may not
+// do and a person who isn't one of the organization's people.
+func onBehalf(p Principal, perm Permission) (person Principal, acting bool, err error) {
+	if p.ReadOnly && !perm.Reads() {
+		return Principal{}, false, fmt.Errorf("%w (%s): this API key can only read", ErrForbidden, perm.Name())
+	}
+	person, acting = p.Person()
+	if !acting {
+		return Principal{}, false, nil
+	}
+	if person.Kind != KindUser || person.OnBehalfOf != nil || person.OrgID != p.OrgID {
+		return Principal{}, false, fmt.Errorf("%w (%s): the agent acts only for its own organization's members", ErrForbidden, perm.Name())
+	}
+	if person.ReadOnly && !perm.Reads() {
+		return Principal{}, false, fmt.Errorf("%w (%s): the person the agent acts for can only read", ErrForbidden, perm.Name())
+	}
+	return person, true, nil
 }
 
 func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, resourceID string) (*warden.CheckResult, error) {
@@ -138,6 +191,15 @@ func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, re
 	// The automation acts only in its own organization.
 	if p.IsSystem() && p.UserID != SystemSubject(p.OrgID) {
 		return nil, ErrForbidden
+	}
+	// So does the agent.
+	if p.IsAgent() && p.UserID != AgentSubject(p.OrgID) {
+		return nil, fmt.Errorf("%w (%s)", ErrForbidden, perm.Name())
+	}
+	// Its role holds infrastructure:modify for the deployments it approved,
+	// which run as it alone. Anywhere else, it doesn't change infrastructure.
+	if p.IsAgent() && deploymentRunOnly(perm) && !InDeploymentRun(ctx) {
+		return nil, fmt.Errorf("%w (%s): the agent changes infrastructure only while running a deployment it approved", ErrForbidden, perm.Name())
 	}
 	// Retirement destroys recovery bytes. A cached Warden assignment alone
 	// cannot authorize it when a membership hook has failed or is delayed,
@@ -245,6 +307,23 @@ func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	// Its role's permissions may have just changed, assignment or not.
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, system)
 	a.ensured.Store(orgID, struct{}{})
+	return nil
+}
+
+// writeRole creates the role if it's missing and sets its permissions to
+// def's, whatever they were.
+func (a *Authorizer) writeRole(ctx context.Context, orgID string, def RoleDef, now time.Time) error {
+	r, err := a.ensureRole(ctx, orgID, def, now)
+	if err != nil {
+		return err
+	}
+	refs := make([]permission.Ref, 0, len(def.Permissions))
+	for _, perm := range def.Permissions {
+		refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
+	}
+	if err := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); err != nil {
+		return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, err)
+	}
 	return nil
 }
 
@@ -381,9 +460,9 @@ func (a *Authorizer) ensureRole(ctx context.Context, orgID string, def RoleDef, 
 // the membership hooks call it with the role authsome just wrote. The root
 // row it creates carries grantedBy.
 func (a *Authorizer) Assign(ctx context.Context, orgID, userID, roleSlug, grantedBy string) error {
-	// The automation's role is never a person's.
-	if roleSlug == RoleSystem {
-		return fmt.Errorf("%w: %s isn't a member role", ErrForbidden, RoleSystem)
+	// The automation's role and the agent's are never a person's.
+	if roleSlug == RoleSystem || roleSlug == RoleAgent {
+		return fmt.Errorf("%w: %s isn't a member role", ErrForbidden, roleSlug)
 	}
 	return a.sync(ctx, orgID, userID, roleSlug, grantedBy)
 }
@@ -426,6 +505,43 @@ func (a *Authorizer) Revoke(ctx context.Context, orgID, userID string) error {
 		return fmt.Errorf("revoke roles of %s in %s: %w", userID, orgID, err)
 	}
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectUser, userID)
+	return nil
+}
+
+// AssignAgent gives the organization's AI agent its role, when the
+// workspace turns the agent on. Unlike the automation's, the role is
+// written into this tenant only, and brought up to AgentRole each time, so
+// a release that grows the role reaches a workspace on its next enable.
+func (a *Authorizer) AssignAgent(ctx context.Context, orgID string) error {
+	if orgID == "" {
+		return fmt.Errorf("%w: the agent needs an organization", ErrForbidden)
+	}
+	if err := a.EnsureTenant(ctx, orgID); err != nil {
+		return err
+	}
+	if err := a.writeRole(ctx, orgID, AgentRole(), a.now().UTC()); err != nil {
+		return err
+	}
+	agent := AgentSubject(orgID)
+	if err := a.assign(ctx, orgID, warden.SubjectServiceAcct, agent, RoleAgent, "loomplane"); err != nil {
+		return err
+	}
+	// Its role's permissions may have just changed, assignment or not.
+	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, agent)
+	return nil
+}
+
+// RevokeAgent takes the organization's AI agent's role away, when the
+// workspace turns the agent off. The role stays, held by no one.
+func (a *Authorizer) RevokeAgent(ctx context.Context, orgID string) error {
+	if orgID == "" {
+		return fmt.Errorf("%w: the agent needs an organization", ErrForbidden)
+	}
+	agent := AgentSubject(orgID)
+	if err := a.store.DeleteAssignmentsBySubject(ctx, orgID, string(warden.SubjectServiceAcct), agent); err != nil {
+		return fmt.Errorf("revoke roles of %s in %s: %w", agent, orgID, err)
+	}
+	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, agent)
 	return nil
 }
 

@@ -354,6 +354,9 @@ func (s *FailedCleanups) RecoverFailedCleanups(ctx context.Context) error {
 
 // RunFailedCleanup replays only the accepted deletion, never its creation stages.
 func (s *FailedCleanups) RunFailedCleanup(ctx context.Context, org, id string, attempt int, heartbeat func([]byte) error) error {
+	// The removal runs as the deployment's approver, which may be the
+	// agent: cleaning up its own deployment is part of running it.
+	ctx = security.WithDeploymentRun(ctx)
 	if s.managed != nil {
 		_, err := s.managed.CurrentFailedCleanup(ctx, org, id)
 		if err == nil {

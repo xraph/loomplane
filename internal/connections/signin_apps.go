@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/oauth"
-	"github.com/xraph/loomplane/internal/security"
 )
 
 // Provider is one cloud's sign-in: where to send someone, and the calls
@@ -32,11 +31,18 @@ type Handout interface {
 	Handout(app oauth.App, g oauth.Grant, settings map[string]string) ([]byte, error)
 }
 
+// AppIndependent is a Provider whose grants keep working whatever app is
+// configured, such as Vercel's, which never expire and carry no refresh
+// token. Its connections stay usable when the app changes or goes.
+type AppIndependent interface {
+	GrantOutlivesApp() bool
+}
+
 // Where a sign-in app came from.
 const (
-	AppFromConfig       = "config"
-	AppFromOrganization = "organization"
-	AppFromNone         = "none"
+	AppFromConfig   = "config"
+	AppFromPlatform = "platform"
+	AppFromNone     = "none"
 )
 
 // SignInApp says which app a cloud signs in with. It never carries a secret.
@@ -50,9 +56,14 @@ type SignInApp struct {
 	// Problem is why the cloud last refused the app, until it's saved
 	// again or a sign-in with it works.
 	Problem string `json:"problem,omitempty"`
+	// Connections and Organizations count the sign-ins made with this app
+	// that still work, and the organizations they belong to. They are 0
+	// for a cloud whose grants outlive its app.
+	Connections   int `json:"connections"`
+	Organizations int `json:"organizations"`
 }
 
-// AppInput is an organization's own app for a cloud. Slug is the app's
+// AppInput is the platform's app for a cloud. Slug is the app's
 // name in its install address, which only Vercel needs.
 type AppInput struct {
 	ClientID     string `json:"client_id"`
@@ -60,10 +71,10 @@ type AppInput struct {
 	Slug         string `json:"slug,omitempty"`
 }
 
-// StoredApp is an organization's app as the database keeps it. The secret
-// is in Vault.
+// StoredApp is the platform's app for a cloud as the database keeps it.
+// The secret is in Vault.
 type StoredApp struct {
-	OrgID, Cloud, ClientID, UpdatedBy string
+	Cloud, ClientID, UpdatedBy string
 	// Slug is the app's name in its cloud's own address. Only Vercel's
 	// has one.
 	Slug                 string
@@ -81,12 +92,21 @@ type PendingSignIn struct {
 	ExpiresAt, CreatedAt time.Time
 }
 
-// AppStore keeps sign-in apps and pending sign-ins.
+// AppSecrets keeps the platform's sign-in app secrets, one per cloud.
+type AppSecrets interface {
+	Put(ctx context.Context, cloud string, secret []byte) error
+	Reveal(ctx context.Context, cloud string) ([]byte, error)
+	// Delete removes a secret. One already gone is not an error.
+	Delete(ctx context.Context, cloud string) error
+}
+
+// AppStore keeps sign-in apps and pending sign-ins. An app belongs to the
+// whole platform, one per cloud.
 type AppStore interface {
-	GetApp(ctx context.Context, orgID, cloud string) (*StoredApp, error)
+	GetApp(ctx context.Context, cloud string) (*StoredApp, error)
 	PutApp(ctx context.Context, a *StoredApp) error
-	DeleteApp(ctx context.Context, orgID, cloud string) error
-	ListApps(ctx context.Context, orgID string) ([]*StoredApp, error)
+	DeleteApp(ctx context.Context, cloud string) error
+	ListApps(ctx context.Context) ([]*StoredApp, error)
 	PutSignIn(ctx context.Context, p *PendingSignIn) error
 	// TakeSignIn removes and returns a pending sign-in, so a state works
 	// once. One already taken is ErrNotFound.
@@ -94,12 +114,18 @@ type AppStore interface {
 	// SweepSignIns removes sign-ins that expired before the given time and
 	// says how many.
 	SweepSignIns(ctx context.Context, before time.Time) (int64, error)
-	// SetAppProblem records why an organization's app for a cloud stopped
-	// working, replacing any earlier message.
-	SetAppProblem(ctx context.Context, orgID, cloud, message string, at time.Time) error
-	ClearAppProblem(ctx context.Context, orgID, cloud string) error
+	// SetAppProblem records why the platform's app for a cloud stopped
+	// working, replacing any earlier message. It lands only on a row that
+	// still holds clientID, so an app replaced since is not blamed. A cloud
+	// with no such app has nothing to record on, so that is a no-op.
+	SetAppProblem(ctx context.Context, cloud, clientID, message string, at time.Time) error
+	ClearAppProblem(ctx context.Context, cloud string) error
+	// SignedInWith counts the working sign-ins made with the app whose
+	// client ID is clientID, and the organizations they belong to. It reads
+	// across every organization.
+	SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error)
 	// AppProblems maps each cloud with a problem to its message.
-	AppProblems(ctx context.Context, orgID string) (map[string]string, error)
+	AppProblems(ctx context.Context) (map[string]string, error)
 	// PutReservation holds a keyless connection's ID. An ID already held
 	// is an error.
 	PutReservation(ctx context.Context, r *Reservation) error
@@ -115,26 +141,31 @@ type AppStore interface {
 // AppAuditor records a change to a sign-in app. The Auditor given to
 // NewService may also implement it.
 type AppAuditor interface {
-	RecordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string)
+	RecordApp(ctx context.Context, action, userID, cloud, clientID string)
 }
 
-func (s *Service) recordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string) {
+func (s *Service) recordApp(ctx context.Context, action, userID, cloud, clientID string) {
 	if a, ok := s.audit.(AppAuditor); ok {
-		a.RecordApp(ctx, action, p, cloud, clientID)
+		a.RecordApp(ctx, action, userID, cloud, clientID)
 	}
 }
 
 // SignInApps lists each cloud that can be signed in to and where its app
-// comes from.
-func (s *Service) SignInApps(ctx context.Context, p security.Principal) ([]SignInApp, error) {
-	if err := s.authz.Require(ctx, p, security.CloudAccountRead, ""); err != nil {
-		return nil, err
-	}
-	stored, err := s.Apps.ListApps(ctx, p.OrgID)
+// comes from, with how many sign-ins work with it. Who may see it is the
+// caller's to decide.
+func (s *Service) SignInApps(ctx context.Context) ([]SignInApp, error) {
+	return s.signInApps(ctx, true)
+}
+
+// signInApps is SignInApps, counting the sign-ins only when withCounts. The
+// counts read across every organization, so only the platform's own list
+// asks for them.
+func (s *Service) signInApps(ctx context.Context, withCounts bool) ([]SignInApp, error) {
+	stored, err := s.Apps.ListApps(ctx)
 	if err != nil {
 		return nil, err
 	}
-	problems, err := s.Apps.AppProblems(ctx, p.OrgID)
+	problems, err := s.Apps.AppProblems(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -144,14 +175,39 @@ func (s *Service) SignInApps(ctx context.Context, p security.Principal) ([]SignI
 	}
 	out := []SignInApp{}
 	for _, cloud := range slices.Sorted(maps.Keys(s.Providers)) {
-		entry := SignInApp{Cloud: cloud, Source: AppFromNone, Problem: problems[cloud]}
+		entry := SignInApp{Cloud: cloud, Source: AppFromNone}
 		if cfg, ok := s.ConfigApps[cloud]; ok {
 			entry.Source, entry.ClientID, entry.Slug = AppFromConfig, cfg.ClientID, cfg.Slug
 		} else if a, ok := byCloud[cloud]; ok {
 			t := a.UpdatedAt.UTC()
-			entry.Source, entry.ClientID, entry.Slug, entry.UpdatedBy, entry.UpdatedAt = AppFromOrganization, a.ClientID, a.Slug, a.UpdatedBy, &t
+			entry.Source, entry.ClientID, entry.Slug, entry.UpdatedBy, entry.UpdatedAt = AppFromPlatform, a.ClientID, a.Slug, a.UpdatedBy, &t
+			entry.Problem = problems[cloud]
+		}
+		if withCounts && entry.ClientID != "" && !outlivesApp(s.Providers[cloud]) {
+			if entry.Connections, entry.Organizations, err = s.Apps.SignedInWith(ctx, cloud, entry.ClientID); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func outlivesApp(p Provider) bool {
+	a, ok := p.(AppIndependent)
+	return ok && a.GrantOutlivesApp()
+}
+
+// SignInClouds says which clouds can be signed in to: those with an app,
+// from configuration or the platform.
+func (s *Service) SignInClouds(ctx context.Context) (map[string]bool, error) {
+	apps, err := s.signInApps(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(apps))
+	for _, a := range apps {
+		out[a.Cloud] = a.Source != AppFromNone
 	}
 	return out, nil
 }
@@ -163,13 +219,11 @@ func (s *Service) provider(cloud string) error {
 	return nil
 }
 
-// SetSignInApp saves the organization's own app for a cloud. The secret
-// goes to Vault and the client ID to the database. Saving it clears any
-// problem the cloud had with the app before.
-func (s *Service) SetSignInApp(ctx context.Context, p security.Principal, cloud string, in AppInput) (*SignInApp, error) {
-	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
-		return nil, err
-	}
+// SetSignInApp saves the platform's app for a cloud, on behalf of userID.
+// The secret goes to Vault and the client ID to the database. Saving it
+// clears any problem the cloud had with the app before. Whether userID may
+// is the caller's to check.
+func (s *Service) SetSignInApp(ctx context.Context, userID, cloud string, in AppInput) (*SignInApp, error) {
 	if err := s.provider(cloud); err != nil {
 		return nil, err
 	}
@@ -187,68 +241,65 @@ func (s *Service) SetSignInApp(ctx context.Context, p security.Principal, cloud 
 	}
 	// The secret first, like a connection's: a row without its secret
 	// would look set up and fail every sign-in.
-	if err := s.AppSecrets.Put(ctx, p.OrgID, cloud, []byte(secret)); err != nil {
+	if err := s.AppSecrets.Put(ctx, cloud, []byte(secret)); err != nil {
 		return nil, err
 	}
 	now := s.now().UTC()
-	app := &StoredApp{OrgID: p.OrgID, Cloud: cloud, ClientID: clientID, Slug: slug, UpdatedBy: p.UserID, CreatedAt: now, UpdatedAt: now}
+	app := &StoredApp{Cloud: cloud, ClientID: clientID, Slug: slug, UpdatedBy: userID, CreatedAt: now, UpdatedAt: now}
 	if err := s.Apps.PutApp(ctx, app); err != nil {
 		return nil, err
 	}
 	// The app is saved either way, so a problem left behind only shows a
 	// stale message until the next sign-in clears it.
-	if err := s.Apps.ClearAppProblem(ctx, p.OrgID, cloud); err != nil {
+	if err := s.Apps.ClearAppProblem(ctx, cloud); err != nil {
 		s.warn("clear the problem of a saved sign-in app", err)
 	}
-	s.recordApp(ctx, "cloud_signin_app.set", p, cloud, clientID)
-	return &SignInApp{Cloud: cloud, Source: AppFromOrganization, ClientID: clientID, Slug: slug, UpdatedBy: p.UserID, UpdatedAt: &now}, nil
+	s.recordApp(ctx, "cloud_signin_app.set", userID, cloud, clientID)
+	return &SignInApp{Cloud: cloud, Source: AppFromPlatform, ClientID: clientID, Slug: slug, UpdatedBy: userID, UpdatedAt: &now}, nil
 }
 
-// DeleteSignInApp removes the organization's own app for a cloud, and any
-// problem the cloud had with it.
-func (s *Service) DeleteSignInApp(ctx context.Context, p security.Principal, cloud string) error {
-	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
-		return err
-	}
+// DeleteSignInApp removes the platform's app for a cloud, and any problem
+// the cloud had with it. Whether userID may is the caller's to check.
+func (s *Service) DeleteSignInApp(ctx context.Context, userID, cloud string) error {
 	if err := s.provider(cloud); err != nil {
 		return err
 	}
 	if _, ok := s.ConfigApps[cloud]; ok {
 		return ErrAppLocked
 	}
-	stored, err := s.Apps.GetApp(ctx, p.OrgID, cloud)
+	stored, err := s.Apps.GetApp(ctx, cloud)
 	if err != nil {
 		return err
 	}
-	if err := s.Apps.DeleteApp(ctx, p.OrgID, cloud); err != nil {
+	if err := s.Apps.DeleteApp(ctx, cloud); err != nil {
 		return err
 	}
-	if err := s.AppSecrets.Delete(ctx, p.OrgID, cloud); err != nil {
+	if err := s.AppSecrets.Delete(ctx, cloud); err != nil {
 		s.warn("remove the secret of a deleted sign-in app", err)
 	}
 	// The app is gone either way, so a problem left behind only shows a
 	// stale message until the next app is saved.
-	if err := s.Apps.ClearAppProblem(ctx, p.OrgID, cloud); err != nil {
+	if err := s.Apps.ClearAppProblem(ctx, cloud); err != nil {
 		s.warn("clear the problem of a deleted sign-in app", err)
 	}
-	s.recordApp(ctx, "cloud_signin_app.delete", p, cloud, stored.ClientID)
+	s.recordApp(ctx, "cloud_signin_app.delete", userID, cloud, stored.ClientID)
 	return nil
 }
 
 // app is the app to sign in to a cloud with: configuration's first, then
-// the organization's.
-func (s *Service) app(ctx context.Context, orgID, cloud string) (oauth.App, error) {
+// the platform's.
+func (s *Service) app(ctx context.Context, cloud string) (oauth.App, error) {
 	if cfg, ok := s.ConfigApps[cloud]; ok {
 		return cfg, nil
 	}
-	stored, err := s.Apps.GetApp(ctx, orgID, cloud)
+	stored, err := s.Apps.GetApp(ctx, cloud)
 	if errors.Is(err, ErrNotFound) {
 		return oauth.App{}, ErrNoApp
 	}
 	if err != nil {
 		return oauth.App{}, err
 	}
-	secret, err := s.AppSecrets.Reveal(ctx, orgID, cloud)
+	secret, err := s.AppSecrets.Reveal(ctx, cloud)
 	if errors.Is(err, ErrNotFound) {
 		return oauth.App{}, ErrNoApp
 	}
@@ -258,12 +309,42 @@ func (s *Service) app(ctx context.Context, orgID, cloud string) (oauth.App, erro
 	return oauth.App{ClientID: stored.ClientID, ClientSecret: string(secret), Slug: stored.Slug}, nil
 }
 
-// appRejected records that cloud refused the organization's sign-in app,
-// for the settings page to show, and returns the message saying so. The
-// record is kept even if the caller gives up.
-func (s *Service) appRejected(ctx context.Context, orgID, cloud string) string {
-	why := fmt.Sprintf("Loomplane's %s sign-in app was refused; check its client ID and secret on Cloud sign-in", cloudTitle(cloud))
-	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), orgID, cloud, why, s.now().UTC()); err != nil {
+// connectionApp is the app to renew or hand out c's sign-in with. A grant
+// only works with the client that issued it, so a connection signed in with
+// another app, or with none on record, is ErrAppChanged. A cloud whose
+// grants outlive its app gets the current app, or an empty one.
+func (s *Service) connectionApp(ctx context.Context, c *Connection) (oauth.App, error) {
+	app, err := s.app(ctx, c.Cloud)
+	if outlivesApp(s.Providers[c.Cloud]) {
+		if errors.Is(err, ErrNoApp) {
+			return oauth.App{}, nil
+		}
+		return app, err
+	}
+	if err != nil {
+		return oauth.App{}, err
+	}
+	if c.OAuthClientID != app.ClientID {
+		return oauth.App{}, ErrAppChanged
+	}
+	return app, nil
+}
+
+// appRejected records that cloud refused the sign-in app clientID, for the
+// settings page to show, and returns the message saying so. It records
+// only on the platform's app still holding clientID, so a refusal for an
+// app since replaced blames nothing. The record is kept even if the caller
+// gives up.
+func (s *Service) appRejected(ctx context.Context, cloud, clientID string) string {
+	why := fmt.Sprintf("Loomplane's %s sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret.", cloudTitle(cloud))
+	// A config app has no row of its own, and a platform row under it is
+	// not the app being refused, so nothing is recorded.
+	if _, ok := s.ConfigApps[cloud]; ok {
+		return why
+	}
+	// One conditional statement, so an app replaced since the refusal is
+	// not blamed for it.
+	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), cloud, clientID, why, s.now().UTC()); err != nil {
 		s.warn("record the problem with a sign-in app", err)
 	}
 	return why

@@ -58,8 +58,8 @@ type Service struct {
 	Providers   map[string]Provider
 	ConfigApps  map[string]oauth.App
 	CallbackURL string
-	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
-	AppSecrets Secrets
+	// AppSecrets keeps the platform's sign-in app secrets, keyed by cloud.
+	AppSecrets AppSecrets
 	Apps       AppStore
 	// Lapsed hears about a signed-in connection the cloud stopped
 	// honoring. It may be nil.
@@ -196,7 +196,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
 
 // newConnectionID makes the ID of a new connection.
@@ -221,7 +221,7 @@ func validName(name string) (string, error) {
 // checked is what the check gets instead of cred, such as a sign-in's
 // handout; nil checks cred. A keyless or in-cluster connection writes
 // nothing to Vault. The caller has checked the principal's role.
-func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method, oauthClientID string) (*Connection, error) {
 	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
@@ -251,7 +251,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 		}
 	}
 	now := s.now().UTC()
-	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now, OAuthClientID: oauthClientID}
 	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
 	keeps := method != MethodKeyless && method != MethodInCluster
@@ -361,7 +361,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	case errors.Is(err, oauth.ErrAppRejected):
 		// Signing in again with the same app won't help, so the app
 		// shows the problem too.
-		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+		why = s.appRejected(ctx, c.Cloud, c.OAuthClientID)
 	case refusedSignIn(err):
 		// Revoking Loomplane in the cloud kills the access token at once,
 		// so a refused grant asks for a new sign-in.
@@ -409,7 +409,7 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
 
 // signer is who a credential that got there by method is the sign-in of:
@@ -426,7 +426,7 @@ func signer(p security.Principal, method string) string {
 // the check gets instead of cred, as for create. A move to keyless writes
 // nothing to Vault; the caller removes the old secret. The caller has
 // checked the principal's role.
-func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method, oauthClientID string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -500,6 +500,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 		}
 		c.Method = method
 		c.SignedInBy = signer(p, method)
+		c.OAuthClientID = oauthClientID
 		apply(c, res, s.now().UTC())
 		return s.store.UpdateConnection(ctx, c)
 	}

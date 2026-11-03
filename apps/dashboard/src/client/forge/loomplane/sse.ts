@@ -181,6 +181,42 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           reject(error);
         };
 
+        this.eventSource.addEventListener('agent_request.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.RequestEvent = decode(JSON.parse(event.data), "RequestEvent");
+            this.emit('agent_request.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent_request.updated', (event: MessageEvent) => {
+          try {
+            const data: types.RequestEvent = decode(JSON.parse(event.data), "RequestEvent");
+            this.emit('agent_request.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent_task.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.TaskEvent = decode(JSON.parse(event.data), "TaskEvent");
+            this.emit('agent_task.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent_task.updated', (event: MessageEvent) => {
+          try {
+            const data: types.TaskEvent = decode(JSON.parse(event.data), "TaskEvent");
+            this.emit('agent_task.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('analysis.deleted', (event: MessageEvent) => {
           try {
             const data: types.Analysis = decode(JSON.parse(event.data), "Analysis");
@@ -524,6 +560,70 @@ export class RealtimeEventsSSEClient extends EventEmitter {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Register a handler for agent_request.deleted events.
+   * @param handler - Function to call when agent_request.deleted event is received
+   */
+  onAgentRequestDeleted(handler: (data: types.RequestEvent) => void): void {
+    this.on('agent_request.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for agent_request.deleted events.
+   * @param handler - The handler to remove
+   */
+  offAgentRequestDeleted(handler: (data: types.RequestEvent) => void): void {
+    this.off('agent_request.deleted', handler);
+  }
+
+  /**
+   * Register a handler for agent_request.updated events.
+   * @param handler - Function to call when agent_request.updated event is received
+   */
+  onAgentRequestUpdated(handler: (data: types.RequestEvent) => void): void {
+    this.on('agent_request.updated', handler);
+  }
+
+  /**
+   * Remove a handler for agent_request.updated events.
+   * @param handler - The handler to remove
+   */
+  offAgentRequestUpdated(handler: (data: types.RequestEvent) => void): void {
+    this.off('agent_request.updated', handler);
+  }
+
+  /**
+   * Register a handler for agent_task.deleted events.
+   * @param handler - Function to call when agent_task.deleted event is received
+   */
+  onAgentTaskDeleted(handler: (data: types.TaskEvent) => void): void {
+    this.on('agent_task.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for agent_task.deleted events.
+   * @param handler - The handler to remove
+   */
+  offAgentTaskDeleted(handler: (data: types.TaskEvent) => void): void {
+    this.off('agent_task.deleted', handler);
+  }
+
+  /**
+   * Register a handler for agent_task.updated events.
+   * @param handler - Function to call when agent_task.updated event is received
+   */
+  onAgentTaskUpdated(handler: (data: types.TaskEvent) => void): void {
+    this.on('agent_task.updated', handler);
+  }
+
+  /**
+   * Remove a handler for agent_task.updated events.
+   * @param handler - The handler to remove
+   */
+  offAgentTaskUpdated(handler: (data: types.TaskEvent) => void): void {
+    this.off('agent_task.updated', handler);
   }
 
   /**

@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
-import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -25,6 +24,7 @@ import { Route as TeamsRouteImport } from "./routes/teams"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
 import { Route as WebhooksRouteImport } from "./routes/webhooks"
+import { Route as AgentRequestsRouteImport } from "./routes/agent.requests"
 import { Route as AiSettingsRouteImport } from "./routes/ai.settings"
 import { Route as CloudsIndexRouteImport } from "./routes/clouds.index"
 import { Route as CloudsIdRouteImport } from "./routes/clouds.$id"
@@ -39,12 +39,14 @@ import { Route as IntegrationsResourcesRouteImport } from "./routes/integrations
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
 import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
+import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
@@ -70,11 +72,6 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CloudSignInRoute = CloudSignInRouteImport.update({
-  id: "/cloud-sign-in",
-  path: "/cloud-sign-in",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -135,6 +132,11 @@ const VerifyEmailRoute = VerifyEmailRouteImport.update({
 const WebhooksRoute = WebhooksRouteImport.update({
   id: "/webhooks",
   path: "/webhooks",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentRequestsRoute = AgentRequestsRouteImport.update({
+  id: "/agent/requests",
+  path: "/agent/requests",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AiSettingsRoute = AiSettingsRouteImport.update({
@@ -207,6 +209,11 @@ const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
   path: "/notifications/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlatformCloudSignInRoute = PlatformCloudSignInRouteImport.update({
+  id: "/platform/cloud-sign-in",
+  path: "/platform/cloud-sign-in",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: "/projects/",
   path: "/projects/",
@@ -235,6 +242,11 @@ const ServicesKindRoute = ServicesKindRouteImport.update({
 const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
   id: "/services/catalog",
   path: "/services/catalog",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SetupCloudSignInRoute = SetupCloudSignInRouteImport.update({
+  id: "/setup_/cloud-sign-in",
+  path: "/setup/cloud-sign-in",
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
@@ -303,7 +315,6 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -316,6 +327,7 @@ export interface FileRoutesByFullPath {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
@@ -325,9 +337,11 @@ export interface FileRoutesByFullPath {
   "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -352,7 +366,6 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -365,6 +378,7 @@ export interface FileRoutesByTo {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
@@ -374,9 +388,11 @@ export interface FileRoutesByTo {
   "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
@@ -402,7 +418,6 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
-  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -415,6 +430,7 @@ export interface FileRoutesById {
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
@@ -424,9 +440,11 @@ export interface FileRoutesById {
   "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -453,7 +471,6 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -466,6 +483,7 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
@@ -475,9 +493,11 @@ export interface FileRouteTypes {
     | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
+    | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -502,7 +522,6 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -515,6 +534,7 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
@@ -524,9 +544,11 @@ export interface FileRouteTypes {
     | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
+    | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds"
     | "/deployments"
@@ -551,7 +573,6 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
-    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -564,6 +585,7 @@ export interface FileRouteTypes {
     | "/variables"
     | "/verify-email"
     | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
@@ -573,9 +595,11 @@ export interface FileRouteTypes {
     | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
+    | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup_/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -601,7 +625,6 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
-  CloudSignInRoute: typeof CloudSignInRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -614,6 +637,7 @@ export interface RootRouteChildren {
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   WebhooksRoute: typeof WebhooksRoute
+  AgentRequestsRoute: typeof AgentRequestsRoute
   AiSettingsRoute: typeof AiSettingsRoute
   CloudsIdRoute: typeof CloudsIdRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
@@ -623,9 +647,11 @@ export interface RootRouteChildren {
   IntegrationsResourcesRoute: typeof IntegrationsResourcesRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
+  PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
+  SetupCloudSignInRoute: typeof SetupCloudSignInRoute
   WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
@@ -668,13 +694,6 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/cloud-sign-in": {
-      id: "/cloud-sign-in"
-      path: "/cloud-sign-in"
-      fullPath: "/cloud-sign-in"
-      preLoaderRoute: typeof CloudSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -759,6 +778,13 @@ declare module "@tanstack/react-router" {
       path: "/webhooks"
       fullPath: "/webhooks"
       preLoaderRoute: typeof WebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/agent/requests": {
+      id: "/agent/requests"
+      path: "/agent/requests"
+      fullPath: "/agent/requests"
+      preLoaderRoute: typeof AgentRequestsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/ai/settings": {
@@ -859,6 +885,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof NotificationsSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/platform/cloud-sign-in": {
+      id: "/platform/cloud-sign-in"
+      path: "/platform/cloud-sign-in"
+      fullPath: "/platform/cloud-sign-in"
+      preLoaderRoute: typeof PlatformCloudSignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/": {
       id: "/projects/"
       path: "/projects"
@@ -899,6 +932,13 @@ declare module "@tanstack/react-router" {
       path: "/services/catalog"
       fullPath: "/services/catalog"
       preLoaderRoute: typeof ServicesCatalogRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/setup_/cloud-sign-in": {
+      id: "/setup_/cloud-sign-in"
+      path: "/setup/cloud-sign-in"
+      fullPath: "/setup/cloud-sign-in"
+      preLoaderRoute: typeof SetupCloudSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/workspaces/new": {
@@ -985,7 +1025,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
-  CloudSignInRoute: CloudSignInRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
@@ -998,6 +1037,7 @@ const rootRouteChildren: RootRouteChildren = {
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   WebhooksRoute: WebhooksRoute,
+  AgentRequestsRoute: AgentRequestsRoute,
   AiSettingsRoute: AiSettingsRoute,
   CloudsIdRoute: CloudsIdRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
@@ -1007,9 +1047,11 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsResourcesRoute: IntegrationsResourcesRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NotificationsSettingsRoute: NotificationsSettingsRoute,
+  PlatformCloudSignInRoute: PlatformCloudSignInRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
+  SetupCloudSignInRoute: SetupCloudSignInRoute,
   WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,

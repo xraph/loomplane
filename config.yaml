@@ -198,8 +198,10 @@ clouds:
   # account token mounted; the Helm chart's inCluster values do both.
   kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
-  # in. Leave both empty to keep token entry only. Keep the secret in the
-  # environment.
+  # in. These win over anything registered on the dashboard's Cloud sign-in
+  # page (Settings, platform owners and admins only), which is the
+  # alternative to setting them here. Leave both empty to use the page, or
+  # to keep token entry only. Keep the secret in the environment.
   oauth:
     cloudflare:
       client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"
@@ -259,6 +261,25 @@ federation:
 # The AI section (models) is opt-in.
 ai:
   enabled: "${LOOMPLANE_AI_ENABLED:-false}"
+  # The infra agent's server provider: anthropic, openai or openai-compatible.
+  provider: "${LOOMPLANE_AI_PROVIDER:-anthropic}"
+  # Optional even with the agent on: a workspace can bring its own key.
+  api_key: "${LOOMPLANE_AI_API_KEY:-}"
+  # Required for openai-compatible, an optional override otherwise.
+  base_url: "${LOOMPLANE_AI_BASE_URL:-}"
+  model: "${LOOMPLANE_AI_MODEL:-claude-sonnet-5-5}"
+  # Prices for models nexus's catalog doesn't know. The agent uses server
+  # prices only (these and nexus's catalog), never a workspace's per-key
+  # prices. YAML only. Each item is {provider, model, input_per_million,
+  # output_per_million}, in decimal USD, such as "3" or "0.80".
+  prices: []
+  # One embedding model for the whole server, for retrieval.
+  knowledge:
+    embedding_provider: "${LOOMPLANE_AI_EMBEDDING_PROVIDER:-}"   # openai or openai-compatible
+    embedding_api_key: "${LOOMPLANE_AI_EMBEDDING_API_KEY:-}"
+    embedding_base_url: "${LOOMPLANE_AI_EMBEDDING_BASE_URL:-}"
+    embedding_model: "${LOOMPLANE_AI_EMBEDDING_MODEL:-}"
+    dimensions: "${LOOMPLANE_AI_EMBEDDING_DIMENSIONS:-1536}"
   models:
     # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
     # token is sent here, so it must be https (http only for localhost).

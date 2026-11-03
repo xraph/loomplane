@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -682,5 +683,54 @@ func TestRoleRank(t *testing.T) {
 		if got := RoleRank(slug); got != want {
 			t.Errorf("RoleRank(%q) = %d, want %d", slug, got, want)
 		}
+	}
+}
+
+// The agent acting for a person checks the person on the same project, so
+// a team grant on P lends the agent deployment:approve on P and nowhere
+// else, and the agent's own role still caps what it does there.
+func TestAgentForATeamGranteeApprovesOnlyOnTheirProject(t *testing.T) {
+	ctx := context.Background()
+	f := memTeamFixture(t)
+	p, q := newProjectID(t), newProjectID(t)
+	f.setMember(alice, MemberViewer)
+	f.setGrants(alice, ScopedRole{Role: RoleAdmin, ProjectID: p, TeamID: "team_a"})
+	if err := f.a.Sync(ctx, org, alice); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := f.a.AssignAgent(ctx, org); err != nil {
+		t.Fatalf("AssignAgent: %v", err)
+	}
+	me := f.person(alice)
+	if err := f.a.Require(ctx, me, DeploymentApprove, p); err != nil {
+		t.Fatalf("the grantee approves on P: %v", err)
+	}
+	forAlice := AgentPrincipal(org, &me)
+	if err := f.a.Require(ctx, forAlice, DeploymentApprove, p); err != nil {
+		t.Fatalf("the agent for the grantee approves on P: %v", err)
+	}
+	if ok, err := f.a.AllowedOn(ctx, forAlice, DeploymentApprove, p); err != nil || !ok {
+		t.Fatalf("AllowedOn P = %v, %v; want true", ok, err)
+	}
+	for _, other := range []string{q, ""} {
+		err := f.a.Require(ctx, forAlice, DeploymentApprove, other)
+		if !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), "person") {
+			t.Fatalf("the agent for the grantee approves on %q: %v, want the person's refusal", other, err)
+		}
+		if ok, err := f.a.AllowedOn(ctx, forAlice, DeploymentApprove, other); err != nil || ok {
+			t.Fatalf("AllowedOn %q = %v, %v; want false", other, ok, err)
+		}
+	}
+	// An admin grant on P doesn't give the agent what its own role lacks.
+	if err := f.a.Require(ctx, forAlice, SecretManage, p); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("the agent sets secrets on P: %v, want ErrForbidden", err)
+	}
+	// Once the team loses the grant, P is refused too.
+	f.setGrants(alice)
+	if err := f.a.Sync(ctx, org, alice); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := f.a.Require(ctx, forAlice, DeploymentApprove, p); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("the agent approves on P after the grant went: %v, want ErrForbidden", err)
 	}
 }

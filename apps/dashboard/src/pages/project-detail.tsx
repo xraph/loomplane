@@ -68,6 +68,7 @@ import { ProductIcon } from "@/components/product-icon"
 import { ProjectGeneral } from "@/components/project-general"
 import { ProjectServices } from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
+import { ProjectAutonomy } from "@/components/project-autonomy"
 import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { QueryError } from "@/components/query-error"
@@ -723,6 +724,7 @@ function Body({
 
         <TabsContent value="settings" className="grid max-w-[760px] gap-6">
           <ProjectTeam project={project} />
+          <ProjectAutonomy project={project} />
           <ProjectGeneral
             key={`${project.id}:${project.updatedAt}`}
             project={project}

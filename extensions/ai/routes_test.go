@@ -19,6 +19,8 @@ import (
 
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -70,11 +72,27 @@ func TestModelRoutesAbsentWhenAIIsOff(t *testing.T) {
 			t.Errorf("AI off serves %s %s", info.Method, info.Path)
 		}
 	}
-	for _, path := range []string{"/api/v1/ai/models/registry", "/api/v1/ai/settings", "/api/v1/ai/models/deployments"} {
+	for _, path := range []string{"/api/v1/ai/models/registry", "/api/v1/ai/settings", "/api/v1/ai/models/deployments", "/api/v1/ai/settings/agent"} {
 		out := httptest.NewRecorder()
 		app.Router().ServeHTTP(out, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
 		if out.Code != http.StatusNotFound {
 			t.Errorf("AI off: GET %s answered %d", path, out.Code)
+		}
+	}
+	// The settings writes aren't there either, so nothing can change.
+	for _, w := range []struct{ method, path, body string }{
+		{http.MethodPut, "/api/v1/ai/settings/budget", `{"monthly_budget_usd":"100","revision":0}`},
+		{http.MethodPut, "/api/v1/ai/settings/provider-keys/claude", `{"type":"anthropic","fields":{"api_key":"sk-ant-abcdefgh"}}`},
+		{http.MethodDelete, "/api/v1/ai/settings/provider-keys/claude", ""},
+		{http.MethodPut, "/api/v1/ai/settings/agent/budget", `{"monthly_budget_usd":"25"}`},
+		{http.MethodPatch, "/api/v1/ai/settings/agent", `{"enabled":true,"revision":0}`},
+	} {
+		out := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), w.method, w.path, strings.NewReader(w.body))
+		req.Header.Set("Content-Type", "application/json")
+		app.Router().ServeHTTP(out, req)
+		if out.Code != http.StatusNotFound {
+			t.Errorf("AI off: %s %s answered %d", w.method, w.path, out.Code)
 		}
 	}
 }
@@ -199,6 +217,9 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	if svc, err := forge.InjectType[*aisettings.Service](c); err != nil || svc == nil {
 		t.Errorf("AI settings not provided: %v", err)
 	}
+	if svc, err := forge.InjectType[*agentsettings.Service](c); err != nil || svc == nil {
+		t.Errorf("the agent settings not provided: %v", err)
+	}
 	if svc, err := forge.InjectType[*models.Service](c); err != nil || svc == nil {
 		t.Errorf("the models service not provided: %v", err)
 	}
@@ -209,7 +230,7 @@ func TestModelHooksAreRegistered(t *testing.T) {
 			served++
 		}
 	}
-	if served != 18 {
+	if served != 24 {
 		t.Errorf("%d AI routes on the app's router", served)
 	}
 }
@@ -257,7 +278,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	if err = off.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels} {
+	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels, agentruns.JobSweep} {
 		run, ok := eng.Registry().Get(name)
 		if !ok {
 			t.Fatalf("no %s handler with AI off: %v", name, eng.Registry().Names())
@@ -269,7 +290,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 			}
 		}
 	}
-	if names := eng.Registry().Names(); len(names) != 2 {
+	if names := eng.Registry().Names(); len(names) != 3 {
 		t.Errorf("AI off registers %v", names)
 	}
 	crons, err := eng.CronStore().ListCrons(ctx)

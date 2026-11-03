@@ -148,9 +148,8 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 			g = latest
 			return nil
 		}
-		app, err := s.app(ctx, c.OrgID, c.Cloud)
-		if errors.Is(err, ErrNoApp) {
-			why = noAppWhy(c.Cloud)
+		app, err := s.connectionApp(ctx, current)
+		if why = appGoneWhy(current, err); why != "" {
 			lapsed, err = s.needSignIn(ctx, current, why)
 			return err
 		}
@@ -167,7 +166,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		defer cancel()
 		fresh, err := provider.Refresh(refreshCtx, app, latest)
 		if errors.Is(err, oauth.ErrAppRejected) {
-			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+			why = s.appRejected(ctx, c.Cloud, app.ClientID)
 			lapsed, err = s.needSignIn(ctx, current, why)
 			return err
 		}
@@ -219,7 +218,25 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 // noAppWhy is why a sign-in for cloud needs signing in again once the
 // cloud's sign-in app is gone.
 func noAppWhy(cloud string) string {
-	return fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", cloudTitle(cloud))
+	return fmt.Sprintf("Loomplane's %s sign-in app was removed, so this sign-in can't be renewed. Sign in again once it's back, or connect with a token.", cloudTitle(cloud))
+}
+
+// appChangedWhy is why a sign-in for cloud needs signing in again once
+// the cloud's sign-in app is not the one it signed in with.
+func appChangedWhy(cloud string) string {
+	return fmt.Sprintf("Loomplane's %s sign-in app changed. Sign in again, or connect with a token.", cloudTitle(cloud))
+}
+
+// appGoneWhy is why c needs signing in again when connectionApp failed
+// with ErrNoApp or ErrAppChanged, and "" for any other error.
+func appGoneWhy(c *Connection, err error) string {
+	switch {
+	case errors.Is(err, ErrNoApp):
+		return noAppWhy(c.Cloud)
+	case errors.Is(err, ErrAppChanged):
+		return appChangedWhy(c.Cloud)
+	}
+	return ""
 }
 
 // noLongerAccepted is why a sign-in for cloud needs signing in again once
@@ -228,15 +245,15 @@ func noLongerAccepted(cloud string) string {
 	return fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", cloudTitle(cloud))
 }
 
-// handoutWithoutApp passes err on, unless it is ErrNoApp from building a
-// handout for signed-in c. Without its app no session can renew itself,
-// so, as renew does, c then needs a new sign-in, Lapsed is told, and it
-// is ErrNotReady.
+// handoutWithoutApp passes err on, unless it is ErrNoApp or ErrAppChanged
+// from building a handout for signed-in c. Without its app no session can
+// renew itself, so, as renew does, c then needs a new sign-in, Lapsed is
+// told, and it is ErrNotReady.
 func (s *Service) handoutWithoutApp(ctx context.Context, c *Connection, err error) error {
-	if !errors.Is(err, ErrNoApp) {
+	why := appGoneWhy(c, err)
+	if why == "" {
 		return err
 	}
-	why := noAppWhy(c.Cloud)
 	_, lapsed, markErr := s.signInRefused(ctx, c, why, nil)
 	if markErr != nil {
 		return markErr
@@ -385,10 +402,10 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 		return
 	}
 	var why string
-	app, err := s.app(ctx, c.OrgID, c.Cloud)
+	app, err := s.connectionApp(ctx, c)
 	switch {
-	case errors.Is(err, ErrNoApp):
-		why = noAppWhy(c.Cloud)
+	case appGoneWhy(c, err) != "":
+		why = appGoneWhy(c, err)
 	case err != nil:
 		fail(err)
 		return
@@ -398,7 +415,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 		cancel()
 		switch {
 		case errors.Is(err, oauth.ErrAppRejected):
-			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+			why = s.appRejected(ctx, c.Cloud, app.ClientID)
 		case errors.Is(err, oauth.ErrRefused):
 			why = noLongerAccepted(c.Cloud)
 		case err != nil:

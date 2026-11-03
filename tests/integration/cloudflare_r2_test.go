@@ -110,13 +110,13 @@ func TestCloudflareR2OAuthCreationSyncAndAttachment(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.CloudflareEndpoint = api.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"cloudflare": {ClientID: "r2-app", ClientSecret: "r2-app-secret"}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
 	running := start(t, cfg)
 	defer func() { running.stop() }()
 	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/cloudflare", connections.AppInput{ClientID: "r2-app", ClientSecret: "r2-app-secret"}, nil)
 	var signIn connections.SignIn
 	c.must(http.StatusOK, http.MethodPost, "/api/v1/connections/sign-ins", connections.SignInInput{Cloud: connections.Cloudflare, Name: "R2 storage", Settings: map[string]string{"account_id": account, "services": "r2"}}, &signIn)
 	authorize, err := url.Parse(signIn.AuthorizeURL)

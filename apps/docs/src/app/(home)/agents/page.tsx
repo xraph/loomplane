@@ -1,12 +1,62 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { AgentRun } from "@/components/landing/agent-run";
 import { Code } from "@/components/landing/code";
 
 export const metadata: Metadata = {
-  title: "CLI and agents",
-  description: "loomctl for terminals and CI, and an MCP server for AI agents.",
+  title: "AI agents and the CLI",
+  description:
+    "loomctl for terminals and CI, a built-in agent that prepares releases and asks before production, and an MCP server for the agents you already use.",
 };
+
+const agentFeatures = [
+  {
+    what: "Provider, model and budget",
+    how: "The server's key or your own, a monthly limit, and spend shown beside it",
+    soon: false,
+  },
+  {
+    what: "Requests to a person",
+    how: "Approve a plan, provide a secret, answer a question, connect GitHub or a cloud. Sent to the project's team",
+    soon: false,
+  },
+  {
+    what: "Production rules in code",
+    how: "Six risk classes checked on every call, whatever the model says",
+    soon: false,
+  },
+  {
+    what: "Audit and identity",
+    how: "Every tool call recorded as the Loomplane agent, with who it acted for",
+    soon: false,
+  },
+  {
+    what: "Automatic rollback",
+    how: "The release watch rolls a canary or blue/green release back when it breaches its thresholds. Loomplane does this, with or without the agent",
+    soon: false,
+  },
+  {
+    what: "Release preparation",
+    how: "Plans the release, ships staging, waits out the soak and asks for production",
+    soon: true,
+  },
+  {
+    what: "Investigations",
+    how: "Looks into a failed or unhealthy release on its own and reports what it found",
+    soon: true,
+  },
+  {
+    what: "Chat",
+    how: "Ask it to release, or ask about production, from the dashboard and the app",
+    soon: true,
+  },
+  {
+    what: "Autonomous promotion",
+    how: "Promotes after the soak without asking, on projects that allow it. The switch is stored today",
+    soon: true,
+  },
+];
 
 export default function AgentsPage() {
   return (
@@ -14,7 +64,7 @@ export default function AgentsPage() {
       <section className="page-hero grain" aria-labelledby="agents-title">
         <div className="wrap">
           <div className="crumb rise">
-            <Link href="/">Loomplane</Link> / <b>CLI &amp; agents</b>
+            <Link href="/">Loomplane</Link> / <b>AI agents</b>
           </div>
           <h1 id="agents-title">
             Same platform, from a terminal{" "}
@@ -25,8 +75,106 @@ export default function AgentsPage() {
             <code>loomctl</code> does what the dashboard does, for terminals and
             CI. It runs on API keys that act as you, with your role, and can be
             read-only. <code>loomctl mcp</code> turns the same commands into
-            tools an AI agent can use.
+            tools an AI agent can use, and the built-in agent runs inside your
+            server to carry releases from staging to the point where a person
+            says yes.
           </p>
+        </div>
+      </section>
+
+      <div className="wrap">
+        <div className="feature">
+          <div className="txt">
+            <div className="eyebrow">Built-in agent</div>
+            <h3 className="h3" id="built-in-agent">
+              It carries the release. A person signs off on production.
+            </h3>
+            <p>
+              Turn the agent on for a workspace, give it a monthly budget and a
+              model (the server&apos;s, or your own Anthropic, OpenAI or
+              OpenAI-compatible key), and it works through Loomplane like a
+              teammate: it plans, ships to staging, reads the canary and the
+              cloud&apos;s own metrics, and waits for staging to soak.
+            </p>
+            <p>
+              Production is where it stops. Whatever the model decides, a
+              production promotion goes to the project&apos;s responsible team
+              as a request, and anything that deletes or replaces data waits for
+              a person every time. Loomplane checks that in code on every call,
+              so a hostile commit message can make the agent ask you a strange
+              question but can&apos;t get a change past you.
+            </p>
+            <ul className="ticks">
+              <li>
+                <span>
+                  It acts as <code>agent:&lt;org&gt;</code>, and every call it
+                  makes lands in the audit log under that name
+                </span>
+              </li>
+              <li>
+                It never sees a secret. When it needs one, it asks you to type
+                it into Loomplane
+              </li>
+              <li>
+                Per project, you choose how long staging has to soak before it
+                may promote
+              </li>
+            </ul>
+            <div className="store-row">
+              <Link className="store-link" href="/docs/agents/built-in-agent">
+                Turn the agent on <span className="arr">↗</span>
+              </Link>
+              <Link
+                className="store-link"
+                href="/docs/agents/what-needs-a-person"
+              >
+                What needs a person <span className="arr">↗</span>
+              </Link>
+            </div>
+          </div>
+          <AgentRun />
+        </div>
+      </div>
+
+      <section
+        className="band"
+        style={{ borderTop: "1px solid var(--line)" } as CSSProperties}
+        aria-labelledby="agent-today"
+      >
+        <div className="wrap sec">
+          <div className="eyebrow">Built-in agent</div>
+          <h2 id="agent-today">What it does today, and what&apos;s next.</h2>
+          <p className="sec-lede">
+            The agent&apos;s controls ship first: settings, budgets, requests
+            and the rules about production. The jobs that use them are rolling
+            out on top.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>What</th>
+                  <th>How it works</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agentFeatures.map((f) => (
+                  <tr key={f.what}>
+                    <td>{f.what}</td>
+                    <td>{f.how}</td>
+                    <td>
+                      {f.soon ? (
+                        <span className="chip warn">Coming soon</span>
+                      ) : (
+                        <span className="chip ok">Available</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -49,7 +197,9 @@ export default function AgentsPage() {
               <li>Secrets are set but never shown back</li>
               <li>
                 Works with Claude Code:{" "}
-                <code>claude mcp add loomplane -- loomctl mcp</code>
+                <code className="whole">
+                  claude mcp add loomplane -- loomctl mcp
+                </code>
               </li>
             </ul>
           </div>

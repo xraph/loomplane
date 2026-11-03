@@ -31,6 +31,151 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentRequests = {
+    /**
+     * Answer the agent's question
+     * The person asked, a member of the team it was sent to, or someone who manages the workspace's AI may answer. The first answer counts.
+     */
+    answer: async (id: string, body: types.AnswerInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/answer`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AnswerInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * Say the GitHub or cloud connection the agent asked for is made
+     * Loomplane checks the connection exists before the agent goes on.
+     */
+    complete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/complete`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * Decline the agent's request
+     * Declining a plan approval rejects the plan.
+     */
+    decline: async (id: string, body: types.DeclineInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/decline`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeclineInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * One request the agent made
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+    /**
+     * What the agent is asking of people in your workspace
+     */
+    list: async (status?: string | undefined, projectId?: string | undefined, forParam?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RequestList> => {
+      let __path = `/api/v1/agent/requests`;
+      const queryParams: Record<string, any> = {};
+      if (status !== undefined) {
+        queryParams['status'] = status;
+      }
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (forParam !== undefined) {
+        queryParams['for'] = forParam;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RequestList"],
+      };
+
+      return this.request<types.RequestList>(config);
+    },
+
+    /**
+     * Set the secret the agent asked for
+     * Needs variable:manage on the request's project. The value is stored as a secret variable, as you; the agent only hears that it's set.
+     */
+    provideSecret: async (id: string, body: types.SecretInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Request> => {
+      let __path = `/api/v1/agent/requests/${encodeURIComponent(String(id))}/secret`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SecretInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Request"],
+      };
+
+      return this.request<types.Request>(config);
+    },
+
+  };
+
+  public readonly agentStatus = {
+    /**
+     * Whether the AI agent is on, on this server and in the workspace
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentsettingsStatus> => {
+      let __path = `/api/v1/agent/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentsettingsStatus"],
+      };
+
+      return this.request<types.AgentsettingsStatus>(config);
+    },
+
+  };
+
   public readonly aiModelDeployments = {
     /**
      * Stop a model that's waiting for its GPU server; a server already approved stays in Infrastructure
@@ -335,6 +480,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Delete a provider key, unless the agent or the workspace embeddings use it
+     */
+    deleteProviderKey: async (name: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/ai/settings/provider-keys/${encodeURIComponent(String(name))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * The workspace's AI settings, without any secret, and whether you can change them
      */
     get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
@@ -348,6 +509,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.View>(config);
+    },
+
+    /**
+     * The agent's settings, what it runs with and its month's budget, without any key
+     */
+    getAgent: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
     },
 
     /**
@@ -366,6 +543,80 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.HuggingFaceToken>(config);
+    },
+
+    /**
+     * Add a provider key, or change one; its secrets are never shown again
+     * Anthropic, OpenAI and OpenAI-compatible keys only. Secret fields are write-only: no answer carries them, and only the key's hint (its last four characters) is shown. A secret field left out keeps its value. The key the agent uses must stay granted to every project.
+     */
+    putProviderKey: async (name: string, body: types.ProviderKeyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderKey> => {
+      let __path = `/api/v1/ai/settings/provider-keys/${encodeURIComponent(String(name))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ProviderKeyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderKey"],
+      };
+
+      return this.request<types.ProviderKey>(config);
+    },
+
+    /**
+     * Set the agent's monthly budget, its share of the workspace's; 0 releases it while the agent is off
+     */
+    setAgentBudget: async (body: types.AgentBudgetInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent/budget`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AgentBudgetInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
+    },
+
+    /**
+     * Set the workspace's monthly AI budget, which every allocation shares
+     */
+    setBudget: async (body: types.WorkspaceBudgetInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
+      let __path = `/api/v1/ai/settings/budget`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["WorkspaceBudgetInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["View"],
+      };
+
+      return this.request<types.View>(config);
+    },
+
+    /**
+     * Turn the agent on or off, or change its provider key or model
+     * Turning the agent on needs its monthly budget, a provider key (or the server's key) and a model this server prices: nexus's catalog or ai.prices. A key's own model prices don't count for the agent.
+     */
+    updateAgent: async (body: types.AgentUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentView> => {
+      let __path = `/api/v1/ai/settings/agent`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AgentUpdateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentView"],
+      };
+
+      return this.request<types.AgentView>(config);
     },
 
   };
@@ -1285,59 +1536,6 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ServerUsage>(config);
-    },
-
-  };
-
-  public readonly cloudSignInApps = {
-    /**
-     * Remove the organization's own sign-in app for a cloud
-     */
-    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'DELETE',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
-    },
-
-    /**
-     * The clouds you can sign in to, where each one's app comes from, and the callback URL to register
-     */
-    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
-      let __path = `/api/v1/cloud-sign-in/apps`;
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInAppList"],
-      };
-
-      return this.request<types.SignInAppList>(config);
-    },
-
-    /**
-     * Set the organization's own sign-in app for a cloud. The secret is never returned
-     */
-    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'PUT',
-        url: __path,
-        body,
-        bodyCodec: CODECS["AppInputBody"],
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInApp"],
-      };
-
-      return this.request<types.SignInApp>(config);
     },
 
   };
@@ -5129,6 +5327,81 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly platformCloudSignInApps = {
+    /**
+     * Remove the platform's sign-in app for a cloud
+     */
+    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInAppList"],
+      };
+
+      return this.request<types.SignInAppList>(config);
+    },
+
+    /**
+     * Set the platform's sign-in app for a cloud. The secret is never returned
+     */
+    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AppInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInApp"],
+      };
+
+      return this.request<types.SignInApp>(config);
+    },
+
+  };
+
+  public readonly projectAutonomy = {
+    /**
+     * Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs
+     * In this version the setting is stored and every production promotion still waits for a person; it takes effect when the promotion gate ships. Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.
+     */
+    update: async (id: string, body: types.AutonomyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/autonomy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AutonomyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+  };
+
   public readonly projectVariables = {
     /**
      * Set a variable for a project, or for one of its services
@@ -6127,6 +6400,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.SetupResponse>(config);
+    },
+
+    /**
+     * Stop offering to set up cloud sign-in
+     */
+    endCloudSignInOffer: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/setup/cloud-sign-in-offer`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
     },
 
     /**

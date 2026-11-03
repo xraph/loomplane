@@ -599,7 +599,8 @@ func (s *Service) PutProviderKey(ctx context.Context, p security.Principal, name
 	}
 	slices.Sort(changed)
 	s.record(ctx, p, "ai.provider_key.put", "", map[string]any{
-		"provider_key": name, "provider_type": typ, "fields": slices.Compact(changed),
+		"provider_key": name, "provider_key_id": k.ID, "key_hint": k.KeyHint, "provider_type": typ,
+		"fields": slices.Compact(changed),
 	})
 	return k, nil
 }
@@ -744,7 +745,9 @@ func (s *Service) DeleteProviderKey(ctx context.Context, p security.Principal, n
 	if n := s.notifier(); n != nil {
 		n.ProviderKeysChanged(ctx, p.OrgID, reached(true, k.Projects, k.Projects))
 	}
-	s.record(ctx, p, "ai.provider_key.delete", "", map[string]any{"provider_key": name, "provider_type": k.Type})
+	s.record(ctx, p, "ai.provider_key.delete", "", map[string]any{
+		"provider_key": name, "provider_key_id": k.ID, "key_hint": k.KeyHint, "provider_type": k.Type,
+	})
 	if err := s.keys.Delete(ctx, p.OrgID, k.ID); err != nil {
 		return fmt.Errorf("provider key %q is deleted, but its values are still in Vault: %w", name, err)
 	}
@@ -828,6 +831,17 @@ func (s *Service) GatewayKeys(ctx context.Context, orgID, projectID string) ([]G
 		out = append(out, *g)
 	}
 	return out, nil
+}
+
+// KeyInfo returns one provider key's metadata, without a secret field,
+// or ErrNotFound. For services that pick a key without reading it.
+func (s *Service) KeyInfo(ctx context.Context, orgID, name string) (*ProviderKey, error) {
+	k, err := s.store.ProviderKey(ctx, orgID, name)
+	if err != nil {
+		return nil, err
+	}
+	k.Fields = publicFields(k.Type, k.Fields)
+	return k, nil
 }
 
 // RevealKey returns one provider key with its values, or ErrNotFound.

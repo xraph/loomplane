@@ -18,7 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 )
 
-// An organization sets up its own DigitalOcean app, signs in with it, and
+// An organization signs in with a configured DigitalOcean app and
 // gets a ready connection whose grant never comes back over the API.
 func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	const (
@@ -69,12 +69,13 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	defer do.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.DigitalOceanEndpoint = do.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"digitalocean": {ClientID: clientID, ClientSecret: clientSecret}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 
-	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, nil)
+	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, nil)
 	signedIn(t, c)
 	if path := os.Getenv("LOOMPLANE_TEST_OPENAPI_OUTPUT"); path != "" {
 		var contract json.RawMessage
@@ -91,7 +92,7 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	source := func() string {
 		t.Helper()
 		var list appList
-		c.must(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, &list)
 		if list.CallbackURL != callback {
 			t.Fatalf("callback url %q, want %q", list.CallbackURL, callback)
 		}
@@ -121,28 +122,10 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 		return nil
 	}
 
-	if got := source(); got != connections.AppFromNone {
-		t.Fatalf("source before setting an app: %q", got)
+	if got := source(); got != connections.AppFromConfig {
+		t.Fatalf("source of the configured app: %q", got)
 	}
-	if got := methods(); strings.Join(got, ",") != "token" {
-		t.Fatalf("methods without an app: %v", got)
-	}
-	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections/sign-ins",
-		connections.SignInInput{Cloud: connections.DigitalOcean, Name: "DigitalOcean"}, nil)
-	c.must(http.StatusNotFound, http.MethodDelete, "/api/v1/cloud-sign-in/apps/digitalocean", nil, nil)
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/digitalocean",
-		connections.AppInput{ClientID: clientID}, nil)
-
-	var set json.RawMessage
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/digitalocean",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
-	if strings.Contains(string(set), clientSecret) {
-		t.Fatalf("setting an app returned its secret: %s", set)
-	}
-	if got := source(); got != connections.AppFromOrganization {
-		t.Fatalf("source after setting an app: %q", got)
-	}
-	if body := c.raw("/api/v1/cloud-sign-in/apps"); strings.Contains(body, clientSecret) {
+	if body := c.raw("/api/v1/platform/cloud-sign-in/apps"); strings.Contains(body, clientSecret) {
 		t.Fatalf("the app list shows the secret: %s", body)
 	}
 	if got := methods(); strings.Join(got, ",") != "oauth,token" {
@@ -196,16 +179,232 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 		t.Fatalf("replaced %+v", replaced)
 	}
 
-	c.must(http.StatusNoContent, http.MethodDelete, "/api/v1/cloud-sign-in/apps/digitalocean", nil, nil)
-	if got := source(); got != connections.AppFromNone {
-		t.Fatalf("source after deleting the app: %q", got)
-	}
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/nowhere",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, nil)
 }
 
-// An organization sets up its own Google app, signs in to a project it
-// names first, and gets a ready connection that says who signed in. No
+// fakeMemberDigitalOcean is a DigitalOcean that honors one app and signs anyone
+// in as the account acct-1.
+func fakeMemberDigitalOcean(t *testing.T, clientID, clientSecret, callback string) *httptest.Server {
+	t.Helper()
+	const accessToken = "dop_v1_member"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/oauth/token":
+			if err := r.ParseForm(); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			for k, want := range map[string]string{"code": "ok", "client_id": clientID,
+				"client_secret": clientSecret, "redirect_uri": callback} {
+				if got := r.PostForm.Get(k); got != want {
+					t.Errorf("token form %s = %q, want %q", k, got, want)
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+					return
+				}
+			}
+			_, _ = w.Write([]byte(`{"access_token":"` + accessToken + `","refresh_token":"dor_v1_member","expires_in":2592000,` +
+				`"info":{"uuid":"acct-1","email":"grace@example.com","team":{"uuid":"team-acme","name":"Acme"}}}`))
+		case "/v2/account":
+			if r.Header.Get("Authorization") != "Bearer "+accessToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","email":"grace@example.com","status":"active","team":{"uuid":"team-acme","name":"Acme"}}}`))
+		case "/v2/databases":
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
+		default:
+			t.Errorf("asked DigitalOcean %s", r.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// secondOrgMember signs up another account and gives it an organization of
+// its own. It holds no platform role.
+func secondOrgMember(t *testing.T, owner *client, cfg config.Config, email string) *client {
+	t.Helper()
+	member := &client{t: t, base: owner.base, key: cfg.Identity.PublishableKey}
+	account(t, member, email)
+	var org struct {
+		ID string `json:"id"`
+	}
+	member.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Grace Co", "slug": "grace-co"}, &org)
+	member.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	return member
+}
+
+func cloudMethods(t *testing.T, c *client, cloud string) string {
+	t.Helper()
+	var list struct {
+		Clouds []struct {
+			Cloud   string   `json:"cloud"`
+			Methods []string `json:"methods"`
+		} `json:"clouds"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/connection-clouds", nil, &list)
+	for _, f := range list.Clouds {
+		if f.Cloud == cloud {
+			return strings.Join(f.Methods, ",")
+		}
+	}
+	t.Fatalf("connection-clouds has no %s", cloud)
+	return ""
+}
+
+// The platform owner sets a DigitalOcean app over HTTP and a member of
+// another organization signs in with it. Until the app exists the cloud
+// offers only tokens, and the secret never comes back.
+func TestCloudSignInPlatform_ownerSetsAnAppAndMembersSignIn(t *testing.T) {
+	const (
+		clientID     = "do-platform-app"
+		clientSecret = "do-platform-secret-0123"
+	)
+	cfg := config.Defaults()
+	callback := strings.TrimRight(cfg.PublicURL, "/") + "/integrations/oauth/callback"
+	do := fakeMemberDigitalOcean(t, clientID, clientSecret, callback)
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Clouds.DigitalOceanEndpoint = do.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	owner := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, owner)
+	member := secondOrgMember(t, owner, cfg, "grace@example.com")
+
+	if got := cloudMethods(t, member, connections.DigitalOcean); got != "token" {
+		t.Fatalf("methods with no app: %q, want token", got)
+	}
+	member.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections/sign-ins",
+		connections.SignInInput{Cloud: connections.DigitalOcean, Name: "DigitalOcean"}, nil)
+
+	// A secret is required, and Vercel needs its slug.
+	owner.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/platform/cloud-sign-in/apps/digitalocean",
+		connections.AppInput{ClientID: clientID}, nil)
+	owner.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/platform/cloud-sign-in/apps/vercel",
+		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-secret"}, nil)
+
+	var set json.RawMessage
+	owner.must(http.StatusOK, http.MethodPut, "/api/v1/platform/cloud-sign-in/apps/digitalocean",
+		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
+	var saved connections.SignInApp
+	if err := json.Unmarshal(set, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Source != connections.AppFromPlatform || saved.ClientID != clientID || saved.UpdatedBy == "" {
+		t.Fatalf("saved app %+v", saved)
+	}
+	if strings.Contains(string(set), clientSecret) {
+		t.Fatalf("the PUT response shows the secret: %s", set)
+	}
+	if body := owner.raw("/api/v1/platform/cloud-sign-in/apps"); strings.Contains(body, clientSecret) {
+		t.Fatalf("the app list shows the secret: %s", body)
+	}
+	if got := cloudMethods(t, member, connections.DigitalOcean); got != "oauth,token" {
+		t.Fatalf("methods with the platform app: %q, want oauth,token", got)
+	}
+
+	var signIn connections.SignIn
+	member.must(http.StatusOK, http.MethodPost, "/api/v1/connections/sign-ins",
+		connections.SignInInput{Cloud: connections.DigitalOcean, Name: "DigitalOcean"}, &signIn)
+	u, err := url.Parse(signIn.AuthorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := u.Query(); q.Get("client_id") != clientID || q.Get("state") == "" {
+		t.Fatalf("authorize url %s", signIn.AuthorizeURL)
+	}
+	var conn connections.Connection
+	member.must(http.StatusCreated, http.MethodPost, "/api/v1/connections/sign-ins/complete",
+		connections.CompleteInput{State: u.Query().Get("state"), Code: "ok"}, &conn)
+	if conn.Method != connections.MethodOAuth || conn.Status != connections.StatusReady || conn.Account != "Acme" {
+		t.Fatalf("connection %+v", conn)
+	}
+
+	// The owner's list counts that sign-in.
+	var list struct {
+		Apps []connections.SignInApp `json:"apps"`
+	}
+	owner.must(http.StatusOK, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, &list)
+	for _, a := range list.Apps {
+		if a.Cloud == connections.DigitalOcean && (a.Source != connections.AppFromPlatform || a.Connections != 1 || a.Organizations != 1) {
+			t.Fatalf("digitalocean in the platform list: %+v", a)
+		}
+	}
+
+	owner.must(http.StatusNoContent, http.MethodDelete, "/api/v1/platform/cloud-sign-in/apps/digitalocean", nil, nil)
+	owner.must(http.StatusNotFound, http.MethodDelete, "/api/v1/platform/cloud-sign-in/apps/digitalocean", nil, nil)
+	if got := cloudMethods(t, member, connections.DigitalOcean); got != "token" {
+		t.Fatalf("methods after the app was removed: %q, want token", got)
+	}
+}
+
+// Only a platform owner or admin on a session reaches the platform routes.
+// An organization's owner, and any API key, get the 404 an unknown route
+// would.
+func TestCloudSignInPlatform_closedToEveryoneElse(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	owner := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, owner)
+	member := secondOrgMember(t, owner, cfg, "grace@example.com")
+
+	anon := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	anon.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, nil)
+
+	const apps = "/api/v1/platform/cloud-sign-in/apps"
+	closed := func(who string, c *client) {
+		t.Helper()
+		c.must(http.StatusNotFound, http.MethodGet, apps, nil, nil)
+		c.must(http.StatusNotFound, http.MethodPut, apps+"/digitalocean", connections.AppInput{ClientID: "id", ClientSecret: "secret"}, nil)
+		c.must(http.StatusNotFound, http.MethodDelete, apps+"/digitalocean", nil, nil)
+		t.Logf("%s is refused", who)
+	}
+	closed("an organization owner", member)
+
+	// Keys never count, not even the platform owner's own.
+	for who, maker := range map[string]*client{"the platform owner's key": owner, "a member's key": member} {
+		var key struct {
+			Secret string `json:"secret"`
+		}
+		maker.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]any{"name": "ci", "access": "write"}, &key)
+		closed(who, &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey, token: key.Secret})
+	}
+
+	// Nothing above set an app.
+	var list struct {
+		Apps []connections.SignInApp `json:"apps"`
+	}
+	owner.must(http.StatusOK, http.MethodGet, apps, nil, &list)
+	for _, a := range list.Apps {
+		if a.Source != connections.AppFromNone {
+			t.Fatalf("a refused PUT set an app: %+v", a)
+		}
+	}
+}
+
+// A cloud whose app comes from configuration can't be set or removed.
+func TestCloudSignInPlatform_configLocksACloud(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"digitalocean": {ClientID: "cfg-app", ClientSecret: "cfg-secret"}}
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	owner := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, owner)
+
+	owner.must(http.StatusConflict, http.MethodPut, "/api/v1/platform/cloud-sign-in/apps/digitalocean",
+		connections.AppInput{ClientID: "other", ClientSecret: "other-secret"}, nil)
+	owner.must(http.StatusConflict, http.MethodDelete, "/api/v1/platform/cloud-sign-in/apps/digitalocean", nil, nil)
+}
+
+// An organization signs in to a project with a configured Google app, naming
+// the project first, and gets a ready connection that says who signed in. No
 // grant, verifier or app secret ever comes back over the API.
 func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	const (
@@ -281,18 +480,12 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	defer google.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.GoogleEndpoint = google.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"gcp": {ClientID: clientID, ClientSecret: clientSecret}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
-
-	var set json.RawMessage
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/gcp",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
-	if strings.Contains(string(set), clientSecret) {
-		t.Fatalf("setting an app returned its secret: %s", set)
-	}
 
 	var forms struct {
 		Clouds []struct {
@@ -354,8 +547,8 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	if sent == "" {
 		t.Fatal("Google never got a PKCE verifier")
 	}
-	bodies := []string{string(set), string(raw), c.raw("/api/v1/connections/" + conn.ID), c.raw("/api/v1/connections"),
-		c.raw("/api/v1/cloud-sign-in/apps"), c.raw("/api/v1/connection-clouds")}
+	bodies := []string{string(raw), c.raw("/api/v1/connections/" + conn.ID), c.raw("/api/v1/connections"),
+		c.raw("/api/v1/platform/cloud-sign-in/apps"), c.raw("/api/v1/connection-clouds")}
 	for _, body := range bodies {
 		for _, leak := range []string{"refresh_token", "client_secret", "access_token", firstToken, freshToken, refreshToken, clientSecret, sent} {
 			if strings.Contains(body, leak) {
@@ -365,9 +558,9 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	}
 }
 
-// A Vercel app is installed by its slug, so one without is refused, and
-// the slug saved comes back and names the install page.
-func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
+// A Vercel app's configured slug comes back in the app list and names the
+// install page.
+func TestCloudSignIn_vercelInstallUsesTheAppSlug(t *testing.T) {
 	cfg := config.Defaults()
 	vercel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("asked Vercel %s %s", r.Method, r.URL)
@@ -376,24 +569,17 @@ func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
 	defer vercel.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.VercelEndpoint = vercel.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"vercel": {ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
 
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
-		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret"}, nil)
-	var set connections.SignInApp
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
-		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}, &set)
-	if set.Slug != "loomplane-acme" || set.Source != connections.AppFromOrganization {
-		t.Fatalf("set %+v", set)
-	}
 	var list struct {
 		Apps []connections.SignInApp `json:"apps"`
 	}
-	c.must(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, &list)
 	slug := ""
 	for _, a := range list.Apps {
 		if a.Cloud == connections.Vercel {
