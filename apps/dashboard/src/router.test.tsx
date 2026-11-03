@@ -20,6 +20,7 @@ vi.mock("@/pages/projects", async () => {
 })
 vi.mock("@/pages/members", () => ({ Members: () => <h1>Members</h1> }))
 vi.mock("@/pages/overview", () => ({ Overview: () => <h1>Overview</h1> }))
+vi.mock("@/pages/api-keys", () => ({ ApiKeys: () => <h1>API keys</h1> }))
 vi.mock("@/pages/deployments", () => ({
   runFilters: [
     { value: "all" },
@@ -199,6 +200,16 @@ describe("dashboard routes", () => {
     const { history } = await open("/onboarding")
     await waitFor(() => expect(history.location.pathname).toBe("/"))
     expect(await screen.findByText("Overview")).toBeInTheDocument()
+  })
+
+  it("opens API keys under settings and moves the old address there", async () => {
+    const { history } = await open("/api-keys")
+    await waitFor(() =>
+      expect(history.location.pathname).toBe("/settings/api-keys")
+    )
+    expect(
+      await screen.findByRole("heading", { name: "API keys" })
+    ).toBeInTheDocument()
   })
 
   it("retains invitation tokens in the URL", async () => {

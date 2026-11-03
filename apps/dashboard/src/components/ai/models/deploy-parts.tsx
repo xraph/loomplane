@@ -572,7 +572,7 @@ export function ProblemLine({ problem }: { problem: Problem }) {
       {settings &&
         (can("ai:manage") ? (
           <Link
-            to="/ai/settings"
+            to="/settings/ai"
             className="ml-5 w-fit text-[12.5px] font-medium text-primary hover:underline"
           >
             Open AI settings
