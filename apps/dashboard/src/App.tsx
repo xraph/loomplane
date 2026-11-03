@@ -36,6 +36,7 @@ const authPaths = ["/sign-in", "/sign-up"]
 const callbackPaths = [
   "/integrations/oauth/callback",
   "/integrations/github/setup",
+  "/device",
 ]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
@@ -147,6 +148,8 @@ export function App() {
   // The invitation has a page of its own, outside any workspace. Wherever
   // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  // So has approving a loomctl sign-in, which isn't tied to a workspace.
+  if (path === "/device") return <Outlet />
   if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }

@@ -40,9 +40,10 @@ clients:
     streaming: true
 
   # authsome's organization API: organizations, members, invitations, and
-  # switching the session's active organization. Sign-in and sessions are
-  # deliberately absent: @authsome/ui-react owns that state.
+  # switching the session's active organization, plus approving a loomctl
+  # sign-in code on /device. Sign-in and sessions are deliberately absent:
+  # @authsome/ui-react owns that state.
   - name: authsome
     output: ./src/client/forge/authsome
     package: "@loomplane/authsome-client"
-    include: ["/authsome/v1/orgs", "/authsome/v1/orgs/**", "/authsome/v1/me/switch-org"]
+    include: ["/authsome/v1/orgs", "/authsome/v1/orgs/**", "/authsome/v1/me/switch-org", "/authsome/v1/oauth/device/complete"]

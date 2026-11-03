@@ -72,6 +72,9 @@ func (e *Extension) routes(r forge.Router) error {
 	if err := e.setupRoutes(r); err != nil {
 		return err
 	}
+	if err := e.cliRoutes(r); err != nil {
+		return err
+	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
 	if err := v1.GET("/session", e.getSession,
 		forge.WithName("session.get"),

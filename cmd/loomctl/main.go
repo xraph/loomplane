@@ -1,6 +1,8 @@
 // Command loomctl is Loomplane's command-line client: plan, approve and
-// follow deployments from your terminal or CI, with an API key.
+// follow deployments from your terminal, signed in as you, or from CI with
+// an API key.
 //
+//	loomctl login --url https://loomplane.example.com   sign in through the browser
 //	loomctl login --url https://loomplane.example.com --key lp_live_...
 //	loomctl plan mono --env production
 //	loomctl approve <plan-id>

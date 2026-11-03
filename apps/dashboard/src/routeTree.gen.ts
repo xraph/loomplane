@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as DeviceRouteImport } from "./routes/device"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -76,6 +77,11 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeviceRoute = DeviceRouteImport.update({
+  id: "/device",
+  path: "/device",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -339,6 +345,7 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -394,6 +401,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -450,6 +458,7 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -507,6 +516,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/device"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -562,6 +572,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/device"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -617,6 +628,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/device"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -673,6 +685,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  DeviceRoute: typeof DeviceRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -746,6 +759,13 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/device": {
+      id: "/device"
+      path: "/device"
+      fullPath: "/device"
+      preLoaderRoute: typeof DeviceRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -1105,6 +1125,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  DeviceRoute: DeviceRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,

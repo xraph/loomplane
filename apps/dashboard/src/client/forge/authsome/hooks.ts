@@ -13,6 +13,7 @@ import { ops } from './ops';
 import type { Invitation, InvitationListResponse, Member, MemberListResponse, OrgListResponse, Organization, SlugAvailableResponse } from './types';
 
 export const useSwitchOrg = mutation(ops.switchOrg);
+export const useOauth2DeviceComplete = mutation(ops.oauth2DeviceComplete);
 export const useListOrganizations = query<OrgListResponse>(ops.listOrganizations);
 export const useCreateOrganization = mutation<Organization, Organization>(ops.createOrganization);
 export const useCheckOrgSlug = query<SlugAvailableResponse>(ops.checkOrgSlug);

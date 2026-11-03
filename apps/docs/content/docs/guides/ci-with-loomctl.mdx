@@ -26,7 +26,7 @@ export LOOMPLANE_API_KEY=lp_live_...
 loomctl whoami
 ```
 
-On a machine you use by hand, `loomctl login --url https://loomplane.example.com --key -` reads the key from standard input and saves it, readable only by you, in your user config directory. `loomctl logout` removes it. The key keeps working until you revoke it under Settings.
+On a machine you use by hand you don't need a key at all: `loomctl login --url https://loomplane.example.com` signs you in through the browser. If you'd rather save a key there anyway, `loomctl login --url https://loomplane.example.com --key -` reads it from standard input and saves it, readable only by you, in your user config directory. `loomctl logout` removes it. The key keeps working until you revoke it under Settings.
 
 ## A plan on every pull request
 

@@ -66,10 +66,10 @@ For hot reload while you work on Loomplane itself, `make dev` serves the dashboa
 5. **Plan** an environment. You see every action, step by step, with anything in the way and anything worth knowing.
 6. An admin approves it. You watch each step build, deploy and answer, and the environment shows what runs where.
 
-The same thing from a terminal or CI, with an API key from **Settings, API keys**:
+The same thing from a terminal. `loomctl login` opens the dashboard so you can approve its sign-in; CI uses an API key from **Settings, API keys** with `--key -` instead:
 
 ```bash
-loomctl login --url http://localhost:8780 --key -
+loomctl login --url http://localhost:8780
 loomctl analyze mono
 loomctl manifest save mono -f loomplane.yaml
 loomctl plan mono --env production

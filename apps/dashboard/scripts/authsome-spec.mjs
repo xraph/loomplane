@@ -23,12 +23,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const output = join(here, "..", "specs", "authsome.openapi.json")
 const mount = (process.env.AUTHSOME_MOUNT ?? "/authsome").replace(/\/+$/, "")
 
-// The organization surface. Sign-in, sessions, MFA and the rest stay with the
+// The organization surface, and approving a device code. Sign-in, sessions, MFA and the rest stay with the
 // @authsome/ui-* SDK, which owns the session; generating them here would give
 // the dashboard two clients fighting over one session. Teams are left out:
 // Loomplane blocks authsome's team routes (they answer 404) and serves its
 // own at /api/v1/teams, so a workspace has one kind of team.
-const KEEP = [/^\/v1\/orgs(?!\/[^/]+\/teams)(\/|$)/, /^\/v1\/me\/switch-org$/]
+const KEEP = [
+  /^\/v1\/orgs(?!\/[^/]+\/teams)(\/|$)/,
+  /^\/v1\/me\/switch-org$/,
+  // The dashboard's /device page approves loomctl's sign-in codes.
+  /^\/v1\/oauth\/device\/complete$/,
+]
 
 function pinnedSpec() {
   // The authsome module the backend builds against, from Go's module cache.

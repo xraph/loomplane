@@ -87,6 +87,14 @@ export const ops = {
     bodyCodec: CODECS['SwitchOrgRequest'],
     responseCodec: CODECS['SwitchOrgResponse'],
   },
+  'oauth2DeviceComplete': {
+    method: 'POST',
+    path: '/authsome/v1/oauth/device/complete',
+    provides: [],
+    invalidates: [],
+    security: ['session'],
+    responseCodec: CODECS['DeviceCompleteResponse'],
+  },
   'listOrganizations': {
     method: 'GET',
     path: '/authsome/v1/orgs',

@@ -242,6 +242,24 @@ export class RESTClient extends Client {
   };
 
   /**
+   * Complete device authorization
+   * Approve or deny a device authorization request. Requires authenticated user. Used by external verification UIs (e.g. authsome-ui).
+   */
+  public readonly oauth2DeviceComplete = async (body: URLSearchParams, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeviceCompleteResponse> => {
+    let __path = `/authsome/v1/oauth/device/complete`;
+    const config: RequestConfig = {
+      method: 'POST',
+      url: __path,
+      body,
+      signal: options?.signal,
+      retry: options?.retry,
+      responseCodec: CODECS["DeviceCompleteResponse"],
+    };
+
+    return this.request<types.DeviceCompleteResponse>(config);
+  };
+
+  /**
    * Remove member
    * Removes a member from an organization.
    */
