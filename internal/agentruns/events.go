@@ -120,25 +120,6 @@ func (s *Service) pump(ctx context.Context, t *Task, events <-chan engine.Stream
 	s.pumpWith(w, w.forward(events))
 }
 
-// forward hands the events cortex sends on source to the pump through a
-// 64-event buffer, counting the steps among them. Source is unbuffered,
-// so cortex's send of an event returns only once forward has it: when a
-// tool's hook fires, every step before the tool's call is counted, and
-// none after it is, and the outcome is tagged with that step.
-func (w *eventWriter) forward(source <-chan engine.StreamEvent) <-chan engine.StreamEvent {
-	out := make(chan engine.StreamEvent, 64)
-	go func() {
-		defer close(out)
-		for ev := range source {
-			if ev.Type == engine.EventStep {
-				w.steps.Add(1)
-			}
-			out <- ev
-		}
-	}()
-	return out
-}
-
 // pumpWith writes a run's events to its log until events closes. Text
 // tokens are coalesced; anything else flushes them first, so the log
 // keeps the run's order. Writes outlive ctx: the end of a run is what a
@@ -218,6 +199,25 @@ type toolOutcome struct {
 	// step is the steps cortex had sent when the hook fired: the call's
 	// own step.
 	step int64
+}
+
+// forward hands the events cortex sends on source to the pump through a
+// 64-event buffer, counting the steps among them. Source is unbuffered,
+// so cortex's send of an event returns only once forward has it: when a
+// tool's hook fires, every step before the tool's call is counted, and
+// none after it is, and the outcome is tagged with that step.
+func (w *eventWriter) forward(source <-chan engine.StreamEvent) <-chan engine.StreamEvent {
+	out := make(chan engine.StreamEvent, 64)
+	go func() {
+		defer close(out)
+		for ev := range source {
+			if ev.Type == engine.EventStep {
+				w.steps.Add(1)
+			}
+			out <- ev
+		}
+	}()
+	return out
 }
 
 // newWriter makes the task's run's writer and registers it under the
