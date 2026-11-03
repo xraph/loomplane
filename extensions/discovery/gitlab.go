@@ -156,7 +156,7 @@ func (e *Extension) gitlabConnect(c forge.Context) error {
 	case errors.Is(err, oauth.ErrRefused):
 		return forge.NewHTTPError(http.StatusBadRequest, "GitLab didn't accept that sign-in code; connect again")
 	case errors.Is(err, oauth.ErrAppRejected):
-		return forge.NewHTTPError(http.StatusBadGateway, "GitLab refused Loomplane's OAuth application; check its ID and secret")
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, "GitLab refused the sign-in application; check its application ID and secret")
 	case err != nil:
 		return fail(err)
 	}

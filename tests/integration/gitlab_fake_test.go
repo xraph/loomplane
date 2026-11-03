@@ -64,6 +64,16 @@ type gitLabFake struct {
 	archiveTokens []string
 	// revoked are the tokens it was told to stop honoring.
 	revoked []string
+	// requests are the API requests it answered, as "<escaped path> bearer"
+	// or "<escaped path> anonymous".
+	requests []string
+}
+
+// requestsSeen returns a copy of the API requests the fake answered.
+func (g *gitLabFake) requestsSeen() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.requests...)
 }
 
 func (g *gitLabFake) note(call string) {
@@ -89,7 +99,17 @@ func fakeGitLab(t *testing.T, tgz []byte) *gitLabFake {
 	authed := func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer "+fakeGitLabAccessToken }
 	g.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// EscapedPath keeps %2F, which Path has already turned into a slash.
-		switch got := r.URL.EscapedPath(); got {
+		got := r.URL.EscapedPath()
+		if strings.HasPrefix(got, "/api/v4/") {
+			who := "anonymous"
+			if r.Header.Get("Authorization") != "" {
+				who = "bearer"
+			}
+			g.mu.Lock()
+			g.requests = append(g.requests, got+" "+who)
+			g.mu.Unlock()
+		}
+		switch got {
 		case "/oauth/token":
 			if r.FormValue("grant_type") != "authorization_code" || r.FormValue("code") != fakeGitLabCode ||
 				r.FormValue("client_id") != fakeGitLabClientID || r.FormValue("client_secret") != fakeGitLabSecret ||

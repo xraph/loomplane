@@ -254,6 +254,47 @@ func TestGitLab_otherOrganizationCantFinishSignIn(t *testing.T) {
 	}
 }
 
+func TestGitLab_otherOrganizationCantReadAConnectedProject(t *testing.T) {
+	fake := fakeGitLab(t, tarball(t, "api-"+exampleSHA+"-"+exampleSHA, siteFiles))
+	cfg, host := gitLabInstance(t, fake)
+	r := start(t, cfg)
+	defer r.stop()
+	ada := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, ada)
+	state, _ := gitLabSignIn(t, ada, "instance:"+host)
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/gitlab/connections", map[string]string{"code": fakeGitLabCode, "state": state}, nil)
+
+	grace := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	account(t, grace, "grace@example.com")
+	var org struct {
+		ID string `json:"id"`
+	}
+	grace.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Other", "slug": "other"}, &org)
+	grace.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	grace.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Theirs"}, &proj)
+
+	before := len(fake.requestsSeen())
+	grace.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/projects/"+proj.ID+"/sources",
+		map[string]string{"repository": fake.URL + "/grp/sub/api", "alias": "api"}, nil)
+
+	// GitLab was asked, with no token: Ada's connection isn't Grace's to use.
+	after := fake.requestsSeen()[before:]
+	if len(after) == 0 {
+		t.Fatal("GitLab was never asked whether Grace's organization can read the project")
+	}
+	for _, req := range after {
+		if !strings.HasSuffix(req, " anonymous") {
+			t.Fatalf("GitLab saw %q for Grace's organization; Ada's token was used on her behalf (%v)", req, after)
+		}
+	}
+	if _, archiveTokens, _ := fake.seen(); len(archiveTokens) != 0 {
+		t.Fatalf("the private archive was read with %v", archiveTokens)
+	}
+}
+
 func TestGitLab_viewerCantAddHost(t *testing.T) {
 	fake := fakeGitLab(t, nil)
 	cfg, host := gitLabInstance(t, fake)
