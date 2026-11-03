@@ -149,7 +149,7 @@ func TestProvideReadsStdinOnly(t *testing.T) {
 }
 
 func TestAgentOffMessage(t *testing.T) {
-	off := func(w http.ResponseWriter, r *http.Request) {
+	off := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"not found"}`))
 	}
@@ -166,7 +166,7 @@ func TestAgentOffMessage(t *testing.T) {
 		}
 	}
 	// A request that isn't there is a different 404.
-	gone := func(w http.ResponseWriter, r *http.Request) {
+	gone := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"agent request not found"}`))
 	}

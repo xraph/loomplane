@@ -54,6 +54,12 @@ func (a *App) agentRequestsCommand() cli.Command {
 	)
 }
 
+// sentence is an error that reads as a sentence, capital and full stop
+// included, because loomctl prints it as it stands.
+type sentence string
+
+func (s sentence) Error() string { return string(s) }
+
 // agentError says the agent is off when the server has no such route. A 404
 // on one request's ID is a different thing: that request isn't there.
 func agentError(err error) error {
@@ -62,9 +68,9 @@ func agentError(err error) error {
 		return err
 	}
 	if strings.Contains(strings.ToLower(e.Message), "agent request") {
-		return errors.New("There's no agent request with that ID.")
+		return sentence("There's no agent request with that ID.")
 	}
-	return errors.New(agentOff)
+	return sentence(agentOff)
 }
 
 func (a *App) agentRequests(ctx cli.CommandContext) error {
