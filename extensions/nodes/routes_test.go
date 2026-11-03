@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/nodes"
@@ -249,5 +251,63 @@ func TestRevokeRoute(t *testing.T) {
 	r.seed(t)
 	if out = r.do(t, http.MethodPost, "/api/v1/nodes/node_1/revoke", "", &member); out.Code != http.StatusForbidden {
 		t.Fatalf("without nodes:manage: %d", out.Code)
+	}
+}
+
+func TestJoinTokenListAndCancelRoutes(t *testing.T) {
+	r := newRig(t)
+	exp := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	r.minter.pending = []apikeys.PendingNodeJoinToken{{ID: "key_1", Hint: "c123", MintedBy: "usr_1", MintedByKeyID: "key_9",
+		Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, CreatedAt: exp.Add(-time.Hour), ExpiresAt: exp}}
+	// /join-tokens is its own route, not a node called "join-tokens".
+	out := r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", &member)
+	if out.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", out.Code, out.Body)
+	}
+	var got struct {
+		Tokens []map[string]any `json:"tokens"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil || len(got.Tokens) != 1 {
+		t.Fatalf("body %s (%v)", out.Body, err)
+	}
+	if got.Tokens[0]["minted_by_key_id"] != "key_9" || got.Tokens[0]["expires_at"] != "2026-11-02T12:00:00Z" {
+		t.Fatalf("token %v", got.Tokens[0])
+	}
+	if strings.Contains(out.Body.String(), "lpj_") || got.Tokens[0]["secret"] != nil || got.Tokens[0]["token"] != nil {
+		t.Fatalf("a secret in %s", out.Body)
+	}
+	r.minter.pending = nil
+	if out = r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", &member); out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"tokens":[]`) {
+		t.Fatalf("empty list: %d %s", out.Code, out.Body)
+	}
+
+	if out = r.do(t, http.MethodDelete, "/api/v1/nodes/join-tokens/key_1", "", &member); out.Code != http.StatusNoContent {
+		t.Fatalf("cancel: %d %s", out.Code, out.Body)
+	}
+	if !slices.Equal(r.minter.cancelled, []string{"key_1"}) || r.minter.who != member {
+		t.Fatalf("cancelled %v as %+v", r.minter.cancelled, r.minter.who)
+	}
+	for _, tc := range []struct {
+		err    error
+		status int
+	}{
+		{apikeys.ErrNotFound, http.StatusNotFound},
+		{security.ErrForbidden, http.StatusForbidden},
+		{apikeys.ErrUnavailable, http.StatusServiceUnavailable},
+	} {
+		r.minter.err = tc.err
+		if out = r.do(t, http.MethodDelete, "/api/v1/nodes/join-tokens/key_1", "", &member); out.Code != tc.status {
+			t.Errorf("cancel with %v: %d", tc.err, out.Code)
+		}
+		if out = r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", &member); tc.err != apikeys.ErrNotFound && out.Code != tc.status {
+			t.Errorf("list with %v: %d", tc.err, out.Code)
+		}
+	}
+	r.minter.err = nil
+	if out = r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", nil); out.Code != http.StatusUnauthorized {
+		t.Fatalf("list with no session: %d", out.Code)
+	}
+	if out = r.do(t, http.MethodDelete, "/api/v1/nodes/join-tokens/key_1", "", nil); out.Code != http.StatusUnauthorized {
+		t.Fatalf("cancel with no session: %d", out.Code)
 	}
 }

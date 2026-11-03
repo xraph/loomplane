@@ -245,6 +245,80 @@ func TestNodes_oneJoinTokenOneNode(t *testing.T) {
 	}
 }
 
+// An admin sees the join tokens no machine has used yet, with who made them
+// and from which key, never a secret, and can cancel one so no machine can
+// join with it. Joins from one address are rate-limited on the limiter every
+// replica shares.
+func TestNodes_listCancelAndLimitJoinTokens(t *testing.T) {
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := nodesConfig(t, "http://"+l.Addr().String())
+	a := startReplica(t, cfg, l)
+	api := adminKey(t, &client{t: t, base: a.base, key: cfg.Identity.PublishableKey}, a.base)
+	keep := mintJoinToken(t, api)
+	var scoped struct {
+		Token string `json:"token"`
+	}
+	api.must(http.StatusCreated, http.MethodPost, "/api/v1/nodes/join-tokens", map[string]any{"labels": map[string]string{"zone": "a"}, "endpoints": []string{"docker"}}, &scoped)
+
+	type pending struct {
+		ID            string               `json:"id"`
+		MintedBy      string               `json:"minted_by"`
+		MintedByKeyID string               `json:"minted_by_key_id"`
+		Labels        map[string]string    `json:"labels"`
+		Endpoints     []nodeproto.Endpoint `json:"endpoints"`
+		ExpiresAt     time.Time            `json:"expires_at"`
+	}
+	var list struct {
+		Tokens []pending `json:"tokens"`
+	}
+	api.must(http.StatusOK, http.MethodGet, "/api/v1/nodes/join-tokens", nil, &list)
+	if len(list.Tokens) != 2 {
+		t.Fatalf("listed %d tokens, want 2", len(list.Tokens))
+	}
+	newest := list.Tokens[0]
+	if newest.MintedBy == "" || newest.MintedByKeyID == "" || newest.Labels["zone"] != "a" || len(newest.Endpoints) != 1 || newest.ExpiresAt.IsZero() {
+		t.Fatalf("newest token %+v", newest)
+	}
+
+	api.must(http.StatusNoContent, http.MethodDelete, "/api/v1/nodes/join-tokens/"+newest.ID, nil, nil)
+	api.must(http.StatusNotFound, http.MethodDelete, "/api/v1/nodes/join-tokens/"+newest.ID, nil, nil)
+	api.must(http.StatusOK, http.MethodGet, "/api/v1/nodes/join-tokens", nil, &list)
+	if len(list.Tokens) != 1 || list.Tokens[0].ID == newest.ID {
+		t.Fatalf("after the cancel: %+v", list.Tokens)
+	}
+
+	join := func(token string) int {
+		pub, priv, kerr := ed25519.GenerateKey(rand.Reader)
+		if kerr != nil {
+			t.Fatal(kerr)
+		}
+		return api.do(http.MethodPost, "/api/v1/nodes/join", nodesext.NodeJoin{
+			Token: token, PublicKey: base64.StdEncoding.EncodeToString(pub),
+			Signature: base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, token, "")),
+			Inventory: nodeproto.Inventory{OS: "linux", Arch: "amd64"}, NodeVersion: buildinfo.Version, ProtocolVersion: nodeproto.Version,
+		}, nil)
+	}
+	if got := join(scoped.Token); got != http.StatusUnauthorized {
+		t.Fatalf("join with a cancelled token: %d", got)
+	}
+	if got := join(keep); got != http.StatusCreated {
+		t.Fatalf("join with the kept token: %d", got)
+	}
+	// Two joins counted so far; the rest of this address's minute goes on
+	// spent tokens, then it is refused before the token is looked at.
+	for i := 2; i < cfg.Nodes.JoinRateLimit; i++ {
+		if got := join(keep); got != http.StatusUnauthorized {
+			t.Fatalf("join %d: %d", i, got)
+		}
+	}
+	if got := join(keep); got != http.StatusTooManyRequests {
+		t.Fatalf("join past the limit of %d: %d", cfg.Nodes.JoinRateLimit, got)
+	}
+}
+
 // dockerArch maps what the Docker daemon reports to a GOARCH.
 func dockerArch(t *testing.T) string {
 	t.Helper()

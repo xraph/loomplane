@@ -86,36 +86,15 @@ func IsNodeJoinToken(s string) bool { return strings.HasPrefix(s, NodeJoinPrefix
 // token is short-lived, spends itself on first use, and the maker's live
 // role is checked now.
 func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal, scope NodeJoinScope, lifetime time.Duration) (*NodeJoinToken, error) {
-	if p.IsServiceAccount() || p.Fleet != nil || p.ReadOnly || p.OrgID == "" || p.UserID == "" {
-		return nil, security.ErrForbidden
-	}
-	if s.authz == nil {
-		return nil, security.ErrForbidden
-	}
-	allowed, err := s.authz.Allowed(ctx, p, security.NodeManage)
-	if err != nil {
+	if err := s.mayMintNodeJoin(ctx, p); err != nil {
 		return nil, err
-	}
-	if !allowed {
-		return nil, security.ErrForbidden
 	}
 	if verr := validNodeJoinScope(&scope); verr != nil {
 		return nil, verr
 	}
 	if scope.EdgeScope == EdgeScopeInstance {
-		// Instance-wide authority is session-only, like the instance console.
-		if p.KeyID != "" {
-			return nil, security.ErrForbidden
-		}
-		if s.admins == nil {
-			return nil, security.ErrForbidden
-		}
-		platform, perr := s.admins.IsPlatformAdmin(ctx, p.UserID)
-		if perr != nil {
-			return nil, perr
-		}
-		if !platform {
-			return nil, security.ErrForbidden
+		if err := s.mayMintInstanceEdge(ctx, p); err != nil {
+			return nil, err
 		}
 	}
 	if lifetime <= 0 || lifetime > MaxNodeJoinLifetime {
@@ -152,6 +131,43 @@ func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal,
 		}
 	}
 	return &NodeJoinToken{ID: res.Key.ID.String(), Secret: res.RawKey, ExpiresAt: expires}, nil
+}
+
+// mayMintNodeJoin refuses anyone who may not mint a join token in their
+// organization: a person, with a session or a write API key, whose live role
+// may manage nodes.
+func (s *Service) mayMintNodeJoin(ctx context.Context, p security.Principal) error {
+	if p.IsServiceAccount() || p.Fleet != nil || p.ReadOnly || p.OrgID == "" || p.UserID == "" {
+		return security.ErrForbidden
+	}
+	if s.authz == nil {
+		return security.ErrForbidden
+	}
+	allowed, err := s.authz.Allowed(ctx, p, security.NodeManage)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+// mayMintInstanceEdge refuses anyone who may not mint an instance-wide edge:
+// that takes a platform admin, signed in.
+func (s *Service) mayMintInstanceEdge(ctx context.Context, p security.Principal) error {
+	// Instance-wide authority is session-only, like the instance console.
+	if p.KeyID != "" || s.admins == nil {
+		return security.ErrForbidden
+	}
+	platform, err := s.admins.IsPlatformAdmin(ctx, p.UserID)
+	if err != nil {
+		return err
+	}
+	if !platform {
+		return security.ErrForbidden
+	}
+	return nil
 }
 
 func validNodeJoinScope(sc *NodeJoinScope) error {
@@ -203,7 +219,7 @@ func (s *Service) ConsumeNodeJoinToken(ctx context.Context, raw string) (*NodeJo
 	tctx := s.tenant(ctx, k.TenantID)
 	// Spend first, then check the minter: whoever wins the race owns the
 	// outcome, and a token that fails the check is burned.
-	if serr := s.spendNodeJoinKey(tctx, k); serr != nil {
+	if serr := s.spendNodeJoinKey(tctx, k, "node joined"); serr != nil {
 		return nil, serr
 	}
 	ok, err := s.minterStillAllowed(ctx, claim)
@@ -245,13 +261,13 @@ func (s *Service) liveNodeJoinKey(ctx context.Context, raw string) (*key.Key, *N
 	return res.Key, claim, nil
 }
 
-func (s *Service) spendNodeJoinKey(tctx context.Context, k *key.Key) error {
+func (s *Service) spendNodeJoinKey(tctx context.Context, k *key.Key, reason string) error {
 	// RevokeKey re-reads the key and writes only if its version is the one it
 	// read. A lost race shows as a conflict or as an already revoked key. A
 	// conflict can also be an unrelated write to the row, so look again: if
 	// the key is still active the token is still ours to spend.
 	for range 3 {
-		err := s.engine.RevokeKey(tctx, k.ID, "node joined")
+		err := s.engine.RevokeKey(tctx, k.ID, reason)
 		if err == nil {
 			return nil
 		}
@@ -342,4 +358,130 @@ func (s *Service) nodeJoinClaim(k *key.Key) (*NodeJoinClaim, error) {
 		scope.Endpoints = append(scope.Endpoints, nodeproto.Endpoint(e))
 	}
 	return &NodeJoinClaim{OrgID: k.TenantID, MintedBy: k.CreatedBy, MintedByKeyID: meta.MintedByKeyID, Scope: scope}, nil
+}
+
+// PendingNodeJoinToken is a join token no machine has used yet, as its
+// organization sees it. The secret is never in it.
+type PendingNodeJoinToken struct {
+	ID string `json:"id"`
+	// Hint is the end of the token, to tell it apart from others.
+	Hint string `json:"hint"`
+	// MintedBy is the user who minted it; MintedByKeyID the API key they
+	// minted it with, empty when it came from a session.
+	MintedBy      string               `json:"minted_by"`
+	MintedByKeyID string               `json:"minted_by_key_id,omitempty"`
+	CloudID       string               `json:"cloud_id,omitempty"`
+	Labels        map[string]string    `json:"labels,omitempty"`
+	Endpoints     []nodeproto.Endpoint `json:"endpoints"`
+	Edge          bool                 `json:"edge"`
+	EdgeScope     string               `json:"edge_scope,omitempty"`
+	CreatedAt     time.Time            `json:"created_at"`
+	ExpiresAt     time.Time            `json:"expires_at"`
+}
+
+// ListNodeJoinTokens returns the organization's join tokens that are still
+// unspent and unexpired, newest first. Anyone who may mint one may list
+// them all, whoever minted them. The list is audited.
+func (s *Service) ListNodeJoinTokens(ctx context.Context, p security.Principal) ([]PendingNodeJoinToken, error) {
+	if err := s.mayMintNodeJoin(ctx, p); err != nil {
+		return nil, err
+	}
+	keys, err := s.engine.ListKeys(s.tenant(ctx, p.OrgID), &key.ListFilter{TenantID: p.OrgID, State: key.StateActive})
+	if err != nil {
+		return nil, fmt.Errorf("list join tokens: %w", err)
+	}
+	out := []PendingNodeJoinToken{}
+	for _, k := range keys {
+		if k.TenantID != p.OrgID {
+			continue
+		}
+		// nodeJoinClaim refuses anything that isn't a live join token of
+		// this app: other keys, spent, cancelled and expired tokens.
+		claim, cerr := s.nodeJoinClaim(k)
+		if cerr != nil {
+			continue
+		}
+		out = append(out, pendingNodeJoinToken(k, claim))
+	}
+	slices.SortFunc(out, func(a, b PendingNodeJoinToken) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	if s.audit != nil {
+		meta := map[string]string{"count": fmt.Sprint(len(out))}
+		if ma, ok := s.audit.(MetaAuditor); ok {
+			ma.RecordWithMeta(ctx, "node.join_token.listed", p, APIKey{Name: "node join tokens"}, meta)
+		} else {
+			s.audit.Record(ctx, "node.join_token.listed", p, APIKey{Name: "node join tokens"})
+		}
+	}
+	return out, nil
+}
+
+// CancelNodeJoinToken revokes an unspent join token of the caller's
+// organization, so no machine can join with it. Only someone who may mint
+// that token may cancel it: an instance edge token takes a signed-in
+// platform admin. A token that is spent, expired or not a join token of this
+// organization is ErrNotFound. The cancel is audited.
+func (s *Service) CancelNodeJoinToken(ctx context.Context, p security.Principal, tokenID string) error {
+	if err := s.mayMintNodeJoin(ctx, p); err != nil {
+		return err
+	}
+	kid, err := id.ParseKeyID(tokenID)
+	if err != nil {
+		return ErrNotFound
+	}
+	tctx := s.tenant(ctx, p.OrgID)
+	k, err := s.engine.GetKey(tctx, kid)
+	if err != nil {
+		if errors.Is(err, store.ErrKeyNotFound) {
+			return ErrNotFound
+		}
+		return ErrUnavailable
+	}
+	if k.TenantID != p.OrgID {
+		return ErrNotFound
+	}
+	claim, err := s.nodeJoinClaim(k)
+	if err != nil {
+		return ErrNotFound
+	}
+	if claim.Scope.EdgeScope == EdgeScopeInstance {
+		if ierr := s.mayMintInstanceEdge(ctx, p); ierr != nil {
+			return ierr
+		}
+	}
+	// The same versioned revoke a join spends it with, so a join racing
+	// the cancel either wins and the cancel finds nothing, or loses.
+	if serr := s.spendNodeJoinKey(tctx, k, "cancelled by "+p.UserID); serr != nil {
+		if errors.Is(serr, ErrRejected) {
+			return ErrNotFound
+		}
+		return serr
+	}
+	if s.audit != nil {
+		v := view(k)
+		now := s.now().UTC()
+		v.State, v.RevokedAt = string(key.StateRevoked), &now
+		meta := map[string]string{"minted_by": claim.MintedBy, "minted_by_key_id": claim.MintedByKeyID, "edge_scope": claim.Scope.EdgeScope}
+		if ma, ok := s.audit.(MetaAuditor); ok {
+			ma.RecordWithMeta(ctx, "node.join_token.cancelled", p, v, meta)
+		} else {
+			s.audit.Record(ctx, "node.join_token.cancelled", p, v)
+		}
+	}
+	return nil
+}
+
+func pendingNodeJoinToken(k *key.Key, c *NodeJoinClaim) PendingNodeJoinToken {
+	eps := c.Scope.Endpoints
+	if eps == nil {
+		eps = []nodeproto.Endpoint{}
+	}
+	t := PendingNodeJoinToken{
+		ID: k.ID.String(), Hint: k.Hint, MintedBy: c.MintedBy, MintedByKeyID: c.MintedByKeyID,
+		CloudID: c.Scope.CloudID, Labels: c.Scope.Labels, Endpoints: eps, Edge: c.Scope.Edge, EdgeScope: c.Scope.EdgeScope,
+		CreatedAt: k.CreatedAt,
+	}
+	if k.ExpiresAt != nil {
+		t.ExpiresAt = *k.ExpiresAt
+	}
+	return t
 }

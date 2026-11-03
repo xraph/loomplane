@@ -26,9 +26,18 @@ const (
 	mintHint = "mint a new join token and try again"
 )
 
-// JoinTokenMinter makes node join tokens. The API key service does.
+// JoinTokenMinter makes, lists and cancels node join tokens. The API key
+// service does.
 type JoinTokenMinter interface {
 	CreateNodeJoinToken(ctx context.Context, p security.Principal, scope apikeys.NodeJoinScope, lifetime time.Duration) (*apikeys.NodeJoinToken, error)
+	ListNodeJoinTokens(ctx context.Context, p security.Principal) ([]apikeys.PendingNodeJoinToken, error)
+	CancelNodeJoinToken(ctx context.Context, p security.Principal, tokenID string) error
+}
+
+// JoinTokenList is the org's join tokens no machine has used yet. The
+// secrets are never in it.
+type JoinTokenList struct {
+	Tokens []apikeys.PendingNodeJoinToken `json:"tokens"`
 }
 
 // NodeList is the org's nodes.
@@ -111,6 +120,20 @@ func (e *Extension) routes(r forge.Router, guard ...forge.Middleware) error {
 		forge.WithSummary("Make a single-use token for one machine to join, and the command that uses it"),
 		forge.WithRequestSchema(JoinTokenRequest{}),
 		forge.WithResponseSchema(http.StatusCreated, "JoinToken", JoinToken{}),
+	); err != nil {
+		return err
+	}
+	if err := g.GET("/join-tokens", e.listJoinTokens,
+		forge.WithName("nodeJoinTokens.list"),
+		forge.WithSummary("The join tokens no machine has used yet: who made them, with which key, for what, and when they expire"),
+		forge.WithResponseSchema(http.StatusOK, "JoinTokenList", JoinTokenList{}),
+	); err != nil {
+		return err
+	}
+	if err := g.DELETE("/join-tokens/:id", e.cancelJoinToken,
+		forge.WithName("nodeJoinTokens.cancel"),
+		forge.WithSummary("Cancel a join token no machine has used, so none can"),
+		forge.WithNoContentResponse(),
 	); err != nil {
 		return err
 	}
@@ -230,6 +253,32 @@ func (e *Extension) createJoinToken(c forge.Context) error {
 	return c.JSON(http.StatusCreated, JoinToken{Token: tok.Secret, ExpiresAt: tok.ExpiresAt, Command: e.installCommand(tok.Secret, in.Endpoints)})
 }
 
+func (e *Extension) listJoinTokens(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	out, err := e.minter.ListNodeJoinTokens(c.Request().Context(), p)
+	if err != nil {
+		return e.fail(c, err)
+	}
+	if out == nil {
+		out = []apikeys.PendingNodeJoinToken{}
+	}
+	return c.JSON(http.StatusOK, JoinTokenList{Tokens: out})
+}
+
+func (e *Extension) cancelJoinToken(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err = e.minter.CancelNodeJoinToken(c.Request().Context(), p, c.Param("id")); err != nil {
+		return e.fail(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // installCommand is the line an operator runs on the machine. The token goes
 // in LOOMPLANE_JOIN_TOKEN, so no other user on the machine can read it from
 // a process's arguments. The pipe leaves node join no terminal to ask on, so
@@ -313,6 +362,8 @@ func (e *Extension) fail(c forge.Context, err error) error {
 		return forge.NewHTTPError(http.StatusUpgradeRequired, err.Error())
 	case errors.Is(err, nodes.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, apikeys.ErrNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, "no unused join token has that id; it may have been used, cancelled or expired")
 	case errors.Is(err, nodes.ErrNameTaken):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, nodes.ErrInvalid), errors.Is(err, nodes.ErrWidenRemotely), errors.Is(err, apikeys.ErrInvalid):
