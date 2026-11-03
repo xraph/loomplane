@@ -147,8 +147,8 @@ type Hub struct {
 	// unreachableOnce warns once that another replica holds sessions with no
 	// advertise URL, so this one can't reach its nodes.
 	unreachableOnce sync.Once
-	// started is when this hub was made. A session row connected before it
-	// may be one this process's predecessor left behind.
+	// started is when this hub was made. A session row from this host
+	// connected before it is one this process's predecessor left behind.
 	started time.Time
 }
 
@@ -514,15 +514,33 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 	if s != nil && row != nil && row.Epoch > s.epoch {
 		s.close()
 	}
-	// A row connected before this process started proves nothing about a
-	// live replica: on a single replica it is the dead process's own
-	// "replica:<host>:<pid>" row, left until the node reconnects here.
-	if row != nil && row.Replica != h.self && !hopTarget(row.Replica) && !row.ConnectedAt.Before(h.started) {
+	// After a restart, a node's row names the dead process,
+	// "replica:<host>:<pid>" on this host, until the node reconnects here.
+	// That is no other replica. A row from another host, or from this host
+	// since this process started, is.
+	if row != nil && row.Replica != h.self && !hopTarget(row.Replica) && !h.predecessor(row) {
 		h.unreachableOnce.Do(func() {
 			h.log.Warn("nodes: another replica holds node sessions but has no nodes.advertise_url, so this replica can't reach those nodes and revokes reach them only through the heartbeat; set nodes.advertise_url on every replica", "replica", row.Replica, "node", n.ID)
 		})
 	}
 	return nil, offline(n)
+}
+
+// predecessor reports a session row an earlier process on this host left:
+// same host in its replica id, and connected before this hub started. Both
+// times come from this host's clock.
+func (h *Hub) predecessor(row *Session) bool {
+	return replicaHost(row.Replica) == replicaHost(h.self) && row.ConnectedAt.Before(h.started)
+}
+
+// replicaHost is the host of a "replica:<host>:<pid>" id, or the whole id
+// after "replica:" when it names no pid.
+func replicaHost(id string) string {
+	id = strings.TrimPrefix(id, "replica:")
+	if i := strings.LastIndexByte(id, ':'); i > 0 {
+		return id[:i]
+	}
+	return id
 }
 
 // Sweep marks nodes without a heartbeat for 45 seconds offline, and drops

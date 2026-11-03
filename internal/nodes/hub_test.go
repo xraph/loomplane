@@ -1289,6 +1289,42 @@ func TestHubDoesNotWarnAboutItsOwnPredecessor(t *testing.T) {
 	}
 }
 
+// A live replica on another host is no predecessor, however long ago its
+// sessions connected: in a rolling deploy they all predate the new process.
+func TestHubWarnsAboutAnOlderReplicaOnAnotherHost(t *testing.T) {
+	store := newFakeStore()
+	var logs syncLog
+	seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	if _, err := store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "replica:host-2:4242", ConnectedAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHub(HubConfig{Audience: "https://lp.example.com", Replica: "host-1:4343", HopSecret: []byte("hop-secret-for-tests-only-000000"),
+		ChallengeSecret: []byte("challenge-secret-for-tests-00000"), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err := h.Bind(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	var off ErrNodeOffline
+	if _, err := h.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+		t.Fatalf("open: %v", err)
+	}
+	if !strings.Contains(logs.String(), "has no nodes.advertise_url") {
+		t.Fatalf("no warning about the replica on host-2:\n%s", logs.String())
+	}
+}
+
+func TestReplicaHost(t *testing.T) {
+	for id, want := range map[string]string{
+		"replica:host-1:4242":        "host-1",
+		"replica:10.0.0.7:80":        "10.0.0.7",
+		"replica:a":                  "a",
+		"replica:[fe80::1%eth0]:999": "[fe80::1%eth0]",
+	} {
+		if got := replicaHost(id); got != want {
+			t.Errorf("replicaHost(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 type syncLog struct {
 	mu sync.Mutex
 	b  strings.Builder
