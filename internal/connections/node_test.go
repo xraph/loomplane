@@ -166,6 +166,19 @@ func (m *nodeStore) DeleteConnection(_ context.Context, org, id string) error {
 	return nil
 }
 
+func (m *nodeStore) ReadyServersOnDaemon(_ context.Context, daemon string) ([]*Connection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*Connection
+	for _, id := range slices.Sorted(maps.Keys(m.rows)) {
+		if c := m.rows[id]; c.Cloud == Server && c.Status == StatusReady && c.Details["docker_id"] == daemon {
+			c.Details = maps.Clone(c.Details)
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
 func (m *nodeStore) WithConnectionLock(_ context.Context, org, id string, fn func() error) error {
 	m.mu.Lock()
 	m.locks = append(m.locks, org+"/"+id)
@@ -318,11 +331,150 @@ func TestSameDaemonOverSSHRefused(t *testing.T) {
 	if len(nodes.streams()) == 0 {
 		t.Fatal("the daemon was never asked who it is")
 	}
-	// Only a ready connection in the same organization holds the daemon.
+	// Only a ready connection holds the daemon.
 	seed(store, Connection{ID: "conn_ssh", OrgID: "org_1", Cloud: Server, Name: "web over ssh", Method: MethodToken, Status: StatusFailed, Details: map[string]string{"host": "web.example.com", "docker_id": "daemon-a"}})
-	seed(store, Connection{ID: "conn_other", OrgID: "org_2", Cloud: Server, Name: "theirs", Method: MethodToken, Status: StatusReady, Details: map[string]string{"host": "web.example.com", "docker_id": "daemon-a"}})
 	if _, err := s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeA, "web-1")); err != nil {
-		t.Fatalf("a failed or foreign connection held the daemon: %v", err)
+		t.Fatalf("a failed connection held the daemon: %v", err)
+	}
+}
+
+func TestSameDaemonInAnotherOrgRefused(t *testing.T) {
+	const other = ": this Docker daemon is already connected in another organization"
+	theirs := security.Principal{OrgID: "org_2", UserID: "user_2"}
+	// Their node, then our SSH.
+	s, store, secrets, _, checker := nodeRig(t)
+	if _, err := s.CreateNodeConnection(t.Context(), theirs, nodeInput(nodeA, "their-node")); err != nil {
+		t.Fatal(err)
+	}
+	checker.daemon = "daemon-a"
+	_, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "ours", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"})
+	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), other) || strings.Contains(err.Error(), "their-node") {
+		t.Fatalf("our SSH next to their node: %v", err)
+	}
+	if len(store.rows) != 1 || secrets.puts != 0 {
+		t.Fatal("our SSH connection was kept")
+	}
+	// Their SSH, then our node.
+	s, store, _, _, checker = nodeRig(t)
+	checker.daemon = "daemon-a"
+	if _, err = s.Create(t.Context(), theirs, CreateInput{Cloud: Server, Name: "their ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeA, "web-1"))
+	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), other) || strings.Contains(err.Error(), "their ssh") {
+		t.Fatalf("our node next to their SSH: %v", err)
+	}
+	// SSH next to SSH shares the host's journal, whoever holds it.
+	if _, err = s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "ours", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"}); err != nil {
+		t.Fatalf("our SSH next to their SSH: %v", err)
+	}
+	if len(store.rows) != 2 {
+		t.Fatalf("%d connections kept, want 2", len(store.rows))
+	}
+}
+
+// markFailed stores connection id as failed, as a check that lost its
+// daemon would.
+func markFailed(store *nodeStore, id string) {
+	c := store.rows[id]
+	c.Status, c.Message = StatusFailed, "the daemon went away"
+	store.rows[id] = c
+}
+
+func TestRecheckNextToNodeStaysNotReady(t *testing.T) {
+	s, store, _, _, checker := nodeRig(t)
+	checker.daemon = "daemon-a"
+	ssh, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markFailed(store, ssh.ID)
+	if _, err = s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeA, "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Recheck(t.Context(), orgPrincipal, ssh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == StatusReady || got.Message != "this Docker daemon is already connected as node web-1; remove it from the node first" {
+		t.Fatalf("recheck next to a node: %s %q", got.Status, got.Message)
+	}
+	if row := store.rows[ssh.ID]; row.Status != got.Status || row.Message != got.Message {
+		t.Fatalf("stored %s %q", row.Status, row.Message)
+	}
+	if !slices.Contains(store.locks, "/docker/daemon-a") {
+		t.Fatalf("the recheck didn't hold the daemon lock: %v", store.locks)
+	}
+}
+
+func TestRecheckNodeNextToSSHStaysNotReady(t *testing.T) {
+	s, store, _, _, checker := nodeRig(t)
+	node, err := s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeA, "web-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markFailed(store, node.ID)
+	checker.daemon = "daemon-a"
+	if _, err = s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Recheck(t.Context(), orgPrincipal, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == StatusReady || got.Message != "this Docker daemon is already connected as over ssh over SSH; disconnect it first" {
+		t.Fatalf("node recheck next to SSH: %s %q", got.Status, got.Message)
+	}
+	// Alone on its daemon, a recheck finds only itself and stays ready.
+	again, err := s.CreateNodeConnection(t.Context(), orgPrincipal, nodeInput(nodeB, "web-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = s.Recheck(t.Context(), orgPrincipal, again.ID); err != nil || got.Status != StatusReady {
+		t.Fatalf("recheck alone: %+v %v", got, err)
+	}
+}
+
+func TestRecheckNextToAnotherOrgsNodeStaysNotReady(t *testing.T) {
+	s, store, _, _, checker := nodeRig(t)
+	checker.daemon = "daemon-a"
+	ssh, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markFailed(store, ssh.ID)
+	if _, err = s.CreateNodeConnection(t.Context(), security.Principal{OrgID: "org_2", UserID: "user_2"}, nodeInput(nodeA, "their-node")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Recheck(t.Context(), orgPrincipal, ssh.ID)
+	if err != nil || got.Status == StatusReady || got.Message != "this Docker daemon is already connected in another organization" {
+		t.Fatalf("recheck next to their node: %+v %v", got, err)
+	}
+}
+
+func TestReplaceNextToNodeStaysNotReady(t *testing.T) {
+	for _, org := range []string{"org_1", "org_2"} {
+		s, store, _, _, checker := nodeRig(t)
+		checker.daemon = "daemon-a"
+		ssh, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		markFailed(store, ssh.ID)
+		if _, err = s.CreateNodeConnection(t.Context(), security.Principal{OrgID: org, UserID: "user_2"}, nodeInput(nodeA, "web-1")); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Replace(t.Context(), orgPrincipal, ssh.ID, ReplaceInput{Credential: "-----BEGIN OPENSSH PRIVATE KEY----- rotated"})
+		if err != nil {
+			t.Fatalf("%s: %v", org, err)
+		}
+		want := "this Docker daemon is already connected as node web-1; remove it from the node first"
+		if org != "org_1" {
+			want = "this Docker daemon is already connected in another organization"
+		}
+		if got.Status == StatusReady || got.Message != want || store.rows[ssh.ID].Status != got.Status {
+			t.Fatalf("%s: replace next to a node: %s %q", org, got.Status, got.Message)
+		}
 	}
 }
 
@@ -363,7 +515,8 @@ func TestDaemonRuleHoldsTheDaemonLock(t *testing.T) {
 	if _, err := s.Create(t.Context(), orgPrincipal, CreateInput{Cloud: Server, Name: "over ssh", Credential: "-----BEGIN OPENSSH PRIVATE KEY-----"}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"org_1/docker/daemon-a", "org_1/docker/daemon-ssh"}
+	// The lock is one per daemon, not per organization.
+	want := []string{"/docker/daemon-a", "/docker/daemon-ssh"}
 	if !slices.Equal(store.locks, want) {
 		t.Fatalf("locks %v, want %v", store.locks, want)
 	}

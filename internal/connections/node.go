@@ -22,7 +22,8 @@ type NodeConnectionInput struct {
 	NodeID string
 	Name   string
 	// IdentityGeneration is the node's identity generation, which
-	// reviewed placements pin.
+	// reviewed placements pin. Callers pass the stored
+	// nodes.Node.IdentityGeneration, never a value from a request.
 	IdentityGeneration int64
 	// Settings are the cloud's options. For server: docker_socket,
 	// build_workers and advertise_host.
@@ -153,42 +154,105 @@ func (s *Service) nodeStreams() server.NodeStreams {
 	return nil
 }
 
-// withDaemonLock runs fn holding the lock on Docker daemon daemon in the
-// organization, so two connections to one daemon can't both pass
-// daemonFree. A store that can't lock runs fn as is.
-func (s *Service) withDaemonLock(ctx context.Context, orgID, daemon string, fn func() error) error {
-	locker, ok := s.store.(interface {
-		WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
-	})
+// connectionLocker is a store that holds a lock across every Loomplane
+// process. *PgStore is one.
+type connectionLocker interface {
+	WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
+}
+
+// daemonStore is a store that finds the ready server connections on a
+// Docker daemon in every organization. *PgStore is one.
+type daemonStore interface {
+	ReadyServersOnDaemon(ctx context.Context, daemon string) ([]*Connection, error)
+}
+
+var (
+	_ connectionLocker = (*PgStore)(nil)
+	_ daemonStore      = (*PgStore)(nil)
+)
+
+// withDaemonLock runs fn holding the lock on Docker daemon daemon, one
+// lock for every organization, so two connections to one daemon can't
+// both pass daemonFree. A store that can't lock, such as a test's memory
+// store, runs fn as is; the Postgres store always locks.
+func (s *Service) withDaemonLock(ctx context.Context, daemon string, fn func() error) error {
+	locker, ok := s.store.(connectionLocker)
 	if !ok {
 		return fn()
 	}
-	// Connection IDs start with conn_, so this never names a connection's own lock.
-	return locker.WithConnectionLock(ctx, orgID, "docker/"+daemon, fn)
+	// No organization has an empty ID, and connection IDs start with
+	// conn_, so this never names a connection's own lock.
+	return locker.WithConnectionLock(ctx, "", "docker/"+daemon, fn)
 }
 
-// daemonFree refuses a server connection, made by method, to a Docker
-// daemon that a ready server connection in the organization already
-// attaches in a way that would keep a second fence journal for it. SSH
-// connections fence through the one journal on the host that the daemon
-// ID names, while each node keeps a journal of its own, so a node
-// connection needs the daemon to itself, and an SSH one needs it free of
-// nodes.
-func (s *Service) daemonFree(ctx context.Context, orgID, daemon, method string) error {
+// readyOnDaemon are the ready server connections on daemon, in every
+// organization the store can search. A store that can't search across
+// organizations gives the organization's own.
+func (s *Service) readyOnDaemon(ctx context.Context, orgID, daemon string) ([]*Connection, error) {
+	if store, ok := s.store.(daemonStore); ok {
+		return store.ReadyServersOnDaemon(ctx, daemon)
+	}
 	all, err := s.store.ListConnections(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*Connection
+	for _, c := range all {
+		if c.Cloud == Server && c.Status == StatusReady && c.Details["docker_id"] == daemon {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// daemonFree refuses server connection self, made by method in
+// organization orgID, to a Docker daemon that another ready server
+// connection, in any organization, attaches in a way that would keep a
+// second fence journal for it. SSH connections fence through the one
+// journal on the host that the daemon ID names, while each node keeps a
+// journal of its own, so any pair with a node connection in it is
+// refused, and SSH next to SSH is not. Another organization's connection
+// is never named.
+func (s *Service) daemonFree(ctx context.Context, orgID, self, daemon, method string) error {
+	held, err := s.readyOnDaemon(ctx, orgID, daemon)
 	if err != nil {
 		return err
 	}
-	for _, c := range all {
-		if c.Cloud != Server || c.Status != StatusReady || c.Details["docker_id"] != daemon {
+	for _, c := range held {
+		if c.ID == self || c.Cloud != Server || c.Status != StatusReady || c.Details["docker_id"] != daemon {
 			continue
 		}
-		if c.Method == MethodNode {
+		switch {
+		case c.Method != MethodNode && method != MethodNode:
+			continue
+		case c.OrgID != orgID:
+			return fmt.Errorf("%w: this Docker daemon is already connected in another organization", ErrInvalid)
+		case c.Method == MethodNode:
 			return fmt.Errorf("%w: this Docker daemon is already connected as node %s; remove it from the node first", ErrInvalid, c.Name)
-		}
-		if method == MethodNode {
+		default:
 			return fmt.Errorf("%w: this Docker daemon is already connected as %s over SSH; disconnect it first", ErrInvalid, c.Name)
 		}
 	}
 	return nil
+}
+
+// holdDaemon runs save for c, a connection a check or a replacement is
+// about to store. When c is a server connection that would be ready on a
+// daemon the one-daemon rule gives to another connection, c is stored
+// failed with the rule's reason instead. The daemon stays locked
+// throughout, so the rule and the write are one step.
+func (s *Service) holdDaemon(ctx context.Context, c *Connection, save func() error) error {
+	daemon := c.Details["docker_id"]
+	if c.Cloud != Server || c.Status != StatusReady || daemon == "" {
+		return save()
+	}
+	return s.withDaemonLock(ctx, daemon, func() error {
+		if err := s.daemonFree(ctx, c.OrgID, c.ID, daemon, c.Method); err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				return err
+			}
+			c.Status, c.Message = StatusFailed, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")
+		}
+		return save()
+	})
 }

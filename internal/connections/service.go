@@ -282,8 +282,8 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 		return nil
 	}
 	if daemon := c.Details["docker_id"]; cloud == Server && daemon != "" {
-		err = s.withDaemonLock(ctx, p.OrgID, daemon, func() error {
-			if freeErr := s.daemonFree(ctx, p.OrgID, daemon, method); freeErr != nil {
+		err = s.withDaemonLock(ctx, daemon, func() error {
+			if freeErr := s.daemonFree(ctx, p.OrgID, c.ID, daemon, method); freeErr != nil {
 				return freeErr
 			}
 			return save()
@@ -421,7 +421,8 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		}
 		apply(c, res, now)
 	}
-	if err := s.store.UpdateConnection(ctx, c); err != nil {
+	// A check never turns a connection ready on a daemon another holds.
+	if err := s.holdDaemon(ctx, c, func() error { return s.store.UpdateConnection(ctx, c) }); err != nil {
 		return nil, err
 	}
 	s.record(ctx, "cloud_connection.check", p, c)
@@ -532,7 +533,8 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 		c.SignedInBy = signer(p, method)
 		c.OAuthClientID = oauthClientID
 		apply(c, res, s.now().UTC())
-		return s.store.UpdateConnection(ctx, c)
+		// Nor does a replacement turn one ready on a daemon another holds.
+		return s.holdDaemon(ctx, c, func() error { return s.store.UpdateConnection(ctx, c) })
 	}
 	if versioned, ok := s.store.(interface {
 		WithCredentialReplacement(context.Context, *Connection, func() error) error
