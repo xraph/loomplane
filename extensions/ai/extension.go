@@ -27,6 +27,7 @@ import (
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -79,6 +80,7 @@ type Extension struct {
 	cfg      config.Config
 	engineOf func() *engine.Engine
 	settings *aisettings.Service
+	agent    *agentsettings.Service
 	models   *models.Service
 	hooks    *models.Hooks
 	engine   *engine.Engine
@@ -156,6 +158,15 @@ func (e *Extension) Register(fapp forge.App) error {
 		Projects: projects.NewPgStore(pg),
 	})
 
+	// The agent's settings sit on the same row, and its key is one of the
+	// provider keys above. Nexus and the guardrail seeder are the agent
+	// extension's, which binds them; until then the agent can't turn on.
+	e.agent = agentsettings.NewService(agentsettings.Deps{
+		Store: agentsettings.NewPgStore(pg), AI: e.settings, Roles: authz, Authz: authz,
+		Audit:  projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
+		Config: e.cfg.AI, Environment: e.cfg.Environment, Denied: e.cfg.Planning.EndpointDeniedCIDRs,
+	})
+
 	modelStore := models.NewPgStore(pg)
 	if err := e.registerModels(c, authz, projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()), modelStore, pg); err != nil {
 		return err
@@ -173,11 +184,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.settings); err != nil {
 		return fmt.Errorf("provide the AI settings: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.agent); err != nil {
+		return fmt.Errorf("provide the agent settings: %w", err)
+	}
 	guard, gerr := forge.InjectType[identity.Guard](c)
 	if gerr != nil {
 		return fmt.Errorf("ai needs the identity extension's guard: %w", gerr)
 	}
-	return mountModels(fapp.Router(), guard, e.models, e.settings)
+	if err := mountModels(fapp.Router(), guard, e.models, e.settings); err != nil {
+		return err
+	}
+	return mountSettings(fapp.Router(), guard, e.settings, e.agent)
 }
 
 // registerModels builds the models service over what the planning and

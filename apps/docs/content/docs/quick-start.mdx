@@ -87,7 +87,7 @@ Each GitHub release carries `loomctl_<version>_<os>_<arch>` archives for macOS, 
 
 ### Create a project
 
-In the dashboard choose **New project** and give it a GitHub URL. Any public monorepo works as is. Private ones need a GitHub App, which [Private repositories](/docs/guides/private-repositories) sets up.
+In the dashboard choose **New project** and give it a GitHub or GitLab URL. Any public monorepo works as is. Private ones need a GitHub App or a GitLab sign-in, which [Private repositories](/docs/guides/private-repositories) and [GitLab repositories](/docs/guides/gitlab-repositories) set up.
 
 </Step>
 <Step>
@@ -131,6 +131,18 @@ loomctl approve <plan-id>
 ```
 
 `--key -` reads the key from standard input, so it stays out of your shell history. See [CI with loomctl](/docs/guides/ci-with-loomctl) for pipelines.
+
+## Join a machine as a node
+
+Got a machine you'd rather use than a cloud, even one behind a router? Join it as a node. With `loomctl` logged in, run this on the machine:
+
+```bash
+sudo loomctl node join --allow probe
+```
+
+The machine may not have `loomctl` yet. Then add a node in the dashboard (**Nodes**, **Add node**), tick what Loomplane may use, and paste the one line it gives you. Either way the node dials out, so there's no port to open, and it shows under **Nodes** once it connects.
+
+Today a node reports what the machine has and takes signed updates. Deploying to it comes next. [Nodes](/docs/clouds/nodes) covers the rest, including why allowing `docker` hands over root on that machine.
 
 ## Develop Loomplane locally
 

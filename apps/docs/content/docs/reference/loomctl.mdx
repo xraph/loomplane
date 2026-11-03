@@ -52,6 +52,20 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 
 Managing teams needs `member:manage`. Setting a project's team needs `project:update` on it. See [Teams](/docs/concepts/teams).
 
+## The built-in agent
+
+These need the agent on. On a server with `ai.enabled` off they print "This Loomplane doesn't run the agent (ai.enabled is off)." and exit 1.
+
+| Command | What it does |
+|---|---|
+| `agent requests [--all] [--mine] [--json]` | Lists what the agent is asking people for: ID, kind, project, question, who it was sent to, who it's asked for, and its age. `--all` includes settled requests. `--mine` keeps what's asked of you, your teams or, for admins, the workspace. A plan to approve adds the line `approve with: loomctl approve PLAN --revision REV` |
+| `agent requests answer ID TEXT...` | Answers a question |
+| `agent requests provide ID` | Sets the secret the agent asked for. The value comes from standard input, hidden on a terminal, and a value given as an argument is refused. It's never printed |
+| `agent requests done ID` | Says you connected GitHub or a cloud account |
+| `agent requests decline ID [--reason TEXT]` | Turns a request down. The agent sees the reason |
+
+See [What needs a person](/docs/agents/what-needs-a-person#requests) for who is asked and who can answer.
+
 ## Plans and deployments
 
 | Command | What it does |
@@ -61,7 +75,7 @@ Managing teams needs `member:manage`. Setting a project's team needs `project:up
 | `rollback PROJECT --reason TEXT [--env production] [--deployment ID] [--no-wait] [--json]` | Plans an environment back to its previous successful release. `--reason` is required. It prints which deployment it undoes and which it restores, and the plan lists what it leaves in place. `--deployment` has to name the environment's newest |
 | `plans PROJECT [--json]` | Lists a project's plans |
 | `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy. A promotion or rollback adds a line saying what it moves, which images it reuses and, for a rollback, what it leaves in place |
-| `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
+| `approve PLAN_ID [--revision REV] [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment. `--revision` approves only if the plan is still at that revision |
 | `reject PLAN_ID [--note TEXT]` | Rejects a plan |
 | `deployments PROJECT [--json]` | Lists a project's deployments |
 | `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives. A deployment with a post-deploy watch adds a `Watch:` section with the status, each service's verdict and the services it can't watch. The `--watch` flag follows the deployment, and the Watch section is the release watch, which is a different thing |
@@ -100,6 +114,24 @@ Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default
 | `domain-routes PROJECT`, `preview`, `apply`, `show`, `retry`, `verify`, `remove`, `ttl`, `history` | Domain routes |
 
 Most of these review before they act and apply only with `--yes`. Many take `--wait`, `--timeout` and `--request-id`. [Cloud targets](/docs/clouds/cloud-targets), [Adopting and moving services](/docs/clouds/adopting-and-moving) and [Your own servers](/docs/clouds/your-own-servers) show them in context.
+
+## Nodes
+
+`loomctl node` joins and manages machines that connect to Loomplane. `loomplane node` has the same subcommands. See [Nodes](/docs/clouds/nodes).
+
+| Command | What it does |
+|---|---|
+| `node join [--token TOKEN] [--name NAME] [--label K=V] [--allow ENDPOINTS] [--cloud ID] [--builder dedicated] [--edge] [--foreground] [--state-dir DIR]` | Joins this machine and installs the service. Reads the token from `LOOMPLANE_JOIN_TOKEN` too. Without a token it mints one with your login, and under `sudo` that is the login of the user who ran `sudo`. Needs root on Linux |
+| `node run [--state-dir DIR] [--root-allowlist]` | Runs the node in the foreground. `--root-allowlist` trusts only a root-owned `allow.json`; the systemd unit sets it |
+| `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
+| `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Writes `allow.json`, then tells the running node. Needs root on Linux |
+| `node leave` | Revokes this node, stops its service and removes its config. The next join makes a fresh key |
+| `node list [--json]` | Lists the organization's nodes |
+| `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
+| `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start or stops within five seconds |
+| `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
+
+`join`, `list` and `revoke` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
 
 ## AI agents
 

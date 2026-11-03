@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.loomplane.node</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/a &amp; b/Library/Application Support/loomplane-node/bin/loomctl</string>
+		<string>node</string>
+		<string>run</string>
+		<string>--state-dir</string>
+		<string>/Users/a &amp; b/Library/Application Support/loomplane-node</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/a &amp; b/Library/Application Support/loomplane-node/node.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/a &amp; b/Library/Application Support/loomplane-node/node.log</string>
+</dict>
+</plist>

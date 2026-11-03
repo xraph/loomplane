@@ -75,6 +75,12 @@ var (
 	MemberManage = Permission{"member", "manage"}
 
 	OrganizationAdminister = Permission{"organization", "administer"}
+
+	NodeRead   = Permission{"nodes", "read"}
+	NodeManage = Permission{"nodes", "manage"}
+	// AgentUse is held by every role: talk to the workspace's AI agent and
+	// see its requests. Its settings need AIManage.
+	AgentUse = Permission{"agent", "use"}
 )
 
 // Role slugs. They're Warden roles in each organization's tenant.
@@ -98,7 +104,7 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
-		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead,
+		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead, NodeRead, AgentUse,
 	}
 	developer := append(clone(viewer),
 		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
@@ -107,7 +113,7 @@ func Catalog() []RoleDef {
 	admin := append(clone(developer),
 		OrganizationCloudManage, ClusterManage, ClusterDelete, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
-		AIManage,
+		AIManage, NodeManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister, BackupRetire)
 	return []RoleDef{
@@ -116,6 +122,38 @@ func Catalog() []RoleDef {
 		{Slug: RoleDeveloper, Name: "Developer", Description: "Creates projects and environments and requests deployments", Permissions: developer},
 		{Slug: RoleViewer, Name: "Viewer", Description: "Reads everything, changes nothing", Permissions: viewer},
 	}
+}
+
+// RoleAgent is the Warden role the AI agent holds in an organization that
+// turned it on. It's never a member's role.
+const RoleAgent = "agent"
+
+// AgentRole is what the AI agent may do: what a developer may, less setting
+// tool secrets and publishing AI without approval, plus approving a
+// deployment and changing infrastructure. The Authorizer allows the last
+// only while a deployment the agent approved runs. Acting for a person, it
+// may also do only what they may.
+func AgentRole() RoleDef {
+	var perms []Permission
+	for _, p := range developerPermissions() {
+		if p != AIToolSecret && p != AIPublishNonProduction {
+			perms = append(perms, p)
+		}
+	}
+	return RoleDef{
+		Slug: RoleAgent, Name: "AI agent",
+		Description: "The workspace's AI agent. Never a member's role",
+		Permissions: append(perms, DeploymentApprove, InfrastructureModify),
+	}
+}
+
+func developerPermissions() []Permission {
+	for _, r := range Catalog() {
+		if r.Slug == RoleDeveloper {
+			return r.Permissions
+		}
+	}
+	return nil
 }
 
 // AllPermissions lists every permission any role holds, once each.

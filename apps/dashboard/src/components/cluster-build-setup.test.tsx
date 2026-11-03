@@ -112,16 +112,21 @@ it("connects automatic setup with a hostname and no placement overrides", async 
     </ClientProvider>
   )
   const user = userEvent.setup()
+  // The managed registry sits behind its switch until it's wanted.
+  await user.click(
+    await screen.findByRole("switch", {
+      name: "Run a registry in this cluster",
+    })
+  )
   await user.type(
-    await screen.findByLabelText(/Registry hostname/),
+    screen.getByLabelText("Registry hostname"),
     "images.example.com"
   )
   await user.type(screen.getByLabelText("Name"), "Local")
-  await user.type(
-    screen.getByLabelText("Self-contained kubeconfig"),
-    "test-kubeconfig"
+  await user.type(screen.getByLabelText("Kubeconfig"), "test-kubeconfig")
+  await user.click(
+    screen.getByRole("button", { name: "Check, set up and connect" })
   )
-  await user.click(screen.getByRole("button", { name: "Set up and connect" }))
   await waitFor(() => expect(posted).toHaveLength(1))
   expect(posted[0].settings).toEqual({
     registry_hostname: "images.example.com",

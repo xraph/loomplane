@@ -82,6 +82,9 @@ var (
 	ErrAppLocked = errors.New("this cloud's sign-in app is set in Loomplane's configuration")
 	// ErrNoApp is a sign-in for a cloud with no app.
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
+	// ErrAppChanged is a signed-in connection whose sign-in app is no
+	// longer the one it signed in with, so its grant can't be renewed.
+	ErrAppChanged = errors.New("this cloud's sign-in app changed")
 )
 
 // DetailCanaryMissing is the detail listing, comma separated, what a
@@ -121,9 +124,13 @@ type Connection struct {
 	CreatedBy string     `json:"created_by"`
 	// SignedInBy is the Loomplane user who signed in to the cloud, for a
 	// connection made that way. Empty for a pasted token.
-	SignedInBy string    `json:"signed_in_by,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	SignedInBy string `json:"signed_in_by,omitempty"`
+	// OAuthClientID is the client ID of the sign-in app this connection's
+	// grant came from. Empty for a pasted token and for a connection that
+	// predates it.
+	OAuthClientID string    `json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (c *Connection) normalize() {

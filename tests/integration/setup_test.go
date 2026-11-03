@@ -37,6 +37,8 @@ type publicConfig struct {
 	SetupTokenRequired bool    `json:"setup_token_required"`
 	Waitlist           bool    `json:"waitlist"`
 	ConsolePath        *string `json:"console_path"`
+	PlatformAdmin      bool    `json:"platform_admin"`
+	CloudSignInOffer   bool    `json:"cloud_sign_in_offer"`
 }
 
 // setupClient talks to the API the way the dashboard does in a browser:
@@ -615,5 +617,121 @@ func TestSetup_earlierOwnerIsVerifiedOnStart(t *testing.T) {
 	creds := map[string]string{"email": ada["email"], "password": ada["password"]}
 	if status, raw, _ := owner.send(http.MethodPost, "/authsome/v1/signin", creds); status != http.StatusOK {
 		t.Fatalf("the owner's sign-in after the upgrade: %d %s, want 200", status, raw)
+	}
+}
+
+// ordinaryMember invites email to owner's organization as a viewer and
+// returns a client signed in as them. They hold no platform role.
+func ordinaryMember(t *testing.T, owner *setupClient, email string) *setupClient {
+	t.Helper()
+	var created struct {
+		AcceptPath string `json:"accept_path"`
+	}
+	status, raw, _ := owner.send(http.MethodPost, "/api/v1/invitations", map[string]string{"email": email, "role": "viewer"})
+	if status != http.StatusCreated || json.Unmarshal(raw, &created) != nil {
+		t.Fatalf("invite %s: %d %s", email, status, raw)
+	}
+	_, token, _ := strings.Cut(created.AcceptPath, "token=")
+	if status, why := signUp(owner, email); status != http.StatusCreated {
+		t.Fatalf("%s sign-up: %d %+v", email, status, why)
+	}
+	member := &setupClient{t: t, base: owner.base, key: owner.key}
+	status, raw, cookies := member.send(http.MethodPost, "/authsome/v1/signin", map[string]string{"email": email, "password": "Correct-horse-battery-9"})
+	if status != http.StatusOK {
+		t.Fatalf("%s sign-in: %d %s", email, status, raw)
+	}
+	for _, ck := range cookies {
+		if ck.Name == "loomplane_session" && ck.Value != "" {
+			member.cookie = ck
+		}
+	}
+	if member.cookie == nil {
+		t.Fatalf("%s sign-in set no session cookie", email)
+	}
+	if status, raw, _ := member.send(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": token}); status != http.StatusOK && status != http.StatusCreated {
+		t.Fatalf("%s accept: %d %s", email, status, raw)
+	}
+	var sess identity.Session
+	owner.get("/api/v1/session", &sess)
+	if status, raw, _ := member.send(http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": sess.OrgID}); status != http.StatusOK {
+		t.Fatalf("%s switch org: %d %s", email, status, raw)
+	}
+	return member
+}
+
+// The platform owner's public config says so and carries the setup offer;
+// an ordinary member's carries neither, and can't end the offer.
+func TestSetup_cloudSignInOffer(t *testing.T) {
+	cfg := config.Defaults()
+	r, owner := freshSetup(t, &cfg)
+	defer r.stop()
+	if code, body := owner.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	if got := owner.publicConfig(); !got.PlatformAdmin || !got.CloudSignInOffer {
+		t.Fatalf("owner public config = %+v, want platform_admin and cloud_sign_in_offer", got)
+	}
+	anon := &setupClient{t: t, base: owner.base, key: owner.key}
+	if got := anon.publicConfig(); got.PlatformAdmin || got.CloudSignInOffer {
+		t.Fatalf("anonymous public config = %+v, want neither", got)
+	}
+
+	grace := ordinaryMember(t, owner, "grace@example.com")
+	if got := grace.publicConfig(); got.PlatformAdmin || got.CloudSignInOffer {
+		t.Fatalf("an ordinary member's public config = %+v, want neither", got)
+	}
+	const path = "/api/v1/setup/cloud-sign-in-offer"
+	if status, raw, _ := grace.send(http.MethodDelete, path, nil); status != http.StatusNotFound {
+		t.Fatalf("an ordinary member ending the offer: %d %s, want 404", status, raw)
+	}
+	if got := owner.publicConfig(); !got.CloudSignInOffer {
+		t.Fatal("the offer ended though the request was refused")
+	}
+	if status, raw, _ := owner.send(http.MethodDelete, path, nil); status != http.StatusNoContent {
+		t.Fatalf("the owner ending the offer: %d %s, want 204", status, raw)
+	}
+	if got := owner.publicConfig(); !got.PlatformAdmin || got.CloudSignInOffer {
+		t.Fatalf("owner public config after ending the offer = %+v, want platform_admin only", got)
+	}
+}
+
+// The platform role is read live: once Warden no longer has it, the next
+// request is no longer a platform admin's.
+func TestPlatformUserRoleRevoked(t *testing.T) {
+	cfg := config.Defaults()
+	r, owner := freshSetup(t, &cfg)
+	defer r.stop()
+	if code, body := owner.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	if got := owner.publicConfig(); !got.PlatformAdmin {
+		t.Fatalf("owner public config = %+v, want platform_admin", got)
+	}
+
+	ctx := t.Context()
+	users, roles, closeDB, err := platformadmin.Open(ctx, cfg.Database.URL, cfg.Identity.AppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDB()
+	id, err := users.UserIDByEmail(ctx, "ada@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := roles.ListUserRolesForApp(ctx, cfg.Identity.AppID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range held {
+		if err := roles.UnassignUserRole(ctx, cfg.Identity.AppID, id, role.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := owner.publicConfig()
+	if got.PlatformAdmin || got.CloudSignInOffer || got.ConsolePath != nil {
+		t.Fatalf("public config after the role was removed = %+v, want no platform fields", got)
+	}
+	if status, raw, _ := owner.send(http.MethodDelete, "/api/v1/setup/cloud-sign-in-offer", nil); status != http.StatusNotFound {
+		t.Fatalf("ending the offer without the role: %d %s, want 404", status, raw)
 	}
 }

@@ -56,6 +56,7 @@ import (
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/instance"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
@@ -87,18 +88,21 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	pg            *pgdriver.PgDB
-	store         *authpg.Store
-	orgs          *organization.Plugin
-	warden        *warden.Engine
-	authz         *security.Authorizer
-	audit         *chronicle.Chronicle
-	auditStore    chronstore.Store
-	smith         *keysmith.Engine
-	engine        *authsome.Engine
-	keys          *apikeys.Service
-	teams         *teams.Service
-	lockPG        *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	pg         *pgdriver.PgDB
+	store      *authpg.Store
+	orgs       *organization.Plugin
+	warden     *warden.Engine
+	authz      *security.Authorizer
+	audit      *chronicle.Chronicle
+	auditStore chronstore.Store
+	smith      *keysmith.Engine
+	engine     *authsome.Engine
+	keys       *apikeys.Service
+	teams      *teams.Service
+	lockPG     *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	// joined finds the nodes a key's join tokens brought in. The nodes
+	// extension registers after this one, so it is looked up per request.
+	joined        func() JoinedNodes
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
 	instance      *instance.Settings
@@ -196,20 +200,29 @@ func (e *Extension) register(fapp forge.App) error {
 		return fmt.Errorf("keysmith: %w", err)
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
-	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, apikeys.WithPlatformAdmins(e))
 	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}
 	// ProvideValue keys on its type parameter, so each value goes in with
 	// its own concrete type.
 	c := fapp.Container()
+	e.joined = func() JoinedNodes {
+		svc, err := forge.InjectType[*nodes.Service](c)
+		if err != nil {
+			return nil
+		}
+		return svc
+	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
 		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
+		forge.ProvideValue(c, e.keys),
 		forge.ProvideValue(c, Guard{e.guard()}),
+		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/store/memory"
@@ -89,15 +90,36 @@ func (m *memStore) ListProjects(_ context.Context, orgID string) ([]*Project, er
 	return out, nil
 }
 
+// UpdateProject writes what PgStore's does: name, description, icon,
+// color, status and updated_at.
 func (m *memStore) UpdateProject(_ context.Context, p *Project) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if q, ok := m.projects[p.ID]; !ok || q.OrgID != p.OrgID {
+	q, ok := m.projects[p.ID]
+	if !ok || q.OrgID != p.OrgID {
 		return ErrNotFound
 	}
-	c := *p
-	m.projects[p.ID] = &c
+	q.Name, q.Description, q.Icon, q.Color, q.Status, q.UpdatedAt = p.Name, p.Description, p.Icon, p.Color, p.Status, p.UpdatedAt
 	return nil
+}
+
+func (m *memStore) SetAutonomy(_ context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, Autonomy{}, ErrNotFound
+	}
+	before := Autonomy{AutonomousPromotion: p.AutonomousPromotion, MinStagingSoakSeconds: p.MinStagingSoakSeconds}
+	if in.AutonomousPromotion != nil {
+		p.AutonomousPromotion = *in.AutonomousPromotion
+	}
+	if in.MinStagingSoakSeconds != nil {
+		p.MinStagingSoakSeconds = *in.MinStagingSoakSeconds
+	}
+	p.UpdatedAt = at
+	c := *p
+	return &c, before, nil
 }
 
 func (m *memStore) UpdateExclusions(_ context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error) {

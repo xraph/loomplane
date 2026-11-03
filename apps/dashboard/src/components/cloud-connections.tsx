@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   UploadIcon,
 } from "lucide-react"
-import { type FormEvent, useRef, useState } from "react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
@@ -46,6 +46,7 @@ import {
   clusterSetupWaiting,
 } from "@/components/cluster-build-setup"
 import { KeylessSetup } from "@/components/keyless-setup"
+import { SelfHostedConnect } from "@/components/self-hosted-connect"
 import { MetricCard } from "@/components/metric-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -92,6 +93,7 @@ import {
   isKeyJSON,
   rolesFor,
 } from "@/lib/clouds"
+import { isSelfHosted } from "@/lib/connect-presets"
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
@@ -490,6 +492,8 @@ export function ConnectPanel(props: {
   cloud: string
   onCancel: () => void
   onConnected: (connection: Connection) => void
+  /** Whether anything has been typed, so leaving can be confirmed. */
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   return (
     <ConnectForm
@@ -501,6 +505,7 @@ export function ConnectPanel(props: {
         if (!open) props.onCancel()
       }}
       onConnected={props.onConnected}
+      onDirtyChange={props.onDirtyChange}
     />
   )
 }
@@ -568,8 +573,10 @@ function ConnectForm({
   keyless: startKeyless = false,
   onConnected,
   page = false,
+  onDirtyChange,
 }: {
   page?: boolean
+  onDirtyChange?: (dirty: boolean) => void
   open: boolean
   onOpenChange: (open: boolean) => void
   cloud?: string
@@ -654,6 +661,14 @@ function ConnectForm({
     createInCluster.isPending ||
     replace.isPending ||
     signInStart.isPending
+  // The region starts filled in, so it alone isn't something to lose.
+  const dirty =
+    !replacing &&
+    [name, credential, keyID, team, certificate, billingExport]
+      .concat(Object.values(extraSettings).map(String))
+      .concat(Object.values(signInValues))
+      .some((v) => v.trim() !== "")
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])
 
   const close = (next: boolean) => {
     if (!next) {
@@ -697,6 +712,8 @@ function ConnectForm({
       rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
       if (cloud === "vercel") rememberVercelState((started as SignIn).state)
       // The generated hook doesn't type this response.
+      // Leaving for the cloud's sign-in is the point, not a loss.
+      onDirtyChange?.(false)
       window.location.assign((started as SignIn).authorizeUrl)
     } catch (err) {
       setError(messageOf(err, "Sign-in couldn't be started."))
@@ -790,54 +807,56 @@ function ConnectForm({
     : replacing
       ? "Check and replace"
       : "Check and connect"
+  const header = (
+    <DialogHeader>
+      <DialogTitle>
+        {replacing && keylessOn
+          ? `Switch ${replacing.name} to keyless`
+          : replacing
+            ? `Replace ${replacing.name}'s credential`
+            : "Connect an account"}
+      </DialogTitle>
+      <DialogDescription>
+        {replacing && keylessOn
+          ? "Loomplane checks the cloud's trust first. If the cloud refuses it, the connection stays as it is."
+          : replacing
+            ? "The new credential is checked first. If the cloud refuses it, the old one stays."
+            : "Loomplane checks the credential with the cloud before keeping it."}
+      </DialogDescription>
+    </DialogHeader>
+  )
+  const cloudPicker = (
+    <Field>
+      <FieldLabel>Cloud</FieldLabel>
+      <ToggleGroup
+        variant="outline"
+        spacing={1}
+        className="flex-wrap"
+        value={[cloud]}
+        onValueChange={(v) => {
+          if (v[0]) setCloud(v[0])
+        }}
+      >
+        <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
+        <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
+        <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
+        {extras.map((c) => (
+          <ToggleGroupItem key={c.cloud} value={c.cloud}>
+            {c.title}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </Field>
+  )
   const form = (
     <form onSubmit={(e) => void submit(e)} className="grid gap-5">
-      {!page && (
-        <DialogHeader>
-          <DialogTitle>
-            {replacing && keylessOn
-              ? `Switch ${replacing.name} to keyless`
-              : replacing
-                ? `Replace ${replacing.name}'s credential`
-                : "Connect an account"}
-          </DialogTitle>
-          <DialogDescription>
-            {replacing && keylessOn
-              ? "Loomplane checks the cloud's trust first. If the cloud refuses it, the connection stays as it is."
-              : replacing
-                ? "The new credential is checked first. If the cloud refuses it, the old one stays."
-                : "Loomplane checks the credential with the cloud before keeping it."}
-          </DialogDescription>
-        </DialogHeader>
-      )}
+      {!page && header}
       <FieldGroup
         className={cn(page && "rounded-[14px] bg-card p-4 ring-1 ring-border")}
       >
         {!replacing && (
           <>
-            {!page && (
-              <Field>
-                <FieldLabel>Cloud</FieldLabel>
-                <ToggleGroup
-                  variant="outline"
-                  spacing={1}
-                  className="flex-wrap"
-                  value={[cloud]}
-                  onValueChange={(v) => {
-                    if (v[0]) setCloud(v[0])
-                  }}
-                >
-                  <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
-                  <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
-                  <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
-                  {extras.map((c) => (
-                    <ToggleGroupItem key={c.cloud} value={c.cloud}>
-                      {c.title}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </Field>
-            )}
+            {!page && cloudPicker}
             <Field>
               <FieldLabel htmlFor="connection-name">Name</FieldLabel>
               <Input
@@ -1236,6 +1255,28 @@ function ConnectForm({
     </form>
   )
   if (page) return form
+  // What you run yourself has a form of its own, the same one its page
+  // shows, so a connection made from here asks the same.
+  if (isSelfHosted(cloud))
+    return (
+      <Dialog open={open} onOpenChange={close}>
+        <DialogContent className="sm:max-w-2xl">
+          {header}
+          {!replacing && cloudPicker}
+          <SelfHostedConnect
+            key={cloud}
+            cloud={cloud}
+            layout="dialog"
+            replacing={replacing}
+            onConnected={(c) => {
+              onConnected?.(c)
+              close(false)
+            }}
+            onCancel={() => close(false)}
+          />
+        </DialogContent>
+      </Dialog>
+    )
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-lg">{form}</DialogContent>

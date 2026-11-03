@@ -7,9 +7,20 @@ import { forgeClient } from "@/client/runtime"
 import { ConnectCloudPage } from "./connect-cloud"
 
 const navigate = vi.fn()
+// What the page asked the router to block on, and what the router says.
+const blocker = vi.hoisted(() => ({
+  status: "idle",
+  proceed: vi.fn(),
+  reset: vi.fn(),
+  shouldBlock: (() => false) as () => boolean,
+}))
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => navigate,
+  useBlocker: (opts: { shouldBlockFn: () => boolean }) => {
+    blocker.shouldBlock = opts.shouldBlockFn
+    return blocker
+  },
   Link: ({
     children,
     to,
@@ -42,6 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   navigate.mockReset()
+  blocker.status = "idle"
 })
 
 type Posted = { path: string; body: Record<string, unknown> }
@@ -211,4 +223,34 @@ it("picks a common AWS region in one click", async () => {
     "ariaPressed",
     "true"
   )
+})
+
+it("asks before leaving a form with something typed in it", async () => {
+  stub(["token"], [])
+  page("registry")
+  expect(blocker.shouldBlock()).toBe(false)
+  const user = userEvent.setup()
+  await user.type(screen.getByLabelText("Endpoint"), "https://r.example.com")
+  await waitFor(() => expect(blocker.shouldBlock()).toBe(true))
+})
+
+it("lets a connection that went through move on without asking", async () => {
+  stub(["token"], [])
+  page("registry")
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("radio", { name: /Local registry/ }))
+  await waitFor(() => expect(blocker.shouldBlock()).toBe(true))
+  await user.click(screen.getByRole("button", { name: "Check and connect" }))
+  await waitFor(() => expect(navigate).toHaveBeenCalled())
+  expect(blocker.shouldBlock()).toBe(false)
+})
+
+it("confirms leaving once the router has stopped it", async () => {
+  blocker.status = "blocked"
+  stub(["token"], [])
+  page("registry")
+  expect(await screen.findByText("Leave without connecting?")).toBeTruthy()
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("button", { name: "Leave" }))
+  expect(blocker.proceed).toHaveBeenCalled()
 })

@@ -2,6 +2,8 @@
 
 `loomctl mcp` serves Loomplane's tools over the Model Context Protocol, so an agent such as Claude Code can analyze a project, write its `loomplane.yaml`, plan a deployment, read what the plan would do and, if you let it, approve it.
 
+This is not Loomplane's built-in agent. The built-in agent runs inside Loomplane as your workspace's agent, with its own settings, budget and requests (see the docs under AI agents). `loomctl mcp` serves your own key's tools to an agent that lives outside Loomplane. Both are built from one definition of every operation.
+
 ## Setting it up
 
 Make an API key under Settings, API keys. Then add loomctl to your agent's MCP configuration:

@@ -17,8 +17,16 @@ const { navigate, access } = vi.hoisted(() => ({
 vi.mock("@/lib/router", () => ({
   useNavigate: () => navigate,
   usePath: () => "/",
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
+  // Passes the rest on, as the router's Link does, so a menu item rendered
+  // as a link keeps its role.
+  Link: ({
+    children,
+    to,
+    ...rest
+  }: React.ComponentProps<"a"> & { to: string }) => (
+    <a {...rest} href={to}>
+      {children}
+    </a>
   ),
 }))
 vi.mock("@/lib/organization", () => ({
@@ -126,18 +134,21 @@ it("keeps AI settings in the workspace's Settings for members", async () => {
   sidebar(true)
   // One Settings in the sidebar, so the AI group can't be mistaken for it.
   expect(screen.getAllByText("Settings")).toHaveLength(1)
+  // Settings opens as a menu beside the sidebar, not a list inside it.
   await userEvent.click(screen.getByText("Settings"))
-  expect(screen.getByRole("link", { name: "AI" })).toHaveAttribute(
+  expect(await screen.findByRole("menuitem", { name: "AI" })).toHaveAttribute(
     "href",
-    "/ai/settings"
+    "/settings/ai"
   )
 })
 
 it("leaves AI out of Settings when AI is off", async () => {
   sidebar(false)
   await userEvent.click(screen.getByText("Settings"))
-  expect(screen.getByRole("link", { name: "API keys" })).toBeInTheDocument()
-  expect(screen.queryByRole("link", { name: "AI" })).toBeNull()
+  expect(
+    await screen.findByRole("menuitem", { name: "API keys" })
+  ).toHaveAttribute("href", "/settings/api-keys")
+  expect(screen.queryByRole("menuitem", { name: "AI" })).toBeNull()
 })
 
 function aiLinks() {

@@ -115,3 +115,30 @@ func TestSettings_setupRecord(t *testing.T) {
 		t.Fatalf("after CompleteSetup(true): done %v waitlist %v/%v errs %v %v", done, on, stored, err, werr)
 	}
 }
+
+func TestSettings_cloudSignInOffer(t *testing.T) {
+	s := scratchSettings(t)
+	ctx := t.Context()
+
+	// An instance set up before the offer existed is never offered it.
+	if err := s.MarkSetupCompleted(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := s.CloudSignInOffer(ctx); err != nil || on {
+		t.Fatalf("after MarkSetupCompleted: offer %v err %v, want off", on, err)
+	}
+	if err := s.CompleteSetup(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := s.CloudSignInOffer(ctx); err != nil || !on {
+		t.Fatalf("after CompleteSetup: offer %v err %v, want on", on, err)
+	}
+	for range 2 { // ending it again is harmless
+		if err := s.EndCloudSignInOffer(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if on, err := s.CloudSignInOffer(ctx); err != nil || on {
+			t.Fatalf("after EndCloudSignInOffer: offer %v err %v, want off", on, err)
+		}
+	}
+}

@@ -78,6 +78,7 @@ func (b *builder) add(p Part) {
 	}
 	for _, s := range g.Services {
 		s.ID, s.Source, s.Evidence, s.Requires = qualify(s.ID, alias), alias, tagged(s.Evidence, alias), taggedRequires(s.Requires, alias)
+		s.Env = taggedEnv(s.Env, alias)
 		b.g.Services = append(b.g.Services, s)
 	}
 	for _, pk := range g.Packages {
@@ -249,6 +250,18 @@ func tagged(evs []discovery.Evidence, alias string) []discovery.Evidence {
 	for i, ev := range evs {
 		ev.Source = alias
 		out[i] = ev
+	}
+	return out
+}
+
+func taggedEnv(vars []discovery.EnvUse, alias string) []discovery.EnvUse {
+	if vars == nil {
+		return nil
+	}
+	out := make([]discovery.EnvUse, len(vars))
+	for i, v := range vars {
+		v.Evidence = tagged(v.Evidence, alias)
+		out[i] = v
 	}
 	return out
 }

@@ -74,7 +74,7 @@ func each(rows driver.Rows, err error, scan func(driver.Rows) error) error {
 // loadTeams reads the workspace's teams, or only teamID when it isn't
 // empty, with their current members and grants.
 func loadTeams(ctx context.Context, q querier, orgID, teamID string) ([]Team, error) {
-	var teams []Team
+	teams := []Team{} // a workspace with no teams lists [], never null
 	err := collect(ctx, q, `SELECT id, org_id, name, slug, description, created_at, updated_at
 		FROM loomplane_teams WHERE org_id = $1 AND ($2 = '' OR id = $2) ORDER BY name, id`,
 		[]any{orgID, teamID}, func(rows driver.Rows) error {

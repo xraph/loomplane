@@ -19,6 +19,10 @@ const (
 	// setupKey is the row that says first-run setup has been completed.
 	// Nothing clears it.
 	setupKey = "setup_completed"
+	// cloudSignInOfferKey is the row that says the owner has yet to be
+	// offered the chance to set up cloud sign-in. Setup writes it true and
+	// ending the offer writes it false.
+	cloudSignInOfferKey = "cloud_sign_in_offer"
 )
 
 // Settings reads and writes the instance's settings.
@@ -59,18 +63,39 @@ func (s *Settings) SetupCompleted(ctx context.Context) (bool, error) {
 	return done, err
 }
 
-// CompleteSetup records that first-run setup was completed and sets the
-// waitlist, both in one write, so neither is stored without the other.
+// CompleteSetup records that first-run setup was completed, sets the
+// waitlist and turns the cloud sign-in offer on, all in one write, so none
+// is stored without the others.
 func (s *Settings) CompleteSetup(ctx context.Context, waitlist bool) error {
 	raw, err := json.Marshal(waitlist)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_instance_settings (key, value, updated_at)
-VALUES ($1, $2, now()), ($3, 'true', now())
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, waitlistKey, raw, setupKey)
+VALUES ($1, $2, now()), ($3, 'true', now()), ($4, 'true', now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, waitlistKey, raw, setupKey, cloudSignInOfferKey)
 	if err != nil {
 		return fmt.Errorf("record the completed setup: %w", err)
+	}
+	return nil
+}
+
+// CloudSignInOffer reports whether the platform owner should still be
+// offered cloud sign-in setup. Instances set up before the offer existed
+// never have it.
+func (s *Settings) CloudSignInOffer(ctx context.Context) (bool, error) {
+	on, _, err := s.flag(ctx, cloudSignInOfferKey)
+	return on, err
+}
+
+// EndCloudSignInOffer stops offering cloud sign-in setup. Ending it twice
+// is harmless.
+func (s *Settings) EndCloudSignInOffer(ctx context.Context) error {
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_instance_settings (key, value, updated_at)
+VALUES ($1, 'false', now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, cloudSignInOfferKey)
+	if err != nil {
+		return fmt.Errorf("end the cloud sign-in offer: %w", err)
 	}
 	return nil
 }

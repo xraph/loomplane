@@ -95,6 +95,54 @@ export interface AddSourceInputBody {
   root?: string;
 }
 
+export interface AgentBudgetInputBody {
+  monthlyBudgetUsd: string;
+  revision: number;
+}
+
+export interface AgentUpdateInputBody {
+  enabled?: boolean;
+  knowledge?: boolean;
+  model?: string;
+  providerKey?: string;
+  revision: number;
+}
+
+export interface AgentView {
+  available: boolean;
+  budget: BudgetState;
+  effective: EffectiveView;
+  enabled: boolean;
+  key?: KeyView;
+  knowledge: boolean;
+  knowledgeStatus: KnowledgeStatus;
+  model: string;
+  nexusTenantId: string;
+  orgId: string;
+  problem?: string;
+  providerKey: string;
+  revision: number;
+  server: ServerDefaults;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface AgentrequestsTarget {
+  cloud?: string;
+  environment?: string;
+  key?: string;
+  planId?: string;
+  planRevision?: string;
+  repository?: string;
+  service?: string;
+}
+
+export interface AgentsettingsStatus {
+  enabled: boolean;
+  knowledge: boolean;
+  server: boolean;
+}
+
 export interface Allocation {
   environmentId?: string;
   label: string;
@@ -142,6 +190,10 @@ export interface AnalysisGraph {
 
 export interface AnalysisList {
   analyses: Analysis[];
+}
+
+export interface AnswerInputBody {
+  text: string;
 }
 
 export interface AppInputBody {
@@ -226,6 +278,11 @@ export interface AuthorizeBitbucketInputBody {
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
+}
+
+export interface AutonomyInputBody {
+  autonomousPromotion?: boolean;
+  minStagingSoakSeconds?: number;
 }
 
 export interface Backup {
@@ -350,6 +407,12 @@ export interface BudgetReview {
   digest: string;
   estimate: MoneyEstimate;
   policyRevision: number;
+}
+
+export interface BudgetState {
+  exhausted: boolean;
+  limitUsd: string;
+  spentUsd: string;
 }
 
 export interface Build {
@@ -1370,6 +1433,12 @@ export interface CompositionConfig {
   version: string;
 }
 
+export interface CompromisedRevoke {
+  joinedNodes: Node[];
+  joinedNodesWithheld: boolean;
+  revoked: APIKey;
+}
+
 export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
@@ -1587,6 +1656,10 @@ export interface DbgatewayRouteStatus {
 export interface DecideInputBody {
   note?: string;
   revision?: string;
+}
+
+export interface DeclineInputBody {
+  reason?: string;
 }
 
 export interface DefaultPlacement {
@@ -1954,6 +2027,13 @@ export interface EditInputBody {
 };
 }
 
+export interface EffectiveView {
+  baseUrl?: string;
+  model: string;
+  provider: string;
+  summaryModel: string;
+}
+
 export interface Embeddings {
   deployment?: string;
   dimensions: number;
@@ -2024,6 +2104,13 @@ export interface EnvLink {
   key: string;
   options?: Record<string, any>;
   subject: string;
+}
+
+export interface EnvUse {
+  confidence: string;
+  evidence: Evidence[];
+  example?: string;
+  name: string;
 }
 
 export interface EnvVar {
@@ -2603,6 +2690,43 @@ export interface InstanceStatus {
   snapshotVersion: number;
 }
 
+export interface Inventory {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+}
+
+export interface JoinToken {
+  command: string;
+  expiresAt: string;
+  token: string;
+}
+
+export interface JoinTokenRequestBody {
+  cloudId?: string;
+  edge?: boolean;
+  edgeScope?: string;
+  endpoints?: string[];
+  labels?: Record<string, any>;
+  lifetimeMinutes?: number;
+}
+
+export interface KeyView {
+  hint: string;
+  name: string;
+  type: string;
+}
+
 export interface KeylessInputBody {
   connectionId: string;
   name: string;
@@ -2648,6 +2772,12 @@ export interface KindInfo {
   versions: string[];
 }
 
+export interface KnowledgeStatus {
+  available: boolean;
+  configured: boolean;
+  reason?: string;
+}
+
 export interface KubernetesRule {
   apiGroups: string[];
   resources: string[];
@@ -2668,6 +2798,11 @@ export interface LicenseInfo {
   note?: string;
   title: string;
   url: string;
+}
+
+export interface Link {
+  label: string;
+  path: string;
 }
 
 export interface LinkedService {
@@ -3136,6 +3271,67 @@ export interface NewKeyBody {
   name: string;
 }
 
+export interface Node {
+  createdAt: string;
+  edgeScope: string;
+  endpoints: string[];
+  id: string;
+  identityGeneration: number;
+  ingressMode: string;
+  inventory: Inventory;
+  joinedBy: string;
+  joinedByKeyId: string;
+  keyFingerprint: string;
+  labels: Record<string, any>;
+  lastSeenAt?: string;
+  name: string;
+  orgId: string;
+  protocolVersion: number;
+  revokedAt?: string;
+  revokedBy: string;
+  role: string;
+  status: string;
+  updatedAt: string;
+  version: string;
+}
+
+export interface NodeJoinBody {
+  endpoints?: string[];
+  inventory: {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+};
+  labels?: Record<string, any>;
+  name?: string;
+  nodeVersion: string;
+  protocolVersion: number;
+  publicKey: string;
+  token: string;
+}
+
+export interface NodeJoined {
+  cloudId?: string;
+  endpoints: string[];
+  identityGeneration: number;
+  nodeId: string;
+  orgId: string;
+}
+
+export interface NodeList {
+  nodes: Node[];
+}
+
 export interface NodePoolSpec {
   autoscale: boolean;
   count: number;
@@ -3153,6 +3349,19 @@ export interface NodePoolTaint {
   effect: string;
   key: string;
   value: string;
+}
+
+export interface NodeUpdateBody {
+  endpoints?: string[];
+  ingressMode?: string;
+  labels?: Record<string, any>;
+  name?: string;
+}
+
+export interface NodeprotoGPU {
+  memoryMib: number;
+  model: string;
+  vendor: string;
 }
 
 export interface Note {
@@ -3585,13 +3794,16 @@ export interface Profile {
 }
 
 export interface Project {
+  autonomousPromotion: boolean;
   color: string;
   createdAt: string;
   createdBy: string;
+  deploymentMode: string;
   description: string;
   exclusions: Exclusion[];
   icon: string;
   id: string;
+  minStagingSoakSeconds: number;
   name: string;
   orgId: string;
   repositories: string[];
@@ -3681,6 +3893,22 @@ export interface ProviderKey {
   type: string;
   updatedAt: string;
   updatedBy: string;
+}
+
+export interface ProviderKeyInputBody {
+  fields?: Record<string, any>;
+  models?: {
+  contextWindow?: number;
+  dimensions?: number;
+  embeddingPerMillion?: string;
+  id: string;
+  inputPerMillion: string;
+  maxOutput?: number;
+  outputPerMillion: string;
+  task: string;
+}[];
+  projects?: string[];
+  type: string;
 }
 
 export interface ProviderList {
@@ -3813,8 +4041,10 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  cloudSignInOffer?: boolean;
   consolePath?: string;
   features: Features;
+  platformAdmin?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;
@@ -4086,6 +4316,52 @@ export interface RemoveRouteInputBody {
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
+}
+
+export interface Request {
+  answer: string;
+  answeredAt?: string;
+  answeredBy: string;
+  askedFor: string;
+  context: Link[];
+  createdAt: string;
+  environmentId: string;
+  expiresAt: string;
+  id: string;
+  kind: string;
+  options: string[];
+  orgId: string;
+  outcome: string;
+  projectId: string;
+  question: string;
+  routeNote: string;
+  routeSource: string;
+  runId: string;
+  status: string;
+  target: AgentrequestsTarget;
+  taskId: string;
+  teamId: string;
+  teamName: string;
+  teamReason: string;
+  updatedAt: string;
+}
+
+export interface RequestEvent {
+  askedFor: string;
+  createdAt: string;
+  id: string;
+  kind: string;
+  orgId: string;
+  projectId: string;
+  routeSource: string;
+  status: string;
+  teamId: string;
+  teamName: string;
+  updatedAt: string;
+}
+
+export interface RequestList {
+  requests: (Request | null)[];
 }
 
 export interface Requirement {
@@ -4543,6 +4819,11 @@ export interface Runs {
   workload: string;
 }
 
+export interface Runtime {
+  socket: string;
+  version: string;
+}
+
 export interface RuntimeAccessProfile {
   cleanupDependents: boolean;
   hpa: boolean;
@@ -4649,6 +4930,10 @@ export interface ScalingPoolInputBody {
 };
 }
 
+export interface SecretInputBody {
+  value: string;
+}
+
 export interface Server {
   accelerator?: Accelerator;
   accountId: string;
@@ -4675,6 +4960,13 @@ export interface Server {
   stateRevision: number;
   status: string;
   updatedAt: string;
+}
+
+export interface ServerDefaults {
+  baseUrl?: string;
+  keySet: boolean;
+  model: string;
+  provider: string;
 }
 
 export interface ServerImage {
@@ -4776,6 +5068,7 @@ export interface Service {
   deployable: boolean;
   ecosystem: string;
   entrypoint: string;
+  env?: EnvUse[];
   evidence: Evidence[];
   framework?: string;
   id: string;
@@ -4926,6 +5219,8 @@ export interface SignIn {
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  connections: number;
+  organizations: number;
   problem?: string;
   slug?: string;
   source: string;
@@ -5159,6 +5454,24 @@ export interface TargetChoice {
   region?: string;
   sizeId?: string;
   source: string;
+}
+
+export interface TaskEvent {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  orgId: string;
+  projectId: string;
+  requestedBy: string;
+  runId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
 }
 
 export interface Team {
@@ -5423,6 +5736,11 @@ export interface Workspace {
   path: string;
   source?: string;
   tool: string;
+}
+
+export interface WorkspaceBudgetInputBody {
+  monthlyBudgetUsd: string;
+  revision: number;
 }
 
 export interface Zone {

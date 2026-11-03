@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -49,6 +50,11 @@ type Options struct {
 	// Recipes describes the catalog kinds. Nil means the registry the
 	// server binary registers its kinds in.
 	Recipes *recipes.Registry
+
+	// euid and lookupUser stand in for os.Geteuid and user.Lookup in tests
+	// of the sudo login.
+	euid       func() int
+	lookupUser func(name string) (*user.User, error)
 }
 
 // App is loomctl.
@@ -69,6 +75,12 @@ func New(opts Options) *App {
 	}
 	if opts.Recipes == nil {
 		opts.Recipes = recipes.Default()
+	}
+	if opts.euid == nil {
+		opts.euid = os.Geteuid
+	}
+	if opts.lookupUser == nil {
+		opts.lookupUser = user.Lookup
 	}
 	if opts.ConfigPath == "" {
 		dir, err := os.UserConfigDir()

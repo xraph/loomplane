@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -76,6 +77,7 @@ var sentinels = []sentinelClass{
 	{http.StatusUnprocessableEntity, codeInUse, []error{models.ErrInUse, aisettings.ErrInUse}},
 	{http.StatusUnprocessableEntity, codeInvalid, []error{
 		models.ErrInvalid, models.ErrInvalidQuery, aisettings.ErrInvalid, aisettings.ErrOverBudget, aisettings.ErrUnderAllocated,
+		agentsettings.ErrInvalid,
 		hfhub.ErrRefused, manifests.ErrInvalid, manifest.ErrInvalid, planning.ErrInvalid, planning.ErrNoManifest,
 		cloudinfra.ErrInvalid, projects.ErrInvalid,
 	}},
@@ -83,7 +85,7 @@ var sentinels = []sentinelClass{
 		models.ErrStale, aisettings.ErrStale, manifests.ErrConflict, planning.ErrStale, planning.ErrSuperseded, cloudinfra.ErrConflict,
 	}},
 	{http.StatusConflict, codeBusy, []error{planning.ErrConflict, cloudinfra.ErrBusy, cloudinfra.ErrPending, aisettings.ErrBusy}},
-	{http.StatusConflict, codeConflict, []error{models.ErrConflict}},
+	{http.StatusConflict, codeConflict, []error{models.ErrConflict, agentsettings.ErrDisabled, agentsettings.ErrBudgetExhausted}},
 	{http.StatusNotFound, codeNotFound, []error{
 		models.ErrNotFound, models.ErrEntryNotFound, aisettings.ErrNotFound, projects.ErrNotFound, projects.ErrEnvironmentNotFound,
 		manifests.ErrNotFound, planning.ErrNotFound, cloudinfra.ErrNotFound, cloudprofiles.ErrNotFound, deployments.ErrNotFound,

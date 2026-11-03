@@ -103,7 +103,7 @@ export function Teams() {
         {!teams.data && teams.status !== "error" && (
           <Skeleton className="h-40 w-full rounded-xl" />
         )}
-        {teams.data && teams.data.teams.length === 0 && (
+        {teams.data && (teams.data.teams ?? []).length === 0 && (
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -125,7 +125,7 @@ export function Teams() {
             )}
           </Empty>
         )}
-        {teams.data?.teams.map((team) => (
+        {teams.data?.teams?.map((team) => (
           <TeamCard
             key={team.id}
             team={team}

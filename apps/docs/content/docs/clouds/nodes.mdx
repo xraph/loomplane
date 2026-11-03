@@ -1,0 +1,165 @@
+---
+title: Nodes
+description: Join a machine to Loomplane as a node, choose what Loomplane may use on it, update it with signed releases and cut it off when you're done.
+---
+
+A node is a machine that joins your organization and keeps one connection open to Loomplane. It dials out and opens no port, so a laptop behind a router and a server behind a firewall join the same way.
+
+<Callout>
+  Right now a node can join, report on itself, update and be revoked. Deploying to nodes, Docker or Kubernetes through a node, and routing domains to a node come in the next phases.
+</Callout>
+
+## Join a machine
+
+Linux is supported. macOS works for development, and Windows is refused. On Linux the join installs a systemd service, so it needs root.
+
+If you already ran `loomctl login`, run this on the machine:
+
+```bash
+sudo loomctl node join
+```
+
+`node join` uses your saved login (or `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`) to mint a single-use join token, then spends it. Only an owner's or admin's write key, or a signed-in session, can mint one. Your API key goes to Loomplane to make the token and nowhere else, and the machine never stores it.
+
+Root usually has no login of its own, and `sudo` drops `LOOMPLANE_*` from the environment. So when root has nothing saved, `sudo loomctl node join` reads the login of the user who ran `sudo`. It only does that if the file belongs to that user and nobody else can write to it. On a Mac, run `loomctl node join` without `sudo`.
+
+The machine may not have `loomctl` yet. Add a node in the dashboard (Nodes, Add node), or mint a token somewhere you are logged in, and run the command it gives you on the new machine:
+
+```bash
+curl -fsSL https://loomplane.example.com/install/node.sh | LOOMPLANE_JOIN_TOKEN=lpj_... sh -s -- --allow probe,docker
+```
+
+Use your own instance's address. The script downloads the `loomctl` release your Loomplane runs, checks it, installs it into `/usr/local/bin` and runs `loomctl node join` with the flags you gave it. The token rides in `LOOMPLANE_JOIN_TOKEN` and not on the command line, so other users on the machine can't read it from the process list while the script runs. On Linux the script asks `sudo` to keep that variable with `--preserve-env`. If your sudoers rules won't allow it, run the script as root. The `--allow` list is what you chose when you made the token.
+
+`loomplane node join` is the same command from the server binary. It needs either `--token`, or `--url` plus `--key`.
+
+### What you can pass
+
+| Flag | What it does |
+|---|---|
+| `--url` | Where Loomplane is. Taken from your login if you leave it out |
+| `--token` | A join token. `LOOMPLANE_JOIN_TOKEN` works too and keeps it out of the process list. Without either, `join` mints one for you |
+| `--key` | An API key to mint a token with. `LOOMPLANE_API_KEY` works too |
+| `--name` | The node's name. Loomplane uses the hostname if you don't |
+| `--label key=value` | A label. Repeat it for each |
+| `--allow` | What Loomplane may use here, such as `docker,probe`. See below |
+| `--cloud` | The Cloud this node will join. Recorded now; the node joins it once deploying to nodes arrives. Can't be combined with `--token` |
+| `--builder dedicated` | Marks the node as a dedicated build worker. Recorded now; builds run on it once deploying to nodes arrives |
+| `--edge` | Marks the node as an edge, which will serve traffic. Recorded now; edges start working once domain routing to nodes arrives. Can't be combined with `--token` |
+| `--foreground` | Runs in your terminal and installs no service |
+| `--state-dir` | Where the node keeps its files |
+
+If you pass a token, mint it with `--cloud` or `--edge` already set, because the token carries them.
+
+Check the result with `sudo loomctl node status`. It shows the node ID, the key fingerprint, the allowed endpoints and whether the service is running.
+
+## The node's key and its state
+
+The node creates its own Ed25519 key when it joins and keeps it in its state directory, `/var/lib/loomplane-node` on Linux. Loomplane learns the public half. The private half stays on the machine, in a directory owned by the service user, which is why `status`, `allow` and `leave` want `sudo`.
+
+Every join makes a fresh key. If the state directory still holds one from an earlier node, after a `leave` or a revoke, `join` moves it aside to `identity.key.revoked-<time>` and starts over. Loomplane refuses a key it has seen before, revoked nodes included, so a key that may have been stolen can't come back as a new node.
+
+The state directory holds three files that matter:
+
+| File | Owner on a Linux service | What it holds |
+|---|---|---|
+| `identity.key` | the service user, mode 0600 | The node's private key |
+| `node.json` | the service user | Where Loomplane is, the node ID, and what Loomplane has narrowed the allowlist to |
+| `allow.json` | root, mode 0640, group `loomplane-node` | The most the node may serve, as you set it on the machine |
+
+The service runs `/usr/local/lib/loomplane-node/loomctl`, a copy that belongs to root. The service user can read `allow.json` and run that binary, and it can't change either. On macOS all of it belongs to you and the binary sits in the state directory, since the node runs as you there anyway.
+
+Join refuses a directory that already holds files that aren't a node's own, so it can't take over `/var/lib`. Pass `--state-dir` an empty absolute path to keep a second node somewhere else.
+
+## What Loomplane may use
+
+Each node has an allowlist of endpoints. There are five names:
+
+| Endpoint | Meant for |
+|---|---|
+| `probe` | Reporting what the machine has |
+| `docker` | The local Docker or Podman socket |
+| `dial` | Connections from the node to addresses it can reach |
+| `kube` | A local Kubernetes API |
+| `firecracker` | Firecracker microVMs |
+
+Today only `probe` does anything. The rest are accepted and stored, so you won't have to answer again when deploying to nodes arrives.
+
+An interactive `node join` shows what it found and asks whether to allow it. Say anything but yes and it allows nothing. Without a terminal, such as a script, a cloud-init run or the `curl | sh` line, it allows nothing unless you pass `--allow`. The command the dashboard gives you passes it for you:
+
+```bash
+sudo loomctl node join --token lpj_... --allow probe,docker
+```
+
+Loomplane can only narrow the list. If you remove `docker` in the dashboard, the node drops it. No message from the control plane can add an endpoint. Widening happens on the machine, as root on Linux:
+
+```bash
+sudo loomctl node allow docker
+```
+
+That writes `allow.json` first and then tells the running node. The node serves only what both `allow.json` and `node.json` allow, so code running as the service user can't widen it. The exception is `docker`, which is covered below. If `allow.json` is missing, belongs to anyone else, or can be written by other users, the node serves nothing and logs why. Run `node allow` again to fix it.
+
+The ingress mode is the one setting that comes from the dashboard and could open something up. It will decide whether public traffic reaches the node once domain routing to nodes arrives. Nothing serves `public` on a node yet.
+
+<Callout type="warn">
+  Access to the Docker socket is root access on that host. Anything that can start a container can mount `/` into it. Allow `docker` only on a machine you'd let Loomplane administer.
+
+  `node allow docker` also adds the `loomplane-node` user to the `docker` group and restarts the service to pick that up. From then on, the service user is effectively root on that machine, and the ceiling in `allow.json` no longer holds it back. Removing `docker` in the dashboard stops the node using Docker, but the node isn't root and can't take the group back. To do that, run `sudo gpasswd -d loomplane-node docker` on the machine and restart the service.
+</Callout>
+
+## Commands
+
+`loomctl node` and `loomplane node` have the same subcommands.
+
+| Command | What it does |
+|---|---|
+| `join` | Joins this machine and installs the service |
+| `run` | Runs the node in the foreground. The service uses this |
+| `status` | Shows the node's config, key fingerprint, endpoints and whether it runs. `--json` is for scripts |
+| `allow ENDPOINT...` | Widens `allow.json` and tells the node. Needs root on Linux |
+| `leave` | Tells Loomplane to revoke the node, stops the service and removes its config. The key stays in the state directory, and the next join makes a fresh one |
+| `list` | Lists the organization's nodes. Uses your login or `--url` and `--key` |
+| `revoke NAME-OR-ID` | Stops Loomplane trusting a node. Use the ID if two nodes share a name |
+| `update --release TAG` | Replaces the node's binary with a signed release |
+| `verify-release` | Checks a downloaded release against its signature |
+
+A node that Loomplane revoked stops itself and exits with code 77. That holds whether it was connected at the time or finds out at its next connect, so a machine that was off when you revoked it stops when it comes back. A service manager that restarts on failure should treat 77 as final. The systemd unit does.
+
+## Releases and updates
+
+Releases are signed with cosign keyless, by the Release workflow of `github.com/xraph/loomplane`. `node.sh` checks them one of two ways:
+
+- With cosign 2.4 or newer installed, it verifies the signature on the release checksums itself and then checks the archive against them. This doesn't trust your Loomplane at all.
+- Without cosign, it checks the archive against a checksum your Loomplane already verified against the same signature. In that case Loomplane is vouching for the sum, and the script says so. Install cosign if you want to take Loomplane out of the chain.
+
+With neither, the script stops. Set `LOOMPLANE_SKIP_SIGNATURE=1` to install anyway. The install goes ahead unverified and prints a warning saying so.
+
+To move a running node to another release:
+
+```bash
+sudo loomctl node update --release v1.9.0
+```
+
+The update downloads the release, verifies it, and only then replaces the binary. It restarts the service and watches it for five seconds. If the service won't start on the new binary, or stops within those five seconds, the update puts the old one back and starts that. A binary that fails later than that isn't caught, so check `node status` after an update.
+
+`node verify-release` runs the same check by hand, when you've downloaded the archive, `binaries-checksums.txt` and its `.sigstore.json` bundle yourself.
+
+## Several replicas
+
+If you run more than one Loomplane replica, a node is connected to only one of them. A request for that node reaches the right replica over a hop between replicas. Set `nodes.advertise_url` on each replica to the address the others use to reach it. A single replica needs nothing.
+
+Leave it out with several replicas and nothing fails loudly. Each replica only sees the nodes connected to it and reports the rest offline, and a revoke reaches a node on another replica through its next heartbeat, up to 15 seconds later, not at once. A replica with no advertise URL logs this at startup, and warns the first time it meets a node it can't reach.
+
+Hops need `https`. On a private network you can allow plain `http` with `nodes.hop_insecure`. If your replicas use certificates from a private CA, point `nodes.hop_ca_file` at its PEM file. [Configuration](/docs/reference/configuration#nodes) has the variables.
+
+## Cutting a node off
+
+There are three ways, and each cuts the node off the same way:
+
+- Revoke it in the dashboard.
+- Run `loomctl node revoke NAME` from anywhere you're logged in.
+- Run `sudo loomctl node leave` on the machine.
+
+The node can't reconnect afterwards. A node that was off at the time learns it was revoked at its next connect and stops. If you revoke an API key as compromised, Loomplane lists the nodes that joined with a token that key made and offers to revoke them too. Take the offer unless you're sure those machines are fine.
+
+[Security model](/docs/operations/security-model#nodes) covers what a node can and can't do.

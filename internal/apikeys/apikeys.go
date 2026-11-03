@@ -103,14 +103,26 @@ type Service struct {
 	appID  string
 	authz  Authorizer
 	audit  Auditor
+	admins PlatformAdmins
 	now    func() time.Time
 }
+
+// Option adjusts a Service.
+type Option func(*Service)
+
+// WithPlatformAdmins sets how the Service tells platform admins, who alone
+// may mint instance-wide edge join tokens. Without it nobody is one.
+func WithPlatformAdmins(a PlatformAdmins) Option { return func(s *Service) { s.admins = a } }
 
 // New returns a Service over a Keysmith engine. appID is the authsome app
 // Loomplane runs as; keys are kept under it, and under each organization
 // as Keysmith's tenant.
-func New(engine *keysmith.Engine, appID string, authz Authorizer, audit Auditor) *Service {
-	return &Service{engine: engine, appID: appID, authz: authz, audit: audit, now: time.Now}
+func New(engine *keysmith.Engine, appID string, authz Authorizer, audit Auditor, opts ...Option) *Service {
+	s := &Service{engine: engine, appID: appID, authz: authz, audit: audit, now: time.Now}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Service) tenant(ctx context.Context, orgID string) context.Context {
@@ -122,8 +134,8 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in NewKey) (
 	if p.KeyID != "" {
 		return nil, ErrNotWithKey
 	}
-	// A key acts as the person who made it. Loomplane automation is no
-	// person, and nothing may act as it through a key.
+	// A key acts as the person who made it. Loomplane automation and the
+	// AI agent are no person, and nothing may act as them through a key.
 	if p.IsServiceAccount() {
 		return nil, security.ErrForbidden
 	}
@@ -175,6 +187,9 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]APIKey, err
 	}
 	out := make([]APIKey, 0, len(keys))
 	for _, k := range keys {
+		if kind, ok := k.Metadata["kind"].(string); ok && kind == string(security.KindNodeJoin) {
+			continue
+		}
 		if k.AppID == s.appID && k.TenantID == p.OrgID {
 			out = append(out, view(k))
 		}
@@ -186,36 +201,45 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]APIKey, err
 // Revoke revokes one of the caller's keys, or anyone's for an owner or
 // admin. It works at once.
 func (s *Service) Revoke(ctx context.Context, p security.Principal, keyID string) error {
+	_, err := s.RevokeKey(ctx, p, keyID)
+	return err
+}
+
+// RevokeKey is Revoke, and returns the key as it stands once revoked. Only
+// the key's owner or an admin gets this far, so the caller may show them
+// what else the key reached.
+func (s *Service) RevokeKey(ctx context.Context, p security.Principal, keyID string) (*APIKey, error) {
 	if p.KeyID != "" {
-		return ErrNotWithKey
+		return nil, ErrNotWithKey
 	}
 	kid, err := id.ParseKeyID(keyID)
 	if err != nil {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	tctx := s.tenant(ctx, p.OrgID)
 	k, err := s.engine.GetKey(tctx, kid)
 	if err != nil || k.TenantID != p.OrgID || k.AppID != s.appID {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	if k.CreatedBy != p.UserID {
 		admin, aerr := s.admin(ctx, p)
 		if aerr != nil {
-			return aerr
+			return nil, aerr
 		}
 		if !admin {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
 	}
 	if err := s.engine.RevokeKey(tctx, kid, "revoked by "+p.UserID); err != nil {
-		return fmt.Errorf("revoke the key: %w", err)
+		return nil, fmt.Errorf("revoke the key: %w", err)
 	}
+	v := view(k)
+	now := s.now().UTC()
+	v.State, v.RevokedAt = string(key.StateRevoked), &now
 	if s.audit != nil {
-		v := view(k)
-		v.State = string(key.StateRevoked)
 		s.audit.Record(ctx, "api_key.revoked", p, v)
 	}
-	return nil
+	return &v, nil
 }
 
 // Authenticate checks a key and returns who it acts as.
@@ -232,6 +256,9 @@ func (s *Service) Authenticate(ctx context.Context, raw string) (security.Princi
 		return security.Principal{}, ErrRejected
 	}
 	if _, system := security.IsSystemSubject(k.CreatedBy); system {
+		return security.Principal{}, ErrRejected
+	}
+	if _, agent := security.IsAgentSubject(k.CreatedBy); agent {
 		return security.Principal{}, ErrRejected
 	}
 	if _, scoped := k.Metadata["kind"]; scoped {

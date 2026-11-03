@@ -3,7 +3,7 @@ title: Roles and permissions
 description: What each organization role can do, permission by permission, and how API keys and the Warden check fit in.
 ---
 
-Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`. A fifth role belongs to [Loomplane automation](#loomplane-automation), never to a person.
+Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`. Two more roles belong to identities that aren't people: [Loomplane automation](#loomplane-automation) and [the AI agent](#the-ai-agent). Neither is ever a person's role.
 
 ## The roles
 
@@ -25,6 +25,7 @@ An X means the role holds it.
 | `project:read`, `environment:read`, `deployment:read`, `infrastructure:read`, `cloud_account:read`, `member:read`, `variable:read` | X | X | X | X |
 | `destination:read`, `network:read`, `service_backup:read` | X | X | X | X |
 | `ai:read` | X | X | X | X |
+| `agent:use` (talk to the AI agent, see its requests) | X | X | X | X |
 | `project:create`, `project:update` | | X | X | X |
 | `environment:manage` | | X | X | X |
 | `deployment:create` (request a plan) | | X | X | X |
@@ -49,7 +50,7 @@ An X means the role holds it.
 
 The `destination`, `network`, `service_export`, `access_grant` and `federation_trust` permissions belong to federation, which isn't ready for production.
 
-The `ai` permissions belong to the [AI section](/docs/ai). Today `ai:read` lets you see its pages and the models deployed in your projects, `ai:edit` lets you deploy and change models outside production, and `ai:manage` does that in production and sets the workspace's Hugging Face token. `ai:tool_secret` and `ai:publish_nonproduction` are held already and guard nothing yet.
+The `ai` permissions belong to the [AI section](/docs/ai). Today `ai:read` lets you see its pages and the models deployed in your projects, `ai:edit` lets you deploy and change models outside production, and `ai:manage` does that in production and sets the workspace's Hugging Face token. `ai:tool_secret` and `ai:publish_nonproduction` are held already and guard nothing yet. `agent:use` is for the workspace's AI agent: every role holds it, viewers included, so anyone can ask the agent something. The agent's own settings need `ai:manage`.
 
 A secret variable's value isn't readable by anyone, whatever their role.
 
@@ -84,6 +85,25 @@ It holds one Warden role, `loomplane-automation`, as a service account. Loomplan
 | `infrastructure:modify` | To deploy the rollback and restore its routes |
 
 Warden isn't the only limit. The code refuses it everywhere a person works: it can't create, approve or reject a plan through the API, change a Cloud placement, choose a connection or draft a manifest. Automatic rollback and the deployment of a rollback it approved are the only things that act as it. To stop it rolling back an environment, turn that environment's watch off in the manifest; taking its Warden role away doesn't last past the next start. It can never retire a backup, and no session or API key can sign in as it. It isn't a member, so it doesn't appear among your members and you can't give its role to anyone.
+
+## The AI agent
+
+A workspace that turns the AI agent on gets a second identity that isn't a person. Its ID is `agent:` followed by your organization's ID, and that's what you'll see as `created_by` or `decided_by` on anything it does. It holds one Warden role, `agent`, as a service account.
+
+Loomplane writes that role only when you turn the agent on, and only into your organization. Turning the agent off takes the role away from it. Each time you turn it on again, the role is reset to the list below, so a Loomplane upgrade that changes it reaches you then. The role is what a developer holds, minus `ai:tool_secret` and `ai:publish_nonproduction`, plus `deployment:approve` and `infrastructure:modify`:
+
+| Permission | Why |
+|---|---|
+| Everything a viewer holds, `agent:use` included | To read what it's asked about |
+| `project:create`, `project:update`, `environment:manage`, `deployment:create`, `analysis:run`, `variable:manage`, `access_grant:propose`, `ai:edit` | To do a developer's work when you ask |
+| `deployment:approve` | To approve a plan |
+| `infrastructure:modify`, only while running a deployment it approved | A deployment the agent approved runs as the agent, and deploying it writes to your infrastructure |
+
+Beyond approving, it holds no admin permission you can use through it. `infrastructure:modify` is checked in code as well as in Warden: Loomplane refuses it to the agent everywhere except the deployment of a plan it approved, so a chat or any other agent work can't change your infrastructure with it. It can't set secrets, delete a project, change cloud accounts or members, or retire a backup, and no session or API key can sign in as it.
+
+When you chat with the agent (which comes in a later version), it acts for you. Every check then asks about both of you, and the agent may do something only when you could do it yourself and its role allows it too. So a viewer's chat can read but never deploy, and an owner's chat still can't set a secret. A read-only API key can't use the agent at all, because `agent:use` isn't a read permission. That includes `loomctl agent requests`. When it works alone, outside a chat, its role is the only limit.
+
+Its audit events carry `actor: agent` and `actor_name: Loomplane agent`. In a chat they also carry `on_behalf_of` (the person it acted for), and when they come from one of its tools, `task_id`, `run_id` and `tool`.
 
 ## Where this is enforced
 

@@ -44,6 +44,8 @@ try {
     setupTokenRequired: config.setupTokenRequired,
     requireEmailVerification: config.requireEmailVerification,
     consolePath: config.consolePath,
+    platformAdmin: config.platformAdmin,
+    cloudSignInOffer: config.cloudSignInOffer,
   })
   // Only a platform admin is told the console's path, and the console is its
   // own app: its bundle loads here and nowhere else.

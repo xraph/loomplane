@@ -42,9 +42,13 @@ type Principal struct {
 	KeyID string
 	// ReadOnly limits the request to reading, whatever the member's role.
 	ReadOnly bool
-	// Kind is who the principal is: a person (the zero value) or Loomplane
-	// automation. Only SystemPrincipal and ActorPrincipal set it.
+	// Kind is who the principal is: a person (the zero value), Loomplane
+	// automation or the AI agent. Only SystemPrincipal, AgentPrincipal and
+	// ActorPrincipal set it.
 	Kind Kind `json:",omitempty"`
+	// OnBehalfOf is the person a chat run acts for, on agent principals
+	// only. Every check then needs both of them to hold the permission.
+	OnBehalfOf *Principal `json:",omitempty"`
 }
 
 type principalKey struct{}
@@ -66,9 +70,10 @@ func Resolve(userID, sessionOrg, header string) (Principal, error) {
 	switch {
 	case userID == "":
 		return Principal{}, ErrUnauthenticated
-	case strings.HasPrefix(userID, systemPrefix), IsFleetSubject(userID):
+	case strings.HasPrefix(userID, systemPrefix), strings.HasPrefix(userID, agentPrefix), IsFleetSubject(userID):
 		// authsome never issues such an ID; refusing it anyway means no
-		// session can ever act as Loomplane automation.
+		// session can ever act as Loomplane automation, the AI agent or a
+		// fleet.
 		return Principal{}, ErrUnauthenticated
 	case sessionOrg == "":
 		return Principal{}, ErrNoOrganization

@@ -8,6 +8,8 @@ import (
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/dispatch/job"
 	"github.com/xraph/forge"
+
+	"github.com/xraph/loomplane/internal/agentruns"
 )
 
 // OffName is the name of the extension the platform registers when AI is
@@ -70,4 +72,8 @@ func RegisterOffJobs(eng *engine.Engine) {
 	engine.Register(eng, job.NewDefinition(JobAccrueModels, func(context.Context, accruePayload) error {
 		return nil
 	}, job.WithMaxRetries(0)))
+	// The agent's sweep, scheduled while AI was on.
+	engine.Register(eng, job.NewDefinition(agentruns.JobSweep, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
 }

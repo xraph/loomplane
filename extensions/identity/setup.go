@@ -111,7 +111,31 @@ func (e *Extension) setupRoutes(r forge.Router) error {
 		cfg.Window = time.Minute
 		opts = append(opts, forge.WithMiddleware(rateLimitScope, authmw.RateLimit(limiter, cfg)))
 	}
-	return r.POST("/api/v1/setup", e.completeSetup, opts...)
+	if err := r.POST("/api/v1/setup", e.completeSetup, opts...); err != nil {
+		return err
+	}
+	return r.DELETE("/api/v1/setup/cloud-sign-in-offer", e.endCloudSignInOffer,
+		forge.WithName("setup.endCloudSignInOffer"),
+		forge.WithSummary("Stop offering to set up cloud sign-in"),
+		forge.WithTags("Identity"),
+		forge.WithMiddleware(e.guard()),
+		forge.WithNoContentResponse(),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
+		forge.WithoutEntity(),
+	)
+}
+
+// endCloudSignInOffer stops the setup step that offers cloud sign-in. Only
+// a platform user may; everyone else gets the 404 an unknown route would.
+func (e *Extension) endCloudSignInOffer(c forge.Context) error {
+	ctx := c.Request().Context()
+	if _, ok := e.platformUser(ctx); !ok {
+		return forge.NewHTTPError(http.StatusNotFound, "not found")
+	}
+	if err := e.instance.EndCloudSignInOffer(ctx); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (e *Extension) setupStatus(c forge.Context) error {

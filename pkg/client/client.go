@@ -91,7 +91,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -430,12 +432,20 @@ type Action struct {
 // whose watch or canary failed, is named wherever it acts.
 const AutomationName = "Loomplane automation"
 
+// AgentName is how the workspace's built-in agent is named wherever it
+// acts, such as on a plan it approved.
+const AgentName = "Loomplane agent"
+
 // ActorName is how to show a created_by, decided_by or started_by, such as
 // Plan.DecidedBy: "Loomplane automation" for the organization's automation
-// (loomplane:<org>), else the ID as given.
+// (loomplane:<org>), "Loomplane agent" for its built-in agent (agent:<org>),
+// else the ID as given.
 func ActorName(id string) string {
 	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
 		return AutomationName
+	}
+	if org, ok := strings.CutPrefix(id, "agent:"); ok && org != "" {
+		return AgentName
 	}
 	return id
 }

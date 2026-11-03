@@ -37,6 +37,275 @@
         }
       }
     },
+    "/api/v1/agent/requests": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "What the agent is asking of people in your workspace",
+        "operationId": "agentRequests.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "for",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requests, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One request the agent made",
+        "operationId": "agentRequests.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/answer": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Answer the agent's question",
+        "description": "The person asked, a member of the team it was sent to, or someone who manages the workspace's AI may answer. The first answer counts.",
+        "operationId": "agentRequests.answer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answered request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/complete": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Say the GitHub or cloud connection the agent asked for is made",
+        "description": "Loomplane checks the connection exists before the agent goes on.",
+        "operationId": "agentRequests.complete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/decline": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Decline the agent's request",
+        "description": "Declining a plan approval rejects the plan.",
+        "operationId": "agentRequests.decline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclineInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The declined request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/requests/{id}/secret": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Set the secret the agent asked for",
+        "description": "Needs variable:manage on the request's project. The value is stored as a secret variable, as you; the agent only hears that it's set.",
+        "operationId": "agentRequests.provideSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/status": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Whether the AI agent is on, on this server and in the workspace",
+        "operationId": "agentStatus.get",
+        "responses": {
+          "200": {
+            "description": "The agent's status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentsettingsStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ai/models/deployments": {
       "get": {
         "tags": [
@@ -252,6 +521,122 @@
         }
       }
     },
+    "/api/v1/ai/settings/agent": {
+      "get": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "The agent's settings, what it runs with and its month's budget, without any key",
+        "operationId": "aiSettings.getAgent",
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Turn the agent on or off, or change its provider key or model",
+        "description": "Turning the agent on needs its monthly budget, a provider key (or the server's key) and a model this server prices: nexus's catalog or ai.prices. A key's own model prices don't count for the agent.",
+        "operationId": "aiSettings.updateAgent",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/agent/budget": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Set the agent's monthly budget, its share of the workspace's; 0 releases it while the agent is off",
+        "operationId": "aiSettings.setAgentBudget",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentBudgetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/budget": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Set the workspace's monthly AI budget, which every allocation shares",
+        "operationId": "aiSettings.setBudget",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceBudgetInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/View"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ai/settings/huggingface-token": {
       "put": {
         "tags": [
@@ -289,6 +674,73 @@
         ],
         "summary": "Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it",
         "operationId": "aiSettings.deleteHuggingFaceToken",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/provider-keys/{name}": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Add a provider key, or change one; its secrets are never shown again",
+        "description": "Anthropic, OpenAI and OpenAI-compatible keys only. Secret fields are write-only: no answer carries them, and only the key's hint (its last four characters) is shown. A secret field left out keeps its value. The key the agent uses must stay granted to every project.",
+        "operationId": "aiSettings.putProviderKey",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Path parameter: name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderKeyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The key, without its secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderKey"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Delete a provider key, unless the agent or the workspace embeddings use it",
+        "operationId": "aiSettings.deleteProviderKey",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Path parameter: name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "No Content"
@@ -423,14 +875,31 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "compromised",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
+          "200": {
+            "description": "The key and the nodes that joined with it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompromisedRevoke"
+                }
+              }
+            }
+          },
           "204": {
             "description": "No Content"
           }
         },
-        "summary": "Revoke an API key, at once",
+        "summary": "Revoke an API key, at once. With compromised=true, also list the nodes that joined with a token it made.",
         "tags": [
           "API keys"
         ],
@@ -736,13 +1205,13 @@
         }
       }
     },
-    "/api/v1/cloud-sign-in/apps": {
+    "/api/v1/platform/cloud-sign-in/apps": {
       "get": {
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "The clouds you can sign in to, where each one's app comes from, and the callback URL to register",
-        "operationId": "cloudSignInApps.list",
+        "summary": "The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register",
+        "operationId": "platformCloudSignInApps.list",
         "responses": {
           "200": {
             "description": "Sign-in apps",
@@ -753,17 +1222,20 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Not a platform user"
           }
         }
       }
     },
-    "/api/v1/cloud-sign-in/apps/{cloud}": {
+    "/api/v1/platform/cloud-sign-in/apps/{cloud}": {
       "put": {
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "Set the organization's own sign-in app for a cloud. The secret is never returned",
-        "operationId": "cloudSignInApps.set",
+        "summary": "Set the platform's sign-in app for a cloud. The secret is never returned",
+        "operationId": "platformCloudSignInApps.set",
         "parameters": [
           {
             "name": "cloud",
@@ -796,6 +1268,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Not a platform user"
+          },
+          "409": {
+            "description": "The cloud's app comes from configuration"
+          },
+          "422": {
+            "description": "The app is missing something"
           }
         }
       },
@@ -803,8 +1284,8 @@
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "Remove the organization's own sign-in app for a cloud",
-        "operationId": "cloudSignInApps.delete",
+        "summary": "Remove the platform's sign-in app for a cloud",
+        "operationId": "platformCloudSignInApps.delete",
         "parameters": [
           {
             "name": "cloud",
@@ -819,6 +1300,12 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "404": {
+            "description": "Not a platform user, or the cloud has no platform app"
+          },
+          "409": {
+            "description": "The cloud's app comes from configuration"
           }
         }
       }
@@ -7369,6 +7856,50 @@
         }
       }
     },
+    "/api/v1/projects/{id}/autonomy": {
+      "put": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs",
+        "description": "In this version the setting is stored and every production promotion still waits for a person; it takes effect when the promotion gate ships. Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.",
+        "operationId": "projectAutonomy.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/backup-policies": {
       "get": {
         "tags": [
@@ -13528,6 +14059,24 @@
         "x-forge-no-entity": true
       }
     },
+    "/api/v1/setup/cloud-sign-in-offer": {
+      "delete": {
+        "operationId": "setup.endCloudSignInOffer",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not a platform user"
+          }
+        },
+        "summary": "Stop offering to set up cloud sign-in",
+        "tags": [
+          "Identity"
+        ],
+        "x-forge-no-entity": true
+      }
+    },
     "/api/v1/teams": {
       "get": {
         "tags": [
@@ -14022,6 +14571,196 @@
           }
         }
       }
+    },
+    "/api/v1/nodes": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "The machines joined to this organization",
+        "operationId": "nodes.list",
+        "responses": {
+          "200": {
+            "description": "NodeList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/join": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "A machine joins with a join token. The token is spent.",
+        "operationId": "nodes.join",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeJoinBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "NodeJoined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeJoined"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/join-tokens": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Make a single-use token for one machine to join, and the command that uses it",
+        "operationId": "nodeJoinTokens.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinTokenRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "JoinToken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "One node",
+        "operationId": "nodes.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Rename a node, relabel it, narrow what it serves or set its ingress mode",
+        "operationId": "nodes.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Stop trusting a node, at once. Its key can't connect again.",
+        "operationId": "nodes.revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -14329,6 +15068,26 @@
             "type": "string"
           }
         }
+      },
+      "AgentsettingsStatus": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "server": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "server",
+          "enabled",
+          "knowledge"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentsettings.Status"
       },
       "Allocation": {
         "type": "object",
@@ -14774,6 +15533,17 @@
             "type": "boolean"
           },
           "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AutonomyInputBody": {
+        "type": "object",
+        "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
+          "min_staging_soak_seconds": {
             "type": "integer"
           }
         }
@@ -20380,6 +21150,287 @@
         "properties": {
           "repository": {
             "type": "string"
+          }
+        }
+      },
+      "AgentBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "revision"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgentUpdateInputBody": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "AgentView": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "enabled",
+          "provider_key",
+          "model",
+          "knowledge",
+          "nexus_tenant_id",
+          "revision",
+          "updated_at",
+          "server",
+          "effective",
+          "budget",
+          "knowledge_status",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/EffectiveView"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "key": {
+            "$ref": "#/components/schemas/KeyView"
+          },
+          "knowledge": {
+            "type": "boolean"
+          },
+          "knowledge_status": {
+            "$ref": "#/components/schemas/KnowledgeStatus"
+          },
+          "model": {
+            "type": "string"
+          },
+          "nexus_tenant_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "provider_key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerDefaults"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "BudgetState": {
+        "type": "object",
+        "required": [
+          "limit_usd",
+          "spent_usd",
+          "exhausted"
+        ],
+        "properties": {
+          "exhausted": {
+            "type": "boolean"
+          },
+          "limit_usd": {
+            "type": "string"
+          },
+          "spent_usd": {
+            "type": "string"
+          }
+        }
+      },
+      "EffectiveView": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "summary_model"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "summary_model": {
+            "type": "string"
+          }
+        }
+      },
+      "KeyView": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "hint"
+        ],
+        "properties": {
+          "hint": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "KnowledgeStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderKeyInputBody": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "task",
+                "input_per_million",
+                "output_per_million"
+              ],
+              "properties": {
+                "context_window": {
+                  "type": "integer"
+                },
+                "dimensions": {
+                  "type": "integer"
+                },
+                "embedding_per_million": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "input_per_million": {
+                  "type": "string"
+                },
+                "max_output": {
+                  "type": "integer"
+                },
+                "output_per_million": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ServerDefaults": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "key_set"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string"
+          },
+          "key_set": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceBudgetInputBody": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "revision"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -26663,6 +27714,7 @@
       "Project": {
         "type": "object",
         "required": [
+          "deployment_mode",
           "id",
           "org_id",
           "name",
@@ -26672,6 +27724,8 @@
           "color",
           "repositories",
           "exclusions",
+          "autonomous_promotion",
+          "min_staging_soak_seconds",
           "responsible_team_id",
           "status",
           "created_by",
@@ -26679,6 +27733,9 @@
           "updated_at"
         ],
         "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
           "color": {
             "type": "string"
           },
@@ -26687,6 +27744,9 @@
             "format": "date-time"
           },
           "created_by": {
+            "type": "string"
+          },
+          "deployment_mode": {
             "type": "string"
           },
           "description": {
@@ -26704,6 +27764,9 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "min_staging_soak_seconds": {
+            "type": "integer"
           },
           "name": {
             "type": "string"
@@ -27528,11 +28591,17 @@
           "auth_base_path": {
             "type": "string"
           },
+          "cloud_sign_in_offer": {
+            "type": "boolean"
+          },
           "console_path": {
             "type": "string"
           },
           "features": {
             "$ref": "#/components/schemas/Features"
+          },
+          "platform_admin": {
+            "type": "boolean"
           },
           "publishable_key": {
             "type": "string"
@@ -30770,6 +31839,12 @@
           "entrypoint": {
             "type": "string"
           },
+          "env": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvUse"
+            }
+          },
           "evidence": {
             "type": "array",
             "items": {
@@ -31216,6 +32291,8 @@
         "type": "object",
         "required": [
           "cloud",
+          "connections",
+          "organizations",
           "source"
         ],
         "properties": {
@@ -31224,6 +32301,12 @@
           },
           "cloud": {
             "type": "string"
+          },
+          "connections": {
+            "type": "integer"
+          },
+          "organizations": {
+            "type": "integer"
           },
           "problem": {
             "type": "string"
@@ -33068,6 +34151,667 @@
         "properties": {
           "class_name": {
             "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentrequestsTarget": {
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentrequests.Target"
+      },
+      "AnswerInputBody": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "DeclineInputBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Link": {
+        "type": "object",
+        "required": [
+          "label",
+          "path"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "Request": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "task_id",
+          "run_id",
+          "kind",
+          "status",
+          "question",
+          "context",
+          "options",
+          "target",
+          "asked_for",
+          "answered_by",
+          "answer",
+          "outcome",
+          "team_id",
+          "team_name",
+          "route_source",
+          "team_reason",
+          "route_note",
+          "expires_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "answered_at": {
+            "type": "string"
+          },
+          "answered_by": {
+            "type": "string"
+          },
+          "asked_for": {
+            "type": "string"
+          },
+          "context": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "route_note": {
+            "type": "string"
+          },
+          "route_source": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AgentrequestsTarget"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "team_reason": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RequestList": {
+        "type": "object",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Request"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "SecretInputBody": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "EnvUse": {
+        "type": "object",
+        "required": [
+          "name",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "example": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CompromisedRevoke": {
+        "type": "object",
+        "required": [
+          "revoked",
+          "joined_nodes",
+          "joined_nodes_withheld"
+        ],
+        "properties": {
+          "joined_nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            }
+          },
+          "joined_nodes_withheld": {
+            "type": "boolean"
+          },
+          "revoked": {
+            "$ref": "#/components/schemas/APIKey"
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "key_fingerprint",
+          "identity_generation",
+          "status",
+          "endpoints",
+          "ingress_mode",
+          "role",
+          "edge_scope",
+          "labels",
+          "version",
+          "protocol_version",
+          "inventory",
+          "joined_by",
+          "joined_by_key_id",
+          "revoked_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "identity_generation": {
+            "type": "integer"
+          },
+          "ingress_mode": {
+            "type": "string"
+          },
+          "inventory": {
+            "$ref": "#/components/schemas/Inventory"
+          },
+          "joined_by": {
+            "type": "string"
+          },
+          "joined_by_key_id": {
+            "type": "string"
+          },
+          "key_fingerprint": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "revoked_by": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Inventory": {
+        "type": "object",
+        "required": [
+          "os",
+          "kernel",
+          "arch",
+          "cpus",
+          "memory_mib",
+          "disk_gib"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "cpus": {
+            "type": "integer"
+          },
+          "disk_gib": {
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeprotoGPU"
+            }
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "ports_80_443": {
+            "type": "string"
+          },
+          "public_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Runtime": {
+        "type": "object",
+        "required": [
+          "socket",
+          "version"
+        ],
+        "properties": {
+          "socket": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeprotoGPU": {
+        "properties": {
+          "memory_mib": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor",
+          "model",
+          "memory_mib"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/nodeproto.GPU"
+      },
+      "NodeList": {
+        "type": "object",
+        "required": [
+          "nodes"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            }
+          }
+        }
+      },
+      "NodeJoinBody": {
+        "type": "object",
+        "required": [
+          "token",
+          "public_key",
+          "inventory",
+          "node_version",
+          "protocol_version"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inventory": {
+            "type": "object",
+            "required": [
+              "os",
+              "kernel",
+              "arch",
+              "cpus",
+              "memory_mib",
+              "disk_gib"
+            ],
+            "properties": {
+              "arch": {
+                "type": "string"
+              },
+              "cpus": {
+                "type": "integer"
+              },
+              "disk_gib": {
+                "type": "integer"
+              },
+              "docker": {
+                "$ref": "#/components/schemas/Runtime"
+              },
+              "endpoints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "gpus": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/NodeprotoGPU"
+                }
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "kernel": {
+                "type": "string"
+              },
+              "memory_mib": {
+                "type": "integer"
+              },
+              "os": {
+                "type": "string"
+              },
+              "podman": {
+                "$ref": "#/components/schemas/Runtime"
+              },
+              "ports_80_443": {
+                "type": "string"
+              },
+              "public_addresses": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_version": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeJoined": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "org_id",
+          "identity_generation",
+          "endpoints"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "identity_generation": {
+            "type": "integer"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          }
+        }
+      },
+      "JoinTokenRequestBody": {
+        "type": "object",
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "edge": {
+            "type": "boolean"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "lifetime_minutes": {
+            "type": "integer"
+          }
+        }
+      },
+      "JoinToken": {
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at",
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeUpdateBody": {
+        "type": "object",
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ingress_mode": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
           },
           "name": {
             "type": "string"

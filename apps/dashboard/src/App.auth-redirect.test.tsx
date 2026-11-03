@@ -25,6 +25,7 @@ vi.mock("@authsome/ui-react", async () => {
     },
   }
 })
+const assign = vi.hoisted(() => vi.fn())
 const invite = vi.hoisted(() => ({ token: null as string | null }))
 vi.mock("@/lib/invite", () => ({
   usePendingInvite: () => invite.token,
@@ -60,6 +61,8 @@ beforeEach(() => {
   gate.state = null
   sessionStorage.clear()
   setWorkspaceSlug("")
+  assign.mockReset()
+  vi.stubGlobal("location", { ...window.location, assign })
   vi.spyOn(window, "scrollTo").mockImplementation(() => {})
 })
 
@@ -99,7 +102,9 @@ describe("authentication redirects", () => {
         auth.isAuthenticated = true
         listeners.forEach((listener) => listener())
       })
-      await waitFor(() => expect(history.location.href).toBe(destination))
+      // A full load, so the public config is read again as the signed-in
+      // account.
+      await waitFor(() => expect(assign).toHaveBeenCalledWith(destination))
     }
   )
 
@@ -114,10 +119,11 @@ describe("authentication redirects", () => {
     auth.isAuthenticated = true
     const second = await open("/sign-in")
     await waitFor(() =>
-      expect(second.history.location.href).toBe(
+      expect(assign).toHaveBeenCalledWith(
         "/acme/projects/p1?environment=env_1#activity"
       )
     )
+    expect(second.history.location.pathname).toBe("/sign-in")
   })
 
   it.each([
@@ -129,20 +135,20 @@ describe("authentication redirects", () => {
   ])("rejects an unsafe or looping destination: %s", async (destination) => {
     sessionStorage.setItem("loomplane.auth.destination", destination)
     auth.isAuthenticated = true
-    const { history } = await open("/sign-in")
-    await waitFor(() => expect(history.location.href).toBe("/"))
+    await open("/sign-in")
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/"))
     expect(sessionStorage.getItem("loomplane.auth.destination")).toBeNull()
   })
 
   it("clears a previous workspace before restoring another workspace", async () => {
     setWorkspaceSlug("previous")
-    const { history } = await open("/acme/projects")
+    await open("/acme/projects")
     await screen.findByText("sign-in card")
     await act(async () => {
       auth.isAuthenticated = true
       listeners.forEach((listener) => listener())
     })
-    await waitFor(() => expect(history.location.href).toBe("/acme/projects"))
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/acme/projects"))
   })
 
   it("waits for authentication to load before redirecting", async () => {
@@ -154,8 +160,8 @@ describe("authentication redirects", () => {
 
   it("returns a direct sign-in visit to the overview", async () => {
     auth.isAuthenticated = true
-    const { history } = await open("/sign-in")
-    await waitFor(() => expect(history.location.href).toBe("/"))
+    await open("/sign-in")
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/"))
   })
 })
 
@@ -172,16 +178,15 @@ describe("screens with their own address", () => {
 
   it("comes back to the invitation's page after sign-in", async () => {
     invite.token = "invite+one"
-    const { history } = await open("/invitations/accept")
+    await open("/invitations/accept")
     await screen.findByText("sign-in card")
     await act(async () => {
       auth.isAuthenticated = true
       listeners.forEach((listener) => listener())
     })
     await waitFor(() =>
-      expect(history.location.href).toBe("/invitations/accept")
+      expect(assign).toHaveBeenCalledWith("/invitations/accept")
     )
-    expect(await screen.findByText("invitation card")).toBeInTheDocument()
   })
 
   it("moves onboarding to its own address", async () => {

@@ -1,9 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { AgentRun } from "@/components/landing/agent-run";
 import { DashboardShot } from "@/components/landing/dashboard-shot";
 import { HeroCta } from "@/components/landing/hero-cta";
 import { HowItWorks } from "@/components/landing/how-it-works";
+import { MobileShot } from "@/components/landing/mobile-shot";
+import { NodeJoin } from "@/components/landing/node-join";
+import { cloudWaitlistUrl } from "@/components/landing/site";
 
 export const metadata: Metadata = {
   title: { absolute: "Loomplane" },
@@ -19,6 +23,10 @@ export default function HomePage() {
           className="wrap"
           style={{ paddingBlock: "104px 0" } as CSSProperties}
         >
+          <Link className="pill hero-pill rise" href="/agents#built-in-agent">
+            <b>New</b>A built-in agent that ships releases and asks before
+            production <span className="arr">↗</span>
+          </Link>
           <h1
             id="home-title"
             className="hl rise"
@@ -28,12 +36,14 @@ export default function HomePage() {
             <span className="hl-bold">woven together.</span>
           </h1>
           <p className="lede rise" style={{ "--d": ".18s" } as CSSProperties}>
-            Give Loomplane your monorepo, or an application split across several
-            repositories. It reads the code (never runs it), finds the services
-            and the databases they need, drafts a <code>loomplane.yaml</code>{" "}
-            and shows you the exact plan. Approve it, and a Next.js app goes to
-            Vercel, a Go API to Cloud Run, a worker to ECS on Fargate and
-            Postgres to Cloud SQL, wired together.
+            Give Loomplane your monorepo on GitHub or GitLab, or an application
+            split across several repositories. It reads the code (never runs
+            it), finds the services and the databases they need, drafts a{" "}
+            <code>loomplane.yaml</code> and shows you the exact plan. Approve
+            it, and a Next.js app goes to Vercel, a Go API to Cloud Run, a
+            worker to ECS on Fargate and Postgres to Cloud SQL, wired together.
+            Turn on the built-in agent and it carries each release through
+            staging, then asks your team before production.
           </p>
 
           <HeroCta />
@@ -203,7 +213,10 @@ export default function HomePage() {
             <b>
               6<em>+</em>
             </b>
-            <span>clouds for services, plus your own servers and clusters</span>
+            <span>
+              clouds for services, plus your own servers, clusters and any
+              machine you join as a node
+            </span>
           </div>
           <div className="stat">
             <b>6</b>
@@ -239,6 +252,113 @@ export default function HomePage() {
         </div>
       </section>
 
+      <section className="band" aria-labelledby="agents-home">
+        <div className="wrap">
+          <div className="feature">
+            <div className="txt">
+              <div className="eyebrow">AI agents</div>
+              <h3 className="h3" id="agents-home">
+                An agent on your release path, with your team at the gate.
+              </h3>
+              <p>
+                Loomplane&apos;s built-in agent runs inside your server, on the
+                server&apos;s model key or your own. It plans a release, ships
+                it to staging, reads the canary and the cloud&apos;s own
+                metrics, and waits out the soak you set for the project. Then it
+                asks the project&apos;s responsible team to approve production,
+                on the dashboard or on their phones.
+              </p>
+              <p>
+                The rules about production live in Loomplane&apos;s code, not in
+                the agent&apos;s prompt. Six risk classes are checked on every
+                call, anything that deletes data waits for a person, and every
+                tool call is in the audit log as the Loomplane agent. Already
+                working in Claude Code? <code>loomctl mcp</code> gives your own
+                agent the same tools.
+              </p>
+              <ul className="ticks">
+                <li>
+                  A monthly budget per workspace, with spend shown beside it
+                </li>
+                <li>
+                  It asks for secrets through Loomplane and never sees the value
+                </li>
+                <li>
+                  Release preparation and investigations are rolling out now, on
+                  controls that already ship
+                </li>
+              </ul>
+              <div className="store-row">
+                <Link className="store-link" href="/agents#built-in-agent">
+                  How the agent works <span className="arr">↗</span>
+                </Link>
+                <Link
+                  className="store-link"
+                  href="/docs/agents/what-needs-a-person"
+                >
+                  What needs a person <span className="arr">↗</span>
+                </Link>
+              </div>
+            </div>
+            <AgentRun />
+          </div>
+        </div>
+      </section>
+
+      <section className="band" aria-labelledby="nodes-home">
+        <div className="wrap">
+          <div className="feature flip">
+            <div className="txt">
+              <div className="eyebrow">Nodes</div>
+              <h3 className="h3" id="nodes-home">
+                Turn any machine into a server node with one command.
+              </h3>
+              <p>
+                Run <code>loomctl node join</code> on a laptop, a box under the
+                desk, a GPU workstation or a VM in someone else&apos;s cloud,
+                and it joins your organization as a node. It dials out to
+                Loomplane over one connection and opens no port, so a machine
+                behind a router or a firewall joins the same way as one with a
+                public address. The server binary has the same command, as{" "}
+                <code>loomplane node join</code>.
+              </p>
+              <p>
+                You choose on the machine what Loomplane may use there: the
+                Docker socket, a local Kubernetes API, Firecracker, or only a
+                report of what the machine has. Loomplane can narrow that list
+                from the dashboard. It can never widen it. Today only the report
+                does anything, and allowing Docker hands over root on that
+                machine, so allow it only where you&apos;d let Loomplane
+                administer.
+              </p>
+              <ul className="ticks">
+                <li>
+                  Each node makes its own Ed25519 key, and the private half
+                  never leaves the machine
+                </li>
+                <li>
+                  Updates are cosign-signed releases, and one that dies in its
+                  first five seconds is rolled back
+                </li>
+                <li>
+                  Revoke a node from the dashboard, the CLI or the machine
+                  itself, and it stops for good
+                </li>
+              </ul>
+              <div className="store-row">
+                <span className="store-soon">
+                  Deploying to nodes comes next
+                </span>
+                <Link className="store-link" href="/clouds#nodes">
+                  How nodes work <span className="arr">↗</span>
+                </Link>
+              </div>
+            </div>
+            <NodeJoin />
+          </div>
+        </div>
+      </section>
+
       <section className="band" aria-labelledby="explore-title">
         <div className="wrap sec">
           <div className="sec-head">
@@ -261,9 +381,9 @@ export default function HomePage() {
               <span className="tag">Platform</span>
               <h4>Discovery, manifests and plans</h4>
               <p>
-                Static analysis of your repositories, a versioned{" "}
-                <code>loomplane.yaml</code>, and plans that list every action
-                before anything moves.
+                Static analysis of your GitHub and GitLab repositories, a
+                versioned <code>loomplane.yaml</code>, and plans that list every
+                action before anything moves.
               </p>
               <span className="more">
                 Explore the platform <span className="arr">↗</span>
@@ -274,8 +394,8 @@ export default function HomePage() {
               <h4>Six clouds and your own hardware</h4>
               <p>
                 Vercel, Cloud Run, ECS, Render, App Platform and Container Apps,
-                plus SSH servers and Kubernetes. Pick targets by tag and move
-                between them.
+                plus SSH servers, Kubernetes and nodes that join from behind any
+                firewall. Pick targets by tag and move between them.
               </p>
               <span className="more">
                 See every target <span className="arr">↗</span>
@@ -294,15 +414,15 @@ export default function HomePage() {
               </span>
             </Link>
             <Link className="cell" href="/agents">
-              <span className="tag">CLI and agents</span>
-              <h4>loomctl and an MCP server</h4>
+              <span className="tag">AI agents</span>
+              <h4>A built-in agent, plus MCP and loomctl</h4>
               <p>
-                Everything the dashboard does, from a terminal or CI. Give an
-                agent tools to analyze and plan, and approve only if you allow
-                it.
+                An agent inside your server that carries releases through
+                staging and asks before production. <code>loomctl</code> and an
+                MCP server for the terminal, CI and your own agents.
               </p>
               <span className="more">
-                Read the CLI tour <span className="arr">↗</span>
+                Meet the agent <span className="arr">↗</span>
               </span>
             </Link>
             <Link className="cell" href="/security">
@@ -516,6 +636,65 @@ export default function HomePage() {
         </div>
       </section>
 
+      <section className="band" aria-labelledby="mobile-home">
+        <div className="wrap">
+          <div className="feature flip">
+            <div className="txt">
+              <div className="eyebrow">Mobile app</div>
+              <h3 className="h3" id="mobile-home">
+                The agent ships the release. You approve it from your phone.
+              </h3>
+              <p>
+                Ask Loomplane&apos;s built-in agent to ship a release and it
+                plans it, rolls it out to staging and watches it there, then
+                stops and asks you before anything reaches production. That
+                question lands on your phone with the plan attached: what it
+                creates, what it changes, the warnings, and how the canary will
+                ramp. You approve with Face ID or your fingerprint, or reject it
+                and the agent drops the plan.
+              </p>
+              <p>
+                When a release goes wrong, the agent starts looking on its own
+                and sends you what it found, with the rollback ready. The app
+                works with Loomplane Cloud and with any Loomplane you host, and
+                you can stay signed in to several servers at once.
+              </p>
+              <ul className="ticks">
+                <li>
+                  Production always goes to a person. Loomplane enforces that in
+                  code, so a model that&apos;s been talked into something
+                  can&apos;t push it through
+                </li>
+                <li>
+                  Watch shows the plans waiting on you, two weeks of deployments
+                  and each service&apos;s traffic and latency
+                </li>
+                <li>
+                  Your server seals each notification to your phone&apos;s key,
+                  so the push gateway only ever relays ciphertext
+                </li>
+              </ul>
+              <div className="store-row">
+                <span className="store-soon">
+                  Coming soon to Google Play and the App Store
+                </span>
+                <Link
+                  className="store-link"
+                  href="/docs/agents/what-needs-a-person"
+                >
+                  What needs a person <span className="arr">↗</span>
+                </Link>
+              </div>
+            </div>
+            <div className="vis vis-stack vis-phone">
+              <span className="ide-cross vis-cross a" aria-hidden="true"></span>
+              <span className="ide-cross vis-cross b" aria-hidden="true"></span>
+              <MobileShot />
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="band paper" aria-labelledby="faq-title">
         <div className="wrap sec">
           <div className="eyebrow">Questions</div>
@@ -564,16 +743,58 @@ export default function HomePage() {
               <p>
                 Yes. Connect an SSH server with Docker or a Kubernetes
                 namespace. For anything else, write a provider plugin and point
-                Loomplane at it without changing Loomplane itself.
+                Loomplane at it without changing Loomplane itself. A machine
+                with no public address can join as a node with{" "}
+                <code>loomctl node join</code>: it dials out, so there&apos;s no
+                port to open. Nodes join, report and update today, and deploying
+                to them comes next.
+              </p>
+            </details>
+            <details>
+              <summary>Does it work with GitLab?</summary>
+              <p>
+                Yes. Public projects on gitlab.com need no setup. For private
+                ones you register an OAuth application once, and an owner or
+                admin signs in from Integrations. A self-managed GitLab on 17.0
+                or newer works the same way, and a push webhook re-analyzes a
+                project when its default branch moves.
+              </p>
+            </details>
+            <details>
+              <summary>Is there a hosted version?</summary>
+              <p>
+                Loomplane Cloud is on its way. It&apos;s the same platform, run
+                by us at <code>app.loomplane.com</code>, still deploying to your
+                own cloud accounts.{" "}
+                <a href={cloudWaitlistUrl}>Join the waitlist</a> and we&apos;ll
+                email you when your workspace is ready. Until then, you can
+                self-host it with Docker in a few minutes.
+              </p>
+            </details>
+            <details>
+              <summary>Can I use Loomplane from my phone?</summary>
+              <p>
+                Yes. The app for Android and iOS works with Loomplane Cloud and
+                with any server you host. It shows what&apos;s waiting on you,
+                sends the agent&apos;s approval requests and its findings as
+                notifications, and lets you approve a plan with Face ID or your
+                fingerprint. Push goes through XRaph&apos;s gateway at{" "}
+                <code>push.loomplane.com</code>, which can&apos;t read what it
+                carries.
               </p>
             </details>
             <details>
               <summary>Can an AI agent deploy for me?</summary>
               <p>
-                <code>loomctl mcp</code> gives an agent tools to analyze, draft
-                manifests, plan and follow deployments. Approving a plan or
-                retrying a deployment needs <code>--allow-deploy</code>, so it
-                only happens if you let it.
+                Yes, two ways. Loomplane&apos;s built-in agent runs inside your
+                server and asks a person before any production change. Turn it
+                on per workspace and give it a monthly budget. Its requests,
+                budgets and production rules ship today, and release preparation
+                and investigations are rolling out on top. For a coding agent
+                such as Claude Code, <code>loomctl mcp</code> gives it tools to
+                analyze, draft manifests, plan and follow deployments. Approving
+                a plan through it needs <code>--allow-deploy</code>, so it only
+                happens if you let it.
               </p>
             </details>
           </div>

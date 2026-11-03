@@ -1,16 +1,18 @@
 // Everything Loomplane can connect to, grouped by what it's for: where code
 // comes from, the clouds and servers it deploys to, and where results go.
 // The clouds and servers come from the API's own list of connection forms.
-import { MailIcon, SearchIcon, WebhookIcon } from "lucide-react"
+import { MailIcon, SearchIcon, ServerIcon, WebhookIcon } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import {
   useConnectionCloudsList,
   useConnectionsList,
   useGithubStatus,
+  useNodesList,
 } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { AddNode } from "@/components/nodes/add-node"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
@@ -78,6 +80,8 @@ export function IntegrationCatalog({
   const forms = useQuery(useConnectionCloudsList)
   const connections = useQuery(useConnectionsList)
   const github = useQuery(useGithubStatus)
+  const nodes = useQuery(useNodesList)
+  const [addingNode, setAddingNode] = useState(false)
   const [group, setGroup] = useState<Group | "all">("all")
   const [query, setQuery] = useState("")
   const [onlyOn, setOnlyOn] = useState(false)
@@ -97,6 +101,9 @@ export function IntegrationCatalog({
 
   const accounts = connections.data.connections
   const installs = github.data?.installations.length ?? 0
+  const nodeList = (nodes.data?.nodes ?? []).filter(
+    (n) => n.status !== "revoked"
+  )
   const cards: Card[] = [
     {
       key: "github",
@@ -160,6 +167,35 @@ export function IntegrationCatalog({
         ),
       }
     }),
+    {
+      key: "node",
+      group: "server",
+      name: "Add node",
+      purpose: "Join any Linux machine. No open ports.",
+      icon: <ProductIcon fallback={ServerIcon} label="Node" size="md" />,
+      connected: nodeList.some((n) => n.status === "online"),
+      detail: nodeList.length
+        ? `${nodeList.filter((n) => n.status === "online").length} of ${nodeList.length} online`
+        : "No nodes yet",
+      action: can("nodes:manage") ? (
+        <Button
+          size="sm"
+          variant={nodeList.length ? "outline" : "default"}
+          onClick={() => setAddingNode(true)}
+        >
+          Join a machine
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={<Link to="/nodes" />}
+        >
+          View nodes
+        </Button>
+      ),
+    },
     {
       key: "webhooks",
       group: "notify",
@@ -326,6 +362,9 @@ export function IntegrationCatalog({
             </section>
           )
         })
+      )}
+      {can("nodes:manage") && (
+        <AddNode open={addingNode} onOpenChange={setAddingNode} />
       )}
     </div>
   )

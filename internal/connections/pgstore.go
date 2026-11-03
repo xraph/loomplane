@@ -28,13 +28,13 @@ var (
 )
 
 const columns = `id, org_id, cloud, name, account, details, status, missing, message,
-	checked_at, created_by, created_at, updated_at, generation, method, signed_in_by`
+	checked_at, created_by, created_at, updated_at, generation, method, signed_in_by, oauth_client_id`
 
 func scan(row pgx.Row) (*Connection, error) {
 	var c Connection
 	var details, missing []byte
 	if err := row.Scan(&c.ID, &c.OrgID, &c.Cloud, &c.Name, &c.Account, &details, &c.Status, &missing, &c.Message,
-		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method, &c.SignedInBy); err != nil {
+		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method, &c.SignedInBy, &c.OAuthClientID); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(details, &c.Details); err != nil {
@@ -65,9 +65,9 @@ func (s *PgStore) CreateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_cloud_connections (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		c.ID, c.OrgID, c.Cloud, c.Name, c.Account, details, c.Status, missing, c.Message,
-		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method, c.SignedInBy)
+		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method, c.SignedInBy, c.OAuthClientID)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrExists
@@ -124,6 +124,19 @@ func (s *PgStore) LeftSignIns(ctx context.Context, clouds []string) ([]*Connecti
 		ORDER BY c.org_id, c.id`, MethodOAuth, clouds, StatusSignInNeeded)
 }
 
+// SignedInWith counts the working sign-ins made with the app whose client
+// ID is clientID, and the organizations they belong to. Those already
+// waiting for someone to sign in again aren't counted.
+func (s *PgStore) SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error) {
+	err = s.db.QueryRow(ctx, `SELECT count(*), count(DISTINCT org_id) FROM loomplane_cloud_connections
+		WHERE cloud = $1 AND method = $2 AND oauth_client_id = $3 AND status <> $4`,
+		cloud, MethodOAuth, clientID, StatusSignInNeeded).Scan(&connections, &orgs)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count sign-ins: %w", err)
+	}
+	return connections, orgs, nil
+}
+
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Connection, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -164,9 +177,9 @@ func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections
-		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12, signed_in_by = $13
+		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12, signed_in_by = $13, oauth_client_id = $14
 		WHERE org_id = $1 AND id = $2 AND generation = $11`,
-		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method, c.SignedInBy)
+		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method, c.SignedInBy, c.OAuthClientID)
 	if err != nil {
 		return fmt.Errorf("update connection: %w", err)
 	}

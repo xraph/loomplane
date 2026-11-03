@@ -2,7 +2,6 @@ package connections
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/xraph/forge"
@@ -159,7 +158,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Cloud: p.Cloud(), Title: f.Title, Credential: f.Credential, Help: f.Help, Settings: f.Settings,
 		})
 	}
-	signIn, err := e.signInClouds(ctx, p)
+	signIn, err := e.signInClouds(ctx)
 	if err != nil {
 		return out, err
 	}
@@ -182,22 +181,10 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 	return out, nil
 }
 
-// signInClouds are the clouds the principal's organization can sign in
-// to: those with an app, from configuration or the organization's own.
-// Someone who may not read the apps just isn't offered sign-in.
-func (e *Extension) signInClouds(ctx context.Context, p security.Principal) (map[string]bool, error) {
-	apps, err := e.svc.SignInApps(ctx, p)
-	if errors.Is(err, security.ErrForbidden) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]bool{}
-	for _, a := range apps {
-		out[a.Cloud] = a.Source != connections.AppFromNone
-	}
-	return out, nil
+// signInClouds are the clouds people can sign in to: those with an app,
+// from configuration or the platform.
+func (e *Extension) signInClouds(ctx context.Context) (map[string]bool, error) {
+	return e.svc.SignInClouds(ctx)
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {

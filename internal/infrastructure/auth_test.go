@@ -92,6 +92,31 @@ func TestAuthProvider_refusesSessionsForTheAutomation(t *testing.T) {
 	}
 }
 
+func TestAuthProvider_refusesSessionsForTheAgent(t *testing.T) {
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "agent:aorg_1", "aorg_1", nil }, &fakeAuthz{})
+	if _, err := a.Authenticate(context.Background(), "Bearer tok"); !errors.Is(err, cpauth.ErrUnauthorized) {
+		t.Fatalf("a session resolved to the agent: %v", err)
+	}
+}
+
+func TestAuthProvider_authorizesTheAgentAsItself(t *testing.T) {
+	authz := &fakeAuthz{allow: map[security.Permission]bool{security.InfrastructureRead: true}}
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
+	for _, sub := range []string{security.AgentSubject("aorg_1"), security.AgentSubject("aorg_other")} {
+		if _, err := a.Authorize(context.Background(), cpauth.AuthzRequest{SubjectID: sub, TenantID: "aorg_1", Action: "read"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := authz.calls[0]; got != security.AgentPrincipal("aorg_1", nil) {
+		t.Fatalf("the agent was authorized as %+v", got)
+	}
+	if got := authz.calls[1]; got.IsServiceAccount() {
+		t.Fatalf("another org's agent was authorized as %+v", got)
+	}
+}
+
 func TestAuthProvider_authorizesTheAutomationAsItself(t *testing.T) {
 	authz := &fakeAuthz{allow: map[security.Permission]bool{security.InfrastructureModify: true}}
 	a := NewAuthProvider()

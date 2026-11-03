@@ -78,6 +78,7 @@ import (
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recovery"
+	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
@@ -629,8 +630,20 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.plans); err != nil {
 		return fmt.Errorf("provide the planning service: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.deploys); err != nil {
+		return fmt.Errorf("provide the deployments service: %w", err)
+	}
 	if err := forge.ProvideValue(c, watches); err != nil {
 		return fmt.Errorf("provide the release watches: %w", err)
+	}
+	// The agent reads a service's traffic the way a canary and the watch
+	// do, after it checks the caller may read the project's infrastructure:
+	// neither the reader nor the binding lookup takes a principal.
+	if err := forge.ProvideValue[releasehealth.Reader](c, health); err != nil {
+		return fmt.Errorf("provide the release health reader: %w", err)
+	}
+	if err := forge.ProvideValue(c, planStore); err != nil {
+		return fmt.Errorf("provide the planning store: %w", err)
 	}
 	if err := watchRoutes(fapp.Router(), guard, watches); err != nil {
 		return err

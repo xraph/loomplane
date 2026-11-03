@@ -79,6 +79,7 @@ type Config struct {
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
+	Nodes         NodesConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -245,14 +246,15 @@ func (g GitLabConfig) Validate() error {
 	for i, h := range g.Hosts {
 		key := fmt.Sprintf("gitlab.hosts[%d]", i)
 		_, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
-		if err != nil || h.WebURL == "" {
+		switch {
+		case err != nil || h.WebURL == "":
 			if err == nil {
 				err = errors.New("it is required")
 			}
 			errs = append(errs, fmt.Errorf("%s.web_url must be the address of a GitLab with no path, such as https://git.example.com: %w", key, err))
-		} else if seen[host] {
+		case seen[host]:
 			errs = append(errs, fmt.Errorf("%s.web_url lists %s twice", key, host))
-		} else {
+		default:
 			seen[host] = true
 		}
 		if (h.ClientID == "") != (h.ClientSecret == "") {
@@ -463,8 +465,13 @@ func Defaults() Config {
 		Planning:  PlanningConfig{ApprovalWindow: approvalWindow},
 		Drift:     DriftConfig{Interval: 30 * time.Minute},
 		Worker:    WorkerConfig{HTTPAddr: ":8781"},
-		AI:        AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
-		Push:      PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		AI: AIConfig{
+			Provider:  AIProviderAnthropic,
+			Model:     DefaultAIModel,
+			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
+		},
+		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
 }
 
@@ -604,6 +611,16 @@ func FromSource(src Getter) (Config, error) {
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
 	r.boolean(&c.AI.Enabled, "ai.enabled")
+	r.str(&c.AI.Provider, "ai.provider")
+	r.str(&c.AI.APIKey, "ai.api_key")
+	r.str(&c.AI.BaseURL, "ai.base_url")
+	r.str(&c.AI.Model, "ai.model")
+	r.prices(&c.AI.Prices, "ai.prices")
+	r.str(&c.AI.Knowledge.EmbeddingProvider, "ai.knowledge.embedding_provider")
+	r.str(&c.AI.Knowledge.EmbeddingAPIKey, "ai.knowledge.embedding_api_key")
+	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
+	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
+	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
 	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
@@ -622,6 +639,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
 	r.boolean(&c.Push.Enabled, "push.enabled")
 	r.str(&c.Push.GatewayURL, "push.gateway_url")
+	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
+	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
+	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -641,7 +661,10 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment))
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
+	if c.AI.Enabled {
+		errs = append(errs, c.AI.Validate(c.Environment))
+	}
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
@@ -815,6 +838,37 @@ func (r *reader) gitlabHosts(dst *[]GitLabHostConfig, key string) {
 			return ""
 		}
 		*dst = append(*dst, GitLabHostConfig{WebURL: get("web_url"), ClientID: get("client_id"), ClientSecret: get("client_secret")})
+	}
+}
+
+// prices reads a list of {provider, model, input_per_million,
+// output_per_million}.
+func (r *reader) prices(dst *[]AIPrice, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {provider, model, input_per_million, output_per_million}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{provider, model, input_per_million, output_per_million}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, AIPrice{
+			Provider: get("provider"), Model: get("model"),
+			InputPerMillion: get("input_per_million"), OutputPerMillion: get("output_per_million"),
+		})
 	}
 }
 

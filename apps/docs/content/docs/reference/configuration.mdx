@@ -104,12 +104,22 @@ Loomplane can send phone notifications through a gateway that hands them to Appl
 | `LOOMPLANE_PUSH_ENABLED` | `true` | Turn it off and the app hides push settings for this server |
 | `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` | The gateway that hands notifications to Apple and Google. Only XRaph's gateway can reach the store app |
 
+## Nodes
+
+Machines that join an organization hold one connection to a replica. When you run several replicas, a request for a node reaches the replica that holds it over a hop on `/_/nodes/hop`, signed with a secret every replica derives from `LOOMPLANE_SECRET_KEY`. With one replica you set nothing here.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_NODES_ADVERTISE_URL` (`nodes.advertise_url`) | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. It must be an absolute http or https URL with no user, query or fragment, or startup stops. Set each replica's own address. Use `https`, or a private network with the setting below. With several replicas on one database and no advertise URL, each replica only reaches the nodes connected to it, and logs a warning when it meets one it can't |
+| `LOOMPLANE_NODES_HOP_INSECURE` (`nodes.hop_insecure`) | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
+| `LOOMPLANE_NODES_HOP_CA_FILE` (`nodes.hop_ca_file`) | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+
 ## Cloud sign-in
 
 | Variable | Default | What it does |
 |---|---|---|
 | `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID` | Unset | The client ID of the DigitalOcean OAuth app (`clouds.oauth.digitalocean.client_id`). Set it with the secret |
-| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock the Cloud sign-in page |
+| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock that cloud on the Cloud sign-in page |
 | `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID` | Unset | The client ID of the Vercel Integration (`clouds.oauth.vercel.client_id`). Set it with the secret and the slug |
 | `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET` | Unset | The Integration's client secret |
 | `LOOMPLANE_VERCEL_OAUTH_SLUG` | Unset | The Integration's slug, the last part of its address on Vercel (`clouds.oauth.vercel.slug`). Required once the ID and secret are set |
@@ -118,7 +128,7 @@ Loomplane can send phone notifications through a gateway that hands them to Appl
 | `LOOMPLANE_AZURE_OAUTH_CLIENT_ID` | Unset | The Application (client) ID of the Azure app registration (`clouds.oauth.azure.client_id`). Set it with the secret |
 | `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` | Unset | The app registration's client secret |
 
-Each cloud's values lock only that cloud's row on the Cloud sign-in page. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register each app, and every one of them uses `{public_url}/integrations/oauth/callback` as its callback.
+Each cloud's values lock only that cloud's row on the Cloud sign-in page, and they win over an app registered there. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register each app, and every one of them uses `{public_url}/integrations/oauth/callback` as its callback.
 
 ## Cloud API endpoints
 
@@ -158,6 +168,19 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 |---|---|---|
 | `LOOMPLANE_AI_ENABLED` | `false` | Turns on the [AI section](/docs/ai) (`ai.enabled`): the Models and AI settings pages, their API and the model kinds. Off, a plan with a model resource gets a `catalog-feature-off` problem, and models already running keep running |
 | `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from, and that model engines download weights from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. vLLM and Text Embeddings Inference get a mirror as `HF_ENDPOINT`, and llama.cpp fetches its GGUF from it |
+| `LOOMPLANE_AI_PROVIDER` | `anthropic` | The provider the infra agent uses by default (`ai.provider`): `anthropic`, `openai` or `openai-compatible`. Only read when `ai.enabled` is on |
+| `LOOMPLANE_AI_API_KEY` | empty | The server's API key for that provider (`ai.api_key`). It's optional even with the agent on, because a workspace can bring its own key. Loomplane never logs it or serves it to the dashboard |
+| `LOOMPLANE_AI_BASE_URL` | empty | The provider's endpoint (`ai.base_url`). You need it for `openai-compatible`, and it overrides the default endpoint for the others. It must be http(s) without a user or password, and https in production unless it's `localhost` |
+| `LOOMPLANE_AI_MODEL` | `claude-sonnet-5-5` | The agent's default model (`ai.model`). It isn't the `ai.models` registry block below, which only says where model weights come from. The agent uses `claude-haiku-5-5` for cheap summarising steps |
+| `LOOMPLANE_AI_EMBEDDING_PROVIDER` | empty | The provider for retrieval embeddings (`ai.knowledge.embedding_provider`): `openai` or `openai-compatible`. Anthropic has no embeddings API, so it can't be used. Empty turns retrieval off |
+| `LOOMPLANE_AI_EMBEDDING_API_KEY` | empty | The key for the embedding provider (`ai.knowledge.embedding_api_key`). Never logged or served |
+| `LOOMPLANE_AI_EMBEDDING_BASE_URL` | empty | The embedding endpoint (`ai.knowledge.embedding_base_url`). Required for `openai-compatible` |
+| `LOOMPLANE_AI_EMBEDDING_MODEL` | empty | The embedding model (`ai.knowledge.embedding_model`). Required once a provider is set. Pick one whose native size is at most 2000 dimensions, such as `text-embedding-3-small` |
+| `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | The vector size (`ai.knowledge.dimensions`), from 1 to 2000. It must match the embedding model, and every workspace shares it, because the vector column has one fixed size. `text-embedding-3-small` at 1536 is the default |
+
+With `ai.enabled` on, Loomplane checks these at startup and names the key that's wrong. With it off, none of them are checked, so a stray variable can't stop a server that doesn't run the agent.
+
+`ai.prices` has no variable. Set it in `config.local.yaml` as a list of `{provider, model, input_per_million, output_per_million}`, in decimal USD such as `"3"` or `"0.80"`. The agent uses server prices only: nexus's own catalog, plus the models you list here. A price a workspace sets on its own provider key doesn't apply to the agent, so a model nexus doesn't know needs an entry here. Each provider and model pair can appear once.
 
 ## Process and container
 
