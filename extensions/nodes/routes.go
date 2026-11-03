@@ -74,7 +74,11 @@ type NodeJoin struct {
 	Token string `json:"token"`
 	Name  string `json:"name,omitempty"`
 	// PublicKey is the node's Ed25519 public key, base64.
-	PublicKey       string               `json:"public_key"`
+	PublicKey string `json:"public_key"`
+	// Signature is the node's Ed25519 signature, base64, over
+	// "loomplane-node-join-v1\n" and the JSON {"token","name","public_key"},
+	// with name exactly as sent. It proves the machine holds the key.
+	Signature       string               `json:"signature"`
 	Endpoints       []nodeproto.Endpoint `json:"endpoints,omitempty"`
 	Labels          map[string]string    `json:"labels,omitempty"`
 	Inventory       nodeproto.Inventory  `json:"inventory"`
@@ -266,8 +270,12 @@ func (e *Extension) join(c forge.Context) error {
 	if err != nil {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, "public_key must be base64")
 	}
+	sig, err := base64.StdEncoding.DecodeString(in.Signature)
+	if err != nil {
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, "signature must be base64")
+	}
 	res, err := e.svc.Join(c.Request().Context(), nodes.JoinRequest{
-		Token: in.Token, Name: in.Name, PublicKey: key, Endpoints: in.Endpoints, Labels: in.Labels,
+		Token: in.Token, Name: in.Name, PublicKey: key, Signature: sig, Endpoints: in.Endpoints, Labels: in.Labels,
 		Inventory: in.Inventory, NodeVersion: in.NodeVersion, ProtocolVersion: in.ProtocolVersion,
 	})
 	if err != nil {

@@ -103,7 +103,7 @@ func TestJoinTokenRouteReturnsCommand(t *testing.T) {
 
 func joinBody(t *testing.T, overrides map[string]any) string {
 	t.Helper()
-	pub, _, err := ed25519.GenerateKey(nil)
+	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +114,11 @@ func joinBody(t *testing.T, overrides map[string]any) string {
 	}
 	for k, v := range overrides {
 		m[k] = v
+	}
+	if _, set := overrides["signature"]; !set {
+		token, _ := m["token"].(string) //nolint:errcheck // a test override of another type signs as ""
+		name, _ := m["name"].(string)   //nolint:errcheck // as above
+		m["signature"] = base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, token, name))
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -157,6 +162,9 @@ func TestJoinRouteErrors(t *testing.T) {
 		{name: "must update", body: map[string]any{"protocol_version": 0}, status: http.StatusUpgradeRequired, mustSay: nodes.ErrUpdateNode.Error()},
 		{name: "node newer", body: map[string]any{"protocol_version": nodeproto.Version + 1}, status: http.StatusUpgradeRequired, mustSay: nodes.ErrNodeNewer.Error()},
 		{name: "bad key", body: map[string]any{"public_key": "AAAA"}, status: http.StatusUnprocessableEntity},
+		{name: "unsigned", body: map[string]any{"signature": ""}, status: http.StatusUnprocessableEntity, mustSay: "signed"},
+		{name: "signature not base64", body: map[string]any{"signature": "***"}, status: http.StatusUnprocessableEntity, mustSay: "signature"},
+		{name: "signature for another key", body: map[string]any{"signature": base64.StdEncoding.EncodeToString(make([]byte, 64))}, status: http.StatusUnprocessableEntity, mustSay: "signed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t)
@@ -166,7 +174,7 @@ func TestJoinRouteErrors(t *testing.T) {
 				t.Fatalf("status %d: %s", out.Code, out.Body)
 			}
 			if tc.body != nil && r.tokens.spent != 0 {
-				t.Fatalf("a node that must update spent its token")
+				t.Fatalf("a refused join spent its token")
 			}
 		})
 	}

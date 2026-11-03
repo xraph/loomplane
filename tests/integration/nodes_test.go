@@ -193,12 +193,14 @@ func TestNodes_oneJoinTokenOneNode(t *testing.T) {
 	)
 	begin := make(chan struct{})
 	for i := range joiners {
-		pub, _, kerr := ed25519.GenerateKey(rand.Reader)
+		pub, priv, kerr := ed25519.GenerateKey(rand.Reader)
 		if kerr != nil {
 			t.Fatal(kerr)
 		}
+		name := fmt.Sprintf("racer-%d", i)
 		body, merr := json.Marshal(nodesext.NodeJoin{
-			Token: token, Name: fmt.Sprintf("racer-%d", i), PublicKey: base64.StdEncoding.EncodeToString(pub),
+			Token: token, Name: name, PublicKey: base64.StdEncoding.EncodeToString(pub),
+			Signature: base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, token, name)),
 			Inventory: nodeproto.Inventory{OS: "linux", Arch: "amd64"}, NodeVersion: buildinfo.Version, ProtocolVersion: nodeproto.Version,
 		})
 		if merr != nil {

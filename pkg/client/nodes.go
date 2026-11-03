@@ -37,7 +37,9 @@ type JoinRequest struct {
 	Token string `json:"token"`
 	Name  string `json:"name,omitempty"`
 	// PublicKey is the node's Ed25519 public key, base64.
-	PublicKey       string               `json:"public_key"`
+	PublicKey string `json:"public_key"`
+	// Signature is nodeproto.SignJoin over Token, Name and the key, base64.
+	Signature       string               `json:"signature"`
 	Endpoints       []nodeproto.Endpoint `json:"endpoints,omitempty"`
 	Labels          map[string]string    `json:"labels,omitempty"`
 	Inventory       nodeproto.Inventory  `json:"inventory"`

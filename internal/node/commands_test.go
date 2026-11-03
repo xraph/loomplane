@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -227,6 +228,12 @@ func TestJoinUsesLoginNotStoredKey(t *testing.T) {
 	j := js.join.Load()
 	if j.Token != "lpj_live_minted" || j.Name != "" || j.Labels["env"] != "prod" {
 		t.Fatalf("join request %+v", j)
+	}
+	// The join proves the machine holds the key it joins with.
+	pub, perr := base64.StdEncoding.DecodeString(j.PublicKey)
+	sig, serr := base64.StdEncoding.DecodeString(j.Signature)
+	if perr != nil || serr != nil || nodeproto.VerifyJoin(pub, j.Token, j.Name, sig) != nil {
+		t.Fatalf("join signature %q does not verify for key %q", j.Signature, j.PublicKey)
 	}
 	// Nothing under the state dir may hold the person's key, or the token.
 	err = filepath.WalkDir(r.dir, func(p string, d fs.DirEntry, err error) error {
