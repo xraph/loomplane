@@ -34,6 +34,9 @@ type Source struct {
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
+	// Push says whether a push re-analyzes the source. Only a Bitbucket
+	// source's listing has it.
+	Push *PushState `json:"push,omitempty"`
 }
 
 // normalize puts the times a store returns into UTC, so a source compares
@@ -55,7 +58,7 @@ var (
 	ErrAliasTaken         = errors.New("this project has already used that alias, and an alias is never reused")
 	ErrAliasReserved      = errors.New("that alias is an ecosystem name; pick another")
 	ErrRootsOverlap       = errors.New("this repository is already attached at a directory that contains this one, or sits inside it")
-	ErrSourceInaccessible = errors.New("that repository or branch can't be read by Loomplane; a private repository needs a GitHub installation that can see it")
+	ErrSourceInaccessible = errors.New("that repository or branch can't be read by Loomplane; a private repository needs a connected account that can see it")
 )
 
 var aliasPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
