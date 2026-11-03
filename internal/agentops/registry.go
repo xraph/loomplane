@@ -564,4 +564,5 @@ type LogStore interface {
 type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 	Allowed(ctx context.Context, p security.Principal, perm security.Permission) (bool, error)
+	AllowedOn(ctx context.Context, p security.Principal, perm security.Permission, projectID string) (bool, error)
 }

@@ -122,8 +122,10 @@ func registerProjects(r *Registry, d *Deps) {
 		if person, ok := call.Principal.Person(); ok {
 			out.OnBehalfOf = person.UserID
 		}
+		// What the run may do where it's scoped: a run about one project
+		// counts the grants a person's teams have there.
 		for _, perm := range security.AllPermissions() {
-			ok, err := d.Authz.Allowed(ctx, call.Principal, perm)
+			ok, err := d.Authz.AllowedOn(ctx, call.Principal, perm, call.Scope.ProjectID)
 			if err != nil {
 				return whoamiOutput{}, err
 			}

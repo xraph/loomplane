@@ -112,13 +112,20 @@ func (a *Authorizer) Gate() PromotionGate {
 }
 
 // Visible is what the model is shown: the agent's operations the principal
-// may use. Acting for a person, an operation the agent or the person lacks
-// the permission for is hidden, and a read-only principal sees only
-// reads. A principal that isn't the agent sees nothing, and neither does
+// may use where the run is scoped. A run about one project checks that
+// project, so the grants a person's teams have there count; a run about
+// the whole workspace checks the workspace. Acting for a person, an
+// operation the agent or the person lacks the permission for is hidden,
+// and a read-only principal sees only reads. A scope that isn't one of
+// Loomplane's shows nothing. A principal that isn't the agent sees nothing, and neither does
 // a tool that isn't an operation.
 func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.Tool) []llm.Tool {
 	p, ok := s.Principal.(security.Principal)
 	if !ok || !p.IsAgent() || a.Registry == nil || a.Authz == nil {
+		return nil
+	}
+	scope, err := agentscope.FromCortex(s.Scope)
+	if err != nil {
 		return nil
 	}
 	allowed := map[security.Permission]bool{}
@@ -129,7 +136,7 @@ func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.
 		ok, seen := allowed[perm]
 		if !seen {
 			var err error
-			ok, err = a.Authz.Allowed(ctx, p, perm)
+			ok, err = a.Authz.AllowedOn(ctx, p, perm, scope.ProjectID)
 			ok = ok && err == nil
 			allowed[perm] = ok
 		}
