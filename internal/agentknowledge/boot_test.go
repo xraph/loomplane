@@ -140,3 +140,45 @@ func TestBootMigratesWithConfiguredDimensions(t *testing.T) {
 		t.Fatalf("%d probes, migrations %v; want one probe and Migrate(1536)", v.probes, v.migrations)
 	}
 }
+
+// With AI off, knowledge is off and nothing is asked, whatever ai.knowledge
+// says.
+func TestBootWithAIOffNeverTouchesTheDatabase(t *testing.T) {
+	v := &fakeVectors{ok: true}
+	cfg := knowledgeOn("text-embedding-3-small", 1536)
+	cfg.Enabled = false
+	asked := false
+	st := agentknowledge.Boot(context.Background(), cfg, func(context.Context) bool { asked = true; return true }, v)
+	if st.Configured || st.Available || st.Reason != agentknowledge.ReasonNotConfigured || asked {
+		t.Fatalf("status %+v, asked for a price %v", st, asked)
+	}
+	v.untouched(t)
+}
+
+// deadlines notes whether each call's context had a deadline.
+type deadlines struct {
+	fakeVectors
+	probe, migrate bool
+}
+
+func (d *deadlines) Available(ctx context.Context) (bool, string, error) {
+	_, d.probe = ctx.Deadline()
+	return d.fakeVectors.Available(ctx)
+}
+
+func (d *deadlines) Migrate(ctx context.Context, dimensions int) error {
+	_, d.migrate = ctx.Deadline()
+	return d.fakeVectors.Migrate(ctx, dimensions)
+}
+
+// The probe is bounded, so a held catalog lock can't hang start. Migrate
+// isn't: an index build over a large table must be able to finish.
+func TestBootBoundsOnlyTheProbe(t *testing.T) {
+	d := &deadlines{fakeVectors: fakeVectors{ok: true}}
+	if st := agentknowledge.Boot(context.Background(), knowledgeOn("text-embedding-3-small", 1536), priced, d); !st.Available {
+		t.Fatalf("status %+v", st)
+	}
+	if !d.probe || d.migrate {
+		t.Fatalf("probe bounded %v, migrate bounded %v; want true, false", d.probe, d.migrate)
+	}
+}

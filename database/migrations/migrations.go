@@ -132,15 +132,17 @@ func OptionalVersions() []string {
 	return out
 }
 
-// OnDemand are the on-demand groups a server with these knowledge settings
-// runs: weave's pgvector group at ai.knowledge.dimensions when knowledge is
-// configured, and none when it isn't. Restoring a backup that applied the
-// group runs it, so the vector table comes back with its rows.
-func OnDemand(k config.AIKnowledgeConfig) ([]*migrate.Group, error) {
-	if !k.Configured() {
+// OnDemand are the on-demand groups a server with these AI settings runs:
+// weave's pgvector group at ai.knowledge.dimensions when AI is on and
+// knowledge is configured, and none otherwise. With AI off it reads no
+// knowledge setting at all, since those are validated only when AI is on.
+// Restoring a backup that applied the group runs it, so the vector table
+// comes back with its rows.
+func OnDemand(ai config.AIConfig) ([]*migrate.Group, error) {
+	if !ai.Enabled || !ai.Knowledge.Configured() {
 		return nil, nil
 	}
-	g, err := pgvector.Migrations(k.Dimensions)
+	g, err := pgvector.Migrations(ai.Knowledge.Dimensions)
 	if err != nil {
 		return nil, fmt.Errorf("ai.knowledge.dimensions: %w", err)
 	}

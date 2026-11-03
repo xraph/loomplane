@@ -215,7 +215,7 @@ type RestoreOptions struct {
 	// database no Loomplane has migrated is restored into.
 	Force bool
 	// OnDemand are groups this Loomplane runs only when a feature is on:
-	// weave's pgvector group, when knowledge is configured
+	// weave's pgvector group, when AI is on and knowledge is configured
 	// (migrations.OnDemand). A backup that applied one is restored with
 	// it, so the tables it made come back with their rows; one it didn't
 	// apply stays off, as it was.
@@ -361,7 +361,7 @@ func restoreGroups(m *Manifest, groups []*migrate.Group, opts RestoreOptions) ([
 		switch {
 		case known[mg]:
 		case slices.Contains(opts.Optional, mg):
-			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane runs only when the agent's knowledge is configured; set ai.knowledge in config.yaml, with the ai.knowledge.dimensions the backed-up server ran with, and restore again", mg)
+			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane runs only when AI and the agent's knowledge are both on; set ai.enabled and ai.knowledge in config.yaml, with the ai.knowledge.dimensions the backed-up server ran with, and restore again", mg)
 		default:
 			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane doesn't; restore it with Loomplane %s or later", mg, m.Version)
 		}

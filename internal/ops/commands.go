@@ -22,7 +22,8 @@ type Settings struct {
 	// but a database may have: the schema check counts them as known.
 	Optional []string
 	// OnDemand are the groups behind Optional that this configuration
-	// turns on (weave's pgvector group, with knowledge configured). A
+	// turns on (weave's pgvector group, with AI on and knowledge
+	// configured). A
 	// restore runs one for a backup that applied it.
 	OnDemand []*migrate.Group
 	Version  string

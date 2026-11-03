@@ -78,7 +78,7 @@ func settings() (ops.Settings, error) {
 	if err != nil {
 		return ops.Settings{}, err
 	}
-	onDemand, err := migrations.OnDemand(cfg.AI.Knowledge)
+	onDemand, err := migrations.OnDemand(cfg.AI)
 	if err != nil {
 		return ops.Settings{}, err
 	}

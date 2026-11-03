@@ -37,9 +37,11 @@ const (
 	reasonMigrateFail = "Setting up the knowledge table failed: %v"
 )
 
-// bootTimeout bounds the database work Boot does, so a lock held on the
-// extension catalog can't hold the server's start.
-const bootTimeout = time.Minute
+// probeTimeout bounds the pgvector probe, so a lock held on the extension
+// catalog can't hold the server's start. Migrate has no such bound: a
+// weave migration that builds an index over a large table must be able to
+// finish.
+const probeTimeout = time.Minute
 
 // Vectors is where knowledge keeps its vectors.
 type Vectors interface {
@@ -72,13 +74,14 @@ type Priced func(ctx context.Context) bool
 // why not. Nothing it meets is an error to its caller: the agent starts
 // either way.
 //
-// The order matters. Without an embedding model, or without a price for
-// it, Boot never touches the database. Only then does it ask whether
-// pgvector can be used, and only when it can does it run weave's pgvector
-// group at ai.knowledge.dimensions.
+// The order matters. With AI off (Start never calls it then), without an
+// embedding model, or without a price for it, Boot never touches the
+// database. Only then does it ask whether pgvector can be used, and only
+// when it can does it run weave's pgvector group at
+// ai.knowledge.dimensions.
 func Boot(ctx context.Context, cfg config.AIConfig, priced Priced, v Vectors) agentsettings.KnowledgeStatus {
 	k := cfg.Knowledge
-	if !k.Configured() {
+	if !cfg.Enabled || !k.Configured() {
 		return agentsettings.KnowledgeStatus{Configured: false, Reason: ReasonNotConfigured}
 	}
 	off := func(reason string) agentsettings.KnowledgeStatus {
@@ -88,9 +91,9 @@ func Boot(ctx context.Context, cfg config.AIConfig, priced Priced, v Vectors) ag
 		return off(fmt.Sprintf(reasonNoPrice, k.EmbeddingModel))
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, bootTimeout)
-	defer cancel()
-	ok, reason, err := v.Available(ctx)
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	ok, reason, err := v.Available(probeCtx)
+	cancel()
 	switch {
 	case err != nil:
 		return off(fmt.Sprintf(reasonProbe, err))

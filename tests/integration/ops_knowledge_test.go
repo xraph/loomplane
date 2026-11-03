@@ -16,12 +16,18 @@ import (
 	"github.com/xraph/loomplane/internal/ops"
 )
 
+// knowledgeKeys are AI settings with an ai.knowledge block, AI on or off.
+func knowledgeKeys(enabled bool, dimensions int) config.AIConfig {
+	return config.AIConfig{Enabled: enabled, Knowledge: config.AIKnowledgeConfig{
+		EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: dimensions,
+	}}
+}
+
 // knowledgeRestore is how loomplane restore runs on a server with
 // knowledge at dimensions: weave's pgvector group is on demand.
 func knowledgeRestore(t *testing.T, dimensions int) ops.RestoreOptions {
 	t.Helper()
-	k := config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: dimensions}
-	onDemand, err := migrations.OnDemand(k)
+	onDemand, err := migrations.OnDemand(knowledgeKeys(true, dimensions))
 	if err != nil || len(onDemand) != 1 {
 		t.Fatalf("on-demand groups %v, %v", onDemand, err)
 	}
@@ -109,13 +115,47 @@ func TestKnowledgeBackupNeedsKnowledgeToRestore(t *testing.T) {
 
 	off := ops.RestoreOptions{Optional: migrations.OptionalVersions()}
 	_, err = ops.Restore(ctx, freshDatabase(t), migrations.All(), bytes.NewReader(withVectors.Bytes()), off)
-	if err == nil || !strings.Contains(err.Error(), "ai.knowledge") || strings.Contains(err.Error(), "or later") {
+	if err == nil || !strings.Contains(err.Error(), "set ai.enabled and ai.knowledge") || strings.Contains(err.Error(), "or later") {
 		t.Fatalf("restoring a knowledge backup without knowledge: %v", err)
 	}
 	if _, err = ops.Restore(ctx, freshDatabase(t), migrations.All(), bytes.NewReader(plain.Bytes()), off); err != nil {
 		t.Fatalf("restoring a backup without the pgvector group: %v", err)
 	}
-	if empty, _ := migrations.OnDemand(config.AIKnowledgeConfig{Dimensions: 8}); len(empty) != 0 {
+	if empty, _ := migrations.OnDemand(config.AIConfig{Enabled: true, Knowledge: config.AIKnowledgeConfig{Dimensions: 8}}); len(empty) != 0 {
 		t.Fatalf("knowledge not configured, and on-demand groups %v", empty)
+	}
+}
+
+// With AI off, an ai.knowledge block left in config.yaml turns on nothing
+// for a restore either: a knowledge backup is refused with what to set,
+// before the restore touches the target, even on a Postgres that has
+// pgvector. No vector extension, no table, not even grove's bookkeeping.
+func TestKnowledgeBackupWithAIOffLeavesPgvectorAlone(t *testing.T) {
+	ctx := context.Background()
+	src := freshPgvectorDatabase(t)
+	vectors, err := pgvector.Migrations(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ops.Migrate(ctx, src, append(migrations.All(), vectors)); err != nil {
+		t.Fatal(err)
+	}
+	var backup bytes.Buffer
+	if _, err = ops.Backup(ctx, src, "test", &backup); err != nil {
+		t.Fatal(err)
+	}
+
+	onDemand, err := migrations.OnDemand(knowledgeKeys(false, 8))
+	if err != nil || len(onDemand) != 0 {
+		t.Fatalf("AI off: on-demand groups %v, %v", onDemand, err)
+	}
+	dst := freshPgvectorDatabase(t)
+	_, err = ops.Restore(ctx, dst, migrations.All(), bytes.NewReader(backup.Bytes()),
+		ops.RestoreOptions{OnDemand: onDemand, Optional: migrations.OptionalVersions()})
+	if err == nil || !strings.Contains(err.Error(), "set ai.enabled and ai.knowledge") {
+		t.Fatalf("restoring a knowledge backup with AI off: %v", err)
+	}
+	if dbValue[bool](t, dst, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') OR to_regclass('weave_vectors') IS NOT NULL OR to_regclass('grove_migrations') IS NOT NULL`) {
+		t.Fatal("a refused restore touched the target database")
 	}
 }
