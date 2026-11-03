@@ -18,6 +18,7 @@ const unprefixed = new Set([
   "/reset-password",
   "/verify-email",
   "/invitations/accept",
+  "/onboarding",
   "/workspaces/new",
   "/integrations/oauth/callback",
   "/integrations/github/setup",

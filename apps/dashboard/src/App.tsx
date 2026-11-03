@@ -21,7 +21,6 @@ import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
-import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
@@ -111,15 +110,16 @@ export function App() {
     )
   }
   if (authPaths.includes(path)) return <AuthRedirect authenticated />
-  if (invite) return <AcceptInvitation token={invite} />
-  // An invitation link without its token: the route says so on a page of
-  // its own, since no workspace is involved yet.
+  // The invitation has a page of its own, outside any workspace. Wherever
+  // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }
 
 function SignedIn() {
   const router = useRouter()
+  const path = usePath()
   const workspace = useRouterState({
     select: (state) => requestedWorkspace(state.location),
   })
@@ -135,7 +135,16 @@ function SignedIn() {
           case "loading":
             return <PageLoading />
           case "needs-organization":
-            return <Onboarding activate={state.activate} />
+            // Its own address, as setup has, rather than whichever page
+            // you asked for, which there's no workspace to show.
+            return (
+              <>
+                {path !== "/onboarding" && (
+                  <Navigate to="/onboarding" replace />
+                )}
+                <Onboarding activate={state.activate} />
+              </>
+            )
           case "error":
             return (
               <Problem
