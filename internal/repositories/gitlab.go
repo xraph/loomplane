@@ -53,7 +53,7 @@ func gitlabPath(host, path string) (Repository, error) {
 		}
 	}
 	return Repository{
-		Host:  host,
+		Host:  canonicalGitLabHost(host),
 		Owner: strings.Join(segs[:len(segs)-1], "/"),
 		Name:  segs[len(segs)-1],
 	}, nil
