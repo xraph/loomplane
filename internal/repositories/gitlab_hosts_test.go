@@ -103,10 +103,10 @@ func TestGitLabRegistry_orgHostsOnlyForTheirOrg(t *testing.T) {
 	if _, ok, err = reg.PathParser(ctx, "org-a", "GIT.A.COM"); !ok || err != nil {
 		t.Fatalf("hosts compare without case: %v, %v", ok, err)
 	}
-	if _, ok := reg.Reader(ctx, "git.a.com"); !ok {
+	if _, found := reg.Reader(ctx, "git.a.com"); !found {
 		t.Fatal("the reader of an organization's host should be found")
 	}
-	if _, ok := reg.Reader(ctx, "git.other.com"); ok {
+	if _, found := reg.Reader(ctx, "git.other.com"); found {
 		t.Fatal("nobody registered git.other.com")
 	}
 	h, ok, err := reg.Host(ctx, "org-a", "git.a.com")
@@ -165,7 +165,7 @@ func TestGitLabRegistry_nilStore(t *testing.T) {
 
 func TestGitLabRegistry_instanceHostIsUnguarded(t *testing.T) {
 	const sha = "0123456789abcdef0123456789abcdef01234567"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"` + sha + `"}`))
 	}))
@@ -186,7 +186,7 @@ func TestGitLabRegistry_instanceHostIsUnguarded(t *testing.T) {
 }
 
 func TestGitLabRegistry_orgHostIsGuarded(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"0123456789abcdef0123456789abcdef01234567"}`))
 	}))
 	defer srv.Close()

@@ -53,7 +53,7 @@ func (f *fakeGitLabOAuth) serve(t *testing.T) *repositories.GitLab {
 		}
 		_, _ = w.Write([]byte(`{"id":42,"username":"rex","avatar_url":"https://gitlab.example/a.png","email":"x@y.z"}`))
 	})
-	mux.HandleFunc("GET /api/v4/version", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v4/version", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"version":"17.4.2-ee","revision":"abc"}`))
 	})
 	srv := httptest.NewServer(mux)

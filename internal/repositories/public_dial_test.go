@@ -81,7 +81,7 @@ func TestRefusePrivate(t *testing.T) {
 func getWithOrgRedirects(t *testing.T, trust *http.Client, rawURL string) (*http.Response, error) {
 	t.Helper()
 	c := &http.Client{CheckRedirect: orgClient().CheckRedirect, Transport: trust.Transport}
-	req, err := http.NewRequest(http.MethodGet, rawURL, http.NoBody)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func getWithOrgRedirects(t *testing.T, trust *http.Client, rawURL string) (*http
 
 func TestOrgClient_refusesRedirectsToHttp(t *testing.T) {
 	var plainHits atomic.Int32
-	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	plain := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		plainHits.Add(1)
 	}))
 	defer plain.Close()
@@ -114,7 +114,7 @@ func TestOrgClient_refusesRedirectsToHttp(t *testing.T) {
 
 func TestOrgClient_refusesRedirectsToAnotherHost(t *testing.T) {
 	var otherHits atomic.Int32
-	other := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	other := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		otherHits.Add(1)
 	}))
 	defer other.Close()

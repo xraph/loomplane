@@ -13,7 +13,7 @@ import (
 // Errors reading the address of a GitLab host.
 var (
 	// ErrGitLabSubpath means the GitLab is served under a path.
-	ErrGitLabSubpath = errors.New("Loomplane can't use a GitLab served under a path yet; give it its own host name")
+	ErrGitLabSubpath = errors.New("a GitLab served under a path isn't supported yet; give it its own host name")
 	// ErrGitLabInsecure means the address is plain http.
 	ErrGitLabInsecure = errors.New("a GitLab host has to be served over https")
 )

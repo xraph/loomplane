@@ -82,10 +82,14 @@ func TestGateCallerGivingUpLeavesPromptly(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := g.Enter(ctx, "k"); err == nil {
+	if _, enterErr := g.Enter(ctx, "k"); enterErr == nil {
 		t.Fatal("a waiting caller got through while the turn was held")
 	}
-	if _, err := g.Enter(ctx, "other"); err == nil {
+	// A fresh context: the first wait used up the other one, which would
+	// let Enter take the free turn and cancel at either select.
+	otherCtx, cancelOther := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelOther()
+	if _, enterErr := g.Enter(otherCtx, "other"); enterErr == nil {
 		t.Fatal("a caller got a slot while none was free")
 	}
 	leave()
