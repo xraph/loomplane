@@ -57,6 +57,8 @@ Access tokens live in memory only and expire within a couple of hours. The one l
 
 The card shows Reconnect needed, with the reason, when Bitbucket stops accepting the stored sign-in, when the member who connected the workspace has left your Loomplane organization, when the Bitbucket account that connected it is no longer in the workspace, or when Loomplane can't read the stored sign-in from Vault. Anyone who may connect workspaces fixes it by connecting the same workspace again. It keeps its place, and the new sign-in replaces the old one.
 
+When the member who connected a workspace leaves your organization, Loomplane stops reading as them at the next token renewal, which is within about two hours.
+
 ## Webhooks
 
 When you attach a Bitbucket repository to a project, Loomplane adds a webhook to it, so a push to the default branch re-analyzes the project without anyone pressing Analyze. Your organization gets one webhook per repository. A second project on the same repository shares it, and it's removed when the organization's last source on that repository goes.
@@ -77,6 +79,6 @@ Disconnecting a workspace removes every webhook it added, on Bitbucket and in Lo
 
 ## Revoking access
 
-Disconnecting a workspace on the Integrations card removes it from the organization and deletes its refresh token. It doesn't un-approve the consumer on Bitbucket. For that, the person who connected opens their Bitbucket **Personal settings**, finds Loomplane among the apps they've authorized, and revokes it.
+You revoke a workspace one of two ways. In Loomplane, disconnect it on the Integrations card: that removes it from the organization, deletes its refresh token and takes its webhooks off. On Bitbucket, the person who connected it opens their **Personal settings**, finds Loomplane among the apps they've authorized, and revokes it there. The next renewal then fails and the card shows Reconnect needed. Disconnecting doesn't un-approve the consumer on Bitbucket, so if you want it gone on both sides, do both.
 
-To cut everything off at once, delete the consumer on Bitbucket, or change its secret and update `LOOMPLANE_BITBUCKET_CLIENT_SECRET`. Every connection then shows Reconnect needed until the workspaces are connected again.
+Changing the consumer's secret doesn't revoke anyone. While Loomplane holds a key or secret Bitbucket turns down, private repositories can't be read and the error tells you to check `bitbucket.client_id` and `bitbucket.client_secret`. Loomplane doesn't hold that against any workspace, though. Each keeps its sign-in and its status, and Loomplane tries the stored sign-in again as soon as `LOOMPLANE_BITBUCKET_CLIENT_ID` and `LOOMPLANE_BITBUCKET_CLIENT_SECRET` hold values Bitbucket accepts.
