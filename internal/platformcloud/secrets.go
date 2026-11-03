@@ -1,0 +1,96 @@
+package platformcloud
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/xraph/loomplane/internal/clouds/registry"
+)
+
+// Secrets keeps the platform Cloud's credentials: each host's client key and
+// the registry login. It is a platform-scoped Vault app in production.
+type Secrets interface {
+	Put(ctx context.Context, key string, value []byte) error
+	Reveal(ctx context.Context, key string) ([]byte, error)
+	Delete(ctx context.Context, key string) error
+}
+
+const (
+	hostSecretPrefix = "platform-cloud/host/"
+	registrySecret   = "platform-cloud/registry"
+)
+
+// WithSecrets sets where the service keeps credentials and returns it.
+func (s *Service) WithSecrets(x Secrets) *Service {
+	s.secrets = x
+	return s
+}
+
+func (s *Service) secretStore() (Secrets, error) {
+	if s.secrets == nil {
+		return nil, errors.New("platformcloud: no secret store is configured")
+	}
+	return s.secrets, nil
+}
+
+type registryCredential struct {
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Token    string `json:"token,omitempty"`
+}
+
+// SetRegistrySecret stores the credential platform builds use to push to the
+// registry named in the instance settings. It replaces the previous one.
+func (s *Service) SetRegistrySecret(ctx context.Context, _ /* actor */, username, password, token string) error {
+	if token == "" && (username == "" || password == "") {
+		return errors.New("platformcloud: a registry token, or a username and password, is required")
+	}
+	vault, err := s.secretStore()
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(registryCredential{Username: username, Password: password, Token: token})
+	if err != nil {
+		return err
+	}
+	return vault.Put(ctx, registrySecret, raw)
+}
+
+// registryConfig is the registry a workspace's platform builds push to: the
+// instance registry, in a repository of that workspace's own.
+func (s *Service) registryConfig(ctx context.Context, orgID string) (*registry.Config, error) {
+	if orgID == "" {
+		return nil, errors.New("platformcloud: organization is required")
+	}
+	cfg, err := s.settings.PlatformCloud(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reg := cfg.Registry
+	if reg.Endpoint == "" || strings.Trim(reg.Repository, "/") == "" {
+		return nil, errors.New("platformcloud: the platform registry is not configured")
+	}
+	vault, err := s.secretStore()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := vault.Reveal(ctx, registrySecret)
+	if err != nil {
+		return nil, fmt.Errorf("platformcloud: read registry credential: %w", err)
+	}
+	var cred registryCredential
+	if err = json.Unmarshal(raw, &cred); err != nil {
+		return nil, errors.New("platformcloud: the stored registry credential is unreadable")
+	}
+	return &registry.Config{
+		Endpoint:     reg.Endpoint,
+		Repository:   strings.TrimRight(reg.Repository, "/") + "/ws-" + orgID,
+		AuthEndpoint: reg.AuthEndpoint,
+		Username:     cred.Username,
+		Password:     cred.Password,
+		Token:        cred.Token,
+	}, nil
+}

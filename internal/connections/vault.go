@@ -95,16 +95,31 @@ const PlatformOAuthAppsVaultAppID = "loomplane-platform-oauth-apps"
 
 // VaultAppSecrets keeps the platform's sign-in app secrets in Vault. The
 // svc it is given should be scoped to PlatformOAuthAppsVaultAppID.
-type VaultAppSecrets struct{ svc *secret.Service }
+type VaultAppSecrets struct {
+	svc   *secret.Service
+	appID string
+}
+
+// PlatformCloudVaultAppID is the Vault app the platform Cloud keeps its host
+// credentials and registry credential under.
+const PlatformCloudVaultAppID = "loomplane-platform-cloud"
 
 // NewVaultAppSecrets returns VaultAppSecrets over a Vault secret service.
-func NewVaultAppSecrets(svc *secret.Service) *VaultAppSecrets { return &VaultAppSecrets{svc: svc} }
+func NewVaultAppSecrets(svc *secret.Service) *VaultAppSecrets {
+	return NewVaultAppSecretsFor(svc, PlatformOAuthAppsVaultAppID)
+}
+
+// NewVaultAppSecretsFor returns VaultAppSecrets that keep their secrets
+// under the given Vault app ID. svc should be scoped to the same app.
+func NewVaultAppSecretsFor(svc *secret.Service, appID string) *VaultAppSecrets {
+	return &VaultAppSecrets{svc: svc, appID: appID}
+}
 
 var _ AppSecrets = (*VaultAppSecrets)(nil)
 
 // Put implements AppSecrets.
 func (v *VaultAppSecrets) Put(ctx context.Context, cloud string, value []byte) error {
-	if _, err := v.svc.Set(ctx, cloud, value, PlatformOAuthAppsVaultAppID); err != nil {
+	if _, err := v.svc.Set(ctx, cloud, value, v.appID); err != nil {
 		return fmt.Errorf("store sign-in app secret: %w", err)
 	}
 	return nil
@@ -112,7 +127,7 @@ func (v *VaultAppSecrets) Put(ctx context.Context, cloud string, value []byte) e
 
 // Reveal implements AppSecrets.
 func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, error) {
-	sec, err := v.svc.Get(ctx, cloud, PlatformOAuthAppsVaultAppID)
+	sec, err := v.svc.Get(ctx, cloud, v.appID)
 	if errors.Is(err, core.ErrSecretNotFound) {
 		return nil, ErrNotFound
 	}
@@ -124,7 +139,7 @@ func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, err
 
 // Delete implements AppSecrets. One that's already gone is not an error.
 func (v *VaultAppSecrets) Delete(ctx context.Context, cloud string) error {
-	err := v.svc.Delete(ctx, cloud, PlatformOAuthAppsVaultAppID)
+	err := v.svc.Delete(ctx, cloud, v.appID)
 	if err != nil && !errors.Is(err, core.ErrSecretNotFound) {
 		return fmt.Errorf("delete sign-in app secret: %w", err)
 	}

@@ -46,6 +46,7 @@ type Service struct {
 	store    *PgStore
 	settings SettingsReader
 	orgs     OrgLister
+	secrets  Secrets
 	now      func() time.Time
 }
 

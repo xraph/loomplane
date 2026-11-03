@@ -52,6 +52,9 @@ type Evidence struct {
 	PerOrgMemoryMiB int       `json:"per_org_memory_mib"`
 	IngressAddress  string    `json:"ingress_address"`
 	CheckedAt       time.Time `json:"checked_at"`
+	// Reason says why the last check left the host pending. It is empty
+	// when the check passed.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Allotment is capacity: what a host offers, or what is placed on it.
