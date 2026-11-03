@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -222,13 +223,31 @@ func (e *Extension) createJoinToken(c forge.Context) error {
 	if err != nil {
 		return e.fail(c, err)
 	}
-	return c.JSON(http.StatusCreated, JoinToken{Token: tok.Secret, ExpiresAt: tok.ExpiresAt, Command: e.installCommand(tok.Secret)})
+	return c.JSON(http.StatusCreated, JoinToken{Token: tok.Secret, ExpiresAt: tok.ExpiresAt, Command: e.installCommand(tok.Secret, in.Endpoints)})
 }
 
-// installCommand is the line an operator runs on the machine.
-func (e *Extension) installCommand(token string) string {
-	return "curl -fsSL " + strings.TrimRight(e.cfg.PublicURL, "/") + "/install/node.sh | sh -s -- --token " + token
+// installCommand is the line an operator runs on the machine. The token goes
+// in LOOMPLANE_JOIN_TOKEN, so no other user on the machine can read it from
+// a process's arguments. The pipe leaves node join no terminal to ask on, so
+// the token's endpoints go on the line as --allow: what the panel chose is
+// what the node allows, and the operator sees it before running it. The
+// minter has checked every endpoint is one a node can allow.
+func (e *Extension) installCommand(token string, allow []nodeproto.Endpoint) string {
+	cmd := "curl -fsSL " + strings.TrimRight(e.cfg.PublicURL, "/") + "/install/node.sh | " + joinTokenEnv + "=" + token + " sh -s"
+	var eps []string
+	for _, ep := range allow {
+		if slices.Contains(nodeproto.AllowableEndpoints(), ep) && !slices.Contains(eps, string(ep)) {
+			eps = append(eps, string(ep))
+		}
+	}
+	if len(eps) > 0 {
+		cmd += " -- --allow " + strings.Join(eps, ",")
+	}
+	return cmd
 }
+
+// joinTokenEnv is where node join and node.sh look for a join token.
+const joinTokenEnv = "LOOMPLANE_JOIN_TOKEN"
 
 func (e *Extension) join(c forge.Context) error {
 	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, maxJoinBody))

@@ -272,6 +272,34 @@ func TestJoinWithTokenNeedsNoKey(t *testing.T) {
 	}
 }
 
+// The command the dashboard renders runs join with the token in
+// LOOMPLANE_JOIN_TOKEN and the scope as --allow, with no terminal. The join
+// spends that token and asks for exactly those endpoints.
+func TestJoinFromTheRenderedCommand(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	r.opts.Getenv = func(k string) string { return map[string]string{"LOOMPLANE_JOIN_TOKEN": "lpj_live_env"}[k] }
+	if err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--allow", "probe,docker"); err != nil {
+		t.Fatalf("join: %v\n%s", err, r.out)
+	}
+	j := js.join.Load()
+	if js.minted.Load() != 0 || j.Token != "lpj_live_env" || !slices.Equal(j.Endpoints, []nodeproto.Endpoint{"probe", "docker"}) {
+		t.Fatalf("minted %d, join %+v", js.minted.Load(), j)
+	}
+	// --token wins over the environment, and an environment token can't
+	// carry --edge either.
+	r2 := newCmdRig(t)
+	r2.opts.Getenv = r.opts.Getenv
+	if err := r2.run("node", "join", "--state-dir", r2.dir, "--url", js.URL, "--token", "lpj_live_flag"); err != nil || js.join.Load().Token != "lpj_live_flag" {
+		t.Fatalf("flag over env: %v %+v", err, js.join.Load())
+	}
+	r3 := newCmdRig(t)
+	r3.opts.Getenv = r.opts.Getenv
+	if err := r3.run("node", "join", "--state-dir", r3.dir, "--url", js.URL, "--edge"); err == nil || !strings.Contains(err.Error(), "--edge") {
+		t.Fatalf("--edge with an environment token: %v", err)
+	}
+}
+
 func TestJoinArgumentErrors(t *testing.T) {
 	js := newJoinServer(t)
 	for name, tc := range map[string]struct {

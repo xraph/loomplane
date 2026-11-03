@@ -110,6 +110,46 @@ func mintJoinToken(t *testing.T, c *client) string {
 	return jt.Token
 }
 
+// installLine is the command the API renders for a join token, taken apart
+// the way node.sh would run it: the token from LOOMPLANE_JOIN_TOKEN, and the
+// arguments node.sh passes on to loomctl node join.
+type installLine struct {
+	token string
+	args  []string
+}
+
+// mintInstallLine mints a join token scoped to body and parses the command
+// that comes back. It fails the test if the command is not the one-liner
+// node.sh expects, or if the token shows up anywhere but the environment.
+func mintInstallLine(t *testing.T, c *client, publicURL string, body map[string]any) installLine {
+	t.Helper()
+	var jt struct {
+		Token   string `json:"token"`
+		Command string `json:"command"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/nodes/join-tokens", body, &jt)
+	prefix := "curl -fsSL " + publicURL + "/install/node.sh | "
+	rest, ok := strings.CutPrefix(jt.Command, prefix)
+	if !ok {
+		t.Fatalf("command %q does not start with %q", jt.Command, prefix)
+	}
+	fields := strings.Fields(rest)
+	if len(fields) < 3 || fields[0] != "LOOMPLANE_JOIN_TOKEN="+jt.Token || fields[1] != "sh" || fields[2] != "-s" {
+		t.Fatalf("command %q is not LOOMPLANE_JOIN_TOKEN=... sh -s [-- args]", jt.Command)
+	}
+	args := fields[3:]
+	if len(args) > 0 {
+		if args[0] != "--" {
+			t.Fatalf("command %q passes arguments without --", jt.Command)
+		}
+		args = args[1:]
+	}
+	if strings.Count(jt.Command, jt.Token) != 1 {
+		t.Fatalf("the token appears more than once in %q", jt.Command)
+	}
+	return installLine{token: jt.Token, args: args}
+}
+
 func getNode(t *testing.T, c *client, id string) nodes.Node {
 	t.Helper()
 	var n nodes.Node
@@ -289,12 +329,20 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 	apiB := &client{t: t, base: b.base, key: cfg.Identity.PublishableKey, token: apiA.token}
 
 	// 2. A node process in a Linux container joins through replica A with a
-	// token an admin's write key minted. It runs as root, which is fine here.
-	token := mintJoinToken(t, apiA)
+	// token an admin's write key minted, scoped to probe as the Add node
+	// panel would. It runs what the rendered command hands loomctl: the
+	// token in LOOMPLANE_JOIN_TOKEN and node.sh's arguments, plus --url as
+	// node.sh adds it. --foreground, --name and --state-dir are this test's
+	// own. It runs as root, which is fine here.
+	line := mintInstallLine(t, apiA, publicURL, map[string]any{"endpoints": []string{"probe"}})
+	if !slices.Equal(line.args, []string{"--allow", "probe"}) {
+		t.Fatalf("the rendered command passes %q, want --allow probe", line.args)
+	}
 	name := "e2e-" + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 10)
-	container := docker(t, "create", "--add-host=host.docker.internal:host-gateway", nodesImage,
-		"/loomctl", "node", "join", "--foreground", "--url", publicURL, "--token", token,
-		"--name", name, "--allow", "probe", "--state-dir", nodeStateDir)
+	join := append([]string{"create", "--add-host=host.docker.internal:host-gateway", "-e", "LOOMPLANE_JOIN_TOKEN=" + line.token, nodesImage,
+		"/loomctl", "node", "join", "--url", publicURL}, line.args...)
+	join = append(join, "--foreground", "--name", name, "--state-dir", nodeStateDir)
+	container := docker(t, join...)
 	t.Cleanup(func() {
 		out, rerr := exec.CommandContext(context.Background(), "docker", "rm", "-f", container).CombinedOutput()
 		if rerr != nil {
@@ -328,6 +376,9 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 		return false
 	})
 	t.Logf("the node joined and came online after %s as %s", joined.Round(time.Millisecond), node.ID)
+	if !slices.Equal(node.Endpoints, []nodeproto.Endpoint{nodeproto.EndpointProbe}) {
+		t.Fatalf("the node allows %v, want the token's scope [probe]", node.Endpoints)
+	}
 	if !a.hub.Online(node.ID) || b.hub.Online(node.ID) {
 		t.Fatalf("the node's session: replica A holds it %v, replica B holds it %v; want A only", a.hub.Online(node.ID), b.hub.Online(node.ID))
 	}

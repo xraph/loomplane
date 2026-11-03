@@ -69,7 +69,9 @@ func TestJoinTokenRouteReturnsCommand(t *testing.T) {
 	if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := "curl -fsSL https://loom.example.com/install/node.sh | sh -s -- --token lpj_live_abc123"
+	// The token rides in the environment, not argv, and the scope's
+	// endpoints become --allow, since the pipe leaves join no terminal to ask on.
+	want := "curl -fsSL https://loom.example.com/install/node.sh | LOOMPLANE_JOIN_TOKEN=lpj_live_abc123 sh -s -- --allow probe,docker"
 	if got.Token != "lpj_live_abc123" || got.Command != want || got.ExpiresAt != "2026-11-02T12:00:00Z" {
 		t.Fatalf("body %s", out.Body)
 	}
@@ -78,7 +80,9 @@ func TestJoinTokenRouteReturnsCommand(t *testing.T) {
 		t.Fatalf("minted with %+v for %+v over %v", r.minter.scope, r.minter.who, r.minter.life)
 	}
 
-	// A trailing slash on the public URL does not double up.
+	// A trailing slash on the public URL does not double up, and a token
+	// with no endpoints in its scope gets no --allow.
+	want = "curl -fsSL https://loom.example.com/install/node.sh | LOOMPLANE_JOIN_TOKEN=lpj_live_abc123 sh -s"
 	r.ext.cfg.PublicURL = publicURL + "/"
 	out = r.do(t, http.MethodPost, "/api/v1/nodes/join-tokens", `{}`, &member)
 	if !strings.Contains(out.Body.String(), `"command":"`+want+`"`) {

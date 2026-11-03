@@ -1,11 +1,13 @@
 #!/bin/sh
 # Installs loomctl and joins this machine to Loomplane as a node.
 #
-#   curl -fsSL {{.URLComment}}/install/node.sh | sh -s -- --token lpj_...
+#   curl -fsSL {{.URLComment}}/install/node.sh | LOOMPLANE_JOIN_TOKEN=lpj_... sh -s -- --allow probe
 #
-# Everything after -- goes to loomctl node join. On Linux the join needs
-# root, so the script runs it through sudo unless you are root. On macOS it
-# runs as you, because a node there is for development and refuses root.
+# The join token comes in LOOMPLANE_JOIN_TOKEN, which keeps it out of the
+# process list (--token works too). Everything after -- goes to loomctl node
+# join. On Linux the join needs root, so the script runs it through sudo
+# unless you are root, and asks sudo to keep LOOMPLANE_JOIN_TOKEN. On macOS
+# it runs as you, because a node there is for development and refuses root.
 #
 # The script downloads the loomctl release this Loomplane runs and checks it
 # before it unpacks anything:
@@ -143,6 +145,9 @@ rm -rf "$tmp"
 trap - EXIT HUP INT TERM
 if [ "$os" = linux ] && [ "$(id -u)" -ne 0 ]; then
 	have sudo || fail "joining needs root on Linux, and sudo is not installed: run this script as root"
+	if [ -n "${LOOMPLANE_JOIN_TOKEN:-}" ]; then
+		exec sudo --preserve-env=LOOMPLANE_JOIN_TOKEN "$dest" node join --url "$LOOMPLANE_URL" "$@"
+	fi
 	exec sudo "$dest" node join --url "$LOOMPLANE_URL" "$@"
 fi
 exec "$dest" node join --url "$LOOMPLANE_URL" "$@"

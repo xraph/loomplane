@@ -28,7 +28,7 @@ type shRig struct {
 	env     []string
 }
 
-const stubLoomctl = "#!/bin/sh\necho \"$@\" > \"$OUT\"\n"
+const stubLoomctl = "#!/bin/sh\necho \"$@\" > \"$OUT\"\necho \"${LOOMPLANE_JOIN_TOKEN:-}\" > \"$OUT.token\"\n"
 
 func newShRig(t *testing.T, osName, arch, uid string) *shRig {
 	t.Helper()
@@ -139,9 +139,41 @@ func (r *shRig) run(withSums bool, extraEnv []string, args ...string) (string, e
 	return string(out), err
 }
 
+// tokenSeen is the LOOMPLANE_JOIN_TOKEN loomctl ran with.
+func (r *shRig) tokenSeen() string {
+	b, _ := os.ReadFile(r.out + ".token")
+	return strings.TrimSpace(string(b))
+}
+
 func (r *shRig) joined() string {
 	b, _ := os.ReadFile(r.out)
 	return strings.TrimSpace(string(b))
+}
+
+// The command the dashboard renders: the token in the environment, kept
+// through sudo, and never on a command line.
+func TestScriptKeepsTheTokenOutOfArgv(t *testing.T) {
+	r := newShRig(t, "linux", "x86_64", "1000")
+	// The sudo stub drops what it isn't told to keep, as env_reset does.
+	r.stub("sudo", `echo "sudo $*" >> "$LOG"
+keep=
+case "$1" in --preserve-env=LOOMPLANE_JOIN_TOKEN) keep=$LOOMPLANE_JOIN_TOKEN; shift ;; esac
+unset LOOMPLANE_JOIN_TOKEN
+[ -n "$keep" ] && export LOOMPLANE_JOIN_TOKEN="$keep"
+exec "$@"`)
+	out, err := r.run(true, []string{"LOOMPLANE_JOIN_TOKEN=lpj_secret"}, "--allow", "probe,docker")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := r.joined(); got != "node join --url https://loom.example.com --allow probe,docker" {
+		t.Fatalf("loomctl ran with %q\n%s", got, out)
+	}
+	if got := r.tokenSeen(); got != "lpj_secret" {
+		t.Fatalf("loomctl saw the token %q", got)
+	}
+	if log := r.logged(); strings.Contains(log, "lpj_secret") || !strings.Contains(log, "sudo --preserve-env=LOOMPLANE_JOIN_TOKEN ") {
+		t.Fatalf("the token reached a command line, or sudo did not keep it:\n%s", log)
+	}
 }
 
 func TestScriptLinuxNonRootJoinsThroughSudo(t *testing.T) {

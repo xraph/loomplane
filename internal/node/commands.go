@@ -30,6 +30,10 @@ const (
 	envURL      = "LOOMPLANE_URL"
 	envKey      = "LOOMPLANE_API_KEY"
 	envStateDir = "LOOMPLANE_NODE_STATE"
+	// envToken is a join token, so it stays out of the process's arguments,
+	// where any user on the machine can read it. node.sh passes it through
+	// sudo with --preserve-env.
+	envToken = "LOOMPLANE_JOIN_TOKEN"
 )
 
 // labelBuildWorkers is the label --builder dedicated puts on a node.
@@ -130,7 +134,7 @@ func Commands(opts Options) []cli.Command {
 		cli.WithSubcommand(cli.NewCommand("join", "Join this machine to Loomplane and run it as a service", c.guard(c.join),
 			cli.WithUsage("node join --url https://loomplane.example.com --token lpj_... [--allow docker,dial,probe]"),
 			cli.WithFlags(urlFlag,
-				cli.NewStringFlag("token", "", "A join token; without one, node join mints one with your login or --key", ""),
+				cli.NewStringFlag("token", "", "A join token ("+envToken+" works too, and keeps it out of the process list); without one, node join mints one with your login or --key", ""),
 				keyFlag,
 				cli.NewStringFlag("name", "", "The node's name; the server picks the hostname if empty", ""),
 				cli.NewStringSliceFlag("label", "", "A label, as key=value; repeat it for each", nil),
@@ -344,8 +348,11 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 		return fmt.Errorf("--builder %q: the only choice is dedicated", b)
 	}
 	token, cloud, edge, foreground := ctx.String("token"), ctx.String("cloud"), ctx.Bool("edge"), ctx.Bool("foreground")
+	if token == "" {
+		token = strings.TrimSpace(c.opts.Getenv(envToken))
+	}
 	if token != "" && (cloud != "" || edge) {
-		return errors.New("--cloud and --edge go in the join token, so they cannot be used with --token: mint the token with them, or drop --token and use your login")
+		return errors.New("--cloud and --edge go in the join token, so they cannot be used with a token (--token or " + envToken + "): mint the token with them, or drop the token and use your login")
 	}
 	dir, err := c.stateDir(ctx)
 	if err != nil {
@@ -381,7 +388,7 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 		return err
 	}
 	if token == "" && key == "" {
-		return fmt.Errorf("give a join token with --token, or an API key with --key or %s so one can be minted", envKey)
+		return fmt.Errorf("give a join token with --token or %s, or an API key with --key or %s so one can be minted", envToken, envKey)
 	}
 	// With no --allow on a terminal, show what was found and ask. The answer
 	// goes into the minted token's scope too.
