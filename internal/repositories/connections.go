@@ -151,7 +151,8 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if err != nil {
 		return nil, err
 	}
-	if st.OrgID != p.OrgID || st.UserID != p.UserID {
+	if st.OrgID != p.OrgID || st.UserID != p.UserID || st.Workspace != "" {
+		// A state naming a workspace was made for Bitbucket.
 		return nil, ErrBadState
 	}
 	if in.InstallationID <= 0 {
