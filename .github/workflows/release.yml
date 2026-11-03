@@ -301,7 +301,17 @@ jobs:
   # signing puts the workflow that ran cosign into the certificate, and a
   # reusable workflow would put its own path there. In this job the identity
   # is this file, which is what loomctl node verify-release and node.sh pin
-  # (internal/node/verify.go).
+  # (internal/node/release).
+  #
+  # GoReleaser uploads binaries-checksums.txt before this job signs it, so
+  # for a minute or two a release has checksums and no signature. node.sh
+  # and node update fetch the bundle and fail closed in that window; a node
+  # that retries a little later gets the signed release.
+  #
+  # The certificate names the ref the run started from. A tag push signs as
+  # refs/tags/<tag> and a dispatch from main as refs/heads/main, the two
+  # identities the verifier accepts. Any other ref signs as an identity it
+  # rejects, so the job refuses to sign from one.
   sign-checksums:
     name: Sign checksums
     needs: [plan, cli]
@@ -315,6 +325,16 @@ jobs:
       TAG: ${{ needs.plan.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Check the ref the certificate will name
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*) want="refs/tags/$TAG" ;;
+            *) want=refs/heads/main ;;
+          esac
+          if [ "$GITHUB_REF" != "$want" ]; then
+            echo "::error::This run is on $GITHUB_REF, so its signature would name that ref. Releases are signed from $want only."
+            exit 1
+          fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Download the checksums
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern binaries-checksums.txt --clobber
