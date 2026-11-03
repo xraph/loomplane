@@ -40,14 +40,98 @@ export function githubRepo(url: string): string {
   return m?.[1] ?? ""
 }
 
+const segmentPattern = /^[\w.-]+$/
+// A host-qualified key: a host with a dot (and maybe a port), then at least
+// a namespace and a name. GitHub's owner/name never has the host.
+const qualifiedPattern = /^[\w-]+(?:\.[\w-]+)+(?::\d+)?(?:\/[\w.-]+){2,}$/
+
 /**
- * repositoryURL turns what someone typed into the URL the API stores:
- * "owner/name" becomes a GitHub URL, and a full URL or git@ address is kept
- * as it is.
+ * repositoryKey is the key a source stores for what someone pasted or typed,
+ * and empty when it isn't a repository. A GitHub repository is "owner/name".
+ * Any other host is "host/path", where the path keeps every group a GitLab
+ * project sits under and is cut at its first "/-/" page.
+ *
+ * Page URLs give their repository, so a link to a file, branch or commit
+ * works. The host is lowercased. The path keeps its case, except on
+ * bitbucket.org, whose keys are stored lowercased.
+ */
+export function repositoryKey(input: string): string {
+  const v = input.trim()
+  if (!v) return ""
+  if (/^[\w.-]+\/[\w.-]+$/.test(v)) return v.replace(/\.git$/, "")
+
+  let host: string
+  let path: string
+  const url = v.match(
+    /^([a-z][a-z0-9+.-]*):\/\/(?:[^/@\s]*@)?([^/\s]+)(\/\S*)?$/i
+  )
+  const scp = v.match(/^[\w.-]+@([^/:\s]+):(\S+)$/)
+  if (url) {
+    host = url[1].toLowerCase() === "ssh" ? url[2].replace(/:\d+$/, "") : url[2]
+    path = url[3] ?? ""
+  } else if (scp) {
+    host = scp[1]
+    path = scp[2]
+  } else if (qualifiedPattern.test(v)) {
+    const i = v.indexOf("/")
+    host = v.slice(0, i)
+    path = v.slice(i)
+  } else {
+    return ""
+  }
+  host = host.toLowerCase()
+
+  const segments = path
+    .replace(/[?#].*$/, "")
+    .split("/")
+    .filter(Boolean)
+  const cut = segments.indexOf("-")
+  const kept = cut < 0 ? segments : segments.slice(0, cut)
+
+  const github = host === "github.com" || host === "www.github.com"
+  let repo: string[]
+  if (github) {
+    repo = kept.slice(0, 2)
+  } else if (host === "bitbucket.org" || host === "www.bitbucket.org") {
+    host = "bitbucket.org"
+    repo = kept.slice(0, 2).map((s) => s.toLowerCase())
+  } else {
+    repo = kept
+  }
+  if (repo.length < 2) return ""
+  repo[repo.length - 1] = repo[repo.length - 1].replace(/\.git$/, "")
+  if (!repo.every((s) => segmentPattern.test(s))) return ""
+  const joined = repo.join("/")
+  return github ? joined : `${host}/${joined}`
+}
+
+/**
+ * startsWithHost is whether what's typed so far begins with a host, which
+ * has a dot GitHub owners never do. A field adds github.com/ before
+ * everything else.
+ */
+export function startsWithHost(typed: string): boolean {
+  return typed.trim().split("/")[0].includes(".")
+}
+
+/**
+ * repositoryHost is the host a stored key is on: "github.com" for a bare
+ * owner/name, and the key's first segment otherwise.
+ */
+export function repositoryHost(key: string): string {
+  const v = key.trim()
+  return qualifiedPattern.test(v) ? v.slice(0, v.indexOf("/")) : "github.com"
+}
+
+/**
+ * repositoryURL turns a stored key into its web URL: "owner/name" becomes a
+ * GitHub URL and "host/path" an https one. A full URL or git@ address, and
+ * anything that isn't a key yet, is kept as it is.
  */
 export function repositoryURL(input: string): string {
   const v = input.trim()
   if (/^[\w.-]+\/[\w.-]+$/.test(v)) return `https://github.com/${v}`
+  if (qualifiedPattern.test(v)) return `https://${v}`
   return v
 }
 
