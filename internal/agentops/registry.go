@@ -474,12 +474,20 @@ type Deps struct {
 	Watches  WatchService
 	// Teams lists the workspace's teams for list_teams: *teams.Service.
 	Teams TeamService
+	// People names a person by user ID, for approve_plan's report of a
+	// plan someone decided: agentrequests.PgPeople. Nil names nobody.
+	People PersonNamer
 	// Promote decides whether the agent may approve a production plan
 	// without a person: allowed, or the reasons it may not, in words a
 	// person reads. approve_plan asks it again just before approving.
 	// aiagent sets it to the tool authorizer's Promote, which reads the
 	// gate installed at call time. Nil never allows.
 	Promote func(ctx context.Context, call Call, plan *planning.Plan) (allowed bool, failed []string, err error)
+}
+
+// PersonNamer names a person by their user ID, never by their email.
+type PersonNamer interface {
+	Name(ctx context.Context, userID string) string
 }
 
 // BindingLookup is *planning.PgStore's binding read.

@@ -103,6 +103,22 @@ func TestSettleRejectsOtherwise(t *testing.T) {
 	}
 }
 
+// A person who rejects a plan the agent asked about says why, and the
+// agent reads it with their name, so it can tell the person it heard.
+func TestSettleTellsTheAgentWhyAPersonRejected(t *testing.T) {
+	r := newRig(t)
+	r.suspend(t, r.chat, approval(t, "plan_1", "rev1"))
+	r.plans.set(planning.StatusRejected, cy)
+	r.plans.mu.Lock()
+	r.plans.plans["plan_1"].DecisionNote = "  keep the db  "
+	r.plans.mu.Unlock()
+	r.settle(t)
+	d := r.resumer.decided(t)
+	if len(d) != 1 || d[0].d.Approved || d[0].d.Reason != "the plan was rejected by Cy: keep the db" {
+		t.Fatalf("decisions %+v", d)
+	}
+}
+
 // Only a person's approval resumes a run approved: a plan approved by the
 // agent or Loomplane automation while the checkpoint waited is not one.
 func TestSettleApprovesOnlyAPersonsApproval(t *testing.T) {
