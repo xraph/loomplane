@@ -2,9 +2,11 @@ package ctl
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,16 +27,57 @@ func (a *App) commands() []cli.Command {
 }
 
 // nodeLogin is the login node join, list and revoke act with: the saved one,
-// or the environment's.
+// or the environment's. Under sudo, root usually has no login of its own
+// and sudo drops LOOMPLANE_*, so when root has nothing it reads the login of
+// the user who ran sudo (SUDO_USER), after checking that the file is theirs
+// and that nobody else can write it.
 func (a *App) nodeLogin() (url, key string, err error) {
 	s, err := a.settings()
 	if err != nil {
 		return "", "", err
 	}
+	if s.URL == "" && s.Key == "" {
+		su, serr := a.sudoSettings()
+		if serr != nil {
+			return "", "", serr
+		}
+		s = su
+	}
 	if s.URL == "" || s.Key == "" {
 		return "", "", fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
 	}
 	return s.URL, s.Key, nil
+}
+
+// sudoSettings is the saved login of the user who ran sudo, when root runs
+// loomctl through sudo. It returns empty Settings when that doesn't apply or
+// the user has no login, and an error when the file is there but can't be
+// trusted.
+func (a *App) sudoSettings() (Settings, error) {
+	name := a.opts.Getenv("SUDO_USER")
+	if a.opts.euid() != 0 || name == "" || name == "root" {
+		return Settings{}, nil
+	}
+	u, err := a.opts.lookupUser(name)
+	if err != nil {
+		return Settings{}, fmt.Errorf("finding %s, who ran sudo: %w", name, err)
+	}
+	if sudoUID := a.opts.Getenv("SUDO_UID"); sudoUID != "" && sudoUID != u.Uid {
+		return Settings{}, fmt.Errorf("SUDO_UID %s is not the uid of %s (%s), so their login isn't used", sudoUID, name, u.Uid)
+	}
+	path := filepath.Join(u.HomeDir, userConfigDir, "loomplane", "loomctl.json")
+	data, err := readOwnedBy(path, u.Uid)
+	if errors.Is(err, os.ErrNotExist) {
+		return Settings{}, nil
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("not using %s's login: %w", name, err)
+	}
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Settings{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return s, nil
 }
 
 func (a *App) ownCommands() []cli.Command {
