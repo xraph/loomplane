@@ -88,8 +88,6 @@ func googleSignIn(t *testing.T, s *Service) *gcp.Client {
 	s.Providers[GCP] = google
 	s.checkers[GCP] = GCPChecker{Client: google}
 	s.ConfigApps[GCP] = oauth.App{ClientID: "g-id.apps.googleusercontent.com", ClientSecret: "g-secret"}
-	// A problem is recorded on the platform's row, so the cloud has one.
-	s.Apps.(*fakeAppStore).apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "g-id.apps.googleusercontent.com"}
 	return google
 }
 
@@ -271,6 +269,7 @@ func TestRecheckKeepsASignInThroughAGoogleOutage(t *testing.T) {
 func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	r := newRefreshRig(t)
 	googleSignIn(t, r.s)
+	usePlatformApp(r.s, GCP, oauth.App{ClientID: "g-id.apps.googleusercontent.com", ClientSecret: "g-secret"})
 	googleSignedIn(t, r, "conn_gcp", "1//app")
 	const why = "Loomplane's Google Cloud sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
 	for range 2 {
@@ -287,8 +286,7 @@ func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	// Azure's sessions are told apart the same way.
 	a := newRefreshRig(t)
 	azureSignIn(t, a.s)
-	a.s.ConfigApps[Azure] = oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"}
-	a.apps.apps[Azure] = &StoredApp{Cloud: Azure, ClientID: azureApp.ClientID}
+	usePlatformApp(a.s, Azure, oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"})
 	a.store.rows["conn_az"] = Connection{ID: "conn_az", OrgID: "org", Cloud: Azure, Name: "Shop", Method: MethodOAuth, Account: "Acme production",
 		Details: map[string]string{"tenant_id": azuretest.Tenant, "subscription_id": azuretest.Subscription, "resource_group": "loomplane", "signed_in_as": "ada@contoso.com"},
 		Status:  StatusReady, Generation: 2}

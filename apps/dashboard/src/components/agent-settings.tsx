@@ -428,7 +428,7 @@ function AgentForm({
               inputMode="decimal"
               value={budget}
               onChange={(e) => setBudgetText(e.target.value)}
-              placeholder="25"
+              placeholder="For example, 25"
               aria-invalid={!!problems.budget}
               className="max-w-[200px] tabular-nums"
             />
