@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest"
 
-import { repositoryHost, repositoryKey, repositoryURL } from "@/lib/format"
+import {
+  repositoryHost,
+  repositoryKey,
+  repositoryURL,
+  startsWithHost,
+} from "@/lib/format"
 
 describe("repositoryKey", () => {
   test("reads GitLab URLs", () => {
@@ -94,6 +99,17 @@ describe("repositoryURL", () => {
     )
   })
 
+  test("takes a host with only a port", () => {
+    expect(repositoryURL("localhost:8080/grp/api")).toBe(
+      "https://localhost:8080/grp/api"
+    )
+    expect(repositoryKey("localhost:8080/grp/api")).toBe(
+      "localhost:8080/grp/api"
+    )
+    expect(startsWithHost("localhost:8080/grp")).toBe(true)
+    expect(startsWithHost("acme/api")).toBe(false)
+  })
+
   test("leaves a git@ address and a half-typed value as they are", () => {
     expect(repositoryURL("git@gitlab.com:grp/api.git")).toBe(
       "git@gitlab.com:grp/api.git"
@@ -109,6 +125,7 @@ describe("repositoryHost", () => {
     expect(repositoryHost("git.example.com:8443/grp/api")).toBe(
       "git.example.com:8443"
     )
+    expect(repositoryHost("localhost:8080/grp/api")).toBe("localhost:8080")
     expect(repositoryHost("")).toBe("github.com")
   })
 })

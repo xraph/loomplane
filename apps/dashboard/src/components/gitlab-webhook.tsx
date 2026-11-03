@@ -15,6 +15,16 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation } from "@/client/hooks"
 import { CopyButton } from "@/components/keyless-setup"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
@@ -28,9 +38,11 @@ export function GitLabWebhook({
   const invalidate = useInvalidate()
   const [signingToken, setSigningToken] = useState("")
   const [secret, setSecret] = useState<GitLabWebhookSecret | null>(null)
+  const [replacing, setReplacing] = useState(false)
   const url = secret?.url || connection.webhookUrl
 
   const submit = async () => {
+    setReplacing(false)
     const token = signingToken.trim()
     try {
       const made = (await create.mutateAsync({
@@ -70,7 +82,9 @@ export function GitLabWebhook({
           type="button"
           variant="outline"
           disabled={create.isPending}
-          onClick={() => void submit()}
+          onClick={() =>
+            connection.webhookSet ? setReplacing(true) : void submit()
+          }
         >
           {create.isPending && <Spinner />}
           {connection.webhookSet ? "Replace secret" : "Create secret"}
@@ -93,6 +107,26 @@ export function GitLabWebhook({
           />
         </div>
       )}
+      <AlertDialog open={replacing} onOpenChange={setReplacing}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace the secret?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The webhook already set up in GitLab stops working until you paste
+              the new secret there.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => void submit()}
+            >
+              Replace it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

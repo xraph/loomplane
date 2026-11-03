@@ -41,9 +41,11 @@ export function githubRepo(url: string): string {
 }
 
 const segmentPattern = /^[\w.-]+$/
-// A host-qualified key: a host with a dot (and maybe a port), then at least
-// a namespace and a name. GitHub's owner/name never has the host.
-const qualifiedPattern = /^[\w-]+(?:\.[\w-]+)+(?::\d+)?(?:\/[\w.-]+){2,}$/
+// A host-qualified key: a host with a dot, or a name with a port such as
+// localhost:8080, then at least a namespace and a name. GitHub's owner/name
+// never has the host.
+const qualifiedPattern =
+  /^(?:[\w-]+(?:\.[\w-]+)+(?::\d+)?|[\w-]+:\d+)(?:\/[\w.-]+){2,}$/
 
 /**
  * repositoryKey is the key a source stores for what someone pasted or typed,
@@ -107,11 +109,12 @@ export function repositoryKey(input: string): string {
 
 /**
  * startsWithHost is whether what's typed so far begins with a host, which
- * has a dot GitHub owners never do. A field adds github.com/ before
- * everything else.
+ * has a dot or a port that GitHub owners never do. A field adds github.com/
+ * before everything else.
  */
 export function startsWithHost(typed: string): boolean {
-  return typed.trim().split("/")[0].includes(".")
+  const first = typed.trim().split("/")[0]
+  return first.includes(".") || first.includes(":")
 }
 
 /**

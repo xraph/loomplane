@@ -20,15 +20,14 @@ In GitLab, open **Preferences**, then **Applications**, then **Add new applicati
 | Confidential | On |
 | Scopes | `read_api`, and nothing else |
 
-Save it and copy the Application ID and the Secret. GitLab shows the secret once. Then set them in `config.yaml`, for both `loomplane` and `loomplane-worker`, and keep the secret out of any file you commit:
+Save it and copy the Application ID and the Secret. GitLab shows the secret once. `config.yaml` already has a `gitlab:` block wired to environment variables, so set these for both `loomplane` and `loomplane-worker`, and keep the secret out of any file you commit:
 
-```yaml
-gitlab:
-  client_id: "<the Application ID>"
-  client_secret: "<the Secret>"
+```sh
+LOOMPLANE_GITLAB_CLIENT_ID="<the Application ID>"
+LOOMPLANE_GITLAB_CLIENT_SECRET="<the Secret>"
 ```
 
-You can set them as `LOOMPLANE_GITLAB_CLIENT_ID` and `LOOMPLANE_GITLAB_CLIENT_SECRET` instead. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
+On Helm, set `gitlab.clientID` in your values and `secrets.gitlabClientSecret`, or put `LOOMPLANE_GITLAB_CLIENT_SECRET` in the Secret named by `secrets.existingSecret`. You can also put a `gitlab:` block with `client_id` and `client_secret` in `config.local.yaml`. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
 
 ## A self-managed GitLab
 
@@ -42,7 +41,7 @@ gitlab:
       client_secret: "<the Secret>"
 ```
 
-A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
+A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in a `gitlab:` block in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
 
 An organization can add its own instead. Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters the address, an Application ID and a Secret. The dialog shows the callback URL to use. Loomplane is stricter about these:
 

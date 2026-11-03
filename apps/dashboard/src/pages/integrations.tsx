@@ -13,6 +13,7 @@ import {
   useGithubRepositories,
   useGithubStatus,
   useGitlabDisconnect,
+  useGitlabRemoveHost,
   useGitlabRepositories,
   useGitlabStartSignIn,
   useGitlabStatus,
@@ -46,6 +47,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -720,15 +722,18 @@ function GitLabPanel() {
   const status = useQuery(useGitlabStatus)
   const { signIn, pendingHost } = useGitLabSignIn()
   const [adding, setAdding] = useState(false)
-  const mayConnect = can("repository:connect")
   const data = status.data
   const hosts = data?.hosts ?? []
   const connections = data?.connections ?? []
-  const mayAddHost = !!data?.organizationHosts && data.canConnect
-  // Hosts nobody has signed in to yet.
-  const open = hosts.filter((h) => !connections.some((c) => c.host === h.host))
-  const home = open.find((h) => h.instance && h.host === "gitlab.com")
-  const others = open.filter((h) => h !== home)
+  // The server says whether this person may connect, and their role must too.
+  const mayConnect = !!data?.canConnect && can("repository:connect")
+  const mayAddHost = !!data?.organizationHosts && mayConnect
+  // gitlab.com, until someone has signed in to it, has a button of its own.
+  const home =
+    connections.length === 0
+      ? hosts.find((h) => h.instance && h.host === "gitlab.com")
+      : undefined
+  const listed = hosts.filter((h) => h !== home)
   const addHost = mayAddHost && (
     <Button
       variant="outline"
@@ -761,7 +766,9 @@ function GitLabPanel() {
         <div className="p-4">
           <Skeleton className="h-32 w-full" />
         </div>
-      ) : hosts.length === 0 && !data.organizationHosts ? (
+      ) : hosts.length === 0 &&
+        !data.organizationHosts &&
+        !connections.length ? (
         <p className="px-4 py-4 text-[13px] leading-relaxed text-muted-foreground">
           Public gitlab.com projects can still be read. Ask your operator to set
           up GitLab to read private ones.
@@ -781,7 +788,7 @@ function GitLabPanel() {
                     : "An admin can connect a GitLab."}
                 </EmptyDescription>
               </EmptyHeader>
-              {(home || addHost) && (
+              {mayConnect && (home || addHost) && (
                 <EmptyContent>
                   {home && (
                     <Button
@@ -814,14 +821,16 @@ function GitLabPanel() {
               ))}
             </ul>
           )}
-          {(connections.length ? open : others).length > 0 && (
+          {listed.length > 0 && (
             <ul
               className={cn("divide-y", connections.length > 0 && "border-t")}
             >
-              {(connections.length ? open : others).map((h) => (
+              {listed.map((h) => (
                 <GitLabHostRow
                   key={h.id}
                   host={h}
+                  mayConnect={mayConnect}
+                  mayRemove={mayAddHost && !h.instance}
                   disabled={pendingHost !== null}
                   pending={pendingHost === h.id}
                   onConnect={() => void signIn(h.id)}
@@ -842,30 +851,119 @@ function GitLabPanel() {
 
 function GitLabHostRow({
   host,
+  mayConnect,
+  mayRemove,
   disabled,
   pending,
   onConnect,
 }: {
   host: GitLabHostView
+  mayConnect: boolean
+  mayRemove: boolean
   disabled: boolean
   pending: boolean
   onConnect: () => void
 }) {
+  const [removing, setRemoving] = useState(false)
   return (
     <li className="flex items-center gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">
         {host.host}
       </span>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={disabled}
-        onClick={onConnect}
-      >
-        {pending && <Spinner />}
-        Connect
-      </Button>
+      {mayConnect && (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`Connect ${host.host}`}
+          disabled={disabled}
+          onClick={onConnect}
+        >
+          {pending && <Spinner />}
+          Connect
+        </Button>
+      )}
+      {mayRemove && (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive"
+            aria-label={`Remove ${host.host}`}
+            onClick={() => setRemoving(true)}
+          >
+            Remove
+          </Button>
+          <RemoveGitLabHost
+            host={host}
+            open={removing}
+            onOpenChange={setRemoving}
+          />
+        </>
+      )}
     </li>
+  )
+}
+
+function RemoveGitLabHost({
+  host,
+  open,
+  onOpenChange,
+}: {
+  host: GitLabHostView
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const remove = useMutation(useGitlabRemoveHost)
+  const invalidate = useInvalidate()
+  const [error, setError] = useState<string | null>(null)
+
+  const confirm = async () => {
+    setError(null)
+    try {
+      await remove.mutateAsync({ path: { id: host.id } })
+      invalidate(useGitlabStatus)
+      toast.success(`Removed ${host.host}`)
+      onOpenChange(false)
+    } catch (err) {
+      // The server refuses while someone is still connected through it.
+      setError(messageOf(err, "It wasn't removed."))
+    }
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setError(null)
+        onOpenChange(next)
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove {host.host}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            People can no longer sign in to it from Loomplane. You can add it
+            again later.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => void confirm()}
+          >
+            {remove.isPending && <Spinner />}
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
@@ -884,6 +982,7 @@ function GitLabConnectionRow({
 }) {
   const [disconnecting, setDisconnecting] = useState(false)
   const [webhook, setWebhook] = useState(false)
+  const who = `${c.username} on ${c.host}`
   return (
     <li className="grid gap-2.5 px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
@@ -905,6 +1004,7 @@ function GitLabConnectionRow({
         {c.lapsed && mayConnect && host && (
           <Button
             size="sm"
+            aria-label={`Sign in again as ${who}`}
             disabled={signingIn}
             onClick={() => void onSignIn(host.id)}
           >
@@ -915,6 +1015,7 @@ function GitLabConnectionRow({
           <Button
             variant="outline"
             size="sm"
+            aria-label={`Webhook for ${who}`}
             aria-expanded={webhook}
             onClick={() => setWebhook((v) => !v)}
           >
@@ -926,6 +1027,7 @@ function GitLabConnectionRow({
             variant="outline"
             size="sm"
             className="text-destructive"
+            aria-label={`Disconnect ${who}`}
             onClick={() => setDisconnecting(true)}
           >
             Disconnect
@@ -936,11 +1038,17 @@ function GitLabConnectionRow({
         Reads what this GitLab user can see. A dedicated GitLab user with
         Reporter access is safest.
       </p>
-      {!c.versionSupported && (
+      {c.version === "" ? (
         <p className="text-xs leading-relaxed text-weld-ink">
-          GitLab {c.version} is older than Loomplane supports; some things may
-          not work
+          Loomplane couldn&apos;t read this GitLab&apos;s version
         </p>
+      ) : (
+        !c.versionSupported && (
+          <p className="text-xs leading-relaxed text-weld-ink">
+            GitLab {c.version} is older than Loomplane supports; some things may
+            not work
+          </p>
+        )
       )}
       {/* Mounted only while open, so closing it drops a secret it showed. */}
       {webhook && mayConnect && <GitLabWebhook connection={c} />}

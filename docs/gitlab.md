@@ -17,15 +17,16 @@ In GitLab, open **Preferences**, then **Applications**, then **Add new applicati
 
 Save it, then copy the Application ID and the Secret. GitLab shows the secret once.
 
-Put them in `config.yaml` (or an ignored `config.local.yaml`), and keep the secret out of any file you commit:
+`config.yaml` already has a `gitlab:` block, wired to environment variables. Set these for both `loomplane` and `loomplane-worker`, and keep the secret out of any file you commit:
 
-```yaml
-gitlab:
-  client_id: "<the Application ID>"
-  client_secret: "<the Secret>"
+```sh
+LOOMPLANE_GITLAB_CLIENT_ID="<the Application ID>"
+LOOMPLANE_GITLAB_CLIENT_SECRET="<the Secret>"
 ```
 
-You can set them as `LOOMPLANE_GITLAB_CLIENT_ID` and `LOOMPLANE_GITLAB_CLIENT_SECRET` instead, which is how the Docker Compose, Helm and App Platform setups take them. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read. Restart `loomplane` and `loomplane-worker` after you change them.
+That is how the Docker Compose and App Platform setups take them. On Helm, set `gitlab.clientID` in your values and `secrets.gitlabClientSecret` (or put `LOOMPLANE_GITLAB_CLIENT_SECRET` in the Secret you name in `secrets.existingSecret`). Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read. Restart `loomplane` and `loomplane-worker` after you change them.
+
+The Helm values also have `gitlab.apiURL`, `gitlab.allowOrganizationHosts` and `gitlab.webhookURL`. If you'd rather use a file than the environment, put a `gitlab:` block in `config.local.yaml` with `client_id` and `client_secret`. You need that file anyway for the hosts list below.
 
 `gitlab.api_url` (`LOOMPLANE_GITLAB_API_URL`) is the address Loomplane reads gitlab.com from, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double.
 

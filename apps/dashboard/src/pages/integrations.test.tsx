@@ -12,8 +12,10 @@ import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { Integrations } from "@/pages/integrations"
 
+// Whether the signed-in role may do anything: false is a viewer.
+let allowed = true
 vi.mock("@/lib/organization", () => ({
-  useOrganization: () => ({ session: { orgId: "org" }, can: () => true }),
+  useOrganization: () => ({ session: { orgId: "org" }, can: () => allowed }),
 }))
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
@@ -28,6 +30,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   assign.mockReset()
+  allowed = true
 })
 
 type Sent = { method: string; path: string; body: Record<string, unknown> }
@@ -272,7 +275,7 @@ it("offers GitLab.com, each other host and a self-managed one", async () => {
   ).toBeInTheDocument()
   expect(within(card).getByText("git.acme.dev")).toBeInTheDocument()
   expect(
-    within(card).getByRole("button", { name: "Connect" })
+    within(card).getByRole("button", { name: "Connect git.acme.dev" })
   ).toBeInTheDocument()
   expect(
     within(card).getByRole("button", { name: "Add a self-managed GitLab" })
@@ -307,7 +310,9 @@ it("starts the sign-in for another host", async () => {
   })
   show()
   await userEvent.click(
-    await within(gitlabCard()).findByRole("button", { name: "Connect" })
+    await within(gitlabCard()).findByRole("button", {
+      name: "Connect git.acme.dev",
+    })
   )
   await waitFor(() =>
     expect(assign).toHaveBeenCalledWith("https://git.acme.dev/oauth/authorize")
@@ -315,7 +320,7 @@ it("starts the sign-in for another host", async () => {
   expect(sent[0]?.body).toEqual({ host_id: "h2" })
 })
 
-it("keeps the self-managed option for people who may connect", async () => {
+it("offers nothing to connect when the server says no", async () => {
   fixture({
     gitlab: {
       ...noGitlab,
@@ -325,14 +330,135 @@ it("keeps the self-managed option for people who may connect", async () => {
     },
   })
   show()
-  await within(gitlabCard()).findByRole("button", {
-    name: "Connect GitLab.com",
-  })
+  expect(
+    await within(gitlabCard()).findByText("An admin can connect a GitLab.")
+  ).toBeInTheDocument()
+  expect(
+    within(gitlabCard()).queryByRole("button", { name: /Connect/ })
+  ).not.toBeInTheDocument()
   expect(
     within(gitlabCard()).queryByRole("button", {
       name: "Add a self-managed GitLab",
     })
   ).not.toBeInTheDocument()
+})
+
+it("gives a viewer no way to change anything", async () => {
+  allowed = false
+  fixture({
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost, selfManaged],
+      connections: [{ ...gitlabConnection, lapsed: true }],
+      organization_hosts: true,
+    },
+  })
+  show()
+  const card = gitlabCard()
+  expect(await within(card).findByText("rex")).toBeInTheDocument()
+  expect(within(card).getByText("git.acme.dev")).toBeInTheDocument()
+  expect(within(card).queryAllByRole("button")).toEqual([])
+})
+
+it("says when it can't read a GitLab's version", async () => {
+  fixture({
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost],
+      connections: [
+        { ...gitlabConnection, version: "", version_supported: false },
+      ],
+    },
+  })
+  show()
+  expect(
+    await screen.findByText("Loomplane couldn't read this GitLab's version")
+  ).toBeInTheDocument()
+  expect(screen.queryByText(/is older than Loomplane supports/)).toBeNull()
+})
+
+it("keeps listing connections after the operator's config is gone", async () => {
+  fixture({ gitlab: { ...noGitlab, connections: [gitlabConnection] } })
+  show()
+  const card = gitlabCard()
+  expect(await within(card).findByText("rex")).toBeInTheDocument()
+  expect(
+    within(card).getByRole("button", { name: "Disconnect rex on gitlab.com" })
+  ).toBeInTheDocument()
+  expect(
+    within(card).queryByText(/Ask your operator to set up GitLab/)
+  ).not.toBeInTheDocument()
+})
+
+it("lets someone connect another account on a host that has one", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    reply: {
+      "POST /api/v1/gitlab/sign-ins": {
+        status: 200,
+        body: { authorize_url: "https://gitlab.com/oauth/authorize?two=1" },
+      },
+    },
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost],
+      connections: [gitlabConnection],
+    },
+  })
+  show()
+  await userEvent.click(
+    await within(gitlabCard()).findByRole("button", {
+      name: "Connect gitlab.com",
+    })
+  )
+  await waitFor(() =>
+    expect(assign).toHaveBeenCalledWith(
+      "https://gitlab.com/oauth/authorize?two=1"
+    )
+  )
+  expect(sent[0]?.body).toEqual({ host_id: "h1" })
+})
+
+it("removes an organization's host after a confirm, and shows a refusal", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    reply: {
+      "DELETE /api/v1/gitlab/hosts/h2": {
+        status: 409,
+        body: { message: "Someone is still connected through it" },
+      },
+    },
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost, selfManaged],
+      connections: [gitlabConnection],
+      organization_hosts: true,
+    },
+  })
+  show()
+  const user = userEvent.setup()
+  const card = gitlabCard()
+  // gitlab.com is the instance's own: nothing to remove.
+  await within(card).findByRole("button", { name: "Remove git.acme.dev" })
+  expect(
+    within(card).queryByRole("button", { name: "Remove gitlab.com" })
+  ).not.toBeInTheDocument()
+  await user.click(
+    within(card).getByRole("button", { name: "Remove git.acme.dev" })
+  )
+  expect(sent).toEqual([])
+  const dialog = await screen.findByRole("alertdialog")
+  await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+  expect(
+    await within(dialog).findByText("Someone is still connected through it.")
+  ).toBeInTheDocument()
+  expect(sent).toContainEqual({
+    method: "DELETE",
+    path: "/api/v1/gitlab/hosts/h2",
+    body: {},
+  })
 })
 
 it("shows a connection and counts it in the summary", async () => {
@@ -353,7 +479,7 @@ it("shows a connection and counts it in the summary", async () => {
   ).toBeInTheDocument()
   const card = gitlabCard()
   expect(await within(card).findByText("rex")).toBeInTheDocument()
-  expect(within(card).getByText("gitlab.com")).toBeInTheDocument()
+  expect(within(card).getAllByText("gitlab.com").length).toBeGreaterThan(0)
   expect(
     within(card).getByText(
       "Reads what this GitLab user can see. A dedicated GitLab user with Reporter access is safest."
@@ -390,7 +516,9 @@ it("asks to sign in again when the sign-in lapsed", async () => {
   })
   show()
   await userEvent.click(
-    await within(gitlabCard()).findByRole("button", { name: "Sign in again" })
+    await within(gitlabCard()).findByRole("button", {
+      name: "Sign in again as rex on gitlab.com",
+    })
   )
   await waitFor(() =>
     expect(assign).toHaveBeenCalledWith(
@@ -416,7 +544,9 @@ it("disconnects only after a confirm", async () => {
   show()
   const user = userEvent.setup()
   await user.click(
-    await within(gitlabCard()).findByRole("button", { name: "Disconnect" })
+    await within(gitlabCard()).findByRole("button", {
+      name: "Disconnect rex on gitlab.com",
+    })
   )
   expect(sent).toEqual([])
   const dialog = await screen.findByRole("alertdialog")
@@ -457,7 +587,7 @@ it("adds a self-managed GitLab and shows the server's refusal", async () => {
   ).toBeInTheDocument()
   expect(
     within(dialog).getByText(
-      "Create an application on your GitLab with this callback URL and only the read_api scope."
+      "Create a confidential application on your GitLab with this callback URL and only the read_api scope."
     )
   ).toBeInTheDocument()
   await user.type(
@@ -523,7 +653,9 @@ it("shows a webhook secret once, then drops it", async () => {
   show()
   const user = userEvent.setup()
   await user.click(
-    await within(gitlabCard()).findByRole("button", { name: "Webhook" })
+    await within(gitlabCard()).findByRole("button", {
+      name: "Webhook for rex on gitlab.com",
+    })
   )
   expect(screen.getByText(gitlabConnection.webhook_url)).toBeInTheDocument()
   expect(
@@ -545,15 +677,31 @@ it("shows a webhook secret once, then drops it", async () => {
   })
 
   // Closing the panel drops them: opening it again shows neither.
-  await user.click(screen.getByRole("button", { name: "Webhook" }))
-  await user.click(screen.getByRole("button", { name: "Webhook" }))
+  await user.click(
+    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
+  )
+  await user.click(
+    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
+  )
   expect(screen.queryByText("whsec_sign123")).not.toBeInTheDocument()
   expect(screen.queryByText("plain-secret-456")).not.toBeInTheDocument()
   expect(window.localStorage.length).toBe(0)
 })
 
-it("offers to replace a secret that is already set", async () => {
+it("asks before replacing a secret that is already set", async () => {
+  const sent: Sent[] = []
   fixture({
+    sent,
+    reply: {
+      "POST /api/v1/gitlab/connections/c1/webhook": {
+        status: 200,
+        body: {
+          url: gitlabConnection.webhook_url,
+          signing_token: "new-signing",
+          secret_token: "new-secret",
+        },
+      },
+    },
     gitlab: {
       ...noGitlab,
       hosts: [gitlabHost],
@@ -562,9 +710,21 @@ it("offers to replace a secret that is already set", async () => {
   })
   show()
   await userEvent.click(
-    await within(gitlabCard()).findByRole("button", { name: "Webhook" })
+    await within(gitlabCard()).findByRole("button", {
+      name: "Webhook for rex on gitlab.com",
+    })
   )
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("button", { name: "Replace secret" }))
+  // It breaks the hook already in GitLab, so it asks first.
+  const dialog = await screen.findByRole("alertdialog")
   expect(
-    screen.getByRole("button", { name: "Replace secret" })
+    within(dialog).getByText(
+      "The webhook already set up in GitLab stops working until you paste the new secret there."
+    )
   ).toBeInTheDocument()
+  expect(sent).toEqual([])
+  await user.click(within(dialog).getByRole("button", { name: "Replace it" }))
+  expect(await screen.findByText("new-signing")).toBeInTheDocument()
+  expect(sent).toHaveLength(1)
 })

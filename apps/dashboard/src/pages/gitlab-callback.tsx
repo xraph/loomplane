@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react"
 import { messageOf } from "@/client/errors"
 import {
   useGitlabConnect,
+  useGitlabRepositories,
   useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
@@ -43,6 +44,7 @@ export function GitLabCallback({ code, state, error }: GitLabCallbackProps) {
       .mutateAsync({ body: { code, state } })
       .then(() => {
         invalidate(useGitlabStatus)
+        invalidate(useGitlabRepositories)
         void navigate({ to: "/integrations", search: { tab: "connected" } })
       })
       .catch(() => undefined) // shown from the mutation's own error state

@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useGitlabAddHost,
+  useGitlabRepositories,
   useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
@@ -39,8 +40,8 @@ export function GitLabHostDialog({
         <DialogHeader>
           <DialogTitle>Add a self-managed GitLab</DialogTitle>
           <DialogDescription>
-            Create an application on your GitLab with this callback URL and only
-            the read_api scope.
+            Create a confidential application on your GitLab with this callback
+            URL and only the read_api scope.
           </DialogDescription>
         </DialogHeader>
         {/* Mounted only while open, so a closed dialog keeps no secret. */}
@@ -84,6 +85,7 @@ function HostForm({
         },
       })
       invalidate(useGitlabStatus)
+      invalidate(useGitlabRepositories)
       toast.success("GitLab added")
       onDone()
     } catch (err) {
