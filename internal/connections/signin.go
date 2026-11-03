@@ -205,7 +205,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	})
 	switch {
 	case errors.Is(err, oauth.ErrAppRejected):
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, pending.Cloud))
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, pending.Cloud, app.ClientID))
 	case errors.Is(err, oauth.ErrRefused):
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	case err != nil:
@@ -219,7 +219,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	if err != nil {
 		return nil, fmt.Errorf("encode sign-in grant: %w", err)
 	}
-	checked, err := s.checkable(ctx, &Connection{OrgID: p.OrgID, Cloud: pending.Cloud, Details: pending.Settings}, grant)
+	checked, err := s.checkable(ctx, &Connection{OrgID: p.OrgID, Cloud: pending.Cloud, Details: pending.Settings, OAuthClientID: app.ClientID}, grant)
 	if err != nil {
 		return nil, err
 	}
@@ -235,9 +235,9 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 			settings = map[string]string{}
 		}
 		maps.Copy(settings, pending.Settings)
-		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth)
+		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth, app.ClientID)
 	}
-	return s.create(ctx, p, "", pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth)
+	return s.create(ctx, p, "", pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth, app.ClientID)
 }
 
 // checkable is what a check of signed-in c gets for grant g: a handout,
@@ -245,7 +245,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 // Either is a secret.
 func (s *Service) checkable(ctx context.Context, c *Connection, g oauth.Grant) ([]byte, error) {
 	if h, ok := s.Providers[c.Cloud].(Handout); ok {
-		app, err := s.app(ctx, c.Cloud)
+		app, err := s.connectionApp(ctx, c)
 		if err != nil {
 			return nil, err
 		}

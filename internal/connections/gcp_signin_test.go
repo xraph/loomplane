@@ -88,8 +88,6 @@ func googleSignIn(t *testing.T, s *Service) *gcp.Client {
 	s.Providers[GCP] = google
 	s.checkers[GCP] = GCPChecker{Client: google}
 	s.ConfigApps[GCP] = oauth.App{ClientID: "g-id.apps.googleusercontent.com", ClientSecret: "g-secret"}
-	// A problem is recorded on the platform's row, so the cloud has one.
-	s.Apps.(*fakeAppStore).apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "g-id.apps.googleusercontent.com"}
 	return google
 }
 
@@ -186,7 +184,7 @@ func TestCompleteSignInRefusesADifferentProject(t *testing.T) {
 func googleSignedIn(t *testing.T, r *refreshRig, id, rt string) {
 	t.Helper()
 	r.store.rows[id] = Connection{ID: id, OrgID: "org", Cloud: GCP, Name: id, Method: MethodOAuth, Account: "shop-prod",
-		Details: map[string]string{"project_id": "shop-prod", "signed_in_as": "ada@example.com"}, Status: StatusReady, Generation: 2}
+		Details: map[string]string{"project_id": "shop-prod", "signed_in_as": "ada@example.com"}, Status: StatusReady, Generation: 2, OAuthClientID: "g-id.apps.googleusercontent.com"}
 	r.keep(t, id, oauth.Grant{AccessToken: "ya29.old", RefreshToken: rt, Expiry: r.clock.Add(time.Hour),
 		Account: map[string]string{"subject": "1078", "email": "ada@example.com", "project_id": "shop-prod"}})
 }
@@ -271,6 +269,7 @@ func TestRecheckKeepsASignInThroughAGoogleOutage(t *testing.T) {
 func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	r := newRefreshRig(t)
 	googleSignIn(t, r.s)
+	usePlatformApp(r.s, GCP, oauth.App{ClientID: "g-id.apps.googleusercontent.com", ClientSecret: "g-secret"})
 	googleSignedIn(t, r, "conn_gcp", "1//app")
 	const why = "Loomplane's Google Cloud sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
 	for range 2 {
@@ -287,11 +286,10 @@ func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
 	// Azure's sessions are told apart the same way.
 	a := newRefreshRig(t)
 	azureSignIn(t, a.s)
-	a.s.ConfigApps[Azure] = oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"}
-	a.apps.apps[Azure] = &StoredApp{Cloud: Azure, ClientID: azureApp.ClientID}
+	usePlatformApp(a.s, Azure, oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"})
 	a.store.rows["conn_az"] = Connection{ID: "conn_az", OrgID: "org", Cloud: Azure, Name: "Shop", Method: MethodOAuth, Account: "Acme production",
 		Details: map[string]string{"tenant_id": azuretest.Tenant, "subscription_id": azuretest.Subscription, "resource_group": "loomplane", "signed_in_as": "ada@contoso.com"},
-		Status:  StatusReady, Generation: 2}
+		Status:  StatusReady, Generation: 2, OAuthClientID: azureApp.ClientID}
 	a.keep(t, "conn_az", oauth.Grant{AccessToken: "fake-token", RefreshToken: "rt-ada-1", Expiry: a.clock.Add(time.Hour), Account: map[string]string{"email": "ada@contoso.com"}})
 	c, err := a.s.Recheck(t.Context(), starter, "conn_az")
 	const azureWhy = "Loomplane's Microsoft Azure sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
@@ -325,7 +323,7 @@ func TestLapseMessagesNameTheCloud(t *testing.T) {
 		{r.store.rows["conn_do"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
 		{r.store.rows["conn_quiet"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
 		{noAppWhy(Azure), "Loomplane's Microsoft Azure sign-in app was removed, so this sign-in can't be renewed. Sign in again once it's back, or connect with a token."},
-		{r.s.appRejected(t.Context(), Vercel), "Loomplane's Vercel sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."},
+		{r.s.appRejected(t.Context(), Vercel, ""), "Loomplane's Vercel sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."},
 	} {
 		if m.got != m.want {
 			t.Errorf("got %q, want %q", m.got, m.want)

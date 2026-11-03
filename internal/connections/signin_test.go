@@ -547,7 +547,7 @@ func TestCredentialHandsOutWithoutRenewing(t *testing.T) {
 	r.s.Providers[GCP] = handingOut{r.renewer}
 	r.s.ConfigApps[GCP] = oauth.App{ClientID: "g-id", ClientSecret: "g-secret"}
 	r.store.rows["conn_gcp"] = Connection{ID: "conn_gcp", OrgID: "org", Cloud: GCP, Name: "Shop", Method: MethodOAuth, Account: "shop-prod",
-		Details: map[string]string{"project_id": "shop-prod"}, Status: StatusReady, Generation: 2}
+		Details: map[string]string{"project_id": "shop-prod"}, Status: StatusReady, Generation: 2, OAuthClientID: "g-id"}
 	r.keep(t, "conn_gcp", oauth.Grant{AccessToken: "ya29.old", RefreshToken: "1//rt", Expiry: r.clock.Add(time.Minute)})
 
 	_, cred, err := r.s.Credential(t.Context(), "org", "conn_gcp")
@@ -581,6 +581,9 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	row0 := r.store.rows["conn_do"]
+	row0.OAuthClientID = "org-id"
+	r.store.rows["conn_do"] = row0
 	r.renewer.errs["rt-at-1"] = fmt.Errorf("%w: digitalocean answered 401: invalid_client", oauth.ErrAppRejected)
 	const why = "Loomplane's DigitalOcean sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
 
@@ -609,7 +612,7 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 	// An exchange the cloud refuses for the app is recorded the same way.
 	s := newSignInRig(t)
 	s.provider.errs = map[string]error{"code-bad-app": oauth.ErrAppRejected}
-	s.apps.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "cfg-id"}
+	usePlatformApp(s.s, DigitalOcean, oauth.App{ClientID: "cfg-id", ClientSecret: "cfg-secret"})
 	state := s.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
 	if _, err := s.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-bad-app"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), why) {
 		t.Fatalf("complete: %v", err)
@@ -629,5 +632,27 @@ func TestSignInMessagesNameTheCloud(t *testing.T) {
 	_, err = r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: Azure, Name: "Acme"})
 	if want := "Loomplane has no sign-in for Microsoft Azure"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("no provider: %v, want it to say %q", err, want)
+	}
+}
+
+func TestCompleteSignInStoresClientID(t *testing.T) {
+	r := newSignInRig(t)
+	state := r.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
+	c, err := r.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-team-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OAuthClientID != "cfg-id" || r.store.rows[c.ID].OAuthClientID != "cfg-id" {
+		t.Fatalf("created with %q, stored %q", c.OAuthClientID, r.store.rows[c.ID].OAuthClientID)
+	}
+
+	q := newSignInRig(t)
+	tokenConnection(q)
+	state = q.start(t, starter, SignInInput{Cloud: DigitalOcean, ConnectionID: "conn_do"})
+	if _, err := q.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-team-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.store.rows["conn_do"].OAuthClientID; got != "cfg-id" {
+		t.Fatalf("replaced with %q", got)
 	}
 }

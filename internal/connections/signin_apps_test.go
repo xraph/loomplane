@@ -285,7 +285,7 @@ func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
 	if _, err := s.SetSignInApp(t.Context(), "usr_1", GCP, AppInput{ClientID: "id", ClientSecret: "old"}); err != nil {
 		t.Fatal(err)
 	}
-	s.appRejected(t.Context(), GCP)
+	s.appRejected(t.Context(), GCP, "id")
 	if store.problems[GCP] == "" {
 		t.Fatal("no problem was recorded")
 	}
@@ -299,6 +299,75 @@ func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
 	for _, a := range apps {
 		if a.Problem != "" {
 			t.Fatalf("the deleted app's problem stayed: %+v", a)
+		}
+	}
+}
+
+// usePlatformApp makes app the platform's app for cloud, with no
+// configuration over it.
+func usePlatformApp(s *Service, cloud string, app oauth.App) {
+	delete(s.ConfigApps, cloud)
+	s.Apps.(*fakeAppStore).apps[cloud] = &StoredApp{Cloud: cloud, ClientID: app.ClientID, Slug: app.Slug}
+	s.AppSecrets.(*fakeAppSecrets).kept[cloud] = app.ClientSecret
+}
+
+// A config app that the cloud refuses is not the platform app under it, so
+// the platform row doesn't get its problem.
+func TestRefusedConfigAppLeavesTheShadowedPlatformRowAlone(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg", ClientSecret: "x"}})
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	if why := s.appRejected(t.Context(), GCP, "cfg"); why == "" {
+		t.Fatal("no message")
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+	s.ConfigApps = nil
+	s.appRejected(t.Context(), GCP, "platform")
+	if got, _ := store.AppProblems(t.Context()); len(got) != 1 {
+		t.Fatalf("a platform app's problem wasn't recorded: %v", got)
+	}
+}
+
+func (m *memStore) SignedInWith(_ context.Context, cloud, clientID string) (int, int, error) {
+	orgs := map[string]bool{}
+	n := 0
+	for _, c := range m.rows {
+		if c.Cloud == cloud && c.Method == MethodOAuth && c.OAuthClientID == clientID && c.Status != StatusSignInNeeded {
+			n++
+			orgs[c.OrgID] = true
+		}
+	}
+	return n, len(orgs), nil
+}
+
+func TestSignInAppsCounts(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	s.Providers[Vercel] = independentRenewer{}
+	mem := &memStore{rows: map[string]Connection{
+		"a": {ID: "a", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
+		"b": {ID: "b", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
+		"c": {ID: "c", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusSignInNeeded},
+		"d": {ID: "d", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "other", Status: StatusReady},
+		"e": {ID: "e", OrgID: "o1", Cloud: Vercel, Method: MethodOAuth, OAuthClientID: "vid", Status: StatusReady},
+	}}
+	s.store = mem
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "id"}
+	store.apps[Vercel] = &StoredApp{Cloud: Vercel, ClientID: "vid", Slug: "x"}
+	apps, err := s.SignInApps(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		switch a.Cloud {
+		case DigitalOcean:
+			if a.Connections != 2 || a.Organizations != 2 {
+				t.Fatalf("digitalocean: %+v", a)
+			}
+		case Vercel:
+			if a.Connections != 0 || a.Organizations != 0 {
+				t.Fatalf("vercel: %+v", a)
+			}
 		}
 	}
 }

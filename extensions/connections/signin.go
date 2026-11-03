@@ -1,7 +1,6 @@
 package connections
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/xraph/forge"
@@ -76,35 +75,14 @@ func (e *Extension) signInApps(c forge.Context) error {
 		Keyless: KeylessState{Enabled: enabled, Issuer: e.issuer.URL(), Reason: reason}})
 }
 
-func (e *Extension) setSignInApp(c forge.Context) error {
-	p, err := principal(c)
-	if err != nil {
-		return err
-	}
-	var in connections.AppInput
-	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"client_id": "...", "client_secret": "...", "slug": "..."}, with slug for Vercel only`)
-	}
-	app, err := e.svc.SetSignInApp(c.Request().Context(), p.UserID, c.Param("cloud"), in)
-	if err != nil {
-		return fail(err)
-	}
-	return c.JSON(http.StatusOK, app)
+// setSignInApp and deleteSignInApp are closed until Task 4's platform-admin
+// routes replace them: nothing here may change the platform's apps yet.
+func (e *Extension) setSignInApp(forge.Context) error {
+	return forge.NewHTTPError(http.StatusNotFound, "not found")
 }
 
-func (e *Extension) deleteSignInApp(c forge.Context) error {
-	p, err := principal(c)
-	if err != nil {
-		return err
-	}
-	err = e.svc.DeleteSignInApp(c.Request().Context(), p.UserID, c.Param("cloud"))
-	if errors.Is(err, connections.ErrNotFound) {
-		return forge.NewHTTPError(http.StatusNotFound, "Loomplane has no sign-in app of its own for that cloud")
-	}
-	if err != nil {
-		return fail(err)
-	}
-	return c.NoContent(http.StatusNoContent)
+func (e *Extension) deleteSignInApp(forge.Context) error {
+	return forge.NewHTTPError(http.StatusNotFound, "not found")
 }
 
 func (e *Extension) startSignIn(c forge.Context) error {

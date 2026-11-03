@@ -82,6 +82,9 @@ var (
 	ErrAppLocked = errors.New("this cloud's sign-in app is set in Loomplane's configuration")
 	// ErrNoApp is a sign-in for a cloud with no app.
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
+	// ErrAppChanged is a signed-in connection whose sign-in app is no
+	// longer the one it signed in with, so its grant can't be renewed.
+	ErrAppChanged = errors.New("this cloud's sign-in app changed")
 )
 
 // DetailCanaryMissing is the detail listing, comma separated, what a
