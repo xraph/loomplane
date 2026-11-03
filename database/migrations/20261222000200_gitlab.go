@@ -91,6 +91,9 @@ func init() {
 				Exec(ctx)
 		},
 		func(ctx context.Context, db *migrate.DB) error {
+			// Dropping the tables leaves the GitLab entries in Vault (app
+			// loomplane-gitlab) behind: sign-ins, webhook secrets and hosts'
+			// client secrets, which nothing points at any more.
 			for _, table := range []string{"loomplane_gitlab_connections", "loomplane_gitlab_sign_ins", "loomplane_gitlab_hosts"} {
 				if err := db.NewDropTable(table).IfExists().Exec(ctx); err != nil {
 					return err
