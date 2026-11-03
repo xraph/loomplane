@@ -64,12 +64,14 @@ import (
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
 	"github.com/xraph/loomplane/internal/gpus"
+	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/octopusloom"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providerinventory"
@@ -483,6 +485,10 @@ func (e *Extension) Register(fapp forge.App) error {
 		Dialer:            dialer,
 		Features:          e.features,
 		CatalogInputs:     catalogInputs,
+		// Loomplane Cloud previews room for services on its targets. It
+		// refuses an organization it isn't enabled for, which is every
+		// organization on an instance with no platform hosts.
+		Platform: platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil),
 	})
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}

@@ -378,3 +378,22 @@ func TestServiceReservesPlatformCloudNames(t *testing.T) {
 		t.Fatalf("a longer name is fine: %v", err)
 	}
 }
+
+// Accepting a target change rechecks the locked target. A Loomplane Cloud
+// target takes its own branch: it is never changed through a sync, even
+// when nothing about it moved since the review.
+func TestSyncTargetCheckRefusesPlatformTarget(t *testing.T) {
+	managed := Target{ID: "t", Runtime: "managed", Provider: "vercel", ConnectionID: "a", Region: "iad1", Revision: 2}
+	if err := checkSyncTarget(managed, 2, &managed); err != nil {
+		t.Fatalf("unchanged managed target: %v", err)
+	}
+	moved := managed
+	moved.ConnectionID = "b"
+	if err := checkSyncTarget(moved, 2, &managed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("moved managed target: %v", err)
+	}
+	platform := Target{ID: "p", Runtime: "platform", Provider: "platform", Region: "fra", Revision: 1}
+	if err := checkSyncTarget(platform, 1, &platform); !errors.Is(err, ErrPlatformOwned) {
+		t.Fatalf("platform target: %v", err)
+	}
+}

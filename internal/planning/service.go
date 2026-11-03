@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -146,6 +147,7 @@ type Service struct {
 	dialer            TargetDialer
 	features          map[string]bool
 	inputs            CatalogInputMap
+	platform          platformPlacer
 }
 
 // Deps are what a Service needs.
@@ -202,6 +204,10 @@ type Deps struct {
 	// CatalogInputs digest what kinds render from outside the manifest,
 	// by kind. The map may gain entries after NewService, during Register.
 	CatalogInputs CatalogInputMap
+	// Platform previews room on Loomplane Cloud for services planned onto
+	// its targets. Nil means this instance has no Loomplane Cloud, so a
+	// plan that names one of its targets is refused.
+	Platform platformPlacer
 }
 
 // NewService returns a Service.
@@ -223,7 +229,7 @@ func NewService(d Deps) *Service {
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
-		features: d.Features, inputs: d.CatalogInputs,
+		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform,
 	}
 }
 
@@ -826,10 +832,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		} else {
 			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
 		}
+		var platform map[string]*platformcloud.Ref
+		if poolErr == nil {
+			platform, poolErr = s.resolvePlatform(ctx, plan, resolutionManifest, assignment, needs.Held)
+		}
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, platform, needs.Held, intents)
 		}
 	}
 	for name, selection := range locationSelections {

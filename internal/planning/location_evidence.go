@@ -44,6 +44,12 @@ func (s *PgStore) LocationPolicy(ctx context.Context, org, cloud string) (*cloud
 // previews retain the same cumulative workload accounting as ordinary planning.
 func (s *PgStore) LocationCandidate(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, t cloudprofiles.Target, set manifest.Settings, request cloudinfra.PlacementRequest, cumulative cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
 	c := PlacementCandidate{TargetID: t.ID, LocationID: t.LocationID, OrgID: t.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Provider: t.Provider, Runtime: t.Runtime, TargetRevision: t.Revision, GrantRevision: a.GrantRevision, Granted: true}
+	if t.Runtime == platformRuntime {
+		// Location policy doesn't apply to Loomplane Cloud, which chooses
+		// its own hosts and has no connection to read evidence from.
+		c.Rejections = append(c.Rejections, LocationRuntimeUnsupported)
+		return c, nil
+	}
 	if t.LocationID != "" {
 		l, err := cloudprofiles.NewPgStore(s.db).PlacementLocation(ctx, plan.OrgID, plan.ProjectID, a.CloudID, t.LocationID)
 		if err != nil {
@@ -221,6 +227,11 @@ func (s *Service) selectLocation(ctx context.Context, plan *Plan, a *cloudprofil
 		}
 	}
 	for _, t := range a.Targets {
+		// Location policy doesn't apply to Loomplane Cloud targets; a
+		// service that names one is refused before evaluation.
+		if t.Runtime == platformRuntime {
+			continue
+		}
 		if set.CloudTarget != "" && t.Name != set.CloudTarget || len(set.CloudTags) > 0 && !carriesTags(t.Tags, set.CloudTags) || set.Target != "" && t.ConnectionID != set.Target || set.Provider != "" && t.Provider != set.Provider || set.Region != "" && t.Region != set.Region {
 			continue
 		}

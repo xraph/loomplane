@@ -165,7 +165,9 @@ func locationRejections(in LocationPlacementInput, c PlacementCandidate) []Locat
 	if len(p.Residency) > 0 {
 		add(c.LocationRevision > 0 && c.EvidenceRevision > 0 && c.ResidencySource == "operator-attested" && slices.ContainsFunc(p.Residency, func(v string) bool { return slices.Contains(c.Residency, v) }), LocationResidencyUnverified)
 	}
-	add(c.RuntimeQualified && (p.Runtime == "" || p.Runtime == c.Runtime), LocationRuntimeUnsupported)
+	// Loomplane Cloud chooses its own hosts, so location policy never
+	// places a workload there.
+	add(c.Runtime != platformRuntime && c.RuntimeQualified && (p.Runtime == "" || p.Runtime == c.Runtime), LocationRuntimeUnsupported)
 	add(p.Architecture == "" || p.Architecture == c.Architecture, LocationArchitectureUnverified)
 	if p.GPU != nil {
 		add(c.GPU != nil && c.GPU.Kind == p.GPU.Kind && c.GPU.Count >= p.GPU.Count, LocationGPUUnsupported)

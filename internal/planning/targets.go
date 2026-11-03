@@ -124,6 +124,10 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 
 func (p *planner) configureTarget(name, base string, prov *provider.Provider, set manifest.Settings, cfg *ServiceConfig) {
 	cfg.Placement = set.Placement
+	if prov.Cloud == platformRuntime {
+		p.configurePlatform(name, base, set, cfg)
+		return
+	}
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		c := p.targetConnection(name, base+".cloud_target", "target", prov.Cloud, placement.ConnectionID)
 		if c != nil {
@@ -331,5 +335,43 @@ func (p *planner) checkTargetPlacements() {
 				Message: fmt.Sprintf("%s and %s publish host port %d on the same server. Choose different ports.", name, other, cfg.Endpoint.HostPort)})
 		}
 		ports[key] = name
+	}
+}
+
+// configurePlatform configures a service on a Loomplane Cloud target. It
+// reads no connection: the platform runs and builds the service on hosts
+// it chooses, and the plan keeps only the previewed region and size.
+func (p *planner) configurePlatform(name, base string, set manifest.Settings, cfg *ServiceConfig) {
+	cfg.Target, cfg.TargetSettings, cfg.Endpoint = "", nil, set.Endpoint
+	if pin, ok := p.in.CloudPlacements[name]; !ok || pin.Platform == nil {
+		p.problem(Finding{Code: "platform-target-required", Subject: ServiceSubject, Name: name, Path: base + ".provider", Message: "Loomplane Cloud runs services only through its Cloud targets. Name one with cloud_target instead of provider."})
+		return
+	}
+	if set.Placement != nil {
+		p.problem(Finding{Code: "platform-location-unsupported", Subject: ServiceSubject, Name: name, Path: base + ".placement", Message: platformLocation})
+	}
+	if set.Target != "" {
+		p.problem(Finding{Code: "platform-target-connection", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: "Loomplane Cloud chooses its own hosts. Remove target for this service."})
+	}
+	b := set.Build
+	if b == nil {
+		b = &manifest.Build{}
+	}
+	if b.Builder != "" || b.Registry != "" {
+		p.problem(Finding{Code: "platform-builder", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "Loomplane Cloud builds the services it runs. Remove build.builder and build.registry for this service."})
+	}
+	cfg.BuildTarget = &BuildTarget{BuilderCloud: platformBuilder, Builder: platformBuilder, Image: b.Image}
+	if cfg.Catalog != nil || cfg.Component != nil || cfg.GPU != nil || (set.Size != nil && set.Size.GPU != nil) {
+		p.problem(Finding{Code: "platform-stateless-only", Subject: ServiceSubject, Name: name, Path: base, Message: "Loomplane Cloud runs stateless application services without catalog compositions or GPUs."})
+	}
+	if cfg.Image == "" && cfg.Ecosystem != "go" && b.Image == "" {
+		p.problem(Finding{Code: "dockerfile-required", Subject: ServiceSubject, Name: name, Path: base + ".build",
+			Message: "This source needs a Dockerfile for a remote container build. You can also choose a digest-pinned image."})
+	}
+	if cfg.Image == "" && b.Context != "" {
+		cfg.Context = b.Context
+	}
+	if cfg.Scale != nil && (cfg.Scale.Min != 1 || cfg.Scale.Max != 1) {
+		p.problem(Finding{Code: "platform-scale", Subject: ServiceSubject, Name: name, Path: base + ".scale", Message: "Loomplane Cloud runs one instance of each service. Use min: 1 and max: 1."})
 	}
 }
