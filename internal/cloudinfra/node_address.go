@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -20,6 +21,9 @@ import (
 	"github.com/xraph/loomplane/pkg/nodeproto"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+// errProxyPortsTaken is a check whose proxy couldn't start.
+var errProxyPortsTaken = errors.New("the node's proxy can't start")
 
 // ErrNoPublicAddress is an address check that no public address of the
 // node answered. The node runs without direct ingress.
@@ -57,26 +61,49 @@ type nodeNonceTarget struct {
 	Credential []byte
 }
 
-// cgnat is carrier-grade NAT space, 100.64.0.0/10. It isn't reachable from
-// outside the carrier, and netip doesn't count it as private.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+// notPublic are ranges netip counts as global unicast that can't be a
+// node's public address: this network, CGNAT, IETF protocol assignments,
+// benchmarking, the reserved 240/4, NAT64, 6to4 and IPv4-compatible IPv6.
+var notPublic = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("::/96"),
+}
+
+// publicAddress reports an address Loomplane may fetch from: public
+// unicast, outside every range in notPublic.
+func publicAddress(a netip.Addr) bool {
+	a = a.Unmap()
+	if a.Zone() != "" || !a.IsGlobalUnicast() || a.IsPrivate() {
+		return false
+	}
+	for _, p := range notPublic {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
+}
 
 // publicNodeAddresses keeps the candidates worth fetching from outside:
 // public unicast IP addresses, IPv4 first and then IPv6, each once, in the
 // order the node gave them. Private, loopback, link-local, CGNAT,
-// unspecified and multicast addresses, IPv6 unique local ones, and
-// anything that isn't an IP address are left out.
+// unspecified, multicast and reserved addresses, IPv6 unique local and
+// transition ones, and anything that isn't an IP address are left out.
 func publicNodeAddresses(candidates []string) []string {
 	var v4, v6 []string
 	for _, c := range candidates {
 		a, err := netip.ParseAddr(strings.TrimSpace(c))
-		if err != nil || a.Zone() != "" {
+		if err != nil || !publicAddress(a) {
 			continue
 		}
 		a = a.Unmap()
-		if !a.IsGlobalUnicast() || a.IsPrivate() || cgnat.Contains(a) {
-			continue
-		}
 		s := a.String()
 		if a.Is4() && !slices.Contains(v4, s) {
 			v4 = append(v4, s)
@@ -106,27 +133,50 @@ func nodeAddressURL(address, nonce string) string {
 	return "http://" + host + server.NodeAddressPath + nonce
 }
 
-// nodeAddressClient fetches nonces. It follows no redirect, uses no proxy
-// and keeps no connection.
-var nodeAddressClient = &http.Client{
-	Timeout:       nodeAddressTimeout,
-	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	Transport: &http.Transport{
-		Proxy:               nil,
-		DialContext:         (&net.Dialer{Timeout: nodeAddressTimeout}).DialContext,
-		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: nodeAddressTimeout,
-	},
+// newNodeAddressClient fetches nonces. It follows no redirect, uses no
+// proxy and keeps no connection. control, when set, checks each address
+// it dials.
+func newNodeAddressClient(control func(network, address string, c syscall.RawConn) error) *http.Client {
+	return &http.Client{
+		Timeout:       nodeAddressTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{
+			Proxy:               nil,
+			DialContext:         (&net.Dialer{Timeout: nodeAddressTimeout, Control: control}).DialContext,
+			DisableKeepAlives:   true,
+			TLSHandshakeTimeout: nodeAddressTimeout,
+		},
+	}
 }
 
-// fetchNodeNonce GETs url and returns at most maxNodeNonceBody bytes of a
-// 200 answer. Anything else, a redirect included, is an error.
+// dialPublicOnly refuses to dial anything publicAddress refuses, so the
+// fetch can't reach an address the candidate filter would have dropped.
+func dialPublicOnly(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	if a, parseErr := netip.ParseAddr(host); parseErr != nil || !publicAddress(a) {
+		return fmt.Errorf("refusing to fetch an address check from %s", host)
+	}
+	return nil
+}
+
+var nodeAddressClient = newNodeAddressClient(dialPublicOnly)
+
+// fetchNodeNonce GETs url from a public address and returns at most
+// maxNodeNonceBody bytes of a 200 answer. Anything else, a redirect
+// included, is an error.
 func fetchNodeNonce(ctx context.Context, url string) ([]byte, error) {
+	return fetchNodeNonceWith(ctx, nodeAddressClient, url)
+}
+
+func fetchNodeNonceWith(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := nodeAddressClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +246,14 @@ func (s *Service) checkNodeAddress(ctx context.Context, org, connectionID string
 			found = s.firstAnswering(ctx, addresses, nonce)
 			return ctx.Err()
 		})
+		if errors.Is(err, errProxyPortsTaken) {
+			// The admin reads why on the node; nothing else changes.
+			if d, ok := s.NodeIngress.(nodeIngressDetail); ok {
+				if detailErr := d.RecordIngressDetail(ctx, nodeID, ProxyPortsTakenDetail); detailErr != nil {
+					err = errors.Join(err, detailErr)
+				}
+			}
+		}
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -259,14 +317,78 @@ func (s *Service) nodeServer(ctx context.Context, conn *connections.Connection) 
 	return nil, fmt.Errorf("%w: no server of a Cloud runs on connection %s", ErrNotFound, conn.Name)
 }
 
+// nodeProxy is a server's proxy as an address check uses it: Caddy over
+// its loopback admin, or a fake admin in tests.
+type nodeProxy interface {
+	Ensure(ctx context.Context) (*server.IngressSnapshot, error)
+	Read(ctx context.Context) (*server.IngressSnapshot, error)
+	Apply(ctx context.Context, expected *server.IngressSnapshot, v server.IngressConfig) (*server.IngressSnapshot, error)
+}
+
+// clientProxy is the server's Caddy through the fenced ingress admin.
+type clientProxy struct {
+	c           *server.Client
+	org, server string
+}
+
+func (p clientProxy) Ensure(ctx context.Context) (*server.IngressSnapshot, error) {
+	return server.EnsureIngress(ctx, p.c, p.org, p.server)
+}
+
+func (p clientProxy) Read(ctx context.Context) (*server.IngressSnapshot, error) {
+	return server.ReadIngress(ctx, p.c, p.org, p.server)
+}
+
+func (p clientProxy) Apply(ctx context.Context, expected *server.IngressSnapshot, v server.IngressConfig) (*server.IngressSnapshot, error) {
+	return server.ApplyIngress(ctx, p.c, expected, v)
+}
+
+// proxyState is what a server's proxy runs, held against the config
+// Loomplane stored for it.
+type proxyState int
+
+const (
+	// proxyAsStored runs the stored config.
+	proxyAsStored proxyState = iota
+	// proxyWithAddressCheck runs the stored config plus address check
+	// routes, from a check in flight or one that couldn't take its route
+	// off again.
+	proxyWithAddressCheck
+	// proxyChanged runs something else, such as a route change in flight.
+	proxyChanged
+)
+
+// proxyAgainst says what live is next to stored.
+func proxyAgainst(stored, live []byte) proxyState {
+	if server.SameIngressConfig(stored, live) {
+		return proxyAsStored
+	}
+	if stripped, changed := server.WithoutAddressChecks(live); changed && server.SameIngressConfig(stored, stripped) {
+		return proxyWithAddressCheck
+	}
+	return proxyChanged
+}
+
+// ingressExpected is the snapshot a route change applies its config over.
+// A proxy that runs previous's config, or that config plus an address
+// check left behind, is taken as it is now: the change's complete config
+// replaces it, check and all, so a lost check never blocks the change.
+// Anything else is left to the change's own compare-and-swap.
+func ingressExpected(previous, actual *server.IngressSnapshot) *server.IngressSnapshot {
+	if previous == nil || actual == nil || previous.ContainerID != actual.ContainerID || proxyAgainst(previous.Config, actual.Config) == proxyChanged {
+		return previous
+	}
+	return actual
+}
+
+// ProxyPortsTakenDetail is what a node shows when its proxy can't start
+// because another program holds port 80 or 443.
+const ProxyPortsTakenDetail = "ports 80/443 on this machine are taken by another program, so Loomplane's proxy can't start; free them for direct ingress"
+
 // serveNodeNonceThroughIngress serves nonce through the server's proxy
 // while check runs, then takes it away. It holds the server's ingress
 // lock, the one route changes take, for all of it, and starts a new fence
-// generation like any ingress effect. The live config must be the one
-// Loomplane last stored for the server, so a change in flight is never
-// overwritten: the check adds its route to that config, and removing it
-// puts that config back. The removal runs on a fresh context, so a caller
-// that has gone still leaves the proxy as it was.
+// generation like any ingress effect.
 func (s *Service) serveNodeNonceThroughIngress(ctx context.Context, t nodeNonceTarget, nonce string, check func(context.Context) error) error {
 	st, err := s.domainStore()
 	if err != nil {
@@ -292,69 +414,88 @@ func (s *Service) serveNodeNonceThroughIngress(ctx context.Context, t nodeNonceT
 		if fenceErr := c.ArmEffectFence(ctx, fence); fenceErr != nil {
 			return fenceErr
 		}
-		// A server without routes runs the initial config, which is what a
-		// route's first apply expects to find.
-		base := state.Config
-		var live *server.IngressSnapshot
-		if state.Current == nil {
-			base = server.IngressConfig{OrgID: t.OrgID, ServerID: t.ServerID, Version: "initial", Routes: []server.IngressRoute{}}
-			live, err = server.EnsureIngress(ctx, c, t.OrgID, t.ServerID)
-		} else {
-			live, err = server.ReadIngress(ctx, c, t.OrgID, t.ServerID)
+		save := func(ctx context.Context, state *IngressState) error {
+			return st.SaveServerIngress(ctx, t.OrgID, t.ServerID, state)
 		}
-		if err != nil {
-			return err
-		}
-		stored, err := base.JSON()
-		if err != nil {
-			return err
-		}
-		if !server.SameIngressConfig(stored, live.Config) {
-			return fmt.Errorf("%w: the server's proxy isn't running the config Loomplane last applied; finish its route changes first", ErrConflict)
-		}
-		withCheck := base
-		withCheck.AddressCheck = nonce
-		checking, err := withCheck.JSON()
-		if err != nil {
-			return err
-		}
-		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodeNonceRestoreTimeout)
-		defer cancel()
-		// Whatever the apply did, even an outcome it never heard, the
-		// check comes off before the lock goes.
-		defer func() {
-			if restoreErr := s.restoreNodeNonce(restoreCtx, st, c, t, state, base, stored, checking); restoreErr != nil {
-				s.warn("Couldn't take a node's address check off its proxy; the next route change replaces it", restoreErr)
-			}
-		}()
-		if _, err = server.ApplyIngress(ctx, c, live, withCheck); err != nil {
-			return err
-		}
-		return check(ctx)
+		return s.checkThroughProxy(ctx, clientProxy{c: c, org: t.OrgID, server: t.ServerID}, t, state, nonce, check, save)
 	})
 }
 
-// restoreNodeNonce puts the stored config back where the check left it.
-// A proxy found running anything but the stored config or the check is
-// left alone. When the server has a stored config, the snapshot it now
-// runs is saved with it, so the next route change applies on top of it.
-func (s *Service) restoreNodeNonce(ctx context.Context, st DomainStore, c *server.Client, t nodeNonceTarget, state *IngressState, base server.IngressConfig, stored, checking []byte) error {
-	current, err := server.ReadIngress(ctx, c, t.OrgID, t.ServerID)
+// checkThroughProxy runs check while p serves nonce. The proxy must run
+// the config Loomplane last stored for the server, so a change in flight
+// is never overwritten; an address check an earlier run left on it comes
+// off first. The check's route is added to the stored config by
+// compare-and-swap, and taken off again on a fresh context however the
+// apply or the check ended, an apply whose outcome never came back
+// included. When the server has a stored config, the snapshot the proxy
+// ends on is saved with it.
+func (s *Service) checkThroughProxy(ctx context.Context, p nodeProxy, t nodeNonceTarget, state *IngressState, nonce string, check func(context.Context) error, save func(context.Context, *IngressState) error) error {
+	// A server without routes runs the initial config, which is what a
+	// route's first apply expects to find.
+	base := state.Config
+	var live *server.IngressSnapshot
+	var err error
+	if state.Current == nil {
+		base = server.IngressConfig{OrgID: t.OrgID, ServerID: t.ServerID, Version: "initial", Routes: []server.IngressRoute{}}
+		live, err = p.Ensure(ctx)
+	} else {
+		live, err = p.Read(ctx)
+	}
+	if errors.Is(err, server.ErrIngressPortsTaken) {
+		return fmt.Errorf("%w: %w", errProxyPortsTaken, err)
+	}
 	if err != nil {
 		return err
 	}
-	switch {
-	case server.SameIngressConfig(stored, current.Config):
-	case server.SameIngressConfig(checking, current.Config):
-		if current, err = server.ApplyIngress(ctx, c, current, base); err != nil {
+	stored, err := base.JSON()
+	if err != nil {
+		return err
+	}
+	switch proxyAgainst(stored, live.Config) {
+	case proxyAsStored:
+	case proxyWithAddressCheck:
+		// An earlier check couldn't take its route off. It comes off now.
+		if live, err = p.Apply(ctx, live, base); err != nil {
 			return err
 		}
 	default:
-		return fmt.Errorf("%w: the proxy of server %s changed during an address check", ErrConflict, t.ServerID)
+		return fmt.Errorf("%w: the server's proxy isn't running the config Loomplane last applied; finish its route changes first", ErrConflict)
+	}
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodeNonceRestoreTimeout)
+	defer cancel()
+	defer func() {
+		if restoreErr := s.restoreProxy(restoreCtx, p, state, base, stored, save); restoreErr != nil {
+			s.warn("Couldn't take a node's address check off its proxy; the next address check or route change on that server takes it off", restoreErr)
+		}
+	}()
+	withCheck := base
+	withCheck.AddressCheck = nonce
+	if _, err = p.Apply(ctx, live, withCheck); err != nil {
+		return err
+	}
+	return check(ctx)
+}
+
+// restoreProxy puts the stored config back where an address check left
+// it. A proxy running anything but the stored config, with or without
+// address checks, is left alone.
+func (s *Service) restoreProxy(ctx context.Context, p nodeProxy, state *IngressState, base server.IngressConfig, stored []byte, save func(context.Context, *IngressState) error) error {
+	current, err := p.Read(ctx)
+	if err != nil {
+		return err
+	}
+	switch proxyAgainst(stored, current.Config) {
+	case proxyAsStored:
+	case proxyWithAddressCheck:
+		if current, err = p.Apply(ctx, current, base); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%w: the proxy changed during an address check", ErrConflict)
 	}
 	if state.Current == nil || (state.Current.ETag == current.ETag && state.Current.ContainerID == current.ContainerID) {
 		return nil
 	}
 	state.Current = current
-	return st.SaveServerIngress(ctx, t.OrgID, t.ServerID, state)
+	return save(ctx, state)
 }

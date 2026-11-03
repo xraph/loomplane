@@ -129,8 +129,13 @@ type Store interface {
 	// SetIngress writes in on a node that is not revoked, and returns the
 	// stored node.
 	SetIngress(ctx context.Context, id string, in IngressSetting) (*Node, error)
-	// RecordIngressApplied writes the mode the node says it now runs.
-	RecordIngressApplied(ctx context.Context, id, mode string) error
+	// RecordIngressApplied writes the mode the node says it now runs, only
+	// while epoch is still the node's session epoch, so an answer from a
+	// superseded session is dropped. No match is ErrNotFound.
+	RecordIngressApplied(ctx context.Context, id, mode string, epoch int64) error
+	// MarkIngressSent records that the stored mode was sent to the node at
+	// at, on a node that is not revoked.
+	MarkIngressSent(ctx context.Context, id string, at time.Time) error
 	// SetIngressDetail writes only the detail an admin reads on a node that
 	// is not revoked, such as an address check's finding.
 	SetIngressDetail(ctx context.Context, id, detail string) error

@@ -192,14 +192,25 @@ func (f *fakeStore) SetIngress(_ context.Context, id string, in IngressSetting) 
 	return clone(n), nil
 }
 
-func (f *fakeStore) RecordIngressApplied(_ context.Context, id, mode string) error {
+func (f *fakeStore) RecordIngressApplied(_ context.Context, id, mode string, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil || f.epochs[id] != epoch {
+		return ErrNotFound
+	}
+	n.IngressApplied = mode
+	return nil
+}
+
+func (f *fakeStore) MarkIngressSent(_ context.Context, id string, at time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n, ok := f.nodes[id]
 	if !ok || n.RevokedAt != nil {
 		return ErrNotFound
 	}
-	n.IngressApplied = mode
+	n.IngressSentAt = &at
 	return nil
 }
 

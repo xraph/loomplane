@@ -388,6 +388,10 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 			mode = nodeproto.IngressNone
 		}
 		s.deliver(nodeproto.SetIngress{Mode: mode})
+		// Sent now, so the node gets its grace before a mismatch shows.
+		if err = h.store.MarkIngressSent(ctx, s.nodeID, h.now()); err != nil && !errors.Is(err, ErrNotFound) {
+			h.log.Warn("nodes: recording that a node was sent its ingress mode", "node", s.nodeID, "error", err)
+		}
 	}
 	if !inventoryEqual(old.Inventory, inv) {
 		h.fireInventory(n, old.Inventory, inv)
@@ -408,7 +412,9 @@ func (h *Hub) ingressApplied(s *session, mode string) {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	if err := h.store.RecordIngressApplied(ctx, s.nodeID, mode); err != nil && !errors.Is(err, ErrNotFound) {
+	// An answer from a superseded session doesn't count: its node may
+	// have been sent a newer mode since.
+	if err := h.store.RecordIngressApplied(ctx, s.nodeID, mode, s.epoch); err != nil && !errors.Is(err, ErrNotFound) {
 		h.log.Warn("nodes: recording the ingress mode a node applied", "node", s.nodeID, "error", err)
 	}
 }

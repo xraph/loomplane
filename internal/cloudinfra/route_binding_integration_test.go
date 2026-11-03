@@ -235,6 +235,22 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); resolveErr != nil || b.Address != "203.0.113.7" {
 		t.Fatalf("confirmed node: %+v %v", b, resolveErr)
 	}
+	// A second connection to the confirmed node, whose advertise_host was
+	// set by hand to an address that never answered, routes nowhere.
+	if err := connections.NewPgStore(pg).CreateConnection(ctx, &connections.Connection{ID: "runtime_2", OrgID: "org", Cloud: "server", Name: "Runtime 2", Method: connections.MethodNode, Status: connections.StatusReady,
+		Details: map[string]string{"node_id": "node_1", "identity_generation": "1", "docker_id": "daemon", "advertise_host": "198.51.100.9"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE loomplane_bindings SET connection_id='runtime_2' WHERE id='b_gw'`)
+	exec(`UPDATE loomplane_cloud_servers SET runtime_connection_id='runtime_2' WHERE id='srv_1'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) {
+		t.Fatalf("an unconfirmed advertise_host on a confirmed node resolved: %+v %v", b, resolveErr)
+	}
+	// Once it names the confirmed address, it routes there.
+	exec(`UPDATE loomplane_cloud_connections SET details=details||'{"advertise_host":"203.0.113.7"}' WHERE org_id='org' AND id='runtime_2'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); resolveErr != nil || b.Address != "203.0.113.7" || b.ConnectionID != "runtime_2" {
+		t.Fatalf("second connection on the confirmed address: %+v %v", b, resolveErr)
+	}
 	// A revoked node routes nowhere, confirmed or not.
 	exec(`UPDATE loomplane_nodes SET status='revoked',revoked_at=now() WHERE id='node_1'`)
 	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) {

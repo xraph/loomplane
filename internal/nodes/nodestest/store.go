@@ -196,14 +196,25 @@ func (s *Store) SetIngress(_ context.Context, id string, in nodes.IngressSetting
 	return clone(n), nil
 }
 
-func (s *Store) RecordIngressApplied(_ context.Context, id, mode string) error {
+func (s *Store) RecordIngressApplied(_ context.Context, id, mode string, epoch int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil || s.epochs[id] != epoch {
+		return nodes.ErrNotFound
+	}
+	n.IngressApplied = mode
+	return nil
+}
+
+func (s *Store) MarkIngressSent(_ context.Context, id string, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n, ok := s.nodes[id]
 	if !ok || n.RevokedAt != nil {
 		return nodes.ErrNotFound
 	}
-	n.IngressApplied = mode
+	n.IngressSentAt = &at
 	return nil
 }
 

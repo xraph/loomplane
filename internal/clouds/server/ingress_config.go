@@ -113,6 +113,89 @@ const NodeAddressPath = "/.well-known/loomplane-node/"
 // addressCheckNonce is the shape of a nonce: 16 to 32 random bytes in hex.
 var addressCheckNonce = regexp.MustCompile(`^[0-9a-f]{32,64}$`)
 
+// WithoutAddressChecks is config with every route that serves
+// NodeAddressPath taken out, and a server those routes leave empty
+// dropped. changed says whether there was any. Only an address check puts
+// a route on that path, so what is left is the config the check was added
+// to.
+func WithoutAddressChecks(config []byte) (out []byte, changed bool) {
+	var doc map[string]any
+	if json.Unmarshal(config, &doc) != nil {
+		return config, false
+	}
+	servers := object(object(object(doc, "apps"), "http"), "servers")
+	for name, raw := range servers {
+		srv, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		routes, ok := srv["routes"].([]any)
+		if !ok {
+			continue
+		}
+		kept := make([]any, 0, len(routes))
+		for _, r := range routes {
+			if !isAddressCheckRoute(r) {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) == len(routes) {
+			continue
+		}
+		changed = true
+		if len(kept) == 0 {
+			delete(servers, name)
+		} else {
+			srv["routes"] = kept
+		}
+	}
+	if !changed {
+		return config, false
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return config, false
+	}
+	return out, true
+}
+
+// object is the JSON object at key of m, or nil.
+func object(m map[string]any, key string) map[string]any {
+	if v, ok := m[key].(map[string]any); ok {
+		return v
+	}
+	return nil
+}
+
+// isAddressCheckRoute reports a route that matches a path under
+// NodeAddressPath.
+func isAddressCheckRoute(r any) bool {
+	route, ok := r.(map[string]any)
+	if !ok {
+		return false
+	}
+	matches, ok := route["match"].([]any)
+	if !ok {
+		return false
+	}
+	for _, m := range matches {
+		match, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		paths, ok := match["path"].([]any)
+		if !ok {
+			continue
+		}
+		for _, p := range paths {
+			if path, ok := p.(string); ok && strings.HasPrefix(path, NodeAddressPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // addressCheckRoute answers GET NodeAddressPath<nonce> on any host with the
 // nonce.
 func addressCheckRoute(nonce string) map[string]any {

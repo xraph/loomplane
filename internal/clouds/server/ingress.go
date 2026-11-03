@@ -23,6 +23,16 @@ import (
 
 const ingressOwner = "loomplane.ingress"
 
+// ErrIngressPortsTaken is a proxy Docker couldn't start because another
+// program holds port 80 or 443 on the host.
+var ErrIngressPortsTaken = errors.New("ports 80/443 on the host are taken by another program")
+
+// portsTaken reports Docker refusing to publish a port that is in use.
+func portsTaken(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "port is already allocated") || strings.Contains(msg, "address already in use")
+}
+
 type IngressSnapshot struct {
 	ContainerID string          `json:"container_id"`
 	ETag        string          `json:"etag"`
@@ -114,6 +124,9 @@ func EnsureIngress(ctx context.Context, c *Client, org, server string) (*Ingress
 			return nil, checkErr
 		}
 		if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+container.ID+"/start", nil, nil); checkErr != nil {
+			if portsTaken(checkErr) {
+				return nil, fmt.Errorf("%w: %w", ErrIngressPortsTaken, checkErr)
+			}
 			return nil, checkErr
 		}
 	}

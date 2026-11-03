@@ -291,7 +291,8 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 			state.Current = snapshot
 			state.Config = server.IngressConfig{OrgID: route.OrgID, ServerID: route.Binding.ServerID, Version: "initial", Routes: []server.IngressRoute{}}
 			initial, configErr := state.Config.JSON()
-			if configErr != nil || !server.SameIngressConfig(initial, snapshot.Config) {
+			// An address check left behind is replaced by this change's config.
+			if configErr != nil || proxyAgainst(initial, snapshot.Config) == proxyChanged {
 				return ErrConflict
 			}
 		}
@@ -342,7 +343,7 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, op.PreviousConfig, *op.DesiredConfig)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(op.PreviousConfig, actual), *op.DesiredConfig)
 		if err != nil {
 			return err
 		}

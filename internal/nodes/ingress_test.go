@@ -98,7 +98,7 @@ func TestSetIngressMismatchShowsAfter30Seconds(t *testing.T) {
 	if list, err := r.svc.List(context.Background(), admin); err != nil || len(list) != 1 || list[0].IngressDetail != "the node didn't apply ingress mode direct" {
 		t.Fatalf("list %+v %v", list, err)
 	}
-	if err := r.store.RecordIngressApplied(context.Background(), id, nodeproto.IngressDirect); err != nil {
+	if err := r.store.RecordIngressApplied(context.Background(), id, nodeproto.IngressDirect, 0); err != nil {
 		t.Fatal(err)
 	}
 	if d := detail(); d != "" {
@@ -134,5 +134,52 @@ func TestRecordIngressDetailKeepsTheAddress(t *testing.T) {
 	}
 	if err := r.svc.RecordIngressDetail(context.Background(), "node_missing", detail); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing node: %v", err)
+	}
+}
+
+func TestReconnectRestampsTheIngressSend(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointDocker)
+	// The mode was set a minute ago, while the node was away.
+	r.svc.clock = func() time.Time { return time.Now().Add(-time.Minute) }
+	if err := r.svc.SetIngress(context.Background(), "node_1", nodeproto.IngressDirect, "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.clock = nil
+	if d := r.node("node_1"); d.IngressSentAt == nil {
+		t.Fatal("no send time")
+	}
+	n := r.connect("node_1", priv, "")
+	n.next() // hello
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux"}})
+	n.next() // narrow
+	if m := n.next(); !reflect.DeepEqual(m, nodeproto.SetIngress{Mode: nodeproto.IngressDirect}) {
+		t.Fatalf("message %#v", m)
+	}
+	// Until the node answers, the resend's grace holds, so the reconnect
+	// doesn't flash the mismatch.
+	waitFor(t, "the resend's time", func() bool { return time.Since(*r.node("node_1").IngressSentAt) < 30*time.Second })
+	got, err := r.svc.Get(context.Background(), admin, "node_1")
+	if err != nil || got.IngressDetail != "" {
+		t.Fatalf("detail %q %v", got.IngressDetail, err)
+	}
+}
+
+func TestStaleSessionAnswerIsDropped(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointDocker)
+	n := r.connect("node_1", priv, "")
+	n.next() // hello
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux"}})
+	n.next() // narrow
+	n.next() // the stored ingress mode
+	// Another replica claims the node, so this session's epoch is stale.
+	if _, err := r.store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "b", ConnectedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	n.send(nodeproto.IngressApplied{Mode: nodeproto.IngressDirect})
+	time.Sleep(100 * time.Millisecond)
+	if got := r.node("node_1").IngressApplied; got != "" {
+		t.Fatalf("a superseded session's answer was recorded: %q", got)
 	}
 }

@@ -699,8 +699,16 @@ func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
 	if events() != before+1 {
 		t.Fatal("a new address appended no node.updated")
 	}
-	// The node's answer is bookkeeping: stored, and no event.
-	if err = s.RecordIngressApplied(ctx, "node_1", "direct"); err != nil {
+	// The node's answer is bookkeeping: stored, and no event. An answer
+	// from a superseded session is dropped.
+	epoch, err := s.ClaimSession(ctx, Session{NodeID: "node_1", Replica: "r1", ConnectedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "relay", epoch-1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale answer: %v", err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "direct", epoch); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := s.GetByID(ctx, "node_1"); n.IngressApplied != "direct" || events() != before+1 {
@@ -717,6 +725,15 @@ func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
 	}
 	if n, _ := s.GetByID(ctx, "node_1"); n.IngressDetail != "address changed to 198.51.100.9 but it doesn't answer on port 80" || n.IngressMode != "none" || !n.IngressSentAt.Equal(at) || events() != count {
 		t.Fatalf("detail %+v, %d events", n, events())
+	}
+	// The first-inventory resend restamps the send time alone, with no event.
+	count = events()
+	resent := at.Add(time.Minute)
+	if err = s.MarkIngressSent(ctx, "node_1", resent); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.GetByID(ctx, "node_1"); !n.IngressSentAt.Equal(resent) || events() != count {
+		t.Fatalf("resent %+v, %d events", n, events())
 	}
 	// A settings change of the mode sends it again and drops the old detail.
 	mode := "direct"
@@ -739,7 +756,10 @@ func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
 	if _, err = s.SetIngress(ctx, "node_1", IngressSetting{Mode: "none", SentAt: at}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked set: %v", err)
 	}
-	if err = s.RecordIngressApplied(ctx, "node_1", "none"); !errors.Is(err, ErrNotFound) {
+	if err = s.MarkIngressSent(ctx, "node_1", at); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked sent: %v", err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "none", epoch); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked applied: %v", err)
 	}
 	if err = s.SetIngressDetail(ctx, "node_1", "x"); !errors.Is(err, ErrNotFound) {

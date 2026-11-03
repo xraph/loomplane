@@ -274,7 +274,7 @@ func (s *Service) prepareSourceIngress(ctx context.Context, st DomainStore, op *
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 		if err != nil {
 			return err
 		}
@@ -451,7 +451,7 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 			return readErr
 		}
 		if !server.SameIngressConfig(raw, actual.Config) {
-			actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+			actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 			if err != nil {
 				return err
 			}

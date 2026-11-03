@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -50,9 +51,10 @@ type ingressCall struct{ node, mode, address string }
 
 // fakeNodeIngress is the nodes service as ConfirmNodeAddress sees it.
 type fakeNodeIngress struct {
-	mu    sync.Mutex
-	calls []ingressCall
-	err   error
+	mu      sync.Mutex
+	calls   []ingressCall
+	details []string
+	err     error
 }
 
 func (f *fakeNodeIngress) SetIngress(_ context.Context, nodeID, mode, address string) error {
@@ -60,6 +62,13 @@ func (f *fakeNodeIngress) SetIngress(_ context.Context, nodeID, mode, address st
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, ingressCall{nodeID, mode, address})
 	return f.err
+}
+
+func (f *fakeNodeIngress) RecordIngressDetail(_ context.Context, nodeID, detail string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.details = append(f.details, nodeID+": "+detail)
+	return nil
 }
 
 func (f *fakeNodeIngress) list() []ingressCall {
@@ -189,7 +198,8 @@ func TestConfirmPicksAnsweringAddress(t *testing.T) {
 func TestConfirmSkipsPrivateRanges(t *testing.T) {
 	r := newAddressRig(t)
 	candidates := []string{"10.0.0.5", "192.168.1.2", "100.64.0.1", "172.16.4.4", "127.0.0.1", "169.254.169.254", "0.0.0.0", "224.0.0.1", "255.255.255.255",
-		"fd00::1", "fe80::1", "::1", "::", "ff02::1", "::ffff:10.0.0.9", "web.example.com", "2001:db8::5", " 203.0.113.7 ", "203.0.113.7"}
+		"0.1.2.3", "192.0.0.8", "198.18.0.1", "198.19.255.1", "240.0.0.1", "64:ff9b::a00:5", "64:ff9b:1::1", "2002:a00:5::1", "::10.0.0.5",
+		"fd00::1", "fe80::1", "::1", "::", "ff02::1", "::ffff:10.0.0.9", "fe80::1%eth0", "web.example.com", "2001:db8::5", " 203.0.113.7 ", "203.0.113.7"}
 	_, err := r.svc.ConfirmNodeAddress(t.Context(), "org", r.conn.ID, candidates)
 	if !errors.Is(err, ErrNoPublicAddress) {
 		t.Fatalf("err %v", err)
@@ -285,13 +295,18 @@ func TestConfirmFetchFollowsNoRedirectAndBoundsTheBody(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	if _, err := fetchNodeNonce(t.Context(), srv.URL+"/moved"); err == nil {
+	// The test server is on loopback, which the real client refuses.
+	if _, err := fetchNodeNonce(t.Context(), srv.URL+"/answer"); err == nil || !strings.Contains(err.Error(), "refusing to fetch") {
+		t.Fatalf("loopback fetched: %v", err)
+	}
+	client := newNodeAddressClient(nil)
+	if _, err := fetchNodeNonceWith(t.Context(), client, srv.URL+"/moved"); err == nil {
 		t.Fatal("a redirect was followed")
 	}
-	if body, err := fetchNodeNonce(t.Context(), srv.URL+"/answer"); err != nil || string(body) != "nonce" {
+	if body, err := fetchNodeNonceWith(t.Context(), client, srv.URL+"/answer"); err != nil || string(body) != "nonce" {
 		t.Fatalf("body %q %v", body, err)
 	}
-	if body, err := fetchNodeNonce(t.Context(), srv.URL+"/big"); err != nil || len(body) > maxNodeNonceBody {
+	if body, err := fetchNodeNonceWith(t.Context(), client, srv.URL+"/big"); err != nil || len(body) > maxNodeNonceBody {
 		t.Fatalf("read %d bytes, %v", len(body), err)
 	}
 }
@@ -361,5 +376,16 @@ func TestConfirmFailureNeverFailsTheAdoption(t *testing.T) {
 	}
 	if len(r.ingress.list()) != 0 || len(warned) != 1 {
 		t.Fatalf("ingress %+v warned %v", r.ingress.list(), warned)
+	}
+}
+
+func TestConfirmSaysWhenPortsAreTaken(t *testing.T) {
+	r := newAddressRig(t)
+	r.proxy.err = fmt.Errorf("%w: %w", errProxyPortsTaken, server.ErrIngressPortsTaken)
+	if _, err := r.svc.ConfirmNodeAddress(t.Context(), "org", r.conn.ID, []string{"203.0.113.7"}); !errors.Is(err, errProxyPortsTaken) {
+		t.Fatalf("err %v", err)
+	}
+	if len(r.ingress.calls) != 0 || len(r.ingress.details) != 1 || r.ingress.details[0] != "node_1: "+ProxyPortsTakenDetail {
+		t.Fatalf("calls %+v details %v", r.ingress.calls, r.ingress.details)
 	}
 }

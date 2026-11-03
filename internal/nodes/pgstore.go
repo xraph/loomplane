@@ -234,10 +234,18 @@ func (s *PgStore) SetIngress(ctx context.Context, id string, in IngressSetting) 
 		id, in.Mode, in.PublicAddress, in.ConfirmedAt, in.Detail, in.SentAt))
 }
 
-// RecordIngressApplied writes the mode a node says it runs. The column is
-// out of the event payload, so the answer appends no event.
-func (s *PgStore) RecordIngressApplied(ctx context.Context, id, mode string) error {
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET ingress_applied=$2 WHERE id=$1 AND revoked_at IS NULL`, id, mode)
+// RecordIngressApplied writes the mode a node says it runs, while epoch is
+// its session epoch. The column is out of the event payload, so the answer
+// appends no event.
+func (s *PgStore) RecordIngressApplied(ctx context.Context, id, mode string, epoch int64) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET ingress_applied=$2 WHERE id=$1 AND revoked_at IS NULL AND session_epoch=$3`, id, mode, epoch)
+	return affected(res, err)
+}
+
+// MarkIngressSent writes when the stored mode last went to the node. The
+// column is out of the event payload.
+func (s *PgStore) MarkIngressSent(ctx context.Context, id string, at time.Time) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_nodes SET ingress_sent_at=$2 WHERE id=$1 AND revoked_at IS NULL`, id, at)
 	return affected(res, err)
 }
 

@@ -211,10 +211,13 @@ const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_arr
 
 // routeServerAddress is where a server binding's route sends traffic: the
 // connection's advertise_host, else its SSH host. A node's connection has
-// no SSH host, and its advertise_host counts only once the node's public
-// address answered an address check; until then it is empty.
+// no SSH host, and its advertise_host counts only while it is the address
+// the node confirmed by an address check; until then it is empty. So a
+// connection whose advertise_host someone set by hand never routes to an
+// address that didn't answer.
 const routeServerAddress = `CASE WHEN coalesce(c.details->>'node_id','')='' THEN coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
- ELSE coalesce((SELECT c.details->>'advertise_host' FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL AND n.public_address_confirmed_at IS NOT NULL),'') END`
+ ELSE coalesce((SELECT n.public_address FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL
+ AND n.public_address_confirmed_at IS NOT NULL AND n.public_address<>'' AND n.public_address=c.details->>'advertise_host'),'') END`
 
 var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),` + routeServerAddress + `,coalesce(c.details->>'node_id','')
  FROM loomplane_bindings b
@@ -238,7 +241,7 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
 	if node != "" && out.Address == "" {
-		return out, fmt.Errorf("%w: the node this service runs on has no confirmed public address yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+		return out, fmt.Errorf("%w: the node this service runs on has no confirmed public address on this connection yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
 	}
 	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)

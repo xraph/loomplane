@@ -300,3 +300,43 @@ func TestIngressConfigServesAnAddressCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestWithoutAddressChecksTakesOnlyTheChecks(t *testing.T) {
+	nonce := "0123456789abcdef0123456789abcdef"
+	r := IngressRoute{ID: "r1", Hostname: "app.example.com", Backend: testBackend(), ChallengeAddress: "203.0.113.9"}
+	r.Backend.OrgID = "org"
+	for _, routes := range [][]IngressRoute{{}, {r}} {
+		plain := IngressConfig{OrgID: "org", ServerID: "srv", Version: "v1", Routes: routes}
+		want, err := plain.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, changed := WithoutAddressChecks(want); changed || !bytes.Equal(out, want) {
+			t.Fatalf("a config without checks changed: %s", out)
+		}
+		plain.AddressCheck = nonce
+		checking, err := plain.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, changed := WithoutAddressChecks(checking)
+		if !changed || !SameIngressConfig(want, out) {
+			t.Fatalf("%d routes: %s", len(routes), out)
+		}
+	}
+	if out, changed := WithoutAddressChecks([]byte("{")); changed || string(out) != "{" {
+		t.Fatalf("garbage: %s", out)
+	}
+}
+
+func TestIngressPortsTakenIsNamed(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"docker returned HTTP 500: driver failed programming external connectivity on endpoint lp-ingress: Bind for 0.0.0.0:80 failed: port is already allocated": true,
+		"docker returned HTTP 500: listen tcp4 0.0.0.0:443: bind: address already in use":                                                                         true,
+		"docker returned HTTP 500: no space left on device":                                                                                                       false,
+	} {
+		if got := portsTaken(errors.New(msg)); got != want {
+			t.Errorf("%q: %v", msg, got)
+		}
+	}
+}
