@@ -186,3 +186,36 @@ func TestCodecRefusesNonAgentPrincipals(t *testing.T) {
 		}
 	}
 }
+
+// A person who decides a checkpoint is encoded as a Decider, so cortex can
+// record who decided. It's never a run's principal: those bytes decode as
+// revoked, and nothing else a person could be is encoded.
+func TestCodecEncodesThePersonWhoDecides(t *testing.T) {
+	c, _, _, _ := newCodec(t)
+	data, err := c.EncodePrincipal(t.Context(), agentauthz.Decider{Person: security.Principal{UserID: ada, OrgID: orgA}})
+	if err != nil {
+		t.Fatalf("encode a decider: %v", err)
+	}
+	if !strings.Contains(string(data), ada) || !strings.Contains(string(data), "decider") {
+		t.Fatalf("decider bytes %s", data)
+	}
+	if _, err = c.DecodePrincipal(t.Context(), data); !errors.Is(err, cortex.ErrPrincipalRevoked) {
+		t.Fatalf("a decider decoded as a run's principal: %v", err)
+	}
+	agent := as(orgA, ada)
+	for name, d := range map[string]agentauthz.Decider{
+		"nobody":              {},
+		"no organization":     {Person: security.Principal{UserID: ada}},
+		"the agent":           {Person: agent},
+		"the automation":      {Person: security.SystemPrincipal(orgA)},
+		"someone on behalf":   {Person: security.Principal{UserID: ada, OrgID: orgA, OnBehalfOf: &security.Principal{UserID: "usr_bob", OrgID: orgA}}},
+		"an agent subject ID": {Person: security.Principal{UserID: security.AgentSubject(orgA), OrgID: orgA}},
+	} {
+		if _, encErr := c.EncodePrincipal(t.Context(), d); encErr == nil {
+			t.Errorf("encoded a decider that is %s", name)
+		}
+	}
+	if _, err = c.EncodePrincipal(t.Context(), &agentauthz.Decider{Person: security.Principal{UserID: ada, OrgID: orgA}}); err == nil {
+		t.Error("encoded a pointer to a decider")
+	}
+}

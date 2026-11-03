@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/xraph/cortex"
 
@@ -29,9 +30,28 @@ type Codec struct {
 
 var _ cortex.PrincipalCodec = (*Codec)(nil)
 
-// EncodePrincipal writes the agent principal. Anything else is refused:
-// no run of the agent starts as anyone else.
+// Decider is a person deciding a checkpoint of an agent run, as
+// agentrequests puts them on the context it decides with: cortex encodes
+// the decider through the codec to record who decided. It's never a run's
+// principal: EncodePrincipal takes it, and DecodePrincipal refuses what it
+// wrote for good, so no run continues as a decider.
+type Decider struct {
+	Person security.Principal
+}
+
+// deciderRecord is what a Decider is stored as. Its shape is never an
+// agent principal's.
+type deciderRecord struct {
+	Decider security.Principal `json:"decider"`
+}
+
+// EncodePrincipal writes the agent principal, or a person who decides one
+// of its checkpoints. Anything else is refused: no run of the agent starts
+// as anyone else.
 func (c *Codec) EncodePrincipal(_ context.Context, principal any) ([]byte, error) {
+	if d, ok := principal.(Decider); ok {
+		return encodeDecider(d)
+	}
 	p, ok := principal.(security.Principal)
 	if !ok {
 		return nil, fmt.Errorf("agentauthz: an agent run's principal is the agent, not %T", principal)
@@ -56,6 +76,10 @@ func (c *Codec) DecodePrincipal(ctx context.Context, data []byte) (any, error) {
 	var p security.Principal
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, revoked("the stored principal can't be read")
+	}
+	var d deciderRecord
+	if json.Unmarshal(data, &d) == nil && d.Decider != (security.Principal{}) {
+		return nil, revoked("a person who decided a checkpoint is never a run's principal")
 	}
 	if err := agentShape(p); err != nil {
 		return nil, revoked(err.Error())
@@ -95,6 +119,23 @@ func (c *Codec) DecodePrincipal(ctx context.Context, data []byte) (any, error) {
 		return nil, unavailable("the person's permissions couldn't be checked")
 	}
 	return p, nil
+}
+
+// encodeDecider writes a person who decides a checkpoint: a person of one
+// workspace, acting as themselves.
+func encodeDecider(d Decider) ([]byte, error) {
+	p := d.Person
+	if p.Kind != security.KindUser || p.UserID == "" || p.OrgID == "" || p.OnBehalfOf != nil || p.Fleet != nil {
+		return nil, errors.New("agentauthz: a checkpoint is decided by a person of the workspace")
+	}
+	if _, agent := security.IsAgentSubject(p.UserID); agent || strings.Contains(p.UserID, ":") {
+		return nil, errors.New("agentauthz: a checkpoint is decided by a person, not by automation or the agent")
+	}
+	data, err := json.Marshal(deciderRecord{Decider: p})
+	if err != nil {
+		return nil, fmt.Errorf("agentauthz: encode who decided: %w", err)
+	}
+	return data, nil
 }
 
 // agentShape checks p is a workspace's agent, acting alone or for one of

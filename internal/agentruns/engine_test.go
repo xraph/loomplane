@@ -636,3 +636,46 @@ func TestACancelledTaskStopsItsRun(t *testing.T) {
 		t.Fatalf("continuations %+v", conts)
 	}
 }
+
+// A person's approval resumes the run approved through cortex, with the
+// person recorded as who decided: agentrequests decides on the task's bound
+// context with the person as an agentauthz.Decider. A bare person on the
+// context is still refused by the codec, as no run may carry one.
+func TestAPersonsApprovalResumesTheRunAsApproved(t *testing.T) {
+	r := newRealRun(t, true,
+		turn{calls: []llm.ToolCall{call(t, "call_create", "create_project", map[string]any{"name": "Mono"})}},
+		turn{text: "Created Mono."},
+	)
+	task := r.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), Input: "Create Mono."})
+	if err := r.runStart(t, task); err != nil {
+		t.Fatal(err)
+	}
+	n := r.handler.last(t)
+	bound, err := r.svc.Bind(context.Background(), r.store.task(t, task.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decider := security.Principal{OrgID: orgA, UserID: ada}
+	err = r.eng.DecideCheckpoint(cortex.WithPrincipal(bound, decider), n.CheckpointID, checkpoint.Decision{Approved: true, DecidedBy: ada})
+	if !errors.Is(err, cortex.ErrPrincipalUnavailable) {
+		t.Fatalf("a bare person deciding: %v", err)
+	}
+	err = r.eng.DecideCheckpoint(cortex.WithPrincipal(bound, agentauthz.Decider{Person: decider}), n.CheckpointID,
+		checkpoint.Decision{Approved: true, DecidedBy: ada, Reason: "approved by Ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err := r.eng.GetCheckpoint(bound, n.CheckpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.Decision == nil || !cp.Decision.Approved || !strings.Contains(string(cp.Decision.DecidedByPrincipal), ada) {
+		t.Fatalf("checkpoint decision %+v", cp.Decision)
+	}
+	if err = r.runContinue(t, task); err != nil {
+		t.Fatal(err)
+	}
+	if r.creator.count() != 1 || r.status(t, task) != StatusCompleted {
+		t.Fatalf("after approval: created %d, %s", r.creator.count(), r.status(t, task))
+	}
+}
