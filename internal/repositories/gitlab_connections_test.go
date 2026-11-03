@@ -348,9 +348,13 @@ type gcFake struct {
 	refuse    bool // refresh answers invalid_grant
 	refreshes atomic.Int32
 	revoked   []string
-	forms     []url.Values
-	seq       int
-	slow      time.Duration // delay on each refresh
+	// revokeHints are the token_type_hint of each revoke, in order.
+	revokeHints []string
+	// revokeStatus, when set, answers every revoke.
+	revokeStatus int
+	forms        []url.Values
+	seq          int
+	slow         time.Duration // delay on each refresh
 	// refreshStatus and refreshBody, when set, answer every refresh.
 	refreshStatus int
 	refreshBody   string
@@ -418,7 +422,12 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		f.mu.Lock()
 		f.revoked = append(f.revoked, r.PostForm.Get("token"))
+		f.revokeHints = append(f.revokeHints, r.PostForm.Get("token_type_hint"))
+		status := f.revokeStatus
 		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+		}
 		_, _ = w.Write([]byte(`{}`))
 	case r.URL.Path == "/api/v4/user":
 		u, ok := f.userOf(r)
@@ -968,8 +977,10 @@ func TestGitLabDisconnect_revokesAndForgets(t *testing.T) {
 	if err := f.svc.Disconnect(context.Background(), p, v.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.fake.revoked) != 1 || f.fake.revoked[0] != g.AccessToken {
-		t.Fatalf("revoked %v, want the access token", f.fake.revoked)
+	// The refresh token, which GitLab revokes even once the access token
+	// has expired, as it has on an idle connection.
+	if len(f.fake.revoked) != 1 || f.fake.revoked[0] != g.RefreshToken || f.fake.revokeHints[0] != "refresh_token" {
+		t.Fatalf("revoked %v with hints %v, want the refresh token as a refresh_token", f.fake.revoked, f.fake.revokeHints)
 	}
 	if d := f.secrets.dump(); d != "" {
 		t.Fatalf("secrets left: %s", d)
@@ -1257,8 +1268,78 @@ func TestGitLabDisconnect_revokesWhenTheCallerHasGivenUp(t *testing.T) {
 	}
 	f.fake.mu.Lock()
 	revoked := append([]string(nil), f.fake.revoked...)
+	hints := append([]string(nil), f.fake.revokeHints...)
 	f.fake.mu.Unlock()
-	if len(revoked) != 1 || revoked[0] != g.AccessToken {
-		t.Fatalf("revoked %v, want the access token even though the caller had gone", revoked)
+	if len(revoked) != 1 || revoked[0] != g.RefreshToken || hints[0] != "refresh_token" {
+		t.Fatalf("revoked %v with hints %v, want the refresh token even though the caller had gone", revoked, hints)
+	}
+}
+
+func TestGitLabDisconnect_revokesTheAccessTokenWithoutARefreshToken(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	v := f.connect(t, p, "instance:"+gcHost, "alice")
+	f.secrets.setGrant(t, "org-a", v.ID, oauth.Grant{AccessToken: "at-alice-7", Expiry: time.Now().Add(time.Hour)})
+	if err := f.svc.Disconnect(context.Background(), p, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.fake.revoked) != 1 || f.fake.revoked[0] != "at-alice-7" || f.fake.revokeHints[0] != "access_token" {
+		t.Fatalf("revoked %v with hints %v, want the access token as an access_token", f.fake.revoked, f.fake.revokeHints)
+	}
+}
+
+func TestGitLabConnect_reconnectRevokesTheReplacedGrant(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	first := f.connect(t, p, "instance:"+gcHost, "alice")
+	old := f.secrets.grant(t, first.ID)
+	if len(f.fake.revoked) != 0 {
+		t.Fatalf("a first sign-in revoked %v", f.fake.revoked)
+	}
+	again := f.connect(t, p, "instance:"+gcHost, "alice")
+	if again.ID != first.ID {
+		t.Fatalf("reconnect made %s, want %s", again.ID, first.ID)
+	}
+	if len(f.fake.revoked) != 1 || f.fake.revoked[0] != old.RefreshToken || f.fake.revokeHints[0] != "refresh_token" {
+		t.Fatalf("revoked %v with hints %v, want the replaced refresh token %s", f.fake.revoked, f.fake.revokeHints, old.RefreshToken)
+	}
+	if g := f.secrets.grant(t, first.ID); g.RefreshToken == old.RefreshToken {
+		t.Fatal("the reconnect kept the old grant")
+	}
+	last := len(f.audit.actions) - 1
+	if f.audit.actions[last] != "gitlab.connect" {
+		t.Fatalf("audit = %v", f.audit.actions)
+	}
+	if _, ok := f.audit.details[last]["revoke_error"]; ok {
+		t.Fatalf("audit details = %v, want no revoke failure", f.audit.details[last])
+	}
+}
+
+func TestGitLabConnect_reconnectRevokeFailureIsAudited(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	first := f.connect(t, p, "instance:"+gcHost, "alice")
+	old := f.secrets.grant(t, first.ID)
+	f.fake.mu.Lock()
+	f.fake.revokeStatus = http.StatusInternalServerError
+	f.fake.mu.Unlock()
+	// The new sign-in is kept whatever GitLab says to the revoke.
+	again := f.connect(t, p, "instance:"+gcHost, "alice")
+	if again.Lapsed {
+		t.Fatal("a failed revoke of the old grant lapsed the new sign-in")
+	}
+	if g := f.secrets.grant(t, first.ID); g.RefreshToken == old.RefreshToken {
+		t.Fatal("the reconnect kept the old grant")
+	}
+	last := len(f.audit.details) - 1
+	if f.audit.actions[last] != "gitlab.connect" {
+		t.Fatalf("audit = %v", f.audit.actions)
+	}
+	if _, ok := f.audit.details[last]["revoke_error"]; !ok {
+		t.Fatalf("audit details = %v, want the revoke failure", f.audit.details[last])
+	}
+	raw, _ := json.Marshal(f.audit.details[last])
+	if strings.Contains(string(raw), old.RefreshToken) || strings.Contains(string(raw), old.AccessToken) {
+		t.Fatalf("audit holds a token: %s", raw)
 	}
 }

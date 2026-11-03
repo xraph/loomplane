@@ -46,10 +46,11 @@ func fakeGitLabProjects(t *testing.T, projects map[string][]byte) *httptest.Serv
 
 // The values the fake GitLab below hands out and expects.
 const (
-	fakeGitLabAccessToken = "glpat-it-access-token"
-	fakeGitLabCode        = "from-gitlab"
-	fakeGitLabClientID    = "it-gitlab-client"
-	fakeGitLabSecret      = "it-gitlab-client-secret"
+	fakeGitLabAccessToken  = "glpat-it-access-token"
+	fakeGitLabRefreshToken = "glrt-it-refresh"
+	fakeGitLabCode         = "from-gitlab"
+	fakeGitLabClientID     = "it-gitlab-client"
+	fakeGitLabSecret       = "it-gitlab-client-secret"
 )
 
 // gitLabFake is a self-managed GitLab with an OAuth application, one signed
@@ -62,7 +63,8 @@ type gitLabFake struct {
 	calls []string
 	// archiveTokens are the bearer tokens the private archive was asked with.
 	archiveTokens []string
-	// revoked are the tokens it was told to stop honoring.
+	// revoked are the tokens it was told to stop honoring, each as
+	// "<token> <token_type_hint>".
 	revoked []string
 	// requests are the API requests it answered, as "<escaped path> bearer"
 	// or "<escaped path> anonymous".
@@ -119,11 +121,11 @@ func fakeGitLab(t *testing.T, tgz []byte) *gitLabFake {
 				return
 			}
 			g.note("token")
-			_, _ = w.Write([]byte(`{"access_token":"` + fakeGitLabAccessToken + `","refresh_token":"glrt-it-refresh","expires_in":7200}`))
+			_, _ = w.Write([]byte(`{"access_token":"` + fakeGitLabAccessToken + `","refresh_token":"` + fakeGitLabRefreshToken + `","expires_in":7200}`))
 		case "/oauth/revoke":
 			g.mu.Lock()
 			g.calls = append(g.calls, "revoke")
-			g.revoked = append(g.revoked, r.FormValue("token"))
+			g.revoked = append(g.revoked, r.FormValue("token")+" "+r.FormValue("token_type_hint"))
 			g.mu.Unlock()
 		case "/api/v4/user":
 			if !authed(r) {

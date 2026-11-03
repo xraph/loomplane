@@ -250,22 +250,31 @@ func TestGitLab_ExchangeSpentCodeIsRefused(t *testing.T) {
 	}
 }
 
-func TestGitLab_RevokeSendsTheToken(t *testing.T) {
+func TestGitLab_RevokeSendsTheTokenAndItsHint(t *testing.T) {
 	f := &fakeGitLabOAuth{status: 200, body: `{}`}
-	if err := f.serve(t).Revoke(context.Background(), gitlabApp, "the-token"); err != nil {
+	if err := f.serve(t).Revoke(context.Background(), gitlabApp, "the-token", repositories.GitLabRefreshTokenHint); err != nil {
 		t.Fatal(err)
 	}
 	form := f.last(t)
-	for k, v := range map[string]string{"token": "the-token", "client_id": "app-id", "client_secret": "app-secret"} {
+	for k, v := range map[string]string{
+		"token": "the-token", "token_type_hint": "refresh_token", "client_id": "app-id", "client_secret": "app-secret",
+	} {
 		if form.Get(k) != v {
 			t.Errorf("%s = %q, want %q", k, form.Get(k), v)
 		}
+	}
+	// No hint sends none.
+	if err := f.serve(t).Revoke(context.Background(), gitlabApp, "the-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	if form := f.last(t); form.Has("token_type_hint") {
+		t.Fatalf("token_type_hint = %q, want none sent", form.Get("token_type_hint"))
 	}
 }
 
 func TestGitLab_RevokeFailureNeverQuotesTheToken(t *testing.T) {
 	f := &fakeGitLabOAuth{status: 500, body: `{"error":"server_error","error_description":"the-token"}`}
-	err := f.serve(t).Revoke(context.Background(), gitlabApp, "the-token")
+	err := f.serve(t).Revoke(context.Background(), gitlabApp, "the-token", repositories.GitLabRefreshTokenHint)
 	if err == nil || strings.Contains(err.Error(), "the-token") {
 		t.Fatalf("err = %v", err)
 	}

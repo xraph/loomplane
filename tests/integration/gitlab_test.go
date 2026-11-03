@@ -220,8 +220,10 @@ func TestGitLab_signInListAndReadAPrivateProject(t *testing.T) {
 			t.Fatalf("the archive was read with %q, want the connection's token", tok)
 		}
 	}
-	if len(revoked) != 1 || revoked[0] != fakeGitLabAccessToken {
-		t.Fatalf("revoked %v, want the connection's token once", revoked)
+	// The refresh token, which GitLab revokes even after the access token
+	// has expired.
+	if len(revoked) != 1 || revoked[0] != fakeGitLabRefreshToken+" refresh_token" {
+		t.Fatalf("revoked %v, want the connection's refresh token once", revoked)
 	}
 	if last := calls[len(calls)-1]; last != "revoke" {
 		t.Fatalf("calls %v, want the revoke after every read", calls)

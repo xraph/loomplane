@@ -137,7 +137,16 @@ func (c *GitLabConnections) Connect(ctx context.Context, p security.Principal, i
 	// renewal GitLab refused while this waited for the lock has marked the
 	// old sign-in lapsed, so the connection is saved again once the new
 	// grant is in, which clears that.
+	// A reconnect replaces the grant the connection held, which is read
+	// first so it can be revoked once the new one is in.
+	var (
+		replaced    oauth.Grant
+		hadReplaced bool
+	)
 	err = c.cfg.Store.WithGrantLock(ctx, p.OrgID, id, func() error {
+		if old, readErr := c.readGrant(ctx, conn); readErr == nil {
+			replaced, hadReplaced = old, true
+		}
 		if putErr := c.cfg.Secrets.Put(ctx, p.OrgID, id, raw); putErr != nil {
 			return putErr
 		}
@@ -153,7 +162,17 @@ func (c *GitLabConnections) Connect(ctx context.Context, p security.Principal, i
 		}
 		return nil, err
 	}
-	c.record(ctx, AuditGitLabConnect, p, map[string]any{"host": h.Host, "username": user.Username, "connection_id": id})
+	details := map[string]any{"host": h.Host, "username": user.Username, "connection_id": id}
+	if hadReplaced && replaced.RefreshToken != grant.RefreshToken {
+		// Best-effort: the new sign-in works whether or not GitLab takes
+		// the revoke, and a caller giving up mustn't leave it unsent.
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitlabRenewTimeout)
+		if revokeErr := c.revokeGrant(revokeCtx, h, replaced); revokeErr != nil {
+			details["revoke_error"] = revokeErr.Error()
+		}
+		cancel()
+	}
+	c.record(ctx, AuditGitLabConnect, p, details)
 	saved, err := c.ownConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err

@@ -436,16 +436,29 @@ func (c *GitLabConnections) revoke(ctx context.Context, conn *GitLabConnection) 
 	if err != nil {
 		return err
 	}
+	return c.revokeGrant(ctx, h, g)
+}
+
+// revokeGrant asks h to stop honoring g. It revokes the refresh token,
+// which GitLab revokes whether or not its access token has expired, and
+// falls back to the access token only when g has no refresh token.
+func (c *GitLabConnections) revokeGrant(ctx context.Context, h GitLabHost, g oauth.Grant) error {
 	app, err := c.app(ctx, h)
 	if err != nil {
 		return err
 	}
-	return c.client(h).Revoke(ctx, app, g.AccessToken)
+	if g.RefreshToken != "" {
+		return c.client(h).Revoke(ctx, app, g.RefreshToken, GitLabRefreshTokenHint)
+	}
+	return c.client(h).Revoke(ctx, app, g.AccessToken, GitLabAccessTokenHint)
 }
 
 // Repositories lists the projects the organization's live connections can
 // read, by host, namespace and path, each once. A lapsed connection, or one
-// that lapses on the way, is left out.
+// that lapses on the way, is left out. So is one whose listing fails, such
+// as a token GitLab revoked early, so one bad connection doesn't blank the
+// rest: the failure goes to the audit, by connection, and is returned only
+// when every connection asked failed.
 func (c *GitLabConnections) Repositories(ctx context.Context, p security.Principal) ([]GitLabRepository, error) {
 	if err := c.cfg.Authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err

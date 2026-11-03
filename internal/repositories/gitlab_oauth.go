@@ -74,9 +74,23 @@ func (g *GitLab) Refresh(ctx context.Context, app oauth.App, grant oauth.Grant) 
 	})
 }
 
-// Revoke tells GitLab to stop honoring token, an access or a refresh token.
-func (g *GitLab) Revoke(ctx context.Context, app oauth.App, token string) error {
-	resp, err := g.postForm(ctx, "/oauth/revoke", app, url.Values{"token": {token}})
+// The token_type_hint values Revoke sends.
+const (
+	GitLabRefreshTokenHint = "refresh_token"
+	GitLabAccessTokenHint  = "access_token"
+)
+
+// Revoke tells GitLab to stop honoring token, an access or a refresh token,
+// with hint as its token_type_hint ("" sends none). Revoke a grant by its
+// refresh token: GitLab answers 200 to a revoke of an expired access token
+// and does nothing, which leaves the refresh token, and the application's
+// access, live.
+func (g *GitLab) Revoke(ctx context.Context, app oauth.App, token, hint string) error {
+	form := url.Values{"token": {token}}
+	if hint != "" {
+		form.Set("token_type_hint", hint)
+	}
+	resp, err := g.postForm(ctx, "/oauth/revoke", app, form)
 	if err != nil {
 		return err
 	}
