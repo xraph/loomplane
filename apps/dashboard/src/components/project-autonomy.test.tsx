@@ -7,6 +7,9 @@ import type { Project } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
 import { ProjectAutonomy } from "./project-autonomy"
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+vi.mock("sonner", () => ({ toast: toasts }))
+
 const state = vi.hoisted(() => ({ enabled: true, permissions: [] as string[] }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => false }),
@@ -25,6 +28,8 @@ afterEach(() => {
   forgeClient.clear()
   state.enabled = true
   state.permissions = []
+  toasts.success.mockClear()
+  toasts.error.mockClear()
 })
 
 const project = {
@@ -69,11 +74,12 @@ test("starts at ask first and needs approve permission", async () => {
     name: "Autonomous promotion",
   })
   expect(toggle).toHaveAttribute("aria-checked", "false")
+  // The promotion gate isn't in this version, so the card says the agent
+  // still asks before every production promotion.
   expect(
-    screen.getByText(
-      "When someone asks the agent to release and every gate is green, it promotes without asking first."
-    )
+    screen.getByText(/still asks a person before every production promotion/)
   ).toBeInTheDocument()
+  expect(screen.queryByText(/promotes without asking/)).toBeNull()
   await waitFor(() => expect(dev.permissionReads()).toBe(1))
   expect(toggle).toHaveAttribute("aria-disabled", "true")
   await userEvent.click(toggle)
@@ -100,6 +106,11 @@ test("starts at ask first and needs approve permission", async () => {
         body: { autonomous_promotion: true },
       },
     ])
+  )
+  await waitFor(() =>
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Saved. In this version the agent still asks before it promotes to production."
+    )
   )
 })
 

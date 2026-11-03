@@ -45,6 +45,9 @@ function soakLabel(seconds: number): string {
  * ProjectAutonomy is whether the agent may promote this project's release
  * without asking first. New projects ask first. It shows only while the
  * agent is on, and only someone who may approve deployments changes it.
+ * The setting is stored, but the promotion gate isn't in this version, so
+ * the agent still asks before every production promotion and the card
+ * says so.
  */
 export function ProjectAutonomy({ project }: { project: Project }) {
   const agent = useAgent()
@@ -80,7 +83,7 @@ export function ProjectAutonomy({ project }: { project: Project }) {
         void put(
           { autonomousPromotion: v },
           v
-            ? "The agent can now promote on its own"
+            ? "Saved. In this version the agent still asks before it promotes to production."
             : "The agent asks before it promotes"
         )
       }
@@ -103,8 +106,10 @@ export function ProjectAutonomy({ project }: { project: Project }) {
         <div className="grid gap-0.5">
           <span className="text-[13px] font-medium">Autonomous promotion</span>
           <p className="max-w-[56ch] text-[12.5px] leading-normal text-muted-foreground">
-            When someone asks the agent to release and every gate is green, it
-            promotes without asking first.
+            Lets the agent promote a release someone asked for once every gate
+            is green. In this version it still asks a person before every
+            production promotion; the setting takes effect when the promotion
+            gate ships.
           </p>
         </div>
         {mayEdit ? (

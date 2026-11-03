@@ -30,10 +30,18 @@ var (
 	_ autonomyAPI = (*projects.Service)(nil)
 )
 
-// autonomyDescription says what the autonomy switch covers.
-const autonomyDescription = "Only a person with deployment:approve on the project can change it; the agent never can. " +
-	"It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing " +
-	"production data or resources, which always waits for a person."
+// autonomySummary and autonomyDescription say what the autonomy switch
+// covers, and that in this version it's stored only: the promotion gate
+// isn't wired yet (agentauthz.AskFirst), so every production promotion
+// still asks a person.
+const (
+	autonomySummary     = "Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs"
+	autonomyDescription = "In this version the setting is stored and every production promotion still waits for a person; " +
+		"it takes effect when the promotion gate ships. " +
+		"Only a person with deployment:approve on the project can change it; the agent never can. " +
+		"It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing " +
+		"production data or resources, which always waits for a person."
+)
 
 // mountRoutes serves the agent's status and a project's autonomy under
 // /api/v1 behind guard. Neither sits behind agentscope.Binder's
@@ -50,7 +58,7 @@ func mountRoutes(r forge.Router, guard identity.Guard, status statusAPI, autonom
 		),
 		g.PUT("/projects/:id/autonomy", h.setAutonomy,
 			forge.WithName("projectAutonomy.update"),
-			forge.WithSummary("Let the agent promote a release to production without asking first, after a minimum staging soak"),
+			forge.WithSummary(autonomySummary),
 			forge.WithDescription(autonomyDescription),
 			forge.WithRequestSchema(projects.AutonomyInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),

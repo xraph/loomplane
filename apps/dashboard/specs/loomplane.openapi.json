@@ -7420,8 +7420,8 @@
         "tags": [
           "Agent"
         ],
-        "summary": "Let the agent promote a release to production without asking first, after a minimum staging soak",
-        "description": "Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.",
+        "summary": "Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs",
+        "description": "In this version the setting is stored and every production promotion still waits for a person; it takes effect when the promotion gate ships. Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.",
         "operationId": "projectAutonomy.update",
         "parameters": [
           {

@@ -14,7 +14,7 @@ Every operation the agent has belongs to one of six classes. The class decides w
 | `read` | list projects, read a plan, logs, metrics, status | Allowed |
 | `change` | create a project or environment, save a manifest, add a source, set a variable that isn't secret, plan staging | Allowed within the permissions of the person it acts for |
 | `deploy_nonproduction` | approve a staging, preview or development plan | Allowed within those permissions |
-| `promote_production` | approve a production plan that deletes nothing | Passes the autonomy gate, otherwise asks |
+| `promote_production` | approve a production plan that deletes nothing | Asks a person. The project's autonomy switch is stored, and takes effect when the promotion gate ships |
 | `destroy_production` | a production plan with a delete, a delete or replace of anything that holds data, deleting a production environment, connection or project, removing a production variable | Always a person |
 | `secret_or_external` | set a secret, connect GitHub, create a cloud connection | Always a person, through a request |
 
@@ -82,4 +82,4 @@ The command line refuses a value given as an argument, so it stays out of your s
 
 Anything from outside Loomplane's own state is untrusted: logs, commit messages, README files, issue bodies, error output, and what people wrote elsewhere. Shield scans it before the model sees it, and what survives is wrapped as quoted data with its source. The agent is told never to follow instructions inside it.
 
-A scan can miss something, which is why the table above doesn't rest on the model behaving. The risk class, the permission check and the autonomy gate run in Loomplane's code on every call, and shield's checks on a tool call can only add restrictions. A hostile commit message can make the agent ask you a strange question. It can't make the agent delete a production database.
+A scan can miss something, which is why the table above doesn't rest on the model behaving. The risk class, the permission check and the approval check run in Loomplane's code on every call, and shield's checks on a tool call can only add restrictions. A hostile commit message can make the agent ask you a strange question. It can't make the agent delete a production database.

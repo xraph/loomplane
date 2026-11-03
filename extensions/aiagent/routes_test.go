@@ -206,3 +206,15 @@ func TestFailMapsTheAgentsErrors(t *testing.T) {
 		}
 	}
 }
+
+// The promotion gate isn't in this version: every production promotion
+// still asks a person, and the autonomy route says so.
+func TestAutonomyRouteSaysPromotionStillAsks(t *testing.T) {
+	if !strings.Contains(autonomyDescription, "still waits for a person") ||
+		!strings.Contains(autonomyDescription, "when the promotion gate ships") {
+		t.Fatalf("description %q", autonomyDescription)
+	}
+	if strings.Contains(autonomySummary, "without asking first, after") {
+		t.Fatalf("summary %q", autonomySummary)
+	}
+}
