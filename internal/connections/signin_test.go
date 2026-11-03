@@ -577,12 +577,12 @@ func TestCredentialHandsOutWithoutRenewing(t *testing.T) {
 func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 	r := newRefreshRig(t)
 	r.s.ConfigApps = nil
-	if _, err := r.s.SetSignInApp(t.Context(), starter, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "old-secret"}); err != nil {
+	if _, err := r.s.SetSignInApp(t.Context(), starter.UserID, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "old-secret"}); err != nil {
 		t.Fatal(err)
 	}
 	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
 	r.renewer.errs["rt-at-1"] = fmt.Errorf("%w: digitalocean answered 401: invalid_client", oauth.ErrAppRejected)
-	const why = "Loomplane's DigitalOcean sign-in app was refused; check its client ID and secret on Cloud sign-in"
+	const why = "Loomplane's DigitalOcean sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret."
 
 	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), why) {
 		t.Fatalf("credential: %v", err)
@@ -591,7 +591,7 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 	if row.Status != StatusSignInNeeded || row.Message != why || row.Generation != 3 || len(r.lapsed) != 1 {
 		t.Fatalf("connection %+v, lapsed %d", row, len(r.lapsed))
 	}
-	apps, err := r.s.SignInApps(t.Context(), starter)
+	apps, err := r.s.SignInApps(t.Context())
 	if err != nil || len(apps) != 1 || apps[0].Problem != why {
 		t.Fatalf("apps %+v: %v", apps, err)
 	}
@@ -599,21 +599,22 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 		t.Fatalf("the secret was shown: %s", shown)
 	}
 
-	if _, err := r.s.SetSignInApp(t.Context(), starter, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "new-secret"}); err != nil {
+	if _, err := r.s.SetSignInApp(t.Context(), starter.UserID, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "new-secret"}); err != nil {
 		t.Fatal(err)
 	}
-	if apps, _ = r.s.SignInApps(t.Context(), starter); apps[0].Problem != "" {
+	if apps, _ = r.s.SignInApps(t.Context()); apps[0].Problem != "" {
 		t.Fatalf("saving the app kept its problem: %+v", apps[0])
 	}
 
 	// An exchange the cloud refuses for the app is recorded the same way.
 	s := newSignInRig(t)
 	s.provider.errs = map[string]error{"code-bad-app": oauth.ErrAppRejected}
+	usePlatformApp(s.s, DigitalOcean, oauth.App{ClientID: "cfg-id", ClientSecret: "cfg-secret"})
 	state := s.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
 	if _, err := s.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-bad-app"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), why) {
 		t.Fatalf("complete: %v", err)
 	}
-	if s.apps.problems["org/"+DigitalOcean] != why || len(s.store.rows) != 0 {
+	if s.apps.problems[DigitalOcean] != why || len(s.store.rows) != 0 {
 		t.Fatalf("problems %v, rows %v", s.apps.problems, s.store.rows)
 	}
 }

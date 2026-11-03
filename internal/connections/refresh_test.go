@@ -799,6 +799,7 @@ func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
 	r := newRefreshRig(t)
 	old := r.clock.Add(-48 * time.Hour)
 	r.vercelSignIn(t, &old)
+	usePlatformApp(r.s, Vercel, oauth.App{ClientID: "vercel-id", ClientSecret: "vercel-secret", Slug: "loomplane"})
 	r.renewer.probeErrs = map[string]error{"vt-1": oauth.ErrAppRejected}
 	report, err := r.s.RefreshDue(t.Context())
 	if err != nil {
@@ -807,7 +808,7 @@ func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
 	if report != (RefreshReport{Lapsed: 1}) || r.store.rows["conn_vercel"].Status != StatusSignInNeeded || len(r.lapsed) != 1 {
 		t.Fatalf("report %+v row %+v", report, r.store.rows["conn_vercel"])
 	}
-	if r.apps.problems["org/"+Vercel] == "" {
+	if r.apps.problems[Vercel] == "" {
 		t.Fatalf("no app problem recorded: %v", r.apps.problems)
 	}
 }

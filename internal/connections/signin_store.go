@@ -12,11 +12,11 @@ import (
 
 var _ AppStore = (*PgStore)(nil)
 
-const appColumns = `org_id, cloud, client_id, slug, updated_by, created_at, updated_at`
+const appColumns = `cloud, client_id, slug, updated_by, created_at, updated_at`
 
 func scanApp(row pgx.Row) (*StoredApp, error) {
 	var a StoredApp
-	if err := row.Scan(&a.OrgID, &a.Cloud, &a.ClientID, &a.Slug, &a.UpdatedBy, &a.CreatedAt, &a.UpdatedAt); err != nil {
+	if err := row.Scan(&a.Cloud, &a.ClientID, &a.Slug, &a.UpdatedBy, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	a.CreatedAt, a.UpdatedAt = a.CreatedAt.UTC(), a.UpdatedAt.UTC()
@@ -24,8 +24,8 @@ func scanApp(row pgx.Row) (*StoredApp, error) {
 }
 
 // GetApp implements AppStore.
-func (s *PgStore) GetApp(ctx context.Context, orgID, cloud string) (*StoredApp, error) {
-	a, err := scanApp(s.db.QueryRow(ctx, `SELECT `+appColumns+` FROM loomplane_oauth_apps WHERE org_id = $1 AND cloud = $2`, orgID, cloud))
+func (s *PgStore) GetApp(ctx context.Context, cloud string) (*StoredApp, error) {
+	a, err := scanApp(s.db.QueryRow(ctx, `SELECT `+appColumns+` FROM loomplane_platform_oauth_apps WHERE cloud = $1`, cloud))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -35,11 +35,12 @@ func (s *PgStore) GetApp(ctx context.Context, orgID, cloud string) (*StoredApp, 
 	return a, nil
 }
 
-// PutApp implements AppStore. It keeps the first created_at.
+// PutApp implements AppStore. It keeps the first created_at. Saving an app
+// leaves any problem on the row for the caller to clear.
 func (s *PgStore) PutApp(ctx context.Context, a *StoredApp) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_oauth_apps (`+appColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (org_id, cloud) DO UPDATE SET client_id = EXCLUDED.client_id, slug = EXCLUDED.slug, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
-		a.OrgID, a.Cloud, a.ClientID, a.Slug, a.UpdatedBy, a.CreatedAt, a.UpdatedAt)
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_platform_oauth_apps (`+appColumns+`) VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (cloud) DO UPDATE SET client_id = EXCLUDED.client_id, slug = EXCLUDED.slug, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
+		a.Cloud, a.ClientID, a.Slug, a.UpdatedBy, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("save sign-in app: %w", err)
 	}
@@ -47,16 +48,16 @@ func (s *PgStore) PutApp(ctx context.Context, a *StoredApp) error {
 }
 
 // DeleteApp implements AppStore.
-func (s *PgStore) DeleteApp(ctx context.Context, orgID, cloud string) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_oauth_apps WHERE org_id = $1 AND cloud = $2`, orgID, cloud); err != nil {
+func (s *PgStore) DeleteApp(ctx context.Context, cloud string) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_platform_oauth_apps WHERE cloud = $1`, cloud); err != nil {
 		return fmt.Errorf("delete sign-in app: %w", err)
 	}
 	return nil
 }
 
 // ListApps implements AppStore.
-func (s *PgStore) ListApps(ctx context.Context, orgID string) ([]*StoredApp, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+appColumns+` FROM loomplane_oauth_apps WHERE org_id = $1 ORDER BY cloud`, orgID)
+func (s *PgStore) ListApps(ctx context.Context) ([]*StoredApp, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+appColumns+` FROM loomplane_platform_oauth_apps ORDER BY cloud`)
 	if err != nil {
 		return nil, fmt.Errorf("list sign-in apps: %w", err)
 	}
@@ -123,27 +124,26 @@ func (s *PgStore) SweepSignIns(ctx context.Context, before time.Time) (int64, er
 	return tag.RowsAffected()
 }
 
-// SetAppProblem implements AppStore.
-func (s *PgStore) SetAppProblem(ctx context.Context, orgID, cloud, message string, at time.Time) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_oauth_app_problems (org_id, cloud, message, at) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (org_id, cloud) DO UPDATE SET message = EXCLUDED.message, at = EXCLUDED.at`, orgID, cloud, message, at)
-	if err != nil {
+// SetAppProblem implements AppStore. A cloud with no app row updates
+// nothing.
+func (s *PgStore) SetAppProblem(ctx context.Context, cloud, message string, at time.Time) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_platform_oauth_apps SET problem = $2, problem_at = $3 WHERE cloud = $1`, cloud, message, at); err != nil {
 		return fmt.Errorf("save sign-in app problem: %w", err)
 	}
 	return nil
 }
 
 // ClearAppProblem implements AppStore.
-func (s *PgStore) ClearAppProblem(ctx context.Context, orgID, cloud string) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_oauth_app_problems WHERE org_id = $1 AND cloud = $2`, orgID, cloud); err != nil {
+func (s *PgStore) ClearAppProblem(ctx context.Context, cloud string) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_platform_oauth_apps SET problem = '', problem_at = NULL WHERE cloud = $1 AND problem <> ''`, cloud); err != nil {
 		return fmt.Errorf("clear sign-in app problem: %w", err)
 	}
 	return nil
 }
 
 // AppProblems implements AppStore.
-func (s *PgStore) AppProblems(ctx context.Context, orgID string) (map[string]string, error) {
-	rows, err := s.db.Query(ctx, `SELECT cloud, message FROM loomplane_oauth_app_problems WHERE org_id = $1`, orgID)
+func (s *PgStore) AppProblems(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT cloud, problem FROM loomplane_platform_oauth_apps WHERE problem <> ''`)
 	if err != nil {
 		return nil, fmt.Errorf("list sign-in app problems: %w", err)
 	}

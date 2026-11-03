@@ -58,8 +58,8 @@ type Service struct {
 	Providers   map[string]Provider
 	ConfigApps  map[string]oauth.App
 	CallbackURL string
-	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
-	AppSecrets Secrets
+	// AppSecrets keeps the platform's sign-in app secrets, keyed by cloud.
+	AppSecrets AppSecrets
 	Apps       AppStore
 	// Lapsed hears about a signed-in connection the cloud stopped
 	// honoring. It may be nil.
@@ -361,7 +361,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	case errors.Is(err, oauth.ErrAppRejected):
 		// Signing in again with the same app won't help, so the app
 		// shows the problem too.
-		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+		why = s.appRejected(ctx, c.Cloud)
 	case refusedSignIn(err):
 		// Revoking Loomplane in the cloud kills the access token at once,
 		// so a refused grant asks for a new sign-in.

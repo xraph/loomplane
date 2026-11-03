@@ -208,7 +208,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 			g = latest
 			return nil
 		}
-		app, err := s.app(ctx, c.OrgID, c.Cloud)
+		app, err := s.app(ctx, c.Cloud)
 		if errors.Is(err, ErrNoApp) {
 			why = noAppWhy(c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)
@@ -227,7 +227,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		defer cancel()
 		fresh, err := provider.Refresh(refreshCtx, app, latest)
 		if errors.Is(err, oauth.ErrAppRejected) {
-			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+			why = s.appRejected(ctx, c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)
 			return err
 		}
@@ -279,7 +279,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 // noAppWhy is why a sign-in for cloud needs signing in again once the
 // cloud's sign-in app is gone.
 func noAppWhy(cloud string) string {
-	return fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", cloudTitle(cloud))
+	return fmt.Sprintf("Loomplane's %s sign-in app was removed, so this sign-in can't be renewed. Sign in again once it's back, or connect with a token.", cloudTitle(cloud))
 }
 
 // noLongerAccepted is why a sign-in for cloud needs signing in again once
@@ -445,7 +445,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 		return
 	}
 	var why string
-	app, err := s.app(ctx, c.OrgID, c.Cloud)
+	app, err := s.app(ctx, c.Cloud)
 	switch {
 	case errors.Is(err, ErrNoApp):
 		why = noAppWhy(c.Cloud)
@@ -458,7 +458,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 		cancel()
 		switch {
 		case errors.Is(err, oauth.ErrAppRejected):
-			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+			why = s.appRejected(ctx, c.Cloud)
 		case errors.Is(err, oauth.ErrRefused):
 			why = noLongerAccepted(c.Cloud)
 		case err != nil:
