@@ -194,11 +194,11 @@ func sentTo(r client.AgentRequest) string {
 	switch r.RouteSource {
 	case "named":
 		if r.TeamReason != "" {
-			return fmt.Sprintf("%s (%s)", r.TeamName, oneLine(r.TeamReason, 40))
+			return fmt.Sprintf("%s (%s)", oneLine(r.TeamName, 80), oneLine(r.TeamReason, 40))
 		}
-		return r.TeamName
+		return oneLine(r.TeamName, 80)
 	case "project":
-		return r.TeamName
+		return oneLine(r.TeamName, 80)
 	case "admins":
 		return "workspace admins"
 	case "asker":
@@ -207,8 +207,19 @@ func sentTo(r client.AgentRequest) string {
 	return "-"
 }
 
-// oneLine puts s on one line and cuts it to at most n characters.
+// oneLine puts s on one line and cuts it to at most n characters. Control
+// characters go first (tabs and newlines become spaces), so text the agent
+// wrote can't drive the terminal: no escape sequences, no OSC-8 links.
 func oneLine(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			return ' '
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			return -1
+		}
+		return r
+	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > n {
 		return string(r[:n-1]) + "…"

@@ -258,3 +258,18 @@ func TestAgentRequestsPrintOnlyTheStoredRevision(t *testing.T) {
 		}
 	}
 }
+
+// Text from a request reaches the terminal without control bytes, so a
+// question can't move the cursor, recolour the screen or carry a link.
+func TestOneLineDropsControlBytes(t *testing.T) {
+	in := "Which\x1b[2J region\x1b]8;;https://x\x07here\x1b]8;;\x07?\x7f\u009b31m\tok\r\n"
+	got := oneLine(in, 200)
+	for _, r := range got {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			t.Fatalf("control rune %U in %q", r, got)
+		}
+	}
+	if !strings.HasPrefix(got, "Which[2J region]8;;https://xhere]8;;?31m ok") {
+		t.Fatalf("got %q", got)
+	}
+}
