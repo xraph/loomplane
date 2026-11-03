@@ -37,3 +37,13 @@ func TestNetworkPolicyDropsDeniedPortsBeforeEgress(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkPolicyDedupesDeniedPorts(t *testing.T) {
+	policy, err := networkPolicy("tap0", "192.0.2.2", nil, nil, nil, []int{25, 465, 25, 587, 465})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(policy, "tcp dport { 25, 465, 587 } drop") {
+		t.Fatal(policy)
+	}
+}

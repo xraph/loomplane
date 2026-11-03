@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -54,11 +55,16 @@ func networkPolicy(device, ip string, hostIPs, egress, peers []string, ports []i
 		}
 		fmt.Fprintf(&b, " ip daddr %s drop\n", prefix.Masked())
 	}
+	var uniquePorts []int
 	for _, port := range ports {
 		if port < 1 || port > 65535 {
 			return "", ErrInvalid
 		}
+		if !slices.Contains(uniquePorts, port) {
+			uniquePorts = append(uniquePorts, port)
+		}
 	}
+	ports = uniquePorts
 	b.WriteString(" ip daddr 100.64.0.0/10 drop\n ip daddr 169.254.0.0/16 drop\n ip daddr 127.0.0.0/8 drop\n ip daddr 0.0.0.0/8 drop\n ip daddr 224.0.0.0/4 drop\n")
 	for _, v := range peers {
 		addr, e := netip.ParseAddr(v)

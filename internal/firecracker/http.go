@@ -34,6 +34,10 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host client identity is not authorized", http.StatusForbidden)
 		return
 	}
+	if !platform && peer.Org == "" {
+		http.Error(w, "host client identity is not authorized", http.StatusForbidden)
+		return
+	}
 	if r.URL.Path == "/v1/capabilities" && r.Method == http.MethodGet {
 		c, err := a.Host.Driver.Check(r.Context())
 		if err != nil {

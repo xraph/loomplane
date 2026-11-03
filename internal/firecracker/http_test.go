@@ -186,3 +186,41 @@ func TestUsageIsScopedToPeerOrg(t *testing.T) {
 		t.Fatalf("platform peer saw %+v", got)
 	}
 }
+
+func TestHTTPRefusesPeerWithoutOrg(t *testing.T) {
+	h, d, q := testHost(t)
+	cert := &x509.Certificate{Raw: []byte("orgless")}
+	sum := sha256.Sum256(cert.Raw)
+	api := Handler{Host: h, Peers: []Peer{{Fingerprint: hex.EncodeToString(sum[:]), Connection: q.Scope.Connection}}}
+	for _, path := range []string{"/v1/usage", "/v1/capabilities"} {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+		r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden {
+			t.Fatal(path, w.Code)
+		}
+	}
+	if w := platformRequest(t, api, cert, "/v1/apply", q); w.Code != http.StatusForbidden || d.starts != 0 {
+		t.Fatal("orgless peer ran a workload", w.Code)
+	}
+}
+
+func TestPerOrgPeerNamedPlatformStaysBoundToItsOrg(t *testing.T) {
+	h, d, q := testHost(t)
+	cert := &x509.Certificate{Raw: []byte("org-peer")}
+	sum := sha256.Sum256(cert.Raw)
+	api := Handler{Host: h, Peers: []Peer{{Fingerprint: hex.EncodeToString(sum[:]), Org: q.Scope.Org, Connection: PlatformConnection}}}
+	q.Scope.Connection = PlatformConnection
+	other := q
+	other.Scope.Org = "other"
+	if w := platformRequest(t, api, cert, "/v1/apply", other); w.Code != http.StatusForbidden {
+		t.Fatal("per-org peer named platform reached another org", w.Code)
+	}
+	if d.starts != 0 {
+		t.Fatal("rejected request launched a VM")
+	}
+	if w := platformRequest(t, api, cert, "/v1/apply", q); w.Code != http.StatusOK {
+		t.Fatal("own org refused", w.Code, w.Body.String())
+	}
+}

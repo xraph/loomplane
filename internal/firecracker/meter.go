@@ -3,6 +3,7 @@ package firecracker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 )
@@ -25,13 +26,13 @@ type UsageReader interface {
 
 func meterTable(vmID string) string { return "loomplane_meter_" + vmID }
 
-// meterPolicy counts everything a VM sends, ahead of the VM's own policy at
-// priority -500. It lives in its own table so policy refreshes never reset it.
+// meterPolicy counts everything a VM sends, after the VM's own policy at
+// priority -500, so frames that policy drops are not counted. It lives in its own table so policy refreshes never reset it.
 func meterPolicy(device, vmID string) (string, error) {
 	if !deviceName.MatchString(device) || !meterID.MatchString(vmID) {
 		return "", ErrInvalid
 	}
-	return fmt.Sprintf("table netdev %s {\n counter egress { }\n chain meter { type filter hook ingress device \"%s\" priority -600; policy accept;\n counter name \"egress\"\n }\n}\n", meterTable(vmID), device), nil
+	return fmt.Sprintf("table netdev %s {\n counter egress { }\n chain meter { type filter hook ingress device \"%s\" priority -400; policy accept;\n counter name \"egress\"\n }\n}\n", meterTable(vmID), device), nil
 }
 
 // parseMeter reads the egress counter from `nft -j list table`.
@@ -53,4 +54,20 @@ func parseMeter(raw []byte) (bytes, packets uint64, err error) {
 		}
 	}
 	return 0, 0, ErrMissing
+}
+
+var errMeterReset = errors.New("meter table was recreated during the read")
+
+// meterSample builds one VM's sample from nft output. before and after are the
+// receipt's CounterID read either side of the nft call; a change means the
+// table was replaced, so the bytes belong to a different counter and are dropped.
+func meterSample(vmID, before, after string, raw []byte) (UsageSample, error) {
+	if before != after {
+		return UsageSample{}, errMeterReset
+	}
+	b, p, err := parseMeter(raw)
+	if err != nil {
+		return UsageSample{}, err
+	}
+	return UsageSample{VMID: vmID, CounterID: before, Bytes: b, Packets: p}, nil
 }

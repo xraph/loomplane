@@ -1,7 +1,11 @@
 package firecracker
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,5 +50,44 @@ func TestPlatformRefusesSMT(t *testing.T) {
 	}
 	if err := platformReady(HostConfig{}, Capabilities{SMTActive: true}); err != nil {
 		t.Fatal("SMT refused on a per-org host", err)
+	}
+}
+
+func TestCapabilitiesOmitPlatformFieldsWhenUnset(t *testing.T) {
+	raw, err := json.Marshal(Capabilities{HostID: "h", Limits: Limits{VMs: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Platform", "SMTActive", "DeniedPorts", "PerOrg"} {
+		if strings.Contains(string(raw), key) {
+			t.Fatal("older control planes would reject", key, string(raw))
+		}
+	}
+	raw, err = json.Marshal(Capabilities{Platform: true, SMTActive: true, DeniedPorts: []int{25}, Limits: Limits{PerOrg: OrgLimits{VMs: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Platform", "SMTActive", "DeniedPorts", "PerOrg"} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatal("missing", key, string(raw))
+		}
+	}
+}
+
+func TestRunHostRefusesPlatformWithPeers(t *testing.T) {
+	cfg := HostConfig{
+		Platform: &PlatformPeer{Fingerprint: strings.Repeat("a", 64)},
+		Peers:    []Peer{{Fingerprint: strings.Repeat("b", 64), Org: "org"}},
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "host.json")
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = RunHost(context.Background(), path); !errors.Is(err, ErrInvalid) {
+		t.Fatal("platform config with per-org peers started", err)
 	}
 }

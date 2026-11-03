@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -60,13 +61,22 @@ func (d *linuxDriver) Usage(ctx context.Context, vms []VM) ([]UsageSample, error
 		cmd := exec.CommandContext(ctx, "nft", "-j", "list", "table", "netdev", meterTable(vm.ID)) //nolint:gosec // Table name is built from the validated VM identity, with no shell.
 		cmd.Stdout = &stdout
 		if cmd.Run() != nil {
+			log.Printf("Firecracker egress meter missing for VM %s", vm.ID)
 			continue
 		}
-		bytesSent, packets, err := parseMeter(stdout.Bytes())
+		after, err := d.readReceipt(vm)
 		if err != nil {
-			return nil, err
+			continue
 		}
-		out = append(out, UsageSample{VMID: vm.ID, CounterID: receipt.CounterID, Bytes: bytesSent, Packets: packets})
+		sample, err := meterSample(vm.ID, receipt.CounterID, after.CounterID, stdout.Bytes())
+		if errors.Is(err, errMeterReset) {
+			continue
+		}
+		if err != nil {
+			log.Printf("Firecracker egress meter unreadable for VM %s", vm.ID)
+			continue
+		}
+		out = append(out, sample)
 	}
 	return out, nil
 }
