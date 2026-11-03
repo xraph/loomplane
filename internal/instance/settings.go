@@ -138,3 +138,71 @@ func EffectiveWaitlist(override *bool, on, stored bool) bool {
 	}
 	return stored && on
 }
+
+// platformCloudKey is the row that holds the platform Cloud settings.
+const platformCloudKey = "platform_cloud"
+
+// PlatformLimits caps what one organization may use of the platform Cloud.
+type PlatformLimits struct {
+	VCPUs            int `json:"vcpus"`
+	MemoryMiB        int `json:"memory_mib"`
+	VMs              int `json:"vms"`
+	ConcurrentBuilds int `json:"concurrent_builds"`
+}
+
+// RegistrySettings says where platform builds push images. The credential
+// that goes with it lives in Vault.
+type RegistrySettings struct {
+	Endpoint     string `json:"endpoint"`
+	Repository   string `json:"repository"`
+	AuthEndpoint string `json:"auth_endpoint"`
+}
+
+// PlatformCloudSettings configures the platform-owned Cloud.
+type PlatformCloudSettings struct {
+	// Attach is "manual" or "all_workspaces".
+	Attach        string           `json:"attach"`
+	DefaultLimits PlatformLimits   `json:"default_limits"`
+	Apex          string           `json:"apex"`
+	Registry      RegistrySettings `json:"registry"`
+}
+
+func defaultPlatformCloud() PlatformCloudSettings {
+	return PlatformCloudSettings{
+		Attach:        "manual",
+		DefaultLimits: PlatformLimits{VCPUs: 4, MemoryMiB: 8192, VMs: 10, ConcurrentBuilds: 1},
+	}
+}
+
+// PlatformCloud returns the platform Cloud settings, or the defaults
+// (attach manually, the default limits, no apex) when nothing is stored.
+func (s *Settings) PlatformCloud(ctx context.Context) (PlatformCloudSettings, error) {
+	out := defaultPlatformCloud()
+	var raw []byte
+	err := s.db.QueryRow(ctx, `SELECT value FROM loomplane_instance_settings WHERE key = $1`, platformCloudKey).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return PlatformCloudSettings{}, fmt.Errorf("read %s setting: %w", platformCloudKey, err)
+	}
+	if err = json.Unmarshal(raw, &out); err != nil {
+		return PlatformCloudSettings{}, fmt.Errorf("decode %s setting: %w", platformCloudKey, err)
+	}
+	return out, nil
+}
+
+// SetPlatformCloud replaces the platform Cloud settings.
+func (s *Settings) SetPlatformCloud(ctx context.Context, v PlatformCloudSettings) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_instance_settings (key, value, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, platformCloudKey, raw)
+	if err != nil {
+		return fmt.Errorf("store %s setting: %w", platformCloudKey, err)
+	}
+	return nil
+}
