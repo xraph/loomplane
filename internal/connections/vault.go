@@ -7,6 +7,8 @@ import (
 
 	"github.com/xraph/vault/core"
 	"github.com/xraph/vault/secret"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 // VaultAppID is the Vault app cloud credentials are kept under, apart
@@ -42,7 +44,10 @@ func NewVaultSecretsFor(svc *secret.Service, appID string) *VaultSecrets {
 	return &VaultSecrets{svc: svc, appID: appID}
 }
 
-var _ Secrets = (*VaultSecrets)(nil)
+var (
+	_ Secrets              = (*VaultSecrets)(nil)
+	_ repositories.Secrets = (*VaultSecrets)(nil)
+)
 
 func vaultKey(orgID, connectionID string) string { return orgID + "/" + connectionID }
 

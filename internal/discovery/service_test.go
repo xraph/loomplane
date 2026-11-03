@@ -569,6 +569,10 @@ func TestRunner_failures(t *testing.T) {
 		reason     string
 	}{
 		{"permanent", repositories.ErrNotFound, 3, false, repositories.ErrNotFound.Error()},
+		{
+			"lapsed GitLab sign-in", &repositories.GitLabSignInLapsedError{Username: "alice", Host: "gitlab.example.com"},
+			3, false, "The GitLab sign-in for alice on gitlab.example.com needs signing in again",
+		},
 		{"transient, then out of attempts", errors.New("connection reset"), 2, true, "the analysis failed: connection reset"},
 	}
 	for _, tt := range tests {

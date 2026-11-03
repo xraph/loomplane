@@ -72,7 +72,8 @@ type GitLabConnection struct {
 	GitLabUserID int64
 	Username     string
 	AvatarURL    string
-	// Version says which vault version holds the connection's tokens.
+	// Version is the GitLab release seen at sign-in, such as "17.4.2-ee",
+	// and "" when GitLab didn't say.
 	Version   string
 	CreatedBy string
 	CreatedAt time.Time

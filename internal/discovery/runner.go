@@ -123,13 +123,20 @@ func permanent(err error) bool {
 	return errors.Is(err, repositories.ErrNotFound) ||
 		errors.Is(err, repositories.ErrTooLarge) ||
 		errors.Is(err, repositories.ErrInvalidURL) ||
-		errors.Is(err, repositories.ErrUnsupportedHost)
+		errors.Is(err, repositories.ErrUnsupportedHost) ||
+		errors.Is(err, repositories.ErrGitLabSignInLapsed)
 }
 
 // reason is what a person sees for a failed analysis: the cause in
 // Loomplane's words when it's one Loomplane knows, the error itself when
 // it isn't.
 func reason(err error) string {
+	// A lapsed GitLab sign-in says whose it is and where, which is what
+	// someone needs to sign in again.
+	var lapsed *repositories.GitLabSignInLapsedError
+	if errors.As(err, &lapsed) {
+		return lapsed.Error()
+	}
 	for _, known := range []error{
 		repositories.ErrNotFound, repositories.ErrTooLarge, repositories.ErrInvalidURL,
 		repositories.ErrUnsupportedHost, repositories.ErrRateLimited,
