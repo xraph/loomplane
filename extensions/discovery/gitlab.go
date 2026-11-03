@@ -228,26 +228,9 @@ func gitlabConnections(cfg config.Config, db *grove.DB, pg *pgdriver.PgDB, authz
 	if err != nil {
 		return nil, nil, fmt.Errorf("vault encryptor: %w", err)
 	}
-	var (
-		instance []repositories.GitLabHost
-		secrets  = map[string]string{}
-	)
-	if cfg.GitLab.ClientID != "" {
-		instance = append(instance, repositories.GitLabHost{
-			WebURL: repositories.DefaultGitLabURL, Host: repositories.HostGitLab, ClientID: cfg.GitLab.ClientID, Instance: true,
-		})
-		secrets[repositories.HostGitLab] = cfg.GitLab.ClientSecret
-	}
-	for _, h := range cfg.GitLab.Hosts {
-		webURL, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
-		if err != nil {
-			return nil, nil, fmt.Errorf("gitlab.hosts %q: %w", h.WebURL, err)
-		}
-		if _, taken := secrets[host]; taken {
-			continue
-		}
-		instance = append(instance, repositories.GitLabHost{WebURL: webURL, Host: host, ClientID: h.ClientID, Instance: true})
-		secrets[host] = h.ClientSecret
+	instance, secrets, err := gitlabInstanceHosts(cfg.GitLab)
+	if err != nil {
+		return nil, nil, err
 	}
 	registry := &repositories.GitLabRegistry{
 		Instance: instance, Store: repositories.NewGitLabPgStore(pg), AllowOrganizationHosts: cfg.GitLab.AllowOrganizationHosts,
@@ -267,6 +250,40 @@ func gitlabConnections(cfg config.Config, db *grove.DB, pg *pgdriver.PgDB, authz
 		WebhookBaseURL:  strings.TrimRight(webhookBase, "/"),
 	})
 	return conns, registry, nil
+}
+
+// gitlabInstanceHosts are the operator's GitLab hosts, and their OAuth
+// client secrets by host. gitlab.com is one whenever its OAuth application
+// is set. It is reached at gitlab.api_url, as the static gitlab.com reader
+// is, but keeps the host name gitlab.com, so its sources stay
+// gitlab.com/... wherever api_url points.
+func gitlabInstanceHosts(cfg config.GitLabConfig) ([]repositories.GitLabHost, map[string]string, error) {
+	var (
+		instance []repositories.GitLabHost
+		secrets  = map[string]string{}
+	)
+	if cfg.ClientID != "" {
+		webURL := strings.TrimRight(cfg.APIURL, "/")
+		if webURL == "" {
+			webURL = repositories.DefaultGitLabURL
+		}
+		instance = append(instance, repositories.GitLabHost{
+			WebURL: webURL, Host: repositories.HostGitLab, ClientID: cfg.ClientID, Instance: true,
+		})
+		secrets[repositories.HostGitLab] = cfg.ClientSecret
+	}
+	for _, h := range cfg.Hosts {
+		webURL, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
+		if err != nil {
+			return nil, nil, fmt.Errorf("gitlab.hosts %q: %w", h.WebURL, err)
+		}
+		if _, taken := secrets[host]; taken {
+			continue
+		}
+		instance = append(instance, repositories.GitLabHost{WebURL: webURL, Host: host, ClientID: h.ClientID, Instance: true})
+		secrets[host] = h.ClientSecret
+	}
+	return instance, secrets, nil
 }
 
 // SourceReaders reads the hosts a source can be on: GitHub, gitlab.com and
