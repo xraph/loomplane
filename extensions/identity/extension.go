@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -262,7 +263,11 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	engine, err := authsome.NewEngine(
+	options, err := e.editionOptions(db)
+	if err != nil {
+		return nil, err
+	}
+	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
 		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
@@ -290,9 +295,11 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
 		authsome.WithPlugin(e.waitlist),
 		authsome.WithPlugin(e.oauthProvider(db)),
+	}, options)
+	engine, err := authsome.NewEngine(append(opts,
 		// Last, so it judges a sign-up the other plugins have accepted.
 		authsome.WithPlugin(e.gate),
-	)
+	)...)
 	if err != nil {
 		return nil, fmt.Errorf("authsome engine: %w", err)
 	}

@@ -45,6 +45,7 @@ import {
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
+import { useCloudSettingsGroups } from "@/hooks/use-cloud-settings-groups"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
@@ -197,6 +198,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   // Settings sit at the foot of the sidebar, apart from the pages you work
   // in, and open beside it rather than pushing the projects up.
   const at = (p: string) => path.startsWith(p)
+  const cloudGroups = useCloudSettingsGroups()
   const settings: SettingsGroup[] = [
     {
       label: "Workspace",
@@ -286,6 +288,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           ]
         : [],
     },
+    ...cloudGroups,
   ]
 
   return (
