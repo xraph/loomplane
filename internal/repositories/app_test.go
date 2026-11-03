@@ -356,10 +356,10 @@ func TestConnections_tokensOnlyFromTheOrganizationsOwnInstallations(t *testing.T
 		repo      Repository
 		want      string
 	}{
-		{"owner matches, any case", "aorg_a", Repository{"acme", "mono"}, repoToken},
-		{"the installation can't see the repository", "aorg_a", Repository{"acme", "secret"}, ""},
-		{"another owner", "aorg_a", Repository{"globex", "mono"}, ""},
-		{"another organization", "aorg_b", Repository{"acme", "mono"}, ""},
+		{"owner matches, any case", "aorg_a", Repository{Owner: "acme", Name: "mono"}, repoToken},
+		{"the installation can't see the repository", "aorg_a", Repository{Owner: "acme", Name: "secret"}, ""},
+		{"another owner", "aorg_a", Repository{Owner: "globex", Name: "mono"}, ""},
+		{"another organization", "aorg_b", Repository{Owner: "acme", Name: "mono"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -382,7 +382,7 @@ func TestConnections_withoutAnApp(t *testing.T) {
 	if _, err := f.conns.Connect(ctx, admin, ConnectGitHubInput{InstallationID: installed}); !errors.Is(err, ErrAppNotConfigured) {
 		t.Fatalf("connect: %v", err)
 	}
-	if tok, err := f.conns.Token(ctx, "aorg_a", Repository{"acme", "mono"}); err != nil || tok != "" {
+	if tok, err := f.conns.Token(ctx, "aorg_a", Repository{Owner: "acme", Name: "mono"}); err != nil || tok != "" {
 		t.Fatalf("token %q, %v", tok, err)
 	}
 }

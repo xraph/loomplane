@@ -29,10 +29,8 @@ import (
 
 // Errors a fetch can fail with. Each is permanent: retrying won't help.
 var (
-	ErrUnsupportedHost = errors.New("only GitHub repositories can be analyzed so far")
-	ErrInvalidURL      = errors.New("that isn't a GitHub repository URL")
-	ErrNotFound        = errors.New("the repository or ref doesn't exist, or it's private and Loomplane can't read it")
-	ErrTooLarge        = errors.New("the repository is larger than Loomplane analyzes")
+	ErrNotFound = errors.New("the repository or ref doesn't exist, or it's private and Loomplane can't read it")
+	ErrTooLarge = errors.New("the repository is larger than Loomplane analyzes")
 )
 
 // ErrRateLimited means GitHub refused for now. It's worth retrying later.
@@ -52,52 +50,9 @@ const (
 )
 
 var (
-	ownerPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
-	repoPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
-	refPattern   = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,250}$`)
-	shaPattern   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	refPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,250}$`)
+	shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
-
-// Repository is a GitHub repository, by owner and name.
-type Repository struct {
-	Owner string `json:"owner"`
-	Name  string `json:"name"`
-}
-
-// FullName is "owner/name".
-func (r Repository) FullName() string { return r.Owner + "/" + r.Name }
-
-// URL is the repository's page on github.com.
-func (r Repository) URL() string { return "https://github.com/" + r.FullName() }
-
-// ParseGitHubURL reads a repository from the URLs people paste:
-// https://github.com/o/r, https://github.com/o/r.git, github.com/o/r and
-// git@github.com:o/r.git.
-func ParseGitHubURL(raw string) (Repository, error) {
-	s := strings.TrimSpace(raw)
-	if rest, ok := strings.CutPrefix(s, "git@github.com:"); ok {
-		s = "https://github.com/" + rest
-	}
-	if !strings.Contains(s, "://") {
-		s = "https://" + s
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" {
-		return Repository{}, ErrInvalidURL
-	}
-	if host := strings.ToLower(u.Hostname()); host != "github.com" && host != "www.github.com" {
-		return Repository{}, ErrUnsupportedHost
-	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) < 2 {
-		return Repository{}, ErrInvalidURL
-	}
-	r := Repository{Owner: parts[0], Name: strings.TrimSuffix(parts[1], ".git")}
-	if !ownerPattern.MatchString(r.Owner) || !repoPattern.MatchString(r.Name) || r.Name == "." || r.Name == ".." {
-		return Repository{}, ErrInvalidURL
-	}
-	return r, nil
-}
 
 // ValidRef reports whether ref is a plausible branch, tag or commit name.
 // Anything else is refused before it reaches a URL.

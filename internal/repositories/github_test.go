@@ -28,12 +28,12 @@ func TestParseGitHubURL(t *testing.T) {
 		want repositories.Repository
 		err  error
 	}{
-		{"https://github.com/acme/mono", repositories.Repository{"acme", "mono"}, nil},
-		{"https://github.com/acme/mono.git", repositories.Repository{"acme", "mono"}, nil},
-		{"https://github.com/acme/mono/tree/main/apps", repositories.Repository{"acme", "mono"}, nil},
-		{"github.com/acme/mono", repositories.Repository{"acme", "mono"}, nil},
-		{"git@github.com:acme/mono.git", repositories.Repository{"acme", "mono"}, nil},
-		{"  https://www.github.com/acme/my.repo_1  ", repositories.Repository{"acme", "my.repo_1"}, nil},
+		{"https://github.com/acme/mono", repositories.Repository{Owner: "acme", Name: "mono"}, nil},
+		{"https://github.com/acme/mono.git", repositories.Repository{Owner: "acme", Name: "mono"}, nil},
+		{"https://github.com/acme/mono/tree/main/apps", repositories.Repository{Owner: "acme", Name: "mono"}, nil},
+		{"github.com/acme/mono", repositories.Repository{Owner: "acme", Name: "mono"}, nil},
+		{"git@github.com:acme/mono.git", repositories.Repository{Owner: "acme", Name: "mono"}, nil},
+		{"  https://www.github.com/acme/my.repo_1  ", repositories.Repository{Owner: "acme", Name: "my.repo_1"}, nil},
 		{"https://gitlab.com/acme/mono", repositories.Repository{}, repositories.ErrUnsupportedHost},
 		{"https://github.com/acme", repositories.Repository{}, repositories.ErrInvalidURL},
 		{"https://github.com/-acme/mono", repositories.Repository{}, repositories.ErrInvalidURL},
@@ -164,7 +164,7 @@ func newFake(t *testing.T) (*fakeGitHub, *repositories.GitHub) {
 func TestGitHub_resolveAndFetchExtractsSafely(t *testing.T) {
 	ctx := context.Background()
 	f, g := newFake(t)
-	repo := repositories.Repository{"acme", "mono"}
+	repo := repositories.Repository{Owner: "acme", Name: "mono"}
 
 	sha, err := g.Resolve(ctx, repo, "", "ghs_token")
 	if err != nil || sha != testSHA {
@@ -205,7 +205,7 @@ func TestGitHub_resolveAndFetchExtractsSafely(t *testing.T) {
 
 func TestGitHub_limits(t *testing.T) {
 	ctx := context.Background()
-	repo := repositories.Repository{"acme", "mono"}
+	repo := repositories.Repository{Owner: "acme", Name: "mono"}
 	tests := map[string]func(g *repositories.GitHub){
 		"archive": func(g *repositories.GitHub) { g.MaxArchiveBytes = 512 },
 		"total":   func(g *repositories.GitHub) { g.MaxTotalBytes = 1024 },
@@ -224,17 +224,17 @@ func TestGitHub_limits(t *testing.T) {
 func TestGitHub_errors(t *testing.T) {
 	ctx := context.Background()
 	f, g := newFake(t)
-	if _, err := g.Resolve(ctx, repositories.Repository{"acme", "private"}, "main", ""); !errors.Is(err, repositories.ErrNotFound) {
+	if _, err := g.Resolve(ctx, repositories.Repository{Owner: "acme", Name: "private"}, "main", ""); !errors.Is(err, repositories.ErrNotFound) {
 		t.Fatalf("missing repo: %v", err)
 	}
-	if _, err := g.Resolve(ctx, repositories.Repository{"acme", "mono"}, "../../etc", ""); !errors.Is(err, repositories.ErrNotFound) {
+	if _, err := g.Resolve(ctx, repositories.Repository{Owner: "acme", Name: "mono"}, "../../etc", ""); !errors.Is(err, repositories.ErrNotFound) {
 		t.Fatalf("bad ref: %v", err)
 	}
-	if _, err := g.Fetch(ctx, repositories.Repository{"acme", "mono"}, "main", "", t.TempDir()); err == nil || !strings.Contains(err.Error(), "full commit SHA") {
+	if _, err := g.Fetch(ctx, repositories.Repository{Owner: "acme", Name: "mono"}, "main", "", t.TempDir()); err == nil || !strings.Contains(err.Error(), "full commit SHA") {
 		t.Fatalf("fetch by branch: %v", err)
 	}
 	f.limit = true
-	if _, err := g.Resolve(ctx, repositories.Repository{"acme", "mono"}, "main", ""); !errors.Is(err, repositories.ErrRateLimited) {
+	if _, err := g.Resolve(ctx, repositories.Repository{Owner: "acme", Name: "mono"}, "main", ""); !errors.Is(err, repositories.ErrRateLimited) {
 		t.Fatalf("rate limited: %v", err)
 	}
 }
