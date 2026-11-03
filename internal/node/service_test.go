@@ -112,8 +112,22 @@ func TestSystemdInstallCreatesUserCopiesBinaryAndWritesUnit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.state, "node.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(r.state, "keep-out"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(r.state, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.m.Install(t.Context(), Unit{Binary: r.src, StateDir: r.state, Docker: true}); err != nil {
 		t.Fatal(err)
+	}
+	for p := range r.chowned {
+		if b := filepath.Base(p); b == "keep-out" || b == "other" {
+			t.Errorf("chowned %s, which is not a node file", p)
+		}
+	}
+	if len(r.chowned) > 5 {
+		t.Errorf("chowned %d paths: %v", len(r.chowned), r.chowned)
 	}
 	want := []string{
 		"useradd --system --no-create-home --home-dir " + r.state + " --shell /usr/sbin/nologin loomplane-node",
@@ -267,5 +281,26 @@ func TestLaunchdLifecycle(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("never ran %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestUnitValuesAreChecked(t *testing.T) {
+	good := Unit{Binary: "/usr/local/bin/loomctl", StateDir: "/var/lib/loomplane-node"}
+	for name, u := range map[string]Unit{
+		"relative dir":    {Binary: good.Binary, StateDir: "var/lib/node"},
+		"space":           {Binary: good.Binary, StateDir: "/var/lib/my node"},
+		"newline":         {Binary: good.Binary, StateDir: "/var/lib/n\nExecStart=/bin/sh"},
+		"percent":         {Binary: good.Binary, StateDir: "/var/lib/%n"},
+		"odd binary name": {Binary: "/usr/local/bin/lo omctl", StateDir: good.StateDir},
+	} {
+		if _, err := renderSystemdUnit(u, "loomplane-node"); err == nil {
+			t.Errorf("systemd accepted %s", name)
+		}
+	}
+	if _, err := renderLaunchdPlist(Unit{Binary: good.Binary, StateDir: "relative"}); err == nil {
+		t.Error("launchd accepted a relative dir")
+	}
+	if _, err := renderLaunchdPlist(Unit{Binary: "/x/lo omctl", StateDir: "/Users/a/Library/Application Support/loomplane-node"}); err == nil {
+		t.Error("launchd accepted an odd binary name")
 	}
 }

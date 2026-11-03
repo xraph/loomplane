@@ -141,3 +141,24 @@ func installBinary(src, stateDir string) error {
 
 // goosNow is the system this binary runs on.
 func goosNow() string { return runtime.GOOS }
+
+// stdinIsTerminal reports whether standard input is a terminal.
+func stdinIsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// systemReady checks what installing the service needs: systemd and useradd
+// on Linux. Other systems need nothing from the machine here.
+func systemReady(goos string) error {
+	if goos != "linux" {
+		return nil
+	}
+	if fi, err := os.Stat("/run/systemd/system"); err != nil || !fi.IsDir() {
+		return errors.New("this machine does not run systemd")
+	}
+	if _, err := exec.LookPath("useradd"); err != nil {
+		return errors.New("useradd is not installed")
+	}
+	return nil
+}

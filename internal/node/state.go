@@ -181,6 +181,11 @@ func (s State) LoadConfig() (Config, error) {
 	if err := s.ensureDir(); err != nil {
 		return c, err
 	}
+	return s.readConfigFile()
+}
+
+func (s State) readConfigFile() (Config, error) {
+	var c Config
 	path := filepath.Join(s.Dir, configFile)
 	f, err := s.openChecked(path, false)
 	if err != nil {
@@ -198,6 +203,29 @@ func (s State) LoadConfig() (Config, error) {
 		c.IngressMode = nodeproto.IngressNone
 	}
 	return c, nil
+}
+
+// ReadConfig reads node.json without touching the state dir: it never
+// creates it, changes its mode or changes its owner. A missing dir or file
+// returns an error wrapping fs.ErrNotExist. Commands that only look, and the
+// first read of those that change things, use it, so they cannot alter a
+// directory that is not a node's.
+func (s State) ReadConfig() (Config, error) {
+	var c Config
+	fi, err := os.Lstat(s.Dir)
+	if err != nil {
+		return c, err
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return c, fmt.Errorf("state dir %s is a symlink; point --state-dir at the real directory", s.Dir)
+	}
+	if !fi.IsDir() {
+		return c, fmt.Errorf("state dir %s is not a directory", s.Dir)
+	}
+	if owner, ok := fileOwner(fi); ok && int64(owner) != int64(s.uid()) {
+		return c, fmt.Errorf("state dir %s is owned by uid %d, not by this user (uid %d)", s.Dir, owner, s.uid())
+	}
+	return s.readConfigFile()
 }
 
 // SaveConfig writes node.json atomically with mode 0600.

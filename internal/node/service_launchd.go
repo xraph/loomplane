@@ -22,6 +22,11 @@ type launchdManager struct {
 }
 
 func renderLaunchdPlist(u Unit) (string, error) {
+	// The macOS state dir has a space in it ("Application Support"), and the
+	// plist is XML-escaped, so only the shape is checked.
+	if err := checkUnit(u, false); err != nil {
+		return "", err
+	}
 	return render("templates/com.loomplane.node.plist", map[string]string{
 		"Label":    launchdLabel,
 		"Exec":     xmlEscape(filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary))),

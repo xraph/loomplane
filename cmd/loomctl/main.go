@@ -22,7 +22,7 @@ import (
 func main() {
 	if err := ctl.New(ctl.Options{Version: buildinfo.Version}).Run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "loomctl:", err)
-		// 3 is a node that Loomplane revoked; everything else is 1.
+		// 77 is a node that Loomplane revoked; everything else is 1.
 		os.Exit(node.ExitCode(err))
 	}
 }

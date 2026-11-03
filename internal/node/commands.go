@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -12,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -54,6 +54,11 @@ type Options struct {
 	binary  func() (string, error)
 	chown   func(path string, uid, gid int) error
 	runNode func(ctx context.Context, st State) error
+	// in and isTerminal drive the endpoint question of node join.
+	in         io.Reader
+	isTerminal func() bool
+	// serviceReady checks that this system can host the service.
+	serviceReady func() error
 }
 
 type cmds struct {
@@ -88,6 +93,15 @@ func Commands(opts Options) []cli.Command {
 	}
 	if o.chown == nil {
 		o.chown = os.Lchown
+	}
+	if o.in == nil {
+		o.in = os.Stdin
+	}
+	if o.isTerminal == nil {
+		o.isTerminal = stdinIsTerminal
+	}
+	if o.serviceReady == nil {
+		o.serviceReady = func() error { return systemReady(o.goos) }
 	}
 	if o.runNode == nil {
 		o.runNode = c.runForeground
@@ -129,7 +143,7 @@ func Commands(opts Options) []cli.Command {
 }
 
 // guard refuses a system the node does not run on, and turns a revoked node's
-// error into one that carries exit code 3 through Forge.
+// error into one that carries its exit code (77 for a revoked node) through Forge.
 func (c *cmds) guard(h func(cli.CommandContext) error) cli.CommandHandler {
 	return func(ctx cli.CommandContext) error {
 		if err := supportedFor(c.opts.goos); err != nil {
@@ -152,14 +166,20 @@ func (c *cmds) printf(format string, a ...any) {
 	_, _ = fmt.Fprintf(c.opts.Out, format, a...)
 }
 
-func (c *cmds) stateDir(ctx cli.CommandContext) string {
-	if d := ctx.String("state-dir"); d != "" {
-		return d
+// stateDir is the absolute state directory. A relative one is refused: a
+// command run as root must know exactly which directory it changes.
+func (c *cmds) stateDir(ctx cli.CommandContext) (string, error) {
+	d := ctx.String("state-dir")
+	if d == "" {
+		d = c.opts.Getenv(envStateDir)
 	}
-	if d := c.opts.Getenv(envStateDir); d != "" {
-		return d
+	if d == "" {
+		d = DefaultStateDir(c.opts.goos, c.opts.home)
 	}
-	return DefaultStateDir(c.opts.goos, c.opts.home)
+	if !filepath.IsAbs(d) {
+		return "", fmt.Errorf("--state-dir %q must be an absolute path", d)
+	}
+	return filepath.Clean(d), nil
 }
 
 // stateOwner is the uid that owns dir, when root works on a state dir that
@@ -282,7 +302,8 @@ func parseLabels(items []string) (map[string]string, error) {
 }
 
 func (c *cmds) join(ctx cli.CommandContext) error {
-	eps, err := parseAllow(ctx.StringSlice("allow"))
+	allowFlag := ctx.StringSlice("allow")
+	eps, err := parseAllow(allowFlag)
 	if err != nil {
 		return fmt.Errorf("--allow: %w", err)
 	}
@@ -298,24 +319,42 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 		return fmt.Errorf("--builder %q: the only choice is dedicated", b)
 	}
 	token, cloud, edge, foreground := ctx.String("token"), ctx.String("cloud"), ctx.Bool("edge"), ctx.Bool("foreground")
-	if token != "" && cloud != "" {
-		return errors.New("--cloud goes in the join token, so it cannot be used with --token: mint the token with --cloud, or drop --token and use your login")
+	if token != "" && (cloud != "" || edge) {
+		return errors.New("--cloud and --edge go in the join token, so they cannot be used with --token: mint the token with them, or drop --token and use your login")
 	}
-	dir := c.stateDir(ctx)
-	// Check this before the token is spent.
+	dir, err := c.stateDir(ctx)
+	if err != nil {
+		return err
+	}
+	// Everything that can fail without the network comes before the token is
+	// spent.
+	if rerr := c.refuseMacRoot("node join"); rerr != nil {
+		return rerr
+	}
 	if !foreground {
 		if rerr := c.needRoot("installing the node as a service"); rerr != nil {
 			return fmt.Errorf("%w, or pass --foreground to run it in this terminal", rerr)
 		}
+		if serr := c.opts.serviceReady(); serr != nil {
+			return fmt.Errorf("%w: %w; pass --foreground to run it in this terminal", ErrUnsupported, serr)
+		}
+	}
+	if cerr := checkJoinDir(dir); cerr != nil {
+		return cerr
 	}
 	url, key, err := c.credentials(ctx)
 	if err != nil {
 		return err
 	}
+	if token == "" && key == "" {
+		return fmt.Errorf("give a join token with --token, or an API key with --key or %s so one can be minted", envKey)
+	}
+	// With no --allow on a terminal, show what was found and ask. The answer
+	// goes into the minted token's scope too.
+	if len(allowFlag) == 0 && c.opts.isTerminal() {
+		eps = c.askEndpoints(ctx.Context())
+	}
 	if token == "" {
-		if key == "" {
-			return fmt.Errorf("give a join token with --token, or an API key with --key or %s so one can be minted", envKey)
-		}
 		scope := client.NodeJoinScope{Labels: labels, Endpoints: eps, Edge: edge, CloudID: cloud}
 		jt, merr := client.New(url, key).CreateNodeJoinToken(ctx.Context(), scope)
 		if merr != nil {
@@ -351,6 +390,68 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 	return c.install(ctx.Context(), dir, *cfg)
 }
 
+// askEndpoints shows what this machine offers and asks whether Loomplane may
+// use it. Anything but yes allows nothing.
+func (c *cmds) askEndpoints(ctx context.Context) []nodeproto.Endpoint {
+	inv := Detect(ctx, c.opts.detect)
+	offered := []nodeproto.Endpoint{nodeproto.EndpointProbe}
+	c.printf("\nLoomplane could use this on this machine:\n  %-8s report what the machine has\n", nodeproto.EndpointProbe)
+	switch {
+	case inv.Docker != nil:
+		offered = append(offered, nodeproto.EndpointDocker)
+		c.printf("  %-8s run containers with docker %s at %s\n", nodeproto.EndpointDocker, inv.Docker.Version, inv.Docker.Socket)
+	case inv.Podman != nil:
+		offered = append(offered, nodeproto.EndpointDocker)
+		c.printf("  %-8s run containers with podman %s at %s\n", nodeproto.EndpointDocker, inv.Podman.Version, inv.Podman.Socket)
+	}
+	c.printf("Allow these? [y/N] ")
+	line, err := bufio.NewReader(c.opts.in).ReadString('\n')
+	if err != nil && line == "" {
+		c.printf("\n")
+		return []nodeproto.Endpoint{}
+	}
+	if a := strings.ToLower(strings.TrimSpace(line)); a == "y" || a == "yes" {
+		return offered
+	}
+	return []nodeproto.Endpoint{}
+}
+
+// checkJoinDir refuses a state dir that already holds anything but a node's
+// own files, so a join can never take over a directory such as /var/lib.
+func checkJoinDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !ownStateFile(e.Name()) {
+			return fmt.Errorf("%s already holds %q, which is not a node's file; give --state-dir an empty or new directory", dir, e.Name())
+		}
+	}
+	return nil
+}
+
+// ownStateFile names what a node puts in its state dir: the key, the config,
+// the copied binary's folder, the control socket, the macOS log and the temp
+// files an atomic write leaves behind.
+func ownStateFile(name string) bool {
+	switch name {
+	case identityFile, configFile, "bin", controlSocket, "node.log":
+		return true
+	}
+	return strings.HasPrefix(name, "."+configFile+".tmp-") || strings.HasPrefix(name, "."+identityFile+".tmp-")
+}
+
+func (c *cmds) refuseMacRoot(what string) error {
+	if c.opts.goos == "darwin" && c.opts.euid() == 0 {
+		return fmt.Errorf("%s as root would set the node up for root; run it as your own user, without sudo", what)
+	}
+	return nil
+}
+
 // install registers the node as a service and starts it.
 func (c *cmds) install(ctx context.Context, dir string, cfg Config) error {
 	if c.opts.goos == "darwin" {
@@ -360,7 +461,7 @@ func (c *cmds) install(ctx context.Context, dir string, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("finding the running binary: %w", err)
 	}
-	unit := Unit{Binary: bin, StateDir: dir, Docker: slices.Contains(cfg.Endpoints, nodeproto.EndpointDocker)}
+	unit := Unit{Binary: bin, StateDir: dir, Docker: cfg.DockerSocket != ""}
 	if err := c.opts.svc.Install(ctx, unit); err != nil {
 		return fmt.Errorf("joined as node %s, but installing the service failed: %w; fix that and run node leave, then join again", cfg.NodeID, err)
 	}
@@ -372,7 +473,11 @@ func (c *cmds) install(ctx context.Context, dir string, cfg Config) error {
 }
 
 func (c *cmds) run(ctx cli.CommandContext) error {
-	return c.opts.runNode(ctx.Context(), State{Dir: c.stateDir(ctx)})
+	dir, err := c.stateDir(ctx)
+	if err != nil {
+		return err
+	}
+	return c.opts.runNode(ctx.Context(), State{Dir: dir})
 }
 
 // runForeground keeps the connection to Loomplane until it is told to stop,
@@ -404,10 +509,13 @@ type statusInfo struct {
 }
 
 func (c *cmds) status(ctx cli.CommandContext) error {
-	dir := c.stateDir(ctx)
+	dir, err := c.stateDir(ctx)
+	if err != nil {
+		return err
+	}
 	st := c.stateFor(dir)
 	info := statusInfo{StateDir: dir, Endpoints: []nodeproto.Endpoint{}}
-	cfg, err := st.LoadConfig()
+	cfg, err := st.ReadConfig()
 	switch {
 	case err == nil:
 		info.Joined, info.URL, info.NodeID, info.OrgID = true, cfg.URL, cfg.NodeID, cfg.OrgID
@@ -461,7 +569,7 @@ func fingerprint(st State) string {
 	if _, err := os.Stat(filepath.Join(st.Dir, identityFile)); err != nil {
 		return ""
 	}
-	priv, err := st.Identity()
+	priv, err := st.readKey(filepath.Join(st.Dir, identityFile))
 	if err != nil {
 		return ""
 	}
@@ -495,7 +603,10 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	dir := c.stateDir(ctx)
+	dir, err := c.stateDir(ctx)
+	if err != nil {
+		return err
+	}
 	sock := filepath.Join(dir, controlSocket)
 	list := joinEndpoints(eps, ", ")
 	err = controlCall(ctx.Context(), sock, controlRequest{Op: "allow", Endpoints: eps})
@@ -512,7 +623,7 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 		return fmt.Errorf("the node service is running but its control socket %s does not answer; restart the service, then allow again", sock)
 	}
 	st := c.stateFor(dir)
-	cfg, err := st.LoadConfig()
+	cfg, err := st.ReadConfig()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return errors.New("this machine has not joined a Loomplane: run node join first")
@@ -534,10 +645,16 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 	if err := c.needRoot("node leave"); err != nil {
 		return err
 	}
-	dir := c.stateDir(ctx)
+	if err := c.refuseMacRoot("node leave"); err != nil {
+		return err
+	}
+	dir, err := c.stateDir(ctx)
+	if err != nil {
+		return err
+	}
 	st := c.stateFor(dir)
 	joined := true
-	if _, err := st.LoadConfig(); err != nil {
+	if _, err := st.ReadConfig(); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
@@ -552,7 +669,10 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 		case errors.Is(err, errNoService):
 			c.printf("The node is not running, so it cannot tell Loomplane it is leaving: revoke it in the dashboard (Nodes), or with node revoke.\n")
 		default:
-			c.printf("The running node could not tell Loomplane it is leaving (%v): revoke it in the dashboard (Nodes), or with node revoke.\n", err)
+			// The service runs and is still joined, so keep it and its
+			// config until Loomplane has revoked it.
+			c.printf("Revoke it in the dashboard (Nodes), or with node revoke, then run node leave again.\n")
+			return fmt.Errorf("the running node could not confirm that Loomplane revoked it (%w); its service and config are kept", err)
 		}
 	}
 	// --purge removes what Loomplane put on this machine. Nothing is there
@@ -561,8 +681,10 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 	if err := c.opts.svc.Remove(ctx.Context()); err != nil && !errors.Is(err, ErrUnsupported) {
 		return fmt.Errorf("removing the service: %w", err)
 	}
-	if err := st.DeleteConfig(); err != nil {
-		return err
+	if joined {
+		if err := st.DeleteConfig(); err != nil {
+			return err
+		}
 	}
 	c.printf("Removed this node's service and config. Its key stays in %s.\n", dir)
 	return nil

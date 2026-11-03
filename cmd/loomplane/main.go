@@ -53,11 +53,10 @@ func main() {
 
 // newApp runs after flags parse and before the chosen command. Building the
 // app does no I/O; Forge registers and starts extensions when it starts.
-func newApp(cli.CommandContext) (forge.App, error) {
+func newApp(ctx cli.CommandContext) (forge.App, error) {
 	// A machine that joined as a node has no database and no configuration,
-	// so the node commands run without the app. They exit with node.ExitCode
-	// through Forge's own exit code, and never read ctx.App().
-	if len(os.Args) > 1 && os.Args[1] == "node" {
+	// so the node commands run without the app. They never read ctx.App().
+	if ops.IsNodeCommand(ctx.Command()) {
 		return nil, nil //nolint:nilnil // no app is the point
 	}
 	cfg, err := loadConfig()

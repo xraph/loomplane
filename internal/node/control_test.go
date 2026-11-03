@@ -1,7 +1,9 @@
 package node
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/yamux"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -96,10 +100,8 @@ func TestControlCallWithNoServiceIsErrNoService(t *testing.T) {
 	}
 }
 
-func TestLeaveWaitsForRevokeAndTimesOut(t *testing.T) {
-	r, rt, cfg, done := liveNode(t)
-	_ = cfg
-	_ = r
+func TestLeaveReturnsOnceRevoked(t *testing.T) {
+	_, rt, _, done := liveNode(t)
 	if err := rt.Leave(t.Context()); err != nil {
 		t.Fatalf("Leave: %v", err)
 	}
@@ -111,12 +113,77 @@ func TestLeaveWaitsForRevokeAndTimesOut(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run kept going after Leave")
 	}
-	// Not connected: say so at once.
-	r2 := newRig(t)
-	r2.st = State{Dir: filepath.Join(shortDir(t), "state")}
-	r2.join(t, nodeproto.EndpointProbe)
-	rt2 := r2.runtime(t)
-	if err := rt2.Leave(t.Context()); err == nil || !strings.Contains(err.Error(), "not connected") {
+}
+
+func TestLeaveWhileOfflineSaysSo(t *testing.T) {
+	r := newRig(t)
+	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
+	r.join(t, nodeproto.EndpointProbe)
+	if err := r.runtime(t).Leave(t.Context()); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("Leave while offline: %v", err)
+	}
+}
+
+// A session that ends with no Revoked and no unauthorized close is a network
+// blip, not a revoke: Leave must say it could not confirm.
+func TestLeaveIsAnErrorWhenTheSessionEndsWithoutRevoked(t *testing.T) {
+	old := leaveWait
+	leaveWait = 300 * time.Millisecond
+	t.Cleanup(func() { leaveWait = old })
+
+	nodeEnd, hubEnd := net.Pipe()
+	cfg := yamux.DefaultConfig()
+	cfg.LogOutput = io.Discard
+	hub, err := yamux.Client(hubEnd, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux, err := yamux.Server(nodeEnd, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hub.Close(); _ = mux.Close() })
+	hubCtrl, err := hub.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCtrl, err := mux.AcceptStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &Runtime{revoked: make(chan struct{})}
+	s := &session{r: rt, mux: mux, ctrl: nodeCtrl, done: make(chan struct{})}
+	rt.attach(s)
+	go func() { // the "hub": reads the Leave, then drops the connection
+		_, _ = bufio.NewReader(hubCtrl).ReadBytes('\n')
+		_ = hub.Close()
+		close(s.done)
+	}()
+	err = rt.Leave(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "did not confirm") {
+		t.Fatalf("Leave: %v", err)
+	}
+	select {
+	case <-rt.revoked:
+		t.Fatal("a dropped connection was taken for a revoke")
+	default:
+	}
+}
+
+func TestControlRefusesToStartBesideALiveNode(t *testing.T) {
+	r := newRig(t)
+	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	first := r.runtime(t)
+	start(t, first)
+	eventually(t, "the node to be online", func() bool { return r.online(cfg.NodeID) })
+	second := r.runtime(t)
+	err := second.Run(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "another node service is running") {
+		t.Fatalf("second Run: %v", err)
+	}
+	// The first node's socket is still there and still answers.
+	if err := controlCall(t.Context(), filepath.Join(r.st.Dir, controlSocket), controlRequest{Op: "nonsense"}); err == nil || errors.Is(err, errNoService) {
+		t.Fatalf("the first node lost its socket: %v", err)
 	}
 }

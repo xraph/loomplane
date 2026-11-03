@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -58,8 +59,8 @@ func lookupUser(name string) (uid, gid int, err error) {
 // renderSystemdUnit fills the unit template. The binary it runs is the copy in
 // the state dir, named like the running binary.
 func renderSystemdUnit(u Unit, svcUser string) (string, error) {
-	if strings.ContainsAny(u.StateDir, " \t\n\"'\\") {
-		return "", fmt.Errorf("the state dir %q has a space or a quote in it, which a systemd unit cannot take; use another --state-dir", u.StateDir)
+	if err := checkUnit(u, true); err != nil {
+		return "", err
 	}
 	return render("templates/loomplane-node.service", map[string]string{
 		"User": svcUser, "StateDir": u.StateDir, "Exec": filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary)),
@@ -102,7 +103,7 @@ func (m *systemdManager) Install(ctx context.Context, u Unit) error {
 	}
 	// Task 8's checks insist the state files belong to the user that runs the
 	// node, so hand over everything join made, and the copied binary.
-	if err := m.chownTree(u.StateDir, uid, gid); err != nil {
+	if err := m.chownKnown(u, uid, gid); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(m.unitDir, 0o755); err != nil { //nolint:gosec // systemd reads the unit dir as any user
@@ -143,13 +144,43 @@ func (m *systemdManager) ensureUser(ctx context.Context, u Unit) (uid, gid int, 
 	return uid, gid, nil
 }
 
-func (m *systemdManager) chownTree(root string, uid, gid int) error {
-	return filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
-		if err != nil {
+// chownKnown hands the service user the state dir and the files a node keeps
+// in it, by name. It never walks the tree, so a state dir that holds anything
+// else, or that points somewhere it should not, is not touched beyond itself.
+func (m *systemdManager) chownKnown(u Unit, uid, gid int) error {
+	for _, p := range []string{
+		u.StateDir,
+		filepath.Join(u.StateDir, "bin"),
+		filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary)),
+		filepath.Join(u.StateDir, identityFile),
+		filepath.Join(u.StateDir, configFile),
+	} {
+		if err := m.chown(p, uid, gid); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-		return m.chown(p, uid, gid)
-	})
+	}
+	return nil
+}
+
+// safePath allows only the characters a unit file can carry without quoting.
+var safePath = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// checkUnit requires an absolute state dir and binary name made of safe
+// characters, before either goes into a unit file or a command.
+func checkUnit(u Unit, strictDir bool) error {
+	if !filepath.IsAbs(u.StateDir) {
+		return fmt.Errorf("the state dir %q is not an absolute path", u.StateDir)
+	}
+	if strictDir && !safePath.MatchString(u.StateDir) {
+		return fmt.Errorf("the state dir %q has characters a systemd unit cannot take; use letters, digits and . _ - / only", u.StateDir)
+	}
+	if strings.ContainsAny(u.StateDir, "\x00\r\n") {
+		return fmt.Errorf("the state dir %q has a control character in it", u.StateDir)
+	}
+	if name := filepath.Base(u.Binary); !safePath.MatchString(name) || name == "." || name == ".." {
+		return fmt.Errorf("the binary name %q has characters a service file cannot take", name)
+	}
+	return nil
 }
 
 func (m *systemdManager) systemctl(ctx context.Context, args ...string) error {

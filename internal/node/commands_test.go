@@ -1,12 +1,14 @@
 package node
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,7 +75,8 @@ func newCmdRig(t *testing.T) *cmdRig {
 	r := &cmdRig{svc: &fakeService{}, out: &bytes.Buffer{}, dir: filepath.Join(shortDir(t), "state")}
 	r.opts = Options{Version: "test", Out: r.out, Getenv: func(string) string { return "" },
 		goos: "linux", euid: func() int { return 0 }, home: t.TempDir(), svc: r.svc, detect: quietDetect(),
-		binary: func() (string, error) { return "/usr/local/bin/loomctl", nil }, chown: func(string, int, int) error { return nil }}
+		binary: func() (string, error) { return "/usr/local/bin/loomctl", nil }, chown: func(string, int, int) error { return nil },
+		in: strings.NewReader(""), isTerminal: func() bool { return false }, serviceReady: func() error { return nil }}
 	return r
 }
 
@@ -490,14 +493,14 @@ func TestLeaveWithoutServicePointsAtTheDashboard(t *testing.T) {
 	}
 }
 
-func TestRunExitsWith3WhenRevoked(t *testing.T) {
+func TestRunExitsWith77WhenRevoked(t *testing.T) {
 	r := newRig(t)
 	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
 	r.join(t, nodeproto.EndpointProbe)
 	r.env.Store.BeforeClaim = func(id string) { r.env.Store.Revoke(id) }
 	cr := newCmdRig(t)
 	err := cr.run("node", "run", "--state-dir", r.st.Dir)
-	if err == nil || cli.GetExitCode(err) != 3 || !errors.Is(err, ErrRevoked) || ExitCode(err) != 3 {
+	if err == nil || cli.GetExitCode(err) != ExitRevoked || !errors.Is(err, ErrRevoked) || ExitCode(err) != ExitRevoked {
 		t.Fatalf("run returned %v (exit %d)", err, cli.GetExitCode(err))
 	}
 	if cli.GetExitCode(errors.New("x")) != 1 {
@@ -604,5 +607,260 @@ func TestListAndRevoke(t *testing.T) {
 	r2 := newCmdRig(t)
 	if err := r2.run("node", "list"); err == nil || !strings.Contains(err.Error(), "--url") {
 		t.Fatalf("list without a login: %v", err)
+	}
+}
+
+// serveControlStub answers every control request with resp.
+func serveControlStub(t *testing.T, dir, resp string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "unix", filepath.Join(dir, controlSocket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = bufio.NewReader(c).ReadBytes('\n')
+			_, _ = c.Write([]byte(resp + "\n"))
+			_ = c.Close()
+		}
+	}()
+}
+
+func TestLeaveKeepsEverythingWhenTheNodeCannotConfirm(t *testing.T) {
+	r := newCmdRig(t)
+	st := State{Dir: r.dir}
+	if err := st.SaveConfig(Config{URL: "http://x", NodeID: "n", Endpoints: []nodeproto.Endpoint{}}); err != nil {
+		t.Fatal(err)
+	}
+	serveControlStub(t, r.dir, `{"ok":false,"error":"Loomplane did not confirm"}`)
+	err := r.run("node", "leave", "--state-dir", r.dir)
+	if err == nil || !strings.Contains(err.Error(), "kept") {
+		t.Fatalf("leave: %v", err)
+	}
+	if strings.Contains(r.out.String(), "revoked this node") {
+		t.Fatalf("claimed a revoke:\n%s", r.out)
+	}
+	if _, err := st.LoadConfig(); err != nil {
+		t.Fatalf("node.json must stay: %v", err)
+	}
+	if r.svc.did("remove") || r.svc.did("stop") {
+		t.Fatalf("the service was touched: %v", r.svc.calls)
+	}
+}
+
+// fakeDocker serves just enough of the Docker API for Detect to find it.
+func fakeDocker(t *testing.T) string {
+	t.Helper()
+	sock := filepath.Join(shortDir(t), "d.sock")
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "unix", sock)
+	if err != nil {
+		t.Skip("unix sockets unavailable")
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Version": "27.1.0"})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sock
+}
+
+func TestJoinRefusesAStateDirWithForeignFiles(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	if err := os.MkdirAll(r.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dir, "passwd"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var chowned int
+	r.opts.chown = func(string, int, int) error { chowned++; return nil }
+	err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x")
+	if err == nil || !strings.Contains(err.Error(), "passwd") {
+		t.Fatalf("join: %v", err)
+	}
+	if js.join.Load() != nil || len(r.svc.installed) != 0 || chowned != 0 {
+		t.Fatal("the join went ahead")
+	}
+	if fi, _ := os.Stat(r.dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("the dir's mode changed to %v", fi.Mode())
+	}
+	// A dir that holds only a node's own files is fine to join again in.
+	r2 := newCmdRig(t)
+	if err := os.MkdirAll(filepath.Join(r2.dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkJoinDir(r2.dir); err != nil {
+		t.Fatalf("own files: %v", err)
+	}
+}
+
+func TestStateDirMustBeAbsolute(t *testing.T) {
+	r := newCmdRig(t)
+	for _, args := range [][]string{{"status"}, {"run"}, {"leave"}, {"allow", "docker"}, {"join", "--url", "http://x", "--token", "x"}} {
+		err := r.run(append(append([]string{"node"}, args...), "--state-dir", "relative/dir")...)
+		if err == nil || !strings.Contains(err.Error(), "absolute") {
+			t.Errorf("node %s: %v", args[0], err)
+		}
+	}
+	if _, err := os.Stat("relative"); err == nil {
+		t.Fatal("a relative dir was created")
+	}
+}
+
+func TestStatusChangesNothing(t *testing.T) {
+	r := newCmdRig(t)
+	dir := filepath.Join(shortDir(t), "state")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run("node", "status", "--state-dir", dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("status changed the dir to %v", fi.Mode())
+	}
+	missing := filepath.Join(shortDir(t), "never")
+	if err := r.run("node", "status", "--state-dir", missing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Fatal("status created the state dir")
+	}
+	// Nor do allow and leave touch a dir that is not a node's.
+	for _, args := range [][]string{{"allow", "docker"}, {"leave"}} {
+		_ = r.run(append([]string{"node"}, append(args, "--state-dir", dir)...)...)
+	}
+	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("allow or leave changed the dir to %v", fi.Mode())
+	}
+}
+
+func TestJoinAsksWhichEndpointsOnATerminal(t *testing.T) {
+	sock := fakeDocker(t)
+	for name, tc := range map[string]struct {
+		answer string
+		want   []nodeproto.Endpoint
+	}{"yes": {"y\n", []nodeproto.Endpoint{"probe", "docker"}}, "no": {"n\n", nil}, "eof": {"", nil}} {
+		js := newJoinServer(t)
+		r := newCmdRig(t)
+		r.opts.isTerminal = func() bool { return true }
+		r.opts.in = strings.NewReader(tc.answer)
+		r.opts.detect.DockerSockets = []string{sock}
+		r.opts.Login = func() (string, string, error) { return js.URL, secretKey, nil }
+		if err := r.run("node", "join", "--state-dir", r.dir); err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, r.out)
+		}
+		if got := js.scope.Load().Endpoints; !slices.Equal(got, tc.want) {
+			t.Errorf("%s: the minted scope has %v, want %v", name, got, tc.want)
+		}
+		if got := js.join.Load().Endpoints; len(got) != len(tc.want) {
+			t.Errorf("%s: the join sent %v", name, got)
+		}
+		if !strings.Contains(r.out.String(), "Allow these?") || !strings.Contains(r.out.String(), sock) {
+			t.Errorf("%s: the question lacks what was found:\n%s", name, r.out)
+		}
+	}
+}
+
+func TestJoinWithoutTerminalOrAllowAllowsNothing(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	r.opts.in = strings.NewReader("y\n")
+	r.opts.detect.DockerSockets = []string{fakeDocker(t)}
+	r.opts.Login = func() (string, string, error) { return js.URL, secretKey, nil }
+	if err := r.run("node", "join", "--state-dir", r.dir); err != nil {
+		t.Fatal(err)
+	}
+	if len(js.scope.Load().Endpoints) != 0 || len(js.join.Load().Endpoints) != 0 {
+		t.Fatalf("scope %v, join %v", js.scope.Load().Endpoints, js.join.Load().Endpoints)
+	}
+	if !strings.Contains(r.out.String(), "node allow docker") || strings.Contains(r.out.String(), "Allow these?") {
+		t.Fatalf("output:\n%s", r.out)
+	}
+	// --allow wins over the question, terminal or not.
+	r2 := newCmdRig(t)
+	r2.opts.isTerminal = func() bool { return true }
+	r2.opts.Login = func() (string, string, error) { return js.URL, secretKey, nil }
+	if err := r2.run("node", "join", "--state-dir", r2.dir, "--allow", "probe"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r2.out.String(), "Allow these?") {
+		t.Fatalf("asked although --allow was given:\n%s", r2.out)
+	}
+}
+
+func TestJoinRecordsDetectedDockerEvenWhenNotAllowed(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	sock := fakeDocker(t)
+	r.opts.detect.DockerSockets = []string{sock}
+	if err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x", "--allow", "probe"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := State{Dir: r.dir}.LoadConfig()
+	if err != nil || cfg.DockerSocket != sock {
+		t.Fatalf("config %+v %v", cfg, err)
+	}
+	if len(r.svc.installed) != 1 || !r.svc.installed[0].Docker {
+		t.Fatalf("the unit does not ask for the docker group: %+v", r.svc.installed)
+	}
+	// And a machine without Docker does not.
+	r2 := newCmdRig(t)
+	if err := r2.run("node", "join", "--state-dir", r2.dir, "--url", js.URL, "--token", "x", "--allow", "probe"); err != nil {
+		t.Fatal(err)
+	}
+	if r2.svc.installed[0].Docker {
+		t.Fatal("docker group for a machine without docker")
+	}
+}
+
+func TestJoinNeedsSystemdAndUseraddBeforeSpendingTheToken(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	r.opts.serviceReady = func() error { return errors.New("this machine does not run systemd") }
+	err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x")
+	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "--foreground") || !strings.Contains(err.Error(), "systemd") {
+		t.Fatalf("join: %v", err)
+	}
+	if js.join.Load() != nil {
+		t.Fatal("the token was spent")
+	}
+}
+
+func TestEdgeCannotRideOnAToken(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	err := r.run("node", "join", "--state-dir", r.dir, "--url", js.URL, "--token", "x", "--edge")
+	if err == nil || !strings.Contains(err.Error(), "--edge") {
+		t.Fatalf("join: %v", err)
+	}
+}
+
+func TestMacJoinAndLeaveRefuseRoot(t *testing.T) {
+	js := newJoinServer(t)
+	r := newCmdRig(t)
+	r.opts.goos = "darwin" // euid stays 0
+	for _, args := range [][]string{{"join", "--url", js.URL, "--token", "x"}, {"leave"}} {
+		err := r.run(append([]string{"node"}, append(args, "--state-dir", r.dir)...)...)
+		if err == nil || !strings.Contains(err.Error(), "your own user") {
+			t.Errorf("node %s as root on macOS: %v", args[0], err)
+		}
+	}
+	if js.join.Load() != nil {
+		t.Fatal("the token was spent")
 	}
 }

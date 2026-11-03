@@ -99,6 +99,11 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	}
 	cfg := Config{URL: base, NodeID: res.NodeID, OrgID: res.OrgID, IdentityGeneration: res.IdentityGeneration,
 		Endpoints: granted, IngressMode: nodeproto.IngressNone}
+	if inv.Docker != nil {
+		// Detected, whether or not it was allowed: the service user needs
+		// the socket's group, and the runtime looks for Docker here first.
+		cfg.DockerSocket = inv.Docker.Socket
+	}
 	if err = o.State.SaveConfig(cfg); err != nil {
 		return nil, fmt.Errorf("joined as node %s, but saving %s failed: %w; revoke that node in Loomplane and join again", res.NodeID, o.State.Dir, err)
 	}

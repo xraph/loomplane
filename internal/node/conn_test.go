@@ -257,7 +257,7 @@ func TestRunIgnoresBadIngressMode(t *testing.T) {
 	}
 }
 
-func TestRunRevokedExits3(t *testing.T) {
+func TestRunRevokedExits77(t *testing.T) {
 	r := newRig(t)
 	cfg := r.join(t, nodeproto.EndpointProbe)
 	done := start(t, r.runtime(t))
@@ -268,7 +268,7 @@ func TestRunRevokedExits3(t *testing.T) {
 	assertRevoked(t, r, done)
 }
 
-func TestRunRevokedAtConnectExits3(t *testing.T) {
+func TestRunRevokedAtConnectExits77(t *testing.T) {
 	r := newRig(t)
 	r.join(t, nodeproto.EndpointProbe)
 	// Revoked after the assertion checks out and before the session is claimed.
@@ -281,7 +281,7 @@ func assertRevoked(t *testing.T, r *rig, done chan error) {
 	t.Helper()
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrRevoked) || ExitCode(err) != 3 || err.Error() != "this node was revoked in Loomplane" {
+		if !errors.Is(err, ErrRevoked) || ExitCode(err) != ExitRevoked || err.Error() != "this node was revoked in Loomplane" {
 			t.Fatalf("Run returned %v (exit %d)", err, ExitCode(err))
 		}
 	case <-time.After(10 * time.Second):
@@ -353,7 +353,7 @@ func TestRunStopsOnUpdateNeeded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	err = rt.Run(ctx)
-	if err == nil || !strings.Contains(err.Error(), "update this node") || ExitCode(err) == 3 {
+	if err == nil || !strings.Contains(err.Error(), "update this node") || ExitCode(err) == ExitRevoked {
 		t.Fatalf("Run: %v", err)
 	}
 	if connects.Load() != 1 {

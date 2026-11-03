@@ -42,3 +42,27 @@ func TestLoomplaneNodeNeedsNoApp(t *testing.T) {
 		t.Fatalf("node status: %v", err)
 	}
 }
+
+func TestIsNodeCommand(t *testing.T) {
+	c := cli.New(cli.Config{Name: "loomplane"})
+	for _, cmd := range Commands(func() (Settings, error) { return Settings{}, nil }) {
+		if err := c.AddCommand(cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byName := map[string]cli.Command{}
+	for _, cmd := range c.Commands() {
+		byName[cmd.Name()] = cmd
+	}
+	if !IsNodeCommand(byName["node"]) {
+		t.Fatal("node is not a node command")
+	}
+	for _, sub := range byName["node"].Subcommands() {
+		if !IsNodeCommand(sub) {
+			t.Errorf("node %s is not a node command", sub.Name())
+		}
+	}
+	if IsNodeCommand(byName["backup"]) || IsNodeCommand(byName["migrate"]) || IsNodeCommand(nil) {
+		t.Fatal("a server command was taken for a node command")
+	}
+}

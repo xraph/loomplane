@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	// ExitRevoked is the process exit code of a node that Loomplane revoked.
-	ExitRevoked = 3
+	// ExitRevoked is the process exit code of a node that Loomplane revoked:
+	// EX_NOPERM. Forge uses 3 for its own internal errors.
+	ExitRevoked = 77
 
 	defaultMinDelay    = time.Second
 	defaultMaxDelay    = time.Minute
@@ -57,7 +58,7 @@ type UpgradeError struct{ Message string }
 
 func (e *UpgradeError) Error() string { return e.Message }
 
-// ExitCode is the exit code for an error from Run: 0 for none, 3 for a
+// ExitCode is the exit code for an error from Run: 0 for none, 77 for a
 // revoked node and 1 for anything else.
 func ExitCode(err error) int {
 	switch {
@@ -90,6 +91,9 @@ type Runtime struct {
 	// leaving is set once Leave has asked Loomplane to revoke this node, and
 	// cleared by the next connection that Loomplane accepts.
 	leaving atomic.Bool
+	// revoked is closed when Run decides this node was revoked.
+	revoked     chan struct{}
+	revokedOnce sync.Once
 
 	// Tunables, set by tests.
 	minDelay, maxDelay, stableAfter time.Duration
@@ -109,7 +113,7 @@ func NewRuntime(st State, reg *Registry) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading this node's config (has it joined? run loomctl node join): %w", err)
 	}
-	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version}
+	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{})}
 	r.live = NewLive(r.sanitized(cfg))
 	reg.Register(nodeproto.EndpointProbe, ProbeHandler(r.detectOptions))
 	return r, nil
@@ -147,7 +151,7 @@ func (r *Runtime) sanitized(c Config) Config {
 }
 
 // Run keeps the connection to Loomplane until ctx ends (it then returns nil),
-// the node is revoked (ErrRevoked, exit code 3) or Loomplane answers 426
+// the node is revoked (ErrRevoked, exit code 77) or Loomplane answers 426
 // (*UpgradeError). Anything else is retried with backoff.
 func Run(ctx context.Context, st State, reg *Registry) error {
 	r, err := NewRuntime(st, reg)
@@ -192,7 +196,11 @@ func (r *Runtime) inventory(ctx context.Context) nodeproto.Inventory {
 
 // Run connects, serves and reconnects. See the package func Run.
 func (r *Runtime) Run(ctx context.Context) error {
-	defer r.serveControl(ctx)()
+	stop, err := r.serveControl(ctx)
+	if err != nil {
+		return err
+	}
+	defer stop()
 	minDelay, maxDelay := orDur(r.minDelay, defaultMinDelay), orDur(r.maxDelay, defaultMaxDelay)
 	delay := minDelay
 	for {
@@ -206,6 +214,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		revoked := errors.Is(err, ErrRevoked) || (r.leaving.Load() && errors.Is(err, errKeyRefused))
 		switch {
 		case revoked:
+			r.revokedOnce.Do(func() { close(r.revoked) })
 			if derr := r.st.DeleteConfig(); derr != nil {
 				r.log().Error("loomplane-node: removing node.json after a revoke", "error", derr)
 			}

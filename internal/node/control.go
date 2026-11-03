@@ -46,13 +46,23 @@ var errNoService = errors.New("no node service is listening on the control socke
 
 // serveControl listens on the control socket until ctx ends or the returned
 // stop function runs, and removes the socket then. The socket is private to
-// the service user. A node that cannot listen still runs: only the local
-// allow and leave commands lose their way in, and they say so.
-func (r *Runtime) serveControl(ctx context.Context) (stop func()) {
+// the service user, and each caller is checked against the node's own user
+// and root. A node that cannot listen still runs: only the local allow and
+// leave commands lose their way in, and they say so. A socket that someone
+// answers on means another node runs on this state dir, and that is an error.
+func (r *Runtime) serveControl(ctx context.Context) (stop func(), err error) {
 	path := filepath.Join(r.st.Dir, controlSocket)
-	// A socket left by a crash would refuse the bind. Remove only a socket,
-	// never another kind of file.
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&fs.ModeSocket != 0 {
+	// A socket left by a crash would refuse the bind, but a live one belongs
+	// to a running node. Remove only a dead socket, never another file.
+	if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&fs.ModeSocket != 0 {
+		var d net.Dialer
+		dctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		c, derr := d.DialContext(dctx, "unix", path)
+		cancel()
+		if derr == nil {
+			_ = c.Close()
+			return nil, errors.New("another node service is running on this state directory")
+		}
 		_ = os.Remove(path)
 	}
 	var lc net.ListenConfig
@@ -65,7 +75,7 @@ func (r *Runtime) serveControl(ctx context.Context) (stop func()) {
 	}
 	if err != nil {
 		r.log().Warn("loomplane-node: no control socket, so node allow and node leave cannot reach this node", "path", path, "error", err)
-		return func() {}
+		return func() {}, nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -86,7 +96,7 @@ func (r *Runtime) serveControl(ctx context.Context) (stop func()) {
 		_ = l.Close()
 		<-done
 		_ = os.Remove(path)
-	}
+	}, nil
 }
 
 func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
@@ -99,6 +109,10 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 		}
 		b, _ := json.Marshal(resp)      //nolint:errcheck // two plain fields
 		_, _ = c.Write(append(b, '\n')) //nolint:errcheck // the client may be gone
+	}
+	if ok, perr := peerAllowed(c); perr != nil || !ok {
+		reply(errors.New("this user may not use the node's control socket"))
+		return
 	}
 	line, err := bufio.NewReaderSize(io.LimitReader(c, 64<<10), 4<<10).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
@@ -125,8 +139,11 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 }
 
 // Leave asks Loomplane to revoke this node, through the live session, and
-// waits up to five seconds for the answer: the session ends once Loomplane
-// revokes the node, and Run then removes node.json and returns ErrRevoked.
+// waits up to five seconds for Run to decide the node was revoked: Loomplane
+// said so, or closed the connection with the unauthorized code, or refused the
+// key at the reconnect that followed the request. A connection that merely
+// ended is not an answer, so Leave then returns an error and the node keeps
+// its config.
 func (r *Runtime) Leave(ctx context.Context) error {
 	r.mu.Lock()
 	s := r.cur
@@ -142,10 +159,10 @@ func (r *Runtime) Leave(ctx context.Context) error {
 	t := time.NewTimer(leaveWait)
 	defer t.Stop()
 	select {
-	case <-s.done:
+	case <-r.revoked:
 		return nil
 	case <-t.C:
-		return errors.New("Loomplane did not answer the request to leave within " + leaveWait.String())
+		return errors.New("Loomplane did not confirm that it revoked this node within " + leaveWait.String())
 	case <-ctx.Done():
 		return ctx.Err()
 	}
