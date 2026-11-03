@@ -166,7 +166,11 @@ func Commands(opts Options) []cli.Command {
 		cli.WithSubcommand(cli.NewCommand("status", "Show this node's config, key fingerprint, endpoints and whether it runs", c.guard(c.status),
 			cli.WithFlags(stateFlag, jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("leave", "Take this machine out of Loomplane: stop the service and remove the config", c.guard(c.leave),
-			cli.WithFlags(stateFlag, cli.NewBoolFlag("purge", "", "Also remove what Loomplane put on this machine (nothing yet)", false)))),
+			cli.WithUsage("node leave [--purge] [--purge-volumes [--yes-delete-volumes=<name>]]"),
+			cli.WithFlags(stateFlag,
+				cli.NewBoolFlag("purge", "", "Also remove Loomplane's containers and networks from this machine's Docker", false),
+				cli.NewBoolFlag("purge-volumes", "", "Also delete Loomplane's volumes, and the data in them; asks for the node's name first", false),
+				cli.NewStringFlag("yes-delete-volumes", "", "The node's name, to delete its volumes without being asked", "")))),
 		cli.WithSubcommand(cli.NewCommand("allow", "Widen what Loomplane may use on this machine", c.guard(c.allow),
 			cli.WithUsage("node allow docker [dial probe kube firecracker]"),
 			cli.WithFlag(stateFlag))),
@@ -185,6 +189,9 @@ func Commands(opts Options) []cli.Command {
 		cli.WithSubcommand(cli.NewCommand("revoke", "Stop trusting a node, by name or id", c.guard(c.revoke),
 			cli.WithUsage("node revoke <name-or-id>"),
 			cli.WithFlags(urlFlag, keyFlag))),
+		cli.WithSubcommand(cli.NewCommand("drain", "Stop new placements on a node's server, by name or id, after showing what runs there", c.guard(c.drain),
+			cli.WithUsage("node drain <name-or-id> [--yes]"),
+			cli.WithFlags(urlFlag, keyFlag, cli.NewBoolFlag("yes", "", "Drain without asking", false)))),
 	)}
 }
 
@@ -840,11 +847,23 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 	}
 	st := c.stateFor(dir)
 	joined := true
-	if _, err := st.ReadConfig(); err != nil {
+	cfg, err := st.ReadConfig()
+	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		joined = false
+	}
+	volumes := ctx.Bool("purge-volumes") || ctx.String("yes-delete-volumes") != ""
+	purge := ctx.Bool("purge") || volumes
+	// Volumes hold data, so their name check comes before anything
+	// changes: a wrong name leaves the node exactly as it was.
+	if volumes {
+		if cerr := c.confirmVolumes(ctx, cfg.Name); cerr != nil {
+			return cerr
+		}
+	}
+	if !joined {
 		c.printf("This machine has not joined a Loomplane.\n")
 	}
 	if joined {
@@ -858,24 +877,95 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 			c.printf("The node is not running, so it cannot tell Loomplane it is leaving: revoke it in the dashboard (Nodes), or with node revoke.\n")
 		default:
 			// The service runs and is still joined, so keep it and its
-			// config until Loomplane has revoked it.
+			// config until Loomplane has revoked it. What Loomplane put on
+			// the machine goes all the same when asked: Loomplane may be
+			// the part that can't be reached.
 			c.printf("Revoke it in the dashboard (Nodes), or with node revoke, then run node leave again.\n")
-			return fmt.Errorf("the running node could not confirm that Loomplane revoked it (%w); its service and config are kept", err)
+			kept := fmt.Errorf("the running node could not confirm that Loomplane revoked it (%w); its service and config are kept", err)
+			if purge {
+				return errors.Join(kept, c.purge(ctx.Context(), cfg.DockerSocket, volumes))
+			}
+			return kept
 		}
 	}
-	// --purge removes what Loomplane put on this machine. Nothing is there
-	// until phase 2 adds containers, so it changes nothing yet.
 	_ = c.opts.svc.Stop(ctx.Context()) //nolint:errcheck // a revoked node has stopped itself
+	// The service has stopped, so nothing starts a container again while
+	// the purge runs. A failed purge still lets the node leave.
+	var purgeErr error
+	if purge {
+		purgeErr = c.purge(ctx.Context(), cfg.DockerSocket, volumes)
+	}
 	if err := c.opts.svc.Remove(ctx.Context()); err != nil && !errors.Is(err, ErrUnsupported) {
-		return fmt.Errorf("removing the service: %w", err)
+		return errors.Join(fmt.Errorf("removing the service: %w", err), purgeErr)
 	}
 	if joined {
 		if err := st.DeleteConfig(); err != nil {
-			return err
+			return errors.Join(err, purgeErr)
 		}
 	}
 	c.printf("Removed this node's service and config. Its key stays in %s, and a later join makes a fresh one.\n", dir)
+	return purgeErr
+}
+
+// confirmVolumes asks for the node's name before its volumes are deleted,
+// or takes it from --yes-delete-volumes. Anything but the name refuses.
+func (c *cmds) confirmVolumes(ctx cli.CommandContext, name string) error {
+	if name == "" {
+		return errors.New("this machine doesn't know its node's name (it hasn't joined, or joined before Loomplane recorded it), so its volumes can't be confirmed for deletion and nothing was changed; delete them with docker volume rm")
+	}
+	if given := ctx.String("yes-delete-volumes"); given != "" {
+		if given != name {
+			return fmt.Errorf("--yes-delete-volumes %q isn't this node's name, the one it joined with, so nothing was changed", given)
+		}
+		return nil
+	}
+	if !c.opts.isTerminal() {
+		return errors.New("--purge-volumes deletes data, so it asks for the node's name on a terminal; without one, pass --yes-delete-volumes=<name>")
+	}
+	c.printf("Type the node's name to delete its Loomplane volumes: ")
+	line, _ := bufio.NewReader(c.opts.in).ReadString('\n') //nolint:errcheck // a short read is a wrong name
+	if strings.TrimSpace(line) != name {
+		return errors.New("that isn't this node's name, the one it joined with, so its volumes stay and nothing was changed")
+	}
 	return nil
+}
+
+// purge removes what Loomplane put on this machine's Docker and says what
+// went. socket is the node's configured one; without it, the first Docker
+// or Podman socket that answers.
+func (c *cmds) purge(ctx context.Context, socket string, volumes bool) error {
+	socket = findSocket(ctx, socket, c.opts.detect)
+	if socket == "" {
+		c.printf("No Docker or Podman socket answered, so there was nothing to purge.\n")
+		return nil
+	}
+	rep, err := Purge(ctx, socket, volumes)
+	c.printf("Removed %s: %s.\n", count(len(rep.Containers), "container"), orNone(rep.Containers))
+	c.printf("Removed %s: %s.\n", count(len(rep.Networks), "network"), orNone(rep.Networks))
+	if volumes {
+		c.printf("Deleted %s: %s.\n", count(len(rep.Volumes), "volume"), orNone(rep.Volumes))
+	} else if len(rep.KeptVolumes) > 0 {
+		c.printf("Kept %s, which hold data: %s. Delete them with: docker volume rm %s\n",
+			count(len(rep.KeptVolumes), "Loomplane volume"), strings.Join(rep.KeptVolumes, ", "), strings.Join(rep.KeptVolumes, " "))
+	}
+	if err != nil {
+		return fmt.Errorf("purging %s: %w", socket, err)
+	}
+	return nil
+}
+
+func count(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return strconv.Itoa(n) + " " + what + "s"
+}
+
+func orNone(names []string) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ", ")
 }
 
 func (c *cmds) list(ctx cli.CommandContext) error {
@@ -920,11 +1010,24 @@ func (c *cmds) revoke(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	nodes, err := api.Nodes(ctx.Context())
+	n, err := c.findNode(ctx.Context(), api, ctx.Arg(0), "revoke")
 	if err != nil {
 		return err
 	}
-	want := ctx.Arg(0)
+	if err := api.RevokeNode(ctx.Context(), n.ID); err != nil {
+		return err
+	}
+	c.printf("Revoked %s (%s).\n", n.Name, n.ID)
+	return nil
+}
+
+// findNode is the organization's node with the id want, or else the one
+// live node called want.
+func (c *cmds) findNode(ctx context.Context, api *client.Client, want, verb string) (*client.Node, error) {
+	nodes, err := api.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var match []client.Node
 	for _, n := range nodes {
 		if n.ID == want {
@@ -938,14 +1041,64 @@ func (c *cmds) revoke(ctx cli.CommandContext) error {
 	}
 	switch len(match) {
 	case 0:
-		return fmt.Errorf("no node is called or has the id %q; see node list", want)
+		return nil, fmt.Errorf("no node is called or has the id %q; see node list", want)
 	case 1:
+		return &match[0], nil
 	default:
-		return fmt.Errorf("%d nodes are called %q; revoke one by its id", len(match), want)
+		return nil, fmt.Errorf("%d nodes are called %q; %s one by its id", len(match), want, verb)
 	}
-	if err := api.RevokeNode(ctx.Context(), match[0].ID); err != nil {
+}
+
+// drain shows what runs on a node's server, asks, and then stops new
+// placements there. Moving what runs there off is a reviewed move each, in
+// the dashboard.
+func (c *cmds) drain(ctx cli.CommandContext) error {
+	if ctx.NArgs() != 1 {
+		return errors.New("name the node to drain: node drain <name-or-id>")
+	}
+	api, err := c.apiClient(ctx)
+	if err != nil {
 		return err
 	}
-	c.printf("Revoked %s (%s).\n", match[0].Name, match[0].ID)
+	n, err := c.findNode(ctx.Context(), api, ctx.Arg(0), "drain")
+	if err != nil {
+		return err
+	}
+	review, err := api.DrainNode(ctx.Context(), n.ID)
+	if err != nil {
+		return err
+	}
+	c.printf("Draining %s stops new placements on its server %s. It holds %s.\n", n.Name, review.ServerID, count(review.Reservations, "reservation"))
+	if review.Usage != nil && len(review.Usage.Workloads) > 0 {
+		tw := tabwriter.NewWriter(c.opts.Out, 0, 8, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "  PROJECT\tENVIRONMENT\tSERVICE\tPHASE")
+		for _, w := range review.Usage.Workloads {
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", w.ProjectID, w.EnvironmentID, w.Service, w.Phase)
+		}
+		_ = tw.Flush()
+	}
+	// The data that lives only on this machine, said before the question.
+	if loads, werr := api.NodeWorkloads(ctx.Context(), n.ID); werr == nil {
+		for _, w := range loads {
+			if w.Kind == "database" && !w.HasBackupPolicy {
+				c.printf("The database %s (%s) has no backups. If this machine is lost, its data is lost.\n", w.Service, w.Environment)
+			}
+		}
+	}
+	if !ctx.Bool("yes") {
+		if !c.opts.isTerminal() {
+			return errors.New("node drain asks before it drains, and there is no terminal to ask on; pass --yes")
+		}
+		c.printf("Drain %s? [y/N] ", n.Name)
+		line, _ := bufio.NewReader(c.opts.in).ReadString('\n') //nolint:errcheck // a short read is a no
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			c.printf("Not drained.\n")
+			return nil
+		}
+	}
+	if _, err := api.ApplyNodeDrain(ctx.Context(), n.ID, review.Review); err != nil {
+		return err
+	}
+	c.printf("%s is draining: nothing new is placed on it. Move what runs there with a reviewed move each, in the dashboard.\n", n.Name)
 	return nil
 }

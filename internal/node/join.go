@@ -103,7 +103,7 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	if granted == nil {
 		granted = []nodeproto.Endpoint{}
 	}
-	cfg := Config{URL: base, NodeID: res.NodeID, OrgID: res.OrgID, IdentityGeneration: res.IdentityGeneration,
+	cfg := Config{URL: base, NodeID: res.NodeID, OrgID: res.OrgID, Name: res.Name, IdentityGeneration: res.IdentityGeneration,
 		Endpoints: granted, IngressMode: nodeproto.IngressNone}
 	if inv.Docker != nil {
 		// Detected, whether or not it was allowed: the service user needs

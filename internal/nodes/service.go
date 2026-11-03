@@ -93,6 +93,12 @@ type Service struct {
 	// Adopt links a joined node to its cloud account. Phase 2 fills it. It may be nil.
 	// ErrAdoptionRefused from it means the node joins without a Cloud.
 	Adopt func(ctx context.Context, n *Node, claim *apikeys.NodeJoinClaim) error
+	// Servers finds the Cloud server a node was adopted as and the
+	// connections that reach it, and Placed reads what is deployed there.
+	// Phase 2 fills them. Without them a node runs nothing and has nothing
+	// to drain.
+	Servers NodeServers
+	Placed  WorkloadReader
 	// Log receives failures nobody else sees. Nil means slog.Default().
 	Log *slog.Logger
 	// clock is what time it is. Nil means time.Now. Tests set it.
@@ -129,6 +135,7 @@ type JoinRequest struct {
 type JoinResult struct {
 	NodeID             string
 	OrgID              string
+	Name               string
 	IdentityGeneration int64
 	Endpoints          []nodeproto.Endpoint
 	CloudID            string
@@ -248,7 +255,7 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		}
 	}
 	s.record(ctx, "node.joined", security.ActorPrincipal(claim.OrgID, claim.MintedBy), *n, map[string]string{"role": role})
-	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: cloudID}, nil
+	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, Name: n.Name, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: cloudID}, nil
 }
 
 const joinRollback = "system:join-rollback"
@@ -366,7 +373,11 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]Node, error
 	if err := s.allow(ctx, p, security.NodeRead, false); err != nil {
 		return nil, err
 	}
-	return s.withDetails(s.Store.List(ctx, p.OrgID))
+	list, err := s.withDetails(s.Store.List(ctx, p.OrgID))
+	for i := range list {
+		s.drainingStatus(ctx, &list[i])
+	}
+	return list, err
 }
 
 // Get returns one node of the org.
@@ -379,6 +390,7 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*No
 		return nil, err
 	}
 	s.ingressDetail(n)
+	s.drainingStatus(ctx, n)
 	return n, nil
 }
 
@@ -459,6 +471,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 		s.record(ctx, "node.updated", p, *n, nil)
 	}
 	s.ingressDetail(n)
+	s.drainingStatus(ctx, n)
 	return n, nil
 }
 

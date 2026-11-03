@@ -38,6 +38,8 @@ type Extension struct {
 	hubErr error
 	svc    *nodes.Service
 	minter JoinTokenMinter
+	// drains drains the Cloud server a node was adopted as.
+	drains ServerDrains
 
 	guard identity.Guard
 
@@ -129,6 +131,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	infra.NodeRecords = store
 	e.adoptOnConnect(infra)
 	e.followAddressChanges(infra)
+	e.serveNodeServers(infra, store)
 	// Bind makes the hub the service's notifier and refuses an empty
 	// audience or secret.
 	if err = e.hub.Bind(store, e.svc); err != nil {

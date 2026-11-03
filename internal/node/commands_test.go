@@ -143,7 +143,7 @@ func TestCommandsGroup(t *testing.T) {
 	for _, s := range cmds[0].Subcommands() {
 		names = append(names, s.Name())
 	}
-	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke", "update", "verify-release"} {
+	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke", "drain", "update", "verify-release"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("no node %s; have %v", want, names)
 		}
@@ -154,7 +154,7 @@ func TestEverySubcommandRefusesWindows(t *testing.T) {
 	r := newCmdRig(t)
 	r.opts.goos = "windows"
 	for _, args := range [][]string{
-		{"join", "--token", "x", "--url", "http://x"}, {"run"}, {"status"}, {"leave"}, {"allow", "docker"}, {"list"}, {"revoke", "x"}, {"update", "--release", "v1.9.0"}, {"verify-release"},
+		{"join", "--token", "x", "--url", "http://x"}, {"run"}, {"status"}, {"leave"}, {"allow", "docker"}, {"list"}, {"revoke", "x"}, {"drain", "x"}, {"update", "--release", "v1.9.0"}, {"verify-release"},
 	} {
 		err := r.run(append([]string{"node"}, args...)...)
 		if err == nil || !strings.Contains(err.Error(), "Linux and macOS") {
