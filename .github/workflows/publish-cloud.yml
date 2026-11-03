@@ -24,6 +24,10 @@ on:
 env:
   IMAGE: ghcr.io/xraph/loomplane-cloud
 
+concurrency:
+  group: publish-cloud
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Build and push the Cloud image
@@ -77,8 +81,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=cloud
       - name: Check the package is not anonymously readable
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' 'https://ghcr.io/token?scope=repository:xraph/loomplane-cloud:pull')
-          if [ "$code" = "200" ]; then
-            echo "::error::ghcr.io/xraph/loomplane-cloud hands out anonymous pull tokens. Make the package private before re-running, and delete the pushed tags."
+          code=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' 'https://ghcr.io/token?scope=repository:xraph/loomplane-cloud:pull') || code=000
+          # A private package answers an anonymous pull token request with
+          # 401 or 403. Anything else, a network failure included, means we
+          # couldn't confirm it, so the job fails.
+          if [ "$code" != "401" ] && [ "$code" != "403" ]; then
+            echo "::error::Expected 401 or 403 from the anonymous token endpoint for ghcr.io/xraph/loomplane-cloud, got ${code}. If it is 200 the package is anonymously readable: make it private and delete the pushed tags. Otherwise the check couldn't run: re-run the job."
             exit 1
           fi
