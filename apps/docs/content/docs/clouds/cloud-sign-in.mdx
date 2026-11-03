@@ -9,9 +9,9 @@ A pasted token works, but it's yours to copy, store and rotate. Signing in swaps
 
 ## Register the OAuth app
 
-You do this once per cloud for the whole instance, and you need to be the platform owner or a platform admin. Everyone else in every organization only signs in. When a cloud has no app yet, its connect dialog offers a token and nothing more.
+You do this once per cloud for the whole instance, and you need to be the platform owner or a platform admin. Everyone else in every organization only signs in. Until a cloud has an app, its connect dialog can't offer to sign in. You paste a token there, or connect keylessly where the cloud supports it.
 
-The first time you run Loomplane, setup ends with an optional **Cloud sign-in** step. Skip it and the page below is always there.
+The first time you run Loomplane, setup ends with an optional **Cloud sign-in** step. Skip that step and you can register the apps later on the Cloud sign-in page.
 
 <Steps>
 <Step>
@@ -169,19 +169,19 @@ A cloud can still refuse the grant. Someone revoked Loomplane's access, uninstal
 
 Once Loomplane knows, the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again**, either on the connection's page or on its row in the **Clouds** list under **Integrations**, and approve once more. The button shows on any signed-in connection that isn't ready. The connection keeps its ID, so your projects and environments carry on without changes.
 
-The person who made the connection and the connection's organization owners and admins hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
+The person who made the connection and the owners and admins of the connection's organization hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
 
 A Google or Azure person can also lose a role without losing the sign-in. The grant still works then, but deployments fail on the permission. **Check again** lists what's missing.
 
 ## Replace or remove an app
 
-Choose **Edit** on the cloud's row to change the app, or **Remove** to take it away. Before it saves, the page tells you how many connections signed in with the current app.
+Choose **Edit** on the cloud's row to change the app. The **Remove** button is in the same dialog. If connections have signed in with the current app, the page tells you how many before you change its client ID or remove it.
 
 Give a cloud a different client ID, or remove its app, and every one of those connections asks to be signed in again, because the old grants belong to the old app. Changing only the client secret keeps them all working. Vercel connections are the exception: Vercel's tokens don't depend on the app once they're issued, so they carry on either way.
 
 ## When the cloud refuses the app
 
-If the cloud refuses the app itself, say after someone rotated its client secret, every sign-in through it stops working. The platform owner sees the problem on that cloud's row of the Cloud sign-in page. Save the app again with the new values and it clears. Each connection that tried the app asks to be signed in again as well.
+If the cloud refuses the app itself, say after someone rotated its client secret, every sign-in through it stops working. A platform owner or admin sees the problem on that cloud's row of the Cloud sign-in page. Save the app again with the new values and it clears. Each connection that tried the app asks to be signed in again as well.
 
 An app set in config isn't recorded on the page, so a refusal there shows only on the connections, with the cloud's message. It clears with the first sign-in that works after you fix config.
 
