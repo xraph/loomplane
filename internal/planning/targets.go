@@ -27,6 +27,12 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	if details["managed_attachment_id"] != "" {
 		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
 	}
+	if details["node_id"] != "" {
+		// A node-backed connection of any cloud pins the node and the key
+		// it joined with, so a node that rejoined with a new key is
+		// reviewed again. Never the key's fingerprint: rotation keeps it.
+		keys = append(keys, "node_id", "identity_generation")
+	}
 	var out map[string]string
 	for _, k := range keys {
 		if v := details[k]; v != "" {
@@ -51,6 +57,11 @@ func reviewedPlacementKeys(cloud string, details map[string]string) []string {
 		}
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
+		if details["node_id"] != "" {
+			// A node has no SSH to pin, and DDNS moves its advertised
+			// address, so neither is reviewed.
+			keys = []string{"docker_socket", "architecture", "docker_id"}
+		}
 	case "kubernetes":
 		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
 	case "firecracker":
@@ -75,7 +86,7 @@ func PublicReviewedSettings(details map[string]string) map[string]string {
 			}
 		}
 	}
-	for _, key := range []string{"build_workers", "build_runtime_class", "runtime_class", "region", "zone"} {
+	for _, key := range []string{"build_workers", "build_runtime_class", "runtime_class", "region", "zone", "node_id", "identity_generation"} {
 		if value, ok := details[key]; ok {
 			out[key] = value
 		}

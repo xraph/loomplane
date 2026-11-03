@@ -19,7 +19,7 @@ type storageReader func(context.Context, *Connection, []byte) ([]owned.StoredVol
 // StorageVolumes inspects safe metadata for one checked connection. Secrets
 // stay inside the adapter, and project authorization filters every result.
 func (s *Service) StorageVolumes(ctx context.Context, p security.Principal, connection string) ([]owned.StoredVolume, error) {
-	return s.storageVolumes(ctx, p, connection, readStorageVolumes)
+	return s.storageVolumes(ctx, p, connection, s.readStorageVolumes)
 }
 
 func (s *Service) storageVolumes(ctx context.Context, p security.Principal, connection string, read storageReader) ([]owned.StoredVolume, error) {
@@ -63,7 +63,7 @@ func (s *Service) storageVolumes(ctx context.Context, p security.Principal, conn
 	return visible, nil
 }
 
-func readStorageVolumes(ctx context.Context, c *Connection, credential []byte) ([]owned.StoredVolume, error) {
+func (s *Service) readStorageVolumes(ctx context.Context, c *Connection, credential []byte) ([]owned.StoredVolume, error) {
 	switch c.Cloud {
 	case Server:
 		cfg, err := server.ParseConfig(credential, c.Details)
@@ -71,7 +71,7 @@ func readStorageVolumes(ctx context.Context, c *Connection, credential []byte) (
 			return nil, err
 		}
 		maps.Copy(cfg.Details, c.Details)
-		native, err := server.Dial(ctx, cfg)
+		native, err := server.Connect(ctx, cfg, s.nodeStreams())
 		if err != nil {
 			return nil, err
 		}
