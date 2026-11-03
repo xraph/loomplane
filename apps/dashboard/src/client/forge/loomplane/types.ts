@@ -271,6 +271,10 @@ export interface AttachmentPrerequisites {
   storageClass?: string;
 }
 
+export interface AuthorizeBitbucketInputBody {
+  workspace: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -336,6 +340,39 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface BitbucketAuthorization {
+  url: string;
+}
+
+export interface BitbucketConnectInputBody {
+  code: string;
+  state: string;
+}
+
+export interface BitbucketRepositoryList {
+  problems: string[];
+  repositories: ConnectedBitbucketRepository[];
+}
+
+export interface BitbucketStatus {
+  canConnect: boolean;
+  configured: boolean;
+  problems: string[];
+  workspaces: BitbucketWorkspaceView[];
+}
+
+export interface BitbucketWorkspaceView {
+  avatarUrl: string;
+  connectedBy: string;
+  createdAt: string;
+  id: string;
+  manageUrl: string;
+  message: string;
+  name: string;
+  status: string;
+  workspace: string;
 }
 
 export interface Board {
@@ -1413,6 +1450,13 @@ export interface ConnectGitLabInputBody {
   state: string;
 }
 
+export interface ConnectedBitbucketRepository {
+  defaultBranch: string;
+  fullName: string;
+  private: boolean;
+  workspace: string;
+}
+
 export interface ConnectedRepository {
   defaultBranch: string;
   fullName: string;
@@ -1789,6 +1833,7 @@ export interface DiscoverySource {
   id: string;
   orgId: string;
   projectId: string;
+  push?: PushState;
   ref: string;
   removedAt?: string;
   repository: string;
@@ -1995,6 +2040,10 @@ export interface Embeddings {
   mode: string;
   model: string;
   provider?: string;
+}
+
+export interface EnableBitbucketWebhookInputBody {
+  repository: string;
 }
 
 export interface EndpointList {
@@ -2663,6 +2712,10 @@ export interface JoinToken {
   token: string;
 }
 
+export interface JoinTokenList {
+  tokens: PendingNodeJoinToken[];
+}
+
 export interface JoinTokenRequestBody {
   cloudId?: string;
   edge?: boolean;
@@ -3268,6 +3321,7 @@ export interface NodeJoinBody {
   nodeVersion: string;
   protocolVersion: number;
   publicKey: string;
+  signature: string;
   token: string;
 }
 
@@ -3497,6 +3551,20 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PendingNodeJoinToken {
+  cloudId?: string;
+  createdAt: string;
+  edge: boolean;
+  edgeScope?: string;
+  endpoints: string[];
+  expiresAt: string;
+  hint: string;
+  id: string;
+  labels?: Record<string, any>;
+  mintedBy: string;
+  mintedByKeyId?: string;
 }
 
 export interface PinStatus {
@@ -4019,6 +4087,11 @@ export interface PushDevice {
   quietHours?: QuietHours;
   settings: Record<string, any>;
   timeZone: string;
+}
+
+export interface PushState {
+  on: boolean;
+  reason?: string;
 }
 
 export interface QuantizationView {

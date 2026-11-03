@@ -70,9 +70,28 @@ const noGitlab = {
   organization_hosts: false,
 }
 
+const bitbucketWorkspace = {
+  id: "w1",
+  workspace: "acme",
+  name: "Acme Inc",
+  avatar_url: "",
+  manage_url: "https://bitbucket.org/acme/workspace/settings",
+  connected_by: "Rex Raphael",
+  status: "ready",
+  message: "",
+  created_at: "2026-11-02T00:00:00Z",
+}
+const noBitbucket = {
+  configured: false,
+  can_connect: true,
+  problems: [] as string[],
+  workspaces: [] as (typeof bitbucketWorkspace)[],
+}
+
 function fixture({
   installed = true,
   gitlab = noGitlab,
+  bitbucket = noBitbucket,
   sent = [] as Sent[],
   reply = {} as Record<string, { status: number; body: unknown }>,
 } = {}) {
@@ -97,6 +116,9 @@ function fixture({
       }
       let body: unknown = {}
       if (path === "/api/v1/gitlab") body = gitlab
+      if (path === "/api/v1/bitbucket") body = bitbucket
+      if (path === "/api/v1/bitbucket/repositories")
+        body = { repositories: [], problems: [] }
       if (path === "/api/v1/github")
         body = {
           configured: true,
@@ -795,4 +817,313 @@ it("asks before replacing a secret that is already set", async () => {
   const again = await screen.findByRole("alertdialog")
   await user.click(within(again).getByRole("button", { name: "Keep it" }))
   expect(sent).toHaveLength(1)
+})
+
+/* ------------------------------------------------------------------------ */
+/* Bitbucket                                                                  */
+
+const bitbucketCard = () => screen.getByRole("region", { name: "Bitbucket" })
+const configured = { ...noBitbucket, configured: true }
+
+it("says what works without a Bitbucket OAuth consumer", async () => {
+  fixture()
+  show()
+  const card = bitbucketCard()
+  expect(
+    await within(card).findByText(
+      /Only public repositories: no Bitbucket OAuth consumer is set up/
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(card).getByRole("link", { name: "Bitbucket guide" })
+  ).toHaveAttribute(
+    "href",
+    "https://loomplane.dev/docs/guides/bitbucket-repositories"
+  )
+  expect(
+    within(card).queryByRole("button", { name: /Connect/ })
+  ).not.toBeInTheDocument()
+})
+
+it("lists each workspace and counts it in the summary", async () => {
+  fixture({
+    bitbucket: {
+      ...configured,
+      workspaces: [
+        bitbucketWorkspace,
+        { ...bitbucketWorkspace, id: "w2", workspace: "tools", name: "Tools" },
+      ],
+    },
+  })
+  show()
+  expect(
+    await screen.findByText(
+      "1 GitHub account, 2 Bitbucket workspaces and 1 cloud account"
+    )
+  ).toBeInTheDocument()
+  const card = bitbucketCard()
+  expect(await within(card).findByText("Acme Inc")).toBeInTheDocument()
+  expect(within(card).getByText("acme")).toBeInTheDocument()
+  expect(within(card).getAllByText(/Connected by Rex Raphael/)).toHaveLength(2)
+  expect(
+    within(card).getAllByRole("link", { name: /Manage/ })[0]
+  ).toHaveAttribute("href", "https://bitbucket.org/acme/workspace/settings")
+  expect(
+    within(card).getByRole("button", { name: "Disconnect Acme Inc" })
+  ).toBeInTheDocument()
+  expect(
+    within(card).getByRole("button", { name: "Connect workspace" })
+  ).toBeInTheDocument()
+  expect(
+    within(card).queryByRole("button", { name: /Reconnect/ })
+  ).not.toBeInTheDocument()
+})
+
+it("offers a first workspace when none is connected", async () => {
+  fixture({ bitbucket: configured })
+  show()
+  expect(
+    await within(bitbucketCard()).findByText("No Bitbucket workspaces yet")
+  ).toBeInTheDocument()
+  expect(
+    within(bitbucketCard()).getByRole("button", { name: "Connect workspace" })
+  ).toBeInTheDocument()
+})
+
+it("shows why a workspace needs connecting again, and reconnects it", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    reply: {
+      "POST /api/v1/bitbucket/authorize": {
+        status: 200,
+        body: { url: "https://bitbucket.org/site/oauth2/authorize?again=1" },
+      },
+    },
+    bitbucket: {
+      ...configured,
+      workspaces: [
+        {
+          ...bitbucketWorkspace,
+          status: "reconnect_needed",
+          message: "Bitbucket no longer accepts this sign-in.",
+        },
+      ],
+    },
+  })
+  show()
+  const card = bitbucketCard()
+  expect(
+    await within(card).findByText("Bitbucket no longer accepts this sign-in.")
+  ).toBeInTheDocument()
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Reconnect Acme Inc" })
+  )
+  await waitFor(() =>
+    expect(assign).toHaveBeenCalledWith(
+      "https://bitbucket.org/site/oauth2/authorize?again=1"
+    )
+  )
+  expect(sent).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/bitbucket/authorize",
+      body: { workspace: "acme" },
+    },
+  ])
+})
+
+it("asks for the workspace slug, then leaves for Bitbucket", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    reply: {
+      "POST /api/v1/bitbucket/authorize": {
+        status: 200,
+        body: { url: "https://bitbucket.org/site/oauth2/authorize?x=1" },
+      },
+    },
+    bitbucket: configured,
+  })
+  show()
+  const user = userEvent.setup()
+  await user.click(
+    await within(bitbucketCard()).findByRole("button", {
+      name: "Connect workspace",
+    })
+  )
+  const dialog = await screen.findByRole("dialog")
+  expect(
+    within(dialog).getByText(/acme in bitbucket.org\/acme/)
+  ).toBeInTheDocument()
+  const connect = within(dialog).getByRole("button", {
+    name: "Connect workspace",
+  })
+  expect(connect).toBeDisabled()
+  await user.type(within(dialog).getByLabelText("Workspace slug"), " acme ")
+  await user.click(connect)
+  await waitFor(() =>
+    expect(assign).toHaveBeenCalledWith(
+      "https://bitbucket.org/site/oauth2/authorize?x=1"
+    )
+  )
+  expect(sent).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/bitbucket/authorize",
+      body: { workspace: "acme" },
+    },
+  ])
+})
+
+it("shows the server's refusal in the connect dialog and stays", async () => {
+  fixture({
+    reply: {
+      "POST /api/v1/bitbucket/authorize": {
+        status: 400,
+        body: { message: "That isn't a Bitbucket workspace slug" },
+      },
+    },
+    bitbucket: configured,
+  })
+  show()
+  const user = userEvent.setup()
+  await user.click(
+    await within(bitbucketCard()).findByRole("button", {
+      name: "Connect workspace",
+    })
+  )
+  const dialog = await screen.findByRole("dialog")
+  await user.type(within(dialog).getByLabelText("Workspace slug"), "no way")
+  await user.click(
+    within(dialog).getByRole("button", { name: "Connect workspace" })
+  )
+  expect(
+    await within(dialog).findByText("That isn't a Bitbucket workspace slug.")
+  ).toBeInTheDocument()
+  expect(assign).not.toHaveBeenCalled()
+})
+
+it("disconnects a workspace only after a confirm", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    bitbucket: { ...configured, workspaces: [bitbucketWorkspace] },
+  })
+  show()
+  const user = userEvent.setup()
+  await user.click(
+    await within(bitbucketCard()).findByRole("button", {
+      name: "Disconnect Acme Inc",
+    })
+  )
+  expect(sent).toEqual([])
+  const dialog = await screen.findByRole("alertdialog")
+  await user.click(within(dialog).getByRole("button", { name: "Disconnect" }))
+  await waitFor(() =>
+    expect(sent).toContainEqual({
+      method: "DELETE",
+      path: "/api/v1/bitbucket/workspaces/w1",
+      body: {},
+    })
+  )
+})
+
+it("shows what the status says went wrong", async () => {
+  fixture({
+    bitbucket: {
+      ...configured,
+      problems: ["Bitbucket turned down bitbucket.client_id"],
+      workspaces: [bitbucketWorkspace],
+    },
+  })
+  show()
+  expect(
+    await within(bitbucketCard()).findByText(
+      "Bitbucket turned down bitbucket.client_id"
+    )
+  ).toBeInTheDocument()
+})
+
+it("gives a viewer no way to change a workspace", async () => {
+  allowed = false
+  fixture({
+    bitbucket: {
+      ...configured,
+      workspaces: [{ ...bitbucketWorkspace, status: "reconnect_needed" }],
+    },
+  })
+  show()
+  const card = bitbucketCard()
+  expect(await within(card).findByText("Acme Inc")).toBeInTheDocument()
+  expect(within(card).queryAllByRole("button")).toEqual([])
+})
+
+it("spins only the Reconnect that was pressed, and holds the others", async () => {
+  fixture({
+    reply: {},
+    bitbucket: {
+      ...configured,
+      workspaces: [
+        { ...bitbucketWorkspace, status: "reconnect_needed", message: "a" },
+        {
+          ...bitbucketWorkspace,
+          id: "w2",
+          workspace: "tools",
+          name: "Tooling",
+          status: "reconnect_needed",
+          message: "b",
+        },
+      ],
+    },
+  })
+  // The link never comes back, so the first row stays pending.
+  const real = globalThis.fetch
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).includes("/bitbucket/authorize")
+      ? new Promise<Response>(() => {})
+      : real(input, init)
+  )
+  show()
+  const card = bitbucketCard()
+  const first = await within(card).findByRole("button", {
+    name: "Reconnect Acme Inc",
+  })
+  const second = within(card).getByRole("button", {
+    name: "Reconnect Tooling",
+  })
+  await userEvent.click(first)
+  await waitFor(() => expect(second).toBeDisabled())
+  expect(
+    first.querySelector('[role="status"], svg.animate-spin')
+  ).not.toBeNull()
+  expect(second.querySelector('[role="status"], svg.animate-spin')).toBeNull()
+})
+
+it("keeps listing workspaces without a consumer, with the note and no Reconnect", async () => {
+  fixture({
+    bitbucket: {
+      ...noBitbucket,
+      workspaces: [
+        { ...bitbucketWorkspace, status: "reconnect_needed", message: "gone" },
+      ],
+    },
+  })
+  show()
+  const card = bitbucketCard()
+  expect(await within(card).findByText("Acme Inc")).toBeInTheDocument()
+  expect(
+    within(card).getByText(
+      /Only public repositories: no Bitbucket OAuth consumer is set up/
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(card).queryByRole("button", { name: /Reconnect/ })
+  ).not.toBeInTheDocument()
+  expect(
+    within(card).queryByRole("button", { name: "Connect workspace" })
+  ).not.toBeInTheDocument()
+  expect(
+    within(card).getByRole("button", { name: "Disconnect Acme Inc" })
+  ).toBeInTheDocument()
 })

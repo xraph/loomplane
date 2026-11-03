@@ -812,6 +812,114 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly bitbucket = {
+    /**
+     * The Bitbucket link that starts connecting a workspace
+     */
+    authorize: async (body: types.AuthorizeBitbucketInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketAuthorization> => {
+      let __path = `/api/v1/bitbucket/authorize`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AuthorizeBitbucketInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketAuthorization"],
+      };
+
+      return this.request<types.BitbucketAuthorization>(config);
+    },
+
+    /**
+     * Connect a Bitbucket workspace, from what Bitbucket's redirect carried back
+     */
+    connect: async (body: types.BitbucketConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketWorkspaceView> => {
+      let __path = `/api/v1/bitbucket/workspaces`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BitbucketConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketWorkspaceView"],
+      };
+
+      return this.request<types.BitbucketWorkspaceView>(config);
+    },
+
+    /**
+     * Disconnect a workspace. The consumer stays approved on Bitbucket.
+     */
+    disconnect: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/bitbucket/workspaces/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The repositories the organization's workspaces can read
+     */
+    repositories: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketRepositoryList> => {
+      let __path = `/api/v1/bitbucket/repositories`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketRepositoryList"],
+      };
+
+      return this.request<types.BitbucketRepositoryList>(config);
+    },
+
+    /**
+     * The organization's Bitbucket workspaces, and whether this Loomplane has an OAuth consumer
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketStatus> => {
+      let __path = `/api/v1/bitbucket`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketStatus"],
+      };
+
+      return this.request<types.BitbucketStatus>(config);
+    },
+
+    webhook: {
+      /**
+       * Try again to add the push webhook that re-analyzes a repository's sources
+       */
+      enable: async (body: types.EnableBitbucketWebhookInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushState> => {
+        let __path = `/api/v1/bitbucket/webhooks`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["EnableBitbucketWebhookInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushState"],
+        };
+
+        return this.request<types.PushState>(config);
+      },
+
+    },
+
+  };
+
   public readonly catalogAdmin = {
     /**
      * Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure
@@ -4477,6 +4585,22 @@ export class RESTClient extends Client {
 
   public readonly nodeJoinTokens = {
     /**
+     * Cancel a join token no machine has used, so none can
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/nodes/join-tokens/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * Make a single-use token for one machine to join, and the command that uses it
      */
     create: async (body: types.JoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinToken> => {
@@ -4492,6 +4616,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.JoinToken>(config);
+    },
+
+    /**
+     * The join tokens no machine has used yet: who made them, with which key, for what, and when they expire
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinTokenList> => {
+      let __path = `/api/v1/nodes/join-tokens`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["JoinTokenList"],
+      };
+
+      return this.request<types.JoinTokenList>(config);
     },
 
   };

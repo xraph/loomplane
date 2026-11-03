@@ -14,7 +14,7 @@ func TestNodesConfigLoads(t *testing.T) {
 		t.Fatalf("nodes settings: %+v", cfg.Nodes)
 	}
 	def, err := FromSource(mapGetter{"database.url": testDSN})
-	if err != nil || def.Nodes != (NodesConfig{}) {
+	if err != nil || def.Nodes != (NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit}) {
 		t.Fatalf("defaults: %+v %v", def.Nodes, err)
 	}
 }
@@ -25,5 +25,15 @@ func TestNodesConfigRejectsABadAdvertiseURL(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "nodes.advertise_url") {
 			t.Errorf("%q: %v", bad, err)
 		}
+	}
+}
+
+func TestNodesConfigRateLimits(t *testing.T) {
+	cfg, err := FromSource(mapGetter{"database.url": testDSN, "nodes.join_rate_limit": 3, "nodes.challenge_rate_limit": 0})
+	if err != nil || cfg.Nodes.JoinRateLimit != 3 || cfg.Nodes.ChallengeRateLimit != 0 {
+		t.Fatalf("limits: %+v %v", cfg.Nodes, err)
+	}
+	if _, err = FromSource(mapGetter{"database.url": testDSN, "nodes.join_rate_limit": -1}); err == nil || !strings.Contains(err.Error(), "nodes.join_rate_limit") {
+		t.Fatalf("negative limit: %v", err)
 	}
 }

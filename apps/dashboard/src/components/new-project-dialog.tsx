@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useBitbucketStatus,
   useGithubStatus,
   useGitlabStatus,
   useProjectsCreate,
@@ -48,6 +49,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { aliasFor, aliasProblem } from "@/lib/alias"
 import { repositoryKey, repositoryURL } from "@/lib/format"
+import { canReadBitbucket } from "@/lib/integrations"
 import {
   ProjectIcon,
   type ProjectColorName,
@@ -129,15 +131,15 @@ function NewProjectForm({
   const create = useMutation(useProjectsCreate)
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
-  const hasGitHub = (github.data?.installations.length ?? 0) > 0
-  const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
-  const connected = hasGitHub || hasGitLab
-  const connection =
-    hasGitHub && hasGitLab
-      ? "GitHub or GitLab connection"
-      : hasGitLab
-        ? "GitLab connection"
-        : "GitHub connection"
+  const bitbucket = useQuery(useBitbucketStatus)
+  // The hosts with an account connected, in the order the page lists them.
+  const hosts = [
+    (github.data?.installations.length ?? 0) > 0 && "GitHub",
+    (gitlab.data?.connections.length ?? 0) > 0 && "GitLab",
+    canReadBitbucket(bitbucket.data) && "Bitbucket",
+  ].filter((h): h is string => !!h)
+  const connected = hosts.length > 0
+  const connection = `${hosts.length > 1 ? `${hosts.slice(0, -1).join(", ")} or ${hosts[hosts.length - 1]}` : hosts[0]} connection`
   const [rows, setRows] = useState<RepoRow[]>([
     { key: 0, repo: repository, alias: "" },
   ])
@@ -322,7 +324,7 @@ function NewProjectForm({
               ? "Each one gets an alias, from its name unless you give it one. Plans and variables name it by that alias, and it can't change later."
               : connected
                 ? `From your ${connection}, or any public repository. You can add it later, or more of them.`
-                : "Any public GitHub or GitLab repository. Connect one under Integrations for private ones. You can add it later, or more of them."}
+                : "Any public GitHub, GitLab or Bitbucket repository. Connect one under Integrations for private ones. You can add it later, or more of them."}
           </FieldDescription>
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">

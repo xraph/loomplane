@@ -299,6 +299,7 @@ func TestConnections_connect(t *testing.T) {
 		"someone else's installation": {InstallationID: someoneElse, Code: goodCode, State: state(admin)},
 		"state for another person":    {InstallationID: installed, Code: goodCode, State: state(dev)},
 		"no state":                    {InstallationID: installed, Code: goodCode},
+		"a Bitbucket state":           {InstallationID: installed, Code: goodCode, State: bitbucketState(t, f.key, admin)},
 	}
 	for name, in := range refusals {
 		t.Run(name, func(t *testing.T) {
@@ -399,4 +400,15 @@ func TestAccountURLs(t *testing.T) {
 	if avatar != "https://github.com/rex.png" || manage != "https://github.com/settings/installations/8" {
 		t.Fatalf("a person's: %q, %q", avatar, manage)
 	}
+}
+
+// bitbucketState is a Bitbucket connect state for p, signed with GitHub's
+// key, which GitHub's flow must still refuse.
+func bitbucketState(t *testing.T, key []byte, p security.Principal) string {
+	t.Helper()
+	s, err := SignWorkspaceState(key, p.OrgID, p.UserID, "acme", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

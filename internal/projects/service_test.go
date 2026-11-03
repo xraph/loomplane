@@ -991,3 +991,35 @@ func TestSetTeamAuditsThePreviousTeam(t *testing.T) {
 		t.Fatalf("clearing an unset team was audited: %v", audit.actions)
 	}
 }
+
+func TestService_createRollbackRunsTheReapers(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	reaper := &reapRecorder{}
+	f.svc.AddReaper(reaper)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+
+	// The first repository attaches, the second can't: the project goes, and
+	// what the first one's attach set up is cleaned up after it.
+	f.attach.failOn = map[string]error{"acme/private": fmt.Errorf("%w: Loomplane can't read it", ErrRepository)}
+	_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Shop", Repositories: []RepositoryInput{{Repository: "acme/api"}, {Repository: "acme/private"}}})
+	if !errors.Is(err, ErrRepository) {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(reaper.reaped) != 1 || !slices.Equal(reaper.reaped, reaper.finished) || !strings.HasSuffix(reaper.reaped[0], "/") {
+		t.Fatalf("a rolled-back attach: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+
+	// The same when the project's initialization can't start.
+	f.attach.failOn = nil
+	reaper.reaped, reaper.finished = nil, nil
+	f.init.err = errors.New("queue down")
+	if _, err = f.svc.Create(ctx, dev, CreateProjectInput{Name: "Shop", RepositoryURL: "https://github.com/acme/api"}); err == nil {
+		t.Fatal("Create succeeded without its initialization")
+	} else if !strings.Contains(err.Error(), "initialization") {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(reaper.reaped) != 1 || !slices.Equal(reaper.reaped, reaper.finished) {
+		t.Fatalf("a rolled-back initialization: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+}

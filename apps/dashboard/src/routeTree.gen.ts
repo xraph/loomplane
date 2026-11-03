@@ -56,6 +56,7 @@ import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
+import { Route as IntegrationsBitbucketCallbackRouteImport } from "./routes/integrations.bitbucket.callback"
 import { Route as IntegrationsConnectCloudRouteImport } from "./routes/integrations.connect.$cloud"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 import { Route as IntegrationsGitlabCallbackRouteImport } from "./routes/integrations.gitlab.callback"
@@ -299,6 +300,12 @@ const CloudsAccountsIdRoute = CloudsAccountsIdRouteImport.update({
   path: "/clouds/accounts/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsBitbucketCallbackRoute =
+  IntegrationsBitbucketCallbackRouteImport.update({
+    id: "/integrations/bitbucket/callback",
+    path: "/integrations/bitbucket/callback",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const IntegrationsConnectCloudRoute =
   IntegrationsConnectCloudRouteImport.update({
     id: "/integrations/connect/$cloud",
@@ -388,6 +395,7 @@ export interface FileRoutesByFullPath {
   "/services/": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
@@ -444,6 +452,7 @@ export interface FileRoutesByTo {
   "/services": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
@@ -501,6 +510,7 @@ export interface FileRoutesById {
   "/services/": typeof ServicesIndexRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
+  "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
   "/integrations/connect/$cloud": typeof IntegrationsConnectCloudRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
@@ -559,6 +569,7 @@ export interface FileRouteTypes {
     | "/services/"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/bitbucket/callback"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
@@ -615,6 +626,7 @@ export interface FileRouteTypes {
     | "/services"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/bitbucket/callback"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
@@ -671,6 +683,7 @@ export interface FileRouteTypes {
     | "/services/"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
+    | "/integrations/bitbucket/callback"
     | "/integrations/connect/$cloud"
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
@@ -728,6 +741,7 @@ export interface RootRouteChildren {
   ServicesIndexRoute: typeof ServicesIndexRoute
   AiModelsSplatRoute: typeof AiModelsSplatRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
+  IntegrationsBitbucketCallbackRoute: typeof IntegrationsBitbucketCallbackRoute
   IntegrationsConnectCloudRoute: typeof IntegrationsConnectCloudRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsGitlabCallbackRoute: typeof IntegrationsGitlabCallbackRoute
@@ -1069,6 +1083,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof CloudsAccountsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/bitbucket/callback": {
+      id: "/integrations/bitbucket/callback"
+      path: "/integrations/bitbucket/callback"
+      fullPath: "/integrations/bitbucket/callback"
+      preLoaderRoute: typeof IntegrationsBitbucketCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/connect/$cloud": {
       id: "/integrations/connect/$cloud"
       path: "/integrations/connect/$cloud"
@@ -1168,6 +1189,7 @@ const rootRouteChildren: RootRouteChildren = {
   ServicesIndexRoute: ServicesIndexRoute,
   AiModelsSplatRoute: AiModelsSplatRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
+  IntegrationsBitbucketCallbackRoute: IntegrationsBitbucketCallbackRoute,
   IntegrationsConnectCloudRoute: IntegrationsConnectCloudRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsGitlabCallbackRoute: IntegrationsGitlabCallbackRoute,

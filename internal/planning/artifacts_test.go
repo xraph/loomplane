@@ -328,9 +328,12 @@ func TestGitBuildable_refusesSelfManaged(t *testing.T) {
 	for _, tc := range []struct {
 		provider, key, want string
 	}{
-		{"render", "gitlab.example.com/team/api", "Render builds from github.com and gitlab.com repositories only, so it can't build gitlab.example.com/team/api"},
+		{"render", "gitlab.example.com/team/api", "Render builds from github.com, gitlab.com and bitbucket.org repositories only, so it can't build gitlab.example.com/team/api"},
 		{"digitalocean", "gitlab.example.com/team/api", "App Platform builds from github.com and gitlab.com repositories only, so it can't build gitlab.example.com/team/api"},
 		{"render", "gitlab.com/a/b", ""},
+		{"render", "bitbucket.org/acme/api", ""},
+		{"render", "Bitbucket.org/Acme/API", ""},
+		{"digitalocean", "bitbucket.org/acme/api", "App Platform builds from github.com and gitlab.com repositories only, so it can't build bitbucket.org/acme/api"},
 		{"render", "gitlab.com/grp/sub/api", ""},
 		{"render", "GitLab.com/a/b", ""},
 		{"render", "acme/api", ""},

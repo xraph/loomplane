@@ -286,25 +286,28 @@ func gitlabInstanceHosts(cfg config.GitLabConfig) ([]repositories.GitLabHost, ma
 	return instance, secrets, nil
 }
 
-// SourceReaders reads the hosts a source can be on: GitHub, gitlab.com and
-// whichever GitLab the registry knows.
+// SourceReaders reads the hosts a source can be on: GitHub, Bitbucket,
+// gitlab.com and whichever GitLab the registry knows.
 func SourceReaders(cfg config.Config, registry *repositories.GitLabRegistry) repositories.Readers {
 	return repositories.Readers{
 		Static: map[string]repositories.Reader{
-			"github.com":            repositories.NewGitHub(cfg.GitHub.APIURL),
-			repositories.HostGitLab: repositories.NewGitLab(cfg.GitLab.APIURL, nil),
+			"github.com":               repositories.NewGitHub(cfg.GitHub.APIURL),
+			repositories.HostBitbucket: repositories.NewBitbucket(cfg.Bitbucket.APIURL, cfg.Bitbucket.WebURL),
+			repositories.HostGitLab:    repositories.NewGitLab(cfg.GitLab.APIURL, nil),
 		},
 		Lookup: registry.Reader,
 	}
 }
 
 // SourceTokens mints the tokens private sources are read with, from the
-// organization's GitHub installations and GitLab accounts.
-func SourceTokens(github *repositories.Connections, gitlab *repositories.GitLabConnections) repositories.Tokens {
+// organization's GitHub installations, Bitbucket workspaces and GitLab
+// accounts.
+func SourceTokens(github *repositories.Connections, bitbucket *repositories.BitbucketConnections, gitlab *repositories.GitLabConnections) repositories.Tokens {
 	return repositories.Tokens{
 		Static: map[string]repositories.TokenSource{
-			"github.com":            github,
-			repositories.HostGitLab: gitlab,
+			"github.com":               github,
+			repositories.HostBitbucket: bitbucket,
+			repositories.HostGitLab:    gitlab,
 		},
 		Lookup: gitlab.Lookup,
 	}

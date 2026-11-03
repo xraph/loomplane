@@ -51,6 +51,7 @@ type Service struct {
 	audit    projects.Auditor
 	access   Checker
 	hosts    repositories.Hosts
+	hooks    SourceHooks
 	now      func() time.Time
 }
 
@@ -152,6 +153,12 @@ const (
 // already under way is left alone, and that's ErrAlreadyActive.
 func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, error) {
 	return s.startFromPush(ctx, src, PushActor)
+}
+
+// StartFromBitbucketPush is StartFromPush for a push Bitbucket signed, which
+// the analysis records as BitbucketPushActor's.
+func (s *Service) StartFromBitbucketPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, BitbucketPushActor)
 }
 
 // StartFromGitLabPush is StartFromPush for a push GitLab announced, recorded

@@ -1,20 +1,25 @@
-// A repository field: type or paste any GitHub or GitLab repository, or pick
-// one the organization's connected GitHub accounts and GitLab connections let
-// Loomplane read, from a list grouped by account or namespace. New project and
-// Add a repository both use it. The field holds the key a source stores:
+// A repository field: type or paste any GitHub, GitLab or Bitbucket
+// repository, or pick one the organization's connected GitHub accounts,
+// GitLab connections and Bitbucket workspaces let Loomplane read, from a
+// list grouped by account, namespace or workspace. New project and Add a
+// repository both use it. The field holds the key a source stores:
 // owner/name for GitHub, host/path for anything else.
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { GitBranchIcon, LockIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import {
-  useGithubRepositories,
+  useBitbucketStatus,
   useGithubStatus,
-  useGitlabRepositories,
   useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import { HostMark } from "@/components/host-mark"
 import { QueryError } from "@/components/query-error"
+import {
+  type Listing,
+  RepositoryListings,
+} from "@/components/repository-listings"
 import {
   InputGroup,
   InputGroupAddon,
@@ -24,8 +29,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { repositoryKey, startsWithHost } from "@/lib/format"
 import {
-  fromGitHub,
-  fromGitLab,
+  canReadBitbucket,
   type PickerRepository,
   pickerGroupLabel,
   type RepositoryChoice,
@@ -65,58 +69,27 @@ function HostAddon({ value }: { value: string }) {
   )
 }
 
-/** What one host's list of repositories is doing. */
-type Listing = {
-  repositories: PickerRepository[]
-  loading: boolean
-  error?: unknown
-  retry?: () => Promise<unknown>
-}
-
-const nothing: Listing = { repositories: [], loading: false }
-
-function GithubListing({ children }: { children: (l: Listing) => ReactNode }) {
-  const repos = useQuery(useGithubRepositories)
-  return children({
-    repositories: (repos.data?.repositories ?? []).map(fromGitHub),
-    loading: !repos.data && repos.status !== "error",
-    error: repos.status === "error" ? repos.error : undefined,
-    retry: repos.refetch,
-  })
-}
-
-function GitlabListing({ children }: { children: (l: Listing) => ReactNode }) {
-  const repos = useQuery(useGitlabRepositories)
-  return children({
-    repositories: (repos.data?.repositories ?? []).map(fromGitLab),
-    loading: !repos.data && repos.status !== "error",
-    error: repos.status === "error" ? repos.error : undefined,
-    retry: repos.refetch,
-  })
-}
-
 export function RepositoryPicker(props: FieldProps) {
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const installations = github.data?.installations ?? []
   const hasGitHub = installations.length > 0
   const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
+  const hasBitbucket = canReadBitbucket(bitbucket.data)
   // The lists ask the hosts, so they're only there once an account is
   // connected.
-  if (!hasGitHub && !hasGitLab) return <PlainField {...props} />
-  const label = pickerGroupLabel(installations)
-  const withGitLab = (g: Listing) =>
-    hasGitLab ? (
-      <GitlabListing>
-        {(l) => <Picker {...props} label={label} listings={[g, l]} />}
-      </GitlabListing>
-    ) : (
-      <Picker {...props} label={label} listings={[g]} />
-    )
-  return hasGitHub ? (
-    <GithubListing>{withGitLab}</GithubListing>
-  ) : (
-    withGitLab(nothing)
+  if (!hasGitHub && !hasGitLab && !hasBitbucket)
+    return <PlainField {...props} />
+  const label = pickerGroupLabel(installations, bitbucket.data?.workspaces)
+  return (
+    <RepositoryListings
+      github={hasGitHub}
+      gitlab={hasGitLab}
+      bitbucket={hasBitbucket}
+    >
+      {(listings) => <Picker {...props} label={label} listings={listings} />}
+    </RepositoryListings>
   )
 }
 
@@ -232,6 +205,11 @@ function Picker({
                           <span className="size-4 rounded-[4px] border bg-muted" />
                         )}
                         {group.account}
+                        <HostMark
+                          provider={group.provider}
+                          host={group.host}
+                          className="size-3 shrink-0"
+                        />
                       </Autocomplete.GroupLabel>
                       <Autocomplete.Collection>
                         {(c: RepositoryChoice) => (
