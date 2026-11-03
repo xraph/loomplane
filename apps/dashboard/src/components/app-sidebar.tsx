@@ -39,6 +39,7 @@ import {
 } from "@/components/sidebar/nav-settings"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
+import { cloudSettingsGroups } from "@/cloud"
 import { aiNavItems } from "@/lib/ai-nav"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
@@ -281,6 +282,9 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           ]
         : [],
     },
+    ...(import.meta.env.VITE_LOOMPLANE_EDITION === "cloud"
+      ? cloudSettingsGroups()
+      : []),
   ]
 
   return (
