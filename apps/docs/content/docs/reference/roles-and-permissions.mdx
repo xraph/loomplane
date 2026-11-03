@@ -101,7 +101,7 @@ Loomplane writes that role only when you turn the agent on, and only into your o
 
 Beyond approving, it holds no admin permission you can use through it. `infrastructure:modify` is checked in code as well as in Warden: Loomplane refuses it to the agent everywhere except the deployment of a plan it approved, so a chat or any other agent work can't change your infrastructure with it. It can't set secrets, delete a project, change cloud accounts or members, or retire a backup, and no session or API key can sign in as it.
 
-When you chat with the agent, it acts for you. Every check then asks about both of you, and the agent may do something only when you could do it yourself and its role allows it too. So a viewer's chat can read but never deploy, and an owner's chat still can't set a secret. A read-only API key makes the agent read-only as well. When it works alone, outside a chat, its role is the only limit.
+When you chat with the agent (which comes in a later version), it acts for you. Every check then asks about both of you, and the agent may do something only when you could do it yourself and its role allows it too. So a viewer's chat can read but never deploy, and an owner's chat still can't set a secret. A read-only API key can't use the agent at all, because `agent:use` isn't a read permission. That includes `loomctl agent requests`. When it works alone, outside a chat, its role is the only limit.
 
 Its audit events carry `actor: agent` and `actor_name: Loomplane agent`. In a chat they also carry `on_behalf_of` (the person it acted for), and when they come from one of its tools, `task_id`, `run_id` and `tool`.
 

@@ -62,7 +62,7 @@ Every kind can be declined, with a reason the agent sees. A request that nobody 
 
 A request goes to the project's [responsible team](/docs/concepts/teams) by default. If the project has none, or its team is empty, it goes to the workspace admins, and the request says why it fell through. The agent can name a different team for a question, a secret or a connection, but only with a reason, and the request shows both: "Sent to Payments", then why. A team that doesn't exist or has no members is passed over with a note. A request to approve a plan always goes to the project's team, never to one the agent picked.
 
-Every member of the team gets the notice under their own notification preferences, and any one of them can answer. The first answer settles it. A question you asked in a conversation goes to you alone.
+Every member of the team gets the notice under their own notification preferences, and any one of them can answer. The first answer settles it. A question you asked in a conversation is sent to you alone. It isn't private, though: anyone with `project:read` on its project can see it, and an `ai:manage` holder can answer it.
 
 ### Who can see and answer
 
@@ -70,11 +70,12 @@ On the **Agent** page, **For you** shows what was asked of you, what went to a t
 
 - A request about a project needs `agent:use` and `project:read` on that project.
 - A request with no project (a question in a workspace-wide chat, say) is seen by the person who asked, the team it was routed to, and anyone with `ai:manage`. A viewer who isn't any of those doesn't see it.
-- Answering is for the asker, a current member of the routed team, or an `ai:manage` holder, and the action needs its own permission: `deployment:approve` to approve a plan, `variable:manage` to provide a secret, `repository:connect` to connect GitHub, `cloud_account:manage` to connect a cloud.
+- Answering a question is for the asker, a current member of the routed team, or an `ai:manage` holder.
+- Every other kind needs its own permission and nothing more: `deployment:approve` on the project to approve or decline a plan, `variable:manage` on the project to provide a secret, `repository:connect` to connect GitHub, `cloud_account:manage` to connect a cloud. The page shows the controls only to people who hold it.
 
 ### Secrets
 
-The agent never sees a secret's value, and you never type one into a chat. When it needs one it asks with a request that names the key and the environment. You type the value into the field on the request, or pipe it to `loomctl agent requests provide <id>`. The value is sent once, stored as a secret variable by you, and cleared from the page. No response, audit entry, notice or model prompt carries it. If saving fails the request stays open, and your next try replaces the value.
+The agent never sees a secret's value, and you never type one into a chat. When it needs one it asks with a request that names the key, the environment and, when it has one, the service. You type the value into the field on the request, or pipe it to `loomctl agent requests provide <id>`. The value is sent once, stored as a secret variable by you, and cleared from the page. No response, audit entry, notice or model prompt carries it. If saving fails the request stays open, and your next try replaces the value.
 
 The command line refuses a value given as an argument, so it stays out of your shell history. It reads standard input, and hides what you type when that's a terminal.
 

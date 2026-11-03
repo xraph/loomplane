@@ -3,7 +3,7 @@ title: Workspace settings
 description: Choose the agent's provider and key, set its monthly budget, decide about knowledge, and set per-project autonomy.
 ---
 
-A workspace admin runs the agent from **Settings, AI**. You need `ai:manage` to see the agent's panel at all. Everyone else with `agent:use` can talk to the agent and see its requests, and nobody else sees the settings.
+A workspace admin runs the agent from **Settings, AI**. You need `ai:manage` to see the agent's panel at all. Everyone else with `agent:use` can see the agent's requests, and nobody else sees the settings. Chatting with the agent comes in a later version. In this one you set it up here and answer what it asks on the requests page.
 
 ## Provider and key
 
@@ -20,7 +20,7 @@ Paste the key into **API key** and choose **Save provider**. After that the page
 
 Keys live in Vault, never in the database. A key the agent uses has to be available to every project, because the agent works across the workspace, so you can't narrow it to some. You can't delete it while the agent runs on it either.
 
-The base URL for an OpenAI-compatible endpoint is checked when you save. It has to be an absolute URL with no credentials in it, and in production it has to be https. Loomplane refuses addresses on private networks, loopback and link-local ranges (outside development) and anything in `planning.endpoint_denied_cidrs`, because the agent sends its key there. The refusal names the rule.
+The base URL for an OpenAI-compatible endpoint is checked when you save. It has to be an absolute URL with no credentials in it, and in production it has to be https. Loomplane refuses addresses on private networks and loopback outside development, link-local and cloud metadata addresses everywhere, and anything in `planning.endpoint_denied_cidrs`, because the agent sends its key there. The refusal names the rule.
 
 The **Model** field starts from the model the agent runs on now. Type another to change it. Loomplane refuses a model it has no price for and says so under the field.
 
