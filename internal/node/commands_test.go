@@ -38,6 +38,17 @@ type fakeService struct {
 	runErr    error
 	// runningSeq, while it lasts, answers Running in turn before running.
 	runningSeq []bool
+	// grantChanged is what GrantDocker reports; grants counts its calls.
+	grantChanged bool
+	grants       int
+}
+
+func (f *fakeService) GrantDocker(context.Context) (bool, error) {
+	f.note("grant-docker")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants++
+	return f.grantChanged, nil
 }
 
 func (f *fakeService) note(c string) {
@@ -448,6 +459,54 @@ func TestAllowWithoutServiceWritesConfigForNextStart(t *testing.T) {
 	}
 	if !strings.Contains(r.out.String(), "next time") {
 		t.Fatalf("output should say it applies at the next start:\n%s", r.out)
+	}
+}
+
+// allow docker puts the service user in the docker group, and restarts a
+// running service only when membership changed.
+func TestAllowDockerGrantsTheGroupAndRestartsOnlyOnChange(t *testing.T) {
+	for name, tc := range map[string]struct {
+		changed, running bool
+		wantRestart      bool
+		wantOut          string
+	}{
+		"joined the group":     {true, true, true, "restarted"},
+		"already in the group": {false, true, false, ""},
+		"changed, not running": {true, false, false, "next time it starts"},
+	} {
+		r := newCmdRig(t)
+		r.svc.grantChanged = tc.changed
+		r.svc.running = tc.running
+		if tc.running {
+			serveControlStub(t, r.dir, `{"ok":true}`)
+		}
+		st := State{Dir: r.dir}
+		if err := st.SaveConfig(Config{URL: "http://x", NodeID: "n", Endpoints: []nodeproto.Endpoint{"probe"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.run("node", "allow", "docker", "--state-dir", r.dir); err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, r.out)
+		}
+		if r.svc.grants != 1 {
+			t.Errorf("%s: GrantDocker ran %d times", name, r.svc.grants)
+		}
+		if got := r.svc.did("stop") && r.svc.did("start"); got != tc.wantRestart {
+			t.Errorf("%s: restarted = %v, want %v (%v)", name, got, tc.wantRestart, r.svc.calls)
+		}
+		if !strings.Contains(r.out.String(), tc.wantOut) {
+			t.Errorf("%s: output lacks %q:\n%s", name, tc.wantOut, r.out)
+		}
+	}
+	// Allowing something else never touches the group.
+	r := newCmdRig(t)
+	if err := (State{Dir: r.dir}).SaveConfig(Config{URL: "http://x", NodeID: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run("node", "allow", "dial", "--state-dir", r.dir); err != nil {
+		t.Fatal(err)
+	}
+	if r.svc.grants != 0 {
+		t.Fatal("allow dial touched the docker group")
 	}
 }
 
@@ -912,8 +971,18 @@ func TestJoinRecordsDetectedDockerEvenWhenNotAllowed(t *testing.T) {
 	if err != nil || cfg.DockerSocket != sock {
 		t.Fatalf("config %+v %v", cfg, err)
 	}
-	if len(r.svc.installed) != 1 || !r.svc.installed[0].Docker {
-		t.Fatalf("the unit does not ask for the docker group: %+v", r.svc.installed)
+	// Detected but not allowed: the socket path is kept, the group is not asked for.
+	if len(r.svc.installed) != 1 || r.svc.installed[0].Docker {
+		t.Fatalf("the unit asks for the docker group although docker was not allowed: %+v", r.svc.installed)
+	}
+	// Allowed and detected: the group is asked for.
+	r3 := newCmdRig(t)
+	r3.opts.detect.DockerSockets = []string{sock}
+	if err := r3.run("node", "join", "--state-dir", r3.dir, "--url", js.URL, "--token", "x", "--allow", "probe,docker"); err != nil {
+		t.Fatal(err)
+	}
+	if len(r3.svc.installed) != 1 || !r3.svc.installed[0].Docker {
+		t.Fatalf("the unit does not ask for the docker group: %+v", r3.svc.installed)
 	}
 	// And a machine without Docker does not.
 	r2 := newCmdRig(t)

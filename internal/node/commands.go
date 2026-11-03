@@ -562,7 +562,7 @@ func (c *cmds) install(ctx context.Context, dir string, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("finding the running binary: %w", err)
 	}
-	unit := Unit{Binary: bin, StateDir: dir, BinDir: c.binDir(dir), Docker: cfg.DockerSocket != ""}
+	unit := Unit{Binary: bin, StateDir: dir, BinDir: c.binDir(dir), Docker: cfg.DockerSocket != "" && slices.Contains(cfg.Endpoints, nodeproto.EndpointDocker)}
 	if err := c.opts.svc.Install(ctx, unit); err != nil {
 		return fmt.Errorf("joined as node %s, but installing the service failed: %w; fix that and run node leave, then join again", cfg.NodeID, err)
 	}
@@ -739,7 +739,7 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	switch {
 	case err == nil:
 		c.printf("Allowed %s. The running node told Loomplane.\n", list)
-		return nil
+		return c.grantDocker(ctx.Context(), eps)
 	case !errors.Is(err, errNoService):
 		return err
 	}
@@ -756,6 +756,36 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 		return err
 	}
 	c.printf("Allowed %s. The node is not running, so Loomplane learns of it the next time the node starts.\n", list)
+	return c.grantDocker(ctx.Context(), eps)
+}
+
+// grantDocker follows an allow that includes docker: the service user joins
+// the docker group, which is what lets the node reach the socket, and a
+// running service restarts so the new process has the group. Anything else
+// allowed needs nothing here. The group is root-equivalent, so only this
+// root-run command ever adds it.
+func (c *cmds) grantDocker(ctx context.Context, eps []nodeproto.Endpoint) error {
+	if !slices.Contains(eps, nodeproto.EndpointDocker) {
+		return nil
+	}
+	changed, err := c.opts.svc.GrantDocker(ctx)
+	if err != nil {
+		return fmt.Errorf("docker is allowed, but giving the node service access to it failed: %w", err)
+	}
+	if !changed {
+		return nil
+	}
+	if running, _ := c.opts.svc.Running(ctx); !running { //nolint:errcheck // unknown counts as not running
+		c.printf("The node service is now in the docker group. It picks that up the next time it starts.\n")
+		return nil
+	}
+	if err := c.opts.svc.Stop(ctx); err != nil {
+		return fmt.Errorf("the node service is in the docker group now, but restarting it failed: %w; restart it yourself", err)
+	}
+	if err := c.opts.svc.Start(ctx); err != nil {
+		return fmt.Errorf("the node service is in the docker group now, but restarting it failed: %w; start it yourself", err)
+	}
+	c.printf("The node service is now in the docker group, and was restarted to pick that up.\n")
 	return nil
 }
 

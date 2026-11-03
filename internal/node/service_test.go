@@ -18,6 +18,8 @@ type fakeRunner struct {
 	calls []string
 	// reply returns the error for a command line; nil means success.
 	reply func(line string) error
+	// output returns what a command line prints; nil prints nothing.
+	output func(line string) []byte
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -25,10 +27,14 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 	f.mu.Lock()
 	f.calls = append(f.calls, line)
 	f.mu.Unlock()
-	if f.reply != nil {
-		return nil, f.reply(line)
+	var out []byte
+	if f.output != nil {
+		out = f.output(line)
 	}
-	return nil, nil
+	if f.reply != nil {
+		return out, f.reply(line)
+	}
+	return out, nil
 }
 
 func (f *fakeRunner) got() []string {
@@ -136,6 +142,7 @@ func TestSystemdInstallCreatesUserCopiesBinaryAndWritesUnit(t *testing.T) {
 	want := []string{
 		"useradd --system --no-create-home --home-dir " + r.state + " --shell /usr/sbin/nologin loomplane-node",
 		"getent group docker",
+		"id -nG loomplane-node",
 		"usermod -aG docker loomplane-node",
 		"systemctl daemon-reload",
 	}
@@ -203,6 +210,62 @@ func TestSystemdInstallSkipsWhatIsThere(t *testing.T) {
 	for _, c := range r.run.got() {
 		if strings.HasPrefix(c, "useradd") || strings.HasPrefix(c, "usermod") {
 			t.Fatalf("ran %q", c)
+		}
+	}
+}
+
+// Docker detected but not granted: Install is called with Docker false, and
+// the service user never meets the docker group.
+func TestSystemdInstallLeavesTheDockerGroupAloneWhenNotGranted(t *testing.T) {
+	r := newSystemdRig(t)
+	if err := r.m.Install(t.Context(), Unit{Binary: r.src, StateDir: r.state, BinDir: r.bin}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.run.got() {
+		if strings.Contains(c, "usermod") || strings.Contains(c, "docker") {
+			t.Fatalf("ran %q", c)
+		}
+	}
+}
+
+func TestSystemdGrantDocker(t *testing.T) {
+	for name, tc := range map[string]struct {
+		groups      string
+		noGroup     bool
+		noUser      bool
+		wantChanged bool
+		wantUsermod bool
+	}{
+		"not a member yet":   {groups: "loomplane-node", wantChanged: true, wantUsermod: true},
+		"already a member":   {groups: "loomplane-node docker"},
+		"no docker group":    {groups: "loomplane-node", noGroup: true},
+		"no service user":    {noUser: true},
+		"similar group name": {groups: "loomplane-node dockerroot", wantChanged: true, wantUsermod: true},
+	} {
+		r := newSystemdRig(t)
+		r.created = !tc.noUser
+		r.run.reply = func(line string) error {
+			if line == "getent group docker" && tc.noGroup {
+				return &runError{Code: 2}
+			}
+			return nil
+		}
+		r.run.output = func(line string) []byte {
+			if strings.HasPrefix(line, "id -nG") {
+				return []byte(tc.groups + "\n")
+			}
+			return nil
+		}
+		changed, err := r.m.GrantDocker(t.Context())
+		if err != nil || changed != tc.wantChanged {
+			t.Errorf("%s: changed=%v err=%v", name, changed, err)
+		}
+		ran := false
+		for _, c := range r.run.got() {
+			ran = ran || strings.HasPrefix(c, "usermod")
+		}
+		if ran != tc.wantUsermod {
+			t.Errorf("%s: usermod ran = %v (%v)", name, ran, r.run.got())
 		}
 	}
 }

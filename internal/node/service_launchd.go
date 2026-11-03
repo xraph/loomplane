@@ -91,6 +91,10 @@ func (m *launchdManager) Remove(ctx context.Context) error {
 	return nil
 }
 
+// GrantDocker does nothing: a LaunchAgent runs as the person who installed
+// it, who already decides their own groups.
+func (m *launchdManager) GrantDocker(context.Context) (bool, error) { return false, nil }
+
 func (m *launchdManager) Running(ctx context.Context) (bool, error) {
 	_, err := m.run.Run(ctx, "launchctl", "print", m.target())
 	switch {

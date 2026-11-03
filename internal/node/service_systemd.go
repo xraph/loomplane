@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -123,7 +124,7 @@ func (m *systemdManager) Install(ctx context.Context, u Unit) error {
 }
 
 // ensureUser creates the service user if it is missing, and adds it to the
-// docker group when Docker was found and the group exists.
+// docker group when u.Docker says root allowed Docker and the group exists.
 func (m *systemdManager) ensureUser(ctx context.Context, u Unit) (uid, gid int, err error) {
 	uid, gid, err = m.lookup(m.user)
 	var unknown user.UnknownUserError
@@ -140,12 +141,8 @@ func (m *systemdManager) ensureUser(ctx context.Context, u Unit) (uid, gid int, 
 		return 0, 0, err
 	}
 	if u.Docker {
-		if _, gerr := m.run.Run(ctx, "getent", "group", "docker"); gerr == nil {
-			if _, err := m.run.Run(ctx, "usermod", "-aG", "docker", m.user); err != nil {
-				return 0, 0, fmt.Errorf("adding %s to the docker group: %w", m.user, err)
-			}
-		} else if !exited(gerr) {
-			return 0, 0, gerr
+		if _, err := m.GrantDocker(ctx); err != nil {
+			return 0, 0, err
 		}
 	}
 	return uid, gid, nil
@@ -196,6 +193,36 @@ func (m *systemdManager) systemctl(ctx context.Context, args ...string) error {
 		return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// GrantDocker adds the service user to the docker group if there is one and
+// the user is not in it already. A missing user or group is not an error:
+// there is nothing to grant.
+func (m *systemdManager) GrantDocker(ctx context.Context) (bool, error) {
+	if _, _, err := m.lookup(m.user); err != nil {
+		var unknown user.UnknownUserError
+		if errors.As(err, &unknown) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := m.run.Run(ctx, "getent", "group", "docker"); err != nil {
+		if exited(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	out, err := m.run.Run(ctx, "id", "-nG", m.user)
+	if err != nil && !exited(err) {
+		return false, err
+	}
+	if err == nil && slices.Contains(strings.Fields(string(out)), "docker") {
+		return false, nil
+	}
+	if _, err := m.run.Run(ctx, "usermod", "-aG", "docker", m.user); err != nil {
+		return false, fmt.Errorf("adding %s to the docker group: %w", m.user, err)
+	}
+	return true, nil
 }
 
 func (m *systemdManager) unitName() string { return strings.TrimSuffix(systemdUnitName, ".service") }

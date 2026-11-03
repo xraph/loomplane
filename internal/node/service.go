@@ -32,8 +32,10 @@ type Unit struct {
 	// BinDir is where the service's copy of the binary goes: systemBinDir on
 	// Linux, StateDir/bin on macOS. Empty means StateDir/bin.
 	BinDir string
-	// Docker is set when Docker was found, and puts the service user in the
-	// docker group on Linux.
+	// Docker puts the service user in the docker group on Linux. Set it only
+	// when Docker was found and root allowed the docker endpoint: the group
+	// is root-equivalent, and allow.json is meant to be a ceiling the
+	// service user can't lift.
 	Docker bool
 }
 
@@ -47,6 +49,12 @@ type ServiceManager interface {
 	// Remove stops the service and unregisters it. It leaves the state dir.
 	Remove(ctx context.Context) error
 	Running(ctx context.Context) (bool, error)
+	// GrantDocker puts the service user in the docker group, when there is
+	// such a group and a service user. It reports whether membership
+	// changed, so the caller knows a running service needs a restart to pick
+	// the group up. Where services have no user of their own it does
+	// nothing and reports false.
+	GrantDocker(ctx context.Context) (changed bool, err error)
 }
 
 // Runner runs the system commands a service manager needs. Tests replace it,
@@ -107,6 +115,7 @@ func (unsupportedManager) Remove(context.Context) error        { return ErrUnsup
 func (unsupportedManager) Running(context.Context) (bool, error) {
 	return false, ErrUnsupported
 }
+func (unsupportedManager) GrantDocker(context.Context) (bool, error) { return false, ErrUnsupported }
 
 // binDir is where u's service binary goes.
 func (u Unit) binDir() string {
