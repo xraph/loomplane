@@ -116,7 +116,7 @@ func TestParseRepository(t *testing.T) {
 			t.Errorf("ParseRepository(%q) = %v, %v", in, repo, err)
 		}
 	}
-	for _, in := range []string{"https://gitlab.com/acme/mono", "acme", ""} {
+	for _, in := range []string{"https://git.example.com/acme/mono", "acme", ""} {
 		if _, err := ParseRepository(context.Background(), repositories.Hosts{}, org, in); err == nil {
 			t.Errorf("ParseRepository(%q) succeeded", in)
 		}
