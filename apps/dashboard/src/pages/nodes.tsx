@@ -5,6 +5,7 @@ import { useNodesList } from "@/client/forge/loomplane/hooks"
 import type { Node } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { AddNode } from "@/components/nodes/add-node"
+import { JoinTokens } from "@/components/nodes/join-tokens"
 import { NodeStatus } from "@/components/nodes/node-status"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
@@ -103,6 +104,7 @@ export function Nodes() {
             <NodeTable nodes={list} />
           </>
         )}
+        {manage && nodes.data && <JoinTokens nodes={nodes.data} />}
       </Page>
       {manage && <AddNode open={adding} onOpenChange={setAdding} />}
     </>

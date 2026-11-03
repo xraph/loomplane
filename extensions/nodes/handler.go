@@ -20,6 +20,14 @@ func (noMinter) CreateNodeJoinToken(context.Context, security.Principal, apikeys
 	return nil, apikeys.ErrUnavailable
 }
 
+func (noMinter) ListNodeJoinTokens(context.Context, security.Principal) ([]apikeys.PendingNodeJoinToken, error) {
+	return nil, apikeys.ErrUnavailable
+}
+
+func (noMinter) CancelNodeJoinToken(context.Context, security.Principal, string) error {
+	return apikeys.ErrUnavailable
+}
+
 // NodeHandler serves the nodes routes the platform mounts (join, challenge,
 // connect, hop and the rest of /api/v1/nodes) over a hub and service the
 // caller already bound, with no guard. It is for tests that need the real

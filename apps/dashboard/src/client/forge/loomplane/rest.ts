@@ -4585,6 +4585,22 @@ export class RESTClient extends Client {
 
   public readonly nodeJoinTokens = {
     /**
+     * Cancel a join token no machine has used, so none can
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/nodes/join-tokens/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * Make a single-use token for one machine to join, and the command that uses it
      */
     create: async (body: types.JoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinToken> => {
@@ -4600,6 +4616,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.JoinToken>(config);
+    },
+
+    /**
+     * The join tokens no machine has used yet: who made them, with which key, for what, and when they expire
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinTokenList> => {
+      let __path = `/api/v1/nodes/join-tokens`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["JoinTokenList"],
+      };
+
+      return this.request<types.JoinTokenList>(config);
     },
 
   };

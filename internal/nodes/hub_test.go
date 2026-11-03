@@ -763,6 +763,54 @@ func TestOnOnlineFiresAfterFirstInventory(t *testing.T) {
 	}
 }
 
+// A node that floods its control stream is closed with a log line, and the
+// message that went over the limit is not stored.
+func TestHubClosesANodeThatFloodsControl(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1")
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	for range controlBurst {
+		n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux", Hostname: "within"}})
+	}
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux", Hostname: "flood"}})
+	n.closedWithin(3 * time.Second)
+	waitFor(t, "the session to end", func() bool { return !r.hub.Online("node_1") })
+	if got := r.node("node_1").Inventory.Hostname; got != "within" {
+		t.Fatalf("stored hostname %q, want the last one inside the limit", got)
+	}
+	if !strings.Contains(r.logs.String(), "faster than allowed") {
+		t.Fatalf("no log line:\n%s", r.logs.String())
+	}
+}
+
+func TestControlBucketRefills(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	b := newBucket(start)
+	for i := range controlBurst {
+		if !b.take(start) {
+			t.Fatalf("refused message %d of the burst", i)
+		}
+	}
+	if b.take(start) {
+		t.Fatal("took one past the burst")
+	}
+	if !b.take(start.Add(time.Second / controlPerSecond)) {
+		t.Fatal("did not refill")
+	}
+	if b.take(start.Add(time.Second / controlPerSecond)) {
+		t.Fatal("refilled more than the time allows")
+	}
+	// A long quiet spell refills to the burst, no further.
+	later := start.Add(time.Hour)
+	for range controlBurst {
+		b.take(later)
+	}
+	if b.take(later) {
+		t.Fatal("refilled past the burst")
+	}
+}
+
 func TestOnInventoryFiresOnChange(t *testing.T) {
 	r := newHubRig(t, newFakeStore(), "a")
 	priv := seedNode(t, r.store, "node_1", "web-1")
@@ -1214,6 +1262,66 @@ func TestHubWarnsWhenAReplicaCannotBeReached(t *testing.T) {
 	}
 	if got := strings.Count(logs.String(), "has no nodes.advertise_url"); got != 1 {
 		t.Fatalf("warned %d times:\n%s", got, logs.String())
+	}
+}
+
+// After a restart on a single replica, a node's session row still names the
+// dead process until the node reconnects. That row was written before this
+// hub started, so it is no sign of a replica that can't be reached.
+func TestHubDoesNotWarnAboutItsOwnPredecessor(t *testing.T) {
+	store := newFakeStore()
+	var logs syncLog
+	seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	if _, err := store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "replica:host-1:4242", ConnectedAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHub(HubConfig{Audience: "https://lp.example.com", Replica: "host-1:4343", HopSecret: []byte("hop-secret-for-tests-only-000000"),
+		ChallengeSecret: []byte("challenge-secret-for-tests-00000"), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err := h.Bind(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	var off ErrNodeOffline
+	if _, err := h.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+		t.Fatalf("open: %v", err)
+	}
+	if strings.Contains(logs.String(), "has no nodes.advertise_url") {
+		t.Fatalf("warned about the process this one replaced:\n%s", logs.String())
+	}
+}
+
+// A live replica on another host is no predecessor, however long ago its
+// sessions connected: in a rolling deploy they all predate the new process.
+func TestHubWarnsAboutAnOlderReplicaOnAnotherHost(t *testing.T) {
+	store := newFakeStore()
+	var logs syncLog
+	seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	if _, err := store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "replica:host-2:4242", ConnectedAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHub(HubConfig{Audience: "https://lp.example.com", Replica: "host-1:4343", HopSecret: []byte("hop-secret-for-tests-only-000000"),
+		ChallengeSecret: []byte("challenge-secret-for-tests-00000"), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err := h.Bind(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	var off ErrNodeOffline
+	if _, err := h.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+		t.Fatalf("open: %v", err)
+	}
+	if !strings.Contains(logs.String(), "has no nodes.advertise_url") {
+		t.Fatalf("no warning about the replica on host-2:\n%s", logs.String())
+	}
+}
+
+func TestReplicaHost(t *testing.T) {
+	for id, want := range map[string]string{
+		"replica:host-1:4242":        "host-1",
+		"replica:10.0.0.7:80":        "10.0.0.7",
+		"replica:a":                  "a",
+		"replica:[fe80::1%eth0]:999": "[fe80::1%eth0]",
+	} {
+		if got := replicaHost(id); got != want {
+			t.Errorf("replicaHost(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 

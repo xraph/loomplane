@@ -113,6 +113,8 @@ Machines that join an organization hold one connection to a replica. When you ru
 | `LOOMPLANE_NODES_ADVERTISE_URL` (`nodes.advertise_url`) | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. It must be an absolute http or https URL with no user, query or fragment, or startup stops. Set each replica's own address. Use `https`, or a private network with the setting below. With several replicas on one database and no advertise URL, each replica only reaches the nodes connected to it, and logs a warning when it meets one it can't |
 | `LOOMPLANE_NODES_HOP_INSECURE` (`nodes.hop_insecure`) | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
 | `LOOMPLANE_NODES_HOP_CA_FILE` (`nodes.hop_ca_file`) | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+| `LOOMPLANE_NODES_JOIN_RATE_LIMIT` (`nodes.join_rate_limit`) | `10` | How many joins one address may send a minute. Past it the address gets a 429 until the minute is up. `0` turns the limit off |
+| `LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT` (`nodes.challenge_rate_limit`) | `120` | How many connect challenges one address may ask for a minute. Every node reconnects after a restart, and nodes behind one NAT share this budget, so raise it if you run more than about a hundred machines behind one address. `0` turns it off |
 
 ## Cloud sign-in
 
