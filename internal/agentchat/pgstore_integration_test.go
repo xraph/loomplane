@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 	_ "github.com/xraph/grove/drivers/pgdriver/pgmigrate" // registers the Postgres migration executor
 	"github.com/xraph/grove/migrate"
@@ -24,11 +25,11 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-func openDB(t *testing.T) *pgdriver.PgDB {
+func openDB(t *testing.T, opts ...driver.Option) *pgdriver.PgDB {
 	t.Helper()
 	dsn := agenttest.FreshDatabase(t)
 	pg := pgdriver.New()
-	if err := pg.Open(context.Background(), dsn); err != nil {
+	if err := pg.Open(context.Background(), dsn, opts...); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pg.Close() })
@@ -203,7 +204,7 @@ func TestConcurrentSendsStartOneOverPostgres(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range 2 {
-		svc := agentchat.NewService(agentchat.Deps{Store: agentchat.NewPgStore(pg), Runs: runs, Lock: pglock.For(pg)})
+		svc := agentchat.NewService(agentchat.Deps{Store: agentchat.NewPgStore(pg), Runs: runs, TryLock: pglock.TryFor(pg)})
 		wg.Go(func() {
 			_, errs[i] = svc.Send(context.Background(), ada, "s1", agentchat.SendInput{Message: fmt.Sprintf("go %d", i)})
 		})
@@ -226,5 +227,39 @@ func TestConcurrentSendsStartOneOverPostgres(t *testing.T) {
 	c, err := agentchat.NewPgStore(pg).Conversation(context.Background(), "o", "s1")
 	if err != nil || c.Turns != 2 || c.Status != agentruns.StatusQueued {
 		t.Fatalf("conversation %+v, %v", c, err)
+	}
+}
+
+// A burst of sends across many conversations, more than the pool has
+// connections, all get their turn: only a few hold the lock, and its
+// connection, at once.
+func TestASendBurstLeavesThePoolWorking(t *testing.T) {
+	const pool, n = 6, 20
+	pg := openDB(t, driver.WithPoolSize(pool))
+	start := time.Now().UTC().Add(-time.Minute)
+	for i := range n {
+		insert(t, pg, task{fmt.Sprintf("atask_first_%d", i), "o", "", "chat", fmt.Sprintf("s%d", i), "completed",
+			"usr_ada", "hello", start})
+	}
+	runs := &sqlRuns{pg: pg}
+	svc := agentchat.NewService(agentchat.Deps{Store: agentchat.NewPgStore(pg), Runs: runs, TryLock: pglock.TryFor(pg)})
+	ada := security.Principal{Kind: security.KindUser, UserID: "usr_ada", OrgID: "o"}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = svc.Send(ctx, ada, fmt.Sprintf("s%d", i), agentchat.SendInput{Message: "next"})
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	if got := runs.starts.Load(); got != n {
+		t.Fatalf("started %d turns, want %d", got, n)
 	}
 }

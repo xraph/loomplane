@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/xraph/loomplane/internal/agentruns"
@@ -26,17 +25,29 @@ const (
 // on, followed by its ID.
 const lockPrefix = "agent-conversation:"
 
+// maxLockedSends bounds how many sends in this process hold the
+// conversation lock at once. pglock holds a pooled connection for as long
+// as fn runs, and fn needs more of them: the store's read, and Runs.Start's
+// settings, budget, Warden and insert. Unbounded, a burst of sends across
+// many conversations takes every connection and then waits forever for
+// one more. Four leaves the rest of the pool free, as the authorizer's
+// sync lock does (internal/security/teams.go).
+const maxLockedSends = 4
+
+// TryLockFunc runs fn while holding the lock called name and reports
+// whether it ran. When someone else holds the lock it returns false at
+// once instead of waiting. pglock.TryFor fits.
+type TryLockFunc func(ctx context.Context, name string, fn func(context.Context) error) (bool, error)
+
 // Deps are what a Service needs.
 type Deps struct {
 	Store Store
 	Runs  Runs
 	Authz *security.Authorizer
-	// Lock runs fn holding the advisory lock called name: pglock.For over
-	// the app's database, so replicas take turns too.
-	Lock func(ctx context.Context, name string, fn func(context.Context) error) error
-	// Now is the clock, nil for time.Now. The service reads no time of
-	// its own yet: every time it returns is a task's.
-	Now func() time.Time
+	// TryLock is the conversation's lock: pglock.TryFor over the app's
+	// database, so replicas take turns too. A send that finds it held
+	// gets ErrBusy at once, since the holder is already starting a turn.
+	TryLock TryLockFunc
 }
 
 // Service keeps people's conversations with the agent.
@@ -44,12 +55,15 @@ type Service struct {
 	store Store
 	runs  Runs
 	authz *security.Authorizer
-	lock  func(ctx context.Context, name string, fn func(context.Context) error) error
+	lock  TryLockFunc
+	// slots bounds the sends holding the lock (maxLockedSends).
+	slots chan struct{}
 }
 
 // NewService returns a Service over d.
 func NewService(d Deps) *Service {
-	return &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.Lock}
+	return &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.TryLock,
+		slots: make(chan struct{}, maxLockedSends)}
 }
 
 // requirePerson refuses anyone but a person of a workspace: the agent never
@@ -75,12 +89,19 @@ func message(raw string) (string, error) {
 }
 
 // manages reports whether p manages the workspace's AI, which lets them
-// read everyone's conversations.
+// read everyone's conversations. Someone who isn't a member doesn't, so
+// they get the same ErrNotFound as anyone else and can't tell an ID
+// exists.
 func (s *Service) manages(ctx context.Context, p security.Principal) (bool, error) {
 	if s.authz == nil {
 		return false, errors.New("agentchat: no authorizer is configured")
 	}
-	return s.authz.Allowed(ctx, p, security.AIManage)
+	ok, err := s.authz.Allowed(ctx, p, security.AIManage)
+	if errors.Is(err, security.ErrNotMember) || errors.Is(err, security.ErrUnauthenticated) ||
+		errors.Is(err, security.ErrForbidden) {
+		return false, nil
+	}
+	return ok, err
 }
 
 // Start opens a conversation with its first message. agentruns checks
@@ -113,9 +134,10 @@ func (s *Service) Start(ctx context.Context, p security.Principal, in StartInput
 }
 
 // Send adds a message to a conversation p started. While the agent is
-// still on the last one, it's ErrBusy: sends take turns on the
-// conversation's lock, and the task each one starts is written before
-// the lock goes, so two sends at once start one turn.
+// still on the last one, it's ErrBusy: a send holds the conversation's
+// lock while it reads the latest turn and writes the next one's task, and
+// a send that finds the lock held is busy at once, so two sends at once
+// start one turn.
 func (s *Service) Send(ctx context.Context, p security.Principal, id string, in SendInput) (*Sent, error) {
 	if err := requirePerson(p); err != nil {
 		return nil, err
@@ -141,8 +163,14 @@ func (s *Service) Send(ctx context.Context, p security.Principal, id string, in 
 	if s.lock == nil {
 		return nil, errors.New("agentchat: no lock is configured")
 	}
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	var sent *Sent
-	err = s.lock(ctx, lockPrefix+id, func(ctx context.Context) error {
+	ran, err := s.lock(ctx, lockPrefix+id, func(ctx context.Context) error {
 		// Read again under the lock: a send that held it before us has
 		// written its task by now.
 		latest, lerr := s.store.Conversation(ctx, p.OrgID, id)
@@ -167,6 +195,9 @@ func (s *Service) Send(ctx context.Context, p security.Principal, id string, in 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !ran {
+		return nil, ErrBusy
 	}
 	return sent, nil
 }

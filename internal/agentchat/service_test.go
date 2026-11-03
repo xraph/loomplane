@@ -260,29 +260,38 @@ func (c *clock) tick() time.Time {
 	return c.now
 }
 
-// memLock serialises each name in memory, as pglock.Do does across
-// replicas.
+// memLock is pglock.TryFor in memory: one holder per name, and a caller
+// that finds the name held is told at once. It counts how many hold any
+// name at once.
 type memLock struct {
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	held  map[string]bool
 	names []string
+	now   int
+	peak  int
 }
 
-func (l *memLock) Do(ctx context.Context, name string, fn func(context.Context) error) error {
+func (l *memLock) Try(ctx context.Context, name string, fn func(context.Context) error) (bool, error) {
 	l.mu.Lock()
-	if l.locks == nil {
-		l.locks = map[string]*sync.Mutex{}
-	}
-	m, ok := l.locks[name]
-	if !ok {
-		m = &sync.Mutex{}
-		l.locks[name] = m
+	if l.held == nil {
+		l.held = map[string]bool{}
 	}
 	l.names = append(l.names, name)
+	if l.held[name] {
+		l.mu.Unlock()
+		return false, nil
+	}
+	l.held[name] = true
+	l.now++
+	l.peak = max(l.peak, l.now)
 	l.mu.Unlock()
-	m.Lock()
-	defer m.Unlock()
-	return fn(ctx)
+	defer func() {
+		l.mu.Lock()
+		delete(l.held, name)
+		l.now--
+		l.mu.Unlock()
+	}()
+	return true, fn(ctx)
 }
 
 type world struct {
@@ -299,7 +308,7 @@ func newWorld(t *testing.T) *world {
 	c := &clock{now: time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)}
 	runs := &fakeRuns{store: st, clock: c, events: map[string][]agentruns.Event{}}
 	lock := &memLock{}
-	svc := NewService(Deps{Store: st, Runs: runs, Authz: newAuthz(t), Lock: lock.Do, Now: func() time.Time { return c.now }})
+	svc := NewService(Deps{Store: st, Runs: runs, Authz: newAuthz(t), TryLock: lock.Try})
 	return &world{svc: svc, store: st, runs: runs, lock: lock, clock: c}
 }
 
@@ -646,5 +655,66 @@ func TestStartPassesRunErrorsThrough(t *testing.T) {
 	w.runs.err = agentsettings.ErrBudgetExhausted
 	if _, err := w.svc.Send(t.Context(), person(orgA, ada), c.ID, SendInput{Message: "more"}); !errors.Is(err, agentsettings.ErrBudgetExhausted) {
 		t.Fatalf("Send: %v", err)
+	}
+}
+
+// A burst of sends across many conversations holds the lock at most
+// maxLockedSends at a time, since each holder keeps a pooled connection,
+// and every send still gets its turn.
+func TestSendsHoldTheLockAFewAtATime(t *testing.T) {
+	w := newWorld(t)
+	const n = 3 * maxLockedSends
+	convs := make([]Conversation, n)
+	for i := range convs {
+		convs[i] = w.open(t, ada, fmt.Sprintf("conversation %d", i), "")
+	}
+	w.runs.mu.Lock()
+	w.runs.delay = 30 * time.Millisecond
+	w.runs.mu.Unlock()
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Go(func() {
+			_, errs[i] = w.svc.Send(context.Background(), person(orgA, ada), convs[i].ID, SendInput{Message: "next"})
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	if w.lock.peak > maxLockedSends || w.lock.peak < 2 {
+		t.Fatalf("%d sends held the lock at once, want 2 to %d", w.lock.peak, maxLockedSends)
+	}
+	if got := len(w.runs.started()); got != 2*n {
+		t.Fatalf("started %d tasks, want %d", got, 2*n)
+	}
+
+	// A send that can't get a slot before its context ends gives up.
+	for range maxLockedSends {
+		w.svc.slots <- struct{}{}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := w.svc.Send(ctx, person(orgA, ada), convs[0].ID, SendInput{Message: "late"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send with no slot: %v", err)
+	}
+}
+
+// Someone who isn't a member of the workspace can't tell a conversation
+// exists.
+func TestStrangersGetNotFound(t *testing.T) {
+	w := newWorld(t)
+	c := w.open(t, ada, "hello", "")
+	zed := person(orgA, "usr_zed")
+	if _, err := w.svc.History(t.Context(), zed, c.ID, HistoryQuery{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger History: %v", err)
+	}
+	if _, err := w.svc.Send(t.Context(), zed, c.ID, SendInput{Message: "hi"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stranger Send: %v", err)
+	}
+	if _, err := w.svc.List(t.Context(), zed, ListFilter{Everyone: true}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("stranger List everyone: %v", err)
 	}
 }
