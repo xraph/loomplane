@@ -17,7 +17,7 @@ In Bitbucket, open a workspace's **Settings** and choose **OAuth consumers**, th
 
 Save it, then open the consumer to copy its **Key** and **Secret**.
 
-Account Read is how Loomplane learns who signed in and checks they belong to the workspace. Repositories Read is the only access to code. Webhooks is for push events, which the next section covers. Loomplane never asks for write access to your code.
+Account Read is how Loomplane learns who signed in and checks they belong to the workspace. Repositories Read is the only access to code. Webhooks is for push events, which the Webhooks section covers. Loomplane never asks for write access to your code.
 
 ## Configure Loomplane
 
@@ -69,7 +69,21 @@ Anyone who may connect workspaces can fix it by connecting the same workspace ag
 
 ## Webhooks
 
-Push re-analysis for Bitbucket repositories is coming in the next change, and this section will cover how Loomplane adds the webhook, why it needs repository admin, and what to do when it can't. Until then, press Analyze to pick up new commits.
+When you attach a Bitbucket repository to a project, Loomplane adds a webhook to it, so a push to the default branch re-analyzes the project without anyone pressing Analyze. Your organization gets one webhook per repository. A second project on the same repository shares it, and it's removed when the organization's last source on that repository goes.
+
+The webhook only goes in when three things are true:
+
+- Your organization has connected the workspace the repository is in, and the connection is ready.
+- The person who connected the workspace is an admin of the repository. Bitbucket only lets a repository admin add a webhook, which is also why the consumer asks for Webhooks Read and write.
+- Your `public_url` is https. Bitbucket won't deliver to plain http, so a local instance on `http://localhost:8780` never gets one.
+
+If any of them isn't, the source still attaches and Analyze works as it always has. The Sources list shows **Push re-analysis is off** beside the source, with the reason. Fix what the reason names (connect the workspace, have a repository admin connect it again, or move to an https address), then choose **Turn on**. Loomplane tries to add the webhook again and keeps it if Bitbucket agrees. You need the same role to turn it on as to connect a workspace.
+
+Only pushes to the repository's default branch re-analyze, the same as with GitHub. A source with no branch set follows the default, and a source that names a branch is re-analyzed only while that branch is the default. A push to any other branch, a tag or a deleted branch starts nothing. Loomplane asks Bitbucket which branch is the default each time a push arrives, so if you rename it, the next push already uses the new name.
+
+Each webhook has a secret of its own, derived from your `secret_key` and never stored, and Loomplane checks the signature on every delivery. A delivery only re-analyzes projects in the organization that owns the webhook, even when another organization has projects on the same repository.
+
+Disconnecting a workspace removes every webhook it added, on Bitbucket and in Loomplane. If Bitbucket refuses to remove one (say the account lost admin on the repository), Loomplane stops listening to it anyway and its deliveries get a 404. You can delete it yourself on Bitbucket, under the repository's settings.
 
 ## Revoking access
 
