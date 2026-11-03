@@ -25,6 +25,10 @@ const (
 	gitlabMaxSegments = 21
 	// gitlabMaxPages caps one listing at 1000 projects.
 	gitlabMaxPages = 10
+	// gitlabProjectsPageBytes caps one page of a project listing. A page
+	// holds 100 full project entities, which a busy GitLab can push past
+	// the 1 MiB every other JSON read keeps to.
+	gitlabProjectsPageBytes = 8 << 20
 )
 
 // gitlabSegment is one group or project name in a path.
@@ -204,7 +208,7 @@ func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, e
 			return nil, err
 		}
 		var batch []GitLabProject
-		err = json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(&batch)
+		err = json.NewDecoder(io.LimitReader(resp.Body, gitlabProjectsPageBytes)).Decode(&batch)
 		next := resp.Header.Get("X-Next-Page")
 		resp.Body.Close() // read-only body
 		if err != nil {

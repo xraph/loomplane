@@ -448,3 +448,31 @@ func TestGitLab_DownloadWritesTheArchive(t *testing.T) {
 		t.Fatalf("Download over the archive limit: %v", err)
 	}
 }
+
+func TestGitLab_ProjectsReadsAPageLargerThanOtherBodies(t *testing.T) {
+	// 100 full project entities with long descriptions: about 2 MiB, past
+	// the 1 MiB other JSON reads allow and inside a listing page's 8 MiB.
+	desc := strings.Repeat("d", 20<<10)
+	var page strings.Builder
+	page.WriteString("[")
+	for i := range 100 {
+		if i > 0 {
+			page.WriteString(",")
+		}
+		fmt.Fprintf(&page, `{"id":%d,"path_with_namespace":"grp/p%d","name":"p%d","description":%q,"visibility":"public","namespace":{"full_path":"grp"}}`, i, i, i, desc)
+	}
+	page.WriteString("]")
+	body := page.String()
+	if len(body) <= 1<<20 || len(body) >= 8<<20 {
+		t.Fatalf("page is %d bytes; want between 1 MiB and 8 MiB", len(body))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	got, err := repositories.NewGitLab(srv.URL, nil).Projects(context.Background(), "tok")
+	if err != nil || len(got) != 100 || got[99].PathWithNamespace != "grp/p99" {
+		t.Fatalf("Projects of a %d-byte page = %d projects, %v; want 100", len(body), len(got), err)
+	}
+}
