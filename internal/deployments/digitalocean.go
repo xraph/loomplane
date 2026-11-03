@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -166,6 +167,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 	repo, err := repositoryFor(job)
 	if err != nil {
 		return nil, err
+	}
+	if hostErr := doSupportedHost(repo); hostErr != nil {
+		return nil, hostErr
 	}
 	if job.CommitSHA == "" {
 		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
@@ -447,6 +451,16 @@ func doAddress(cfg *planning.ServiceConfig, app *digitalocean.App) string {
 	return app.LiveURL
 }
 
+// doSupportedHost is nil for a repository App Platform builds from: GitHub
+// or gitlab.com. Planning refuses any other, so this only stops an old plan.
+func doSupportedHost(key string) error {
+	r, err := repositories.ParseKey(key)
+	if err != nil || r.Host == repositories.HostGitHub || strings.EqualFold(r.Host, "github.com") || strings.EqualFold(r.Host, "gitlab.com") {
+		return nil
+	}
+	return fmt.Errorf("app platform builds from GitHub or gitlab.com only, so it can't build %s", key)
+}
+
 // doAppSpec is the App Platform app a planned service runs as.
 func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digitalocean.AppSpec {
 	region := job.Action.Region
@@ -454,9 +468,11 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 		region = doRegion
 	}
 	spec := digitalocean.AppSpec{Name: DigitalOceanName(job), Region: region}
-	comp := digitalocean.Component{
-		Name:   doName(job.Action.Name),
-		GitHub: &digitalocean.GitHubSource{Repo: repo, Branch: branch},
+	comp := digitalocean.Component{Name: doName(job.Action.Name)}
+	if r, err := repositories.ParseKey(repo); err == nil && r.Host == "gitlab.com" {
+		comp.GitLab = &digitalocean.GitLabSource{Repo: r.FullName(), Branch: branch}
+	} else {
+		comp.GitHub = &digitalocean.GitHubSource{Repo: repo, Branch: branch}
 	}
 	root := strings.Trim(cfg.Source, "/")
 	if root == "." {

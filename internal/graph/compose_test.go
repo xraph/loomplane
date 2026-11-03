@@ -270,3 +270,43 @@ func TestCompose_rootRecomputesWhatItsResourcesRestOn(t *testing.T) {
 		t.Fatalf("rooted changed its input: %+v", g.Resources[0])
 	}
 }
+
+func TestComposeLinks_gitLabGoModule(t *testing.T) {
+	app := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Name: "gitlab.com/acme/app", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "app", Path: "cmd/app"}},
+		Requires:    []pd.Requirement{{Name: "gitlab.com/grp/sub/api/pkg", Version: "v1.0.0", Evidence: pd.Evidence{Path: "go.mod", Line: 5}}},
+	}}})
+	g := Compose([]Part{{Source: ref("app", "acme/app"), Graph: app}, {Source: ref("lib", "gitlab.com/grp/sub/api"), Graph: kitGraph("gitlab.com/grp/sub/api/pkg")}})
+	e := edgeBetween(g, "svc:app:go:cmd/app", "pkg:lib:go:.")
+	if e == nil || e.Kind != Uses || e.Confidence != pd.Certain {
+		t.Fatalf("edge %+v in %+v", e, g.Edges)
+	}
+}
+
+func TestStructural_gitLabKeys(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		req  pd.Requirement
+		eco  pd.Ecosystem
+		repo string
+		want bool
+	}{
+		{"go module of the project", pd.Requirement{Name: "gitlab.com/grp/sub/api/pkg"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module that is the project", pd.Requirement{Name: "gitlab.com/grp/sub/api"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module compares without case", pd.Requirement{Name: "GitLab.com/Grp/Sub/API/v2"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module of a longer name", pd.Requirement{Name: "gitlab.com/grp/sub/apiary"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go module of the parent group", pd.Requirement{Name: "gitlab.com/grp/sub"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go module on another host", pd.Requirement{Name: "gitlab.example.com/grp/sub/api"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go github path does not match a gitlab key", pd.Requirement{Name: "github.com/grp/api"}, pd.Go, "gitlab.com/grp/api", false},
+		{"go self-managed host", pd.Requirement{Name: "git.corp.example/grp/api/x"}, pd.Go, "git.corp.example/grp/api", true},
+		{"rust https url", pd.Requirement{Git: "https://gitlab.com/grp/sub/api.git"}, pd.Rust, "gitlab.com/grp/sub/api", true},
+		{"rust ssh url", pd.Requirement{Git: "git@gitlab.com:grp/sub/api.git"}, pd.Rust, "gitlab.com/grp/sub/api", true},
+		{"rust other project", pd.Requirement{Git: "https://gitlab.com/grp/sub/other"}, pd.Rust, "gitlab.com/grp/sub/api", false},
+		{"rust other host", pd.Requirement{Git: "https://github.com/grp/sub/api"}, pd.Rust, "gitlab.com/grp/sub/api", false},
+	} {
+		if got := structural(tt.req, tt.eco, tt.repo); got != tt.want {
+			t.Errorf("%s: structural = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

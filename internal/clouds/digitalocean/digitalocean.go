@@ -280,6 +280,9 @@ type AppDomainStep struct {
 type Component struct {
 	Name   string        `json:"name"`
 	GitHub *GitHubSource `json:"github,omitempty"`
+	// GitLab is the source of a gitlab.com project. At most one of GitHub
+	// and GitLab is set.
+	GitLab *GitLabSource `json:"gitlab,omitempty"`
 	// SourceDir and DockerfilePath are paths from the repository's root.
 	SourceDir      string `json:"source_dir,omitempty"`
 	DockerfilePath string `json:"dockerfile_path,omitempty"`
@@ -300,6 +303,14 @@ type Component struct {
 // DeployOnPush is always false here: Loomplane deploys what was approved,
 // not whatever was pushed last.
 type GitHubSource struct {
+	Repo         string `json:"repo"`
+	Branch       string `json:"branch"`
+	DeployOnPush bool   `json:"deploy_on_push"`
+}
+
+// GitLabSource is a branch of a GitLab project, as group/project, with any
+// subgroups between. DeployOnPush is always false, as for GitHub.
+type GitLabSource struct {
 	Repo         string `json:"repo"`
 	Branch       string `json:"branch"`
 	DeployOnPush bool   `json:"deploy_on_push"`
