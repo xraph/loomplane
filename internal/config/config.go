@@ -223,14 +223,15 @@ func (g GitLabConfig) Validate() error {
 	for i, h := range g.Hosts {
 		key := fmt.Sprintf("gitlab.hosts[%d]", i)
 		_, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
-		if err != nil || h.WebURL == "" {
+		switch {
+		case err != nil || h.WebURL == "":
 			if err == nil {
 				err = errors.New("it is required")
 			}
 			errs = append(errs, fmt.Errorf("%s.web_url must be the address of a GitLab with no path, such as https://git.example.com: %w", key, err))
-		} else if seen[host] {
+		case seen[host]:
 			errs = append(errs, fmt.Errorf("%s.web_url lists %s twice", key, host))
-		} else {
+		default:
 			seen[host] = true
 		}
 		if (h.ClientID == "") != (h.ClientSecret == "") {
