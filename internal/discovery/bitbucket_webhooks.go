@@ -243,7 +243,12 @@ func (w *BitbucketWebhooks) Ensure(ctx context.Context, orgID string, repo repos
 	if w.API == nil {
 		return w.off(ctx, orgID, key, row, conn.ID, reasonNoConn)
 	}
-	uuid, err := w.API.CreateHook(ctx, token, repo, w.deliveryURL(row.HookID), w.Secret(row.HookID))
+	// Bitbucket may add the hook before its answer is read, and only the
+	// answer says which hook it is. A caller giving up mustn't cut that off
+	// and leave a hook nothing can find to remove.
+	cctx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), hookFinishTimeout)
+	defer cancelCreate()
+	uuid, err := w.API.CreateHook(cctx, token, repo, w.deliveryURL(row.HookID), w.Secret(row.HookID))
 	if err != nil {
 		reason := reasonTryAgain
 		if errors.Is(err, repositories.ErrHookNotAdmin) {

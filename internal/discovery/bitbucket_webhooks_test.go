@@ -152,7 +152,10 @@ type fakeHookAPI struct {
 	during func()
 }
 
-func (f *fakeHookAPI) CreateHook(_ context.Context, token string, repo repositories.Repository, url, secret string) (string, error) {
+func (f *fakeHookAPI) CreateHook(ctx context.Context, token string, repo repositories.Repository, url, secret string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err // as a real call would
+	}
 	if f.createErr != nil {
 		return "", f.createErr
 	}
@@ -686,6 +689,23 @@ func TestBitbucketWebhooks_aCancelledRequestStillKeepsTheHook(t *testing.T) {
 		t.Fatalf("state %+v", st)
 	}
 	if got := f.hooks.all(); len(got) != 1 || got[0].Status != repositories.HookOn || got[0].BitbucketHookUUID != "{hook-1}" {
+		t.Fatalf("rows %+v", got)
+	}
+}
+
+// A caller that has already given up when the hook is added still gets it
+// recorded: Bitbucket may have added it, and only its answer says which.
+func TestBitbucketWebhooks_aRequestCancelledBeforeTheHookIsAddedKeepsIt(t *testing.T) {
+	f := newHookFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if st := f.w.Ensure(ctx, "org_a", acmeAPI); !st.On {
+		t.Fatalf("state %+v", st)
+	}
+	if len(f.api.created) != 1 {
+		t.Fatalf("created %v", f.api.created)
+	}
+	if got := f.hooks.all(); len(got) != 1 || got[0].Status != repositories.HookOn || got[0].BitbucketHookUUID != f.api.created[0].uuid {
 		t.Fatalf("rows %+v", got)
 	}
 }
