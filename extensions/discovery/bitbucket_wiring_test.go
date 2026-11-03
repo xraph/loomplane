@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	cloudconn "github.com/xraph/loomplane/internal/connections"
@@ -46,5 +47,27 @@ func TestBitbucketSecrets_reveal(t *testing.T) {
 				t.Fatalf("revealed %q", raw)
 			}
 		})
+	}
+}
+
+// A consumer Bitbucket turned down is the operator's configuration, so it
+// answers the way a consumer that isn't set up does.
+func TestFail_rejectedBitbucketConsumer(t *testing.T) {
+	for _, err := range []error{
+		repositories.ErrBitbucketConsumerRejected,
+		fmt.Errorf("renew the Bitbucket sign-in for acme: %w", repositories.ErrBitbucketConsumerRejected),
+	} {
+		var got interface{ StatusCode() int }
+		mapped := fail(err)
+		if !errors.As(mapped, &got) || got.StatusCode() != http.StatusConflict {
+			t.Fatalf("fail(%v) = %v, want a 409", err, mapped)
+		}
+		if mapped.Error() != repositories.ErrBitbucketConsumerRejected.Error() {
+			t.Fatalf("fail(%v) says %q", err, mapped.Error())
+		}
+	}
+	var unset interface{ StatusCode() int }
+	if !errors.As(fail(repositories.ErrBitbucketNotConfigured), &unset) || unset.StatusCode() != http.StatusConflict {
+		t.Fatal("a consumer that isn't set up should answer 409 too")
 	}
 }

@@ -119,7 +119,11 @@ func TestBitbucketOAuth_exchangeRefused(t *testing.T) {
 		want   error
 	}{
 		{"invalid_grant", http.StatusBadRequest, `{"error":"invalid_grant","error_description":"leaks ` + oauthRefreshToken + `"}`, repositories.ErrBitbucketRefused},
-		{"unauthorized", http.StatusUnauthorized, `{"error":"invalid_client"}`, repositories.ErrBitbucketRefused},
+		// The token endpoint authenticates the consumer, so these are the
+		// operator's key and secret, not anyone's grant.
+		{"unauthorized", http.StatusUnauthorized, `{"error":"invalid_client"}`, repositories.ErrBitbucketConsumerRejected},
+		{"unauthorized without a body", http.StatusUnauthorized, ``, repositories.ErrBitbucketConsumerRejected},
+		{"invalid_client", http.StatusBadRequest, `{"error":"invalid_client"}`, repositories.ErrBitbucketConsumerRejected},
 		{"rate limited", http.StatusTooManyRequests, ``, repositories.ErrRateLimited},
 	}
 	for _, c := range cases {
@@ -135,6 +139,9 @@ func TestBitbucketOAuth_exchangeRefused(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), oauthRefreshToken) {
 				t.Fatalf("the response body leaked into the error: %v", err)
+			}
+			if errors.Is(err, repositories.ErrBitbucketConsumerRejected) && errors.Is(err, repositories.ErrBitbucketRefused) {
+				t.Fatalf("err = %v is both the consumer's fault and the grant's", err)
 			}
 		})
 	}
@@ -202,6 +209,15 @@ func TestBitbucketOAuth_refresh(t *testing.T) {
 	}
 	if _, err = o.Refresh(context.Background(), "revoked"); !errors.Is(err, repositories.ErrBitbucketRefused) {
 		t.Fatalf("err = %v, want ErrBitbucketRefused", err)
+	}
+
+	// A wrong consumer secret isn't the grant's fault.
+	f.token = func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+	}
+	if _, err = o.Refresh(context.Background(), "old-refresh"); !errors.Is(err, repositories.ErrBitbucketConsumerRejected) {
+		t.Fatalf("err = %v, want ErrBitbucketConsumerRejected", err)
 	}
 }
 

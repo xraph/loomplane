@@ -69,21 +69,22 @@ type fakeBBAPI struct {
 	clock    *bbClock
 	lifetime time.Duration
 	// workspaces are those the signed-in account belongs to, by slug.
-	workspaces map[string]BitbucketWorkspace
-	refresh    string // the refresh token Bitbucket honours now
-	rotate     bool
-	refuse     bool
-	refreshErr error
-	noRefresh  bool  // Exchange answers without a refresh token
-	lookupErr  error // Workspace fails with it
-	delay      time.Duration
-	issued     int
-	exchanges  int // Exchange calls, spent code or not
-	refreshes  int
-	lookups    int // Workspace calls
-	repos      map[string][]BitbucketRepository
-	repoErr    map[string]error
-	repoTokens []string
+	workspaces  map[string]BitbucketWorkspace
+	refresh     string // the refresh token Bitbucket honours now
+	rotate      bool
+	refuse      bool
+	refreshErr  error
+	noRefresh   bool  // Exchange answers without a refresh token
+	exchangeErr error // Exchange fails with it
+	lookupErr   error // Workspace fails with it
+	delay       time.Duration
+	issued      int
+	exchanges   int // Exchange calls, spent code or not
+	refreshes   int
+	lookups     int // Workspace calls
+	repos       map[string][]BitbucketRepository
+	repoErr     map[string]error
+	repoTokens  []string
 }
 
 func newFakeBBAPI(clock *bbClock) *fakeBBAPI {
@@ -116,6 +117,9 @@ func (f *fakeBBAPI) Exchange(_ context.Context, code string) (BitbucketGrant, er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.exchanges++
+	if f.exchangeErr != nil {
+		return BitbucketGrant{}, f.exchangeErr
+	}
 	if code != bbGoodCode {
 		return BitbucketGrant{}, ErrBitbucketRefused
 	}
@@ -912,6 +916,65 @@ func TestBitbucketToken_refusedRefreshMarksReconnect(t *testing.T) {
 	}
 	if _, ok := f.secrets.get("aorg_a", v.ID); !ok {
 		t.Fatal("the refused sign-in's secret should stay until it's replaced or disconnected")
+	}
+}
+
+// Bitbucket turning down Loomplane's own key and secret is the operator's
+// to fix. The workspace's sign-in is still good, so nothing about it may
+// change, and it renews again once the configuration is right.
+func TestBitbucketToken_rejectedConsumerLeavesTheSignIn(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	held, _ := f.secrets.get("aorg_a", v.ID)
+	saves := f.store.saves
+
+	f.api.set(func(a *fakeBBAPI) { a.refreshErr = ErrBitbucketConsumerRejected })
+	f.expire()
+	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme", "api"))
+	if !errors.Is(err, ErrBitbucketConsumerRejected) || tok != "" {
+		t.Fatalf("Token with a rejected consumer = %q, %v; want ErrBitbucketConsumerRejected", tok, err)
+	}
+	noTokens(t, "the error", err.Error())
+	row := f.store.row(v.ID)
+	if row.Status != BitbucketReady || row.Message != "" || f.store.saves != saves {
+		t.Fatalf("a rejected consumer changed the row: %s %q, %d saves", row.Status, row.Message, f.store.saves-saves)
+	}
+	if now, ok := f.secrets.get("aorg_a", v.ID); !ok || now != held {
+		t.Fatal("a rejected consumer touched the stored sign-in")
+	}
+	list, err := f.conns.Repositories(ctx, admin)
+	if err != nil || len(list.Problems) != 1 {
+		t.Fatalf("listing with a rejected consumer = %+v, %v", list, err)
+	}
+	if row := f.store.row(v.ID); row.Status != BitbucketReady {
+		t.Fatalf("listing marked the row %s", row.Status)
+	}
+
+	// The operator fixes the configuration, and the same sign-in renews.
+	f.api.set(func(a *fakeBBAPI) { a.refreshErr = nil })
+	tok, err = f.conns.Token(ctx, "aorg_a", repo("acme", "api"))
+	if err != nil || !strings.HasPrefix(tok, bbAccessPrefix) {
+		t.Fatalf("Token once the consumer is fixed = %q, %v", tok, err)
+	}
+	if f.api.exchanges != 1 {
+		t.Fatalf("%d sign-ins, want the first one only", f.api.exchanges)
+	}
+}
+
+// Connecting with a rejected consumer says so, and keeps nothing.
+func TestBitbucketConnect_rejectedConsumer(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	f.api.set(func(a *fakeBBAPI) { a.exchangeErr = ErrBitbucketConsumerRejected })
+	_, err := f.conns.Connect(ctx, admin, BitbucketConnectInput{Code: bbGoodCode, State: f.stateFor(t, admin, "acme")})
+	if !errors.Is(err, ErrBitbucketConsumerRejected) {
+		t.Fatalf("Connect: %v, want ErrBitbucketConsumerRejected", err)
+	}
+	if rows, _ := f.store.ListBitbucketWorkspaces(ctx, "aorg_a"); len(rows) != 0 || f.secrets.len() != 0 {
+		t.Fatalf("a rejected consumer kept %d rows and %d secrets", len(rows), f.secrets.len())
 	}
 }
 

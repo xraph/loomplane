@@ -23,6 +23,11 @@ import (
 // short of signing in again fixes it.
 var ErrBitbucketRefused = errors.New("Bitbucket refused the sign-in; connect the workspace again")
 
+// ErrBitbucketConsumerRejected means Bitbucket turned down Loomplane's own
+// key and secret, not the grant. It's the operator's to fix, and every
+// workspace's sign-in is still good once they have.
+var ErrBitbucketConsumerRejected = errors.New("Bitbucket refused Loomplane's OAuth consumer; check bitbucket.client_id and bitbucket.client_secret")
+
 // ErrNotAMember means the Bitbucket account that signed in isn't in the
 // workspace it was asked to connect.
 var ErrNotAMember = errors.New("your Bitbucket account isn't a member of that workspace")
@@ -163,17 +168,24 @@ func (o *BitbucketOAuth) token(ctx context.Context, form url.Values, keep string
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
-		return BitbucketGrant{}, ErrBitbucketRefused
+		// The token endpoint authenticates the consumer, so a 401 is about
+		// Loomplane's key and secret, whoever's grant came with it.
+		return BitbucketGrant{}, ErrBitbucketConsumerRejected
 	case http.StatusTooManyRequests:
 		return BitbucketGrant{}, ErrRateLimited
 	case http.StatusBadRequest:
-		// Only the error code is read, and only to tell a spent grant
-		// from a malformed request.
+		// Only the error code is read, and only to tell a spent grant and
+		// a rejected consumer from a malformed request.
 		var e struct {
 			Error string `json:"error"`
 		}
-		if json.NewDecoder(body).Decode(&e) == nil && e.Error == "invalid_grant" {
-			return BitbucketGrant{}, ErrBitbucketRefused
+		if json.NewDecoder(body).Decode(&e) == nil {
+			switch e.Error {
+			case "invalid_grant":
+				return BitbucketGrant{}, ErrBitbucketRefused
+			case "invalid_client":
+				return BitbucketGrant{}, ErrBitbucketConsumerRejected
+			}
 		}
 		return BitbucketGrant{}, fmt.Errorf("Bitbucket answered %s to the token request", resp.Status)
 	default:

@@ -612,8 +612,10 @@ func (c *BitbucketConnections) mint(ctx context.Context, row *BitbucketConnectio
 // renew trades cur's refresh token for an access token, holding cur's
 // lock. It checks first that the member whose sign-in it is still belongs
 // to the organization. A refusal, a member who left, or a sign-in that
-// can't be read or is gone from Vault marks cur reconnect_needed and gives "". Anything else
-// that goes wrong is an error and changes nothing.
+// can't be read or is gone from Vault marks cur reconnect_needed and gives
+// "". Anything else that goes wrong is an error and changes nothing. That
+// includes Bitbucket rejecting Loomplane's consumer, which the operator
+// fixes, and after which the same sign-in renews again.
 func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnection) (string, error) {
 	member, err := c.store.BitbucketConnectorIsMember(ctx, cur.OrgID, cur.CreatedBy)
 	if err != nil {

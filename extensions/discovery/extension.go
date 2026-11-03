@@ -233,6 +233,10 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, repositories.ErrAppNotConfigured), errors.Is(err, repositories.ErrBitbucketNotConfigured), errors.Is(err, repositories.ErrBitbucketRefused):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrBitbucketConsumerRejected):
+		// Like a consumer that isn't set up at all, it's the operator's
+		// configuration that's wrong, and nothing the caller can retry.
+		return forge.NewHTTPError(http.StatusConflict, repositories.ErrBitbucketConsumerRejected.Error())
 	case errors.Is(err, repositories.ErrRateLimited):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 	}
