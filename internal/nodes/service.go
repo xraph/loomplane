@@ -143,6 +143,9 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	if in.ProtocolVersion < nodeproto.Version || !s.versionOK(in.NodeVersion) {
 		return nil, ErrUpdateNode
 	}
+	// What the machine says about itself is stored and sent on every
+	// node.updated, so it is bounded first.
+	in.NodeVersion, in.Inventory = nodeproto.BoundVersion(in.NodeVersion), in.Inventory.Bounded()
 	if len(in.PublicKey) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("%w: bad public key", ErrInvalid)
 	}

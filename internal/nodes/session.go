@@ -147,12 +147,12 @@ func (s *session) readLoop() {
 		}
 		switch m := msg.(type) {
 		case nodeproto.Hello:
-			s.nodeVersion, s.protocol = m.NodeVersion, m.Version
+			s.nodeVersion, s.protocol = nodeproto.BoundVersion(m.NodeVersion), m.Version
 		case nodeproto.Heartbeat:
 			s.lastBeat.Store(s.hub.now().UnixNano())
 			s.hub.heartbeat(s, m)
 		case nodeproto.InventoryReport:
-			s.hub.inventory(s, m.Inventory)
+			s.hub.inventory(s, m.Inventory.Bounded())
 		case nodeproto.Allowed:
 			s.hub.allowed(s, m.Endpoints)
 		case nodeproto.NarrowApplied:

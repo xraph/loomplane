@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestControlRoundTrip(t *testing.T) {
@@ -116,5 +117,27 @@ func TestAllowedWireType(t *testing.T) {
 	}
 	if got := strings.TrimSpace(buf.String()); got != `{"type":"allowed","endpoints":["docker"]}` {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestInventoryBounded(t *testing.T) {
+	long := strings.Repeat("é", 300) // two bytes each
+	inv := Inventory{Hostname: long, Kernel: long, Docker: &Runtime{Socket: long, Version: "27"},
+		GPUs: make([]GPU, 100), PublicAddresses: []string{long}, Endpoints: []Endpoint{EndpointProbe}}
+	b := inv.Bounded()
+	if len(b.Hostname) > MaxFieldLen || !utf8.ValidString(b.Hostname) || len(b.Kernel) > MaxFieldLen || len(b.Docker.Socket) > MaxFieldLen {
+		t.Fatalf("strings not bounded: %d %d %d", len(b.Hostname), len(b.Kernel), len(b.Docker.Socket))
+	}
+	if len(b.GPUs) != 64 || len(b.PublicAddresses[0]) > MaxFieldLen || b.Docker.Version != "27" || b.Endpoints[0] != EndpointProbe {
+		t.Fatalf("bounded %+v", b)
+	}
+	if inv.Docker.Socket != long {
+		t.Fatal("Bounded changed its receiver")
+	}
+	if got := BoundVersion(strings.Repeat("1", 100)); len(got) != MaxVersionLen {
+		t.Fatalf("version %d bytes", len(got))
+	}
+	if got := (Inventory{OS: "linux"}).Bounded(); got.OS != "linux" || got.GPUs != nil {
+		t.Fatalf("a small inventory changed: %+v", got)
 	}
 }

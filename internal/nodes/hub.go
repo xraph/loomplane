@@ -38,6 +38,9 @@ const (
 	revokeGrace      = 500 * time.Millisecond
 	controlQueue     = 64
 	maxControlLine   = 1 << 20
+	// nonceSweepMargin is how long a spent nonce outlives its expiry, to
+	// cover clock skew between replicas.
+	nonceSweepMargin = 5 * time.Minute
 )
 
 var (
@@ -140,6 +143,10 @@ type Hub struct {
 
 	hopMu   sync.Mutex
 	hopSeen map[string]time.Time // hop MACs already used, until they expire
+
+	// unreachableOnce warns once that another replica holds sessions with no
+	// advertise URL, so this one can't reach its nodes.
+	unreachableOnce sync.Once
 }
 
 // NewHub returns a hub. It does no I/O; Bind checks the configuration.
@@ -188,6 +195,9 @@ func (h *Hub) Bind(store Store, svc *Service) error {
 			return fmt.Errorf("%w: the advertise URL %s is plain http: %w", ErrHubConfig, h.self, ErrHopInsecure)
 		}
 		h.log.Warn("nodes: replica hops run over plain http; stream bytes cross the network unencrypted", "advertise_url", h.self)
+	}
+	if h.cfg.AdvertiseURL == "" {
+		h.log.Info("nodes: nodes.advertise_url is not set, which is right for a single replica; with several replicas on one database, set it on each, or a node is reachable only through the replica it connected to", "replica", h.self)
 	}
 	h.store, h.svc = store, svc
 	if svc != nil && svc.Notify == nil {
@@ -501,6 +511,11 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 	if s != nil && row != nil && row.Epoch > s.epoch {
 		s.close()
 	}
+	if row != nil && row.Replica != h.self && !hopTarget(row.Replica) {
+		h.unreachableOnce.Do(func() {
+			h.log.Warn("nodes: another replica holds node sessions but has no nodes.advertise_url, so this replica can't reach those nodes and revokes reach them only through the heartbeat; set nodes.advertise_url on every replica", "replica", row.Replica, "node", n.ID)
+		})
+	}
 	return nil, offline(n)
 }
 
@@ -529,7 +544,10 @@ func (h *Hub) sweepOnce(ctx context.Context) {
 	} else if len(ids) > 0 {
 		h.log.Info("nodes: marked nodes offline", "nodes", strings.Join(ids, ","))
 	}
-	if err := h.store.DeleteExpiredNonces(ctx, now); err != nil {
+	// Spent nonces are kept past their expiry by a margin: another replica
+	// whose clock runs behind this one's still accepts a nonce this one
+	// sees as expired, and deleting it would let it be used again there.
+	if err := h.store.DeleteExpiredNonces(ctx, now.Add(-nonceSweepMargin)); err != nil {
 		h.log.Warn("nodes: deleting expired challenge nonces", "error", err)
 	}
 	h.closeSilent(now)

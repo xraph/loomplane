@@ -1029,3 +1029,18 @@ func TestJoinPeekErrorsPassThroughWithoutSpending(t *testing.T) {
 		t.Fatal("a token the peek refused was spent")
 	}
 }
+
+func TestJoinBoundsWhatTheMachineReports(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	in := joinReq()
+	in.NodeVersion = "v1.8.0-" + strings.Repeat("x", 500)
+	in.Inventory.Kernel = strings.Repeat("k", 5000)
+	res, err := r.svc.Join(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.store.GetByID(context.Background(), res.NodeID)
+	if len(n.Version) > nodeproto.MaxVersionLen || len(n.Inventory.Kernel) > nodeproto.MaxFieldLen {
+		t.Fatalf("stored a %d byte version and a %d byte kernel", len(n.Version), len(n.Inventory.Kernel))
+	}
+}

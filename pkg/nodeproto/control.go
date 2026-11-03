@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -226,4 +227,53 @@ func DecodeControl(line []byte) (any, error) {
 		return *m, nil
 	}
 	return nil, fmt.Errorf("nodeproto: unhandled control type %q", head.Type)
+}
+
+// Bounds on what a node reports about itself, so a node can't fill a row
+// and every event that carries it.
+const (
+	MaxVersionLen  = 64
+	MaxFieldLen    = 255
+	maxGPUs        = 64
+	maxAddresses   = 32
+	maxInvEndpoint = 16
+)
+
+// clip cuts s to at most n bytes, on a rune boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "")
+}
+
+// BoundVersion is a node version cut to MaxVersionLen bytes.
+func BoundVersion(v string) string { return clip(v, MaxVersionLen) }
+
+// Bounded returns inv with each string cut to MaxFieldLen bytes and each
+// list to a size no machine needs, so a node can't store more than that.
+func (inv Inventory) Bounded() Inventory {
+	b := inv
+	b.Hostname, b.OS, b.Kernel, b.Arch = clip(inv.Hostname, MaxFieldLen), clip(inv.OS, MaxFieldLen), clip(inv.Kernel, MaxFieldLen), clip(inv.Arch, MaxFieldLen)
+	b.Ports80443 = clip(inv.Ports80443, MaxFieldLen)
+	rt := func(r *Runtime) *Runtime {
+		if r == nil {
+			return nil
+		}
+		return &Runtime{Socket: clip(r.Socket, MaxFieldLen), Version: clip(r.Version, MaxFieldLen)}
+	}
+	b.Docker, b.Podman = rt(inv.Docker), rt(inv.Podman)
+	b.GPUs = nil
+	for _, g := range inv.GPUs[:min(len(inv.GPUs), maxGPUs)] {
+		b.GPUs = append(b.GPUs, GPU{Vendor: clip(g.Vendor, MaxFieldLen), Model: clip(g.Model, MaxFieldLen), MemoryMiB: g.MemoryMiB})
+	}
+	b.PublicAddresses = nil
+	for _, a := range inv.PublicAddresses[:min(len(inv.PublicAddresses), maxAddresses)] {
+		b.PublicAddresses = append(b.PublicAddresses, clip(a, MaxFieldLen))
+	}
+	b.Endpoints = nil
+	for _, e := range inv.Endpoints[:min(len(inv.Endpoints), maxInvEndpoint)] {
+		b.Endpoints = append(b.Endpoints, Endpoint(clip(string(e), MaxVersionLen)))
+	}
+	return b
 }

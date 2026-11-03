@@ -674,7 +674,10 @@ func TestSweepMarksOffline(t *testing.T) {
 	_ = r.store.SetStatus(context.Background(), "node_2", StatusOnline)
 	_ = r.store.Touch(context.Background(), "node_1", time.Now().Add(-time.Minute), nodeproto.Usage{})
 	_ = r.store.Touch(context.Background(), "node_2", time.Now().Add(-10*time.Second), nodeproto.Usage{})
-	_ = r.store.UseNonce(context.Background(), "old", time.Now().Add(-time.Second))
+	_ = r.store.UseNonce(context.Background(), "old", time.Now().Add(-nonceSweepMargin-time.Second))
+	// Just expired here, but a replica whose clock runs behind could still
+	// take it, so it stays until the margin has passed.
+	_ = r.store.UseNonce(context.Background(), "recent", time.Now().Add(-time.Second))
 	_ = r.store.UseNonce(context.Background(), "live", time.Now().Add(time.Minute))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -692,6 +695,9 @@ func TestSweepMarksOffline(t *testing.T) {
 	}
 	if _, ok := r.store.nonces["live"]; !ok {
 		t.Fatal("live nonce dropped")
+	}
+	if _, ok := r.store.nonces["recent"]; !ok {
+		t.Fatal("a nonce that just expired was dropped inside the clock skew margin")
 	}
 }
 
@@ -1165,4 +1171,65 @@ func TestLeaveAlwaysTellsTheNode(t *testing.T) {
 			t.Fatalf("round %d: neither Revoked nor a close", i)
 		}
 	}
+}
+
+// A node can't store more than the bounds through its hello or inventory.
+func TestHubBoundsWhatANodeReports(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointProbe)
+	n := r.connect("node_1", priv, "a:")
+	_ = n.next() // hello
+	n.send(nodeproto.Hello{Version: nodeproto.Version, NodeVersion: strings.Repeat("9", 1000)})
+	n.send(nodeproto.InventoryReport{Inventory: nodeproto.Inventory{OS: "linux", Hostname: strings.Repeat("h", 10000)}})
+	waitFor(t, "the inventory", func() bool { return r.node("node_1").Inventory.OS == "linux" })
+	got := r.node("node_1")
+	if len(got.Version) > nodeproto.MaxVersionLen || len(got.Inventory.Hostname) > nodeproto.MaxFieldLen {
+		t.Fatalf("stored a %d byte version and a %d byte hostname", len(got.Version), len(got.Inventory.Hostname))
+	}
+}
+
+// Replicas sharing a database with no advertise URL can't reach each
+// other's nodes. The hub says so at startup, and warns once when it meets a
+// session it can't hop to.
+func TestHubWarnsWhenAReplicaCannotBeReached(t *testing.T) {
+	store := newFakeStore()
+	var logs syncLog
+	h := NewHub(HubConfig{Audience: "https://lp.example.com", Replica: "b", HopSecret: []byte("hop-secret-for-tests-only-000000"),
+		ChallengeSecret: []byte("challenge-secret-for-tests-00000"), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err := h.Bind(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "nodes.advertise_url is not set") {
+		t.Fatalf("no startup note:\n%s", logs.String())
+	}
+	seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	if _, err := store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "replica:a", ConnectedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		var off ErrNodeOffline
+		if _, err := h.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+			t.Fatalf("open: %v", err)
+		}
+	}
+	if got := strings.Count(logs.String(), "has no nodes.advertise_url"); got != 1 {
+		t.Fatalf("warned %d times:\n%s", got, logs.String())
+	}
+}
+
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
