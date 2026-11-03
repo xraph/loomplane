@@ -1461,6 +1461,23 @@ export interface ConsumerOption {
   title: string;
 }
 
+export interface Conversation {
+  createdAt: string;
+  id: string;
+  lastTaskId: string;
+  orgId: string;
+  projectId: string;
+  startedBy: string;
+  status: string;
+  title: string;
+  turns: number;
+  updatedAt: string;
+}
+
+export interface ConversationList {
+  conversations: Conversation[];
+}
+
 export interface Cost {
   estimate: boolean;
   hourlyUsd: string;
@@ -2120,6 +2137,14 @@ export interface EnvironmentUsage {
   projectName: string;
 }
 
+export interface Event {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
+}
+
 export interface Evidence {
   detail: string;
   line?: number;
@@ -2475,6 +2500,12 @@ export interface HeldRoute {
   key: string;
   routeIds: string[];
   service: string;
+}
+
+export interface History {
+  conversation: Conversation;
+  more: boolean;
+  turns: Turn[];
 }
 
 export interface HostCard {
@@ -3874,6 +3905,19 @@ export interface Reach {
   mode: string;
 }
 
+export interface RealtimeAgentEnd {
+  error?: string;
+  status: string;
+}
+
+export interface RealtimeAgentEvent {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
+}
+
 export interface RealtimeForgeGap {
   reason: string;
 }
@@ -4696,6 +4740,15 @@ export interface SecretInputBody {
   value: string;
 }
 
+export interface SendInputBody {
+  message: string;
+}
+
+export interface Sent {
+  conversation: Conversation;
+  task: Task;
+}
+
 export interface Server {
   accelerator?: Accelerator;
   accountId: string;
@@ -5100,6 +5153,11 @@ export interface StartAnalysisInputBody {
   sources?: string[];
 }
 
+export interface StartInputBody {
+  message: string;
+  projectId?: string;
+}
+
 export interface Step {
   actionId: string;
   finishedAt?: string;
@@ -5208,6 +5266,28 @@ export interface TargetChoice {
   source: string;
 }
 
+export interface Task {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  metadata: Record<string, any>;
+  orgId: string;
+  projectId: string;
+  releasePlanId?: string;
+  releaseRevision?: string;
+  requestedBy: string;
+  runId: string;
+  sessionId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
+}
+
 export interface TaskEvent {
   createdAt: string;
   environmentId: string;
@@ -5290,6 +5370,17 @@ export interface TrafficReport {
   start: string;
   step: number;
   total: number;
+}
+
+export interface Turn {
+  createdAt: string;
+  error: string;
+  eventSeq: number;
+  events: Event[];
+  finishedAt?: string;
+  message: string;
+  status: string;
+  taskId: string;
 }
 
 export interface UnreachableAccount {

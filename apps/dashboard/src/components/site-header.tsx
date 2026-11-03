@@ -48,6 +48,7 @@ export type Crumb = {
     | "/webhooks"
     | "/domains"
     | "/ai/models"
+    | "/assistant"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {

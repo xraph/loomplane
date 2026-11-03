@@ -31,6 +31,109 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentConversations = {
+    /**
+     * A page of a conversation's turns, each with its run's events
+     * The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.
+     */
+    get: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.History> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["History"],
+      };
+
+      return this.request<types.History>(config);
+    },
+
+    /**
+     * Your conversations with the agent, the most recently updated first
+     * With everyone=true, everyone's in the workspace, which needs ai:manage. For the next page, pass the last conversation's updated_at as before.
+     */
+    list: async (projectId?: string | undefined, everyone?: boolean | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConversationList> => {
+      let __path = `/api/v1/agent/conversations`;
+      const queryParams: Record<string, any> = {};
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (everyone !== undefined) {
+        queryParams['everyone'] = everyone;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConversationList"],
+      };
+
+      return this.request<types.ConversationList>(config);
+    },
+
+    /**
+     * Add a message to your conversation
+     * Only the person who started the conversation adds to it, once the agent has finished the last message.
+     */
+    send: async (id: string, body: types.SendInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}/messages`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SendInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Sent"],
+      };
+
+      return this.request<types.Sent>(config);
+    },
+
+    /**
+     * Start a conversation with the agent
+     * The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.
+     */
+    start: async (body: types.StartInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
+      let __path = `/api/v1/agent/conversations`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["StartInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Sent"],
+      };
+
+      return this.request<types.Sent>(config);
+    },
+
+  };
+
   public readonly agentRequests = {
     /**
      * Answer the agent's question
@@ -172,6 +275,67 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.AgentsettingsStatus>(config);
+    },
+
+  };
+
+  public readonly agentTasks = {
+    /**
+     * Stop one of the agent's tasks
+     * The person who asked for it, or someone who manages the workspace's AI, may stop it.
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Task> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Task"],
+      };
+
+      return this.request<types.Task>(config);
+    },
+
+    /**
+     * One of the agent's tasks
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Task> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Task"],
+      };
+
+      return this.request<types.Task>(config);
+    },
+
+    /**
+     * Follow a task's events as they happen
+     * Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.
+     */
+    stream: async (id: string, after?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}/stream`;
+      const queryParams: Record<string, any> = {};
+      if (after !== undefined) {
+        queryParams['after'] = after;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
     },
 
   };

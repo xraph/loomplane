@@ -17,6 +17,7 @@ import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import {
   ActivityIcon,
+  AssistantIcon,
   CloudsIcon,
   DeploymentsIcon,
   DomainsIcon,
@@ -31,6 +32,7 @@ import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
+import { useAssistantAvailable } from "@/lib/agent-stream"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
@@ -76,6 +78,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { openNewProject } = useShell()
   const features = useFeatures()
   const agent = useAgent()
+  const assistant = useAssistantAvailable()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -96,6 +99,17 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/" />,
       isActive: path === "/",
     },
+    // The agent, for whoever may talk to it.
+    ...(assistant
+      ? [
+          {
+            title: "Assistant",
+            icon: <AssistantIcon />,
+            link: <Link to="/assistant" />,
+            isActive: path.startsWith("/assistant"),
+          },
+        ]
+      : []),
     {
       title: "Deployments",
       icon: <DeploymentsIcon />,
