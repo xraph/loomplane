@@ -421,6 +421,8 @@ func (s *Service) serveNodeNonceThroughIngress(ctx context.Context, t nodeNonceT
 		if err != nil {
 			return err
 		}
+		// The fence journal is the daemon's; ParseConfig doesn't carry it.
+		cfg.Details["docker_id"] = t.Connection.Details["docker_id"]
 		c, err := server.Connect(ctx, cfg, s.NodeStreams)
 		if err != nil {
 			return err
