@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -30,6 +31,8 @@ type session struct {
 	epoch  int64
 	mux    *yamux.Session
 	ctrl   net.Conn
+	// conn is the node's WebSocket, for the close frame that follows Revoked.
+	conn *websocket.Conn
 
 	out  chan any
 	done chan struct{}
@@ -65,6 +68,17 @@ func (s *session) close() {
 		close(s.done)
 		_ = s.mux.Close()
 	})
+}
+
+// closeUnauthorized ends a revoked node's session after Revoked was written.
+// The close frame with the unauthorized code goes out behind it on the same
+// connection, so a node that missed the message still learns it was revoked.
+func (s *session) closeUnauthorized() {
+	if s.conn != nil {
+		msg := websocket.FormatCloseMessage(nodeproto.CloseUnauthorized, "unauthorized")
+		_ = s.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second)) //nolint:errcheck // the session closes either way
+	}
+	s.close()
 }
 
 func (s *session) closeAfter(d time.Duration) { time.AfterFunc(d, s.close) }
@@ -113,7 +127,7 @@ func (s *session) writeLoop() {
 				return
 			}
 			if _, ok := msg.(nodeproto.Revoked); ok {
-				s.close()
+				s.closeUnauthorized()
 				return
 			}
 		}
@@ -438,8 +452,10 @@ func (h *Hub) allowed(s *session, eps []nodeproto.Endpoint) {
 	}
 }
 
-// leave revokes the node whose verified session asked, and no other. The
-// revoke's Revoked notice closes the session.
+// leave revokes the node whose verified session asked, and no other. It then
+// queues Revoked on that session; the write loop flushes it, sends the close
+// frame and closes. Nothing else closes the session here, so no close can race
+// the write.
 func (h *Hub) leave(s *session) {
 	if h.svc == nil {
 		s.close()
@@ -452,7 +468,9 @@ func (h *Hub) leave(s *session) {
 		s.close()
 		return
 	}
-	s.closeAfter(revokeGrace)
+	// The revoke's own notice may have gone to another replica or been
+	// dropped; a second Revoked on this session is harmless.
+	s.deliver(nodeproto.Revoked{})
 }
 
 // inventoryEqual compares inventories by their wire encoding, so a nil slice

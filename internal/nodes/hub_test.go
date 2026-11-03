@@ -1131,3 +1131,28 @@ func TestSilentSessionIsClosed(t *testing.T) {
 		t.Fatalf("a silent session was sent %#v", m)
 	}
 }
+
+// A node that leaves must always learn it was revoked: either it reads
+// Revoked, or the WebSocket closes with the unauthorized code. The hub may
+// not close the connection under the write.
+func TestLeaveAlwaysTellsTheNode(t *testing.T) {
+	for i := range 40 {
+		r := newHubRig(t, newFakeStore(), "a")
+		priv := seedNode(t, r.store, "node_1", "web-1")
+		n := r.connect("node_1", priv, "")
+		n.next()
+		waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+		n.send(nodeproto.Leave{})
+		select {
+		case m, ok := <-n.msgs:
+			if !ok {
+				t.Fatalf("round %d: the control stream closed before Revoked arrived", i)
+			}
+			if m != (nodeproto.Revoked{}) {
+				t.Fatalf("round %d: message %#v", i, m)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("round %d: neither Revoked nor a close", i)
+		}
+	}
+}
