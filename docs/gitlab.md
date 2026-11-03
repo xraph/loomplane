@@ -28,7 +28,7 @@ That is how the Docker Compose and App Platform setups take them. On Helm, set `
 
 The Helm values also have `gitlab.apiURL`, `gitlab.allowOrganizationHosts` and `gitlab.webhookURL`. If you'd rather use a file than the environment, put a `gitlab:` block in `config.local.yaml` with `client_id` and `client_secret`. You need that file anyway for the hosts list below.
 
-`gitlab.api_url` (`LOOMPLANE_GITLAB_API_URL`) is the address Loomplane reads gitlab.com from, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double.
+`gitlab.api_url` (`LOOMPLANE_GITLAB_API_URL`) is the address Loomplane reaches gitlab.com at, for reading projects and for signing in, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double. Sources keep the host name either way, so they're still written `gitlab.com/<group>/<project>`.
 
 ## A self-managed GitLab
 
@@ -47,6 +47,8 @@ gitlab:
 ```
 
 A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in `config.local.yaml`. `web_url` is the GitLab's address with no path, and it may be http or https. Set `client_id` and `client_secret` together, or leave both out to read that GitLab's public projects only. These hosts are yours, so Loomplane trusts them: it doesn't filter the addresses they resolve to, which means a GitLab on your private network works.
+
+Links Loomplane builds to a repository, such as **Open on git.example.com** on a project's sources, always use https. A GitLab you serve over plain http still gets https links, so they only open if that host answers https as well.
 
 ### As an organization
 
@@ -76,7 +78,7 @@ Disconnecting a GitLab on its Integrations card revokes the sign-in at GitLab, a
 
 A push to a project's default branch can re-analyze it without anyone pressing Analyze. Loomplane only reads from GitLab, so it doesn't add the webhook for you. You add it yourself, once per project or group.
 
-Each connection gets its own URL, and a secret that its card shows once. The URL is:
+Each connection gets its own URL, and a secret that proves a delivery came from your GitLab. The URL is:
 
 ```
 <webhook_url>/api/v1/gitlab/webhook/<connection id>
@@ -84,12 +86,12 @@ Each connection gets its own URL, and a secret that its card shows once. The URL
 
 `gitlab.webhook_url` (`LOOMPLANE_GITLAB_WEBHOOK_URL`) defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do, such as an internal one.
 
-In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Paste the URL, tick **Push events** and paste a secret. The card gives you two, because GitLab checks deliveries in two ways:
+In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Paste the URL and tick **Push events**. The secret depends on your GitLab version, and the connection's **Webhook** panel on Integrations has a place for each:
 
-- On GitLab 19 and newer, GitLab signs each delivery, and you paste the signing token.
-- On older versions, GitLab sends a secret token with each delivery, and you paste the secret token.
+- On GitLab 19 and newer, GitLab makes the signing token itself. Choose **Generate signing token** in GitLab and copy it, since GitLab shows it once. Paste it into **Paste GitLab's signing token** on the panel and choose **Save signing token**. Loomplane keeps it and checks the signature on every delivery. You can't paste a token of your own into GitLab, so this one always goes from GitLab to Loomplane.
+- On older versions, choose **Create secret** on the panel. Loomplane shows a secret token once. Copy it and paste it into GitLab's **Secret token** field, which GitLab sends back with each delivery.
 
-If you'd rather use a signing token GitLab generated, paste that into the card before you create the secret, and Loomplane verifies deliveries against it.
+Replacing either one makes Loomplane forget the old secret, so a hook still using it stops working until you update it in GitLab.
 
 A project webhook covers that project. A group webhook covers every project under the group, which is less to maintain, but group webhooks need GitLab Premium on gitlab.com.
 

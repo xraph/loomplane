@@ -41,7 +41,7 @@ gitlab:
       client_secret: "<the Secret>"
 ```
 
-A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in a `gitlab:` block in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
+A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in a `gitlab:` block in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works. Links Loomplane builds to a repository, such as **Open on git.example.com**, always use https, so a GitLab served over plain http gets https links that only open if the host answers https too.
 
 An organization can add its own instead. Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters the address, an Application ID and a Secret. The dialog shows the callback URL to use. Loomplane is stricter about these:
 
@@ -69,22 +69,21 @@ Loomplane seals the tokens in its vault, and GitLab rotates them every two hours
 
 ## Re-analyze on push
 
-Each connection gets a webhook URL and a secret, shown once on its card. The URL is `<webhook_url>/api/v1/gitlab/webhook/<connection id>`, where `gitlab.webhook_url` (`LOOMPLANE_GITLAB_WEBHOOK_URL`) defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do.
+Each connection gets a webhook URL and a secret that proves a delivery came from your GitLab. The URL is `<webhook_url>/api/v1/gitlab/webhook/<connection id>`, where `gitlab.webhook_url` (`LOOMPLANE_GITLAB_WEBHOOK_URL`) defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do.
 
 <Steps>
 <Step>
 
-On the connection's card, choose **Create secret**. Copy the URL, the signing token and the secret token before you leave. If you'd rather use a signing token GitLab generated, paste it into the card first.
+In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Paste the URL from the connection's **Webhook** panel on Integrations and tick **Push events**. Group webhooks need GitLab Premium on gitlab.com.
 
 </Step>
 <Step>
 
-In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Group webhooks need GitLab Premium on gitlab.com.
+Set the secret. Which way it goes depends on your GitLab version.
 
-</Step>
-<Step>
+On GitLab 19 and newer, GitLab makes the signing token. Choose **Generate signing token** in GitLab and copy it, because GitLab shows it once. Paste it into **Paste GitLab's signing token** on the panel and choose **Save signing token**. Loomplane keeps it and checks every delivery's signature with it.
 
-Paste the URL, tick **Push events**, and paste a secret. On GitLab 19 and newer that's the signing token. On older versions it's the secret token.
+On older versions, choose **Create secret** on the panel. Copy the secret token it shows, once, and paste it into GitLab's **Secret token** field.
 
 </Step>
 <Step>

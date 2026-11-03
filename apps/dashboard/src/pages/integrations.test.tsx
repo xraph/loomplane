@@ -630,7 +630,7 @@ it("copies the callback URL", async () => {
   )
 })
 
-it("shows a webhook secret once, then drops it", async () => {
+it("shows a created secret token once, then drops it", async () => {
   const sent: Sent[] = []
   fixture({
     sent,
@@ -660,32 +660,89 @@ it("shows a webhook secret once, then drops it", async () => {
   expect(screen.getByText(gitlabConnection.webhook_url)).toBeInTheDocument()
   expect(
     screen.getByText(
-      "Add a webhook with Push events on the project or its group, and paste this URL and one of these secrets. Use the signing token on GitLab 19 and newer."
+      "In GitLab, add a webhook with Push events on the project or its group, and paste this URL."
     )
   ).toBeInTheDocument()
+  expect(
+    screen.getByText(
+      "On older GitLab, create a secret here and paste it into GitLab's Secret token field."
+    )
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "Create secret" }))
+  expect(await screen.findByText("plain-secret-456")).toBeInTheDocument()
+  // Loomplane's signing token is never offered: GitLab makes its own.
+  expect(screen.queryByText("whsec_sign123")).not.toBeInTheDocument()
+  expect(screen.queryByText("Signing token")).not.toBeInTheDocument()
+  expect(sent).toContainEqual({
+    method: "POST",
+    path: "/api/v1/gitlab/connections/c1/webhook",
+    body: {},
+  })
+
+  // Closing the panel drops it: opening it again doesn't show it.
+  await user.click(
+    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
+  )
+  await user.click(
+    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
+  )
+  expect(screen.queryByText("plain-secret-456")).not.toBeInTheDocument()
+  expect(window.localStorage.length).toBe(0)
+})
+
+it("saves GitLab's signing token and shows no secret back", async () => {
+  const sent: Sent[] = []
+  fixture({
+    sent,
+    reply: {
+      "POST /api/v1/gitlab/connections/c1/webhook": {
+        status: 200,
+        body: {
+          url: gitlabConnection.webhook_url,
+          signing_token: "whsec_theirs",
+          secret_token: "plain-secret-456",
+        },
+      },
+    },
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost],
+      connections: [gitlabConnection],
+    },
+  })
+  show()
+  const user = userEvent.setup()
+  await user.click(
+    await within(gitlabCard()).findByRole("button", {
+      name: "Webhook for rex on gitlab.com",
+    })
+  )
+  expect(
+    screen.getByText(
+      "On GitLab 19 and newer, choose Generate signing token in GitLab, copy it and paste it here. Loomplane keeps it."
+    )
+  ).toBeInTheDocument()
+  const save = screen.getByRole("button", { name: "Save signing token" })
+  // Nothing to save until a token is pasted.
+  expect(save).toBeDisabled()
   await user.type(
     screen.getByLabelText("Paste GitLab's signing token"),
-    "whsec_theirs"
+    "  whsec_theirs "
   )
-  await user.click(screen.getByRole("button", { name: "Create secret" }))
-  expect(await screen.findByText("whsec_sign123")).toBeInTheDocument()
-  expect(screen.getByText("plain-secret-456")).toBeInTheDocument()
+  await user.click(save)
+  expect(
+    await screen.findByText(
+      "Saved. Loomplane checks GitLab's signature on every delivery."
+    )
+  ).toBeInTheDocument()
   expect(sent).toContainEqual({
     method: "POST",
     path: "/api/v1/gitlab/connections/c1/webhook",
     body: { signing_token: "whsec_theirs" },
   })
-
-  // Closing the panel drops them: opening it again shows neither.
-  await user.click(
-    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
-  )
-  await user.click(
-    screen.getByRole("button", { name: "Webhook for rex on gitlab.com" })
-  )
-  expect(screen.queryByText("whsec_sign123")).not.toBeInTheDocument()
+  expect(screen.queryByText("whsec_theirs")).not.toBeInTheDocument()
   expect(screen.queryByText("plain-secret-456")).not.toBeInTheDocument()
-  expect(window.localStorage.length).toBe(0)
+  expect(screen.getByLabelText("Paste GitLab's signing token")).toHaveValue("")
 })
 
 it("asks before replacing a secret that is already set", async () => {
@@ -720,11 +777,22 @@ it("asks before replacing a secret that is already set", async () => {
   const dialog = await screen.findByRole("alertdialog")
   expect(
     within(dialog).getByText(
-      "The webhook already set up in GitLab stops working until you paste the new secret there."
+      "Loomplane forgets the current secret, so the webhook already set up in GitLab stops working until it uses the new one."
     )
   ).toBeInTheDocument()
   expect(sent).toEqual([])
   await user.click(within(dialog).getByRole("button", { name: "Replace it" }))
-  expect(await screen.findByText("new-signing")).toBeInTheDocument()
+  expect(await screen.findByText("new-secret")).toBeInTheDocument()
+  expect(screen.queryByText("new-signing")).not.toBeInTheDocument()
+  expect(sent).toHaveLength(1)
+
+  // Saving a pasted signing token over it asks too.
+  await user.type(
+    screen.getByLabelText("Paste GitLab's signing token"),
+    "whsec_new"
+  )
+  await user.click(screen.getByRole("button", { name: "Save signing token" }))
+  const again = await screen.findByRole("alertdialog")
+  await user.click(within(again).getByRole("button", { name: "Keep it" }))
   expect(sent).toHaveLength(1)
 })
