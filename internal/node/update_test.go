@@ -306,3 +306,22 @@ func TestUpdateGoesBackWhenTheServiceWillNotStart(t *testing.T) {
 		}
 	}
 }
+
+// A binary that starts and then dies is caught by the wait after the start,
+// and the old one goes back.
+func TestUpdateGoesBackWhenTheServiceDiesAfterStarting(t *testing.T) {
+	u := newUpdateRig(t)
+	u.svc.running = true
+	// Running before the update, then down during the wait.
+	u.svc.runningSeq = []bool{true, false}
+	err := u.run("node", "update", "--state-dir", u.dir, "--release", "v1.9.0")
+	if err == nil || !strings.Contains(err.Error(), "did not stay running") || !strings.Contains(err.Error(), "previous binary is back in place") {
+		t.Fatalf("err %v", err)
+	}
+	if u.binary(t) != oldBinary {
+		t.Fatalf("the service binary is %q, want the old one back", u.binary(t))
+	}
+	if !slices.Equal(u.svc.calls, []string{"stop", "start", "stop", "start"}) {
+		t.Fatalf("service calls %v: it should restart on the old binary", u.svc.calls)
+	}
+}

@@ -165,8 +165,40 @@ func (c *cmds) update(ctx cli.CommandContext) error {
 	if err = c.opts.svc.Start(ctx.Context()); err != nil {
 		return c.rollBack(ctx.Context(), target, prev, true, fmt.Errorf("starting the service on %s failed: %w", tag, err))
 	}
+	// systemd says a Type=exec unit started once the binary runs. One that
+	// dies a moment later is still a failed update, so watch it for a while.
+	if err = c.stayedUp(ctx.Context()); err != nil {
+		_ = c.opts.svc.Stop(ctx.Context()) //nolint:errcheck // it is down or crash looping; the start below says if it matters
+		return c.rollBack(ctx.Context(), target, prev, true, fmt.Errorf("the service started on %s but %w", tag, err))
+	}
 	c.printf("The node service restarted on %s.\n", tag)
 	return nil
+}
+
+// updateSettle is how long node update watches a service it restarted.
+const updateSettle = 5 * time.Second
+
+// stayedUp checks the service every half second for settle, and fails the
+// first time it is not running.
+func (c *cmds) stayedUp(ctx context.Context) error {
+	deadline := time.Now().Add(c.opts.settle)
+	for {
+		ok, err := c.opts.svc.Running(ctx)
+		if err != nil || !ok {
+			return fmt.Errorf("did not stay running for %s", c.opts.settle)
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return nil
+		}
+		t := time.NewTimer(min(left, 500*time.Millisecond))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 // rollBack puts the previous binary back and, when the service was stopped,
@@ -246,14 +278,16 @@ func (c *cmds) writeBinary(src io.Reader, target string, old os.FileInfo) error 
 		_ = os.Remove(tmp.Name())
 		return err
 	}
+	// The new binary is in place now, so the update goes on: failing here
+	// would remove the .old copy and leave nothing to roll back to.
 	if err = syncDir(filepath.Dir(target)); err != nil {
-		return fmt.Errorf("syncing %s after the rename: %w", filepath.Dir(target), err)
+		c.printf("The new binary is in place, but syncing %s failed (%v); a crash now could lose the change.\n", filepath.Dir(target), err)
 	}
 	return nil
 }
 
-// verifyRelease checks a downloaded release by hand. node.sh runs it when
-// cosign is not installed.
+// verifyRelease checks a downloaded release by hand, for when you
+// downloaded the archive, checksums and bundle yourself.
 func (c *cmds) verifyRelease(ctx cli.CommandContext) error {
 	tag, err := releaseTag(ctx.String("release"))
 	if err != nil {

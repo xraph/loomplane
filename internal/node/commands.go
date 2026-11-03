@@ -21,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/xraph/forge/cli"
 
@@ -78,6 +79,9 @@ type Options struct {
 	goarch        string
 	httpc         *http.Client
 	verifyRelease func(ctx context.Context, version string, checksums, bundle []byte, artifact, sum string) error
+	// settle is how long node update watches the service after starting it
+	// on a new binary. Zero means updateSettle; tests make it short.
+	settle time.Duration
 }
 
 type cmds struct {
@@ -133,6 +137,9 @@ func Commands(opts Options) []cli.Command {
 	}
 	if o.systemBin == "" {
 		o.systemBin = systemBinDir
+	}
+	if o.settle == 0 {
+		o.settle = updateSettle
 	}
 
 	stateFlag := cli.NewStringFlag("state-dir", "", "Where the node keeps its identity and config (default: "+DefaultStateDir(o.goos, o.home)+")", "")

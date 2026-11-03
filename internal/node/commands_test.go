@@ -36,6 +36,8 @@ type fakeService struct {
 	// what Running returns.
 	startErrs []error
 	runErr    error
+	// runningSeq, while it lasts, answers Running in turn before running.
+	runningSeq []bool
 }
 
 func (f *fakeService) note(c string) {
@@ -67,6 +69,11 @@ func (f *fakeService) Remove(context.Context) error { f.note("remove"); return n
 func (f *fakeService) Running(context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.runningSeq) > 0 {
+		r := f.runningSeq[0]
+		f.runningSeq = f.runningSeq[1:]
+		return r, f.runErr
+	}
 	return f.running, f.runErr
 }
 
@@ -91,7 +98,7 @@ func newCmdRig(t *testing.T) *cmdRig {
 		goos: "linux", euid: func() int { return 0 }, home: t.TempDir(), svc: r.svc, detect: quietDetect(),
 		binary: func() (string, error) { return "/usr/local/bin/loomctl", nil }, chown: func(string, int, int) error { return nil },
 		in: strings.NewReader(""), isTerminal: func() bool { return false }, serviceReady: func() error { return nil },
-		systemBin: filepath.Join(t.TempDir(), "lib")}
+		systemBin: filepath.Join(t.TempDir(), "lib"), settle: time.Millisecond}
 	return r
 }
 
