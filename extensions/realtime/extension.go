@@ -15,9 +15,25 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	store "github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 )
 
 const Name = "loomplane-realtime"
+
+// teamMembers says whether a person is a current member of a team.
+type teamMembers interface {
+	IsMember(ctx context.Context, orgID, teamID, userID string) (bool, error)
+}
+
+// teamLookup is teams.Service's IsMember on the database.
+type teamLookup struct {
+	svc *teams.Service
+	db  *pgdriver.PgDB
+}
+
+func (l teamLookup) IsMember(ctx context.Context, orgID, teamID, userID string) (bool, error) {
+	return l.svc.IsMember(ctx, l.db, orgID, teamID, userID)
+}
 
 type Extension struct {
 	*forge.BaseExtension
@@ -27,6 +43,9 @@ type Extension struct {
 	authz interface {
 		Require(context.Context, security.Principal, security.Permission, string) error
 	}
+	// teams says who is in a team, so a request routed to one reaches
+	// its members live. Nil delivers to no team.
+	teams  teamMembers
 	verify identity.RevalidateStream
 	guard  identity.Guard
 	cancel context.CancelFunc
@@ -51,6 +70,11 @@ func (e *Extension) Register(app forge.App) error {
 	if e.authz, err = forge.InjectType[*security.Authorizer](c); err != nil {
 		return err
 	}
+	teamSvc, err := forge.InjectType[*teams.Service](c)
+	if err != nil {
+		return fmt.Errorf("realtime needs the identity extension's teams: %w", err)
+	}
+	e.teams = teamLookup{svc: teamSvc, db: pgdriver.Unwrap(db)}
 	if e.verify, err = forge.InjectType[identity.RevalidateStream](c); err != nil {
 		return err
 	}

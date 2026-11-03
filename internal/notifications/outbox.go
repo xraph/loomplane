@@ -295,7 +295,8 @@ func (s *Service) emailStep(ctx context.Context, item *outboxItem, p security.Pr
 // deployment, organization cloud management for a domain notice, and need
 // when the notice names one, as a model's budget notice does with
 // ai:manage. A notice queued with Enqueue needs project read when it has a
-// project, then its own need.
+// project, then its own need on that project (or the workspace when it has
+// none).
 func (s *Service) recipient(ctx context.Context, p security.Principal, d *outboxMessage) (address string, authorized bool, err error) {
 	var email string
 	project, need := d.project, d.need
@@ -328,7 +329,10 @@ func (s *Service) recipient(ctx context.Context, p security.Principal, d *outbox
 			return "", false, needErr
 		}
 		if named != nil {
-			grants = append(grants, grant{*named, ""})
+			// The need is checked where the notice points: a project-scoped
+			// grant (a team's admin role on the project, say) only counts
+			// on its own project, and a workspace notice checks the workspace.
+			grants = append(grants, grant{*named, project})
 		}
 	case need != nil:
 		grants = append(grants, grant{*need, ""})

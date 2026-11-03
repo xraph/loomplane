@@ -53,3 +53,76 @@ func TestNotificationConfigResend(t *testing.T) {
 		t.Fatalf("expected rejection without from: %v", err)
 	}
 }
+
+func TestNotificationConfigMailDir(t *testing.T) {
+	cfg, err := FromSource(mapGetter{"database.url": testDSN, "notifications.mail_dir": ".forge/mail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notifications.MailEnabled() || cfg.Notifications.MailDir != ".forge/mail" {
+		t.Fatal("a mail directory should turn mail on")
+	}
+	for _, test := range []struct {
+		name              string
+		edit              func(*NotificationsConfig)
+		environment, want string
+	}{
+		{"production", func(*NotificationsConfig) {}, EnvProduction, "production"},
+		{"with SMTP", func(c *NotificationsConfig) { c.SMTPHost = "mail.example.com" }, EnvDevelopment, "only one"},
+		{"with Resend", func(c *NotificationsConfig) { c.ResendAPIKey = "re_test" }, EnvDevelopment, "only one"},
+		{"bad from", func(c *NotificationsConfig) { c.From = "a@example.com\r\nBcc: b@example.com" }, EnvDevelopment, "single email"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			edited := cfg.Notifications
+			test.edit(&edited)
+			if err := edited.Validate(test.environment); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected rejection containing %q: %v", test.want, err)
+			}
+		})
+	}
+	if err := cfg.Notifications.Validate(EnvStaging); err != nil {
+		t.Fatalf("no from is fine for a mail directory: %v", err)
+	}
+}
+
+// Email verification is on by default wherever the instance can send the
+// code. Without mail, nobody after the setup owner could ever verify.
+func TestEmailVerificationFollowsMail(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		settings mapGetter
+		want     bool
+	}{
+		{"no mail", mapGetter{}, false},
+		{"mail directory", mapGetter{"notifications.mail_dir": ".forge/mail"}, true},
+		{"smtp", mapGetter{"notifications.smtp_host": "127.0.0.1", "notifications.from": "a@example.com"}, true},
+		{"turned off", mapGetter{"notifications.mail_dir": ".forge/mail", "identity.require_email_verification": "false"}, false},
+		{"turned on without mail", mapGetter{"identity.require_email_verification": "true"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.settings["database.url"] = testDSN
+			cfg, err := FromSource(test.settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Identity.RequireEmailVerification != test.want {
+				t.Fatalf("require email verification = %v, want %v", cfg.Identity.RequireEmailVerification, test.want)
+			}
+		})
+	}
+}
+
+func TestProductionRefusesVerificationWithoutMail(t *testing.T) {
+	on := true
+	cfg := Defaults()
+	cfg.Identity.EmailVerification = &on
+	cfg.Identity.RequireEmailVerification = true
+	errs := cfg.productionChecks()
+	found := false
+	for _, err := range errs {
+		found = found || strings.Contains(err.Error(), "require_email_verification")
+	}
+	if !found {
+		t.Fatalf("production should refuse verification with no way to send the code: %v", errs)
+	}
+}

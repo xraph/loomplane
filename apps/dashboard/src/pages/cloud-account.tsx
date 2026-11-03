@@ -276,7 +276,10 @@ export function CloudAccount({ id }: { id: string }) {
                       {can("infrastructure:read") && (
                         <DropdownMenuItem
                           render={
-                            <Link to="/resources" search={{ connection: id }} />
+                            <Link
+                              to="/integrations/resources"
+                              search={{ connection: id }}
+                            />
                           }
                         >
                           Provider resources

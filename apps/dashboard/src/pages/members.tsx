@@ -10,7 +10,9 @@ import {
   useInvitationsCreate,
   useInvitationsList,
   useMembersList,
+  useProjectsList,
   useSessionGet,
+  useTeamsList,
 } from "@/client/forge/loomplane/hooks"
 import type {
   CreatedInvitation,
@@ -64,6 +66,7 @@ import {
 } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { teamRolesFor } from "@/lib/teams"
 import { cn } from "@/lib/utils"
 import {
   grantable,
@@ -79,6 +82,12 @@ export function Members() {
   const mayManage = can("member:manage")
   const [inviting, setInviting] = useState(false)
   const me = members.data?.members.find((m) => m.userId === session.userId)
+  // One read of the teams and projects for the whole table, never one per row.
+  const teams = useQuery(useTeamsList)
+  const projects = useQuery(useProjectsList)
+  const teamList = teams.data?.teams ?? []
+  const projectName = (id: string) =>
+    projects.data?.projects.find((p) => p.id === id)?.name ?? id
 
   return (
     <>
@@ -131,6 +140,12 @@ export function Members() {
                     // Nobody changes their own role or removes themselves here.
                     manageable={mayManage && m.userId !== session.userId}
                     myRole={me?.role ?? "viewer"}
+                    teamRoles={teamRolesFor(
+                      m.userId,
+                      m.role,
+                      teamList,
+                      projectName
+                    )}
                   />
                 ))}
               </TableBody>
@@ -176,11 +191,13 @@ function MemberRow({
   isMe,
   manageable,
   myRole,
+  teamRoles,
 }: {
   member: OrgMember
   isMe: boolean
   manageable: boolean
   myRole: string
+  teamRoles: { teams: string[]; higher: string[] }
 }) {
   const { session } = useOrganization()
   const update = useMutation(useUpdateMember)
@@ -260,29 +277,50 @@ function MemberRow({
         </div>
       </TableCell>
       <TableCell>
-        {canTouch ? (
-          <Select
-            items={choices.map((r) => ({ label: r.label, value: r.value }))}
-            value={member.role}
-            onValueChange={(v) => void changeRole(v as Role)}
-            disabled={update.isPending}
-          >
-            <SelectTrigger size="sm" aria-label={`Role of ${member.email}`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {choices.map((r) => (
-                <SelectItem key={r.value} value={r.value}>
-                  {r.label}
-                </SelectItem>
+        <div className="grid justify-items-start gap-1.5">
+          {canTouch ? (
+            <Select
+              items={choices.map((r) => ({ label: r.label, value: r.value }))}
+              value={member.role}
+              onValueChange={(v) => void changeRole(v as Role)}
+              disabled={update.isPending}
+            >
+              <SelectTrigger size="sm" aria-label={`Role of ${member.email}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {r.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span className="text-muted-foreground">
+              {roleLabel(member.role)}
+            </span>
+          )}
+          {teamRoles.teams.length > 0 && (
+            <ul
+              aria-label={`Teams of ${member.name || member.email}`}
+              className="flex flex-wrap gap-1"
+            >
+              {teamRoles.teams.map((name) => (
+                <li key={name}>
+                  <Badge variant="outline" className="text-[11.5px]">
+                    {name}
+                  </Badge>
+                </li>
               ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <span className="text-muted-foreground">
-            {roleLabel(member.role)}
-          </span>
-        )}
+            </ul>
+          )}
+          {teamRoles.higher.map((line) => (
+            <span key={line} className="text-xs text-muted-foreground">
+              {line}
+            </span>
+          ))}
+        </div>
       </TableCell>
       <TableCell className="hidden text-muted-foreground md:table-cell">
         <time dateTime={member.joinedAt}>{formatDate(member.joinedAt)}</time>

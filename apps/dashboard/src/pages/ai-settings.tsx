@@ -1,6 +1,6 @@
-// AI settings: what the AI in every project of the workspace shares. For
-// now that's the Hugging Face token gated models download with. It's
-// write-only: once saved, only its last characters, the account it belongs
+// AI settings: what the AI in every project of the workspace shares. That's
+// the workspace's agent, for admins, and the Hugging Face token gated models
+// download with. The token is write-only: once saved, only its last characters, the account it belongs
 // to and when it was set come back.
 import { CheckIcon, LockIcon } from "lucide-react"
 import { type FormEvent, useId, useState } from "react"
@@ -13,6 +13,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { HuggingFaceToken } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { AgentSettings } from "@/components/agent-settings"
 import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { Panel } from "@/components/panel"
@@ -43,6 +44,7 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { formatDate } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
 
 const description =
   "Settings the AI in every project of this workspace shares. Models run on your own servers, and Loomplane keeps only what they need to start."
@@ -51,11 +53,13 @@ const description =
 export function AISettings() {
   const settings = useQuery(useAiSettingsGet)
   const denied = settings.status === "error" && statusOf(settings.error) === 403
+  const { can } = useOrganization()
   return (
     <>
       <SiteHeader crumbs={[{ label: "AI settings" }]} />
       <Page className="max-w-[880px]">
         <PageHeading title="AI settings" description={description} />
+
         {denied && <Restricted />}
         {settings.status === "error" && !denied && (
           <QueryError
@@ -70,6 +74,7 @@ export function AISettings() {
             className="h-56 w-full rounded-[14px]"
           />
         )}
+        {settings.data && can("ai:manage") && <AgentSettings />}
         {settings.data && (
           <HuggingFaceSection
             token={settings.data.huggingface}

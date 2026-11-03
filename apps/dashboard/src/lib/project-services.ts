@@ -84,6 +84,41 @@ export function stateOf(binding: Binding | undefined): ServiceState {
   return binding.drift ? "drifted" : "live"
 }
 
+/** The tone a service's state is drawn in, a subset of StatusPill's. */
+export type ServiceTone = "live" | "waiting" | "quiet"
+
+/**
+ * serviceStatus names where a service stands in one environment, as a pill
+ * shows it. short drops "Loomplane" so the words fit a table column.
+ */
+export function serviceStatus(
+  binding: Binding | undefined,
+  short = false
+): { tone: ServiceTone; label: string } {
+  const state = stateOf(binding)
+  if (state === "live") return { tone: "live", label: "Live" }
+  if (state === "none") return { tone: "quiet", label: "Not deployed" }
+  const verb = binding?.drift === "missing" ? "Deleted" : "Changed"
+  return {
+    tone: "waiting",
+    label: short ? `${verb} outside` : `${verb} outside Loomplane`,
+  }
+}
+
+/** The tabs of a service's page, the first the default. */
+export const serviceTabs = [
+  "overview",
+  "deployments",
+  "variables",
+  "settings",
+] as const
+export type ServiceTab = (typeof serviceTabs)[number]
+
+/** serviceTabOf reads ?tab=, so an unknown value opens the default tab. */
+export function serviceTabOf(value: unknown): ServiceTab | undefined {
+  return serviceTabs.find((t) => t === value)
+}
+
 /** isDeployed reports whether anything of the service runs anywhere. */
 export function isDeployed(row: ServiceRow): boolean {
   return Object.values(row.deployed).some(Boolean)
@@ -105,6 +140,20 @@ export function filterRows(
       locationOf(r.service).toLowerCase().includes(q)
     )
   })
+}
+
+/** filterExcluded keeps the excluded services a search shows. */
+export function filterExcluded(
+  excluded: Excluded[],
+  search: string
+): Excluded[] {
+  const q = search.trim().toLowerCase()
+  if (!q) return excluded
+  return excluded.filter(
+    (x) =>
+      x.service.name.toLowerCase().includes(q) ||
+      locationOf(x.service).toLowerCase().includes(q)
+  )
 }
 
 /**
@@ -295,16 +344,11 @@ export function callersOf(
   })
 }
 
-/** sizeLabel names a deployed size, such as "1 vCPU, 1 GB". */
+/** sizeLabel names a deployed size, such as "1 vCPU, 1 GiB". */
 export function sizeLabel(c: DeployedConfig): string {
   const parts: string[] = []
   if (c.cpu) parts.push(`${c.cpu} vCPU`)
-  if (c.memoryMB)
-    parts.push(
-      c.memoryMB >= 1024 && c.memoryMB % 1024 === 0
-        ? `${c.memoryMB / 1024} GB`
-        : `${c.memoryMB} MB`
-    )
+  if (c.memoryMB) parts.push(`${Number((c.memoryMB / 1024).toFixed(2))} GiB`)
   return parts.join(", ")
 }
 

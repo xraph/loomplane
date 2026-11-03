@@ -5,12 +5,11 @@ import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
   CopyIcon,
-  DatabaseIcon,
   FolderGit2Icon,
   KeyboardIcon,
   Settings2Icon,
 } from "lucide-react"
-import { type ComponentProps, useState } from "react"
+import { type ComponentProps } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -27,22 +26,14 @@ import {
   ProjectsIcon,
   ServicesIcon,
 } from "@/components/icons"
-import { OrganizationForm } from "@/components/organization-form"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
-import { useFeatures } from "@/lib/features"
+import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -62,17 +53,21 @@ import {
 } from "@/components/ui/sidebar"
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
-import { Link, usePath } from "@/lib/router"
+import { Link, useNavigate, usePath } from "@/lib/router"
 import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
+const agentPath = "/agent/requests"
+
 const settingsPaths = [
   "/members",
+  "/teams",
   "/variables",
   "/integrations",
   "/cloud-sign-in",
   "/api-keys",
-  "/notifications",
+  "/notifications/settings",
+  "/webhooks",
   "/ai/settings",
 ]
 
@@ -81,6 +76,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { can } = useOrganization()
   const { openNewProject } = useShell()
   const features = useFeatures()
+  const agent = useAgent()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -104,7 +100,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     {
       title: "Deployments",
       icon: <DeploymentsIcon />,
-      isActive: path.startsWith("/deployments"),
+      isActive: path.startsWith("/deployments") || path.startsWith(agentPath),
       badge: waiting > 0 && (
         <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
           {waiting}
@@ -130,6 +126,19 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
             <span className="text-weld-ink">{waiting}</span>
           ),
         },
+        // The agent's requests, only where the agent is on for this person.
+        ...(features.ai && agent.enabled && can("agent:use")
+          ? [
+              {
+                title: "Agent",
+                link: <Link to="/agent/requests" />,
+                isActive: path.startsWith(agentPath),
+                badge: agent.pending > 0 && (
+                  <span className="text-weld-ink">{agent.pending}</span>
+                ),
+              },
+            ]
+          : []),
         {
           title: "Failed",
           link: <Link to="/deployments" search={{ status: "failed" }} />,
@@ -150,7 +159,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       title: "Services",
       icon: <ServicesIcon />,
       link: <Link to="/services" />,
-      isActive: path === "/services",
+      isActive: path.startsWith("/services"),
     },
     ...(can("organization_cloud:manage")
       ? [
@@ -167,12 +176,6 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <CloudsIcon />,
       link: <Link to="/clouds" />,
       isActive: path.startsWith("/clouds"),
-    },
-    {
-      title: "Resources",
-      icon: <DatabaseIcon />,
-      link: <Link to="/resources" />,
-      isActive: path.startsWith("/resources"),
     },
     {
       title: "Infrastructure",
@@ -192,6 +195,10 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/activity" />,
       isActive: path.startsWith("/activity"),
     },
+  ]
+
+  // Settings sit at the foot of the sidebar, apart from the pages you work in.
+  const settings: NavItem[] = [
     {
       title: "Settings",
       icon: <Settings2Icon />,
@@ -199,13 +206,27 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       items: [
         {
           title: "Notifications",
-          link: <Link to="/notifications" />,
-          isActive: path.startsWith("/notifications"),
+          link: <Link to="/notifications/settings" />,
+          isActive: path.startsWith("/notifications/settings"),
         },
+        ...(can("member:manage")
+          ? [
+              {
+                title: "Webhooks",
+                link: <Link to="/webhooks" />,
+                isActive: path.startsWith("/webhooks"),
+              },
+            ]
+          : []),
         {
           title: "Members",
           link: <Link to="/members" />,
           isActive: path.startsWith("/members"),
+        },
+        {
+          title: "Teams",
+          link: <Link to="/teams" />,
+          isActive: path.startsWith("/teams"),
         },
         {
           title: "Variables",
@@ -257,6 +278,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
+        <NavMain items={settings} label="" className="mt-auto" />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
         <Account />
@@ -268,47 +290,28 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
 
 function Organizations() {
   const { session, organizations, switchOrganization } = useOrganization()
-  const [creating, setCreating] = useState(false)
+  const navigate = useNavigate()
   const switchTo = (orgId: string) =>
     switchOrganization(orgId).catch((err: unknown) =>
       toast.error(messageOf(err, "Couldn't switch workspace."))
     )
   return (
-    <>
-      <TeamSwitcher
-        activeId={session.orgId}
-        onSwitch={(id) => void switchTo(id)}
-        onCreate={() => setCreating(true)}
-        orgs={organizations.map((o) => ({
-          id: o.id,
-          name: o.name,
-          detail: o.slug,
-          // The active organization wears Loomplane's mark, so the corner
-          // still says where you are; the others go by their initial.
-          mark:
-            o.id === session.orgId
-              ? "brand"
-              : (o.name.trim()[0]?.toUpperCase() ?? "?"),
-        }))}
-      />
-      <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>New workspace</DialogTitle>
-            <DialogDescription>
-              A separate home for another team&apos;s projects. You&apos;ll be
-              its owner.
-            </DialogDescription>
-          </DialogHeader>
-          <OrganizationForm
-            onCreated={async (orgId) => {
-              await switchOrganization(orgId)
-              setCreating(false)
-            }}
-          />
-        </DialogContent>
-      </Dialog>
-    </>
+    <TeamSwitcher
+      activeId={session.orgId}
+      onSwitch={(id) => void switchTo(id)}
+      onCreate={() => void navigate({ to: "/workspaces/new" })}
+      orgs={organizations.map((o) => ({
+        id: o.id,
+        name: o.name,
+        detail: o.slug,
+        // The active organization wears Loomplane's mark, so the corner
+        // still says where you are; the others go by their initial.
+        mark:
+          o.id === session.orgId
+            ? "brand"
+            : (o.name.trim()[0]?.toUpperCase() ?? "?"),
+      }))}
+    />
   )
 }
 

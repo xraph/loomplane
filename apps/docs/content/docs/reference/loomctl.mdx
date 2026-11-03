@@ -35,6 +35,37 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 | `vars PROJECT [--json]` | Lists variables. Secrets show no value |
 | `vars set PROJECT KEY=VALUE [--env E] [--service S] [--secret]` | Sets a variable. `KEY=-` reads the value from standard input |
 
+## Teams
+
+| Command | What it does |
+|---|---|
+| `teams [--json]` | Lists teams with their member counts and roles, such as `developer on checkout-api` or `admin on the workspace` |
+| `teams show TEAM [--json]` | Shows a team's description, roles and members. `TEAM` is a slug, name or ID |
+| `teams create NAME [--description TEXT]` | Creates a team |
+| `teams delete TEAM --yes` | Deletes a team. Without `--yes` nothing is sent |
+| `teams add TEAM EMAIL` | Adds a workspace member, found by email |
+| `teams remove TEAM EMAIL` | Takes a person out of a team |
+| `teams grant TEAM viewer\|developer\|admin [--project P]` | Gives the team a role on a project, or on the whole workspace without `--project` |
+| `teams revoke TEAM [--project P]` | Removes the team's role on that project, or on the workspace |
+| `projects team PROJECT TEAM` | Names the team responsible for a project |
+| `projects team PROJECT --none` | Clears it |
+
+Managing teams needs `member:manage`. Setting a project's team needs `project:update` on it. See [Teams](/docs/concepts/teams).
+
+## The built-in agent
+
+These need the agent on. On a server with `ai.enabled` off they print "This Loomplane doesn't run the agent (ai.enabled is off)." and exit 1.
+
+| Command | What it does |
+|---|---|
+| `agent requests [--all] [--mine] [--json]` | Lists what the agent is asking people for: ID, kind, project, question, who it was sent to, who it's asked for, and its age. `--all` includes settled requests. `--mine` keeps what's asked of you, your teams or, for admins, the workspace. A plan to approve adds the line `approve with: loomctl approve PLAN --revision REV` |
+| `agent requests answer ID TEXT...` | Answers a question |
+| `agent requests provide ID` | Sets the secret the agent asked for. The value comes from standard input, hidden on a terminal, and a value given as an argument is refused. It's never printed |
+| `agent requests done ID` | Says you connected GitHub or a cloud account |
+| `agent requests decline ID [--reason TEXT]` | Turns a request down. The agent sees the reason |
+
+See [What needs a person](/docs/agents/what-needs-a-person#requests) for who is asked and who can answer.
+
 ## Plans and deployments
 
 | Command | What it does |
@@ -44,7 +75,7 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 | `rollback PROJECT --reason TEXT [--env production] [--deployment ID] [--no-wait] [--json]` | Plans an environment back to its previous successful release. `--reason` is required. It prints which deployment it undoes and which it restores, and the plan lists what it leaves in place. `--deployment` has to name the environment's newest |
 | `plans PROJECT [--json]` | Lists a project's plans |
 | `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy. A promotion or rollback adds a line saying what it moves, which images it reuses and, for a rollback, what it leaves in place |
-| `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
+| `approve PLAN_ID [--revision REV] [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment. `--revision` approves only if the plan is still at that revision |
 | `reject PLAN_ID [--note TEXT]` | Rejects a plan |
 | `deployments PROJECT [--json]` | Lists a project's deployments |
 | `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives. A deployment with a post-deploy watch adds a `Watch:` section with the status, each service's verdict and the services it can't watch. The `--watch` flag follows the deployment, and the Watch section is the release watch, which is a different thing |

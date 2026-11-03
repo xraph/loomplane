@@ -1,5 +1,5 @@
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router"
-import { act, cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -193,6 +193,12 @@ describe("dashboard routes", () => {
     expect(
       await screen.findByRole("heading", { name: "Domain" })
     ).toBeInTheDocument()
+  })
+
+  it("sends someone who has a workspace home from onboarding", async () => {
+    const { history } = await open("/onboarding")
+    await waitFor(() => expect(history.location.pathname).toBe("/"))
+    expect(await screen.findByText("Overview")).toBeInTheDocument()
   })
 
   it("retains invitation tokens in the URL", async () => {

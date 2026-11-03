@@ -11,6 +11,7 @@
     "drift",
     "variables-and-secrets",
     "gateways-and-networking",
-    "organizations-and-roles"
+    "organizations-and-roles",
+    "teams"
   ]
 }

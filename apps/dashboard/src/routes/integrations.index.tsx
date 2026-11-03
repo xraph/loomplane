@@ -18,7 +18,9 @@ function IntegrationsRoute() {
     <Integrations
       tab={tab ?? "catalog"}
       onTab={(t) =>
-        void navigate({ search: t === "connected" ? { tab: t } : {} })
+        void (t === "resources"
+          ? navigate({ to: "/integrations/resources", search: {} })
+          : navigate({ search: t === "connected" ? { tab: t } : {} }))
       }
     />
   )

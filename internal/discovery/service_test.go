@@ -15,11 +15,13 @@ import (
 
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/store/memory"
+	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/security/securitytest"
 )
 
 const (
@@ -854,5 +856,52 @@ func TestService_projectGraphComposesEverySource(t *testing.T) {
 	known, err := ServiceCatalog{Store: f.store}.Services(ctx, org, project)
 	if err != nil || known[view.Graph.Services[0].ID] == "" {
 		t.Fatalf("catalog %v, %v", known, err)
+	}
+}
+
+// Reading an analysis or its graph checks the analysis's project, so a
+// team's grant there counts and nowhere else.
+func TestAnalysisReadsCheckTheProject(t *testing.T) {
+	ctx := context.Background()
+	w := securitytest.New(t, org)
+	rec := securitytest.NewRecorder(w.Authz)
+	store := newMemStore()
+	svc := NewService(store, fakeProjects{}, rec, &queue{}, &audits{})
+	projA, projB := typeid.MustGenerate("proj").String(), typeid.MustGenerate("proj").String()
+	for id, projectID := range map[string]string{"an_a": projA, "an_b": projB} {
+		if err := store.CreateAnalysis(ctx, &Analysis{ID: id, OrgID: org, ProjectID: projectID, Status: StatusQueued}); err != nil {
+			t.Fatal(err)
+		}
+		store.graphs[id] = &graph.Graph{}
+	}
+	workspace := w.Workspace(t, "ausr_viewer", security.RoleViewer)
+	grant := w.ProjectOnly(t, "ausr_grace", security.RoleDeveloper, projA)
+
+	calls := []struct {
+		name string
+		run  func(p security.Principal, id string) error
+	}{
+		{"Get", func(p security.Principal, id string) error { _, err := svc.Get(ctx, p, id); return err }},
+		{"Graph", func(p security.Principal, id string) error { _, err := svc.Graph(ctx, p, id); return err }},
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			rec.Reset()
+			if err := c.run(workspace, "an_a"); err != nil {
+				t.Fatalf("workspace viewer on A: %v", err)
+			}
+			if got, want := rec.Checks(), []string{"project:read " + projA}; !slices.Equal(got, want) {
+				t.Fatalf("checks %v, want %v", got, want)
+			}
+			if err := c.run(workspace, "an_b"); err != nil {
+				t.Fatalf("workspace viewer on B: %v", err)
+			}
+			if err := c.run(grant, "an_a"); err != nil {
+				t.Fatalf("project grant on A: %v", err)
+			}
+			if err := c.run(grant, "an_b"); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("project grant on B: %v, want ErrForbidden", err)
+			}
+		})
 	}
 }

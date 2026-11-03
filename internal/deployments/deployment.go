@@ -50,6 +50,11 @@ var (
 	ErrNotFound = errors.New("deployment not found")
 	// ErrNoExecutor is an action whose provider Loomplane can't act on.
 	ErrNoExecutor = errors.New("loomplane has no adapter for this provider yet")
+	// ErrNotRunning is a cancel of a deployment that has already finished.
+	ErrNotRunning = errors.New("only a running deployment can be cancelled")
+	// ErrNothingToCancel is a cancel of a deployment whose every step has
+	// started. It finishes on its own.
+	ErrNothingToCancel = errors.New("every step of this deployment has started, so it finishes on its own")
 )
 
 // Deployment is one run of an approved plan.
@@ -81,6 +86,9 @@ type Deployment struct {
 	StartedBy  string     `json:"started_by"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// CancelRequestedAt is when someone cancelled it while it ran. It
+	// stops before its next action and is then cancelled.
+	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
 }
 
 // SourceArtifact is one repository a deployment moves, at the commit its
@@ -96,6 +104,10 @@ type SourceArtifact struct {
 type Step struct {
 	Checkpoint           []byte `json:"-"`
 	CloudCleanupComplete bool   `json:"-"`
+	// Claimed is set once an attempt at the action is about to start, before
+	// any effect, so a requested cancel can't stop it from then on. It isn't
+	// StartedAt, which says the action may have had effects.
+	Claimed bool `json:"-"`
 	// ActionID is the plan action's ID, such as "service:api".
 	ActionID string `json:"action_id"`
 	Name     string `json:"name"`

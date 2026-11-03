@@ -10,8 +10,12 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
+import type { ReactElement } from "react"
+
 import { forgeClient } from "@/client/runtime"
+import { NotificationSettings } from "@/pages/notification-settings"
 import { Notifications } from "@/pages/notifications"
+import { Webhooks } from "@/pages/webhooks"
 
 const organization = vi.hoisted(() => ({ admin: true, orgId: "org-a" }))
 vi.mock("@/lib/organization", () => ({
@@ -22,6 +26,9 @@ vi.mock("@/lib/organization", () => ({
   }),
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+vi.mock("@/lib/router", () => ({
+  Link: ({ to, ...props }: { to: string }) => <a href={to} {...props} />,
+}))
 
 afterEach(() => {
   cleanup()
@@ -57,13 +64,23 @@ const endpoint = {
   created_at: "2026-10-18T12:00:00Z",
 }
 
-function mount() {
-  return render(
-    <ClientProvider client={forgeClient}>
-      <Notifications />
-    </ClientProvider>
-  )
+function mount(page: ReactElement = <Notifications />) {
+  return render(<ClientProvider client={forgeClient}>{page}</ClientProvider>)
 }
+
+const mountSettings = () => mount(<NotificationSettings />)
+const mountWebhooks = () => mount(<Webhooks />)
+
+// The inbox, its settings and webhooks together, for access changes that
+// have to reach every one of them.
+const mountAll = () =>
+  mount(
+    <>
+      <Notifications />
+      <NotificationSettings />
+      <Webhooks />
+    </>
+  )
 
 function installAPI(
   handler?: (path: string, init?: RequestInit) => Response | undefined
@@ -108,8 +125,14 @@ it("keeps a failed inbox distinct from an empty inbox and retries the read", asy
 it("does not fetch or offer webhook administration without the organization grant", async () => {
   organization.admin = false
   const requests = installAPI()
-  mount()
+  mountAll()
   expect(await screen.findByText("No notifications yet")).toBeInTheDocument()
+  expect(
+    screen.getByText("Webhooks are for administrators")
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("link", { name: /Workspace webhooks/ })
+  ).not.toBeInTheDocument()
   expect(
     screen.queryByRole("button", { name: "Add webhook" })
   ).not.toBeInTheDocument()
@@ -140,7 +163,7 @@ it("shows disabled mail without discarding a saved email preference", async () =
       ? response({ deployment_email: true, mail_enabled: false })
       : undefined
   )
-  mount()
+  mountSettings()
   expect(
     await screen.findByText(/Email delivery is disabled/)
   ).toBeInTheDocument()
@@ -155,7 +178,7 @@ it("shows a failed preference save and keeps the persisted preference", async ()
       ? response({ error: "Preferences unavailable" }, 503)
       : undefined
   )
-  mount()
+  mountSettings()
   const preference = await screen.findByRole("switch", {
     name: "Deployment email",
   })
@@ -178,7 +201,7 @@ it("persists opting out and back in through the generated request codec", async 
     }
     return response({ deployment_email: enabled, mail_enabled: true })
   })
-  mount()
+  mountSettings()
   const preference = await screen.findByRole("switch", {
     name: "Deployment email",
   })
@@ -248,7 +271,7 @@ it.each([401, 403])(
         return response({ items: [notification], mail_enabled: true })
       if (path.endsWith("/webhooks")) return response({ items: [endpoint] })
     })
-    mount()
+    mountAll()
     expect(await screen.findByText("Deployment succeeded")).toBeInTheDocument()
     expect(
       await screen.findByRole("button", { name: "Delivery history" })
@@ -260,7 +283,7 @@ it.each([401, 403])(
     denied = true
     fireEvent.focus(window)
     await waitFor(() => {
-      expect(screen.getAllByRole("alert").length).toBeGreaterThanOrEqual(2)
+      expect(screen.getAllByRole("alert").length).toBeGreaterThanOrEqual(3)
       expect(screen.queryByText("Deployment succeeded")).not.toBeInTheDocument()
       expect(screen.queryByRole("switch")).not.toBeInTheDocument()
       expect(
@@ -284,7 +307,7 @@ it.each([401, 403])(
     fireEvent.focus(window)
     await waitFor(
       () => {
-        expect(screen.getAllByText(/Temporarily unavailable/)).toHaveLength(2)
+        expect(screen.getAllByText(/Temporarily unavailable/)).toHaveLength(3)
       },
       { timeout: 5000 }
     )
@@ -300,9 +323,6 @@ it.each([401, 403])(
     expect(
       await screen.findByRole("switch", { name: "Deployment email" })
     ).toBeChecked()
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Retry webhooks" })
-    )
     expect(
       await screen.findByRole("button", { name: "Add webhook" })
     ).toBeInTheDocument()
@@ -331,7 +351,7 @@ it.each([401, 403])(
               ],
             })
     })
-    mount()
+    mountWebhooks()
     await userEvent.click(
       await screen.findByRole("button", { name: "Delivery history" })
     )
@@ -373,7 +393,7 @@ it.each([401, 403])(
             )
           : response({ items: [endpoint] })
     })
-    mount()
+    mountWebhooks()
     await userEvent.click(
       await screen.findByRole("button", { name: "Add webhook" })
     )
@@ -396,9 +416,6 @@ it.each([401, 403])(
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: "Add webhook" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Retry notification processing" })
     ).not.toBeInTheDocument()
 
     failureStatus = 503
@@ -426,7 +443,7 @@ it("closes rotation confirmation before showing the new signing secret", async (
       return response({ endpoint, secret: "whsec_rotated_test" })
     if (path.endsWith("/webhooks")) return response({ items: [endpoint] })
   })
-  mount()
+  mountWebhooks()
   await userEvent.click(
     await screen.findByRole("button", { name: "Rotate secret" })
   )
@@ -453,7 +470,7 @@ it("closes deletion confirmation after removing a webhook", async () => {
     if (path.endsWith("/webhooks"))
       return response({ items: removed ? [] : [endpoint] })
   })
-  mount()
+  mountWebhooks()
   await userEvent.click(await screen.findByRole("button", { name: "Delete" }))
   await userEvent.click(
     within(screen.getByRole("alertdialog")).getByRole("button", {
@@ -487,7 +504,7 @@ it("retains cached notification content during transient refresh failures", asyn
         ],
       })
   })
-  mount()
+  mountAll()
   expect(await screen.findByText("Deployment succeeded")).toBeInTheDocument()
   await userEvent.click(
     await screen.findByRole("button", { name: "Delivery history" })
@@ -555,7 +572,7 @@ it("clears the one-time signing secret when its dialog closes", async () => {
     if (path.endsWith("/webhooks"))
       return response({ items: created ? [endpoint] : [] })
   })
-  mount()
+  mountWebhooks()
   await userEvent.click(
     await screen.findByRole("button", { name: "Add webhook" })
   )
@@ -597,7 +614,7 @@ it("clears the one-time signing secret when the organization changes", async () 
       ? response({ endpoint, secret: "whsec_org_a_only" }, 201)
       : undefined
   )
-  const view = mount()
+  const view = mountWebhooks()
   await userEvent.click(
     await screen.findByRole("button", { name: "Add webhook" })
   )
@@ -612,7 +629,7 @@ it("clears the one-time signing secret when the organization changes", async () 
   organization.orgId = "org-b"
   view.rerender(
     <ClientProvider client={forgeClient}>
-      <Notifications />
+      <Webhooks />
     </ClientProvider>
   )
   await waitFor(() =>
@@ -641,7 +658,7 @@ it("shows delivery failures and their retry schedule without exposing request pa
         ],
       })
   })
-  mount()
+  mountWebhooks()
   await userEvent.click(
     await screen.findByRole("button", { name: "Delivery history" })
   )

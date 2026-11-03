@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/xraph/vault/crypto"
@@ -72,5 +73,55 @@ func TestVaultResourceSecretsVersion(t *testing.T) {
 	next("a delete and the same value written back")
 	if accesses != 0 {
 		t.Fatalf("Version counted %d accesses, want none", accesses)
+	}
+}
+
+// Keys reads past Vault's pages and returns only the keys under the
+// prefix, so an environment's sweep finds all of its own and none of an
+// environment whose ID merely starts the same way.
+func TestVaultResourceSecretsKeys(t *testing.T) {
+	ctx := t.Context()
+	enc, err := crypto.NewEncryptor(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewVaultResourceSecrets(secret.NewService(memory.New(), enc))
+	want := map[string]bool{}
+	for i := range 2*keysPage + 7 {
+		for _, env := range []string{"env_1", "env_10", "env_2"} {
+			key := resourceKey("org_1", env, fmt.Sprintf("db%04d", i), ResourceURL)
+			if err = v.Put(ctx, key, []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			if env == "env_1" {
+				want[key] = true
+			}
+		}
+	}
+	prefix, err := environmentKeys("org_1", "env_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := v.Keys(ctx, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Keys found %d keys, want %d", len(got), len(want))
+	}
+	for _, k := range got {
+		if !want[k] {
+			t.Fatalf("Keys returned %q, from outside the environment", k)
+		}
+	}
+}
+
+// An ID that's empty or holds a slash would scope a sweep to more than one
+// environment.
+func TestEnvironmentKeysRefusesWideScopes(t *testing.T) {
+	for _, ids := range [][2]string{{"", "env_1"}, {"org_1", ""}, {"org_1", "env_1/x"}, {"org/1", "env_1"}} {
+		if prefix, err := environmentKeys(ids[0], ids[1]); err == nil {
+			t.Fatalf("environmentKeys(%q, %q) = %q, want an error", ids[0], ids[1], prefix)
+		}
 	}
 }

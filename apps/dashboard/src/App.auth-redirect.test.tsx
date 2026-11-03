@@ -25,10 +25,26 @@ vi.mock("@authsome/ui-react", async () => {
     },
   }
 })
-vi.mock("@/lib/invite", () => ({ usePendingInvite: () => undefined }))
+const invite = vi.hoisted(() => ({ token: null as string | null }))
+vi.mock("@/lib/invite", () => ({
+  usePendingInvite: () => invite.token,
+  inviteSettled: () => false,
+}))
+// The gate's state when a test needs one of its fallbacks, else it admits.
+const gate = vi.hoisted(() => ({ state: null as { kind: string } | null }))
 vi.mock("@/lib/organization", () => ({
-  OrganizationGate: () => <p>Protected page</p>,
+  OrganizationGate: ({
+    fallback,
+  }: {
+    fallback: (state: { kind: string }) => React.ReactNode
+  }) => (gate.state ? fallback(gate.state) : <p>Protected page</p>),
   useOrganization: vi.fn(),
+}))
+vi.mock("@/pages/accept-invitation", () => ({
+  AcceptInvitation: () => <p>invitation card</p>,
+}))
+vi.mock("@/pages/onboarding", () => ({
+  Onboarding: () => <p>onboarding card</p>,
 }))
 vi.mock("@/components/auth-layout", () => ({
   AuthLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -40,6 +56,8 @@ vi.mock("@/pages/auth", () => ({
 beforeEach(() => {
   auth.isAuthenticated = false
   auth.isLoading = false
+  invite.token = null
+  gate.state = null
   sessionStorage.clear()
   setWorkspaceSlug("")
   vi.spyOn(window, "scrollTo").mockImplementation(() => {})
@@ -138,5 +156,39 @@ describe("authentication redirects", () => {
     auth.isAuthenticated = true
     const { history } = await open("/sign-in")
     await waitFor(() => expect(history.location.href).toBe("/"))
+  })
+})
+
+describe("screens with their own address", () => {
+  it("opens a pending invitation on its page, not the overview", async () => {
+    invite.token = "invite+one"
+    auth.isAuthenticated = true
+    const { history } = await open("/")
+    await waitFor(() =>
+      expect(history.location.href).toBe("/invitations/accept")
+    )
+    expect(await screen.findByText("invitation card")).toBeInTheDocument()
+  })
+
+  it("comes back to the invitation's page after sign-in", async () => {
+    invite.token = "invite+one"
+    const { history } = await open("/invitations/accept")
+    await screen.findByText("sign-in card")
+    await act(async () => {
+      auth.isAuthenticated = true
+      listeners.forEach((listener) => listener())
+    })
+    await waitFor(() =>
+      expect(history.location.href).toBe("/invitations/accept")
+    )
+    expect(await screen.findByText("invitation card")).toBeInTheDocument()
+  })
+
+  it("moves onboarding to its own address", async () => {
+    gate.state = { kind: "needs-organization" }
+    auth.isAuthenticated = true
+    const { history } = await open("/projects")
+    await waitFor(() => expect(history.location.href).toBe("/onboarding"))
+    expect(screen.getByText("onboarding card")).toBeInTheDocument()
   })
 })

@@ -3,6 +3,7 @@ import type { Connection, Provider } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
 import {
   filterProviderResources,
+  managedOffers,
   providerResourceReadiness,
   resourceOfferings,
   reviewProviderResource,
@@ -100,6 +101,34 @@ test("offers registry provisions only on available providers with ready matching
       o.connection.id,
     ])
   ).toEqual([["new-provider", "new-kind", "ready"]])
+})
+test("collapses each provider's offering into one catalog card across its accounts", () => {
+  const providers = [
+    {
+      name: "cloudflare",
+      title: "Cloudflare",
+      cloud: "cloudflare",
+      available: true,
+      provisions: [
+        { kind: "cloudflare-d1", creates: "Cloudflare D1 database" },
+        { kind: "cloudflare-durable-object", creates: "DO", importOnly: true },
+      ],
+    },
+  ] as Provider[]
+  const connections = [
+    { id: "a", cloud: "cloudflare", status: "ready" },
+    { id: "b", cloud: "cloudflare", status: "ready" },
+  ] as Connection[]
+  expect(managedOffers(providers, connections)).toEqual([
+    {
+      kind: "cloudflare-d1",
+      provider: "cloudflare",
+      cloud: "cloudflare",
+      providerTitle: "Cloudflare",
+      creates: "Cloudflare D1 database",
+      accounts: 2,
+    },
+  ])
 })
 test("adds an external reference then creates a review without applying infrastructure", async () => {
   const calls: { path: string; body: unknown }[] = []

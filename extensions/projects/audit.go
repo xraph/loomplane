@@ -48,7 +48,26 @@ func (a Auditor) Record(ctx context.Context, e projects.AuditEvent) {
 	if e.Principal.IsSystem() {
 		b = b.Meta("actor", "system").Meta("actor_name", security.SystemActorName)
 	}
+	if e.Principal.IsAgent() {
+		b = agentMeta(ctx, b, e.Principal)
+	}
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", e.Action), forge.F("project_id", e.ProjectID), forge.F("error", err.Error()))
 	}
+}
+
+// agentMeta names the AI agent, the person it acts for and the tool call it
+// acted in, when there's one.
+func agentMeta(ctx context.Context, b *chronicle.EventBuilder, p security.Principal) *chronicle.EventBuilder {
+	b = b.Meta("actor", "agent").Meta("actor_name", security.AgentActorName)
+	if person, ok := p.Person(); ok {
+		b = b.Meta("on_behalf_of", person.UserID)
+	}
+	call, _ := security.AgentCallFrom(ctx)
+	for k, v := range map[string]string{"task_id": call.TaskID, "run_id": call.RunID, "tool": call.Tool} {
+		if v != "" {
+			b = b.Meta(k, v)
+		}
+	}
+	return b
 }

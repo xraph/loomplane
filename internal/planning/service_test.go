@@ -620,3 +620,54 @@ func TestPlanIsBlockedWhileACanaryRamps(t *testing.T) {
 		t.Fatalf("compute with the store down: %v", err)
 	}
 }
+
+// TestCloudSyncRefusesTheAgent: the agent holds deployment:approve, which
+// is all a project's Cloud change asks for, but Cloud syncs aren't its to
+// start or drive, alone or for a person. It's refused before Warden.
+func TestCloudSyncRefusesTheAgent(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(Deps{Authz: refusingAuthz{t}})
+	for who, p := range map[string]security.Principal{
+		"alone":      security.AgentPrincipal("org", nil),
+		"for admins": security.AgentPrincipal("org", &security.Principal{UserID: "usr_admin", OrgID: "org"}),
+	} {
+		paths := map[string]func() error{
+			"PreviewCloudChange": func() error {
+				_, err := s.PreviewCloudChange(ctx, p, "proj", cloudprofiles.ChangeInput{})
+				return err
+			},
+			"ApplyCloudChange": func() error {
+				_, err := s.ApplyCloudChange(ctx, p, "proj", "preview", "rev", "key")
+				return err
+			},
+			"RetryCloudSync": func() error {
+				_, err := s.RetryCloudSync(ctx, p, "proj", "sync")
+				return err
+			},
+			"CompleteCloudRouting": func() error {
+				_, err := s.CompleteCloudRouting(ctx, p, "proj", "sync", "production", "evidence")
+				return err
+			},
+			"CloudPreview": func() error {
+				_, err := s.CloudPreview(ctx, p, "proj", "preview")
+				return err
+			},
+			"PreviewCloudRevert": func() error {
+				_, err := s.PreviewCloudRevert(ctx, p, "proj", "sync")
+				return err
+			},
+			"ApplyCloudRevert": func() error {
+				_, err := s.ApplyCloudRevert(ctx, p, "proj", "preview", "rev", "key")
+				return err
+			},
+			"organization": func() error { return s.authorizeCloudSync(ctx, p, "") },
+		}
+		for name, call := range paths {
+			t.Run(who+"/"+name, func(t *testing.T) {
+				if err := call(); !errors.Is(err, security.ErrForbidden) {
+					t.Fatalf("%s as the agent: %v, want ErrForbidden", name, err)
+				}
+			})
+		}
+	}
+}

@@ -3,9 +3,16 @@
 package deployments
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xraph/grove"
+	"github.com/xraph/vault/crypto"
+	"github.com/xraph/vault/secret"
+	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
@@ -126,5 +133,72 @@ func TestBindingReaper_projectDeletion(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("%s isn't reported: %q", want, got)
 		}
+	}
+}
+
+// TestBindingReaper_sweepsVault deletes an environment whose credentials sit
+// in Vault's own tables, as they do in production, and checks every key
+// under it goes, the ones no binding names included, while every other
+// environment's stay.
+func TestBindingReaper_sweepsVault(t *testing.T) {
+	ctx := t.Context()
+	pg := reapDatabase(t)
+	db, err := grove.Open(pg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := crypto.NewEncryptor(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := NewVaultResourceSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(ResourceVaultAppID)))
+	plans, prj := planning.NewPgStore(pg), projects.NewPgStore(pg)
+	keys := map[string][]string{}
+	for _, env := range []string{"env_1", "env_2"} {
+		for _, field := range resourceCredentialFields {
+			keys[env] = append(keys[env], resourceKey("org_1", env, "orders", field))
+		}
+		keys[env] = append(keys[env], extraKeys(env)...)
+		b := &planning.Binding{
+			ID: "db_" + env, OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: env,
+			Subject: planning.ResourceSubject, Name: "orders", Engine: "postgres",
+			Provider: "cloud-sql", Region: "us-central1", ExternalID: "orders-" + env,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		if err = plans.PutBinding(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range append(append(append([]string{}, keys["env_1"]...), keys["env_2"]...), neighbourKeys...) {
+		if err = vault.Put(ctx, k, []byte("secret")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored := func(k string) bool {
+		_, gerr := vault.Get(ctx, k)
+		if gerr != nil && !errors.Is(gerr, ErrNoCredential) {
+			t.Fatal(gerr)
+		}
+		return gerr == nil
+	}
+	w := &warnings{}
+	svc := projects.NewService(prj, allowAll{}, nil, nil)
+	svc.AddReaper(&BindingReaper{Bindings: plans, Environments: prj, Secrets: vault, Warn: w.warn})
+
+	if err = svc.DeleteEnvironment(ctx, security.Principal{UserID: "usr_1", OrgID: "org_1"}, "proj_1", "env_2"); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys["env_2"] {
+		if stored(k) {
+			t.Fatalf("%s is still in Vault after its environment was deleted", k)
+		}
+	}
+	for _, k := range append(append([]string{}, keys["env_1"]...), neighbourKeys...) {
+		if !stored(k) {
+			t.Fatalf("%s went with an environment it isn't in", k)
+		}
+	}
+	if got := w.all(); !strings.Contains(got, "orders-env_2 on cloud-sql in us-central1") || strings.Contains(got, "list the credentials") {
+		t.Fatalf("the leftover isn't reported, or the sweep failed: %q", got)
 	}
 }

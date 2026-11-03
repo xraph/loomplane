@@ -116,8 +116,19 @@ func (s *FailedCleanups) candidate(ctx context.Context, org, id string, accepted
 	return d, plan, a, hex.EncodeToString(sum[:]), nil
 }
 
+// require checks perm on the failed deployment's project, so a team's
+// grant there counts. A deployment outside the caller's organization is
+// ErrNotFound, as reading it would be.
+func (s *FailedCleanups) require(ctx context.Context, p security.Principal, perm security.Permission, deploymentID string) error {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, deploymentID)
+	if err != nil {
+		return err
+	}
+	return s.runner.authz.Require(ctx, p, perm, d.ProjectID)
+}
+
 func (s *FailedCleanups) Preview(ctx context.Context, p security.Principal, id string) (*CleanupReview, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
 	}
 	if s.managed != nil {
@@ -167,14 +178,14 @@ func (s *FailedCleanups) load(ctx context.Context, org, id string) (*FailedClean
 }
 
 func (s *FailedCleanups) Get(ctx context.Context, p security.Principal, id string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentRead, id); err != nil {
 		return nil, err
 	}
 	return s.load(ctx, p.OrgID, id)
 }
 
 func (s *FailedCleanups) Apply(ctx context.Context, p security.Principal, id, revision string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
 	}
 	if revision == "" {
@@ -268,7 +279,7 @@ func (s *FailedCleanups) Apply(ctx context.Context, p security.Principal, id, re
 }
 
 func (s *FailedCleanups) Retry(ctx context.Context, p security.Principal, id string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
 	}
 	if s.managed != nil {
@@ -343,6 +354,9 @@ func (s *FailedCleanups) RecoverFailedCleanups(ctx context.Context) error {
 
 // RunFailedCleanup replays only the accepted deletion, never its creation stages.
 func (s *FailedCleanups) RunFailedCleanup(ctx context.Context, org, id string, attempt int, heartbeat func([]byte) error) error {
+	// The removal runs as the deployment's approver, which may be the
+	// agent: cleaning up its own deployment is part of running it.
+	ctx = security.WithDeploymentRun(ctx)
 	if s.managed != nil {
 		_, err := s.managed.CurrentFailedCleanup(ctx, org, id)
 		if err == nil {

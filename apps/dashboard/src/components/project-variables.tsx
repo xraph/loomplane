@@ -53,7 +53,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { cn } from "@/lib/utils"
 import { layerLabel, ownLayer, reachLabel, type Target } from "@/lib/variables"
 
@@ -71,9 +71,12 @@ interface ServiceOption {
 export function ProjectVariables({
   project,
   environments,
+  environment,
 }: {
   project: Project
   environments: Environment[]
+  /** The environment to open on, such as one chosen from its row. */
+  environment?: string
 }) {
   // The composed graph names services the way the API checks them, with
   // the alias of the repository each comes from.
@@ -89,7 +92,12 @@ export function ProjectVariables({
       name: several && s.source ? `${s.name} (${s.source})` : s.name,
     }))
   return (
-    <Panel project={project} environments={environments} services={services} />
+    <Panel
+      project={project}
+      environments={environments}
+      services={services}
+      initialEnvironment={environment}
+    />
   )
 }
 
@@ -97,14 +105,16 @@ function Panel({
   project,
   environments,
   services,
+  initialEnvironment = "",
 }: {
   project: Project
   environments: Environment[]
   services: ServiceOption[]
+  initialEnvironment?: string
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayManage = can("variable:manage")
-  const [chosenEnv, setEnv] = useState("")
+  const [chosenEnv, setEnv] = useState(initialEnvironment)
   const [chosenService, setService] = useState("")
   // Fall back when the chosen one is deleted, instead of syncing state in
   // an effect.

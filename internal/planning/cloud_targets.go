@@ -529,7 +529,9 @@ func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest
 		if repo == "" && len(in.Graph.Sources) == 1 {
 			repo = in.Graph.Sources[0].Alias
 		}
-		if held || in.Held[repo] {
+		// A service the plan doesn't name stays as it runs, or isn't
+		// created, so its Cloud target is settled no more than a held one's.
+		if held || in.Held[repo] || (len(in.Only) > 0 && !in.Only[name]) {
 			s.CloudTarget, s.CloudTags = "", nil
 			for env, override := range s.Environments {
 				override.CloudTarget, override.CloudTags = "", nil

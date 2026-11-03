@@ -194,7 +194,11 @@ type IdentityConfig struct {
 	AppID string
 	// PublishableKey is the authsome app's public key.
 	PublishableKey string
-	// RequireEmailVerification makes sign-in wait for a verified email.
+	// EmailVerification is identity.require_email_verification as set.
+	// Nil, the default, means on wherever the instance can send mail.
+	EmailVerification *bool
+	// RequireEmailVerification is the setting resolved: whether an account
+	// must verify its email before it can sign in or use the API.
 	RequireEmailVerification bool
 	// SessionCookie names the HttpOnly cookie the dashboard's session is
 	// kept in. Cookies are shared by every port on a host, so two authsome
@@ -359,8 +363,13 @@ func Defaults() Config {
 		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
 		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
-		AI:       AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
-		Push:     PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		AI: AIConfig{
+			Provider:  AIProviderAnthropic,
+			Model:     DefaultAIModel,
+			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
+		},
+		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
 }
 
@@ -421,11 +430,12 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.BasePath, "identity.base_path")
 	r.str(&c.Identity.AppID, "identity.app_id")
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
-	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
+	r.optionalBool(&c.Identity.EmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
 	r.str(&c.Console.Path, "console.path")
 	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
+	r.str(&c.Notifications.MailDir, "notifications.mail_dir")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
@@ -489,6 +499,16 @@ func FromSource(src Getter) (Config, error) {
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
 	r.boolean(&c.AI.Enabled, "ai.enabled")
+	r.str(&c.AI.Provider, "ai.provider")
+	r.str(&c.AI.APIKey, "ai.api_key")
+	r.str(&c.AI.BaseURL, "ai.base_url")
+	r.str(&c.AI.Model, "ai.model")
+	r.prices(&c.AI.Prices, "ai.prices")
+	r.str(&c.AI.Knowledge.EmbeddingProvider, "ai.knowledge.embedding_provider")
+	r.str(&c.AI.Knowledge.EmbeddingAPIKey, "ai.knowledge.embedding_api_key")
+	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
+	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
+	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
 	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
@@ -514,6 +534,12 @@ func FromSource(src Getter) (Config, error) {
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
 	}
+	// Unset, verification follows mail: on wherever the code can be sent,
+	// since without mail nobody after the setup owner could verify.
+	c.Identity.RequireEmailVerification = c.Notifications.MailEnabled()
+	if c.Identity.EmailVerification != nil {
+		c.Identity.RequireEmailVerification = *c.Identity.EmailVerification
+	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -524,6 +550,9 @@ func FromSource(src Getter) (Config, error) {
 func (c *Config) Validate() error {
 	var errs []error
 	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
+	if c.AI.Enabled {
+		errs = append(errs, c.AI.Validate(c.Environment))
+	}
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
@@ -602,6 +631,9 @@ func (c *Config) productionChecks() []error {
 	if c.SecretKey == devSecretKey {
 		errs = append(errs, errors.New("production refuses the development secret_key; set LOOMPLANE_SECRET_KEY"))
 	}
+	if c.Identity.RequireEmailVerification && !c.Notifications.MailEnabled() {
+		errs = append(errs, errors.New("identity.require_email_verification is on but email is off, so nobody could get a code; set up SMTP or Resend, or set LOOMPLANE_REQUIRE_EMAIL_VERIFICATION=false"))
+	}
 	if strings.HasPrefix(c.PublicURL, "http://") {
 		errs = append(errs, errors.New("production needs an https public_url"))
 	}
@@ -658,6 +690,37 @@ func (r *reader) plugins(dst *[]PluginConfig, key string) {
 			return ""
 		}
 		*dst = append(*dst, PluginConfig{URL: get("url"), Token: get("token")})
+	}
+}
+
+// prices reads a list of {provider, model, input_per_million,
+// output_per_million}.
+func (r *reader) prices(dst *[]AIPrice, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {provider, model, input_per_million, output_per_million}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{provider, model, input_per_million, output_per_million}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, AIPrice{
+			Provider: get("provider"), Model: get("model"),
+			InputPerMillion: get("input_per_million"), OutputPerMillion: get("output_per_million"),
+		})
 	}
 }
 

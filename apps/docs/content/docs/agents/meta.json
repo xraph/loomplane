@@ -1,4 +1,9 @@
 {
   "title": "AI agents",
-  "pages": ["mcp-server"]
+  "pages": [
+    "built-in-agent",
+    "workspace-settings",
+    "what-needs-a-person",
+    "mcp-server"
+  ]
 }

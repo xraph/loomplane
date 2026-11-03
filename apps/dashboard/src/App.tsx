@@ -17,11 +17,11 @@ import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
+import { AgentProvider } from "@/lib/features"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
-import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
@@ -50,11 +50,11 @@ function authTitle(path: string) {
 }
 
 export function App() {
-  const { isLoading, isAuthenticated } = useAuth()
+  const { isLoading, isAuthenticated, user } = useAuth()
   const path = usePath()
 
   const invite = usePendingInvite()
-  const { setupPending } = useInstance()
+  const { setupPending, requireEmailVerification } = useInstance()
 
   if (isLoading) return <PageLoading />
   // A fresh instance has nobody to sign in as: every address leads to setup,
@@ -71,11 +71,28 @@ export function App() {
   if (!setupPending && path === "/setup") {
     return <Navigate to="/sign-in" replace />
   }
+  // A signed-in account whose email is already verified has no code to
+  // enter, so the verify page would only ask for one that doesn't exist.
+  if (path === "/verify-email" && isAuthenticated && user?.email_verified) {
+    return <Navigate to="/" replace />
+  }
   if (recoveryPaths.includes(path)) {
     return (
       <AuthLayout title={authTitle(path)}>
         <Outlet />
       </AuthLayout>
+    )
+  }
+  // Sign-up leaves a session behind before the email is verified, so a
+  // second tab arrives signed in. The API refuses that session; send it to
+  // verify its email instead of into pages that would all fail.
+  if (isAuthenticated && requireEmailVerification && !user?.email_verified) {
+    return (
+      <Navigate
+        to="/verify-email"
+        search={{ email: user?.email ?? "" }}
+        replace
+      />
     )
   }
   if (!isAuthenticated) {
@@ -94,15 +111,16 @@ export function App() {
     )
   }
   if (authPaths.includes(path)) return <AuthRedirect authenticated />
-  if (invite) return <AcceptInvitation token={invite} />
-  // An invitation link without its token: the route says so on a page of
-  // its own, since no workspace is involved yet.
+  // The invitation has a page of its own, outside any workspace. Wherever
+  // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }
 
 function SignedIn() {
   const router = useRouter()
+  const path = usePath()
   const workspace = useRouterState({
     select: (state) => requestedWorkspace(state.location),
   })
@@ -118,7 +136,16 @@ function SignedIn() {
           case "loading":
             return <PageLoading />
           case "needs-organization":
-            return <Onboarding activate={state.activate} />
+            // Its own address, as setup has, rather than whichever page
+            // you asked for, which there's no workspace to show.
+            return (
+              <>
+                {path !== "/onboarding" && (
+                  <Navigate to="/onboarding" replace />
+                )}
+                <Onboarding activate={state.activate} />
+              </>
+            )
           case "error":
             return (
               <Problem
@@ -141,6 +168,8 @@ function Shell() {
   const path = usePath()
   const addressPending = useWorkspaceAddress()
   if (addressPending) return <PageLoading />
+  // A new workspace starts in the onboarding frame, not inside this one.
+  if (path === "/workspaces/new") return <Outlet />
   if (missing) {
     const current = organizations.find((o) => o.id === session.orgId)
     return (
@@ -153,14 +182,17 @@ function Shell() {
   }
   return (
     <ShellProvider>
-      <SidebarProvider>
-        <AppSidebar />
-        {/* Keyed on the organization, so switching remounts every page. */}
-        <SidebarInset key={session.orgId} className="min-w-0">
-          <Outlet />
-          <AppStatusBar />
-        </SidebarInset>
-      </SidebarProvider>
+      {/* Keyed on the organization: the agent is on or off per workspace. */}
+      <AgentProvider key={session.orgId}>
+        <SidebarProvider>
+          <AppSidebar />
+          {/* Keyed on the organization, so switching remounts every page. */}
+          <SidebarInset key={session.orgId} className="min-w-0">
+            <Outlet />
+            <AppStatusBar />
+          </SidebarInset>
+        </SidebarProvider>
+      </AgentProvider>
     </ShellProvider>
   )
 }

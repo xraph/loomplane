@@ -1,0 +1,62 @@
+---
+title: The built-in agent
+description: Turn on Loomplane's own AI agent, choose what it runs on, and see what changes when it's off.
+---
+
+Loomplane can run an infrastructure agent inside the server. It reads your projects, plans and deploys the way a teammate would, and stops to ask a person whenever a change needs one. It's off until you turn it on, and with it off nothing about Loomplane changes: no model call, no agent route, no agent page, no worker.
+
+## Turn it on
+
+Two switches, one for the server and one for each workspace. An operator sets the server's, then a workspace admin sets the workspace's.
+
+```bash
+export LOOMPLANE_AI_ENABLED=true
+```
+
+Restart Loomplane. The same setting in `config.local.yaml`:
+
+```yaml
+ai:
+  enabled: true
+  provider: anthropic          # anthropic, openai or openai-compatible
+  api_key: ""                  # optional, see below
+  model: claude-sonnet-5-5
+```
+
+Then open **Settings, AI** as a workspace admin (`ai:manage`), pick a provider, give the agent a monthly budget and switch it on. [Workspace settings](/docs/agents/workspace-settings) walks through the page.
+
+## The server's key is optional
+
+`ai.api_key` is the key the agent uses when a workspace doesn't bring its own. Leave it empty and every workspace has to add a key of its own before it can turn the agent on. Set it and a workspace can choose **Server default** and spend your key, within the budget its admin sets.
+
+| Key | What it does |
+|---|---|
+| `ai.enabled` | Turns the agent's routes, pages and workers on for the whole server. Default `false` |
+| `ai.provider` | The server's provider: `anthropic`, `openai` or `openai-compatible` |
+| `ai.api_key` | The server's key. Optional |
+| `ai.base_url` | Required for `openai-compatible`, an optional override otherwise |
+| `ai.model` | The server's default model. Defaults to `claude-sonnet-5-5` |
+| `ai.prices` | Prices for models the built-in catalog doesn't know, per million tokens in USD |
+| `ai.knowledge.*` | One embedding model for the whole server, see below |
+
+The agent only runs on models Loomplane can price, so a model that isn't in the catalog needs an entry in `ai.prices` first. Prices come from the server's config, never from a workspace.
+
+## What it's built on
+
+Four libraries from the same family do the work, and Loomplane carries no AI plumbing of its own on top of them. Cortex runs the agent: its steps, its tool calls and the pauses where it waits for a person. Nexus talks to the model provider and counts what each workspace spends. Shield scans what goes into the model (build logs, commit messages, anything from outside Loomplane) and what comes out, so a secret doesn't leave in a notification. Weave stores and searches the documents the agent can read.
+
+Their tables migrate with the rest of Loomplane even when the agent is off, so turning it on never needs a migration step.
+
+## Knowledge
+
+Knowledge lets the agent search Loomplane's own documentation and your workspace's documents before it answers. It needs two things on the server: the pgvector extension in your Postgres, and an embedding model set under `ai.knowledge` (`embedding_provider`, `embedding_model` and usually `embedding_api_key`). If either is missing, the knowledge switch on the settings page stays off and says which. The agent works fine without it.
+
+## When it's off
+
+With `ai.enabled` false, the sidebar has no AI group and no Agent item, `/agent/...` and `/api/v1/ai/...` answer 404, and `loomctl agent` tells you the server doesn't run the agent. Turning a workspace's agent off while the server stays on cancels its running work and its pending requests, stops billing against the workspace and takes the agent's role away.
+
+## How it relates to the MCP server
+
+[`loomctl mcp`](/docs/agents/mcp-server) and the built-in agent do different jobs. The MCP server hands your own key's tools to an agent that lives outside Loomplane, such as Claude Code. The built-in agent runs inside Loomplane as the workspace's agent. Both are built from one definition of every operation, so a tool means the same thing whichever one calls it.
+
+What the agent may do alone, and what always waits for you, is on [What needs a person](/docs/agents/what-needs-a-person).

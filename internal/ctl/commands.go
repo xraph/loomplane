@@ -83,6 +83,7 @@ func (a *App) sudoSettings() (Settings, error) {
 func (a *App) ownCommands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
+		a.agentCommand(),
 		a.federationCommand(),
 		a.cloudsCommand(),
 		a.cloudTargetsCommand(),
@@ -99,6 +100,7 @@ func (a *App) ownCommands() []cli.Command {
 		a.retirementsCommand(),
 		a.servicesCommand(),
 		a.storageCommand(),
+		a.teamsCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
 			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
 			cli.WithFlags(
@@ -113,7 +115,11 @@ func (a *App) ownCommands() []cli.Command {
 				cli.WithUsage("projects create <name> --repo acme/web --repo billing=other/web"),
 				cli.WithFlags(
 					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
-					jsonFlag)))),
+					jsonFlag))),
+			cli.WithSubcommand(cli.NewCommand("team", "Name the team responsible for a project, or clear it", a.projectTeam,
+				cli.WithUsage("projects team <project> <team> | projects team <project> --none"),
+				cli.WithFlag(cli.NewBoolFlag("none", "", "Clear the responsible team", false)))),
+		),
 		cli.NewCommand("analyze", "Read a project's repositories and find their services", a.analyze,
 			cli.WithUsage("analyze <project> [--source web] [--ref main]"),
 			cli.WithFlags(
@@ -140,8 +146,9 @@ func (a *App) ownCommands() []cli.Command {
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
 			cli.WithUsage("show <plan-id>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("approve", "Approve a plan, which deploys it", a.approve,
-			cli.WithUsage("approve <plan-id> [--yes] [--note ...]"),
+			cli.WithUsage("approve <plan-id> [--revision <rev>] [--yes] [--note ...]"),
 			cli.WithFlags(
+				cli.NewStringFlag("revision", "", "Approve only if the plan is still at this revision, such as the one the agent asked about", ""),
 				cli.NewStringFlag("note", "", "Why, for the record", ""),
 				cli.NewBoolFlag("yes", "y", "Don't ask first", false),
 				cli.NewBoolFlag("no-wait", "", "Approve and return without following the deployment", false))),
@@ -160,8 +167,8 @@ func (a *App) ownCommands() []cli.Command {
 		cli.NewCommand("resume", "Check capacity again for a deployment paused for it", a.resume,
 			cli.WithUsage("resume <deployment-id> --revision <n>"),
 			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
-		cli.NewCommand("cancel", "Cancel a deployment paused for capacity; finished steps stay", a.cancel,
-			cli.WithUsage("cancel <deployment-id> --revision <n>"),
+		cli.NewCommand("cancel", "Cancel a running deployment, or one paused for capacity; finished steps stay", a.cancel,
+			cli.WithUsage("cancel <deployment-id> [--revision <n>]"),
 			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
 		cli.NewCommand("status", "What runs each of a project's services and resources, and any drift", a.status,
 			cli.WithUsage("status <project>"), cli.WithFlag(jsonFlag)),
@@ -542,6 +549,9 @@ func (a *App) approve(ctx cli.CommandContext) error {
 	}
 	if plan.Status != "ready" {
 		return fmt.Errorf("plan %s is %s, so there's nothing to approve", plan.ID, plan.Status)
+	}
+	if want := ctx.String("revision"); want != "" && want != plan.Revision {
+		return fmt.Errorf("plan %s is at revision %s now, not %s; read it again before you approve", plan.ID, plan.Revision, want)
 	}
 	a.printPlan(plan)
 	if !ctx.Bool("yes") {

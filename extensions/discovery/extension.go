@@ -112,6 +112,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.svc); err != nil {
+		return fmt.Errorf("provide the discovery service: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}

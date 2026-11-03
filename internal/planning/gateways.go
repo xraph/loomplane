@@ -95,10 +95,11 @@ func (p *planner) route(name, path string, a *Action, to string) (string, bool) 
 		// A held service that runs nowhere yet isn't created, so there's
 		// nothing to route to until a plan moves its repository.
 		if alias, held := p.heldNew[to]; held {
-			p.problem(Finding{
-				Code: "need-held", Subject: ServiceSubject, Name: name, Path: path,
-				Message: fmt.Sprintf("%s routes to %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, to, alias, alias, to, p.in.Environment, alias),
-			})
+			msg := fmt.Sprintf("%s routes to %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, to, alias, alias, to, p.in.Environment, alias)
+			if p.unpicked[to] {
+				msg = fmt.Sprintf("%s routes to %s, which isn't part of this deploy and doesn't run in %s yet, so add %s to this deploy.", name, to, p.in.Environment, to)
+			}
+			p.problem(Finding{Code: "need-held", Subject: ServiceSubject, Name: name, Path: path, Message: msg})
 			return "", false
 		}
 		// It couldn't be planned, and a problem says why, or it's off.

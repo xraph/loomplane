@@ -231,6 +231,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
 		}},
+		{http.MethodPost, "/deployments/:id/cancel", e.cancelDeployment, []forge.RouteOption{
+			forge.WithName("deployments.cancel"),
+			forge.WithSummary("Cancel a running deployment before its next step, or a paused one at once; steps that finished stay as they are"),
+			forge.WithResponseSchema(http.StatusOK, "The deployment, cancelled or stopping before its next step", deployments.Deployment{}),
+		}},
 		{http.MethodPost, "/deployments/:id/capacity/resume", e.resumeCapacity, []forge.RouteOption{
 			forge.WithName("deployments.resumeCapacity"),
 			forge.WithSummary("Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries"),
@@ -636,6 +641,18 @@ func (e *Extension) retryDeployment(c forge.Context) error {
 		return err
 	}
 	d, err := e.deploys.Retry(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) cancelDeployment(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	d, err := e.deploys.Cancel(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
 		return fail(err)
 	}

@@ -16,13 +16,16 @@ import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
-import { Route as NotificationsRouteImport } from "./routes/notifications"
+import { Route as OnboardingRouteImport } from "./routes/onboarding"
 import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
 import { Route as SetupRouteImport } from "./routes/setup"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
+import { Route as TeamsRouteImport } from "./routes/teams"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
+import { Route as WebhooksRouteImport } from "./routes/webhooks"
+import { Route as AgentRequestsRouteImport } from "./routes/agent.requests"
 import { Route as AiSettingsRouteImport } from "./routes/ai.settings"
 import { Route as CloudsIndexRouteImport } from "./routes/clouds.index"
 import { Route as CloudsIdRouteImport } from "./routes/clouds.$id"
@@ -33,14 +36,19 @@ import { Route as DesignDeploymentRouteImport } from "./routes/design.deployment
 import { Route as DomainsIndexRouteImport } from "./routes/domains.index"
 import { Route as DomainsZoneIdRouteImport } from "./routes/domains.$zoneId"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
+import { Route as IntegrationsResourcesRouteImport } from "./routes/integrations.resources"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as NodesIndexRouteImport } from "./routes/nodes.index"
 import { Route as NodesIdRouteImport } from "./routes/nodes.$id"
+import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
+import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
+import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
@@ -86,9 +94,9 @@ const MembersRoute = MembersRouteImport.update({
   path: "/members",
   getParentRoute: () => rootRouteImport,
 } as any)
-const NotificationsRoute = NotificationsRouteImport.update({
-  id: "/notifications",
-  path: "/notifications",
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: "/onboarding",
+  path: "/onboarding",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -111,6 +119,11 @@ const SignUpRoute = SignUpRouteImport.update({
   path: "/sign-up",
   getParentRoute: () => rootRouteImport,
 } as any)
+const TeamsRoute = TeamsRouteImport.update({
+  id: "/teams",
+  path: "/teams",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VariablesRoute = VariablesRouteImport.update({
   id: "/variables",
   path: "/variables",
@@ -119,6 +132,16 @@ const VariablesRoute = VariablesRouteImport.update({
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: "/verify-email",
   path: "/verify-email",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WebhooksRoute = WebhooksRouteImport.update({
+  id: "/webhooks",
+  path: "/webhooks",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentRequestsRoute = AgentRequestsRouteImport.update({
+  id: "/agent/requests",
+  path: "/agent/requests",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AiSettingsRoute = AiSettingsRouteImport.update({
@@ -171,6 +194,11 @@ const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   path: "/integrations/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsResourcesRoute = IntegrationsResourcesRouteImport.update({
+  id: "/integrations/resources",
+  path: "/integrations/resources",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   id: "/invitations/accept",
   path: "/invitations/accept",
@@ -184,6 +212,16 @@ const NodesIndexRoute = NodesIndexRouteImport.update({
 const NodesIdRoute = NodesIdRouteImport.update({
   id: "/nodes/$id",
   path: "/nodes/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsIndexRoute = NotificationsIndexRouteImport.update({
+  id: "/notifications/",
+  path: "/notifications/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
+  id: "/notifications/settings",
+  path: "/notifications/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -209,6 +247,16 @@ const ServicesIndexRoute = ServicesIndexRouteImport.update({
 const ServicesKindRoute = ServicesKindRouteImport.update({
   id: "/services/$kind",
   path: "/services/$kind",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
+  id: "/services/catalog",
+  path: "/services/catalog",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
+  id: "/workspaces/new",
+  path: "/workspaces/new",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AiModelsIndexRoute = AiModelsIndexRouteImport.update({
@@ -270,28 +318,36 @@ export interface FileRoutesByFullPath {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
-  "/notifications": typeof NotificationsRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
+  "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/nodes/": typeof NodesIndexRoute
+  "/notifications/": typeof NotificationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -313,28 +369,36 @@ export interface FileRoutesByTo {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
-  "/notifications": typeof NotificationsRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
+  "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
   "/domains": typeof DomainsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
   "/nodes": typeof NodesIndexRoute
+  "/notifications": typeof NotificationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
   "/resources": typeof ResourcesIndexRoute
   "/services": typeof ServicesIndexRoute
@@ -357,28 +421,36 @@ export interface FileRoutesById {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
-  "/notifications": typeof NotificationsRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/webhooks": typeof WebhooksRoute
+  "/agent/requests": typeof AgentRequestsRoute
   "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
+  "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
+  "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/nodes/": typeof NodesIndexRoute
+  "/notifications/": typeof NotificationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -402,28 +474,36 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
-    | "/notifications"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
+    | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/nodes/$id"
+    | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
+    | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
     | "/integrations/"
     | "/nodes/"
+    | "/notifications/"
     | "/projects/"
     | "/resources/"
     | "/services/"
@@ -445,28 +525,36 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
-    | "/notifications"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
+    | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/nodes/$id"
+    | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
+    | "/workspaces/new"
     | "/clouds"
     | "/deployments"
     | "/domains"
     | "/integrations"
     | "/nodes"
+    | "/notifications"
     | "/projects"
     | "/resources"
     | "/services"
@@ -488,28 +576,36 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
-    | "/notifications"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
+    | "/webhooks"
+    | "/agent/requests"
     | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/nodes/$id"
+    | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
+    | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
     | "/integrations/"
     | "/nodes/"
+    | "/notifications/"
     | "/projects/"
     | "/resources/"
     | "/services/"
@@ -532,28 +628,36 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
-  NotificationsRoute: typeof NotificationsRoute
+  OnboardingRoute: typeof OnboardingRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SetupRoute: typeof SetupRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
+  TeamsRoute: typeof TeamsRoute
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  WebhooksRoute: typeof WebhooksRoute
+  AgentRequestsRoute: typeof AgentRequestsRoute
   AiSettingsRoute: typeof AiSettingsRoute
   CloudsIdRoute: typeof CloudsIdRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
   DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
   DomainsZoneIdRoute: typeof DomainsZoneIdRoute
+  IntegrationsResourcesRoute: typeof IntegrationsResourcesRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NodesIdRoute: typeof NodesIdRoute
+  NotificationsSettingsRoute: typeof NotificationsSettingsRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
+  ServicesCatalogRoute: typeof ServicesCatalogRoute
+  WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   DomainsIndexRoute: typeof DomainsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   NodesIndexRoute: typeof NodesIndexRoute
+  NotificationsIndexRoute: typeof NotificationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
@@ -619,11 +723,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof MembersRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/notifications": {
-      id: "/notifications"
-      path: "/notifications"
-      fullPath: "/notifications"
-      preLoaderRoute: typeof NotificationsRouteImport
+    "/onboarding": {
+      id: "/onboarding"
+      path: "/onboarding"
+      fullPath: "/onboarding"
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/reset-password": {
@@ -654,6 +758,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SignUpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/teams": {
+      id: "/teams"
+      path: "/teams"
+      fullPath: "/teams"
+      preLoaderRoute: typeof TeamsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/variables": {
       id: "/variables"
       path: "/variables"
@@ -666,6 +777,20 @@ declare module "@tanstack/react-router" {
       path: "/verify-email"
       fullPath: "/verify-email"
       preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/webhooks": {
+      id: "/webhooks"
+      path: "/webhooks"
+      fullPath: "/webhooks"
+      preLoaderRoute: typeof WebhooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/agent/requests": {
+      id: "/agent/requests"
+      path: "/agent/requests"
+      fullPath: "/agent/requests"
+      preLoaderRoute: typeof AgentRequestsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/ai/settings": {
@@ -738,6 +863,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/resources": {
+      id: "/integrations/resources"
+      path: "/integrations/resources"
+      fullPath: "/integrations/resources"
+      preLoaderRoute: typeof IntegrationsResourcesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/invitations/accept": {
       id: "/invitations/accept"
       path: "/invitations/accept"
@@ -757,6 +889,20 @@ declare module "@tanstack/react-router" {
       path: "/nodes/$id"
       fullPath: "/nodes/$id"
       preLoaderRoute: typeof NodesIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/notifications/": {
+      id: "/notifications/"
+      path: "/notifications"
+      fullPath: "/notifications/"
+      preLoaderRoute: typeof NotificationsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/notifications/settings": {
+      id: "/notifications/settings"
+      path: "/notifications/settings"
+      fullPath: "/notifications/settings"
+      preLoaderRoute: typeof NotificationsSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/projects/": {
@@ -792,6 +938,20 @@ declare module "@tanstack/react-router" {
       path: "/services/$kind"
       fullPath: "/services/$kind"
       preLoaderRoute: typeof ServicesKindRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/services/catalog": {
+      id: "/services/catalog"
+      path: "/services/catalog"
+      fullPath: "/services/catalog"
+      preLoaderRoute: typeof ServicesCatalogRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/workspaces/new": {
+      id: "/workspaces/new"
+      path: "/workspaces/new"
+      fullPath: "/workspaces/new"
+      preLoaderRoute: typeof WorkspacesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/ai/models/": {
@@ -868,28 +1028,36 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
-  NotificationsRoute: NotificationsRoute,
+  OnboardingRoute: OnboardingRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SetupRoute: SetupRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
+  TeamsRoute: TeamsRoute,
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  WebhooksRoute: WebhooksRoute,
+  AgentRequestsRoute: AgentRequestsRoute,
   AiSettingsRoute: AiSettingsRoute,
   CloudsIdRoute: CloudsIdRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
   DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,
   DomainsZoneIdRoute: DomainsZoneIdRoute,
+  IntegrationsResourcesRoute: IntegrationsResourcesRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NodesIdRoute: NodesIdRoute,
+  NotificationsSettingsRoute: NotificationsSettingsRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
+  ServicesCatalogRoute: ServicesCatalogRoute,
+  WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
   DomainsIndexRoute: DomainsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   NodesIndexRoute: NodesIndexRoute,
+  NotificationsIndexRoute: NotificationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,

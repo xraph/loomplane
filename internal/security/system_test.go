@@ -82,6 +82,15 @@ func TestActorPrincipal(t *testing.T) {
 	if other.IsSystem() || other.IsServiceAccount() || other.Kind != KindUser {
 		t.Fatalf("org mismatch gave %+v", other)
 	}
+	// The organization's agent acts as itself, for no one.
+	if got := ActorPrincipal("o", "agent:o"); got != AgentPrincipal("o", nil) {
+		t.Fatalf("agent actor = %+v", got)
+	}
+	// Another organization's agent is a person here, who holds no role.
+	otherAgent := ActorPrincipal("o", "agent:other")
+	if otherAgent.IsAgent() || otherAgent.IsServiceAccount() || otherAgent != (Principal{OrgID: "o", UserID: "agent:other"}) {
+		t.Fatalf("agent org mismatch gave %+v", otherAgent)
+	}
 }
 
 func TestResolveRefusesSystemSubjects(t *testing.T) {

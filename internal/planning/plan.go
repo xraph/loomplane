@@ -725,6 +725,9 @@ type Plan struct {
 	Warnings         []Finding    `json:"warnings"`
 	Summary          Summary      `json:"summary"`
 	Executable       bool         `json:"executable"`
+	// Services are the manifest services the plan moves, sorted, or nil
+	// when it moves every one. The rest stay as they run.
+	Services []string `json:"services,omitempty"`
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud, settled when it was planned.
 	Connections map[string]string `json:"connections"`

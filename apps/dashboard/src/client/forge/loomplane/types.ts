@@ -89,6 +89,54 @@ export interface AddSourceInputBody {
   root?: string;
 }
 
+export interface AgentBudgetInputBody {
+  monthlyBudgetUsd: string;
+  revision: number;
+}
+
+export interface AgentUpdateInputBody {
+  enabled?: boolean;
+  knowledge?: boolean;
+  model?: string;
+  providerKey?: string;
+  revision: number;
+}
+
+export interface AgentView {
+  available: boolean;
+  budget: BudgetState;
+  effective: EffectiveView;
+  enabled: boolean;
+  key?: KeyView;
+  knowledge: boolean;
+  knowledgeStatus: KnowledgeStatus;
+  model: string;
+  nexusTenantId: string;
+  orgId: string;
+  problem?: string;
+  providerKey: string;
+  revision: number;
+  server: ServerDefaults;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface AgentrequestsTarget {
+  cloud?: string;
+  environment?: string;
+  key?: string;
+  planId?: string;
+  planRevision?: string;
+  repository?: string;
+  service?: string;
+}
+
+export interface AgentsettingsStatus {
+  enabled: boolean;
+  knowledge: boolean;
+  server: boolean;
+}
+
 export interface Allocation {
   environmentId?: string;
   label: string;
@@ -136,6 +184,10 @@ export interface AnalysisGraph {
 
 export interface AnalysisList {
   analyses: Analysis[];
+}
+
+export interface AnswerInputBody {
+  text: string;
 }
 
 export interface AppInputBody {
@@ -216,6 +268,11 @@ export interface AttachmentPrerequisites {
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
+}
+
+export interface AutonomyInputBody {
+  autonomousPromotion?: boolean;
+  minStagingSoakSeconds?: number;
 }
 
 export interface Backup {
@@ -307,6 +364,12 @@ export interface BudgetReview {
   digest: string;
   estimate: MoneyEstimate;
   policyRevision: number;
+}
+
+export interface BudgetState {
+  exhausted: boolean;
+  limitUsd: string;
+  spentUsd: string;
 }
 
 export interface Build {
@@ -1436,6 +1499,7 @@ export interface CreatePlanInputBody {
   environment: string;
   from?: string;
   scope?: string[];
+  services?: string[];
 }
 
 export interface CreateProjectInputBody {
@@ -1462,6 +1526,11 @@ export interface CreateTargetInputBody {
   region: string;
   runtime: string;
   tags?: string[];
+}
+
+export interface CreateTeamInputBody {
+  description?: string;
+  name: string;
 }
 
 export interface CreateVariableInputBody {
@@ -1532,6 +1601,10 @@ export interface DbgatewayRouteStatus {
 export interface DecideInputBody {
   note?: string;
   revision?: string;
+}
+
+export interface DeclineInputBody {
+  reason?: string;
 }
 
 export interface DefaultPlacement {
@@ -1635,6 +1708,7 @@ export interface DeployedRepository {
 
 export interface Deployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -1668,6 +1742,7 @@ export interface DeploymentList {
 
 export interface DeploymentsDeployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -1894,6 +1969,13 @@ export interface EditInputBody {
   settings?: Record<string, any>;
   target?: string;
 };
+}
+
+export interface EffectiveView {
+  baseUrl?: string;
+  model: string;
+  provider: string;
+  summaryModel: string;
 }
 
 export interface Embeddings {
@@ -2517,6 +2599,12 @@ export interface JoinTokenRequestBody {
   lifetimeMinutes?: number;
 }
 
+export interface KeyView {
+  hint: string;
+  name: string;
+  type: string;
+}
+
 export interface KeylessInputBody {
   connectionId: string;
   name: string;
@@ -2562,6 +2650,12 @@ export interface KindInfo {
   versions: string[];
 }
 
+export interface KnowledgeStatus {
+  available: boolean;
+  configured: boolean;
+  reason?: string;
+}
+
 export interface KubernetesRule {
   apiGroups: string[];
   resources: string[];
@@ -2582,6 +2676,11 @@ export interface LicenseInfo {
   note?: string;
   title: string;
   url: string;
+}
+
+export interface Link {
+  label: string;
+  path: string;
 }
 
 export interface LinkedService {
@@ -3385,6 +3484,7 @@ export interface Plan {
   release?: Release;
   revision: string;
   rollback?: Rollback;
+  services?: string[];
   sources: PlanSource[];
   status: string;
   summary: PlanningSummary;
@@ -3572,16 +3672,20 @@ export interface Profile {
 }
 
 export interface Project {
+  autonomousPromotion: boolean;
   color: string;
   createdAt: string;
   createdBy: string;
+  deploymentMode: string;
   description: string;
   exclusions: Exclusion[];
   icon: string;
   id: string;
+  minStagingSoakSeconds: number;
   name: string;
   orgId: string;
   repositories: string[];
+  responsibleTeamId: string;
   slug: string;
   status: string;
   updatedAt: string;
@@ -3612,6 +3716,10 @@ export interface ProjectGrant {
 
 export interface ProjectList {
   projects: Project[];
+}
+
+export interface ProjectPermissions {
+  permissions: string[];
 }
 
 export interface ProjectView {
@@ -3663,6 +3771,22 @@ export interface ProviderKey {
   type: string;
   updatedAt: string;
   updatedBy: string;
+}
+
+export interface ProviderKeyInputBody {
+  fields?: Record<string, any>;
+  models?: {
+  contextWindow?: number;
+  dimensions?: number;
+  embeddingPerMillion?: string;
+  id: string;
+  inputPerMillion: string;
+  maxOutput?: number;
+  outputPerMillion: string;
+  task: string;
+}[];
+  projects?: string[];
+  type: string;
 }
 
 export interface ProviderList {
@@ -3798,6 +3922,7 @@ export interface PublicConfig {
   consolePath?: string;
   features: Features;
   publishableKey: string;
+  requireEmailVerification: boolean;
   setupPending: boolean;
   setupTokenRequired: boolean;
   waitlist: boolean;
@@ -4062,6 +4187,52 @@ export interface RemoveRouteInputBody {
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
+}
+
+export interface Request {
+  answer: string;
+  answeredAt?: string;
+  answeredBy: string;
+  askedFor: string;
+  context: Link[];
+  createdAt: string;
+  environmentId: string;
+  expiresAt: string;
+  id: string;
+  kind: string;
+  options: string[];
+  orgId: string;
+  outcome: string;
+  projectId: string;
+  question: string;
+  routeNote: string;
+  routeSource: string;
+  runId: string;
+  status: string;
+  target: AgentrequestsTarget;
+  taskId: string;
+  teamId: string;
+  teamName: string;
+  teamReason: string;
+  updatedAt: string;
+}
+
+export interface RequestEvent {
+  askedFor: string;
+  createdAt: string;
+  id: string;
+  kind: string;
+  orgId: string;
+  projectId: string;
+  routeSource: string;
+  status: string;
+  teamId: string;
+  teamName: string;
+  updatedAt: string;
+}
+
+export interface RequestList {
+  requests: (Request | null)[];
 }
 
 export interface Requirement {
@@ -4630,6 +4801,10 @@ export interface ScalingPoolInputBody {
 };
 }
 
+export interface SecretInputBody {
+  value: string;
+}
+
 export interface Server {
   accelerator?: Accelerator;
   accountId: string;
@@ -4656,6 +4831,13 @@ export interface Server {
   stateRevision: number;
   status: string;
   updatedAt: string;
+}
+
+export interface ServerDefaults {
+  baseUrl?: string;
+  keySet: boolean;
+  model: string;
+  provider: string;
 }
 
 export interface ServerImage {
@@ -4847,6 +5029,15 @@ export interface SetDefaultPlacementInputBody {
   region: string;
 }) | null;
   revision: number;
+}
+
+export interface SetGrantInputBody {
+  projectId?: string;
+  role: string;
+}
+
+export interface SetTeamInputBody {
+  teamId?: string | null;
 }
 
 export interface Setting {
@@ -5125,6 +5316,53 @@ export interface TargetChoice {
   source: string;
 }
 
+export interface TaskEvent {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  orgId: string;
+  projectId: string;
+  requestedBy: string;
+  runId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
+}
+
+export interface Team {
+  createdAt: string;
+  description: string;
+  grants: TeamGrant[];
+  id: string;
+  members: TeamMember[];
+  name: string;
+  orgId: string;
+  slug: string;
+  updatedAt: string;
+}
+
+export interface TeamGrant {
+  id: string;
+  projectId: string;
+  role: string;
+}
+
+export interface TeamList {
+  teams: Team[];
+}
+
+export interface TeamMember {
+  addedAt: string;
+  email: string;
+  name: string;
+  userId: string;
+}
+
 export interface Tenant {
   createdAt: string;
   id: string;
@@ -5204,6 +5442,11 @@ export interface UpdateTargetInputBody {
   displayName: string;
   revision: number;
   tags?: string[];
+}
+
+export interface UpdateTeamInputBody {
+  description?: string;
+  name?: string;
 }
 
 export interface UpdateVariableInputBody {
@@ -5353,6 +5596,11 @@ export interface Workspace {
   path: string;
   source?: string;
   tool: string;
+}
+
+export interface WorkspaceBudgetInputBody {
+  monthlyBudgetUsd: string;
+  revision: number;
 }
 
 export interface Zone {

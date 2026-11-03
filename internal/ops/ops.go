@@ -484,6 +484,14 @@ type Status struct {
 
 // SchemaStatus compares the database's migrations with groups.
 func SchemaStatus(ctx context.Context, dsn string, groups []*migrate.Group) (*Status, error) {
+	return SchemaStatusWith(ctx, dsn, groups, nil)
+}
+
+// SchemaStatusWith is SchemaStatus that also knows optional, as
+// group:version: migrations this Loomplane runs on demand rather than in
+// groups. One the database has isn't Unknown, and one it lacks isn't
+// Pending.
+func SchemaStatusWith(ctx context.Context, dsn string, groups []*migrate.Group, optional []string) (*Status, error) {
 	o, done, err := orchestrator(ctx, dsn, groups)
 	if err != nil {
 		return nil, err
@@ -494,7 +502,10 @@ func SchemaStatus(ctx context.Context, dsn string, groups []*migrate.Group) (*St
 		return nil, err
 	}
 	s := &Status{}
-	known := map[string]bool{}
+	known := make(map[string]bool, len(optional))
+	for _, o := range optional {
+		known[o] = true
+	}
 	for _, g := range gs {
 		for _, m := range g.Applied {
 			s.Applied = append(s.Applied, m.Migration.Group+":"+m.Migration.Version+" "+m.Migration.Name)
@@ -535,7 +546,13 @@ var ErrPendingMigrations = errors.New("the database has migrations still to appl
 // one would read and write a schema it doesn't know. Pending migrations
 // are fine; starting applies them.
 func CheckCompatible(ctx context.Context, dsn string, groups []*migrate.Group) error {
-	s, err := SchemaStatus(ctx, dsn, groups)
+	return CheckCompatibleWith(ctx, dsn, groups, nil)
+}
+
+// CheckCompatibleWith is CheckCompatible that also knows optional, as
+// SchemaStatusWith does.
+func CheckCompatibleWith(ctx context.Context, dsn string, groups []*migrate.Group, optional []string) error {
+	s, err := SchemaStatusWith(ctx, dsn, groups, optional)
 	if err != nil {
 		return err
 	}

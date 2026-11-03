@@ -180,6 +180,9 @@ type Project struct {
 	Repositories []string  `json:"repositories,omitempty"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
+	// ResponsibleTeamID is the team that gets the project's requests and
+	// notices, empty for none.
+	ResponsibleTeamID string `json:"responsible_team_id"`
 }
 
 // NewProject is a project to create.
@@ -429,12 +432,20 @@ type Action struct {
 // whose watch or canary failed, is named wherever it acts.
 const AutomationName = "Loomplane automation"
 
+// AgentName is how the workspace's built-in agent is named wherever it
+// acts, such as on a plan it approved.
+const AgentName = "Loomplane agent"
+
 // ActorName is how to show a created_by, decided_by or started_by, such as
 // Plan.DecidedBy: "Loomplane automation" for the organization's automation
-// (loomplane:<org>), else the ID as given.
+// (loomplane:<org>), "Loomplane agent" for its built-in agent (agent:<org>),
+// else the ID as given.
 func ActorName(id string) string {
 	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
 		return AutomationName
+	}
+	if org, ok := strings.CutPrefix(id, "agent:"); ok && org != "" {
+		return AgentName
 	}
 	return id
 }
@@ -941,6 +952,13 @@ func (c *Client) DeploymentForPlan(ctx context.Context, planID string) (*Deploym
 func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, error) {
 	var d Deployment
 	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/retry", nil, &d)
+}
+
+// Cancel cancels a running deployment, or one paused for capacity. The
+// action that's running finishes and nothing after it starts.
+func (c *Client) Cancel(ctx context.Context, deploymentID string) (*Deployment, error) {
+	var d Deployment
+	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/cancel", nil, &d)
 }
 
 // Binding is what runs a service or resource in an environment now.

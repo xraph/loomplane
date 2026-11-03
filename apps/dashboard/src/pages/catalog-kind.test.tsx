@@ -17,7 +17,7 @@ import {
 import { initialDependencyPicks, type DependencyPicks } from "@/lib/catalog-add"
 import { defineCatalogKind } from "@/lib/catalog-kinds"
 import { CatalogKind } from "@/pages/catalog-kind"
-import { Services } from "@/pages/services"
+import { ServicesCatalog } from "@/pages/services-catalog"
 import { createDashboardRouter } from "@/router"
 
 const navigate = vi.hoisted(() => vi.fn())
@@ -628,7 +628,7 @@ test("registered application kinds follow the native service recipes", async () 
   })
   render(
     <ClientProvider client={forgeClient}>
-      <Services />
+      <ServicesCatalog />
     </ClientProvider>
   )
   const catalog = screen.getByRole("region", { name: "Catalog" })
@@ -678,7 +678,7 @@ test("hidden modules and dependency-only kinds stay out of the catalog", async (
   })
   render(
     <ClientProvider client={forgeClient}>
-      <Services />
+      <ServicesCatalog />
     </ClientProvider>
   )
   const catalog = screen.getByRole("region", { name: "Catalog" })
@@ -755,7 +755,7 @@ test("disposable catalog services don't inherit blanket durability claims", asyn
   serve({ kinds: () => json({ kinds: [appKind("memcached", "Memcached")] }) })
   render(
     <ClientProvider client={forgeClient}>
-      <Services />
+      <ServicesCatalog />
     </ClientProvider>
   )
   expect(
@@ -769,11 +769,7 @@ test("disposable catalog services don't inherit blanket durability claims", asyn
       /Databases and caches Loomplane runs for you, with persistent storage/
     )
   ).not.toBeInTheDocument()
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Browse catalog" })
-  )
   const search = screen.getByRole("searchbox", { name: "Search the catalog" })
-  expect(search).toHaveFocus()
   await userEvent.type(search, "not-a-real-service")
   expect(screen.getByText("Nothing in the catalog matches")).toBeVisible()
   await userEvent.click(screen.getByRole("button", { name: "Clear filters" }))

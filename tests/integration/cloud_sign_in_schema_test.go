@@ -18,8 +18,8 @@ import (
 	"github.com/xraph/loomplane/internal/ops"
 )
 
-// Signing in adds a method to connections, an app per organization and
-// cloud, a single-use pending sign-in, and a kind on the outbox.
+// Signing in adds a method to connections, an app per cloud for the whole
+// platform, a single-use pending sign-in, and a kind on the outbox.
 func TestCloudSignInSchema(t *testing.T) {
 	dsn := freshDatabase(t)
 	ctx := context.Background()
@@ -45,14 +45,14 @@ func TestCloudSignInSchema(t *testing.T) {
 		t.Fatalf("method = %q, want token", method)
 	}
 
-	insertApp := `INSERT INTO loomplane_oauth_apps (org_id, cloud, client_id, updated_by) VALUES ('org_1', 'gcp', 'client', 'usr_1')`
+	insertApp := `INSERT INTO loomplane_platform_oauth_apps (cloud, client_id, updated_by) VALUES ('gcp', 'client', 'usr_1')`
 	if _, err = conn.Exec(ctx, insertApp); err != nil {
 		t.Fatal(err)
 	}
 	_, err = conn.Exec(ctx, insertApp)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
-		t.Fatalf("second app for one org and cloud: err = %v, want a unique violation", err)
+		t.Fatalf("second app for one cloud: err = %v, want a unique violation", err)
 	}
 
 	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_oauth_sign_ins (state, org_id, user_id, cloud, name, expires_at)
@@ -138,8 +138,9 @@ func TestCloudSignInWebhookBackfill(t *testing.T) {
 	}
 }
 
-// Plan 2 adds who signed in, a slug per app, what a pending sign-in
-// needs to finish, and a place to say why an app stopped working.
+// Plan 2 adds who signed in, what a pending sign-in needs to finish, and
+// (before the apps went platform-wide) a slug per app and a place to say
+// why an app stopped working.
 func TestCloudSignInPeopleSchema(t *testing.T) {
 	dsn := freshDatabase(t)
 	ctx := context.Background()
@@ -177,14 +178,14 @@ func TestCloudSignInPeopleSchema(t *testing.T) {
 		t.Fatalf("settings = %q, verifier = %q, want {} and empty", settings, verifier)
 	}
 
-	insertProblem := `INSERT INTO loomplane_oauth_app_problems (org_id, cloud, message, at) VALUES ('org_1', 'vercel', 'bad secret', now())`
-	if _, err = conn.Exec(ctx, insertProblem); err != nil {
+	// The platform migration moves the problem onto the app row, and the
+	// per-organization tables are gone.
+	var olds bool
+	if err = conn.QueryRow(ctx, `SELECT to_regclass('loomplane_oauth_apps') IS NOT NULL OR to_regclass('loomplane_oauth_app_problems') IS NOT NULL`).Scan(&olds); err != nil {
 		t.Fatal(err)
 	}
-	_, err = conn.Exec(ctx, insertProblem)
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
-		t.Fatalf("second problem for one org and cloud: err = %v, want a unique violation", err)
+	if olds {
+		t.Fatal("a per-organization app table is still there")
 	}
 }
 
@@ -213,6 +214,20 @@ func TestCloudSignInPeopleMigrationGoesDownAndUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The platform migration came after this one, so it goes down first,
+	// which brings back the per-organization tables this one changes.
+	var platform *migrate.Migration
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "platform_oauth_apps" {
+			platform = m
+		}
+	}
+	if platform == nil {
+		t.Fatal("no platform_oauth_apps migration")
+	}
+	if err = platform.Down(ctx, exec); err != nil {
+		t.Fatal(err)
+	}
 	has := func() (column, table, index bool) {
 		t.Helper()
 		if qerr := conn.QueryRow(ctx, `SELECT
@@ -234,5 +249,86 @@ func TestCloudSignInPeopleMigrationGoesDownAndUp(t *testing.T) {
 	}
 	if column, table, index := has(); !column || !table || !index {
 		t.Fatalf("up again: signed_in_by %v, the problems table %v, the index %v", column, table, index)
+	}
+}
+
+// Sign-in apps go platform-wide: one row per cloud, the problem on the row,
+// and each connection records the client ID it signed in with. Going down
+// brings the per-organization tables back, empty, and up again drops them.
+func TestPlatformOAuthAppsMigration(t *testing.T) {
+	dsn := freshDatabase(t)
+	ctx := context.Background()
+	if err := ops.Migrate(ctx, dsn, migrations.All()); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var platform *migrate.Migration
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "platform_oauth_apps" {
+			platform = m
+		}
+	}
+	if platform == nil || platform.Version != "20261221000100" {
+		t.Fatalf("platform_oauth_apps migration: %+v", platform)
+	}
+	has := func() (apps, oldApps, oldProblems, column bool) {
+		t.Helper()
+		if qerr := conn.QueryRow(ctx, `SELECT
+			to_regclass('loomplane_platform_oauth_apps') IS NOT NULL,
+			to_regclass('loomplane_oauth_apps') IS NOT NULL,
+			to_regclass('loomplane_oauth_app_problems') IS NOT NULL,
+			EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'loomplane_cloud_connections' AND column_name = 'oauth_client_id')`).
+			Scan(&apps, &oldApps, &oldProblems, &column); qerr != nil {
+			t.Fatal(qerr)
+		}
+		return apps, oldApps, oldProblems, column
+	}
+	if apps, oldApps, oldProblems, column := has(); !apps || oldApps || oldProblems || !column {
+		t.Fatalf("after up: platform apps %v, old apps %v, old problems %v, oauth_client_id %v", apps, oldApps, oldProblems, column)
+	}
+
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_connections (id, org_id, cloud, name, status, created_by, created_at, updated_at)
+		VALUES ('conn_1', 'org_1', 'gcp', 'main', 'connected', 'usr_1', now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	var clientID string
+	if err = conn.QueryRow(ctx, `SELECT oauth_client_id FROM loomplane_cloud_connections WHERE id = 'conn_1'`).Scan(&clientID); err != nil || clientID != "" {
+		t.Fatalf("oauth_client_id = %q, %v; want empty", clientID, err)
+	}
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_platform_oauth_apps (cloud, client_id, updated_by) VALUES ('vercel', 'oac', 'usr_1')`); err != nil {
+		t.Fatal(err)
+	}
+	var slug, problem string
+	var problemAt *time.Time
+	if err = conn.QueryRow(ctx, `SELECT slug, problem, problem_at FROM loomplane_platform_oauth_apps WHERE cloud = 'vercel'`).Scan(&slug, &problem, &problemAt); err != nil {
+		t.Fatal(err)
+	}
+	if slug != "" || problem != "" || problemAt != nil {
+		t.Fatalf("slug %q, problem %q, problem_at %v; want empty and null", slug, problem, problemAt)
+	}
+
+	exec, err := migrate.NewExecutorFor(openPg(t, dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = platform.Down(ctx, exec); err != nil {
+		t.Fatal(err)
+	}
+	if apps, oldApps, oldProblems, column := has(); apps || !oldApps || !oldProblems || column {
+		t.Fatalf("after down: platform apps %v, old apps %v, old problems %v, oauth_client_id %v", apps, oldApps, oldProblems, column)
+	}
+	var oldRows int
+	if err = conn.QueryRow(ctx, `SELECT (SELECT count(*) FROM loomplane_oauth_apps) + (SELECT count(*) FROM loomplane_oauth_app_problems)`).Scan(&oldRows); err != nil || oldRows != 0 {
+		t.Fatalf("old tables hold %d rows, %v; want none", oldRows, err)
+	}
+	if err = platform.Up(ctx, exec); err != nil {
+		t.Fatal(err)
+	}
+	if apps, oldApps, oldProblems, column := has(); !apps || oldApps || oldProblems || !column {
+		t.Fatalf("up again: platform apps %v, old apps %v, old problems %v, oauth_client_id %v", apps, oldApps, oldProblems, column)
 	}
 }

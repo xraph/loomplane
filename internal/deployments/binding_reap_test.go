@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,16 +11,79 @@ import (
 	"github.com/xraph/loomplane/internal/projects"
 )
 
+// Keys makes memSecrets a ResourceSecretKeys.
+func (s *memSecrets) Keys(_ context.Context, prefix string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var keys []string
+	for k := range s.m {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys, nil
+}
+
+// plainSecrets hides Keys, as a ResourceSecrets that can't list.
+type plainSecrets struct{ ResourceSecrets }
+
+// unlistable is memSecrets whose Keys fails.
+type unlistable struct{ *memSecrets }
+
+func (unlistable) Keys(context.Context, string) ([]string, error) {
+	return nil, errors.New("vault can't list")
+}
+
+// extraKeys are what an environment keeps in Vault besides its resources'
+// credentials: a service's runtime values on a server of yours, the
+// variables a deployment pinned, and the address a deployment that failed
+// before it recorded a binding left behind.
+func extraKeys(env string) []string {
+	return []string{
+		resourceKey("org_1", env, "api", "runtime_01"),
+		resourceKey("org_1", env, "applied-inputs/dep_1", "vars_01"),
+		resourceKey("org_1", env, "cache", ResourceURL),
+	}
+}
+
+// neighbourKeys belong to environments the fixture never deletes, one of
+// them named so that env_2 is a prefix of it, and one in another
+// organization.
+var neighbourKeys = []string{
+	resourceKey("org_1", "env_20", "orders", ResourceURL),
+	resourceKey("org_2", "env_2", "orders", ResourceURL),
+}
+
+// kept reports whether every key is still in Vault, and whether any is.
+func kept(s *memSecrets, keys []string) (all, some bool) {
+	all = true
+	for _, k := range keys {
+		if _, err := s.Get(context.Background(), k); err == nil {
+			some = true
+		} else {
+			all = false
+		}
+	}
+	return all, some
+}
+
 // bindingReaperFixture is two environments, each with a deployed app, a
 // provisioned database whose credentials are in Vault, and a database
-// gateway.
+// gateway, and each keeping more in Vault than its bindings name.
 func bindingReaperFixture(t *testing.T) (*BindingReaper, *memSecrets, *warnings) {
 	t.Helper()
 	secrets := &memSecrets{m: map[string][]byte{}}
+	for _, k := range neighbourKeys {
+		secrets.m[k] = []byte("secret")
+	}
 	bindings := &envBindings{}
 	for _, env := range []string{"env_1", "env_2"} {
 		for _, field := range resourceCredentialFields {
 			secrets.m[resourceKey("org_1", env, "orders", field)] = []byte("secret")
+		}
+		for _, k := range extraKeys(env) {
+			secrets.m[k] = []byte("secret")
 		}
 		bindings.bindings = append(bindings.bindings,
 			&planning.Binding{
@@ -42,15 +106,11 @@ func bindingReaperFixture(t *testing.T) (*BindingReaper, *memSecrets, *warnings)
 // hasCredentials reports whether every credential field of the orders
 // database in env is still in Vault, and whether any of them is.
 func hasCredentials(s *memSecrets, env string) (all, some bool) {
-	all = true
+	keys := make([]string, 0, len(resourceCredentialFields))
 	for _, field := range resourceCredentialFields {
-		if _, err := s.Get(context.Background(), resourceKey("org_1", env, "orders", field)); err == nil {
-			some = true
-		} else {
-			all = false
-		}
+		keys = append(keys, resourceKey("org_1", env, "orders", field))
 	}
-	return all, some
+	return kept(s, keys)
 }
 
 func TestBindingReaper_environment(t *testing.T) {
@@ -68,8 +128,14 @@ func TestBindingReaper_environment(t *testing.T) {
 	if _, some := hasCredentials(secrets, "env_2"); some {
 		t.Fatal("the deleted environment's database credentials are still in Vault")
 	}
+	if _, some := kept(secrets, extraKeys("env_2")); some {
+		t.Fatal("the deleted environment's runtime values, pinned variables or failed deployment's address are still in Vault")
+	}
 	if all, _ := hasCredentials(secrets, "env_1"); !all {
 		t.Fatal("another environment's database credentials went too")
+	}
+	if all, _ := kept(secrets, append(extraKeys("env_1"), neighbourKeys...)); !all {
+		t.Fatal("a key outside the deleted environment went too")
 	}
 	got := w.all()
 	for _, want := range []string{
@@ -102,6 +168,12 @@ func TestBindingReaper_project(t *testing.T) {
 		if _, some := hasCredentials(secrets, env); some {
 			t.Fatalf("the credentials in %s are still in Vault", env)
 		}
+		if _, some := kept(secrets, extraKeys(env)); some {
+			t.Fatalf("the other keys in %s are still in Vault", env)
+		}
+	}
+	if all, _ := kept(secrets, neighbourKeys); !all {
+		t.Fatal("a key outside the deleted project went too")
 	}
 	got := w.all()
 	for _, want := range []string{"api-env_1", "orders-env_1", "api-env_2", "orders-env_2"} {
@@ -139,15 +211,49 @@ func TestBindingReaper_locatesThroughTheExecutor(t *testing.T) {
 	}
 }
 
-func TestBindingReaper_nothingToDo(t *testing.T) {
+// A deployment that failed before it recorded a binding still kept things
+// in Vault, so an environment with nothing bound is swept too.
+func TestBindingReaper_nothingBound(t *testing.T) {
 	ctx := context.Background()
-	r, _, w := bindingReaperFixture(t)
+	r, secrets, w := bindingReaperFixture(t)
+	leftover := resourceKey("org_1", "env_3", "cache", ResourceURL)
+	secrets.m[leftover] = []byte("secret")
 	r.Environments = projectEnvironments{envs: []*projects.Environment{{ID: "env_3", Name: "preview"}}}
-	if finish := r.Reap(ctx, "org_1", "proj_1", "env_3"); finish != nil {
-		t.Fatal("an environment with nothing deployed has something to clean up")
+	r.Reap(ctx, "org_1", "proj_1", "env_3")(ctx)
+	if _, some := kept(secrets, []string{leftover}); some {
+		t.Fatal("what a failed deployment left in Vault is still there")
 	}
 	if w.all() != "" {
-		t.Fatalf("warned about nothing: %q", w.all())
+		t.Fatalf("warned about nothing running: %q", w.all())
+	}
+
+	r.Secrets = plainSecrets{secrets}
+	if finish := r.Reap(ctx, "org_1", "proj_1", "env_3"); finish != nil {
+		t.Fatal("an environment with nothing deployed, and a Vault that can't list, has something to clean up")
+	}
+}
+
+// Without a Vault that lists its keys, only what the bindings name goes.
+func TestBindingReaper_withoutListing(t *testing.T) {
+	ctx := context.Background()
+	for name, wrap := range map[string]func(*memSecrets) ResourceSecrets{
+		"can't list":     func(s *memSecrets) ResourceSecrets { return plainSecrets{s} },
+		"listing failed": func(s *memSecrets) ResourceSecrets { return unlistable{s} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, secrets, w := bindingReaperFixture(t)
+			r.Secrets = wrap(secrets)
+			r.Reap(ctx, "org_1", "proj_1", "env_2")(ctx)
+			if _, some := hasCredentials(secrets, "env_2"); some {
+				t.Fatal("the deleted environment's database credentials are still in Vault")
+			}
+			if all, _ := kept(secrets, extraKeys("env_2")); !all {
+				t.Fatal("keys no binding names went without a listing to find them")
+			}
+			if name == "listing failed" && !strings.Contains(w.all(), "vault can't list") {
+				t.Fatalf("the failed listing isn't logged: %q", w.all())
+			}
+		})
 	}
 }
 
@@ -168,10 +274,11 @@ func TestBindingReaper_bestEffort(t *testing.T) {
 	t.Run("bindings unreadable", func(t *testing.T) {
 		r, secrets, w := bindingReaperFixture(t)
 		r.Bindings = &envBindings{err: errors.New("the database is down")}
-		if finish := r.Reap(ctx, "org_1", "proj_1", "env_2"); finish != nil {
-			t.Fatal("cleaned up without knowing what")
+		r.Reap(ctx, "org_1", "proj_1", "env_2")(ctx)
+		if _, some := kept(secrets, extraKeys("env_2")); some {
+			t.Fatal("the keys stayed because the bindings couldn't be read")
 		}
-		if all, _ := hasCredentials(secrets, "env_2"); !all || !strings.Contains(w.all(), "the database is down") {
+		if !strings.Contains(w.all(), "the database is down") {
 			t.Fatalf("the failure isn't logged: %q", w.all())
 		}
 	})

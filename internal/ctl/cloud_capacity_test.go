@@ -35,6 +35,7 @@ func TestCloudCapacityCommandsCallTheirRoutes(t *testing.T) {
 		{[]string{"cloud-capacity", "create-pool", "c1", "--file", pool}, "POST", "/api/v1/clouds/c1/scaling-pools", `"name":"gpu"`},
 		{[]string{"resume", "d1", "--revision", "4"}, "POST", "/api/v1/deployments/d1/capacity/resume", `{"expected_revision":4}`},
 		{[]string{"cancel", "d1", "--revision", "4"}, "POST", "/api/v1/deployments/d1/capacity/cancel", `{"expected_revision":4}`},
+		{[]string{"cancel", "d1"}, "POST", "/api/v1/deployments/d1/cancel", ""},
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {

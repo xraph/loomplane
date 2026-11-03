@@ -20,8 +20,29 @@ import (
 	domain "github.com/xraph/loomplane/pkg/federation"
 )
 
+// groupSnapshotVersion is the migration these tests downgrade. The schema is
+// current, since today's stores write columns added after it, so the
+// orchestrator is shown only what was applied up to it and rolls back that.
+const groupSnapshotVersion = "20261208000700"
+
+type appliedThrough struct {
+	migrate.Executor
+	version string
+}
+
+func (a appliedThrough) Unwrap() migrate.Executor { return a.Executor }
+func (a appliedThrough) ListApplied(ctx context.Context) ([]*migrate.AppliedMigration, error) {
+	applied, err := a.Executor.ListApplied(ctx)
+	kept := applied[:0]
+	for _, m := range applied {
+		if m.Group != migrations.GroupName || m.Version <= a.version {
+			kept = append(kept, m)
+		}
+	}
+	return kept, err
+}
 func rollbackGroupSnapshot(ctx context.Context, f *groupSnapshotFixture) error {
-	_, err := migrate.NewOrchestrator(pgmigrate.New(f.x.f.db), migrations.Group()).Rollback(ctx)
+	_, err := migrate.NewOrchestrator(appliedThrough{pgmigrate.New(f.x.f.db), groupSnapshotVersion}, migrations.Group()).Rollback(ctx)
 	return err
 }
 func snapshotMigrationState(ctx context.Context, t *testing.T, f *groupSnapshotFixture) string {
@@ -45,7 +66,7 @@ func snapshotMigrationState(ctx context.Context, t *testing.T, f *groupSnapshotF
 func TestPlacementGroupSnapshotDowngradeRetainsRecovery(t *testing.T) {
 	for _, mode := range []string{"accepted", "issued", "winner", "cancelled_unresolved"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newGroupSnapshotFixture(t, true, "20261208000700")
+			f := newGroupSnapshotFixture(t, true)
 			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 			defer cancel()
 			if mode == "winner" {
@@ -84,7 +105,7 @@ func TestPlacementGroupSnapshotDowngradeRetainsRecovery(t *testing.T) {
 	}
 }
 func TestPlacementGroupSnapshotDowngradeEmpty(t *testing.T) {
-	f := newGroupSnapshotFixture(t, false, "20261208000700")
+	f := newGroupSnapshotFixture(t, false)
 	ctx := t.Context()
 	if err := rollbackGroupSnapshot(ctx, f); err != nil {
 		t.Fatal(err)
@@ -151,7 +172,7 @@ func waitSnapshotMigration(ctx context.Context, t *testing.T, f *groupSnapshotFi
 func TestPlacementGroupSnapshotDowngradeConcurrentWriter(t *testing.T) {
 	for _, mode := range []string{"acceptance", "issuance"} {
 		t.Run(mode, func(t *testing.T) {
-			f := newGroupSnapshotFixture(t, mode == "issuance", "20261208000700")
+			f := newGroupSnapshotFixture(t, mode == "issuance")
 			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 			defer cancel()
 			pause := &snapshotDowngradePause{groupSnapshotAuthority: f.authority, entered: make(chan struct{}), resume: make(chan struct{}), acceptance: mode == "acceptance"}
@@ -214,7 +235,7 @@ func TestPlacementGroupSnapshotDowngradeConcurrentWriter(t *testing.T) {
 }
 
 func TestPlacementGroupSnapshotDowngradeBeforeAcceptance(t *testing.T) {
-	f := newGroupSnapshotFixture(t, false, "20261208000700")
+	f := newGroupSnapshotFixture(t, false)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	blocker, err := f.x.f.db.BeginTx(ctx, nil)

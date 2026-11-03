@@ -262,12 +262,14 @@ func (s *Service) manage(ctx context.Context, p security.Principal, v *Variable)
 
 // Update changes a variable's value, and whether it's secret.
 func (s *Service) Update(ctx context.Context, p security.Principal, id string, in UpdateVariableInput) (*Variable, error) {
-	if err := s.authz.Require(ctx, p, security.VariableRead, ""); err != nil {
-		return nil, err
-	}
 	prior, err := s.store.GetVariable(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	// The variable's project, so a team's grant there counts; an
+	// organization variable has none and checks the whole workspace.
+	if aerr := s.authz.Require(ctx, p, security.VariableRead, prior.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	if manageErr := s.manage(ctx, p, prior); manageErr != nil {
 		return nil, manageErr
@@ -325,12 +327,12 @@ func (s *Service) updateSource(ctx context.Context, p security.Principal, prior 
 
 // Delete removes a variable, and its secret.
 func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
-	if err := s.authz.Require(ctx, p, security.VariableRead, ""); err != nil {
-		return err
-	}
 	prior, err := s.store.GetVariable(ctx, p.OrgID, id)
 	if err != nil {
 		return err
+	}
+	if aerr := s.authz.Require(ctx, p, security.VariableRead, prior.ProjectID); aerr != nil {
+		return aerr
 	}
 	if manageErr := s.manage(ctx, p, prior); manageErr != nil {
 		return manageErr

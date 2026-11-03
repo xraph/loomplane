@@ -22,6 +22,16 @@ export LOOMPLANE_NOTIFICATIONS_FROM=accounts@example.com
 
 Set `LOOMPLANE_PUBLIC_URL` to the address people use, because recovery and invitation links are built from it.
 
+### Read mail from a folder
+
+On your own machine you don't need a mail server at all. Point Loomplane at a folder and each email lands there as an `.eml` file you can open in any mail client:
+
+```bash
+export LOOMPLANE_NOTIFICATIONS_MAIL_DIR=.forge/mail
+```
+
+A relative path is resolved from where the API starts, and `.forge/` is already gitignored. The files hold whole messages, reset and invitation links included, so they're readable by you only. Set this or an SMTP host or a Resend key, not more than one. Production refuses it.
+
 ### Test with Mailpit
 
 ```bash

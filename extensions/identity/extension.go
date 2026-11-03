@@ -61,6 +61,7 @@ import (
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/setuptoken"
+	"github.com/xraph/loomplane/internal/teams"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
@@ -97,6 +98,8 @@ type Extension struct {
 	smith      *keysmith.Engine
 	engine     *authsome.Engine
 	keys       *apikeys.Service
+	teams      *teams.Service
+	lockPG     *pgdriver.PgDB // the sync lock's own pool (wireTeams)
 	// joined finds the nodes a key's join tokens brought in. The nodes
 	// extension registers after this one, so it is looked up per request.
 	joined        func() JoinedNodes
@@ -149,6 +152,16 @@ func (e *Extension) Dependencies() []string {
 // Forge's central migrations the schema only exists once every extension
 // has registered, so anything that reads or writes waits for Start.
 func (e *Extension) Register(fapp forge.App) error {
+	err := e.register(fapp)
+	if err != nil {
+		// Stop may never run for an extension that failed to register,
+		// so the sync lock pool wireTeams opened is closed here.
+		err = errors.Join(err, e.closeLockPool())
+	}
+	return err
+}
+
+func (e *Extension) register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
@@ -180,6 +193,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("chronicle: %w", err)
 	}
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
+	if teamsErr := e.wireTeams(); teamsErr != nil {
+		return teamsErr
+	}
 	if e.smith, err = keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db)))); err != nil {
 		return fmt.Errorf("keysmith: %w", err)
 	}
@@ -200,6 +216,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
@@ -230,6 +247,11 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	// every approval, from REST or the console, sends the email.
 	e.waitlist.SetWaitlistStore(approvalMailer{Store: e.waitlistStore, send: e.notifications.SendWaitlistApproved, log: e.Logger()})
 	e.gate = e.newSignupGate()
+	// A person who leaves the workspace leaves its teams first, and a
+	// revoke that fails afterwards goes on the sync queue.
+	memberSync := security.NewSync(e.authz)
+	memberSync.SetLeaver(e.teams.Leave)
+	memberSync.SetRequeuer(e.teams.Requeue)
 	tokens, err := security.TokenEncryptor(e.cfg.SecretKey)
 	if err != nil {
 		return nil, err
@@ -258,7 +280,7 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		authsome.WithPlugin(password.New()),
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
-		authsome.WithPlugin(security.NewSync(e.authz)),
+		authsome.WithPlugin(memberSync),
 		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
 		authsome.WithPlugin(e.waitlist),
 		// Last, so it judges a sign-up the other plugins have accepted.
@@ -319,6 +341,9 @@ func (e *Extension) setting(ctx context.Context, key string, value any) error {
 // middleware and routes stay out of Loomplane's API.
 func (e *Extension) mount(ctx context.Context) error {
 	r := forge.NewRouter()
+	// Ahead of everything, so a team route is refused before authsome
+	// looks at the session or counts the request.
+	r.Use(refuseAuthsomeTeams)
 	r.Use(rateLimitScope)
 	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
@@ -356,8 +381,19 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
+	errs = append(errs, e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
+}
+
+// closeLockPool closes the sync lock's pool, once.
+func (e *Extension) closeLockPool() error {
+	if e.lockPG == nil {
+		return nil
+	}
+	err := e.lockPG.Close()
+	e.lockPG = nil
+	return err
 }
 
 // Health checks authsome's store.
@@ -374,26 +410,45 @@ func (e *Extension) Health(ctx context.Context) error {
 // bearer token for API clients), keeps it alive (sessions.go) and resolves
 // the principal.
 func (e *Extension) middleware() []forge.Middleware {
-	return append(e.sessionMiddleware(), requirePrincipal)
+	return append(e.sessionMiddleware(), e.requirePrincipal)
 }
 
-func requirePrincipal(next forge.Handler) forge.Handler {
+func (e *Extension) requirePrincipal(next forge.Handler) forge.Handler {
 	return func(c forge.Context) error {
 		ctx := c.Request().Context()
-		var userID, orgID string
-		if u, ok := authmw.UserIDFrom(ctx); ok {
-			userID = u.String()
-		}
-		if o, ok := authmw.OrgIDFrom(ctx); ok {
-			orgID = o.String()
-		}
-		p, err := security.Resolve(userID, orgID, c.Request().Header.Get(security.HeaderOrganization))
+		p, err := e.principalFor(ctx, c.Request().Header.Get(security.HeaderOrganization))
 		if err != nil {
 			return forge.NewHTTPError(security.StatusFor(err), err.Error())
 		}
 		c.WithContext(security.WithPrincipal(ctx, p))
 		return next(c)
 	}
+}
+
+// principalFor is the principal of a request authsome's middleware has
+// authenticated. Sign-up hands out a session before the email is
+// verified, and authsome only checks verification at sign-in, so when
+// it's required every request checks it here.
+func (e *Extension) principalFor(ctx context.Context, orgHeader string) (security.Principal, error) {
+	var userID, orgID string
+	if u, ok := authmw.UserIDFrom(ctx); ok {
+		userID = u.String()
+	}
+	if o, ok := authmw.OrgIDFrom(ctx); ok {
+		orgID = o.String()
+	}
+	p, err := security.Resolve(userID, orgID, orgHeader)
+	if err != nil {
+		return security.Principal{}, err
+	}
+	if e.cfg.Identity.RequireEmailVerification {
+		// The middleware loads the user for every session; one it couldn't
+		// load isn't let through as verified.
+		if u, ok := authmw.UserFrom(ctx); !ok || u == nil || !u.EmailVerified {
+			return security.Principal{}, security.ErrEmailNotVerified
+		}
+	}
+	return p, nil
 }
 
 // membership is a user's role in an organization, if they're in it. The
@@ -432,6 +487,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 	// After authsome's bootstrap, which applies the platform roles.
 	e.grantConsoleReads(ctx)
 	if err := e.recordEarlierSetup(ctx); err != nil {
+		return err
+	}
+	if err := e.verifyPlatformOwners(ctx); err != nil {
 		return err
 	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {

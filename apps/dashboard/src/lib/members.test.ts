@@ -62,4 +62,19 @@ describe("captureInvite", () => {
     captureInvite(at("/invitations/accept"))
     expect(pendingInvite()).toBe("first")
   })
+
+  it("takes the token out of the address bar once it's kept", () => {
+    window.history.replaceState(null, "", "/invitations/accept?token=abc")
+    captureInvite()
+    expect(pendingInvite()).toBe("abc")
+    expect(window.location.pathname + window.location.search).toBe(
+      "/invitations/accept"
+    )
+  })
+
+  it("leaves a link without a token where it is", () => {
+    window.history.replaceState(null, "", "/invitations/accept")
+    captureInvite()
+    expect(window.location.pathname).toBe("/invitations/accept")
+  })
 })

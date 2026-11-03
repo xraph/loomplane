@@ -177,34 +177,57 @@ function serve() {
   return posted
 }
 
-test("each service shows where it runs, its domains and what it uses", async () => {
+test("each service shows where it runs in every environment", async () => {
   serve()
   const row = (await screen.findByRole("link", { name: "loomplane" })).closest(
-    "tr"
-  )!
+    '[role="row"]'
+  ) as HTMLElement
   expect(await within(row).findByText("Live")).toBeInTheDocument()
   expect(within(row).getByText("Not deployed")).toBeInTheDocument()
-  expect(await within(row).findByText("console.acme.dev")).toBeInTheDocument()
-  expect(within(row).getByText("+1")).toBeInTheDocument()
-  const api = screen.getByRole("link", { name: "api" }).closest("tr")!
+  expect(
+    within(row).getByRole("link", { name: "Open loomplane" })
+  ).toHaveAttribute("href", "/projects/$id/services/$service")
+  const api = screen
+    .getByRole("link", { name: "api" })
+    .closest('[role="row"]') as HTMLElement
   expect(within(api).getAllByText("Not deployed")).toHaveLength(2)
-  expect(within(api).getByText("Nothing")).toBeInTheDocument()
+  // Each environment is a column.
+  expect(
+    screen.getByRole("columnheader", { name: "production" })
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("columnheader", { name: "preview" })
+  ).toBeInTheDocument()
   // The excluded build isn't listed, but the page says it's hidden.
   expect(screen.queryByRole("link", { name: "build" })).not.toBeInTheDocument()
   expect(
     screen.getByText("1 excluded service is hidden here and in the graph.")
   ).toBeInTheDocument()
+  expect(screen.getByText("Showing 3 services")).toBeInTheDocument()
+})
+
+test("the filter says when nothing matches and clears", async () => {
+  serve()
+  const user = userEvent.setup()
+  await screen.findByText("Live")
+  await user.type(
+    screen.getByRole("searchbox", { name: "Filter services" }),
+    "nope"
+  )
+  expect(screen.getByText('No services match "nope"')).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "Clear filter" }))
+  expect(screen.getByRole("link", { name: "loomplane" })).toBeInTheDocument()
 })
 
 test("filters narrow to what's deployed and what's excluded", async () => {
   serve()
   const user = userEvent.setup()
   await screen.findByText("Live")
-  await user.click(screen.getByRole("radio", { name: /Deployed/ }))
+  await user.click(screen.getByRole("tab", { name: /Deployed/ }))
   expect(screen.getByRole("link", { name: "loomplane" })).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "api" })).not.toBeInTheDocument()
 
-  await user.click(screen.getByRole("radio", { name: /Excluded/ }))
+  await user.click(screen.getByRole("tab", { name: /Excluded/ }))
   expect(screen.getByText("build")).toBeInTheDocument()
   expect(screen.getByText("Build or CI tooling")).toBeInTheDocument()
   expect(screen.getByText("Only this service")).toBeInTheDocument()
@@ -274,7 +297,7 @@ test("an excluded service comes back with Include again", async () => {
   const posted = serve()
   const user = userEvent.setup()
   await screen.findByText("Live")
-  await user.click(screen.getByRole("radio", { name: /Excluded/ }))
+  await user.click(screen.getByRole("tab", { name: /Excluded/ }))
   await user.click(screen.getByRole("button", { name: "Include again" }))
   expect(posted).toEqual([
     {

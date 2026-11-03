@@ -43,7 +43,7 @@ var _ Store = (*PgStore)(nil)
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
 	coalesce(manifest_id,''), manifest_revision, result, executable, error,
 	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog,
-	kind, from_environment, from_environment_id, rollback,
+	kind, from_environment, from_environment_id, rollback, services,
  coalesce((SELECT i.id FROM loomplane_fleet_instances i WHERE i.org_id=loomplane_plans.org_id AND i.environment_id=loomplane_plans.environment_id),'')`
 
 // open lists the statuses of a plan that hasn't been settled.
@@ -51,12 +51,21 @@ const open = `('planning', 'ready')`
 
 func scanPlan(row pgx.Row) (*Plan, error) {
 	var p Plan
-	var result, rollbackSpec []byte
+	var result, rollbackSpec, services []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
 		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog,
-		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec, &p.ManagedInstanceID); err != nil {
+		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec, &services, &p.ManagedInstanceID); err != nil {
 		return nil, err
+	}
+	if len(services) > 0 {
+		if err := json.Unmarshal(services, &p.Services); err != nil {
+			return nil, fmt.Errorf("decode plan services: %w", err)
+		}
+		// A plan of every service reads as nil, however it was stored.
+		if len(p.Services) == 0 {
+			p.Services = nil
+		}
 	}
 	if len(rollbackSpec) > 0 {
 		if err := json.Unmarshal(rollbackSpec, &p.Rollback); err != nil {
@@ -111,11 +120,18 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 			return nil, fmt.Errorf("encode plan rollback: %w", err)
 		}
 	}
+	// The column is never null: a plan of every service stores [].
+	services := []byte("[]")
+	if len(p.Services) > 0 {
+		if services, err = json.Marshal(p.Services); err != nil {
+			return nil, fmt.Errorf("encode plan services: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15)`,
+		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback, services)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec, services)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict

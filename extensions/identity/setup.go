@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	authsome "github.com/xraph/authsome"
 	"github.com/xraph/authsome/account"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
@@ -182,6 +183,37 @@ func (e *Extension) recordEarlierSetup(ctx context.Context) error {
 		}
 		return e.instance.MarkSetupCompleted(ctx)
 	})
+}
+
+// verifyPlatformOwners marks every platform owner's email verified while
+// verification is required. Setup verifies the owner it makes, but an
+// instance set up before it did can have an owner who never verified, and
+// requiring verification would lock out the person who set it up. Only an
+// owner can make another owner, which is trust enough.
+func (e *Extension) verifyPlatformOwners(ctx context.Context) error {
+	if !e.cfg.Identity.RequireEmailVerification {
+		return nil
+	}
+	appID, err := authid.ParseAppID(e.cfg.Identity.AppID)
+	if err != nil {
+		return fmt.Errorf("identity.app_id: %w", err)
+	}
+	owners, err := e.engine.ListUsersWithRole(ctx, appID, rbac.PlatformOwnerSlug)
+	if err != nil {
+		return fmt.Errorf("list platform owners: %w", err)
+	}
+	verified := true
+	for _, uid := range owners {
+		u, err := e.store.GetUser(ctx, uid)
+		if err != nil || u.EmailVerified {
+			continue // gone since, or nothing to do
+		}
+		if err := e.engine.AdminUpdateUser(ctx, uid, uid, authsome.AdminUserUpdates{EmailVerified: &verified}); err != nil {
+			return fmt.Errorf("verify platform owner %s: %w", uid, err)
+		}
+		e.Logger().Info("verified a platform owner's email, as setup would", forge.F("user_id", uid.String()))
+	}
+	return nil
 }
 
 // hasOrganizations reports whether Loomplane's app has an organization.
@@ -360,6 +392,10 @@ func (e *Extension) setUp(ctx context.Context, req *account.SignUpRequest, name,
 		return nil, SetupResponse{}, fmt.Errorf("sign up the first account: %w", err)
 	}
 	made := setupMade{user: u.ID}
+	if sess, err = e.admitSetupOwner(ctx, appID, u, sess, req); err != nil {
+		e.undoSetup(ctx, made)
+		return nil, SetupResponse{}, err
+	}
 	if err = e.finishSetup(ctx, appID, u, sess, orgName, &made); err != nil {
 		e.undoSetup(ctx, made)
 		return nil, SetupResponse{}, err
@@ -372,6 +408,33 @@ func (e *Extension) setUp(ctx context.Context, req *account.SignUpRequest, name,
 		OK:                   true,
 		VerificationRequired: e.cfg.Identity.RequireEmailVerification && !u.EmailVerified,
 	}, nil
+}
+
+// admitSetupOwner marks the first account's email verified and signs it
+// in. Whoever runs setup has already proved they control this server,
+// with the setup token from its log or, in development, by running it,
+// which is what verifying an email stands in for. With verification
+// required, authsome's sign-up gives an unverified account no session,
+// and before mail is set up nothing else could let the owner in.
+func (e *Extension) admitSetupOwner(ctx context.Context, appID authid.AppID, u *user.User, sess *session.Session, req *account.SignUpRequest) (*session.Session, error) {
+	if !u.EmailVerified {
+		verified := true
+		if err := e.engine.AdminUpdateUser(ctx, u.ID, u.ID, authsome.AdminUserUpdates{EmailVerified: &verified}); err != nil {
+			return nil, fmt.Errorf("verify the first account's email: %w", err)
+		}
+		u.EmailVerified = true
+	}
+	if sess != nil {
+		return sess, nil
+	}
+	res, err := e.engine.IssueSession(ctx, &authsome.IssueSessionRequest{
+		User: u, AppID: appID, AuthMethod: "password",
+		IPAddress: req.IPAddress, UserAgent: req.UserAgent,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sign in the first account: %w", err)
+	}
+	return res.Session, nil
 }
 
 // setupMade is what a setup has created so far, for undoSetup.

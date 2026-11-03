@@ -3,7 +3,8 @@ import { render, screen, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { DeploymentPage } from "@/pages/deployment"
+import { DeploymentPage, type DeploymentTab } from "@/pages/deployment"
+import { Route } from "@/routes/deployments.$id"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
@@ -40,7 +41,11 @@ const plan = (release?: object, status = "ready") => ({
   ...(release ? { release } : {}),
 })
 
-function serve(p: object, more: Record<string, unknown> = {}) {
+function serve(
+  p: object,
+  more: Record<string, unknown> = {},
+  tab?: DeploymentTab
+) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost").pathname
     const extra = Object.entries(more).find(([suffix]) => url.endsWith(suffix))
@@ -62,7 +67,7 @@ function serve(p: object, more: Record<string, unknown> = {}) {
   })
   render(
     <ClientProvider client={forgeClient}>
-      <DeploymentPage id="plan_1" />
+      <DeploymentPage id="plan_1" tab={tab} />
     </ClientProvider>
   )
 }
@@ -70,7 +75,7 @@ function serve(p: object, more: Record<string, unknown> = {}) {
 test("a plan without a release shows no canary panel", async () => {
   serve(plan())
   expect(
-    await screen.findByRole("region", { name: "Steps" })
+    await screen.findByRole("list", { name: "Progress" })
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("heading", { name: "Canary" })
@@ -107,7 +112,7 @@ test.each([
 ])("%s shows no canary panel", async (_, p) => {
   serve(p)
   expect(
-    await screen.findByRole("region", { name: "Steps" })
+    await screen.findByRole("list", { name: "Progress" })
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("heading", { name: "Canary" })
@@ -286,7 +291,7 @@ test("an older deployment offers no rollback", async () => {
       "/deployments/dep_1/watch": 404,
     }
   )
-  expect((await screen.findAllByText("dep_1")).length).toBeGreaterThan(0)
+  expect(await screen.findByText("Deployed")).toBeInTheDocument()
   await new Promise((r) => setTimeout(r, 50))
   expect(
     screen.queryByRole("button", { name: "Roll back" })
@@ -359,4 +364,162 @@ test("renders historical null plan collections and the managed cleanup route", a
   expect(
     await screen.findByRole("button", { name: "Review cleanup" })
   ).toBeInTheDocument()
+})
+
+const api = (op = "replace") => ({
+  id: "service:api",
+  name: "api",
+  op,
+  step: 1,
+  provider: "cloudrun",
+  creates: "Cloud Run service",
+  subject: "service",
+  reason: "4 commits since the running release.",
+})
+
+test("a waiting plan opens on Changes with the one approval box", async () => {
+  serve({
+    ...plan(),
+    actions: [api(), { ...api("keep"), id: "service:worker", name: "worker" }],
+    summary: { create: 0, delete: 0, keep: 1, replace: 1, update: 0 },
+    warnings: [{ code: "slow", message: "api restarts briefly." }],
+  })
+  const box = await screen.findByRole("region", { name: "Approve this plan" })
+  expect(
+    within(box).getByText("Approve to deploy 1 service to production")
+  ).toBeInTheDocument()
+  expect(
+    within(box).getByText(/Replaces api and keeps worker as it is\./)
+  ).toBeInTheDocument()
+  expect(
+    within(box)
+      .getAllByRole("button")
+      .map((b) => b.textContent)
+  ).toEqual(["Reject", "Approve and deploy"])
+  expect(screen.getByRole("tab", { name: /Changes/ })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  const changes = screen.getByRole("table", { name: "Changes" })
+  expect(within(changes).getByText("Replace")).toBeInTheDocument()
+  expect(within(changes).getByText("Keep")).toBeInTheDocument()
+  expect(screen.getByText("api restarts briefly.")).toBeInTheDocument()
+  // The header and the Approve phase both say so.
+  expect(screen.getAllByText("Waiting for you").length).toBe(2)
+})
+
+test("rejecting asks first", async () => {
+  serve({ ...plan(), actions: [api()] })
+  const box = await screen.findByRole("region", { name: "Approve this plan" })
+  within(box).getByRole("button", { name: "Reject" }).click()
+  expect(await screen.findByText("Reject this plan?")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Reject plan" })).toBeEnabled()
+})
+
+test("a blocked plan says where to fix its problems", async () => {
+  serve({
+    ...plan(undefined, "blocked"),
+    problems: [{ code: "no-connection", message: "No AWS account" }],
+  })
+  expect(
+    await screen.findByText("One problem stops this plan from being approved")
+  ).toBeInTheDocument()
+  const fix = screen.getByRole("link", {
+    name: "Fix them in the project's Deployments tab",
+  })
+  expect(fix).toHaveAttribute("href", "/projects/$id")
+  expect(
+    screen.queryByRole("region", { name: "Approve this plan" })
+  ).not.toBeInTheDocument()
+})
+
+const failedDeployment = {
+  id: "dep_1",
+  plan_id: "plan_1",
+  project_id: "proj_1",
+  environment: "production",
+  status: "failed",
+  error: "",
+  retries: 0,
+  sources: [],
+  commit_sha: "",
+  started_at: "2026-10-29T10:00:00Z",
+  started_by: "usr_1",
+  finished_at: "2026-10-29T10:02:00Z",
+  steps: [
+    {
+      action_id: "service:api",
+      status: "failed",
+      name: "api",
+      op: "replace",
+      order: 0,
+      provider: "cloudrun",
+      subject: "service",
+      image: "",
+      url: "",
+      message: "The task role can't read the db secret.",
+      started_at: "2026-10-29T10:00:00Z",
+      finished_at: "2026-10-29T10:02:00Z",
+    },
+  ],
+}
+
+test("a failed deployment names the step and retries from it", async () => {
+  serve(
+    { ...plan(undefined, "approved"), actions: [api()] },
+    {
+      "/plans/plan_1/deployment": failedDeployment,
+      "/environments/production/rollback-target": 422,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(await screen.findByText("api failed on cloudrun")).toBeInTheDocument()
+  expect(
+    screen.getAllByText(/The task role can't read the db secret\./).length
+  ).toBeGreaterThan(0)
+  expect(
+    screen.getByRole("button", { name: "Retry from api" })
+  ).toBeInTheDocument()
+  // Retry lives in the failure callout only, not the header.
+  expect(
+    within(screen.getByRole("banner")).queryByRole("button", { name: /Retry/ })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText("Failed at step 1 of 1")).toBeInTheDocument()
+  // The logs open by default, with a source per service.
+  const from = screen.getByRole("tablist", { name: "Show lines from" })
+  expect(
+    within(from)
+      .getAllByRole("tab")
+      .map((t) => t.textContent)
+  ).toEqual(["Everything", "Plan", "api"])
+})
+
+test("a service's Logs button opens its lines", async () => {
+  serve(
+    { ...plan(undefined, "approved"), actions: [api()] },
+    {
+      "/plans/plan_1/deployment": failedDeployment,
+      "/environments/production/rollback-target": 422,
+      "/deployments/dep_1/watch": 404,
+    },
+    "services"
+  )
+  const table = await screen.findByRole("table", { name: "Services" })
+  expect(await within(table).findByText("Failed")).toBeInTheDocument()
+  within(table).getByRole("button", { name: "Logs for api" }).click()
+  const from = await screen.findByRole("tablist", { name: "Show lines from" })
+  expect(within(from).getByRole("tab", { name: "api" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+})
+
+test("old and unknown tabs fall back", () => {
+  const validate = Route.options.validateSearch as (
+    s: Record<string, unknown>
+  ) => { tab?: string }
+  expect(validate({ tab: "plan" })).toEqual({ tab: "changes" })
+  expect(validate({ tab: "logs" })).toEqual({ tab: "logs" })
+  expect(validate({ tab: "nope" })).toEqual({})
+  expect(validate({})).toEqual({})
 })

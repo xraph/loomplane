@@ -69,6 +69,16 @@ export function AuthPage({
             toast.success("Account created. Sign in to continue.")
             void navigate({ to: "/sign-in", replace: true })
           }}
+          onVerificationRequired={(email) => {
+            // Sign-in refuses the account until it enters the code it was
+            // sent, so go straight to entering it.
+            toast.success("Account created. Check your email for a code.")
+            void navigate({
+              to: "/verify-email",
+              search: { email },
+              replace: true,
+            })
+          }}
         />
       )}
     </>

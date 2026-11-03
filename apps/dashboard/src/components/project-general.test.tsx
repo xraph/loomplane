@@ -49,7 +49,7 @@ function serve() {
 test("renaming sends only the name, trimmed", async () => {
   const sent = serve()
   const user = userEvent.setup()
-  const save = screen.getByRole("button", { name: "Save changes" })
+  const save = screen.getByRole("button", { name: "Save" })
   expect(save).toBeDisabled()
   const name = screen.getByLabelText("Name")
   await user.clear(name)
@@ -66,7 +66,7 @@ test("a project can't be saved without a name", async () => {
   const user = userEvent.setup()
   await user.clear(screen.getByLabelText("Name"))
   expect(screen.getByText("A project needs a name.")).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
 })
 
 test("reset puts the form back", async () => {
@@ -77,7 +77,7 @@ test("reset puts the form back", async () => {
   expect(screen.getByLabelText("Description")).toHaveValue(
     "Private repository analysis."
   )
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
 })
 
 test("a viewer sees the details but can't change them", () => {
@@ -87,9 +87,7 @@ test("a viewer sees the details but can't change them", () => {
     </ClientProvider>
   )
   expect(screen.getByLabelText("Name")).toBeDisabled()
-  expect(
-    screen.queryByRole("button", { name: "Save changes" })
-  ).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument()
 })
 
 test("projectChange keeps only what differs", () => {

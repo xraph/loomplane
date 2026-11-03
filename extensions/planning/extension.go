@@ -78,6 +78,7 @@ import (
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recovery"
+	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
@@ -557,8 +558,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn: reapWarn,
 	})
 	// It takes every other service and resource's binding too, and this
-	// deletes their credentials from Vault and warns about each one still
-	// running in a cloud.
+	// deletes everything the environment kept in Vault and warns about each
+	// one still running in a cloud.
 	projectSvc.AddReaper(&deployments.BindingReaper{
 		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
 		Warn: reapWarn,
@@ -615,8 +616,20 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.plans); err != nil {
 		return fmt.Errorf("provide the planning service: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.deploys); err != nil {
+		return fmt.Errorf("provide the deployments service: %w", err)
+	}
 	if err := forge.ProvideValue(c, watches); err != nil {
 		return fmt.Errorf("provide the release watches: %w", err)
+	}
+	// The agent reads a service's traffic the way a canary and the watch
+	// do, after it checks the caller may read the project's infrastructure:
+	// neither the reader nor the binding lookup takes a principal.
+	if err := forge.ProvideValue[releasehealth.Reader](c, health); err != nil {
+		return fmt.Errorf("provide the release health reader: %w", err)
+	}
+	if err := forge.ProvideValue(c, planStore); err != nil {
+		return fmt.Errorf("provide the planning store: %w", err)
 	}
 	if err := watchRoutes(fapp.Router(), guard, watches); err != nil {
 		return err
@@ -771,7 +784,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound), errors.Is(err, releasewatch.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, planning.ErrManagedFailedCleanupConflict), errors.Is(err, deployments.ErrManagedCleanupReviewRequired), errors.Is(err, deployments.ErrManagedCleanupProtocol), errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrCapacityWaitConflict), errors.Is(err, deployments.ErrStaleRollback),
+	case errors.Is(err, planning.ErrManagedFailedCleanupConflict), errors.Is(err, deployments.ErrManagedCleanupReviewRequired), errors.Is(err, deployments.ErrManagedCleanupProtocol), errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrNotRunning), errors.Is(err, deployments.ErrNothingToCancel), errors.Is(err, deployments.ErrCapacityWaitConflict), errors.Is(err, deployments.ErrStaleRollback),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning), errors.Is(err, planning.ErrNoPreviousRelease),
 		errors.Is(err, planning.ErrReleaseRunning), errors.Is(err, planning.ErrCanaryReverted), errors.Is(err, releasewatch.ErrConflict), errors.Is(err, projects.ErrFleetManaged):
