@@ -544,7 +544,8 @@ function SecretForm({ request: r }: { request: Request }) {
       className="grid gap-2"
     >
       <label htmlFor={field} className="text-[13px] font-medium">
-        Value for {r.target.key} in {where}
+        Value for {r.target.key}
+        {r.target.service ? ` on ${r.target.service}` : ""} in {where}
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input

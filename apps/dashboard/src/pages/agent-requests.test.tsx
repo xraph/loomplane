@@ -548,3 +548,19 @@ it("lets the asker, the routed team or an AI admin answer, and nobody else", asy
   )
   expect(mine.getByRole("textbox", { name: "Your answer" })).toBeInTheDocument()
 })
+
+// The service a secret lands on is part of what you're agreeing to, so the
+// form names it.
+it("names the service a secret is for", async () => {
+  serve([
+    request({
+      kind: "provide_secret",
+      question: "I need the Stripe key.",
+      target: { key: "STRIPE_KEY", environment: "production", service: "api" },
+    }),
+  ])
+  show()
+  expect(
+    await screen.findByLabelText("Value for STRIPE_KEY on api in production")
+  ).toHaveAttribute("type", "password")
+})
