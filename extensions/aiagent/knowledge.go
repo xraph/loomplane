@@ -18,17 +18,6 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 )
 
-// knowledgeUnavailable is why knowledge isn't there yet.
-const knowledgeUnavailable = "Knowledge isn't set up yet on this server"
-
-// bootKnowledge makes knowledge ready on this server and says whether it
-// is. Start calls it after the library extensions have started and before
-// any agent job runs. 3b replaces it with the documentation ingestion; until
-// then knowledge is configured or not, and never available.
-var bootKnowledge = func(_ context.Context, cfg config.AIConfig, _ *grove.DB) agentsettings.KnowledgeStatus {
-	return agentsettings.KnowledgeStatus{Configured: cfg.Knowledge.Configured(), Available: false, Reason: knowledgeUnavailable}
-}
-
 // newVectorStore is knowledge's vector store: pgvector over Loomplane's
 // database. Tests swap it, since pgvector needs Postgres.
 var newVectorStore = func(db *grove.DB, dimensions int) vectorstore.VectorStore {
@@ -45,9 +34,9 @@ type knowledgeExtension struct {
 	tenants func(ctx context.Context, orgID string) (string, error)
 }
 
-// newKnowledgeExtension builds weave without routes or migrations (3b runs
-// pgvector's group when knowledge boots) and without its recovery loop,
-// which Loomplane schedules itself.
+// newKnowledgeExtension builds weave without routes or migrations
+// (agentknowledge.Boot runs pgvector's group when knowledge boots) and
+// without its recovery loop, which Loomplane schedules itself.
 func newKnowledgeExtension(ai config.AIConfig, gateway func() *nexus.Gateway, tenants func(context.Context, string) (string, error)) *knowledgeExtension {
 	return &knowledgeExtension{
 		Extension: weaveext.New(weaveext.WithConfig(weaveext.Config{RecoveryInterval: -1}), weaveext.WithDisableRoutes(), weaveext.WithDisableMigrate()),

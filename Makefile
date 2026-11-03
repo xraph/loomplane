@@ -1,4 +1,4 @@
-.PHONY: help up down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
+.PHONY: help up up-knowledge down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
 	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
@@ -13,6 +13,12 @@ COMPOSE       := docker compose -f deployments/docker-compose/docker-compose.yml
 # The compose Postgres. The integration tests create a database of their
 # own on it for each run.
 TEST_DATABASE_URL ?= postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable
+# The compose Postgres with pgvector (make up-knowledge). test-integration
+# passes it to the knowledge tests only when TEST_PGVECTOR_URL is set in
+# the environment or on the command line; they skip otherwise. To run them
+# against this one, make up-knowledge, then set it to this same URL.
+TEST_PGVECTOR_URL ?= postgres://loomplane:loomplane@localhost:55533/loomplane?sslmode=disable
+PGVECTOR_TEST_ENV := $(if $(filter environment command,$(firstword $(origin TEST_PGVECTOR_URL))),LOOMPLANE_TEST_PGVECTOR_URL='$(TEST_PGVECTOR_URL)')
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -27,11 +33,14 @@ setup: ## Install Go modules and the dashboard's packages
 up: ## Start Postgres in Docker
 	$(COMPOSE) up -d --wait
 
+up-knowledge: ## Start a Postgres with pgvector for the knowledge tests
+	$(COMPOSE) --profile knowledge up -d --wait postgres-vector
+
 stack: ## Build the image and run all of Loomplane in Docker on LOOMPLANE_PORT (8780)
 	$(COMPOSE) --profile app up -d --build --wait
 
 down: ## Stop everything compose started (the data volume stays)
-	$(COMPOSE) --profile app down
+	$(COMPOSE) --profile app --profile knowledge down
 
 migrate: ## Apply pending migrations to the database config.local.yaml names
 	go run ./cmd/loomplane migrate
@@ -125,7 +134,7 @@ test-dashboard: ## Run the dashboard's unit tests
 	pnpm --dir $(DASHBOARD_DIR) test
 
 test-integration: ## Boot the whole app against the compose Postgres (make up first)
-	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags=integration -count=1 -timeout=90m ./tests/integration/
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' $(PGVECTOR_TEST_ENV) go test -tags=integration -count=1 -timeout=90m ./tests/integration/
 
 acceptance: ## Deploy to real clouds and take it down again; costs money (docs/acceptance.md)
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags='integration acceptance' -count=1 -timeout=180m -v \

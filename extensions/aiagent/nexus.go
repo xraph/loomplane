@@ -154,7 +154,7 @@ func embeddingPrice(ctx context.Context, k config.AIKnowledgeConfig, ps []config
 
 // embeddingsPriced reports whether nexus prices the server's embedding
 // model, so knowledge can say so rather than fail on its first embed.
-func (e *Extension) embeddingsPriced(ctx context.Context) bool { //nolint:unused // Boot (plan 3b task 6) calls it; drop this comment then
+func (e *Extension) embeddingsPriced(ctx context.Context) bool {
 	return gatewayAdapter{gw: e.nexus.Gateway}.Priced(ctx, agentsettings.EmbeddingsProvider, e.cfg.AI.Knowledge.EmbeddingModel)
 }
 

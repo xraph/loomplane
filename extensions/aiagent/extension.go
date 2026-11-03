@@ -37,6 +37,7 @@ import (
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/agentchat"
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
@@ -248,11 +249,12 @@ func sweepCron() *cron.Definition[struct{}] {
 	return &cron.Definition[struct{}]{Name: agentruns.CronSweep, JobName: agentruns.JobSweep, Schedule: sweepEvery, Queue: agentruns.SweepQueue}
 }
 
-// Start records whether this server can give the agent knowledge. The
-// library extensions have started by now, and no agent job has run.
+// Start turns knowledge on if this server can have it, and records why
+// not if it can't; knowledge never stops the agent starting. The library
+// extensions have started by now, and no agent job has run.
 func (e *Extension) Start(ctx context.Context) error {
 	if s := e.agentSettings(); s != nil {
-		s.SetKnowledge(bootKnowledge(ctx, e.cfg.AI, e.db))
+		s.SetKnowledge(agentknowledge.Boot(ctx, e.cfg.AI, e.embeddingsPriced, agentknowledge.PgVectors(e.db)))
 	}
 	// Only here: with AI off this extension doesn't exist, and nothing is
 	// scheduled; a schedule left from when AI was on lands on aiext.Off.
