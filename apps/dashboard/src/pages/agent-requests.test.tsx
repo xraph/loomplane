@@ -16,12 +16,16 @@ import { AgentRequests } from "./agent-requests"
 const state = vi.hoisted(() => ({
   runs: [] as { id: string; status: string; plan: { id: string } }[],
   agentOn: true,
+  // The workspace's permissions; null holds every one.
+  workspace: null as string[] | null,
+  // Each project's permissions, by ID; a project left out can't be read.
+  projects: {} as Record<string, string[]>,
 }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
-    session: { orgId: "org" },
+    session: { orgId: "org", userId: "usr_1" },
     organizations: [],
-    can: () => true,
+    can: (p: string) => state.workspace === null || state.workspace.includes(p),
   }),
 }))
 vi.mock("@/lib/features", () => ({
@@ -66,6 +70,8 @@ afterEach(() => {
   forgeClient.clear()
   state.runs = []
   state.agentOn = true
+  state.workspace = null
+  state.projects = {}
 })
 
 type Row = Record<string, unknown>
@@ -104,7 +110,9 @@ function request(over: Row = {}): Row {
 
 function serve(
   requests: Row[],
-  extra: Record<string, (body: unknown) => Response> = {}
+  extra: Record<string, (body: unknown) => Response> = {},
+  // What "for you" lists, when it isn't the same as everyone's.
+  mine?: Row[]
 ) {
   const writes: Write[] = []
   const reads: string[] = []
@@ -119,7 +127,15 @@ function serve(
       const route = extra[`${method} ${url.pathname}`]
       if (route) return route(body)
       if (url.pathname === "/api/v1/agent/requests")
-        return Response.json({ requests })
+        return Response.json({
+          requests:
+            mine && url.searchParams.get("for") === "me" ? mine : requests,
+        })
+      const perms = url.pathname.match(
+        /^\/api\/v1\/projects\/([^/]+)\/permissions$/
+      )
+      if (perms && state.projects[perms[1]])
+        return Response.json({ permissions: state.projects[perms[1]] })
       if (url.pathname === "/api/v1/projects")
         return Response.json({
           projects: [{ id: "proj_1", name: "Storefront", slug: "storefront" }],
@@ -403,4 +419,132 @@ it("says so when the agent is off, and asks for nothing", async () => {
   show()
   expect(await screen.findByText("The agent is off")).toBeInTheDocument()
   expect(reads.filter((r) => r.includes("/agent/"))).toEqual([])
+})
+
+// The page shows a settle control only to someone the server lets settle
+// that kind of request, and tells everyone else who can.
+it("shows each control only to people who may settle it", async () => {
+  state.workspace = ["agent:use", "project:read"]
+  state.projects = {
+    proj_1: ["project:read", "deployment:approve"],
+    proj_2: ["project:read"],
+  }
+  const { reads } = serve([
+    request({
+      id: "areq_plan1",
+      kind: "approve_plan",
+      question: "Approve storefront?",
+      target: { plan_id: "plan_1", plan_revision: "r1" },
+    }),
+    request({
+      id: "areq_plan2",
+      project_id: "proj_2",
+      kind: "approve_plan",
+      question: "Approve billing?",
+      target: { plan_id: "plan_2", plan_revision: "r2" },
+    }),
+    request({
+      id: "areq_secret",
+      kind: "provide_secret",
+      question: "I need the Stripe key.",
+      target: { key: "STRIPE_KEY", environment: "production" },
+    }),
+    request({
+      id: "areq_secret2",
+      project_id: "proj_2",
+      kind: "provide_secret",
+      question: "I need the billing key.",
+      target: { key: "BILLING_KEY", environment: "production" },
+    }),
+    request({
+      id: "areq_gh",
+      kind: "connect_github",
+      question: "Connect GitHub?",
+    }),
+  ])
+  show()
+  const card = async (name: string) =>
+    within(await screen.findByRole("region", { name }))
+
+  // proj_1 lets this person approve deployments, so they may decline its
+  // plan; proj_2 doesn't.
+  const plan1 = await card("Approve storefront?")
+  await waitFor(() =>
+    expect(plan1.getByRole("button", { name: "Decline" })).toBeInTheDocument()
+  )
+  const plan2 = await card("Approve billing?")
+  await waitFor(() =>
+    expect(
+      plan2.getByText(
+        "Only someone who can approve deployments in this project can settle this."
+      )
+    ).toBeInTheDocument()
+  )
+  expect(plan2.queryByRole("button", { name: "Decline" })).toBeNull()
+
+  // Neither project lets them manage variables: no secret field to type
+  // into and lose.
+  for (const q of ["I need the Stripe key.", "I need the billing key."]) {
+    const c = await card(q)
+    expect(c.queryByLabelText(/Value for/)).toBeNull()
+    expect(c.queryByRole("button", { name: "Decline" })).toBeNull()
+    expect(
+      c.getByText(
+        "Only someone who can manage this project's variables can provide it."
+      )
+    ).toBeInTheDocument()
+  }
+
+  // Connecting GitHub needs repository:connect on the workspace.
+  const gh = await card("Connect GitHub?")
+  expect(gh.queryByRole("button", { name: /connected it/ })).toBeNull()
+  expect(
+    gh.getByText("Only someone who can connect repositories can settle this.")
+  ).toBeInTheDocument()
+
+  // One read of permissions per project, however many rows it has.
+  const permissionReads = (id: string) =>
+    reads.filter((r) => r === `/api/v1/projects/${id}/permissions`).length
+  expect(permissionReads("proj_1")).toBe(1)
+  expect(permissionReads("proj_2")).toBe(1)
+})
+
+it("lets the asker, the routed team or an AI admin answer, and nobody else", async () => {
+  state.workspace = ["agent:use", "project:read"]
+  state.projects = { proj_1: ["project:read"] }
+  const theirs = request({
+    id: "areq_theirs",
+    question: "Which region for Ada's cache?",
+    asked_for: "usr_2",
+    team_id: "team_ops",
+    team_name: "Ops",
+    route_source: "named",
+  })
+  const teams = request({
+    id: "areq_team",
+    question: "Which region for the team's cache?",
+    asked_for: "usr_2",
+    team_id: "team_pay",
+    team_name: "Payments",
+    route_source: "named",
+  })
+  // "For you" holds what the server routes to this person's teams.
+  serve([theirs, teams], {}, [teams])
+  show()
+  await userEvent.click(await screen.findByRole("button", { name: "Everyone" }))
+  const other = within(
+    await screen.findByRole("region", { name: "Which region for Ada's cache?" })
+  )
+  await waitFor(() =>
+    expect(
+      other.getByText(
+        "Only the person who asked, a member of the team it was sent to, or someone who manages the workspace's AI can answer."
+      )
+    ).toBeInTheDocument()
+  )
+  expect(other.queryByRole("textbox", { name: "Your answer" })).toBeNull()
+  const mine = within(
+    screen.getByRole("region", { name: "Which region for the team's cache?" })
+  )
+  expect(mine.getByRole("textbox", { name: "Your answer" })).toBeInTheDocument()
 })

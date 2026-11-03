@@ -10,7 +10,7 @@ import {
   PlugIcon,
   SparklesIcon,
 } from "lucide-react"
-import { useId, useState, type ReactNode } from "react"
+import { useId, useState, type ReactElement, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -45,6 +45,7 @@ import {
 } from "@/components/zero-state"
 import { useAgent } from "@/lib/features"
 import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { ago } from "@/lib/relative-time"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -217,6 +218,18 @@ function Requests({
   )
   const pending = all.filter((r) => r.status === "pending")
   const rest = all.filter((r) => r.status !== "pending")
+  // Who's asked what: the pending "for you" list, which the server builds
+  // from the asker, team membership and the AI admins. It's the same query
+  // as the default view, so reading it costs nothing there; on "everyone"
+  // it tells which questions this person may answer.
+  const mine = useQuery(useAgentRequestsList, {
+    query: { status: "pending", for: "me" },
+  })
+  const forMe = new Set([
+    ...(audience === "me" ? pending.map((r) => r.id) : []),
+    ...(mine.data?.requests ?? []).flatMap((r) => (r ? [r.id] : [])),
+  ])
+  const projectIds = [...new Set(pending.map((r) => r.projectId))]
 
   if (list.status === "error")
     return (
@@ -228,51 +241,153 @@ function Requests({
     )
   if (!list.data) return <Skeleton className="h-40 w-full rounded-[14px]" />
   return (
-    <div className="grid gap-3">
-      {pending.length === 0 && (
-        <Notice
-          title="Nothing is waiting on you"
-          text={
-            audience === "me"
-              ? "When the agent needs you, it shows up here and in your inbox."
-              : "The agent isn't waiting on anyone right now."
-          }
-        />
+    <ProjectPermissions ids={projectIds}>
+      {(canOn) => (
+        <div className="grid gap-3">
+          {pending.length === 0 && (
+            <Notice
+              title="Nothing is waiting on you"
+              text={
+                audience === "me"
+                  ? "When the agent needs you, it shows up here and in your inbox."
+                  : "The agent isn't waiting on anyone right now."
+              }
+            />
+          )}
+          {pending.map((r) => (
+            <RequestCard
+              key={r.id}
+              request={r}
+              project={names.get(r.projectId)}
+              highlight={r.id === highlight}
+              may={maySettle(r, canOn(r.projectId), forMe)}
+            />
+          ))}
+          {settled && rest.length > 0 && (
+            <h2 className="mt-2 text-[13px] font-semibold text-muted-foreground">
+              Settled
+            </h2>
+          )}
+          {settled &&
+            rest.map((r) => (
+              <RequestCard
+                key={r.id}
+                request={r}
+                project={names.get(r.projectId)}
+                highlight={r.id === highlight}
+                may={false}
+              />
+            ))}
+        </div>
       )}
-      {pending.map((r) => (
-        <RequestCard
-          key={r.id}
-          request={r}
-          project={names.get(r.projectId)}
-          highlight={r.id === highlight}
-        />
-      ))}
-      {settled && rest.length > 0 && (
-        <h2 className="mt-2 text-[13px] font-semibold text-muted-foreground">
-          Settled
-        </h2>
-      )}
-      {settled &&
-        rest.map((r) => (
-          <RequestCard
-            key={r.id}
-            request={r}
-            project={names.get(r.projectId)}
-            highlight={r.id === highlight}
-          />
-        ))}
-    </div>
+    </ProjectPermissions>
   )
+}
+
+type Can = (permission: string) => boolean
+
+/**
+ * ProjectPermissions reads what the person holds on each project in ids,
+ * once per project however many requests it has, and hands children a
+ * lookup by project. It nests one useProjectCan per project, so the hooks
+ * keep their order while the list keeps its own.
+ */
+function ProjectPermissions({
+  ids,
+  found = {},
+  children,
+}: {
+  ids: string[]
+  found?: Record<string, Can>
+  children: (canOn: (projectId: string) => Can) => ReactElement
+}) {
+  if (ids.length === 0)
+    return <WorkspaceCan found={found}>{children}</WorkspaceCan>
+  const [first, ...more] = ids
+  return (
+    <OneProject id={first} found={found} more={more}>
+      {children}
+    </OneProject>
+  )
+}
+
+function OneProject({
+  id,
+  found,
+  more,
+  children,
+}: {
+  id: string
+  found: Record<string, Can>
+  more: string[]
+  children: (canOn: (projectId: string) => Can) => ReactElement
+}) {
+  const can = useProjectCan(id || undefined)
+  return (
+    <ProjectPermissions ids={more} found={{ ...found, [id]: can }}>
+      {children}
+    </ProjectPermissions>
+  )
+}
+
+function WorkspaceCan({
+  found,
+  children,
+}: {
+  found: Record<string, Can>
+  children: (canOn: (projectId: string) => Can) => ReactElement
+}) {
+  const { can } = useOrganization()
+  return children((projectId) => found[projectId] ?? can)
+}
+
+/**
+ * maySettle is the server's rule for who settles a request, as far as the
+ * page can tell: the permission its kind needs on its project, and for a
+ * question, being the one asked (the "for you" list) or managing the
+ * workspace's AI. The server checks again either way.
+ */
+function maySettle(r: Request, can: Can, forMe: Set<string>): boolean {
+  switch (r.kind) {
+    case "approve_plan":
+      return can("deployment:approve")
+    case "provide_secret":
+      return can("variable:manage")
+    case "connect_github":
+      return can("repository:connect")
+    case "create_connection":
+      return can("cloud_account:manage")
+    case "answer":
+      return forMe.has(r.id) || can("ai:manage")
+    default:
+      return false
+  }
+}
+
+// whoCan says who may settle a request of each kind, for someone who can
+// see it but not act on it.
+const whoCan: Record<string, string> = {
+  approve_plan:
+    "Only someone who can approve deployments in this project can settle this.",
+  provide_secret:
+    "Only someone who can manage this project's variables can provide it.",
+  connect_github: "Only someone who can connect repositories can settle this.",
+  create_connection:
+    "Only someone who can manage cloud connections can settle this.",
+  answer:
+    "Only the person who asked, a member of the team it was sent to, or someone who manages the workspace's AI can answer.",
 }
 
 function RequestCard({
   request: r,
   project,
   highlight,
+  may,
 }: {
   request: Request
   project?: string
   highlight?: boolean
+  may: boolean
 }) {
   const now = useNow(30_000)
   const person = usePeople()
@@ -326,7 +441,16 @@ function RequestCard({
         </ul>
       )}
       {open ? (
-        <Respond request={r} />
+        may ? (
+          <Respond request={r} />
+        ) : (
+          <div className="grid gap-2">
+            {r.kind === "approve_plan" && <PlanLink planId={r.target.planId} />}
+            <p className="text-[13px] text-muted-foreground">
+              {whoCan[r.kind] ?? "You can't settle this request."}
+            </p>
+          </div>
+        )
       ) : (
         <p className="text-[13px] text-muted-foreground">
           <span className="font-medium text-foreground">
@@ -374,12 +498,16 @@ function PlanApproval({ request: r }: { request: Request }) {
   const { runs } = useRuns()
   const run = runs.find((x) => x.plan.id === r.target.planId)
   if (run && run.status === "waiting") return <ApprovalCard run={run} />
+  return <PlanLink planId={r.target.planId} />
+}
+
+function PlanLink({ planId }: { planId?: string }) {
   return (
     <p className="text-[13px]">
-      {r.target.planId ? (
+      {planId ? (
         <Link
           to="/deployments/$id"
-          params={{ id: r.target.planId }}
+          params={{ id: planId }}
           className="text-primary underline-offset-2 hover:underline"
         >
           Open the plan
