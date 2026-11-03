@@ -7,7 +7,7 @@ afterEach(() => {
 
 describe("edition", () => {
   it("is the public edition unless the build says cloud", async () => {
-    vi.stubEnv("VITE_LOOMPLANE_EDITION", "")
+    vi.stubEnv("VITE_LOOMPLANE_EDITION", undefined)
     const { isCloud } = await import("./edition")
     expect(isCloud).toBe(false)
   })

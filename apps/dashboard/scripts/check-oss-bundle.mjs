@@ -2,6 +2,11 @@
 // exports the marker below, so finding it under the build directory means the
 // cloud module leaked into the bundle.
 //
+// Source maps are scanned too. The build emits them (build.sourcemap) and the
+// web extension serves them, so a map that embeds cloud source would publish
+// it even when the JS is clean. Hits are listed apart so you can tell a code
+// leak from a map-only one; both fail the check.
+//
 //   node scripts/check-oss-bundle.mjs dist
 
 import { readdirSync, readFileSync } from "node:fs"
@@ -23,17 +28,22 @@ if (!dir) {
   process.exit(2)
 }
 
-let found
+const code = []
+const maps = []
 try {
-  found = [...files(dir)].filter((f) => readFileSync(f).includes(MARKER))
+  for (const f of files(dir)) {
+    if (!readFileSync(f).includes(MARKER)) continue
+    ;(f.endsWith(".map") ? maps : code).push(f)
+  }
 } catch (err) {
   console.error(`check-oss-bundle: cannot read ${dir}: ${err.message}`)
   process.exit(2)
 }
 
-if (found.length > 0) {
+if (code.length > 0 || maps.length > 0) {
   console.error(`${MARKER} found in a public build:`)
-  for (const f of found) console.error(`  ${f}`)
+  for (const f of code) console.error(`  code: ${f}`)
+  for (const f of maps) console.error(`  source map only: ${f}`)
   process.exit(1)
 }
 console.log(`check-oss-bundle: no cloud code in ${dir}`)
