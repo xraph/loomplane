@@ -480,6 +480,45 @@ func TestToolCallEventCarriesSafeArguments(t *testing.T) {
 	}
 }
 
+// knowledge_search, cortex's builtin, isn't an operation, but the log
+// knows it as a read and keeps its query, through SafeArguments. A tool
+// that's neither keeps no class and no arguments.
+func TestKnowledgeSearchCallIsARead(t *testing.T) {
+	w := newWorld(t)
+	task := w.adaChat(t)
+	events := make(chan engine.StreamEvent, 4)
+	events <- toolCall("knowledge_search", "call_k", `{"query":"canary thresholds","collection":"loomplane-docs","api_key":"k"}`)
+	events <- toolCall("agent_send", "call_a", `{"to":"other","message":"hunter2"}`)
+	close(events)
+	w.svc.pump(context.Background(), task, events)
+	want := map[string]string{
+		"call_k": `{"arguments":{"api_key":"[hidden]","collection":"loomplane-docs","query":"canary thresholds"},"call_id":"call_k","risk":"read","tool":"knowledge_search"}`,
+		"call_a": `{"call_id":"call_a","risk":"","tool":"agent_send"}`,
+	}
+	seen := 0
+	for _, e := range w.store.eventsOf(task.ID) {
+		if e.Kind != string(engine.EventToolCall) {
+			continue
+		}
+		seen++
+		var data struct {
+			CallID string `json:"call_id"`
+		}
+		if err := json.Unmarshal(e.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(e.Data); got != want[data.CallID] {
+			t.Errorf("%s: %s, want %s", data.CallID, got, want[data.CallID])
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("%d tool calls, want %d", seen, len(want))
+	}
+	if risk := w.svc.risk("knowledge_search"); risk != "read" {
+		t.Errorf("a suspended knowledge_search would carry risk %q", risk)
+	}
+}
+
 // toolResult is a tool_result row as the log keeps it.
 type toolResult struct {
 	Seq     int64

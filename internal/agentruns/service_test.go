@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/cortex"
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
+	"github.com/xraph/cortex/knowledge"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/nexus/pipeline"
 	"github.com/xraph/shield"
@@ -325,6 +326,51 @@ func TestStartJobPassesRunIDAndBudget(t *testing.T) {
 	}
 	if got := w.store.task(t, task.ID); got.Status != StatusRunning {
 		t.Fatalf("status %s", got.Status)
+	}
+}
+
+// knowingEngine is the fake engine with a knowledge provider, as cortex
+// is when knowledge is configured.
+type knowingEngine struct {
+	*fakeEngine
+}
+
+func (knowingEngine) Knowledge() knowledge.Provider { return knowingProvider{} }
+
+type knowingProvider struct{ knowledge.Provider }
+
+// Cortex leaves a builtin out of a run whose allowlist doesn't name it,
+// and refuses to prepare one that names a tool it doesn't have. So a chat
+// names knowledge_search only when cortex has knowledge; the authorizer
+// still decides, per workspace, whether the model sees it.
+func TestChatToolsNameKnowledgeSearchOnlyWithKnowledge(t *testing.T) {
+	for _, knows := range []bool{false, true} {
+		w := newWorld(t)
+		if knows {
+			w.svc.engine = func() runner { return knowingEngine{w.engine} }
+		}
+		task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+		if err := w.runStart(t, task); err != nil {
+			t.Fatal(err)
+		}
+		streams, _, _, _, _ := w.engine.calls()
+		o := streams[0].overrides
+		if !o.ToolsRestricted || slices.Contains(o.Tools, agentauthz.KnowledgeSearch) != knows || !slices.Contains(o.Tools, "list_teams") {
+			t.Errorf("with knowledge %v, tools %v", knows, o.Tools)
+		}
+		// A kind with its own list keeps it.
+		if err := w.svc.RegisterKind(KindSpec{Kind: KindInvestigation, Agent: "loomplane-investigation", Prompt: "Investigate.",
+			MaxSteps: 10, DefaultMaxTokens: 1000, MaxTokens: 1000, Tools: []string{"whoami"}}); err != nil {
+			t.Fatal(err)
+		}
+		task = w.start(t, StartInput{Kind: KindInvestigation})
+		if err := w.runStart(t, task); err != nil {
+			t.Fatal(err)
+		}
+		streams, _, _, _, _ = w.engine.calls()
+		if o := streams[1].overrides; !slices.Equal(o.Tools, []string{"whoami"}) {
+			t.Errorf("with knowledge %v, the investigation's tools %v", knows, o.Tools)
+		}
 	}
 }
 

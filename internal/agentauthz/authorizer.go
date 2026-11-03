@@ -89,6 +89,11 @@ type Authorizer struct {
 	// started for it. Nil means only the plan's own creator counts. An
 	// error counts as not requested.
 	Requested func(ctx context.Context, call agentops.Call, plan *planning.Plan) (bool, error)
+	// Knowledge reports whether a workspace's agent has knowledge: it's
+	// turned on there and this server can give it (agentsettings'
+	// Effective.Knowledge). Only then is knowledge_search shown and
+	// allowed. Nil means knowledge is off everywhere.
+	Knowledge func(ctx context.Context, orgID string) bool
 
 	mu   sync.RWMutex
 	gate PromotionGate
@@ -118,7 +123,8 @@ func (a *Authorizer) Gate() PromotionGate {
 // operation the agent or the person lacks the permission for is hidden,
 // and a read-only principal sees only reads. A scope that isn't one of
 // Loomplane's shows nothing. A principal that isn't the agent sees nothing, and neither does
-// a tool that isn't an operation.
+// a tool that isn't an operation, except knowledge_search, which the
+// workspace's agent sees only while Knowledge says the workspace has it.
 func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.Tool) []llm.Tool {
 	p, ok := s.Principal.(security.Principal)
 	if !ok || !p.IsAgent() || a.Registry == nil || a.Authz == nil {
@@ -145,7 +151,13 @@ func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.
 	out := make([]llm.Tool, 0, len(tools))
 	for _, t := range tools {
 		op, ok := a.Registry.Lookup(t.Name)
-		if !ok || (p.ReadOnly && op.Def.Risk.ChangesSomething()) || !may(op.Permission) {
+		if !ok {
+			if a.visibleBuiltin(ctx, p, scope.OrgID, t, may) {
+				out = append(out, t)
+			}
+			continue
+		}
+		if (p.ReadOnly && op.Def.Risk.ChangesSomething()) || !may(op.Permission) {
 			continue
 		}
 		out = append(out, t)
@@ -166,6 +178,9 @@ func (a *Authorizer) Visible(ctx context.Context, s cortex.Subject, tools []llm.
 //     reason); anything else (a secret set_variable) is ErrNeedsPerson,
 //     naming the request to make instead.
 //
+// knowledge_search, cortex's builtin, is a read: it runs while Knowledge
+// says the workspace has knowledge, and is ErrKnowledgeOff otherwise.
+//
 // A production retry_deployment is ErrNeedsPerson, and a plan that sets a
 // default backup schedule always pauses for a person. An unknown tool, a
 // principal that isn't the workspace's agent, a read-only principal
@@ -174,6 +189,9 @@ func (a *Authorizer) Authorize(ctx context.Context, s cortex.Subject, tc llm.Too
 	note := noteFrom(ctx)
 	op, ok := a.Registry.Lookup(tc.Name)
 	if !ok {
+		if risk, builtin := BuiltinRisk(tc.Name); builtin {
+			return a.authorizeBuiltin(ctx, s, tc, risk)
+		}
 		return fmt.Errorf("%s: %w", tc.Name, errNotAnOperation)
 	}
 	call, err := agentops.CallFrom(cortex.Invocation{Subject: s, Call: tc})
@@ -412,11 +430,15 @@ func (l *layered) record(ctx context.Context, s cortex.Subject, tc llm.ToolCall,
 }
 
 // shieldClass is the risk class shield scans a call under: the registry's,
-// as Authorize computed it, but change for a request to a person. A class
+// as Authorize computed it, but change for a request to a person, and
+// BuiltinRisk's for a cortex builtin (knowledge_search reads). A class
 // that can't be read is "", which shield's profile blocks.
 func (a *Authorizer) shieldClass(ctx context.Context, s cortex.Subject, tc llm.ToolCall) string {
 	op, ok := a.Registry.Lookup(tc.Name)
 	if !ok {
+		if risk, builtin := BuiltinRisk(tc.Name); builtin {
+			return string(risk)
+		}
 		return ""
 	}
 	if op.External() {

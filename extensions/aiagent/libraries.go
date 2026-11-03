@@ -7,6 +7,7 @@ import (
 	"github.com/xraph/cortex"
 	cortexengine "github.com/xraph/cortex/engine"
 	cortexext "github.com/xraph/cortex/extension"
+	cortexweave "github.com/xraph/cortex/knowledge/weave"
 	nexusllm "github.com/xraph/cortex/llm/nexus"
 	"github.com/xraph/cortex/safety"
 	shieldsafety "github.com/xraph/cortex/safety/shield"
@@ -18,6 +19,7 @@ import (
 	shieldext "github.com/xraph/shield/extension"
 	weaveext "github.com/xraph/weave/extension"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentscope"
 )
 
@@ -87,11 +89,12 @@ func (e *Extension) LibraryExtensions() []forge.Extension {
 }
 
 // cortexOptions configure the engine cortex builds in its Register from
-// what nexus and shield provided: the nexus adapter maps a run's scope to
-// its workspace's tenant and provider, the shield adapter scans under
-// agentscope.App, and the engine options come last, so they win over
-// cortex's config and its automatic wiring. The last of them is the
-// publication policy.
+// what nexus, shield and weave provided: the nexus adapter maps a run's
+// scope to its workspace's tenant and provider, the shield adapter scans
+// under agentscope.App, the weave adapter (only when knowledge is
+// configured) searches the docs besides the workspace's own collections,
+// and the engine options come last, so they win over cortex's config and
+// its automatic wiring. The last of them is the publication policy.
 func (e *Extension) cortexOptions() []cortexext.ExtOption {
 	opts := []cortexext.ExtOption{
 		// No WithDisableRoutes: cortex's REST handlers are a module of
@@ -100,6 +103,9 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 		cortexext.WithNexusOptions(nexusllm.WithTenant(e.cortexTenant), nexusllm.WithProvider(e.cortexProvider)),
 		cortexext.WithShieldOptions(shieldsafety.WithApp(agentscope.App)),
 	}
+	if e.cfg.AI.Knowledge.Configured() {
+		opts = append(opts, cortexext.WithWeaveOptions(knowledgeOptions()...))
+	}
 	engineOpts := e.engineOptions()
 	out := make([]cortexext.ExtOption, 0, len(opts)+len(engineOpts)+1)
 	out = append(out, opts...)
@@ -107,6 +113,16 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 		out = append(out, cortexext.WithEngineOption(o))
 	}
 	return append(out, cortexext.WithEngineOption(cortexengine.WithPublicationPolicy(publicationPolicy)))
+}
+
+// knowledgeOptions configure cortex's weave adapter. Its default tenant,
+// cortex.RootTenant, is the scope's workspace, so a run searches its own
+// workspace's collections, never another's; the docs collection, under
+// its own tenant, is shared with every run, read only.
+func knowledgeOptions() []cortexweave.Option {
+	return []cortexweave.Option{
+		cortexweave.WithShared(cortexweave.SharedCollection{Tenant: agentknowledge.DocsTenant, Collection: agentknowledge.DocsCollection}),
+	}
 }
 
 // publicationPolicy is how cortex lets the model's text out: in segments

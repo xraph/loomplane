@@ -130,7 +130,7 @@ func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 		toolAuthorizer: &lateAuthorizer{},
 		hooks:          &agentruns.Hooks{},
 	}
-	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow}
+	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow, Knowledge: e.knowledgeOn}
 	// approve_plan asks the same question as the authorizer just before it
 	// approves, through whichever gate is installed then.
 	e.deps.Promote = e.authz.Promote
@@ -159,6 +159,19 @@ func (e *Extension) Dependencies() []string {
 
 // agentSettings is the agent's settings, or nil before Register.
 func (e *Extension) agentSettings() *agentsettings.Service { return e.settings.Load() }
+
+// knowledgeOn reports whether the workspace's agent has knowledge: it's
+// turned on there and this server can give it. Anything that can't be
+// read, the agent being off among them, is off: the agent works without
+// knowledge.
+func (e *Extension) knowledgeOn(ctx context.Context, orgID string) bool {
+	s := e.agentSettings()
+	if s == nil {
+		return false
+	}
+	eff, err := s.Effective(ctx, orgID)
+	return err == nil && eff.Knowledge
+}
 
 // Register resolves the agent's settings from the AI section and binds
 // nexus and the guardrail seeder to them, so a workspace can turn the

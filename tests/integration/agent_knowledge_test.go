@@ -7,16 +7,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/cortex"
+	cortexengine "github.com/xraph/cortex/engine"
 	"github.com/xraph/weave/vectorstore/pgvector"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/agentknowledge"
+	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agenttest"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/ops"
@@ -188,6 +193,19 @@ type embeddingServer struct {
 
 func newEmbeddingServer(t *testing.T, dimensions int) *embeddingServer {
 	t.Helper()
+	return newEmbeddingServerWith(t, func(text string) []float64 {
+		v := make([]float64, dimensions)
+		for j := range v {
+			v[j] = float64((len(text)+j)%11+1) / 11
+		}
+		return v
+	})
+}
+
+// newEmbeddingServerWith is an embedding server that answers each input
+// with vector(input).
+func newEmbeddingServerWith(t *testing.T, vector func(text string) []float64) *embeddingServer {
+	t.Helper()
 	s := &embeddingServer{}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/embeddings") {
@@ -220,11 +238,7 @@ func newEmbeddingServer(t *testing.T, dimensions int) *embeddingServer {
 		}
 		data := make([]item, len(texts))
 		for i, text := range texts {
-			v := make([]float64, dimensions)
-			for j := range v {
-				v[j] = float64((len(text)+j)%11+1) / 11
-			}
-			data[i] = item{Object: "embedding", Index: i, Embedding: v}
+			data[i] = item{Object: "embedding", Index: i, Embedding: vector(text)}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -376,4 +390,240 @@ func TestDocsIngestionAcrossReboots(t *testing.T) {
 		t.Fatalf("two servers indexed %d documents, want %d", got, documents)
 	}
 	checkEmbedded(t, dsn, emb.requests.Load(), documents)
+}
+
+// topicDimensions is the size of topicVector's vectors.
+const topicDimensions = 4
+
+// canaryTopic is what topicVector recognises.
+const canaryTopic = "canary thresholds"
+
+// topicVector embeds a text about canary thresholds along the first axis
+// and everything else along the second, a little of each, so a search for
+// canary thresholds ranks what's about them first and still finds the
+// rest. Real embeddings do this by meaning; the test only needs the order.
+func topicVector(text string) []float64 {
+	v := make([]float64, topicDimensions)
+	if strings.Contains(strings.ToLower(text), canaryTopic) {
+		v[0], v[1] = 1, 0.1
+	} else {
+		v[0], v[1] = 0.1, 1
+	}
+	return v
+}
+
+// knowledgeWorkspace is a workspace on a's server with a budget and the
+// agent on, and knowledge on when knowledge says so.
+func knowledgeWorkspace(a *agentOrg, knowledge bool) {
+	a.budget("10")
+	a.enable(map[string]any{"knowledge": knowledge})
+}
+
+// Cortex's weave adapter, which the extension wires from the weave engine
+// it finds, also searches the docs: listing a workspace's collections
+// names the shared docs collection, under its own tenant.
+func TestCortexKnowledgeSharesDocs(t *testing.T) {
+	dsn := freshPgvectorDatabase(t)
+	fake := agenttest.Anthropic(t)
+	a := knowledgeOrg(t, dsn, docsAI(fake, newEmbeddingServerWith(t, topicVector), topicDimensions), "")
+	defer a.r.stop()
+	bundle, err := agentknowledge.EmbeddedDocs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForDocs(t, dsn, readyDocs, int64(len(bundle.Pages)+1)) // every page and the schema
+
+	eng := inject[*cortexengine.Engine](t, a.container())
+	kp := eng.Knowledge()
+	if kp == nil {
+		t.Fatal("cortex has no knowledge provider with knowledge configured")
+	}
+	ctx := cortex.WithScope(context.Background(), agentscope.Scope{OrgID: a.orgID}.Cortex())
+	cols, err := kp.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(cols) != 1 || cols[0].Name != agentknowledge.DocsCollection || cols[0].DocumentCount == 0 {
+		t.Fatalf("a workspace's collections: %+v, want only %s, with the docs in it", cols, agentknowledge.DocsCollection)
+	}
+}
+
+// searchResult is one result of a knowledge_search, as the model reads it.
+type searchResult struct {
+	Content  string            `json:"content"`
+	Metadata map[string]string `json:"metadata"`
+}
+
+// searchResults are the knowledge_search results in the last message of
+// a request: the tool result the model receives after its call.
+func searchResults(t *testing.T, req agenttest.Captured) []searchResult {
+	t.Helper()
+	text := toolResultText(t, req)
+	var out struct {
+		Status  string         `json:"status"`
+		Results []searchResult `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil || out.Status != "success" {
+		t.Fatalf("knowledge_search answered %s (%v)", text, err)
+	}
+	return out.Results
+}
+
+// toolResultText is the tool result in the last message of a request,
+// out of the untrusted-content quote the run puts it in.
+func toolResultText(t *testing.T, req agenttest.Captured) string {
+	t.Helper()
+	if len(req.Messages) == 0 {
+		t.Fatal("a request with no messages")
+	}
+	var msg struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type    string          `json:"type"`
+			Content json.RawMessage `json:"content"`
+		} `json:"content"`
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if err := json.Unmarshal(last, &msg); err != nil {
+		t.Fatalf("the last message %s: %v", last, err)
+	}
+	for _, b := range msg.Content {
+		if b.Type != "tool_result" {
+			continue
+		}
+		var text string
+		if json.Unmarshal(b.Content, &text) != nil {
+			var parts []struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(b.Content, &parts); err != nil {
+				t.Fatalf("tool result %s: %v", b.Content, err)
+			}
+			for _, p := range parts {
+				text += p.Text
+			}
+		}
+		// The run quotes a tool's result as untrusted content.
+		if body, ok := strings.CutPrefix(text, `<untrusted_content source="tool_result">`); ok {
+			text, _ = strings.CutSuffix(strings.TrimSpace(body), "</untrusted_content>")
+		} else {
+			t.Errorf("a tool result that isn't quoted as untrusted: %.200s", text)
+		}
+		return strings.TrimSpace(text)
+	}
+	t.Fatalf("no tool result in %s", last)
+	return ""
+}
+
+// canaryReport is the o1 report the test indexes.
+const canaryReport = "Canary thresholds tripped on checkout: error rate 4% against a 1% threshold."
+
+// split counts a search's results by the tenant weave read each from:
+// the docs', o1's report, and any other.
+func split(results []searchResult, o1 string) (docs, reports, other int) {
+	for _, r := range results {
+		switch tenant := r.Metadata["tenant_id"]; {
+		case tenant == agentknowledge.DocsTenant:
+			docs++
+		case tenant == o1 && strings.Contains(r.Content, "tripped on checkout"):
+			reports++
+		default:
+			other++
+		}
+	}
+	return docs, reports, other
+}
+
+// A run's knowledge_search reads the docs and its own workspace's
+// documents, never another workspace's; a workspace with knowledge off
+// isn't offered the tool.
+func TestChatSearchesDocsAndOnlyItsOwnReports(t *testing.T) {
+	search := agenttest.Turn{ToolUses: []agenttest.ToolUse{{Name: "knowledge_search", Input: map[string]string{"query": "canary thresholds"}}}}
+	// o2's second search names o1's collection by its ID, filled in once
+	// it exists; the fake encodes a turn's input when it serves it.
+	crossInput := map[string]string{"query": "canary thresholds"}
+	cross := agenttest.Turn{ToolUses: []agenttest.ToolUse{{Name: "knowledge_search", Input: crossInput}}}
+	fake := agenttest.Anthropic(t,
+		search, agenttest.Turn{Text: "The docs explain canary thresholds."}, // o2
+		cross, agenttest.Turn{Text: "I can't read that."}, // o2, naming o1's collection
+		search, agenttest.Turn{Text: "Your checkout canary tripped."}, // o1
+		agenttest.Turn{Text: "I can't search here."}, // o3
+	)
+	dsn := freshPgvectorDatabase(t)
+	o1 := knowledgeOrg(t, dsn, docsAI(fake, newEmbeddingServerWith(t, topicVector), topicDimensions), "")
+	defer o1.r.stop()
+	o2 := secondAgentOrg(t, o1, "bo@example.com", "Other", "other")
+	o3 := secondAgentOrg(t, o1, "cy@example.com", "Plain", "plain")
+	knowledgeWorkspace(o1, true)
+	knowledgeWorkspace(o2, true)
+	knowledgeWorkspace(o3, false)
+	waitForDocs(t, dsn, docsJobsDone, 1)
+
+	knowledge := inject[*agentknowledge.Service](t, o1.container())
+	outcome, err := knowledge.Ingest(context.Background(), o1.orgID, agentknowledge.Document{
+		SourceKey: "report/arep_canary", Kind: agentknowledge.KindReport, Title: "Checkout canary",
+		Content: canaryReport, URL: "/agent/reports/arep_canary",
+	})
+	if err != nil || outcome != agentknowledge.OutcomeIndexed {
+		t.Fatalf("Ingest: %s, %v", outcome, err)
+	}
+
+	chat := func(a *agentOrg, message string) string {
+		t.Helper()
+		sent := converse(t, a.owner, message)
+		waitTask(t, a.owner, sent.Task.ID, func(task agentruns.Task) bool { return agentruns.Terminal(task.Status) })
+		if task := taskOf(t, a.owner, sent.Task.ID); task.Status != agentruns.StatusCompleted {
+			t.Fatalf("the chat ended %s: %s", task.Status, task.Error)
+		}
+		return sent.Conversation.ID
+	}
+
+	crossInput["collection"] = dbValue[string](t, dsn, `SELECT id FROM weave_collections WHERE tenant_id = '`+o1.orgID+`' AND name = '`+agentknowledge.WorkspaceCollection+`'`)
+
+	conversations := map[*agentOrg]string{}
+	conversations[o2] = chat(o2, "What are canary thresholds?")
+	chat(o2, "Read the other workspace's reports.")
+	conversations[o1] = chat(o1, "Why did the checkout canary stop?")
+	chat(o3, "What are canary thresholds?")
+
+	reqs := fake.Requests()
+	if len(reqs) != 7 {
+		t.Fatalf("%d model requests, want 7", len(reqs))
+	}
+	for i, name := range map[int]string{0: "o2", 4: "o1"} {
+		if !slices.Contains(reqs[i].Tools, "knowledge_search") {
+			t.Errorf("%s's model isn't offered knowledge_search: %v", name, reqs[i].Tools)
+		}
+	}
+	if docs, reports, other := split(searchResults(t, reqs[1]), o1.orgID); docs == 0 || reports != 0 || other != 0 {
+		t.Errorf("o2's search: %d from the docs, %d of o1's reports, %d other", docs, reports, other)
+	}
+	if text := toolResultText(t, reqs[3]); !strings.Contains(text, `"error"`) || strings.Contains(text, "tripped") {
+		t.Errorf("o2's search of o1's collection answered %s", text)
+	}
+	if docs, reports, other := split(searchResults(t, reqs[5]), o1.orgID); docs == 0 || reports != 1 || other != 0 {
+		t.Errorf("o1's search: %d from the docs, %d of its reports, %d other", docs, reports, other)
+	}
+	if tools := reqs[6].Tools; slices.Contains(tools, "knowledge_search") || !slices.Contains(tools, "list_projects") {
+		t.Errorf("with knowledge off the model is offered %v", tools)
+	}
+
+	// The step view shows the search as a read, with its query.
+	for a, id := range conversations {
+		h := history(t, a.owner, id)
+		var call map[string]any
+		for _, turn := range h.Turns {
+			for _, e := range turn.Events {
+				if e.Kind == "tool_call" {
+					if err := json.Unmarshal(e.Data, &call); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+		args, _ := call["arguments"].(map[string]any)
+		if call["tool"] != "knowledge_search" || call["risk"] != "read" || args["query"] != "canary thresholds" {
+			t.Errorf("the search's step: %v", call)
+		}
+	}
 }

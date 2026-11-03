@@ -13,10 +13,13 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/execution"
 	"github.com/xraph/cortex/id"
+	"github.com/xraph/cortex/knowledge"
 	"github.com/xraph/cortex/run"
 	"github.com/xraph/cortex/session"
 	"github.com/xraph/dispatch/job"
 
+	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/security"
@@ -114,7 +117,7 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 	if !s.claim(runCtx, t, []string{StatusQueued}, StatusRunning) {
 		return nil
 	}
-	tools := s.tools(spec)
+	tools := s.tools(spec, eng)
 	agentID, err := s.ensureAgent(runCtx, eng, spec, tools)
 	if err != nil {
 		return err
@@ -323,20 +326,41 @@ func (s *Service) refused(ctx context.Context, t *Task, err error) error {
 	return err
 }
 
-// tools is the kind's allowlist: its own, or every operation.
-func (s *Service) tools(spec KindSpec) []string {
+// tools is the kind's allowlist: its own, or every operation and the
+// builtins eng has that the agent may use.
+func (s *Service) tools(spec KindSpec, eng runner) []string {
 	if spec.Tools != nil {
 		return slices.Clone(spec.Tools)
 	}
-	if s.registry == nil {
-		return []string{}
+	var ops []agentops.Op
+	if s.registry != nil {
+		ops = s.registry.Ops()
 	}
-	ops := s.registry.Ops()
-	out := make([]string, 0, len(ops))
+	builtins := builtinTools(eng)
+	out := make([]string, 0, len(ops)+len(builtins))
 	for _, op := range ops {
 		out = append(out, op.Def.Name)
 	}
-	return out
+	return append(out, builtins...)
+}
+
+// knowing is a runner that may have a knowledge provider:
+// *engine.Engine.
+type knowing interface {
+	Knowledge() knowledge.Provider
+}
+
+// builtinTools are the cortex builtins eng has that the agent may use:
+// knowledge_search when it has a knowledge provider. A run's allowlist
+// has to name them: cortex leaves a builtin out of a run whose allowlist
+// doesn't, and refuses to prepare one that names a tool it doesn't have.
+// Whether the model sees one is still the tool authorizer's call, per
+// workspace.
+func builtinTools(eng runner) []string {
+	if k, ok := eng.(knowing); ok && k.Knowledge() != nil {
+		return []string{agentauthz.KnowledgeSearch}
+	}
+	return nil
 }
 
 // ensureAgent makes sure the kind's agent config exists at exactly the

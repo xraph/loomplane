@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/suspension"
 
+	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/security"
 	defs "github.com/xraph/loomplane/pkg/agentops"
 )
@@ -530,9 +531,17 @@ func rawArguments(v any) json.RawMessage {
 // A secret_or_external operation's never do: a request to a person or a
 // secret's value, whatever SafeArguments would hide. Neither do the
 // arguments of a call that flags a secret (a secret set_variable, which
-// is secret_or_external by its input), nor those of a tool that isn't an
-// operation.
+// is secret_or_external by its input), nor those of a tool that's neither
+// an operation nor a builtin the agent may use. knowledge_search's do:
+// its query is what the step shows.
 func (s *Service) keepsArguments(tool string, args json.RawMessage) bool {
+	if risk, ok := s.builtinRisk(tool); ok {
+		if risk == defs.RiskSecretOrExternal {
+			return false
+		}
+		v, decoded := decodeJSON(args)
+		return !decoded || !flagsSecret(v)
+	}
 	if s.registry == nil {
 		return false
 	}
@@ -637,6 +646,9 @@ func flagsSecret(v any) bool {
 
 // risk is an operation's class as its definition states it.
 func (s *Service) risk(tool string) string {
+	if risk, ok := s.builtinRisk(tool); ok {
+		return string(risk)
+	}
 	if s.registry == nil {
 		return ""
 	}
@@ -644,6 +656,18 @@ func (s *Service) risk(tool string) string {
 		return string(op.Def.Risk)
 	}
 	return ""
+}
+
+// builtinRisk is agentauthz.BuiltinRisk for a tool that isn't one of the
+// agent's operations: cortex's builtins the agent may use, such as
+// knowledge_search, which reads.
+func (s *Service) builtinRisk(tool string) (defs.Risk, bool) {
+	if s.registry != nil {
+		if _, ok := s.registry.Lookup(tool); ok {
+			return "", false
+		}
+	}
+	return agentauthz.BuiltinRisk(tool)
 }
 
 // statusEvent is the log's record of a status change.
