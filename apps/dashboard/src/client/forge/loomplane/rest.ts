@@ -5243,8 +5243,8 @@ export class RESTClient extends Client {
 
   public readonly projectAutonomy = {
     /**
-     * Let the agent promote a release to production without asking first, after a minimum staging soak
-     * Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.
+     * Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs
+     * In this version the setting is stored and every production promotion still waits for a person; it takes effect when the promotion gate ships. Only a person with deployment:approve on the project can change it; the agent never can. It covers promoting a release someone asked for, after its staging soak, and never deleting or replacing production data or resources, which always waits for a person.
      */
     update: async (id: string, body: types.AutonomyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/autonomy`;
