@@ -75,7 +75,7 @@ The webhook only goes in when three things are true:
 
 - Your organization has connected the workspace the repository is in, and the connection is ready.
 - The person who connected the workspace is an admin of the repository. Bitbucket only lets a repository admin add a webhook, which is also why the consumer asks for Webhooks Read and write.
-- Your `public_url` is https. Bitbucket won't deliver to plain http, so a local instance on `http://localhost:8780` never gets one.
+- Your `public_url` is https. Loomplane only adds a webhook when it is, so a local instance on `http://localhost:8780` never gets one.
 
 If any of them isn't, the source still attaches and Analyze works as it always has. The Sources list shows **Push re-analysis is off** beside the source, with the reason. Fix what the reason names (connect the workspace, have a repository admin connect it again, or move to an https address), then choose **Turn on**. Loomplane tries to add the webhook again and keeps it if Bitbucket agrees. You need the same role to turn it on as to connect a workspace.
 
