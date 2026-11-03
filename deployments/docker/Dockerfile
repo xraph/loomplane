@@ -32,7 +32,7 @@ RUN --mount=type=cache,id=loomplane-pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 # Empty for the public image. The private Cloud image sets it to cloud.
 ARG LOOMPLANE_EDITION=
-RUN VITE_LOOMPLANE_EDITION="${LOOMPLANE_EDITION}" pnpm build
+RUN if [ -n "${LOOMPLANE_EDITION}" ]; then export VITE_LOOMPLANE_EDITION="${LOOMPLANE_EDITION}"; fi && pnpm build
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS api
 WORKDIR /src

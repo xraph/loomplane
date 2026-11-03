@@ -10,6 +10,8 @@
 package migrations
 
 import (
+	"slices"
+
 	"github.com/xraph/authsome/plugins/oauth2provider"
 	"github.com/xraph/authsome/plugins/waitlist"
 	authpg "github.com/xraph/authsome/store/postgres"
@@ -84,7 +86,8 @@ func NativeCredentialsGroup() *migrate.Group {
 // needs the vector extension, so it runs on demand once a workspace turns
 // knowledge on. OptionalVersions names its migrations for the schema guard.
 func All() []*migrate.Group {
-	groups := []*migrate.Group{
+	// Groups only this edition runs come last.
+	return slices.Concat([]*migrate.Group{
 		Group(),
 		authpg.Migrations,
 		waitlist.PostgresMigrations,
@@ -104,9 +107,7 @@ func All() []*migrate.Group {
 		nexuspg.Migrations,
 		shieldpg.Migrations,
 		weavepg.Migrations,
-	}
-	// Groups only this edition runs come last.
-	return append(groups, editionGroups()...)
+	}, editionGroups())
 }
 
 // optionalDimensions is any size pgvector accepts. A migration's version
