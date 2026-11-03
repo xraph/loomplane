@@ -168,7 +168,7 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 	if err != nil {
 		return nil, err
 	}
-	if hostErr := doSupportedHost(repo); hostErr != nil {
+	if hostErr := planning.GitBuildable("digitalocean", repo); hostErr != nil {
 		return nil, hostErr
 	}
 	if job.CommitSHA == "" {
@@ -449,16 +449,6 @@ func doAddress(cfg *planning.ServiceConfig, app *digitalocean.App) string {
 		return ""
 	}
 	return app.LiveURL
-}
-
-// doSupportedHost is nil for a repository App Platform builds from: GitHub
-// or gitlab.com. Planning refuses any other, so this only stops an old plan.
-func doSupportedHost(key string) error {
-	r, err := repositories.ParseKey(key)
-	if err != nil || r.Host == repositories.HostGitHub || strings.EqualFold(r.Host, "github.com") || strings.EqualFold(r.Host, "gitlab.com") {
-		return nil
-	}
-	return fmt.Errorf("app platform builds from GitHub or gitlab.com only, so it can't build %s", key)
 }
 
 // doAppSpec is the App Platform app a planned service runs as.

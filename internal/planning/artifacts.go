@@ -33,8 +33,8 @@ var gitBuildHosts = map[string][]string{
 // gitBuildTitles name those targets in a refusal.
 var gitBuildTitles = map[string]string{"render": "Render", "digitalocean": "App Platform"}
 
-// gitBuildable is nil when provider can build the repository stored as key.
-func gitBuildable(provider, key string) error {
+// GitBuildable is nil when provider can build the repository stored as key.
+func GitBuildable(provider, key string) error {
 	hosts, ok := gitBuildHosts[provider]
 	if !ok {
 		return nil
@@ -73,10 +73,11 @@ func checkGitBuilds(plan *Plan, result *Result) {
 			continue
 		}
 		for _, src := range plan.Sources {
-			if src.Alias != a.Service.Repo && (len(plan.Sources) != 1 || a.Service.Repo != "") {
+			// The same match the deployment makes to find a service's repository.
+			if src.Alias != a.Service.Repo && (len(plan.Sources) != 1 || (a.Service.Repo != "" && src.Alias != "")) {
 				continue
 			}
-			if err := gitBuildable(a.Provider, src.Repository); err != nil {
+			if err := GitBuildable(a.Provider, src.Repository); err != nil {
 				result.Problems = append(result.Problems, Finding{Code: "git-host-unsupported", Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: err.Error()})
 				result.Executable = false
 			}

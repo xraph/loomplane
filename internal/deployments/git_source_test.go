@@ -62,13 +62,23 @@ func TestDOAppSpec_gitHubSourceUnchanged(t *testing.T) {
 	}
 }
 
-func TestDOSupportedHost(t *testing.T) {
-	for key, ok := range map[string]bool{
-		"acme/mono": true, "gitlab.com/a/b": true, "GitLab.com/a/b/c": true,
-		"gitlab.example.com/a/b": false, "bitbucket.org/a/b": false,
+func TestDigitalOcean_refusesAnUnsupportedHostAtDeploy(t *testing.T) {
+	for key, want := range map[string]string{
+		"acme/mono":              "",
+		"gitlab.com/a/b":         "",
+		"gitlab.example.com/a/b": "App Platform builds from github.com and gitlab.com repositories only, so it can't build gitlab.example.com/a/b",
+		"bitbucket.org/a/b":      "App Platform builds from github.com and gitlab.com repositories only, so it can't build bitbucket.org/a/b",
 	} {
-		if err := doSupportedHost(key); (err == nil) != ok {
-			t.Errorf("%s: err %v, want ok %v", key, err, ok)
+		err := planning.GitBuildable("digitalocean", key)
+		if (want == "") != (err == nil) || (err != nil && err.Error() != want) {
+			t.Errorf("%s: %v, want %q", key, err, want)
 		}
+	}
+	job := doJob(&planning.ServiceConfig{Source: "api", Ecosystem: "go", Workload: provider.HTTPService, Execution: provider.Container}, "")
+	job.Deployment.Sources[0].Repository = "gitlab.example.com/a/b"
+	job.Plan.Sources[0].Repository = "gitlab.example.com/a/b"
+	_, err := newDO(&digitalocean.Client{}).Apply(t.Context(), job)
+	if err == nil || !strings.Contains(err.Error(), "so it can't build gitlab.example.com/a/b") {
+		t.Fatalf("apply: %v", err)
 	}
 }

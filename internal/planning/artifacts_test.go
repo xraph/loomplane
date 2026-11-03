@@ -340,7 +340,7 @@ func TestGitBuildable_refusesSelfManaged(t *testing.T) {
 		{"cloud-run", "gitlab.example.com/team/api", ""},
 		{"vercel", "gitlab.example.com/team/api", ""},
 	} {
-		err := gitBuildable(tc.provider, tc.key)
+		err := GitBuildable(tc.provider, tc.key)
 		switch {
 		case tc.want == "" && err != nil:
 			t.Errorf("%s %s: %v", tc.provider, tc.key, err)
@@ -381,5 +381,30 @@ func TestCheckGitBuilds_refusesAtPlanTime(t *testing.T) {
 	}
 	if p := result.Problems[1]; p.Name != "legacy" || !strings.HasPrefix(p.Message, "App Platform builds from") {
 		t.Fatalf("problem %+v", p)
+	}
+}
+
+func TestCheckGitBuilds_singleSourceWithNoRepo(t *testing.T) {
+	// One source with no alias, or a service with no repo: the same match
+	// the deployment makes.
+	for _, tc := range []struct{ alias, repo string }{{"", ""}, {"", "api"}, {"api", ""}} {
+		plan := &Plan{Sources: []PlanSource{{Alias: tc.alias, Repository: "gitlab.example.com/team/api"}}}
+		result := &Result{Executable: true, Actions: []Action{{
+			ID: "service:api", Op: Create, Subject: ServiceSubject, Name: "api", Provider: "render",
+			Service: &ServiceConfig{Provider: "render", Repo: tc.repo, CommitSHA: artifactCommit, Source: "."},
+		}}}
+		checkGitBuilds(plan, result)
+		if result.Executable || len(result.Problems) != 1 {
+			t.Errorf("alias %q repo %q: executable %v, problems %+v", tc.alias, tc.repo, result.Executable, result.Problems)
+		}
+	}
+	two := &Plan{Sources: []PlanSource{{Alias: "a", Repository: "gitlab.example.com/t/a"}, {Alias: "b", Repository: "acme/b"}}}
+	result := &Result{Executable: true, Actions: []Action{{
+		ID: "service:api", Op: Create, Subject: ServiceSubject, Name: "api", Provider: "render",
+		Service: &ServiceConfig{Provider: "render", Repo: "", CommitSHA: artifactCommit, Source: "."},
+	}}}
+	checkGitBuilds(two, result)
+	if !result.Executable {
+		t.Fatalf("a service with no repo among two sources matched one: %+v", result.Problems)
 	}
 }

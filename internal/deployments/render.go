@@ -21,7 +21,7 @@ import (
 // background workers and static sites) and provisions Render Postgres and
 // Key Value for them. It's a Loomplane capability adapter, like Vercel's:
 // Render builds each service itself, from the repository through its own
-// GitHub connection, and Loomplane tells it which commit.
+// connection to the repository's host, and Loomplane tells it which commit.
 //
 // Each service and environment is a Render service of its own, named the
 // way a Vercel project is, created with automatic deploys off so that
