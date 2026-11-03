@@ -626,8 +626,11 @@ func TestGitLabConnect_rejectsAnotherOrgsState(t *testing.T) {
 	}
 	u, _ := url.Parse(start.AuthorizeURL)
 	_, err = f.svc.Connect(context.Background(), gcPrincipal("org-b", "user-1"), repositories.ConnectGitLabInput{Code: "code-alice", State: u.Query().Get("state")})
-	if !errors.Is(err, repositories.ErrBadState) {
-		t.Fatalf("Connect from org-b = %v, want ErrBadState", err)
+	if !errors.Is(err, repositories.ErrGitLabBadState) {
+		t.Fatalf("Connect from org-b = %v, want ErrGitLabBadState", err)
+	}
+	if strings.Contains(err.Error(), "GitHub") {
+		t.Fatalf("the error names GitHub: %v", err)
 	}
 	for _, org := range []string{"org-a", "org-b"} {
 		if cs, _ := f.store.ListConnections(context.Background(), org); len(cs) != 0 {
@@ -650,8 +653,8 @@ func TestGitLabConnect_rejectsAnotherUsersState(t *testing.T) {
 	}
 	u, _ := url.Parse(start.AuthorizeURL)
 	_, err = f.svc.Connect(context.Background(), gcPrincipal("org-a", "user-2"), repositories.ConnectGitLabInput{Code: "code-alice", State: u.Query().Get("state")})
-	if !errors.Is(err, repositories.ErrBadState) {
-		t.Fatalf("Connect by another user = %v, want ErrBadState", err)
+	if !errors.Is(err, repositories.ErrGitLabBadState) {
+		t.Fatalf("Connect by another user = %v, want ErrGitLabBadState", err)
 	}
 }
 
@@ -700,8 +703,8 @@ func TestGitLabConnect_stateIsSpentOnce(t *testing.T) {
 	if _, err := f.svc.Connect(context.Background(), p, in); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.Connect(context.Background(), p, in); !errors.Is(err, repositories.ErrBadState) {
-		t.Fatalf("second Connect = %v, want ErrBadState", err)
+	if _, err := f.svc.Connect(context.Background(), p, in); !errors.Is(err, repositories.ErrGitLabBadState) {
+		t.Fatalf("second Connect = %v, want ErrGitLabBadState", err)
 	}
 }
 

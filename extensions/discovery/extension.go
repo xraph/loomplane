@@ -43,13 +43,14 @@ const Name = "loomplane-discovery"
 // repository through.
 var _ projects.Attacher = (*discovery.Service)(nil)
 
-// Extension serves the analysis API and the GitHub connection.
+// Extension serves the analysis API and the GitHub and GitLab connections.
 type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
 	engineOf func() *engine.Engine
 	svc      *discovery.Service
 	github   *repositories.Connections
+	gitlab   *repositories.GitLabConnections
 }
 
 // New returns the API extension. engineOf returns the dispatch
@@ -100,12 +101,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
+	var registry *repositories.GitLabRegistry
+	e.gitlab, registry, err = gitlabConnections(e.cfg, db, pg, authz, gitlabAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	if err != nil {
+		return err
+	}
+	// A source may be on any GitLab the organization can use.
+	e.svc.SetHosts(repositories.Hosts{Registry: registry})
 	e.svc.SetAccess(discovery.Access{
-		Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": e.github}},
-		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{
-			"github.com":            repositories.NewGitHub(e.cfg.GitHub.APIURL),
-			repositories.HostGitLab: repositories.NewGitLab(e.cfg.GitLab.APIURL, nil),
-		}},
+		Tokens:  SourceTokens(e.github, e.gitlab),
+		Fetcher: SourceReaders(e.cfg, registry),
 	})
 	// A new project's repository is attached as its first source, which
 	// only discovery knows how to do.
@@ -118,10 +123,19 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.gitlab); err != nil {
+		return fmt.Errorf("provide the GitLab connections: %w", err)
+	}
+	if err := forge.ProvideValue(c, registry); err != nil {
+		return fmt.Errorf("provide the GitLab hosts: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	if err := e.githubRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.gitlabRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
@@ -190,8 +204,17 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, repositories.ErrBadState):
+	case errors.Is(err, repositories.ErrBadState), errors.Is(err, repositories.ErrGitLabBadState):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrGitLabHostExists), errors.Is(err, repositories.ErrGitLabHostInUse), errors.Is(err, repositories.ErrGitLabSignInLapsed):
+		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrGitLabHostsOff):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
+	case errors.Is(err, repositories.ErrGitLabSubpath), errors.Is(err, repositories.ErrGitLabInsecure),
+		errors.Is(err, repositories.ErrGitLabHostIncomplete), errors.Is(err, repositories.ErrPrivateAddress):
+		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrGitLabConnectionNotFound), errors.Is(err, repositories.ErrGitLabHostNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, repositories.ErrNotYourInstallation):
 		return forge.NewHTTPError(http.StatusForbidden, err.Error())
 	case errors.Is(err, repositories.ErrAppNotConfigured):
@@ -261,11 +284,12 @@ func (w *Worker) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	readers := repositories.Readers{Static: map[string]repositories.Reader{
-		"github.com":            repositories.NewGitHub(w.cfg.GitHub.APIURL),
-		repositories.HostGitLab: repositories.NewGitLab(w.cfg.GitLab.APIURL, nil),
-	}}
-	tokens := repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": conns}}
+	glConns, registry, err := gitlabConnections(w.cfg, db, pg, nil, nil)
+	if err != nil {
+		return err
+	}
+	readers := SourceReaders(w.cfg, registry)
+	tokens := SourceTokens(conns, glConns)
 	runner := discovery.NewRunner(discovery.NewPgStore(pg), readers, tokens, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
 	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))

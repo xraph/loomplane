@@ -13,6 +13,10 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
+// ErrGitLabBadState means a GitLab sign-in wasn't started here, for this
+// person and organization, or has expired or already finished.
+var ErrGitLabBadState = errors.New("that GitLab sign-in wasn't started here, or took too long; connect again")
+
 // gitlabSignInLifetime is how long someone has to finish signing in.
 const gitlabSignInLifetime = 15 * time.Minute
 
@@ -72,11 +76,16 @@ func (c *GitLabConnections) Connect(ctx context.Context, p security.Principal, i
 		return nil, err
 	}
 	s, err := c.cfg.Store.TakeSignIn(ctx, in.State, c.cfg.Now())
+	if errors.Is(err, ErrBadState) {
+		// The store reports a missing, spent or expired sign-in as
+		// ErrBadState, whose text names GitHub.
+		return nil, ErrGitLabBadState
+	}
 	if err != nil {
 		return nil, err
 	}
 	if s.OrgID != p.OrgID || s.UserID != p.UserID {
-		return nil, ErrBadState
+		return nil, ErrGitLabBadState
 	}
 	// The host is looked up again as the caller's organization may use it
 	// now: an organization host it removed since is gone.

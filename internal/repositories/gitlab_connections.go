@@ -31,6 +31,15 @@ const (
 	AuditGitLabWebhookSecret = "gitlab.webhook.secret" //nolint:gosec // G101: an audit action's name, not a credential
 )
 
+// GitLabVaultAppID is the Vault app GitLab sign-ins, webhook secrets and
+// organization hosts' client secrets are kept under, apart from every other
+// credential.
+const GitLabVaultAppID = "loomplane-gitlab"
+
+// GitLabVaultKeyLabel names the key, derived from secret_key, that Vault
+// encrypts them with. No other credential shares it.
+const GitLabVaultKeyLabel = "loomplane/gitlab credentials v1"
+
 // instanceHostPrefix starts the view ID of an instance host, which has no
 // row and so no ID of its own.
 const instanceHostPrefix = "instance:"
