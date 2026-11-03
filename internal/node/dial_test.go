@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,8 @@ type fakeNetworks struct {
 	// ignoreFilter answers /networks as a daemon that drops the filter.
 	ignoreFilter bool
 	lists        atomic.Int32
+	// hang, when set, holds GET /networks until it is closed.
+	hang chan struct{}
 }
 
 func (f *fakeNetworks) start(t *testing.T) string {
@@ -72,6 +75,16 @@ func (f *fakeNetworks) start(t *testing.T) string {
 	mux.HandleFunc("GET /_ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "OK") })
 	mux.HandleFunc("GET /networks", func(w http.ResponseWriter, r *http.Request) {
 		f.lists.Add(1)
+		f.mu.Lock()
+		hang := f.hang
+		f.mu.Unlock()
+		if hang != nil {
+			select {
+			case <-hang:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if got := r.URL.Query().Get("filters"); got != `{"label":["loomplane.org"]}` {
 			http.Error(w, "unexpected filters "+got, http.StatusBadRequest)
 			return
@@ -103,7 +116,8 @@ func (f *fakeNetworks) start(t *testing.T) string {
 }
 
 // dialDaemon has one Loomplane network and Docker's default bridge. c1 is on
-// both, c2 only on the bridge, and c3 is a stopped container on lp-net.
+// both, c2 only on the bridge, c3 is a stopped container on lp-net, and c4
+// names lp-net without the network's ID.
 func dialDaemon() *fakeNetworks {
 	return &fakeNetworks{
 		networks: []fakeNetwork{
@@ -117,6 +131,7 @@ func dialDaemon() *fakeNetworks {
 			}},
 			{ID: "c2", State: "running", Networks: map[string]fakeEndpoint{"bridge": {NetworkID: "n0", IPAddress: "172.17.0.2"}}},
 			{ID: "c3", State: "exited", Networks: map[string]fakeEndpoint{"lp-net": {NetworkID: "n1", IPAddress: "172.18.0.7"}}},
+			{ID: "c4", State: "running", Networks: map[string]fakeEndpoint{"lp-net": {IPAddress: "172.18.0.8"}}},
 		},
 	}
 }
@@ -176,12 +191,25 @@ func expectRefused(t *testing.T, h Handler, hdr nodeproto.StreamHeader, want str
 	<-done
 }
 
+// literalOnly is a connect step that fails the test if a name reaches the
+// dialer, which is the only way it could look one up.
+func literalOnly(t *testing.T, g *dialGuard) {
+	t.Helper()
+	g.connect = func(ctx context.Context, d *net.Dialer, network, address string) (net.Conn, error) {
+		if _, err := netip.ParseAddrPort(address); err != nil {
+			t.Errorf("the dialer got %q, which it would look up", address)
+		}
+		return d.DialContext(ctx, network, address)
+	}
+}
+
 func TestDialAllowsLoopback(t *testing.T) {
 	l := echoListener(t)
 	_, port, _ := net.SplitHostPort(l.Addr().String())
-	h := DialHandler(dialDaemon().start(t))
+	g := newDialGuard(dialDaemon().start(t))
+	literalOnly(t, g)
 	for _, target := range []string{l.Addr().String(), net.JoinHostPort("::ffff:127.0.0.1", port), net.JoinHostPort("localhost", port)} {
-		r, live := dialRegistry(h)
+		r, live := dialRegistry(g.serve)
 		c, done := serveWith(t, r, live, nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDial, Target: target})
 		expectEcho(t, c)
 		_ = c.Close()
@@ -200,7 +228,7 @@ func TestDialAllowsLabelledContainer(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		if err := d.Control(network, address, nil); err != nil {
+		if err := d.ControlContext(ctx, network, address, nil); err != nil {
 			return nil, err
 		}
 		checked = append(checked, ip)
@@ -223,9 +251,10 @@ func TestDialRefusesUnlabelledContainer(t *testing.T) {
 		d := dialDaemon()
 		d.ignoreFilter = ignore
 		h := DialHandler(d.start(t))
-		// c1's address on the bridge, c2 on the bridge only, and a stopped
-		// container on the Loomplane network.
-		for _, ip := range []string{"172.17.0.9", "172.17.0.2", "172.18.0.7"} {
+		// c1's address on the bridge, c2 on the bridge only, a stopped
+		// container on the Loomplane network, one whose endpoint doesn't
+		// carry the network's ID, and the Loomplane network's own gateway.
+		for _, ip := range []string{"172.17.0.9", "172.17.0.2", "172.18.0.7", "172.18.0.8", "172.18.0.1"} {
 			expectRefused(t, h, nodeproto.StreamHeader{Target: ip + ":5432"},
 				"address "+ip+" is not a Loomplane container or loopback")
 		}
@@ -253,6 +282,67 @@ func TestDialRefusesUDP(t *testing.T) {
 	h := DialHandler(dialDaemon().start(t))
 	expectRefused(t, h, nodeproto.StreamHeader{Target: "127.0.0.1:53", Arg: "udp"}, "the dial endpoint dials only TCP, not udp")
 	expectRefused(t, h, nodeproto.StreamHeader{Target: "127.0.0.1"}, "dial target 127.0.0.1 is not host:port")
+}
+
+func TestDialRefusesNames(t *testing.T) {
+	g := newDialGuard(dialDaemon().start(t))
+	g.connect = func(context.Context, *net.Dialer, string, string) (net.Conn, error) {
+		t.Error("a name reached the dialer")
+		return nil, errors.New("unreachable")
+	}
+	// Names, and the IPv4 shorthands getaddrinfo would accept, are refused
+	// before anything resolves them.
+	for _, host := range []string{"example.com", "127.1", "0x7f.1", "2130706433", "localhost.", "LOCALHOST"} {
+		expectRefused(t, g.serve, nodeproto.StreamHeader{Target: host + ":80"},
+			"dial target "+host+" must be an IP address or localhost")
+	}
+	for _, target := range []string{"127.0.0.1:http", "127.0.0.1:0", "127.0.0.1:65536"} {
+		expectRefused(t, g.serve, nodeproto.StreamHeader{Target: target}, "dial target "+target+" has no port number")
+	}
+}
+
+func TestDialWaitIsBoundedByTheDial(t *testing.T) {
+	d := dialDaemon()
+	d.hang = make(chan struct{})
+	t.Cleanup(func() { close(d.hang) })
+	g := newDialGuard(d.start(t))
+	// A check with a long deadline starts the read, which hangs.
+	slow := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		slow <- g.check(ctx, "172.18.0.5:1")
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for d.lists.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Later checks wait on that read, each only as long as its own dial
+	// allows, and start no read of their own.
+	var wg sync.WaitGroup
+	start := time.Now()
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			var guard *guardError
+			if err := g.check(ctx, "172.18.0.5:1"); !errors.As(err, &guard) {
+				t.Errorf("check against a hung daemon: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("short checks waited %v behind the hung read", waited)
+	}
+	if n := d.lists.Load(); n != 1 {
+		t.Fatalf("listed networks %d times, want once", n)
+	}
+	if err := <-slow; err == nil {
+		t.Fatal("the hung read allowed the address")
+	}
 }
 
 func TestDialRefusesWhenDockerDoesNotAnswer(t *testing.T) {

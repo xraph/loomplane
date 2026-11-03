@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -42,21 +43,23 @@ type guardError struct{ reason string }
 func (e *guardError) Error() string { return e.reason }
 
 // DialHandler serves the dial endpoint with the daemon at socket. Target is
-// host:port and Arg the network, tcp when empty; only TCP is dialled. The
-// stream reaches loopback (127.0.0.0/8 and ::1) and the addresses running
-// containers have on networks labelled loomplane.org, and nothing else: not
-// the host's other addresses, the Docker bridge gateway or the metadata
-// service. The check runs on each address the dialer is about to connect to,
-// after any lookup and with IPv4-mapped IPv6 unmapped, so a name can't
-// resolve to one address for the check and another for the connect. The
-// connect happens before the verdict: a refused address or a failed connect
-// is a refusal with its reason, as the SSH dialer returns an error.
+// ip:port, or localhost:port for 127.0.0.1, and Arg the network, tcp when
+// empty; only TCP is dialled. Nothing is looked up, so a dial can't make
+// the node send a DNS query. The stream reaches loopback (127.0.0.0/8 and
+// ::1) and the addresses running containers have on networks labelled
+// loomplane.org, and nothing else: not the host's other addresses, the
+// Docker bridge gateway, a Loomplane network's own gateway or the metadata
+// service. The check runs, with IPv4-mapped IPv6 unmapped, on the address
+// the dialer is about to connect to. The connect happens before the verdict:
+// a refused address or a failed connect is a refusal with its reason, as the
+// SSH dialer returns an error.
 func DialHandler(socket string) Handler {
 	return newDialGuard(socket).serve
 }
 
 // dialGuard keeps the labelled containers' addresses for labelledTTL. One
-// guard serves every dial stream, so they share its cache.
+// guard serves every dial stream, so they share its cache and its one read
+// in flight.
 type dialGuard struct {
 	api *http.Client
 	now func() time.Time
@@ -67,6 +70,17 @@ type dialGuard struct {
 	mu  sync.Mutex
 	at  time.Time
 	ips map[netip.Addr]bool
+	// reading is the read in flight, which every check that needs the
+	// addresses waits on rather than starting its own.
+	reading *labelledRead
+}
+
+// labelledRead is one read of the labelled addresses. done is closed once
+// ips and err are set.
+type labelledRead struct {
+	done chan struct{}
+	ips  map[netip.Addr]bool
+	err  error
 }
 
 func newDialGuard(socket string) *dialGuard {
@@ -85,13 +99,16 @@ func (g *dialGuard) serve(ctx context.Context, hdr nodeproto.StreamHeader, strea
 	default:
 		return refusal("the dial endpoint dials only TCP, not " + sanitize(network))
 	}
-	if _, _, err := net.SplitHostPort(hdr.Target); err != nil {
-		return refusal(fmt.Sprintf("dial target %s is not host:port", sanitize(hdr.Target)))
+	address, refused := literalTarget(hdr.Target)
+	if refused != nil {
+		return refused
 	}
-	d := &net.Dialer{Timeout: dialTimeout, Control: func(_, address string, _ syscall.RawConn) error {
+	// The address is already an IP, so the dialer looks nothing up. The
+	// check still runs on what it connects to, and within its deadline.
+	d := &net.Dialer{Timeout: dialTimeout, ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
 		return g.check(ctx, address)
 	}}
-	conn, err := g.connect(ctx, d, network, hdr.Target)
+	conn, err := g.connect(ctx, d, network, address)
 	if err != nil {
 		// The guard's own errors are the reason; the dialer's prefix would
 		// only repeat the target.
@@ -106,6 +123,27 @@ func (g *dialGuard) serve(ctx context.Context, hdr nodeproto.StreamHeader, strea
 		return refusal(err.Error())
 	}
 	return pipe(stream, conn)
+}
+
+// literalTarget is target as ip:port, with localhost read as 127.0.0.1, or
+// the refusal for anything that would need a lookup: a name, an IPv4
+// shorthand such as 127.1 that only getaddrinfo accepts, or a named port.
+func literalTarget(target string) (string, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", refusal(fmt.Sprintf("dial target %s is not host:port", sanitize(target)))
+	}
+	if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
+		return "", refusal(fmt.Sprintf("dial target %s has no port number", sanitize(target)))
+	}
+	if host == "localhost" {
+		return net.JoinHostPort("127.0.0.1", port), nil
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return "", refusal(fmt.Sprintf("dial target %s must be an IP address or localhost", sanitize(host)))
+	}
+	return net.JoinHostPort(ip.String(), port), nil
 }
 
 // check allows address, an ip:port the dialer is about to connect to, when
@@ -129,29 +167,57 @@ func (g *dialGuard) check(ctx context.Context, address string) error {
 	return nil
 }
 
-// labelled returns the addresses, cached for labelledTTL. A failed read is
-// not cached, so it fails only the dials that asked.
+// labelled returns the addresses, cached for labelledTTL. The cache is
+// a known, accepted risk: for up to labelledTTL a removed container's address
+// stays allowed, until Docker hands it to another container. When the cache
+// is stale, the first check starts one read and every check waits on it for
+// no longer than its own ctx allows, so a hung daemon holds no dial past its
+// deadline. A failed read is not cached: it fails the checks that waited on
+// it, and the next check reads again.
 func (g *dialGuard) labelled(ctx context.Context) (map[netip.Addr]bool, error) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.ips != nil && g.now().Sub(g.at) < labelledTTL {
-		return g.ips, nil
+		ips := g.ips
+		g.mu.Unlock()
+		return ips, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, labelledTimeout)
+	read := g.reading
+	if read == nil {
+		read = &labelledRead{done: make(chan struct{})}
+		g.reading = read
+		go g.read(read) //nolint:gosec // G118: the read is shared, so it must not end with the ctx of the check that started it
+	}
+	g.mu.Unlock()
+	select {
+	case <-read.done:
+		return read.ips, read.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// read reads the addresses for every check waiting on r. It has its own
+// deadline, since the check that started it may stop waiting first.
+func (g *dialGuard) read(r *labelledRead) {
+	ctx, cancel := context.WithTimeout(context.Background(), labelledTimeout)
 	defer cancel()
-	ips, err := labelledAddrs(ctx, g.api)
-	if err != nil {
-		return nil, err
+	r.ips, r.err = labelledAddrs(ctx, g.api)
+	g.mu.Lock()
+	if r.err == nil {
+		g.ips, g.at = r.ips, g.now()
 	}
-	g.ips, g.at = ips, g.now()
-	return ips, nil
+	g.reading = nil
+	g.mu.Unlock()
+	close(r.done)
 }
 
 // labelledAddrs reads the networks labelled loomplane.org and the running
 // containers, and returns each address a container has on one of those
-// networks. A container's addresses on other networks are left out. The
-// label and state are checked here as well as filtered by the daemon, so a
-// daemon that drops the filter allows nothing more.
+// networks. A container's addresses on other networks are left out, and an
+// endpoint counts only when it carries the network's ID: a name alone could
+// belong to a network created after the list was read. The label and state
+// are checked here as well as filtered by the daemon, so a daemon that drops
+// the filter allows nothing more.
 func labelledAddrs(ctx context.Context, api *http.Client) (map[netip.Addr]bool, error) {
 	var networks []struct {
 		ID     string `json:"Id"`
@@ -162,10 +228,10 @@ func labelledAddrs(ctx context.Context, api *http.Client) (map[netip.Addr]bool, 
 	if err := dockerGetJSON(ctx, api, "/networks?"+filter.Encode(), &networks); err != nil {
 		return nil, err
 	}
-	ids := map[string]string{} // name to ID
+	labelled := map[string]bool{} // by network ID
 	for _, n := range networks {
-		if _, ok := n.Labels[loomplaneLabel]; ok && n.ID != "" && n.Name != "" {
-			ids[n.Name] = n.ID
+		if _, ok := n.Labels[loomplaneLabel]; ok && n.ID != "" {
+			labelled[n.ID] = true
 		}
 	}
 	var containers []struct {
@@ -184,9 +250,8 @@ func labelledAddrs(ctx context.Context, api *http.Client) (map[netip.Addr]bool, 
 		if c.State != "running" || c.NetworkSettings == nil {
 			continue
 		}
-		for name, ep := range c.NetworkSettings.Networks {
-			id, ok := ids[name]
-			if !ok || (ep.NetworkID != "" && ep.NetworkID != id) {
+		for _, ep := range c.NetworkSettings.Networks {
+			if ep.NetworkID == "" || !labelled[ep.NetworkID] {
 				continue
 			}
 			for _, s := range []string{ep.IPAddress, ep.GlobalIPv6Address} {
