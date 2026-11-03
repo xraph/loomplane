@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/grove/drivers/sqlitedriver"
 	"github.com/xraph/nexus"
 	"github.com/xraph/nexus/provider"
+	"github.com/xraph/nexus/providers/openai"
 	"github.com/xraph/nexus/tenant"
 	"github.com/xraph/weave"
 	weaveext "github.com/xraph/weave/extension"
@@ -205,6 +206,83 @@ func TestEmbeddingsNameTheirProvider(t *testing.T) {
 	}
 	if _, e := emb.calls(); e != 1 || emb.embed[0].Provider != agentsettings.EmbeddingsProvider || emb.embed[0].Dimensions != 8 {
 		t.Fatalf("embeddings: %d, %+v", e, emb.embed)
+	}
+}
+
+// embeddingsPricedOn is what Extension.embeddingsPriced reports, for a
+// gateway built without the extension.
+func embeddingsPricedOn(gw *nexus.Gateway, k config.AIKnowledgeConfig) bool {
+	return gatewayAdapter{gw: func() *nexus.Gateway { return gw }}.Priced(context.Background(), agentsettings.EmbeddingsProvider, k.EmbeddingModel)
+}
+
+// The catalog prices OpenAI's embedding models, but under the provider
+// name "openai". The embeddings provider has its own name, so the
+// catalog row is copied over as an override.
+func TestOpenAIEmbeddingsArePricedFromTheCatalog(t *testing.T) {
+	ai := serverAI()
+	ai.Knowledge = config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingAPIKey: "ek", EmbeddingModel: "text-embedding-3-small", Dimensions: 8}
+	emb := &fakeProvider{name: agentsettings.EmbeddingsProvider}
+	gw := gateway(t, ai, emb)
+	ctx := context.Background()
+	if !gw.PriceBook().Priced(ctx, agentsettings.EmbeddingsProvider, "text-embedding-3-small") || !embeddingsPricedOn(gw, ai.Knowledge) {
+		t.Fatal("the openai embedding model isn't priced")
+	}
+	var want provider.Pricing
+	models, _ := openai.New("").Models(ctx)
+	for _, m := range models {
+		if m.ID == "text-embedding-3-small" {
+			want = m.Pricing
+		}
+	}
+	got, ok := embeddingPrice(ctx, ai.Knowledge, nil)
+	if !ok || want.EmbeddingPerMillion.IsZero() || !got.Pricing.EmbeddingPerMillion.Equal(want.EmbeddingPerMillion) {
+		t.Fatalf("override %+v (ok %v), catalog %+v", got, ok, want)
+	}
+	if got.Provider != agentsettings.EmbeddingsProvider || got.Model != "text-embedding-3-small" {
+		t.Fatalf("override is for %s/%s", got.Provider, got.Model)
+	}
+	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: tenantSlug("org_1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedder := newEmbedder(ai, func() *nexus.Gateway { return gw }, func(context.Context, string) (string, error) { return tn.ID.String(), nil })
+	if _, err = embedder.Embed(weave.WithTenant(ctx, "org_1"), []string{"hello"}); err != nil {
+		t.Fatalf("an embedding was refused: %v", err)
+	}
+	if _, e := emb.calls(); e != 1 {
+		t.Fatalf("the embeddings provider got %d calls", e)
+	}
+}
+
+func TestCompatibleEmbeddingsArePricedFromAIPrices(t *testing.T) {
+	ai := serverAI()
+	ai.Knowledge = config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAICompatible, EmbeddingBaseURL: "http://localhost:11434/v1", EmbeddingModel: "nomic-embed-text", Dimensions: 8}
+	ai.Prices = []config.AIPrice{{Provider: config.AIProviderOpenAICompatible, Model: "nomic-embed-text", InputPerMillion: "0", OutputPerMillion: "0"}}
+	gw := gateway(t, ai, &fakeProvider{name: agentsettings.EmbeddingsProvider})
+	if !embeddingsPricedOn(gw, ai.Knowledge) {
+		t.Fatal("a zero ai.prices entry left the embedding model unpriced")
+	}
+	ai.Prices[0].InputPerMillion = "0.05"
+	o, ok := embeddingPrice(context.Background(), ai.Knowledge, ai.Prices)
+	if !ok || o.Pricing.EmbeddingPerMillion.String() != "0.05" || o.Pricing.InputPerMillion.String() != "0.05" {
+		t.Fatalf("override %+v (ok %v)", o, ok)
+	}
+}
+
+func TestUnpricedEmbeddingsAreReported(t *testing.T) {
+	for _, k := range []config.AIKnowledgeConfig{
+		{EmbeddingProvider: config.AIProviderOpenAICompatible, EmbeddingBaseURL: "http://localhost:11434/v1", EmbeddingModel: "nomic-embed-text", Dimensions: 8},
+		{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-unknown", Dimensions: 8},
+	} {
+		ai := serverAI()
+		ai.Knowledge = k
+		gw := gateway(t, ai, &fakeProvider{name: agentsettings.EmbeddingsProvider})
+		if embeddingsPricedOn(gw, k) {
+			t.Errorf("%s/%s reported as priced", k.EmbeddingProvider, k.EmbeddingModel)
+		}
+		if _, ok := embeddingPrice(context.Background(), k, nil); ok {
+			t.Errorf("%s/%s has an override", k.EmbeddingProvider, k.EmbeddingModel)
+		}
 	}
 }
 

@@ -66,8 +66,12 @@ func (e *Extension) nexusOptions() []nexusext.Option {
 // guards calls to a workspace's base URL. A nil creds or transport is
 // left out, for tests.
 func gatewayOptions(ai config.AIConfig, creds provider.CredentialProvider, transport func(http.RoundTripper) http.RoundTripper) []nexus.Option {
+	overrides := prices(ai.Prices)
+	if o, ok := embeddingPrice(context.Background(), ai.Knowledge, ai.Prices); ok {
+		overrides = append(overrides, o)
+	}
 	opts := []nexus.Option{
-		nexus.WithPriceOverrides(prices(ai.Prices)...),
+		nexus.WithPriceOverrides(overrides...),
 		nexus.WithUnpricedPolicy(nexus.RefuseUnpriced),
 		nexus.WithTimeout(gatewayTimeout),
 		nexus.WithMaxRetries(gatewayMaxRetries),
@@ -94,9 +98,52 @@ func prices(ps []config.AIPrice) []model.PriceOverride {
 			continue
 		}
 		out = append(out, model.PriceOverride{Provider: p.Provider, Model: p.Model,
-			Pricing: provider.Pricing{InputPerMillion: in, OutputPerMillion: outPrice}})
+			Pricing: provider.Pricing{InputPerMillion: in, OutputPerMillion: outPrice, Free: in.IsZero() && outPrice.IsZero()}})
 	}
 	return out
+}
+
+// embeddingPrice is the price override for the server's embeddings, or ok
+// false when there is none. Nexus keys prices by provider name, and the
+// embeddings provider has its own name, so its models start unpriced:
+//   - openai: the pricing of the openai catalog row for the embedding model.
+//   - openai-compatible: the ai.prices entry for the embedding model, with
+//     its input price as the embedding price. A zero entry is free.
+func embeddingPrice(ctx context.Context, k config.AIKnowledgeConfig, ps []config.AIPrice) (model.PriceOverride, bool) {
+	override := func(p provider.Pricing) (model.PriceOverride, bool) {
+		return model.PriceOverride{Provider: agentsettings.EmbeddingsProvider, Model: k.EmbeddingModel, Pricing: p}, true
+	}
+	switch k.EmbeddingProvider {
+	case config.AIProviderOpenAI:
+		models, err := openai.New("").Models(ctx)
+		if err != nil {
+			return model.PriceOverride{}, false
+		}
+		for _, m := range models {
+			if m.ID == k.EmbeddingModel {
+				return override(m.Pricing)
+			}
+		}
+	case config.AIProviderOpenAICompatible:
+		for _, p := range ps {
+			if p.Provider != config.AIProviderOpenAICompatible || p.Model != k.EmbeddingModel {
+				continue
+			}
+			in, ierr := money.Parse(p.InputPerMillion)
+			out, oerr := money.Parse(p.OutputPerMillion)
+			if ierr != nil || oerr != nil {
+				return model.PriceOverride{}, false
+			}
+			return override(provider.Pricing{InputPerMillion: in, EmbeddingPerMillion: in, Free: in.IsZero() && out.IsZero()})
+		}
+	}
+	return model.PriceOverride{}, false
+}
+
+// embeddingsPriced reports whether nexus prices the server's embedding
+// model, so knowledge can say so rather than fail on its first embed.
+func (e *Extension) embeddingsPriced(ctx context.Context) bool { //nolint:unused // Boot (plan 3b task 6) calls it; drop this comment then
+	return gatewayAdapter{gw: e.nexus.Gateway}.Priced(ctx, agentsettings.EmbeddingsProvider, e.cfg.AI.Knowledge.EmbeddingModel)
 }
 
 // serverKeys is the key each chat provider is built with: the server key

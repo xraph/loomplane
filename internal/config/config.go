@@ -366,7 +366,7 @@ func Defaults() Config {
 			Provider:  AIProviderAnthropic,
 			Model:     DefaultAIModel,
 			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
-			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions, DocsBudgetUSD: DefaultDocsBudgetUSD},
 		},
 		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
@@ -508,6 +508,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
 	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
 	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
+	r.str(&c.AI.Knowledge.DocsBudgetUSD, "ai.knowledge.docs_budget_usd")
 	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")

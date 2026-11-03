@@ -255,6 +255,8 @@ ai:
     embedding_base_url: "${LOOMPLANE_AI_EMBEDDING_BASE_URL:-}"
     embedding_model: "${LOOMPLANE_AI_EMBEDDING_MODEL:-}"
     dimensions: "${LOOMPLANE_AI_EMBEDDING_DIMENSIONS:-1536}"
+    # What indexing the docs may spend, in USD.
+    docs_budget_usd: "${LOOMPLANE_AI_DOCS_BUDGET_USD:-5.00}"
   models:
     # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
     # token is sent here, so it must be https (http only for localhost).
