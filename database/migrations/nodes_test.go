@@ -82,3 +82,35 @@ func TestNodeKeysAreNeverReused(t *testing.T) {
 	}
 	exec(t, conn, `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_2','other','web-1','\x01','fp',now(),now())`)
 }
+
+func TestNodeAdoptionsKeepOneApprovalPerNode(t *testing.T) {
+	conn, ex := scratch(t)
+	if _, err := migrate.NewOrchestrator(ex, Group()).Migrate(t.Context()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	up(t, ex, "node_adoptions")
+	exec(t, conn,
+		`INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_1','org','web-1','\x01','fp',now(),now())`,
+		`INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_1','org','cloud','user','waiting',now(),now())`,
+	)
+	for name, stmt := range map[string]string{
+		"a second row for one node": `INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_1','org','cloud','user','waiting',now(),now())`,
+		"an unknown status":         `UPDATE loomplane_node_adoptions SET status='adopting' WHERE node_id='node_1'`,
+		"a live row without Cloud":  `UPDATE loomplane_node_adoptions SET cloud_id='' WHERE node_id='node_1'`,
+		"a row for no node":         `INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_2','org','cloud','user','waiting',now(),now())`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err == nil {
+			t.Fatalf("accepted %s", name)
+		}
+	}
+	// A refused adoption keeps no Cloud.
+	exec(t, conn, `UPDATE loomplane_node_adoptions SET cloud_id='', status='failed', reason='refused' WHERE node_id='node_1'`)
+	if err := migration(t, "node_adoptions").Down(t.Context(), ex); err == nil {
+		t.Fatal("down dropped recorded adoptions")
+	}
+	exec(t, conn, `DELETE FROM loomplane_node_adoptions`)
+	down(t, ex, "node_adoptions")
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_tables WHERE tablename='loomplane_node_adoptions'`); got[0] != "0" {
+		t.Fatalf("down left the table: %v", got)
+	}
+}

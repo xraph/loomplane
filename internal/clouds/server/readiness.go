@@ -8,6 +8,13 @@ import (
 	"net/http"
 )
 
+// What CheckVacant refuses an adoption for. The text is what an operator
+// reads; callers match the values to say it in their own words.
+var (
+	ErrWorkloadsPresent = errors.New("adoption refused: existing Docker workloads need an explicit migration")
+	ErrIngressInUse     = errors.New("adoption refused: ingress listeners are already in use")
+)
+
 // Capacity reads actual daemon capacity after the pinned connection check.
 func (c *Client) Capacity(ctx context.Context) (cpus int, memoryBytes int64, err error) {
 	var info struct {
@@ -40,14 +47,14 @@ func (c *Client) CheckVacant(ctx context.Context) error {
 		return checkErr
 	}
 	if len(containers) > 0 {
-		return errors.New("adoption refused: existing Docker workloads need an explicit migration")
+		return ErrWorkloadsPresent
 	}
 	ports, err := c.access.IngressListeners(ctx)
 	if err != nil {
 		return err
 	}
 	if len(ports) > 0 {
-		return errors.New("adoption refused: ingress listeners are already in use")
+		return ErrIngressInUse
 	}
 	return nil
 }

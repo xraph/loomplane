@@ -171,7 +171,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs, nodes.Hub()),
-		cloudinfraext.New(cfg, deployments),
+		cloudinfraext.New(cfg, deployments, nodes.Hub()),
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),

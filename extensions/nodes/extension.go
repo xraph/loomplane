@@ -15,12 +15,15 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	groveext "github.com/xraph/grove/extension"
 
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/buildinfo"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
 // Name is the extension's name, for other extensions' Dependencies.
@@ -68,9 +71,10 @@ func New(cfg config.Config, replica string) *Extension {
 // open streams to nodes through it.
 func (e *Extension) Hub() *nodes.Hub { return e.hub }
 
-// Dependencies implements forge.Extension.
+// Dependencies implements forge.Extension. Cloud infrastructure registers
+// first, so a node joined with a Cloud can be adopted into it.
 func (e *Extension) Dependencies() []string {
-	return []string{groveext.ExtensionName, identity.Name}
+	return []string{groveext.ExtensionName, identity.Name, cloudinfraext.Name}
 }
 
 // Register builds the service, binds the hub and mounts the routes. A hub
@@ -104,12 +108,20 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("nodes needs the identity extension: %w", err)
 	}
+	infra, err := forge.InjectType[*cloudinfra.Service](c)
+	if err != nil {
+		return fmt.Errorf("nodes needs cloud infrastructure: %w", err)
+	}
 	store := nodes.NewPgStore(pgdriver.Unwrap(db))
 	e.minter = keys
 	e.svc = &nodes.Service{
 		Store: store, Tokens: keys, Authz: authz, Version: buildinfo.Version,
 		Audit: auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()},
+		// A join token scoped to a Cloud is the approval to adopt the node
+		// into it; the first connect does the adopting.
+		Adopt: infra.RecordNodeAdoption,
 	}
+	e.adoptOnConnect(infra)
 	// Bind makes the hub the service's notifier and refuses an empty
 	// audience or secret.
 	if err = e.hub.Bind(store, e.svc); err != nil {
@@ -125,6 +137,20 @@ func (e *Extension) Register(fapp forge.App) error {
 		return routeErr
 	}
 	return e.mountNodeEndpoints(fapp.Router())
+}
+
+// adoptOnConnect adopts a node waiting for its Cloud when it comes online,
+// and again whenever its inventory changes, since Docker may only start
+// answering after the first connect. The hub runs each hook off its own
+// goroutines with a deadline and recovers a panic.
+func (e *Extension) adoptOnConnect(infra *cloudinfra.Service) {
+	adopt := func(ctx context.Context, n *nodes.Node) {
+		if err := infra.AdoptOnline(ctx, n); err != nil {
+			e.Logger().Warn("Adopt a node into its Cloud; the next connect tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+		}
+	}
+	e.hub.OnOnline(adopt)
+	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, _, _ nodeproto.Inventory) { adopt(ctx, n) })
 }
 
 // Start runs the hub's sweep, which marks silent nodes offline.

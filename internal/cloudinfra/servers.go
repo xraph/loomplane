@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -189,9 +190,14 @@ type Deps struct {
 	Adapters                *Adapters
 	Workflow                Workflow
 	Runtime                 Runtime
-	Audit                   projects.Auditor
-	EnrollmentURL           string
-	AllowLocalEnrollment    bool
+	// Nodes connects what runs on a joined node, and NodeConnections finds
+	// what it already connected, for adopting a node into its Cloud. Nil
+	// leaves joined nodes waiting.
+	Nodes                *nodes.Adopter
+	NodeConnections      NodeConnectionSource
+	Audit                projects.Auditor
+	EnrollmentURL        string
+	AllowLocalEnrollment bool
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
@@ -223,7 +229,7 @@ type Service struct {
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
-		d.Runtime = SSHRuntime{}
+		d.Runtime = HostRuntime{}
 	}
 	s := &Service{Deps: d, now: time.Now, started: time.Now().UTC(), expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
 	s.kubernetesRoutes = s.openKubernetesRoute
