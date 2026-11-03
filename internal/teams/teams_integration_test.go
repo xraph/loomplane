@@ -4,6 +4,7 @@ package teams
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -349,6 +350,16 @@ func memberIDs(team *Team) []string {
 func TestCreateListAndUpdateTeams(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)
+
+	// A workspace with no teams lists [], not null: the Teams page reads
+	// its length.
+	empty, err := r.svc.List(ctx, as(vi))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(empty); string(raw) != `{"teams":[]}` {
+		t.Fatalf("an empty workspace's teams = %s, want {\"teams\":[]}", raw)
+	}
 
 	team, err := r.svc.Create(ctx, as(ada), CreateTeamInput{Name: "  Payments ", Description: " Takes the money "})
 	if err != nil {
