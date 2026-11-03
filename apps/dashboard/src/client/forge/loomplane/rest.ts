@@ -4,6 +4,28 @@ import * as types from './types';
 import { CODECS } from './codecs';
 
 export class RESTClient extends Client {
+  public readonly account = {
+    twoStep: {
+      /**
+       * Whether your account asks for a code from an authenticator app at sign-in
+       */
+      get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TwoStep> => {
+        let __path = `/api/v1/account/two-step`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["TwoStep"],
+        };
+
+        return this.request<types.TwoStep>(config);
+      },
+
+    },
+
+  };
+
   public readonly activity = {
     /**
      * What the organization's Loomplane has done lately: deployments, plans, analyses and drift

@@ -5560,6 +5560,10 @@ export interface TrafficReport {
   total: number;
 }
 
+export interface TwoStep {
+  enabled: boolean;
+}
+
 export interface UnreachableAccount {
   connectionId: string;
   message: string;
