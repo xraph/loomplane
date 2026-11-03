@@ -215,7 +215,7 @@ function Allowed({ node: n }: { node: Node }) {
 function Identity({ node: n }: { node: Node }) {
   const keys = useQuery(useApiKeysList)
   const keyName =
-    keys.data?.keys.find((k) => k.id === n.joinedByKeyId)?.name ??
+    keys.data?.keys?.find((k) => k.id === n.joinedByKeyId)?.name ??
     n.joinedByKeyId
   return (
     <Section title="Identity">
