@@ -64,11 +64,10 @@ func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
 }
 
 func (e *Extension) signInApps(c forge.Context) error {
-	p, err := principal(c)
-	if err != nil {
+	if _, err := principal(c); err != nil {
 		return err
 	}
-	apps, err := e.svc.SignInApps(c.Request().Context(), p)
+	apps, err := e.svc.SignInApps(c.Request().Context())
 	if err != nil {
 		return fail(err)
 	}
@@ -86,7 +85,7 @@ func (e *Extension) setSignInApp(c forge.Context) error {
 	if err = c.BindJSON(&in); err != nil {
 		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"client_id": "...", "client_secret": "...", "slug": "..."}, with slug for Vercel only`)
 	}
-	app, err := e.svc.SetSignInApp(c.Request().Context(), p, c.Param("cloud"), in)
+	app, err := e.svc.SetSignInApp(c.Request().Context(), p.UserID, c.Param("cloud"), in)
 	if err != nil {
 		return fail(err)
 	}
@@ -98,9 +97,9 @@ func (e *Extension) deleteSignInApp(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	err = e.svc.DeleteSignInApp(c.Request().Context(), p, c.Param("cloud"))
+	err = e.svc.DeleteSignInApp(c.Request().Context(), p.UserID, c.Param("cloud"))
 	if errors.Is(err, connections.ErrNotFound) {
-		return forge.NewHTTPError(http.StatusNotFound, "this organization has no sign-in app of its own for that cloud")
+		return forge.NewHTTPError(http.StatusNotFound, "Loomplane has no sign-in app of its own for that cloud")
 	}
 	if err != nil {
 		return fail(err)

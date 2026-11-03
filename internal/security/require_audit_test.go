@@ -52,9 +52,6 @@ var workspaceChecks = map[string]int{
 	"internal/connections/gpus.go:GPUInventory":                               1,
 	"internal/connections/signin.go:StartSignIn":                              1,
 	"internal/connections/signin.go:CompleteSignIn":                           1,
-	"internal/connections/signin_apps.go:SignInApps":                          1,
-	"internal/connections/signin_apps.go:SetSignInApp":                        1,
-	"internal/connections/signin_apps.go:DeleteSignInApp":                     1,
 	"internal/connections/keyless.go:PrepareKeyless":                          1,
 	"internal/connections/keyless.go:KeylessSetupFor":                         1,
 	"internal/connections/keyless.go:CreateKeyless":                           1,
@@ -196,8 +193,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 86 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the agent's 8", total)
+	if total != 83 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the agent's 8, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

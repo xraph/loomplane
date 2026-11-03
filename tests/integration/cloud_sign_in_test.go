@@ -139,7 +139,7 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	if strings.Contains(string(set), clientSecret) {
 		t.Fatalf("setting an app returned its secret: %s", set)
 	}
-	if got := source(); got != connections.AppFromOrganization {
+	if got := source(); got != connections.AppFromPlatform {
 		t.Fatalf("source after setting an app: %q", got)
 	}
 	if body := c.raw("/api/v1/cloud-sign-in/apps"); strings.Contains(body, clientSecret) {
@@ -387,7 +387,7 @@ func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
 	var set connections.SignInApp
 	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
 		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}, &set)
-	if set.Slug != "loomplane-acme" || set.Source != connections.AppFromOrganization {
+	if set.Slug != "loomplane-acme" || set.Source != connections.AppFromPlatform {
 		t.Fatalf("set %+v", set)
 	}
 	var list struct {

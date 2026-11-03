@@ -2,7 +2,9 @@ package connections
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -18,54 +20,47 @@ type fakeAppStore struct {
 	problems map[string]string
 }
 
-func (f *fakeAppStore) key(org, cloud string) string { return org + "/" + cloud }
-
-func (f *fakeAppStore) GetApp(_ context.Context, org, cloud string) (*StoredApp, error) {
-	if a, ok := f.apps[f.key(org, cloud)]; ok {
+func (f *fakeAppStore) GetApp(_ context.Context, cloud string) (*StoredApp, error) {
+	if a, ok := f.apps[cloud]; ok {
 		return a, nil
 	}
 	return nil, ErrNotFound
 }
 
 func (f *fakeAppStore) PutApp(_ context.Context, a *StoredApp) error {
-	f.apps[f.key(a.OrgID, a.Cloud)] = a
+	f.apps[a.Cloud] = a
 	return nil
 }
 
-func (f *fakeAppStore) DeleteApp(_ context.Context, org, cloud string) error {
-	delete(f.apps, f.key(org, cloud))
+func (f *fakeAppStore) DeleteApp(_ context.Context, cloud string) error {
+	delete(f.apps, cloud)
 	return nil
 }
 
-func (f *fakeAppStore) ListApps(_ context.Context, org string) ([]*StoredApp, error) {
+func (f *fakeAppStore) ListApps(context.Context) ([]*StoredApp, error) {
 	var out []*StoredApp
 	for _, a := range f.apps {
-		if a.OrgID == org {
-			out = append(out, a)
-		}
+		out = append(out, a)
 	}
 	return out, nil
 }
 
-type fakeAppSecrets struct {
-	Secrets
-	kept map[string]string
-}
+type fakeAppSecrets struct{ kept map[string]string }
 
-func (f *fakeAppSecrets) Put(_ context.Context, org, cloud string, secret []byte) error {
-	f.kept[org+"/"+cloud] = string(secret)
+func (f *fakeAppSecrets) Put(_ context.Context, cloud string, secret []byte) error {
+	f.kept[cloud] = string(secret)
 	return nil
 }
 
-func (f *fakeAppSecrets) Reveal(_ context.Context, org, cloud string) ([]byte, error) {
-	if v, ok := f.kept[org+"/"+cloud]; ok {
+func (f *fakeAppSecrets) Reveal(_ context.Context, cloud string) ([]byte, error) {
+	if v, ok := f.kept[cloud]; ok {
 		return []byte(v), nil
 	}
 	return nil, ErrNotFound
 }
 
-func (f *fakeAppSecrets) Delete(_ context.Context, org, cloud string) error {
-	delete(f.kept, org+"/"+cloud)
+func (f *fakeAppSecrets) Delete(_ context.Context, cloud string) error {
+	delete(f.kept, cloud)
 	return nil
 }
 
@@ -76,118 +71,176 @@ type appAudit struct {
 
 func (a *appAudit) Record(context.Context, string, security.Principal, *Connection) {}
 
-func (a *appAudit) RecordApp(_ context.Context, action string, _ security.Principal, cloud, clientID string) {
+func (a *appAudit) RecordApp(_ context.Context, action, userID, cloud, clientID string) {
 	a.actions = append(a.actions, action)
-	a.meta = append(a.meta, cloud+" "+clientID)
+	a.meta = append(a.meta, userID+" "+cloud+" "+clientID)
 }
 
 type noProvider struct{ Provider }
 
-func signInService(config map[string]oauth.App, denied security.Permission) (*Service, *fakeAppStore, *fakeAppSecrets, *appAudit) {
+func signInService(config map[string]oauth.App) (*Service, *fakeAppStore, *fakeAppSecrets, *appAudit) {
 	store := &fakeAppStore{apps: map[string]*StoredApp{}}
 	secrets := &fakeAppSecrets{kept: map[string]string{}}
 	audit := &appAudit{}
 	return &Service{
-		Providers:  map[string]Provider{DigitalOcean: noProvider{}, GCP: noProvider{}},
+		Providers:  map[string]Provider{DigitalOcean: noProvider{}, GCP: noProvider{}, Azure: noProvider{}},
 		ConfigApps: config, AppSecrets: secrets, Apps: store,
-		authz: inventoryAuthorization{denied: denied}, audit: audit, now: time.Now,
+		authz: inventoryAuthorization{}, audit: audit, now: time.Now,
 	}, store, secrets, audit
 }
 
-var viewer = security.Principal{OrgID: "org", UserID: "viewer"}
-
-func TestSignInAppsShowWhereEachCameFrom(t *testing.T) {
-	s, store, _, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "cfg-id", ClientSecret: "cfg-secret"}}, security.Permission{})
-	store.apps["org/"+GCP] = &StoredApp{OrgID: "org", Cloud: GCP, ClientID: "org-id", UpdatedBy: "u"}
-	apps, err := s.SignInApps(t.Context(), viewer)
-	if err != nil || len(apps) != 2 {
+func TestSignInAppsPrecedence(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "X", ClientSecret: "cfg-secret"}})
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "Y", UpdatedBy: "u"}
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "Y", UpdatedBy: "u"}
+	apps, err := s.SignInApps(t.Context())
+	if err != nil || len(apps) != 3 {
 		t.Fatalf("apps=%v err=%v", apps, err)
 	}
-	if apps[0].Cloud != DigitalOcean || apps[0].Source != "config" || apps[0].ClientID != "cfg-id" {
-		t.Fatalf("config app: %+v", apps[0])
+	by := map[string]SignInApp{}
+	for _, a := range apps {
+		by[a.Cloud] = a
 	}
-	if apps[1].Cloud != GCP || apps[1].Source != "organization" || apps[1].ClientID != "org-id" {
-		t.Fatalf("organization app: %+v", apps[1])
+	if a := by[DigitalOcean]; a.Source != "config" || a.ClientID != "X" || a.UpdatedBy != "" {
+		t.Fatalf("config over platform: %+v", a)
 	}
-	delete(store.apps, "org/"+GCP)
-	apps, _ = s.SignInApps(t.Context(), viewer)
-	if apps[1].Source != "none" || apps[1].ClientID != "" {
-		t.Fatalf("missing app: %+v", apps[1])
+	if a := by[GCP]; a.Source != "platform" || a.ClientID != "Y" || a.UpdatedBy != "u" {
+		t.Fatalf("platform app: %+v", a)
 	}
-}
-
-func TestSetSignInAppIsRefusedWhenConfigSetsIt(t *testing.T) {
-	s, _, secrets, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "x"}}, security.Permission{})
-	_, err := s.SetSignInApp(t.Context(), viewer, DigitalOcean, AppInput{ClientID: "a", ClientSecret: "b"})
-	if !errors.Is(err, ErrAppLocked) || len(secrets.kept) != 0 {
-		t.Fatalf("err=%v kept=%v", err, secrets.kept)
-	}
-	if err := s.DeleteSignInApp(t.Context(), viewer, DigitalOcean); !errors.Is(err, ErrAppLocked) {
-		t.Fatalf("delete: %v", err)
+	if a := by[Azure]; a.Source != "none" || a.ClientID != "" {
+		t.Fatalf("no app: %+v", a)
 	}
 }
 
-func TestSetSignInAppNeedsCloudAccountManage(t *testing.T) {
-	s, store, secrets, audit := signInService(nil, security.CloudAccountManage)
-	_, err := s.SetSignInApp(t.Context(), viewer, DigitalOcean, AppInput{ClientID: "a", ClientSecret: "b"})
-	if !errors.Is(err, security.ErrForbidden) || len(secrets.kept) != 0 || len(store.apps) != 0 || len(audit.actions) != 0 {
-		t.Fatalf("err=%v kept=%v", err, secrets.kept)
-	}
-	if err := s.DeleteSignInApp(t.Context(), viewer, DigitalOcean); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("delete: %v", err)
-	}
-}
-
-func TestSetSignInAppKeepsTheSecretInVaultOnly(t *testing.T) {
-	s, store, secrets, audit := signInService(nil, security.Permission{})
-	got, err := s.SetSignInApp(t.Context(), viewer, DigitalOcean, AppInput{ClientID: " the-id ", ClientSecret: "the-secret"})
+func TestSetSignInAppTrims(t *testing.T) {
+	s, store, secrets, audit := signInService(nil)
+	got, err := s.SetSignInApp(t.Context(), "usr_1", DigitalOcean, AppInput{ClientID: "  abc  ", ClientSecret: " s "})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secrets.kept["org/"+DigitalOcean] != "the-secret" {
-		t.Fatalf("vault: %v", secrets.kept)
+	if store.apps[DigitalOcean].ClientID != "abc" || got.ClientID != "abc" || secrets.kept[DigitalOcean] != "s" {
+		t.Fatalf("stored %+v, returned %+v, secret %q", store.apps[DigitalOcean], got, secrets.kept[DigitalOcean])
 	}
-	if got.Source != "organization" || got.ClientID != "the-id" || got.UpdatedBy != "viewer" {
-		t.Fatalf("returned: %+v", got)
+	if got.Source != AppFromPlatform || got.UpdatedBy != "usr_1" || audit.actions[0] != "cloud_signin_app.set" || audit.meta[0] != "usr_1 digitalocean abc" {
+		t.Fatalf("returned %+v, audit %v %v", got, audit.actions, audit.meta)
 	}
-	if strings.Contains(strings.Join(audit.meta, "|"), "the-secret") || audit.actions[0] != "cloud_signin_app.set" || audit.meta[0] != "digitalocean the-id" {
-		t.Fatalf("audit: %v %v", audit.actions, audit.meta)
+}
+
+func TestSetSignInAppLocked(t *testing.T) {
+	s, store, secrets, audit := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "x"}})
+	_, err := s.SetSignInApp(t.Context(), "usr_1", DigitalOcean, AppInput{ClientID: "a", ClientSecret: "b"})
+	if !errors.Is(err, ErrAppLocked) || len(secrets.kept) != 0 || len(store.apps) != 0 || len(audit.actions) != 0 {
+		t.Fatalf("err=%v kept=%v", err, secrets.kept)
 	}
-	if store.apps["org/"+DigitalOcean].ClientID != "the-id" {
-		t.Fatalf("stored: %+v", store.apps)
+	if err := s.DeleteSignInApp(t.Context(), "usr_1", DigitalOcean); !errors.Is(err, ErrAppLocked) {
+		t.Fatalf("delete: %v", err)
 	}
-	if _, err := s.SetSignInApp(t.Context(), viewer, DigitalOcean, AppInput{ClientID: "", ClientSecret: "x"}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("empty id: %v", err)
+}
+
+func TestSetSignInAppVercelSlug(t *testing.T) {
+	s, store, secrets, _ := signInService(nil)
+	s.Providers[Vercel] = noProvider{}
+	if _, err := s.SetSignInApp(t.Context(), "usr_1", Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "slug") {
+		t.Fatalf("no slug: %v", err)
 	}
-	if _, err := s.SetSignInApp(t.Context(), viewer, "nope", AppInput{ClientID: "a", ClientSecret: "b"}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("unknown cloud: %v", err)
+	if len(secrets.kept) != 0 || len(store.apps) != 0 {
+		t.Fatalf("kept %v, stored %v", secrets.kept, store.apps)
 	}
-	if err := s.DeleteSignInApp(t.Context(), viewer, DigitalOcean); err != nil {
+	got, err := s.SetSignInApp(t.Context(), "usr_1", Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec", Slug: " loomplane "})
+	if err != nil || got.Slug != "loomplane" || store.apps[Vercel].Slug != "loomplane" {
+		t.Fatalf("returned %+v, stored %+v: %v", got, store.apps[Vercel], err)
+	}
+	if app, err := s.app(t.Context(), Vercel); err != nil || app.Slug != "loomplane" {
+		t.Fatalf("app %+v: %v", app, err)
+	}
+	if _, err := s.SetSignInApp(t.Context(), "usr_1", DigitalOcean, AppInput{ClientID: "a", ClientSecret: "b", Slug: "ignored"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(secrets.kept) != 0 || len(store.apps) != 0 || audit.actions[1] != "cloud_signin_app.delete" {
-		t.Fatalf("after delete: %v %v %v", secrets.kept, store.apps, audit.actions)
+	if store.apps[DigitalOcean].Slug != "" {
+		t.Fatalf("digitalocean kept a slug: %+v", store.apps[DigitalOcean])
+	}
+}
+
+func TestSetSignInAppValidates(t *testing.T) {
+	s, store, secrets, audit := signInService(nil)
+	for _, c := range []struct {
+		cloud string
+		in    AppInput
+	}{
+		{DigitalOcean, AppInput{ClientSecret: "x"}},
+		{DigitalOcean, AppInput{ClientID: "x"}},
+		{"nope", AppInput{ClientID: "a", ClientSecret: "b"}},
+	} {
+		if _, err := s.SetSignInApp(t.Context(), "usr_1", c.cloud, c.in); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s %+v: %v", c.cloud, c.in, err)
+		}
+	}
+	if len(secrets.kept) != 0 || len(store.apps) != 0 || len(audit.actions) != 0 {
+		t.Fatalf("something was saved: %v %v %v", secrets.kept, store.apps, audit.actions)
+	}
+}
+
+func TestSignInAppNeverCarriesSecret(t *testing.T) {
+	s, _, _, audit := signInService(map[string]oauth.App{GCP: {ClientID: "cfg", ClientSecret: "cfg-secret-value"}})
+	if _, err := s.SetSignInApp(t.Context(), "usr_1", DigitalOcean, AppInput{ClientID: "the-id", ClientSecret: "platform-secret-value"}); err != nil {
+		t.Fatal(err)
+	}
+	apps, err := s.SignInApps(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, _ := json.Marshal(apps)
+	for _, secret := range []string{"cfg-secret-value", "platform-secret-value"} {
+		if strings.Contains(string(shown), secret) || strings.Contains(strings.Join(audit.meta, "|"), secret) {
+			t.Fatalf("%q leaked: %s %v", secret, shown, audit.meta)
+		}
+	}
+}
+
+func TestSignInClouds(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "cfg", ClientSecret: "x"}})
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "p"}
+	got, err := s.SignInClouds(t.Context())
+	want := map[string]bool{DigitalOcean: true, GCP: true, Azure: false}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("got %v, want %v: %v", got, want, err)
+	}
+}
+
+func TestDeleteSignInApp(t *testing.T) {
+	s, store, secrets, audit := signInService(nil)
+	if _, err := s.SetSignInApp(t.Context(), "usr_1", DigitalOcean, AppInput{ClientID: "id", ClientSecret: "sec"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSignInApp(t.Context(), "usr_2", DigitalOcean); err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets.kept) != 0 || len(store.apps) != 0 || audit.actions[1] != "cloud_signin_app.delete" || audit.meta[1] != "usr_2 digitalocean id" {
+		t.Fatalf("after delete: %v %v %v %v", secrets.kept, store.apps, audit.actions, audit.meta)
+	}
+	if err := s.DeleteSignInApp(t.Context(), "usr_2", DigitalOcean); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
 	}
 }
 
 func TestAppResolutionPrefersConfig(t *testing.T) {
-	s, store, secrets, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "cfg", ClientSecret: "cfg-secret"}}, security.Permission{})
-	store.apps["org/"+DigitalOcean] = &StoredApp{OrgID: "org", Cloud: DigitalOcean, ClientID: "org-id"}
-	secrets.kept["org/"+DigitalOcean] = "org-secret"
-	app, err := s.app(t.Context(), "org", DigitalOcean)
+	s, store, secrets, _ := signInService(map[string]oauth.App{DigitalOcean: {ClientID: "cfg", ClientSecret: "cfg-secret"}})
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "platform-id"}
+	secrets.kept[DigitalOcean] = "platform-secret"
+	app, err := s.app(t.Context(), DigitalOcean)
 	if err != nil || app.ClientID != "cfg" || app.ClientSecret != "cfg-secret" {
 		t.Fatalf("%+v %v", app, err)
 	}
 	s.ConfigApps = nil
-	app, err = s.app(t.Context(), "org", DigitalOcean)
-	if err != nil || app.ClientID != "org-id" || app.ClientSecret != "org-secret" {
+	app, err = s.app(t.Context(), DigitalOcean)
+	if err != nil || app.ClientID != "platform-id" || app.ClientSecret != "platform-secret" {
 		t.Fatalf("%+v %v", app, err)
 	}
 }
 
-func TestAppIsMissingWithoutConfigOrOrganization(t *testing.T) {
-	s, _, _, _ := signInService(nil, security.Permission{})
-	if _, err := s.app(t.Context(), "org", DigitalOcean); !errors.Is(err, ErrNoApp) {
+func TestAppIsMissingWithoutConfigOrPlatform(t *testing.T) {
+	s, _, _, _ := signInService(nil)
+	if _, err := s.app(t.Context(), DigitalOcean); !errors.Is(err, ErrNoApp) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -205,78 +258,41 @@ func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64,
 	return n, nil
 }
 
-func (f *fakeAppStore) SetAppProblem(_ context.Context, org, cloud, message string, _ time.Time) error {
+func (f *fakeAppStore) SetAppProblem(_ context.Context, cloud, message string, _ time.Time) error {
+	if _, ok := f.apps[cloud]; !ok {
+		return nil
+	}
 	if f.problems == nil {
 		f.problems = map[string]string{}
 	}
-	f.problems[f.key(org, cloud)] = message
+	f.problems[cloud] = message
 	return nil
 }
 
-func (f *fakeAppStore) ClearAppProblem(_ context.Context, org, cloud string) error {
-	delete(f.problems, f.key(org, cloud))
+func (f *fakeAppStore) ClearAppProblem(_ context.Context, cloud string) error {
+	delete(f.problems, cloud)
 	return nil
 }
 
-func (f *fakeAppStore) AppProblems(_ context.Context, org string) (map[string]string, error) {
-	out := map[string]string{}
-	for k, v := range f.problems {
-		if cloud, ok := strings.CutPrefix(k, org+"/"); ok {
-			out[cloud] = v
-		}
-	}
-	return out, nil
-}
-
-// Vercel's install page is addressed by the app's slug, so a Vercel app
-// can't be saved without one.
-func TestSetSignInAppNeedsASlugForVercel(t *testing.T) {
-	s, store, secrets, _ := signInService(nil, security.Permission{})
-	s.Providers[Vercel] = noProvider{}
-	if _, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "slug") {
-		t.Fatalf("no slug: %v", err)
-	}
-	if len(secrets.kept) != 0 || len(store.apps) != 0 {
-		t.Fatalf("kept %v, stored %v", secrets.kept, store.apps)
-	}
-	got, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec", Slug: " loomplane "})
-	if err != nil || got.Slug != "loomplane" || store.apps["org/"+Vercel].Slug != "loomplane" {
-		t.Fatalf("returned %+v, stored %+v: %v", got, store.apps["org/"+Vercel], err)
-	}
-	if app, err := s.app(t.Context(), "org", Vercel); err != nil || app.Slug != "loomplane" {
-		t.Fatalf("app %+v: %v", app, err)
-	}
-	apps, _ := s.SignInApps(t.Context(), viewer)
-	if v := apps[len(apps)-1]; v.Cloud != Vercel || v.Slug != "loomplane" {
-		t.Fatalf("listed %+v", v)
-	}
-
-	// Configuration's slug is the one listed when configuration sets the app.
-	s.ConfigApps = map[string]oauth.App{Vercel: {ClientID: "cfg", ClientSecret: "x", Slug: "lp-config"}}
-	apps, _ = s.SignInApps(t.Context(), viewer)
-	if v := apps[len(apps)-1]; v.Source != AppFromConfig || v.Slug != "lp-config" {
-		t.Fatalf("listed %+v", v)
-	}
-	if app, _ := s.app(t.Context(), "org", Vercel); app.Slug != "lp-config" {
-		t.Fatalf("app %+v", app)
-	}
+func (f *fakeAppStore) AppProblems(context.Context) (map[string]string, error) {
+	return maps.Clone(f.problems), nil
 }
 
 // A removed app's problem goes with it, so a new app doesn't start out
 // showing the old one's.
 func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
-	s, store, _, _ := signInService(nil, security.Permission{})
-	if _, err := s.SetSignInApp(t.Context(), viewer, GCP, AppInput{ClientID: "org-id", ClientSecret: "old"}); err != nil {
+	s, store, _, _ := signInService(nil)
+	if _, err := s.SetSignInApp(t.Context(), "usr_1", GCP, AppInput{ClientID: "id", ClientSecret: "old"}); err != nil {
 		t.Fatal(err)
 	}
-	s.appRejected(t.Context(), "org", GCP)
-	if store.problems["org/"+GCP] == "" {
+	s.appRejected(t.Context(), GCP)
+	if store.problems[GCP] == "" {
 		t.Fatal("no problem was recorded")
 	}
-	if err := s.DeleteSignInApp(t.Context(), viewer, GCP); err != nil {
+	if err := s.DeleteSignInApp(t.Context(), "usr_1", GCP); err != nil {
 		t.Fatal(err)
 	}
-	apps, err := s.SignInApps(t.Context(), viewer)
+	apps, err := s.SignInApps(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

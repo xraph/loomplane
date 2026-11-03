@@ -121,6 +121,11 @@ test("says so when there are no teams", async () => {
   expect(await screen.findByText("No teams yet")).toBeInTheDocument()
 })
 
+test("an older server's null list reads as no teams", async () => {
+  serve(null as unknown as unknown[])
+  expect(await screen.findByText("No teams yet")).toBeInTheDocument()
+})
+
 test("an admin creates a team, adds a member and grants a role", async () => {
   const user = userEvent.setup()
   const writes = serve()

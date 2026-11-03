@@ -158,11 +158,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
-	// Signing in. An org's own sign-in app secrets share the credentials'
+	// Signing in. The platform's sign-in app secrets share the credentials'
 	// key but live under a Vault app of their own.
 	e.svc.Apps = store
-	e.svc.AppSecrets = connections.NewVaultSecretsFor(
-		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.OAuthAppsVaultAppID)), connections.OAuthAppsVaultAppID)
+	e.svc.AppSecrets = connections.NewVaultAppSecrets(
+		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.PlatformOAuthAppsVaultAppID)))
 	e.svc.Providers = map[string]connections.Provider{
 		connections.DigitalOcean: doClient,
 		connections.Vercel:       vercelClient,
@@ -310,9 +310,9 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 
 // RecordApp implements connections.AppAuditor. It records the cloud and the
 // client ID, never the secret.
-func (a auditor) RecordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string) {
+func (a auditor) RecordApp(ctx context.Context, action, userID, cloud, clientID string) {
 	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
-		Category("cloud_connections").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Category("cloud_connections").AppID(a.appID).UserID(userID).Outcome("success").
 		Meta("cloud", cloud).Meta("client_id", clientID)
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
