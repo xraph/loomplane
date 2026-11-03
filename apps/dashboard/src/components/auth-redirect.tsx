@@ -46,12 +46,26 @@ export function AuthRedirect({
     // A previous session's workspace must not rewrite the saved address.
     setWorkspaceSlug("")
     if (authenticated) {
-      // This is already a public address, including its workspace prefix.
-      router.history.replace(destination)
+      // A full load, so the dashboard reads the public config again: what
+      // it says about platform admins and cloud sign-in is only true once
+      // you're signed in. The address is already public, workspace prefix
+      // included.
+      window.location.assign(destination)
     } else {
       void router.navigate({ to: "/sign-in", replace: true })
     }
   }, [authenticated, href, router])
 
+  return <PageLoading />
+}
+
+/** Leave for an address with a full load, so the public config is read again. */
+export function FreshLoad({ to }: { to: string }) {
+  const started = useRef(false)
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    window.location.assign(to)
+  }, [to])
   return <PageLoading />
 }

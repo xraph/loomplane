@@ -1038,13 +1038,13 @@
         }
       }
     },
-    "/api/v1/cloud-sign-in/apps": {
+    "/api/v1/platform/cloud-sign-in/apps": {
       "get": {
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "The clouds you can sign in to, where each one's app comes from, and the callback URL to register",
-        "operationId": "cloudSignInApps.list",
+        "summary": "The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register",
+        "operationId": "platformCloudSignInApps.list",
         "responses": {
           "200": {
             "description": "Sign-in apps",
@@ -1055,17 +1055,20 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Not a platform user"
           }
         }
       }
     },
-    "/api/v1/cloud-sign-in/apps/{cloud}": {
+    "/api/v1/platform/cloud-sign-in/apps/{cloud}": {
       "put": {
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "Set the organization's own sign-in app for a cloud. The secret is never returned",
-        "operationId": "cloudSignInApps.set",
+        "summary": "Set the platform's sign-in app for a cloud. The secret is never returned",
+        "operationId": "platformCloudSignInApps.set",
         "parameters": [
           {
             "name": "cloud",
@@ -1098,6 +1101,15 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Not a platform user"
+          },
+          "409": {
+            "description": "The cloud's app comes from configuration"
+          },
+          "422": {
+            "description": "The app is missing something"
           }
         }
       },
@@ -1105,8 +1117,8 @@
         "tags": [
           "Cloud sign-in"
         ],
-        "summary": "Remove the organization's own sign-in app for a cloud",
-        "operationId": "cloudSignInApps.delete",
+        "summary": "Remove the platform's sign-in app for a cloud",
+        "operationId": "platformCloudSignInApps.delete",
         "parameters": [
           {
             "name": "cloud",
@@ -1121,6 +1133,12 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "404": {
+            "description": "Not a platform user, or the cloud has no platform app"
+          },
+          "409": {
+            "description": "The cloud's app comes from configuration"
           }
         }
       }
@@ -13643,13 +13661,14 @@
             "description": "No Content"
           },
           "404": {
-            "description": "Not Found"
+            "description": "Not a platform user"
           }
         },
         "summary": "Stop offering to set up cloud sign-in",
         "tags": [
           "Identity"
-        ]
+        ],
+        "x-forge-no-entity": true
       }
     },
     "/api/v1/teams": {
@@ -31445,6 +31464,8 @@
         "type": "object",
         "required": [
           "cloud",
+          "connections",
+          "organizations",
           "source"
         ],
         "properties": {
@@ -31453,6 +31474,12 @@
           },
           "cloud": {
             "type": "string"
+          },
+          "connections": {
+            "type": "integer"
+          },
+          "organizations": {
+            "type": "integer"
           },
           "problem": {
             "type": "string"

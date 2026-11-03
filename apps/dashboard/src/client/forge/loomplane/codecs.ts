@@ -959,7 +959,7 @@ export const CODECS: Record<string, Codec> = {
   "SetupStatus": {"kind": "object", "fields": {"pending": {"ts": "pending"}}, "required": ["pending"]},
   "SetupStep": {"kind": "object", "fields": {"body": {"ts": "body"}, "command": {"ts": "command"}, "title": {"ts": "title"}}, "required": ["title"]},
   "SignIn": {"kind": "object", "fields": {"authorize_url": {"ts": "authorizeUrl"}, "state": {"ts": "state"}}, "required": ["authorize_url", "state"]},
-  "SignInApp": {"kind": "object", "fields": {"client_id": {"ts": "clientId"}, "cloud": {"ts": "cloud"}, "problem": {"ts": "problem"}, "slug": {"ts": "slug"}, "source": {"ts": "source"}, "updated_at": {"ts": "updatedAt"}, "updated_by": {"ts": "updatedBy"}}, "required": ["cloud", "source"]},
+  "SignInApp": {"kind": "object", "fields": {"client_id": {"ts": "clientId"}, "cloud": {"ts": "cloud"}, "connections": {"ts": "connections"}, "organizations": {"ts": "organizations"}, "problem": {"ts": "problem"}, "slug": {"ts": "slug"}, "source": {"ts": "source"}, "updated_at": {"ts": "updatedAt"}, "updated_by": {"ts": "updatedBy"}}, "required": ["cloud", "connections", "organizations", "source"]},
   "SignInAppList": {"kind": "object", "fields": {"apps": {"ts": "apps", "codec": () => CODECS["SignInAppList.apps"]}, "callback_url": {"ts": "callbackUrl"}, "keyless": {"ts": "keyless", "codec": () => CODECS["KeylessState"]}}, "required": ["apps", "callback_url", "keyless"]},
   "SignInAppList.apps": {"kind": "array", "items": () => CODECS["SignInApp"]},
   "SignInInputBody": {"kind": "object", "fields": {"cloud": {"ts": "cloud"}, "connection_id": {"ts": "connectionId"}, "name": {"ts": "name"}, "settings": {"ts": "settings", "codec": () => CODECS["SignInInputBody.settings"]}}, "required": ["cloud", "name"]},

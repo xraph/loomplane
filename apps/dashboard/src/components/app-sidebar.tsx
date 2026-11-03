@@ -51,6 +51,7 @@ import {
   SidebarMenuSkeleton,
   SidebarRail,
 } from "@/components/ui/sidebar"
+import { useInstance } from "@/lib/instance"
 import { useOrganization } from "@/lib/organization"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate, usePath } from "@/lib/router"
@@ -64,7 +65,7 @@ const settingsPaths = [
   "/teams",
   "/variables",
   "/integrations",
-  "/cloud-sign-in",
+  "/platform/cloud-sign-in",
   "/api-keys",
   "/notifications/settings",
   "/webhooks",
@@ -74,6 +75,7 @@ const settingsPaths = [
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
+  const { platformAdmin } = useInstance()
   const { openNewProject } = useShell()
   const features = useFeatures()
   const agent = useAgent()
@@ -238,11 +240,15 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           link: <Link to="/integrations" />,
           isActive: path.startsWith("/integrations"),
         },
-        {
-          title: "Cloud sign-in",
-          link: <Link to="/cloud-sign-in" />,
-          isActive: path.startsWith("/cloud-sign-in"),
-        },
+        ...(platformAdmin
+          ? [
+              {
+                title: "Cloud sign-in",
+                link: <Link to="/platform/cloud-sign-in" />,
+                isActive: path.startsWith("/platform/cloud-sign-in"),
+              },
+            ]
+          : []),
         // The workspace's AI settings sit with its other settings, so the AI
         // group below doesn't carry a second "Settings".
         ...(features.ai && can("ai:read")

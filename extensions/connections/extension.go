@@ -50,6 +50,9 @@ type Extension struct {
 	plugins *plugins.Set
 	svc     *connections.Service
 	issuer  *issuer.Service
+	// platformUser says whether a request is a platform owner's or admin's,
+	// for the routes that manage the platform's sign-in apps.
+	platformUser identity.PlatformUser
 	// rotating is closed once the startup key rotation is done, and
 	// stopRotating cuts it short.
 	rotating     chan struct{}
@@ -98,6 +101,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("connections needs the identity extension: %w", err)
 	}
+	platformUser, err := forge.InjectType[identity.PlatformUser](c)
+	if err != nil {
+		return fmt.Errorf("connections needs the identity extension: %w", err)
+	}
+	e.platformUser = platformUser
 	audit, err := forge.InjectType[*chronicle.Chronicle](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the audit trail: %w", err)

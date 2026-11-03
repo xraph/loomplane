@@ -1,7 +1,9 @@
 package connections
 
 import (
+	"context"
 	"net/http"
+	"slices"
 
 	"github.com/xraph/forge"
 
@@ -9,37 +11,71 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 )
 
-// SignInAppList is the body of GET /api/v1/cloud-sign-in/apps: each cloud
-// that can be signed in to, where its app comes from, and the callback URL
-// to register with an app. Keyless says whether clouds can connect
-// keylessly, through Loomplane's own issuer.
+// SignInAppList is the body of GET /api/v1/platform/cloud-sign-in/apps: each
+// cloud that can be signed in to, where its app comes from, how many
+// sign-ins work with it, and the callback URL to register with an app.
+// Keyless says whether clouds can connect keylessly, through Loomplane's
+// own issuer.
 type SignInAppList struct {
 	Apps        []connections.SignInApp `json:"apps"`
 	CallbackURL string                  `json:"callback_url"`
 	Keyless     KeylessState            `json:"keyless"`
 }
 
+// platformUserKey carries the platform user the gate found to the handlers.
+type platformUserKey struct{}
+
+// platformGate lets only a platform user through, and gives everyone else
+// the 404 an unknown route would. It runs after the guard, so an API key
+// has been authenticated by then and still isn't a platform user.
+func (e *Extension) platformGate() forge.Middleware {
+	return func(next forge.Handler) forge.Handler {
+		return func(c forge.Context) error {
+			ctx := c.Request().Context()
+			userID, ok := e.platformUser(ctx)
+			if !ok {
+				return forge.NewHTTPError(http.StatusNotFound, "not found")
+			}
+			c.WithContext(context.WithValue(ctx, platformUserKey{}, userID))
+			return next(c)
+		}
+	}
+}
+
+func platformUserID(c forge.Context) string {
+	id, _ := c.Request().Context().Value(platformUserKey{}).(string)
+	return id
+}
+
 func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
-	apps := r.Group("/api/v1/cloud-sign-in", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud sign-in"))
+	apps := r.Group("/api/v1/platform/cloud-sign-in",
+		forge.WithGroupMiddleware(slices.Concat(guard, []forge.Middleware{e.platformGate()})...),
+		forge.WithGroupTags("Cloud sign-in"))
 	if err := apps.GET("/apps", e.signInApps,
-		forge.WithName("cloudSignInApps.list"),
-		forge.WithSummary("The clouds you can sign in to, where each one's app comes from, and the callback URL to register"),
+		forge.WithName("platformCloudSignInApps.list"),
+		forge.WithSummary("The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register"),
 		forge.WithResponseSchema(http.StatusOK, "Sign-in apps", SignInAppList{}),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
 	); err != nil {
 		return err
 	}
 	if err := apps.PUT("/apps/:cloud", e.setSignInApp,
-		forge.WithName("cloudSignInApps.set"),
-		forge.WithSummary("Set the organization's own sign-in app for a cloud. The secret is never returned"),
+		forge.WithName("platformCloudSignInApps.set"),
+		forge.WithSummary("Set the platform's sign-in app for a cloud. The secret is never returned"),
 		forge.WithRequestSchema(connections.AppInput{}),
 		forge.WithResponseSchema(http.StatusOK, "The sign-in app", connections.SignInApp{}),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user", nil),
+		forge.WithResponseSchema(http.StatusConflict, "The cloud's app comes from configuration", nil),
+		forge.WithResponseSchema(http.StatusUnprocessableEntity, "The app is missing something", nil),
 	); err != nil {
 		return err
 	}
 	if err := apps.DELETE("/apps/:cloud", e.deleteSignInApp,
-		forge.WithName("cloudSignInApps.delete"),
-		forge.WithSummary("Remove the organization's own sign-in app for a cloud"),
+		forge.WithName("platformCloudSignInApps.delete"),
+		forge.WithSummary("Remove the platform's sign-in app for a cloud"),
 		forge.WithNoContentResponse(),
+		forge.WithResponseSchema(http.StatusNotFound, "Not a platform user, or the cloud has no platform app", nil),
+		forge.WithResponseSchema(http.StatusConflict, "The cloud's app comes from configuration", nil),
 	); err != nil {
 		return err
 	}
@@ -63,9 +99,6 @@ func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
 }
 
 func (e *Extension) signInApps(c forge.Context) error {
-	if _, err := principal(c); err != nil {
-		return err
-	}
 	apps, err := e.svc.SignInApps(c.Request().Context())
 	if err != nil {
 		return fail(err)
@@ -75,14 +108,23 @@ func (e *Extension) signInApps(c forge.Context) error {
 		Keyless: KeylessState{Enabled: enabled, Issuer: e.issuer.URL(), Reason: reason}})
 }
 
-// setSignInApp and deleteSignInApp are closed until Task 4's platform-admin
-// routes replace them: nothing here may change the platform's apps yet.
-func (e *Extension) setSignInApp(forge.Context) error {
-	return forge.NewHTTPError(http.StatusNotFound, "not found")
+func (e *Extension) setSignInApp(c forge.Context) error {
+	var in connections.AppInput
+	if err := c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"client_id": "...", "client_secret": "..."}`)
+	}
+	app, err := e.svc.SetSignInApp(c.Request().Context(), platformUserID(c), c.Param("cloud"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, app)
 }
 
-func (e *Extension) deleteSignInApp(forge.Context) error {
-	return forge.NewHTTPError(http.StatusNotFound, "not found")
+func (e *Extension) deleteSignInApp(c forge.Context) error {
+	if err := e.svc.DeleteSignInApp(c.Request().Context(), platformUserID(c), c.Param("cloud")); err != nil {
+		return fail(err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (e *Extension) startSignIn(c forge.Context) error {

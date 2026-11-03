@@ -31,6 +31,8 @@ vi.mock("@/pages/recovery", () => ({
   ),
 }))
 
+const assign = vi.hoisted(() => vi.fn())
+
 function instance(requireEmailVerification: boolean) {
   setInstance({
     setupPending: false,
@@ -44,11 +46,16 @@ beforeEach(() => {
   auth.isAuthenticated = true
   auth.user = { email: "ada@example.com", email_verified: false }
   sessionStorage.clear()
+  assign.mockReset()
+  vi.stubGlobal("location", { ...window.location, assign })
   setWorkspaceSlug("")
   vi.spyOn(window, "scrollTo").mockImplementation(() => {})
 })
 
-afterEach(() => instance(false))
+afterEach(() => {
+  instance(false)
+  vi.unstubAllGlobals()
+})
 
 async function open(path: string) {
   const history = createMemoryHistory({ initialEntries: [path] })
@@ -81,9 +88,10 @@ describe("email verification", () => {
   it("sends a verified account home from the verify page", async () => {
     instance(true)
     auth.user = { email: "ada@example.com", email_verified: true }
-    const history = await open("/verify-email?email=ada%40example.com")
-    await screen.findByText("Protected page")
-    await waitFor(() => expect(history.location.pathname).toBe("/"))
+    await open("/verify-email?email=ada%40example.com")
+    // A full load: the public config was read before the account verified,
+    // so only a fresh read can say whether to offer cloud sign-in.
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/"))
   })
 
   // Signed out, the page is how a new account gets its first session.

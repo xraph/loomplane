@@ -18,6 +18,17 @@ type fakeAppStore struct {
 	apps     map[string]*StoredApp
 	signIns  map[string]*PendingSignIn
 	problems map[string]string
+	// setProblemErr fails SetAppProblem when set.
+	setProblemErr error
+	// counts are what SignedInWith reports by cloud, and counted how often
+	// it was asked.
+	counts  map[string][2]int
+	counted int
+}
+
+func (f *fakeAppStore) SignedInWith(_ context.Context, cloud, _ string) (int, int, error) {
+	f.counted++
+	return f.counts[cloud][0], f.counts[cloud][1], nil
 }
 
 func (f *fakeAppStore) GetApp(_ context.Context, cloud string) (*StoredApp, error) {
@@ -258,8 +269,11 @@ func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64,
 	return n, nil
 }
 
-func (f *fakeAppStore) SetAppProblem(_ context.Context, cloud, message string, _ time.Time) error {
-	if _, ok := f.apps[cloud]; !ok {
+func (f *fakeAppStore) SetAppProblem(_ context.Context, cloud, clientID, message string, _ time.Time) error {
+	if f.setProblemErr != nil {
+		return f.setProblemErr
+	}
+	if a, ok := f.apps[cloud]; !ok || a.ClientID != clientID {
 		return nil
 	}
 	if f.problems == nil {
@@ -329,29 +343,10 @@ func TestRefusedConfigAppLeavesTheShadowedPlatformRowAlone(t *testing.T) {
 	}
 }
 
-func (m *memStore) SignedInWith(_ context.Context, cloud, clientID string) (int, int, error) {
-	orgs := map[string]bool{}
-	n := 0
-	for _, c := range m.rows {
-		if c.Cloud == cloud && c.Method == MethodOAuth && c.OAuthClientID == clientID && c.Status != StatusSignInNeeded {
-			n++
-			orgs[c.OrgID] = true
-		}
-	}
-	return n, len(orgs), nil
-}
-
 func TestSignInAppsCounts(t *testing.T) {
 	s, store, _, _ := signInService(nil)
 	s.Providers[Vercel] = independentRenewer{}
-	mem := &memStore{rows: map[string]Connection{
-		"a": {ID: "a", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
-		"b": {ID: "b", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
-		"c": {ID: "c", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusSignInNeeded},
-		"d": {ID: "d", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "other", Status: StatusReady},
-		"e": {ID: "e", OrgID: "o1", Cloud: Vercel, Method: MethodOAuth, OAuthClientID: "vid", Status: StatusReady},
-	}}
-	s.store = mem
+	store.counts = map[string][2]int{DigitalOcean: {2, 2}, Vercel: {5, 3}}
 	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "id"}
 	store.apps[Vercel] = &StoredApp{Cloud: Vercel, ClientID: "vid", Slug: "x"}
 	apps, err := s.SignInApps(t.Context())
@@ -368,6 +363,78 @@ func TestSignInAppsCounts(t *testing.T) {
 			if a.Connections != 0 || a.Organizations != 0 {
 				t.Fatalf("vercel: %+v", a)
 			}
+		}
+	}
+}
+
+// SignInClouds runs for every member's connections list, so it must not
+// run the counts, which read across every organization.
+func TestSignInCloudsSkipsTheCounts(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg"}})
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "id"}
+	got, err := s.SignInClouds(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[DigitalOcean] || !got[GCP] || got[Azure] {
+		t.Fatalf("clouds %v", got)
+	}
+	if store.counted != 0 {
+		t.Fatalf("SignInClouds counted %d times", store.counted)
+	}
+}
+
+func TestAppRejectedWarnsWhenItCannotRecordTheProblem(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	store.setProblemErr = errors.New("db down")
+	var warned []string
+	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
+	if why := s.appRejected(t.Context(), GCP, "platform"); why == "" {
+		t.Fatal("no message")
+	}
+	if len(warned) != 1 {
+		t.Fatalf("warned %v", warned)
+	}
+}
+
+func TestAppRejectedIsQuietWhenThereIsNoApp(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	var warned []string
+	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
+	s.appRejected(t.Context(), GCP, "platform")
+	if len(warned) != 0 {
+		t.Fatalf("warned %v", warned)
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+}
+
+// A refusal for an app since replaced blames the new one for nothing: the
+// record only lands on the row still holding the refused client ID.
+func TestAppRejectedBlamesOnlyTheAppThatWasRefused(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "replacement"}
+	s.appRejected(t.Context(), GCP, "old")
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("the replacement was blamed: %v", got)
+	}
+}
+
+// A config app wins over a platform row, so the list must not show the
+// shadowed row's problem on it.
+func TestSignInAppsShowsNoPlatformProblemOnAConfigApp(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg", ClientSecret: "x"}})
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	store.problems = map[string]string{GCP: "the shadowed row's problem"}
+	apps, err := s.SignInApps(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		if a.Cloud == GCP && (a.Source != AppFromConfig || a.Problem != "") {
+			t.Fatalf("%+v", a)
 		}
 	}
 }

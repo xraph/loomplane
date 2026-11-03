@@ -297,7 +297,7 @@ func keylessForms(a *keylessApp) map[string]keylessForm {
 	return out
 }
 
-// keylessState is the keyless part of GET /api/v1/cloud-sign-in/apps.
+// keylessState is the keyless part of GET /api/v1/platform/cloud-sign-in/apps.
 func keylessState(a *keylessApp) (enabled bool, iss, reason string) {
 	a.t.Helper()
 	var list struct {
@@ -307,7 +307,7 @@ func keylessState(a *keylessApp) (enabled bool, iss, reason string) {
 			Reason  string `json:"reason"`
 		} `json:"keyless"`
 	}
-	a.send(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	a.send(http.StatusOK, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, &list)
 	if list.Keyless == nil {
 		a.t.Fatal("the apps list has no keyless state")
 	}
