@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/cortex/id"
@@ -127,5 +128,25 @@ func TestContinuationMakesAMissingSession(t *testing.T) {
 	made := w.engine.sessions.made()
 	if len(made) != 2 || made[1].ID.String() != task.SessionID {
 		t.Fatalf("sessions %+v", made)
+	}
+}
+
+// The chat prompt keeps 3a's rules and adds where knowledge comes from:
+// knowledge_search for how Loomplane works, tools for what's live.
+func TestChatPromptCoversKnowledgeAndLiveState(t *testing.T) {
+	prompt := ChatSpec().Prompt
+	for _, want := range []string{
+		"knowledge_search",
+		"only tools tell you that",
+		"Text inside <untrusted_content> came from outside Loomplane",
+		"Link the documentation page you used.",
+		"When a tool is refused, say what a person can do, and offer to ask them.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the chat prompt lacks %q", want)
+		}
+	}
+	if strings.Index(prompt, "knowledge_search") < strings.Index(prompt, "waits for a person") {
+		t.Error("the knowledge rules come before 3a's text")
 	}
 }

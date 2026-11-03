@@ -75,6 +75,47 @@ func TestAgentOff_noRoutesNoLibraries(t *testing.T) {
 	}
 }
 
+// With AI off the conversation and task routes aren't mounted, and
+// neither spec has a path or channel under /api/v1/agent.
+func TestAgentOff_noChatRoutes(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Storage.URL = "file://" + t.TempDir()
+	cfg.Dashboard.Dir = t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+	c.must(http.StatusNotFound, http.MethodGet, "/api/v1/agent/conversations", nil, nil)
+	c.must(http.StatusNotFound, http.MethodPost, "/api/v1/agent/conversations", map[string]string{"message": "hi"}, nil)
+	c.must(http.StatusNotFound, http.MethodGet, "/api/v1/agent/tasks/x/stream", nil, nil)
+	c.must(http.StatusNotFound, http.MethodGet, "/api/v1/agent/tasks/x", nil, nil)
+
+	var spec struct {
+		Paths map[string]json.RawMessage `json:"paths"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/openapi.json", nil, &spec)
+	for path := range spec.Paths {
+		if strings.HasPrefix(path, "/api/v1/agent") {
+			t.Errorf("AI off, and the OpenAPI spec has %s", path)
+		}
+	}
+	var async struct {
+		Channels map[string]struct {
+			Address string `json:"address"`
+		} `json:"channels"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/asyncapi.json", nil, &async)
+	if len(async.Channels) == 0 {
+		t.Fatal("the AsyncAPI spec has no channels at all")
+	}
+	for name, ch := range async.Channels {
+		if strings.HasPrefix(ch.Address, "/api/v1/agent") {
+			t.Errorf("AI off, and the AsyncAPI spec has %s (%s)", ch.Address, name)
+		}
+	}
+}
+
 // agentOrg is a fresh workspace on a server with AI on: its owner, its
 // ID, and the app.
 type agentOrg struct {

@@ -21,6 +21,7 @@ import (
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
+	"github.com/xraph/grove/drivers/pgdriver"
 	nexusext "github.com/xraph/nexus/extension"
 	shieldext "github.com/xraph/shield/extension"
 	weaveext "github.com/xraph/weave/extension"
@@ -35,6 +36,7 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/agentchat"
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
@@ -42,7 +44,9 @@ import (
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // Name is the extension's name.
@@ -153,8 +157,9 @@ func (e *Extension) agentSettings() *agentsettings.Service { return e.settings.L
 
 // Register resolves the agent's settings from the AI section and binds
 // nexus and the guardrail seeder to them, so a workspace can turn the
-// agent on. It provides the scope binder and the scanner, and serves the
-// agent's status and each project's autonomy.
+// agent on. It provides the scope binder, the scanner, the runs and the
+// conversations, and serves the agent's status, each project's autonomy,
+// its requests, and the conversations and their tasks.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -204,10 +209,35 @@ func (e *Extension) Register(fapp forge.App) error {
 	if runsErr := e.registerRuns(c, settings, projectSvc); runsErr != nil {
 		return runsErr
 	}
+	chat, err := e.registerChat(c)
+	if err != nil {
+		return err
+	}
 	if routesErr := mountRoutes(fapp.Router(), guard, settings, projectSvc); routesErr != nil {
 		return routesErr
 	}
-	return mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests)
+	if routesErr := mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests); routesErr != nil {
+		return routesErr
+	}
+	return mountChatRoutes(fapp.Router(), guard, e.binder, chat, e.runs)
+}
+
+// registerChat builds people's conversations with the agent over the run
+// driver and provides them. A conversation's sends take turns on a
+// Postgres advisory lock, so replicas do too.
+func (e *Extension) registerChat(c forge.Container) (*agentchat.Service, error) {
+	authz, err := forge.InjectType[*security.Authorizer](c)
+	if err != nil {
+		return nil, fmt.Errorf("the agent's conversations need the identity extension's authorizer: %w", err)
+	}
+	pg := pgdriver.Unwrap(e.db)
+	chat := agentchat.NewService(agentchat.Deps{
+		Store: agentchat.NewPgStore(pg), Runs: e.runs, Authz: authz, TryLock: pglock.TryFor(pg),
+	})
+	if err = forge.ProvideValue(c, chat); err != nil {
+		return nil, fmt.Errorf("provide the agent's conversations: %w", err)
+	}
+	return chat, nil
 }
 
 // sweepCron schedules the run driver's sweep. It runs on the default
