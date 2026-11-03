@@ -218,6 +218,42 @@ export const presets: Record<SelfHosted, Preset[]> = {
   ],
 }
 
+/**
+ * knownSettings are the settings each form has a field for. Any other the
+ * API lists, such as one added since, gets a plain field of its own.
+ */
+export const knownSettings: Record<SelfHosted, Set<string>> = {
+  server: new Set([
+    "host",
+    "port",
+    "user",
+    "host_key",
+    "docker_socket",
+    "advertise_host",
+    "build_workers",
+  ]),
+  registry: new Set(["endpoint", "repository", "auth_endpoint"]),
+  kubernetes: new Set([
+    "context",
+    "namespace",
+    "build_workers",
+    "build_runtime_class",
+    "registry_hostname",
+    "image_pull_secret",
+    "storage_class",
+    "architecture",
+    "ingress_class",
+    "ingress_address",
+    "registry_setup",
+    "registry_storage",
+    "registry_network",
+    "ingress_node",
+    "load_balancer_addresses",
+    "registry_dns",
+    "registry_maintenance",
+  ]),
+}
+
 // Keys only the managed registry reads, sent only when it's on.
 const registryKeys = [
   "registry_hostname",
