@@ -86,35 +86,24 @@ func (s State) SaveCeiling(c Ceiling, gid int) error {
 		return err
 	}
 	path := filepath.Join(s.Dir, ceilingFile)
-	tmp, err := writeTemp(path, b)
-	if err != nil {
-		return err
-	}
-	fail := func(err error) error {
-		_ = os.Remove(tmp)
-		return err
-	}
-	// The temp file is ours and open nowhere else, but chmod and chown it by
-	// descriptor anyway, so nothing swapped in at its name is touched.
-	f, err := openNoFollow(tmp)
-	if err != nil {
-		return fail(err)
-	}
-	if gid >= 0 {
-		if err = f.Chown(-1, gid); err != nil {
-			_ = f.Close()
-			return fail(fmt.Errorf("giving %s to group %d: %w", path, gid, err))
+	// Group and mode are set on the descriptor CreateTemp returned, and the
+	// temp file is never reopened by name. In a directory the service user
+	// owns, it could swap the name for a hard link to another file between a
+	// write and a reopen, and that file would get this group and mode.
+	tmp, err := writeTempWith(path, b, func(f *os.File) error {
+		if gid >= 0 {
+			if err := f.Chown(-1, gid); err != nil {
+				return fmt.Errorf("giving %s to group %d: %w", path, gid, err)
+			}
 		}
-	}
-	if err = f.Chmod(0o640); err != nil {
-		_ = f.Close()
-		return fail(err)
-	}
-	if err = f.Close(); err != nil {
-		return fail(err)
+		return f.Chmod(0o640)
+	})
+	if err != nil {
+		return err
 	}
 	if err = os.Rename(tmp, path); err != nil {
-		return fail(err)
+		_ = os.Remove(tmp)
+		return err
 	}
 	return syncDir(s.Dir)
 }

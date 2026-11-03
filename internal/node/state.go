@@ -313,6 +313,13 @@ func (s State) DeleteConfig() error {
 // writeTemp writes data to a 0600 temp file in path's directory and returns
 // its name. The caller removes it.
 func writeTemp(path string, data []byte) (string, error) {
+	return writeTempWith(path, data, nil)
+}
+
+// writeTempWith is writeTemp, and runs prep on the open file after it is
+// chmodded 0600 and before it is written, so a caller can set ownership or
+// mode by descriptor. The file is never reopened by name.
+func writeTempWith(path string, data []byte, prep func(*os.File) error) (string, error) {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return "", err
@@ -325,6 +332,11 @@ func writeTemp(path string, data []byte) (string, error) {
 	}
 	if err := f.Chmod(0o600); err != nil {
 		return fail(err)
+	}
+	if prep != nil {
+		if err := prep(f); err != nil {
+			return fail(err)
+		}
 	}
 	if _, err := f.Write(data); err != nil {
 		return fail(err)
