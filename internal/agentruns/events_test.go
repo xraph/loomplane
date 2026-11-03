@@ -3,11 +3,13 @@ package agentruns
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
@@ -389,5 +391,287 @@ func TestWatchFromTheEndWaitsForTheFinalStatus(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a stream that had everything didn't close")
+	}
+}
+
+func TestSafeArguments(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"key":"DB_URL","value":"postgres://u:p@h/db","secret":true}`:                              `{"key":"DB_URL","secret":true,"value":"[hidden]"}`,
+		`{"nested":{"api_key":"k","password":"p"}}`:                                                 `{"nested":{"api_key":"[hidden]","password":"[hidden]"}}`,
+		`{"key":"PORT","value":"8080"}`:                                                             `{"key":"PORT","value":"8080"}`,
+		`{"items":[{"Token":"t","private_key":"pk","secret_value":"sv","n":12345678901234567890}]}`: `{"items":[{"Token":"[hidden]","n":12345678901234567890,"private_key":"[hidden]","secret_value":"[hidden]"}]}`,
+		`{"value":"v","secret":"true"}`:                                                             `{"secret":"true","value":"v"}`,
+		``:                                                                                          `{}`,
+		`not json`:                                                                                  `{}`,
+		`{"note":"` + strings.Repeat("x", 5<<10) + `"}`:                                             `{"truncated":true}`,
+	} {
+		if got := string(SafeArguments(json.RawMessage(in))); got != want {
+			t.Errorf("SafeArguments(%.60s) = %.80s, want %s", in, got, want)
+		}
+	}
+}
+
+// toolCall is a cortex tool_call event.
+func toolCall(name, callID, args string) engine.StreamEvent {
+	return engine.StreamEvent{Type: engine.EventToolCall, Data: map[string]any{"tool_name": name, "tool_id": callID, "arguments": args}}
+}
+
+func TestToolCallEventCarriesSafeArguments(t *testing.T) {
+	w := newWorld(t)
+	task := w.adaChat(t)
+	events := make(chan engine.StreamEvent, 8)
+	events <- toolCall("set_variable", "call_1", `{"project":"mono","key":"DB_URL","value":"postgres://u:p@h/db"}`)
+	events <- toolCall("get_plan", "call_2", `{"plan_id":"plan_1","nested":{"api_key":"k","password":"p"}}`)
+	events <- toolCall("set_variable", "call_3", `{"project":"mono","key":"PORT","value":"8080"}`)
+	events <- toolCall("get_plan", "call_4", `{"plan_id":"`+strings.Repeat("x", 5<<10)+`"}`)
+	// A secret_or_external call keeps no arguments, whatever they are.
+	events <- toolCall("request_secret", "call_5", `{"project":"mono","key":"API_TOKEN","reason":"hunter3"}`)
+	events <- toolCall("set_variable", "call_6", `{"project":"mono","key":"DB_PASSWORD","value":"hunter2","secret":true}`)
+	close(events)
+	w.svc.pump(context.Background(), task, events)
+	evs := w.store.eventsOf(task.ID)
+	want := map[string]string{
+		"call_1": `{"key":"DB_URL","project":"mono","value":"postgres://u:p@h/db"}`,
+		"call_2": `{"nested":{"api_key":"[hidden]","password":"[hidden]"},"plan_id":"plan_1"}`,
+		"call_3": `{"key":"PORT","project":"mono","value":"8080"}`,
+		"call_4": `{"truncated":true}`,
+		"call_5": "",
+		"call_6": "",
+	}
+	seen := 0
+	for _, e := range evs {
+		if e.Kind != string(engine.EventToolCall) {
+			continue
+		}
+		seen++
+		var data struct {
+			Tool      string          `json:"tool"`
+			CallID    string          `json:"call_id"`
+			Risk      string          `json:"risk"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal(e.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.Tool == "" || data.Risk == "" {
+			t.Errorf("tool_call %s", e.Data)
+		}
+		if got := string(data.Arguments); got != want[data.CallID] {
+			t.Errorf("%s arguments %s, want %q", data.CallID, got, want[data.CallID])
+		}
+		if want[data.CallID] == "" && strings.Contains(string(e.Data), "arguments") {
+			t.Errorf("%s keeps arguments: %s", data.CallID, e.Data)
+		}
+		for _, leak := range []string{"hunter2", "hunter3"} {
+			if strings.Contains(string(e.Data), leak) {
+				t.Errorf("%s carries %q: %s", data.CallID, leak, e.Data)
+			}
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("%d tool calls, want %d: %+v", seen, len(want), evs)
+	}
+}
+
+// toolResult is a tool_result row as the log keeps it.
+type toolResult struct {
+	Seq     int64
+	Tool    string `json:"tool"`
+	CallID  string `json:"call_id"`
+	Outcome string `json:"outcome"`
+	Message string `json:"message"`
+}
+
+func toolResults(t *testing.T, evs []Event) (results []toolResult, callSeq map[string]int64) {
+	t.Helper()
+	callSeq = map[string]int64{}
+	for _, e := range evs {
+		switch e.Kind {
+		case string(engine.EventToolCall):
+			var c struct {
+				CallID string `json:"call_id"`
+			}
+			if err := json.Unmarshal(e.Data, &c); err != nil {
+				t.Fatal(err)
+			}
+			callSeq[c.CallID] = e.Seq
+		case EventToolResult:
+			var r toolResult
+			if err := json.Unmarshal(e.Data, &r); err != nil {
+				t.Fatal(err)
+			}
+			r.Seq = e.Seq
+			results = append(results, r)
+		}
+	}
+	return results, callSeq
+}
+
+// Cortex fires a tool's hook on the run's goroutine while the pump may
+// still have the tool's call in the channel: the outcome waits for its
+// call and lands right after it.
+func TestToolOutcomesFollowTheirCalls(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	runID := mustRunID(t, task.RunID)
+	ctx := runCtx(task)
+	err := w.svc.drive(context.Background(), task, func(_ context.Context, events chan<- engine.StreamEvent) error {
+		events <- toolCall("list_projects", "call_1", `{}`)
+		events <- toolCall("list_projects", "call_2", `{}`)
+		events <- toolCall("approve_plan", "call_3", `{"plan_id":"plan_1","revision":"r1"}`)
+		// The pump hasn't read any of them yet.
+		for _, err := range []error{
+			h.OnToolCompleted(ctx, runID, "list_projects", `[{"id":"prj_mono"}]`, time.Millisecond),
+			h.OnToolCompleted(ctx, runID, "list_projects", `[{"id":"prj_mono"}]`, time.Millisecond),
+			h.OnToolDenied(ctx, runID, "approve_plan", "approving production waits for a person"),
+		} {
+			if err != nil {
+				t.Error(err)
+			}
+		}
+		close(events)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, calls := toolResults(t, w.store.eventsOf(task.ID))
+	want := []toolResult{
+		{Tool: "list_projects", CallID: "call_1", Outcome: "ok"},
+		{Tool: "list_projects", CallID: "call_2", Outcome: "ok"},
+		{Tool: "approve_plan", CallID: "call_3", Outcome: "denied", Message: "approving production waits for a person"},
+	}
+	if len(results) != len(want) {
+		t.Fatalf("results %+v", results)
+	}
+	for i, r := range results {
+		seq := r.Seq
+		r.Seq = 0
+		if r != want[i] {
+			t.Errorf("result %d %+v, want %+v", i, r, want[i])
+		}
+		if seq <= calls[r.CallID] {
+			t.Errorf("%s's result at %d, its call at %d", r.CallID, seq, calls[r.CallID])
+		}
+	}
+
+	// A hook after the call is written writes at once; a failure's message
+	// is the error, cut to 300 bytes.
+	err = w.svc.drive(context.Background(), task, func(_ context.Context, events chan<- engine.StreamEvent) error {
+		go func() {
+			defer close(events)
+			events <- toolCall("get_plan", "call_4", `{"plan_id":"plan_1"}`)
+			for {
+				if _, c := toolResults(t, w.store.eventsOf(task.ID)); c["call_4"] > 0 {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if herr := h.OnToolFailed(ctx, runID, "get_plan", errors.New(strings.Repeat("é", 400))); herr != nil {
+				t.Error(herr)
+			}
+		}()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _ = toolResults(t, w.store.eventsOf(task.ID))
+	last := results[len(results)-1]
+	if last.CallID != "call_4" || last.Outcome != "failed" || len(last.Message) > 300 || len(last.Message) < 298 || !utf8.ValidString(last.Message) {
+		t.Fatalf("failed result %+v (%d bytes)", last, len(last.Message))
+	}
+}
+
+// A resumed run's outcomes are for the calls it paused on, written before
+// this job: they match the pending calls of the last pause.
+func TestResumedOutcomesMatchThePausedCalls(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	runID := mustRunID(t, task.RunID)
+	events := make(chan engine.StreamEvent, 4)
+	events <- toolCall("ask_person", "call_1", `{"question":"Which region?"}`)
+	events <- engine.StreamEvent{Type: engine.EventSuspended, Data: map[string]any{
+		"run_id": task.RunID, "reason": "external_tool",
+		"pending": []suspension.PendingCall{{ID: "call_1", Name: "ask_person"}},
+	}}
+	close(events)
+	w.svc.pump(context.Background(), task, events)
+
+	err := w.svc.drive(context.Background(), task, func(_ context.Context, events chan<- engine.StreamEvent) error {
+		if herr := h.OnToolCompleted(runCtx(task), runID, "ask_person", "eu-west-1", time.Minute); herr != nil {
+			t.Error(herr)
+		}
+		close(events)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, calls := toolResults(t, w.store.eventsOf(task.ID))
+	if len(results) != 1 || results[0].CallID != "call_1" || results[0].Outcome != "ok" || results[0].Seq <= calls["call_1"] {
+		t.Fatalf("results %+v", results)
+	}
+}
+
+func TestToolOutcomeWithoutAWriterIsDropped(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	before := len(w.store.eventsOf(task.ID))
+	runID := mustRunID(t, task.RunID)
+	for _, err := range []error{
+		h.OnToolCompleted(runCtx(task), runID, "list_projects", "[]", time.Millisecond),
+		h.OnToolFailed(runCtx(task), runID, "list_projects", errors.New("boom")),
+		h.OnToolDenied(runCtx(task), runID, "list_projects", "no"),
+		h.OnToolCompleted(runCtx(task), id.NewAgentRunID(), "list_projects", "[]", time.Millisecond),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := len(w.store.eventsOf(task.ID)); after != before {
+		t.Fatalf("%d events written", after-before)
+	}
+}
+
+func TestSafetyBlockWithholdsTheStepsText(t *testing.T) {
+	w := newWorld(t)
+	task := w.adaChat(t)
+	events := make(chan engine.StreamEvent, 16)
+	events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 1, "type": "generation"}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": "Hello"}}
+	events <- toolCall("list_projects", "call_1", `{}`)
+	events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 2, "type": "generation"}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": "AKIA"}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": strings.Repeat(".", flushBytes)}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": "..."}}
+	events <- engine.StreamEvent{Type: engine.EventSafetyBlock, Data: map[string]any{"message": "cortex: the answer was blocked"}}
+	close(events)
+	w.svc.pump(context.Background(), task, events)
+
+	got, err := w.svc.Events(context.Background(), person(orgA, ada), task.ID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make([]string, 0, len(got))
+	for _, e := range got {
+		kinds = append(kinds, e.Kind)
+	}
+	if want := "step,token,tool_call,step,token,token,safety_block"; strings.Join(kinds, ",") != want {
+		t.Fatalf("kinds %s, want %s", strings.Join(kinds, ","), want)
+	}
+	if string(got[1].Data) != `{"text":"Hello"}` {
+		t.Fatalf("step 1's text %s", got[1].Data)
+	}
+	for _, e := range got[4:6] {
+		if string(e.Data) != `{"text":"","withheld":true}` {
+			t.Fatalf("step 2's text %d: %s", e.Seq, e.Data)
+		}
+	}
+	if !strings.Contains(string(got[6].Data), "blocked") {
+		t.Fatalf("safety_block %s", got[6].Data)
 	}
 }

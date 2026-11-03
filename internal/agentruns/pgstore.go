@@ -254,6 +254,35 @@ func appendEvents(ctx context.Context, tx driver.Tx, orgID, taskID string, event
 	return seq, nil
 }
 
+// WithholdStep implements Store. The task's row is locked first, as
+// appendEvents locks it, so no event lands between the rewrite and e.
+func (s *PgStore) WithholdStep(ctx context.Context, orgID, taskID string, e NewEvent) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+	var seq int64
+	err = tx.QueryRow(ctx, `SELECT event_seq FROM loomplane_agent_tasks WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, taskID).Scan(&seq)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_agent_run_events SET data = $3
+		WHERE org_id = $1 AND task_id = $2 AND kind = 'token'
+		AND seq > COALESCE((SELECT max(seq) FROM loomplane_agent_run_events
+			WHERE org_id = $1 AND task_id = $2 AND kind = 'step'), 0)`,
+		orgID, taskID, []byte(withheldText)); err != nil {
+		return 0, fmt.Errorf("withhold agent run text: %w", err)
+	}
+	if seq, err = appendEvents(ctx, tx, orgID, taskID, []NewEvent{e}); err != nil {
+		return 0, err
+	}
+	return seq, tx.Commit()
+}
+
 // Events implements Store.
 func (s *PgStore) Events(ctx context.Context, orgID, taskID string, after int64, limit int) ([]Event, error) {
 	rows, err := s.db.Query(ctx, `SELECT task_id, seq, kind, data, created_at FROM loomplane_agent_run_events

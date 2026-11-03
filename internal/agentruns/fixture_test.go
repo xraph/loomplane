@@ -17,6 +17,8 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/run"
+	"github.com/xraph/cortex/session"
+	"github.com/xraph/cortex/store"
 	"github.com/xraph/cortex/suspension"
 	"github.com/xraph/dispatch"
 	dispatchengine "github.com/xraph/dispatch/engine"
@@ -312,6 +314,28 @@ func (m *memStore) AppendEvents(_ context.Context, orgID, taskID string, in []Ne
 	return m.append(t, in), nil
 }
 
+func (m *memStore) WithholdStep(_ context.Context, orgID, taskID string, e NewEvent) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, err := m.find(orgID, taskID)
+	if err != nil {
+		return 0, err
+	}
+	evs := m.events[taskID]
+	var step int64
+	for _, ev := range evs {
+		if ev.Kind == string(engine.EventStep) {
+			step = ev.Seq
+		}
+	}
+	for i := range evs {
+		if evs[i].Seq > step && evs[i].Kind == string(engine.EventToken) {
+			evs[i].Data = json.RawMessage(withheldText)
+		}
+	}
+	return m.append(t, []NewEvent{e}), nil
+}
+
 func (m *memStore) Events(_ context.Context, orgID, taskID string, after int64, limit int) ([]Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -538,11 +562,82 @@ type fakeEngine struct {
 	// script, when set, plays a run's stream instead of events, the way a
 	// test needs cortex to order it. It closes nothing; replay does.
 	script func(events chan<- engine.StreamEvent)
+	// sessions is cortex's session store. order records the session
+	// writes and streams, in order.
+	sessions *fakeSessions
+	order    []string
 }
 
 func newFakeEngine() *fakeEngine {
-	return &fakeEngine{agents: map[string]*cortexagent.Config{}, runs: map[string]*run.Run{}}
+	f := &fakeEngine{agents: map[string]*cortexagent.Config{}, runs: map[string]*run.Run{}}
+	f.sessions = &fakeSessions{engine: f, byID: map[string]*session.Session{}}
+	return f
 }
+
+// fakeSessions is cortex's store as the service uses it: sessions only,
+// found at the exact scope they were made at.
+type fakeSessions struct {
+	store.Store
+	engine  *fakeEngine
+	mu      sync.Mutex
+	byID    map[string]*session.Session
+	created []*session.Session
+}
+
+func (f *fakeSessions) CreateSession(ctx context.Context, s *session.Session) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.byID[s.ID.String()]; ok {
+		return cortex.ErrAlreadyExists
+	}
+	c := *s
+	c.Scope = cortex.ScopeFromContext(ctx)
+	c.Metadata = maps.Clone(s.Metadata)
+	f.byID[s.ID.String()] = &c
+	f.created = append(f.created, &c)
+	f.engine.note("create_session")
+	return nil
+}
+
+func (f *fakeSessions) GetSession(ctx context.Context, sessionID id.SessionID) (*session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.byID[sessionID.String()]
+	if !ok || s.Scope.Canonical() != cortex.ScopeFromContext(ctx).Canonical() {
+		return nil, cortex.ErrSessionNotFound
+	}
+	c := *s
+	return &c, nil
+}
+
+// put stores s as made at the scope of ctx.
+func (f *fakeSessions) put(ctx context.Context, s *session.Session) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := *s
+	c.Scope = cortex.ScopeFromContext(ctx)
+	f.byID[s.ID.String()] = &c
+}
+
+func (f *fakeSessions) made() []*session.Session {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.created)
+}
+
+func (f *fakeEngine) note(what string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.order = append(f.order, what)
+}
+
+func (f *fakeEngine) calledInOrder() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.order)
+}
+
+func (f *fakeEngine) Store() store.Store { return f.sessions }
 
 func agentKey(ctx context.Context, name string) string {
 	return cortex.ScopeFromContext(ctx).Canonical() + "|" + name
@@ -568,6 +663,7 @@ func (f *fakeEngine) replay(events chan<- engine.StreamEvent) {
 func (f *fakeEngine) StreamAgent(ctx context.Context, name, input string, o *engine.RunOverrides, events chan<- engine.StreamEvent) error {
 	f.mu.Lock()
 	f.streams = append(f.streams, streamCall{ctx: ctx, agent: name, input: input, overrides: *o})
+	f.order = append(f.order, "stream")
 	err := f.streamErr
 	f.mu.Unlock()
 	if err != nil {

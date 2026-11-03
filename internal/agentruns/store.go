@@ -32,6 +32,9 @@ type NewEvent struct {
 	Data json.RawMessage
 }
 
+// withheldText is a token event's data once a safety stop withheld it.
+const withheldText = `{"text":"","withheld":true}`
+
 // StoreFilter narrows a Store's List.
 type StoreFilter struct {
 	ProjectID   string
@@ -72,6 +75,11 @@ type Store interface {
 	// AppendEvents numbers events after the task's last and bumps its
 	// event_seq, in one transaction, and returns the last number.
 	AppendEvents(ctx context.Context, orgID, taskID string, events []NewEvent) (int64, error)
+	// WithholdStep rewrites the text of the run's current step, every
+	// token event after the task's last step event, to withheldText and
+	// appends e, in one transaction, and returns e's number. A safety
+	// stop calls it, so the text it stopped is never read back.
+	WithholdStep(ctx context.Context, orgID, taskID string, e NewEvent) (int64, error)
 	Events(ctx context.Context, orgID, taskID string, after int64, limit int) ([]Event, error)
 	// Stale reads across workspaces, for the sweep alone: tasks queued
 	// since before queuedBefore, and open tasks whose continuation was

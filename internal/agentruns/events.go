@@ -1,10 +1,14 @@
 package agentruns
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/cortex"
@@ -12,6 +16,7 @@ import (
 	"github.com/xraph/cortex/suspension"
 
 	"github.com/xraph/loomplane/internal/security"
+	defs "github.com/xraph/loomplane/pkg/agentops"
 )
 
 const (
@@ -21,6 +26,13 @@ const (
 	flushBytes = 4 << 10
 	// eventsPerRead bounds one read of a watch.
 	eventsPerRead = 200
+	// Hidden is what SafeArguments shows in place of a secret-looking
+	// value.
+	Hidden = "[hidden]"
+	// MaxArgumentBytes bounds the arguments a tool_call event keeps.
+	MaxArgumentBytes = 4 << 10
+	// maxOutcomeMessage bounds the message of a tool_result event.
+	maxOutcomeMessage = 300
 )
 
 // errTaskCancelled is why a run this process drives was stopped for a
@@ -73,7 +85,9 @@ func (s *Service) claim(ctx context.Context, t *Task, from []string, to string) 
 
 // drive starts a run with start, which closes events when the run ends,
 // and writes its events until then. A run whose context already ended (a
-// cancel, or the attempt over) isn't started.
+// cancel, or the attempt over) isn't started. The run's writer is
+// registered before cortex is called, so a tool hook that fires before
+// the pump reads anything still finds it.
 func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.Context, events chan<- engine.StreamEvent) error) error {
 	if s.beforeDrive != nil {
 		s.beforeDrive()
@@ -85,19 +99,28 @@ func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.
 		return nil
 	}
 	events := make(chan engine.StreamEvent, 64)
+	w := s.newWriter(runCtx, t)
+	defer s.dropWriter(w)
 	if err := start(runCtx, events); err != nil {
 		return err
 	}
-	s.pump(runCtx, t, events)
+	s.pumpWith(w, events)
 	return nil
 }
 
-// pump writes a run's events to its log until events closes. Text tokens
-// are coalesced; anything else flushes them first, so the log keeps the
-// run's order. Writes outlive ctx: the end of a run is what a watcher
-// most wants to see.
+// pump writes a run's events to its log until events closes, with a
+// writer of its own.
 func (s *Service) pump(ctx context.Context, t *Task, events <-chan engine.StreamEvent) {
-	w := &eventWriter{s: s, ctx: context.WithoutCancel(ctx), task: t}
+	w := s.newWriter(ctx, t)
+	defer s.dropWriter(w)
+	s.pumpWith(w, events)
+}
+
+// pumpWith writes a run's events to its log until events closes. Text
+// tokens are coalesced; anything else flushes them first, so the log
+// keeps the run's order. Writes outlive ctx: the end of a run is what a
+// watcher most wants to see.
+func (s *Service) pumpWith(w *eventWriter, events <-chan engine.StreamEvent) {
 	var timer *time.Timer
 	var tick <-chan time.Time
 	stop := func() {
@@ -112,6 +135,10 @@ func (s *Service) pump(ctx context.Context, t *Task, events <-chan engine.Stream
 		case ev, ok := <-events:
 			if !ok {
 				w.flush()
+				// Cortex fires every tool hook before it closes the
+				// stream: what's still waiting has no call to follow.
+				s.dropWriter(w)
+				w.dropWaiting()
 				w.end()
 				return
 			}
@@ -137,15 +164,126 @@ func (s *Service) pump(ctx context.Context, t *Task, events <-chan engine.Stream
 	}
 }
 
-// eventWriter is one run's events on their way to the log.
+// eventWriter is one run's events on their way to the log. The pump
+// writes through it, and so do the run's tool hooks, which cortex fires
+// on the run's own goroutine; mu keeps their writes, and the matching of
+// an outcome to its call, in one order.
 type eventWriter struct {
 	s    *Service
 	ctx  context.Context
 	task *Task
+	// text is the pump's alone.
 	text strings.Builder
+
+	mu sync.Mutex
+	// open is the calls written with no outcome yet, by tool name,
+	// oldest first; waiting is the outcomes that came before their call.
+	open    map[string][]string
+	waiting map[string][]toolOutcome
+}
+
+// toolOutcome is how one tool call ended, as its hook tells it.
+type toolOutcome struct {
+	tool    string
+	outcome string
+	message string
+}
+
+// newWriter makes the task's run's writer and registers it under the
+// run's ID. A run that resumes from a pause gets the outcomes of the
+// calls it paused on first, so those calls start out open.
+func (s *Service) newWriter(ctx context.Context, t *Task) *eventWriter {
+	w := &eventWriter{
+		s: s, ctx: context.WithoutCancel(ctx), task: t,
+		open: map[string][]string{}, waiting: map[string][]toolOutcome{},
+	}
+	w.openPaused()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.writers == nil {
+		s.writers = map[string]*eventWriter{}
+	}
+	s.writers[t.RunID] = w
+	return w
+}
+
+// dropWriter lets the run's writer go, if it's still w.
+func (s *Service) dropWriter(w *eventWriter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.writers[w.task.RunID] == w {
+		delete(s.writers, w.task.RunID)
+	}
+}
+
+// writer is the writer of the run this process is pumping, if any.
+func (s *Service) writer(runID string) *eventWriter {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.writers[runID]
+}
+
+// toolOutcome hands a tool hook's outcome to the run's writer. A run
+// this process isn't pumping (its hook fired on another replica, or
+// after its stream ended) has nowhere to write it, and it's dropped.
+func (s *Service) toolOutcome(runID string, o toolOutcome) {
+	w := s.writer(runID)
+	if w == nil {
+		s.debug("agentruns: a tool outcome came for a run this process isn't writing", "run_id", runID, "tool", o.tool)
+		return
+	}
+	w.outcome(o)
+}
+
+// openPaused opens the calls of the run's last pause that have no
+// outcome in the log yet.
+func (w *eventWriter) openPaused() {
+	var paused []map[string]string
+	done := map[string]bool{}
+	var after int64
+	for {
+		evs, err := w.s.store.Events(w.ctx, w.task.OrgID, w.task.ID, after, 1000)
+		if err != nil {
+			w.s.warn("agentruns: couldn't read a run's log for its paused calls", err)
+			return
+		}
+		for _, e := range evs {
+			after = e.Seq
+			switch e.Kind {
+			case string(engine.EventSuspended):
+				var data struct {
+					Pending []map[string]string `json:"pending"`
+				}
+				if json.Unmarshal(e.Data, &data) == nil {
+					paused = data.Pending
+				}
+			case EventToolResult:
+				var data struct {
+					CallID string `json:"call_id"`
+				}
+				if json.Unmarshal(e.Data, &data) == nil {
+					done[data.CallID] = true
+				}
+			}
+		}
+		if len(evs) < 1000 {
+			break
+		}
+	}
+	for _, c := range paused {
+		if c["tool"] != "" && !done[c["call_id"]] {
+			w.open[c["tool"]] = append(w.open[c["tool"]], c["call_id"])
+		}
+	}
 }
 
 func (w *eventWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushLocked()
+}
+
+func (w *eventWriter) flushLocked() {
 	if w.text.Len() == 0 {
 		return
 	}
@@ -155,7 +293,7 @@ func (w *eventWriter) flush() {
 		w.s.warn("agentruns: couldn't encode a run's text", err)
 		return
 	}
-	w.write(NewEvent{Kind: string(engine.EventToken), Data: data})
+	w.writeLocked(NewEvent{Kind: string(engine.EventToken), Data: data})
 }
 
 // end writes the task's final status once the run's last event is in,
@@ -174,22 +312,86 @@ func (w *eventWriter) end() {
 }
 
 func (w *eventWriter) add(ev engine.StreamEvent) {
-	w.flush()
-	if ev.Type == engine.EventRunStarted {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushLocked()
+	switch ev.Type {
+	case engine.EventRunStarted:
 		w.s.move(w.ctx, w.task, []string{StatusQueued, StatusWaiting}, StatusRunning)
+	case engine.EventSafetyBlock:
+		// The step's text is what the safety checks stopped: withhold
+		// it in the same write that records the stop.
+		e := NewEvent{Kind: string(ev.Type), Data: w.s.eventData(ev)}
+		if _, err := w.s.store.WithholdStep(w.ctx, w.task.OrgID, w.task.ID, e); err != nil {
+			w.s.warn("agentruns: couldn't withhold a stopped run's text", err)
+		}
+		return
 	}
-	w.write(NewEvent{Kind: string(ev.Type), Data: w.s.eventData(ev)})
+	w.writeLocked(NewEvent{Kind: string(ev.Type), Data: w.s.eventData(ev)})
+	if ev.Type == engine.EventToolCall {
+		w.called(stringField(ev.Data, "tool_name"), stringField(ev.Data, "tool_id"))
+	}
+}
+
+// called opens a call just written, or writes the outcome that came
+// before it.
+func (w *eventWriter) called(tool, callID string) {
+	if q := w.waiting[tool]; len(q) > 0 {
+		w.waiting[tool] = q[1:]
+		w.writeOutcome(callID, q[0])
+		return
+	}
+	w.open[tool] = append(w.open[tool], callID)
+}
+
+// outcome writes o after the oldest open call of its tool, or keeps it
+// until that call is written.
+func (w *eventWriter) outcome(o toolOutcome) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if q := w.open[o.tool]; len(q) > 0 {
+		w.open[o.tool] = q[1:]
+		w.writeOutcome(q[0], o)
+		return
+	}
+	w.waiting[o.tool] = append(w.waiting[o.tool], o)
+}
+
+// dropWaiting lets go of the outcomes no call came for.
+func (w *eventWriter) dropWaiting() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for tool, q := range w.waiting {
+		if len(q) > 0 {
+			w.s.debug("agentruns: a tool outcome came with no call to follow", "run_id", w.task.RunID, "tool", tool)
+		}
+	}
+	clear(w.waiting)
+}
+
+func (w *eventWriter) writeOutcome(callID string, o toolOutcome) {
+	data, err := json.Marshal(map[string]string{"tool": o.tool, "call_id": callID, "outcome": o.outcome, "message": o.message})
+	if err != nil {
+		w.s.warn("agentruns: couldn't encode a tool's outcome", err)
+		return
+	}
+	w.writeLocked(NewEvent{Kind: EventToolResult, Data: data})
 }
 
 func (w *eventWriter) write(e NewEvent) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writeLocked(e)
+}
+
+func (w *eventWriter) writeLocked(e NewEvent) {
 	if _, err := w.s.store.AppendEvents(w.ctx, w.task.OrgID, w.task.ID, []NewEvent{e}); err != nil {
 		w.s.warn("agentruns: couldn't write a run's event", err)
 	}
 }
 
-// eventFields are the fields of cortex's events the log keeps. Arguments
-// never are: a tool's arguments can carry a secret, and the person reads
-// what matters in the request it makes.
+// eventFields are the fields of cortex's events the log keeps. A tool
+// call's arguments are kept apart, through SafeArguments.
 var eventFields = []string{
 	"index", "type", "resumed", "reason", "message", "state", "stop_reason", "output", "tokens_used",
 	"publication_status", "verification_status", "duration_ms", "checkpoint_id",
@@ -200,13 +402,13 @@ func (s *Service) eventData(ev engine.StreamEvent) json.RawMessage {
 	out := map[string]any{}
 	switch ev.Type {
 	case engine.EventToolCall:
-		name := ""
-		if n, ok := ev.Data["tool_name"].(string); ok {
-			name = n
-		}
+		name := stringField(ev.Data, "tool_name")
 		out["tool"] = name
 		out["call_id"] = ev.Data["tool_id"]
 		out["risk"] = s.risk(name)
+		if args := rawArguments(ev.Data["arguments"]); s.keepsArguments(name, args) {
+			out["arguments"] = SafeArguments(args)
+		}
 	case engine.EventSuspended:
 		out["reason"] = ev.Data["reason"]
 		if calls, ok := ev.Data["pending"].([]suspension.PendingCall); ok {
@@ -228,6 +430,129 @@ func (s *Service) eventData(ev engine.StreamEvent) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return data
+}
+
+// stringField is data[key] when it's a string, else "".
+func stringField(data map[string]any, key string) string {
+	if v, ok := data[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// rawArguments is a tool call's arguments as cortex sends them: a JSON
+// string.
+func rawArguments(v any) json.RawMessage {
+	switch a := v.(type) {
+	case nil:
+		return nil
+	case string:
+		return json.RawMessage(a)
+	case []byte:
+		return json.RawMessage(a)
+	case json.RawMessage:
+		return a
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// keepsArguments reports whether a call's arguments may go in the log.
+// A secret_or_external operation's never do: a request to a person or a
+// secret's value, whatever SafeArguments would hide. Neither do the
+// arguments of a call that flags a secret (a secret set_variable, which
+// is secret_or_external by its input), nor those of a tool that isn't an
+// operation.
+func (s *Service) keepsArguments(tool string, args json.RawMessage) bool {
+	if s.registry == nil {
+		return false
+	}
+	op, ok := s.registry.Lookup(tool)
+	if !ok || op.External() || op.Def.Risk == defs.RiskSecretOrExternal {
+		return false
+	}
+	v, ok := decodeJSON(args)
+	return !ok || !flagsSecret(v)
+}
+
+// secretKeys are the keys whose values SafeArguments always hides.
+var secretKeys = []string{"password", "token", "api_key", "secret_value", "private_key"}
+
+// SafeArguments is a tool call's arguments as Loomplane shows them: at
+// any depth, the values of password, token, api_key, secret_value and
+// private_key (in any case), and value beside "secret": true, become
+// Hidden. Arguments longer than MaxArgumentBytes once hidden become
+// {"truncated":true}, and ones that aren't JSON become {}.
+func SafeArguments(raw json.RawMessage) json.RawMessage {
+	v, ok := decodeJSON(raw)
+	if !ok {
+		return json.RawMessage(`{}`)
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(hide(v)); err != nil {
+		return json.RawMessage(`{}`)
+	}
+	out := bytes.TrimRight(b.Bytes(), "\n")
+	if len(out) > MaxArgumentBytes {
+		return json.RawMessage(`{"truncated":true}`)
+	}
+	return out
+}
+
+// decodeJSON decodes one JSON value, keeping numbers as they're written.
+func decodeJSON(raw json.RawMessage) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return v, true
+}
+
+func hide(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		secret := x["secret"] == true
+		for k, val := range x {
+			if slices.Contains(secretKeys, strings.ToLower(k)) || (secret && strings.EqualFold(k, "value")) {
+				x[k] = Hidden
+				continue
+			}
+			x[k] = hide(val)
+		}
+	case []any:
+		for i := range x {
+			x[i] = hide(x[i])
+		}
+	}
+	return v
+}
+
+// flagsSecret reports whether any object in v says "secret": true.
+func flagsSecret(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		if x["secret"] == true {
+			return true
+		}
+		for _, val := range x {
+			if flagsSecret(val) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(x, flagsSecret)
+	}
+	return false
 }
 
 // risk is an operation's class as its definition states it.
