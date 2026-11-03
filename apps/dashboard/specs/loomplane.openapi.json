@@ -1021,93 +1021,6 @@
         }
       }
     },
-    "/api/v1/cloud-sign-in/apps": {
-      "get": {
-        "tags": [
-          "Cloud sign-in"
-        ],
-        "summary": "The clouds you can sign in to, where each one's app comes from, and the callback URL to register",
-        "operationId": "cloudSignInApps.list",
-        "responses": {
-          "200": {
-            "description": "Sign-in apps",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SignInAppList"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/cloud-sign-in/apps/{cloud}": {
-      "put": {
-        "tags": [
-          "Cloud sign-in"
-        ],
-        "summary": "Set the organization's own sign-in app for a cloud. The secret is never returned",
-        "operationId": "cloudSignInApps.set",
-        "parameters": [
-          {
-            "name": "cloud",
-            "in": "path",
-            "description": "Path parameter: cloud",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AppInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "The sign-in app",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SignInApp"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Cloud sign-in"
-        ],
-        "summary": "Remove the organization's own sign-in app for a cloud",
-        "operationId": "cloudSignInApps.delete",
-        "parameters": [
-          {
-            "name": "cloud",
-            "in": "path",
-            "description": "Path parameter: cloud",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          }
-        }
-      }
-    },
     "/api/v1/clouds": {
       "get": {
         "tags": [
@@ -4758,6 +4671,38 @@
         }
       }
     },
+    "/api/v1/deployments/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Cancel a running deployment before its next step, or a paused one at once; steps that finished stay as they are",
+        "operationId": "deployments.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment, cancelled or stopping before its next step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentsDeployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deployments/{id}/capacity/cancel": {
       "post": {
         "tags": [
@@ -5137,38 +5082,6 @@
         "responses": {
           "200": {
             "description": "The deployment, running again",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeploymentsDeployment"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/deployments/{id}/cancel": {
-      "post": {
-        "tags": [
-          "Plans"
-        ],
-        "summary": "Cancel a running deployment before its next step, or a paused one at once; steps that finished stay as they are",
-        "operationId": "deployments.cancel",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Path parameter: id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The deployment, cancelled or stopping before its next step",
             "content": {
               "application/json": {
                 "schema": {
@@ -7187,6 +7100,93 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud-sign-in/apps": {
+      "get": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register",
+        "operationId": "platformCloudSignInApps.list",
+        "responses": {
+          "200": {
+            "description": "Sign-in apps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInAppList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud-sign-in/apps/{cloud}": {
+      "put": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Set the platform's sign-in app for a cloud. The secret is never returned",
+        "operationId": "platformCloudSignInApps.set",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sign-in app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInApp"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Remove the platform's sign-in app for a cloud",
+        "operationId": "platformCloudSignInApps.delete",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -13624,15 +13624,13 @@
         "responses": {
           "204": {
             "description": "No Content"
-          },
-          "404": {
-            "description": "Not Found"
           }
         },
         "summary": "Stop offering to set up cloud sign-in",
         "tags": [
           "Identity"
-        ]
+        ],
+        "x-forge-no-entity": true
       }
     },
     "/api/v1/teams": {
@@ -31238,6 +31236,8 @@
         "type": "object",
         "required": [
           "cloud",
+          "connections",
+          "organizations",
           "source"
         ],
         "properties": {
@@ -31246,6 +31246,12 @@
           },
           "cloud": {
             "type": "string"
+          },
+          "connections": {
+            "type": "integer"
+          },
+          "organizations": {
+            "type": "integer"
           },
           "problem": {
             "type": "string"

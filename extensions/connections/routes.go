@@ -158,7 +158,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Cloud: p.Cloud(), Title: f.Title, Credential: f.Credential, Help: f.Help, Settings: f.Settings,
 		})
 	}
-	signIn, err := e.signInClouds(ctx, p)
+	signIn, err := e.signInClouds(ctx)
 	if err != nil {
 		return out, err
 	}
@@ -181,9 +181,9 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 	return out, nil
 }
 
-// signInClouds are the clouds the principal's organization can sign in
-// to: those with an app, from configuration or the platform.
-func (e *Extension) signInClouds(ctx context.Context, _ security.Principal) (map[string]bool, error) {
+// signInClouds are the clouds people can sign in to: those with an app,
+// from configuration or the platform.
+func (e *Extension) signInClouds(ctx context.Context) (map[string]bool, error) {
 	return e.svc.SignInClouds(ctx)
 }
 

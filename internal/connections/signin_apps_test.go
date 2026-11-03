@@ -18,6 +18,15 @@ type fakeAppStore struct {
 	apps     map[string]*StoredApp
 	signIns  map[string]*PendingSignIn
 	problems map[string]string
+	// counts are what SignedInWith reports by cloud, and counted how often
+	// it was asked.
+	counts  map[string][2]int
+	counted int
+}
+
+func (f *fakeAppStore) SignedInWith(_ context.Context, cloud, _ string) (int, int, error) {
+	f.counted++
+	return f.counts[cloud][0], f.counts[cloud][1], nil
 }
 
 func (f *fakeAppStore) GetApp(_ context.Context, cloud string) (*StoredApp, error) {
@@ -329,29 +338,10 @@ func TestRefusedConfigAppLeavesTheShadowedPlatformRowAlone(t *testing.T) {
 	}
 }
 
-func (m *memStore) SignedInWith(_ context.Context, cloud, clientID string) (int, int, error) {
-	orgs := map[string]bool{}
-	n := 0
-	for _, c := range m.rows {
-		if c.Cloud == cloud && c.Method == MethodOAuth && c.OAuthClientID == clientID && c.Status != StatusSignInNeeded {
-			n++
-			orgs[c.OrgID] = true
-		}
-	}
-	return n, len(orgs), nil
-}
-
 func TestSignInAppsCounts(t *testing.T) {
 	s, store, _, _ := signInService(nil)
 	s.Providers[Vercel] = independentRenewer{}
-	mem := &memStore{rows: map[string]Connection{
-		"a": {ID: "a", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
-		"b": {ID: "b", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusReady},
-		"c": {ID: "c", OrgID: "o2", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "id", Status: StatusSignInNeeded},
-		"d": {ID: "d", OrgID: "o1", Cloud: DigitalOcean, Method: MethodOAuth, OAuthClientID: "other", Status: StatusReady},
-		"e": {ID: "e", OrgID: "o1", Cloud: Vercel, Method: MethodOAuth, OAuthClientID: "vid", Status: StatusReady},
-	}}
-	s.store = mem
+	store.counts = map[string][2]int{DigitalOcean: {2, 2}, Vercel: {5, 3}}
 	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "id"}
 	store.apps[Vercel] = &StoredApp{Cloud: Vercel, ClientID: "vid", Slug: "x"}
 	apps, err := s.SignInApps(t.Context())
@@ -369,5 +359,41 @@ func TestSignInAppsCounts(t *testing.T) {
 				t.Fatalf("vercel: %+v", a)
 			}
 		}
+	}
+}
+
+// SignInClouds runs for every member's connections list, so it must not
+// run the counts, which read across every organization.
+func TestSignInCloudsSkipsTheCounts(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg"}})
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "id"}
+	got, err := s.SignInClouds(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[DigitalOcean] || !got[GCP] || got[Azure] {
+		t.Fatalf("clouds %v", got)
+	}
+	if store.counted != 0 {
+		t.Fatalf("SignInClouds counted %d times", store.counted)
+	}
+}
+
+type failingGet struct {
+	*fakeAppStore
+}
+
+func (failingGet) GetApp(context.Context, string) (*StoredApp, error) {
+	return nil, errors.New("db down")
+}
+
+func TestAppRejectedWarnsWhenItCannotReadTheApp(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	var warned []string
+	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
+	s.Apps = failingGet{store}
+	s.appRejected(t.Context(), GCP, "platform")
+	if len(warned) != 1 {
+		t.Fatalf("warned %v", warned)
 	}
 }

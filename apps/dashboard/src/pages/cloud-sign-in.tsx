@@ -3,9 +3,9 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
-  useCloudSignInAppsDelete,
-  useCloudSignInAppsList,
-  useCloudSignInAppsSet,
+  usePlatformCloudSignInAppsDelete,
+  usePlatformCloudSignInAppsList,
+  usePlatformCloudSignInAppsSet,
   useConnectionCloudsList,
 } from "@/client/forge/loomplane/hooks"
 import type { KeylessState, SignInApp } from "@/client/forge/loomplane/types"
@@ -44,14 +44,14 @@ type Dialogue = { app: SignInApp; mode: "edit" | "view" }
 /** CloudSignIn sets the OAuth apps people sign in to a cloud with. */
 export function CloudSignIn() {
   const { can } = useOrganization()
-  const apps = useQuery(useCloudSignInAppsList)
+  const apps = useQuery(usePlatformCloudSignInAppsList)
   const person = usePeople()
   const [open, setOpen] = useState<Dialogue | null>(null)
   const manage = can("cloud_account:manage")
 
   const state = (app: SignInApp) => {
     if (app.source === "config") return "Set in config · locked"
-    if (app.source === "organization") {
+    if (app.source === "platform") {
       const by = app.updatedBy ? ` by ${person(app.updatedBy).name}` : ""
       const when = app.updatedAt ? ` · ${formatDate(app.updatedAt)}` : ""
       return `Set here${by}${when}`
@@ -116,7 +116,7 @@ export function CloudSignIn() {
                       View
                     </Button>
                   )}
-                  {manage && app.source === "organization" && (
+                  {manage && app.source === "platform" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -215,8 +215,8 @@ function ViewDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
 }
 
 function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
-  const save = useMutation(useCloudSignInAppsSet)
-  const remove = useMutation(useCloudSignInAppsDelete)
+  const save = useMutation(usePlatformCloudSignInAppsSet)
+  const remove = useMutation(usePlatformCloudSignInAppsDelete)
   const invalidate = useInvalidate()
   const [clientId, setClientId] = useState(app.clientId ?? "")
   const [clientSecret, setClientSecret] = useState("")
@@ -226,7 +226,7 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
   const busy = save.isPending || remove.isPending
 
   const refresh = () => {
-    invalidate(useCloudSignInAppsList)
+    invalidate(usePlatformCloudSignInAppsList)
     invalidate(useConnectionCloudsList)
   }
 
@@ -343,7 +343,7 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
             </Alert>
           )}
           <DialogFooter>
-            {app.source === "organization" && (
+            {app.source === "platform" && (
               <Button
                 type="button"
                 variant="ghost"

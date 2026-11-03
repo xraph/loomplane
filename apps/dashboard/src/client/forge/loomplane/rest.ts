@@ -1540,59 +1540,6 @@ export class RESTClient extends Client {
 
   };
 
-  public readonly cloudSignInApps = {
-    /**
-     * Remove the organization's own sign-in app for a cloud
-     */
-    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'DELETE',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
-    },
-
-    /**
-     * The clouds you can sign in to, where each one's app comes from, and the callback URL to register
-     */
-    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
-      let __path = `/api/v1/cloud-sign-in/apps`;
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInAppList"],
-      };
-
-      return this.request<types.SignInAppList>(config);
-    },
-
-    /**
-     * Set the organization's own sign-in app for a cloud. The secret is never returned
-     */
-    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'PUT',
-        url: __path,
-        body,
-        bodyCodec: CODECS["AppInputBody"],
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInApp"],
-      };
-
-      return this.request<types.SignInApp>(config);
-    },
-
-  };
-
   public readonly cloudSyncs = {
     /**
      * cloudSyncs.applyRevert
@@ -5237,6 +5184,59 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Soak>(config);
+    },
+
+  };
+
+  public readonly platformCloudSignInApps = {
+    /**
+     * Remove the platform's sign-in app for a cloud
+     */
+    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInAppList"],
+      };
+
+      return this.request<types.SignInAppList>(config);
+    },
+
+    /**
+     * Set the platform's sign-in app for a cloud. The secret is never returned
+     */
+    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AppInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInApp"],
+      };
+
+      return this.request<types.SignInApp>(config);
     },
 
   };

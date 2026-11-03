@@ -4979,6 +4979,8 @@ export interface SignIn {
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  connections: number;
+  organizations: number;
   problem?: string;
   slug?: string;
   source: string;

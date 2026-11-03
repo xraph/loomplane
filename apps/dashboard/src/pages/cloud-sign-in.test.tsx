@@ -49,9 +49,9 @@ function stub(apps: App[], onPut?: (body: Record<string, unknown>) => void) {
       const path = String(input instanceof Request ? input.url : input)
       if (init?.method === "PUT") {
         onPut?.(JSON.parse(String(init.body)) as Record<string, unknown>)
-        return Response.json({ cloud: "gcp", source: "organization" })
+        return Response.json({ cloud: "gcp", source: "platform" })
       }
-      if (path.includes("cloud-sign-in/apps"))
+      if (path.includes("platform/cloud-sign-in/apps"))
         return Response.json({ apps, callback_url: callbackUrl, keyless })
       if (path.includes("members"))
         return Response.json({
@@ -68,7 +68,7 @@ const mixed = [
   { cloud: "gcp", source: "config" },
   {
     cloud: "aws",
-    source: "organization",
+    source: "platform",
     client_id: "aws-id",
     updated_by: "u1",
     updated_at: "2026-10-20T10:00:00Z",
@@ -166,7 +166,7 @@ it("shows a sign-in app's problem", async () => {
   stub([
     {
       cloud: "vercel",
-      source: "organization",
+      source: "platform",
       client_id: "v",
       problem: "The integration slug is missing.",
     },

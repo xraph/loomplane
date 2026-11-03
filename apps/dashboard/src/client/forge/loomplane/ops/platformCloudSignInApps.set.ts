@@ -2,9 +2,9 @@ import type { OperationMeta } from '../ops';
 import { codec_AppInputBody } from '../codecs/AppInputBody';
 import { codec_SignInApp } from '../codecs/SignInApp';
 
-export const op_cloudSignInApps_set = {
+export const op_platformCloudSignInApps_set = {
   method: 'PUT',
-  path: '/api/v1/cloud-sign-in/apps/{cloud}',
+  path: '/api/v1/platform/cloud-sign-in/apps/{cloud}',
   provides: [],
   invalidates: [],
   bodyCodec: codec_AppInputBody,
