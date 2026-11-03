@@ -1,6 +1,8 @@
 package repositories
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultGitLabURL is gitlab.com.
@@ -55,6 +58,8 @@ func gitlabPath(host, path string) (Repository, error) {
 		Name:  segs[len(segs)-1],
 	}, nil
 }
+
+var _ Reader = (*GitLab)(nil)
 
 // GitLab reads projects through GitLab's REST API.
 type GitLab struct {
@@ -132,6 +137,54 @@ func (g *GitLab) Resolve(ctx context.Context, repo Repository, ref, token string
 	return commit.ID, nil
 }
 
+func (g *GitLab) limits() Limits {
+	return Limits{Archive: g.MaxArchiveBytes, Total: g.MaxTotalBytes, File: g.MaxFileBytes}
+}
+
+// archivePath is the API path of a project's tarball at commit sha. LFS
+// objects stay out of it: a checkout is read for its manifests, not blobs.
+func archivePath(repo Repository, sha string) string {
+	return projectPath(repo) + "/repository/archive.tar.gz?sha=" + sha + "&include_lfs_blobs=false"
+}
+
+// Fetch extracts the project at commit sha into dest, which must exist and
+// be empty.
+func (g *GitLab) Fetch(ctx context.Context, repo Repository, sha, token, dest string) (Stats, error) {
+	if !shaPattern.MatchString(sha) {
+		return Stats{}, fmt.Errorf("fetch needs a full commit SHA, got %q", sha)
+	}
+	resp, err := g.get(ctx, archivePath(repo, sha), token, "", downloadTimeout)
+	if err != nil {
+		return Stats{}, err
+	}
+	defer resp.Body.Close() // read-only body
+	zr, err := gzip.NewReader(g.limits().Cap(resp.Body))
+	if err != nil {
+		return Stats{}, fmt.Errorf("read tarball: %w", err)
+	}
+	defer zr.Close() // read-only stream
+	return extractArchive(ctx, tar.NewReader(zr), dest, g.limits())
+}
+
+// Download writes the project's tarball at commit sha to w, as GitLab serves
+// it (gzip, with one top-level directory), and returns its size. It reads
+// nothing inside: a deployment hands the bytes to a builder.
+func (g *GitLab) Download(ctx context.Context, repo Repository, sha, token string, w io.Writer) (int64, error) {
+	if !shaPattern.MatchString(sha) {
+		return 0, fmt.Errorf("download needs a full commit SHA, got %q", sha)
+	}
+	resp, err := g.get(ctx, archivePath(repo, sha), token, "", downloadTimeout)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close() // read-only body
+	n, err := io.Copy(w, g.limits().Cap(resp.Body))
+	if err != nil {
+		return n, fmt.Errorf("download tarball: %w", err)
+	}
+	return n, nil
+}
+
 // Project reads one project.
 func (g *GitLab) Project(ctx context.Context, repo Repository, token string) (GitLabProject, error) {
 	var p GitLabProject
@@ -146,7 +199,7 @@ func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, e
 	page := 1
 	for range gitlabMaxPages {
 		p := "/api/v4/projects?membership=true&min_access_level=20&archived=false&simple=true&order_by=path&sort=asc&per_page=100&page=" + strconv.Itoa(page)
-		resp, err := g.get(ctx, p, token)
+		resp, err := g.get(ctx, p, token, "application/json", requestTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +223,7 @@ func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, e
 }
 
 func (g *GitLab) getJSON(ctx context.Context, p, token string, out any) error {
-	resp, err := g.get(ctx, p, token)
+	resp, err := g.get(ctx, p, token, "application/json", requestTimeout)
 	if err != nil {
 		return err
 	}
@@ -183,15 +236,17 @@ func (g *GitLab) getJSON(ctx context.Context, p, token string, out any) error {
 
 // get calls the API and maps GitLab's error statuses. A non-nil response is
 // a 200 whose body the caller closes. The token goes in a header only when
-// there is one, and never into an error.
-func (g *GitLab) get(ctx context.Context, p, token string) (*http.Response, error) {
-	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
+// there is one, and never into an error. accept may be "" for a download.
+func (g *GitLab) get(ctx context.Context, p, token, accept string, timeout time.Duration) (*http.Response, error) {
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, g.BaseURL+p, http.NoBody)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("build GitLab request: %w", err)
 	}
-	req.Header.Set("Accept", "application/json")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	req.Header.Set("User-Agent", "loomplane")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

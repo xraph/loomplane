@@ -1,11 +1,17 @@
 package repositories_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,6 +89,8 @@ type fakeGitLab struct {
 	pages    int    // how many pages /projects has; the last has no X-Next-Page
 	next     string // when set, X-Next-Page on every page, whatever its number
 	pageSeen []string
+	tgz      []byte     // served as the archive when set
+	archive  url.Values // query of the last archive request
 }
 
 func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +111,12 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/v4/projects/grp%2Fsub%2Fapi/repository/commits/main",
 		"/api/v4/projects/grp%2Fsub%2Fapi/repository/commits/release%2F1.2":
 		_, _ = w.Write([]byte(`{"id":"` + testSHA + `","short_id":"0123456"}`))
+	case "/api/v4/projects/grp%2Fsub%2Fapi/repository/archive.tar.gz":
+		f.mu.Lock()
+		f.archive = r.URL.Query()
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(f.tgz)
 	case "/api/v4/projects":
 		q := r.URL.Query()
 		for k, want := range map[string]string{
@@ -309,5 +323,122 @@ func TestGitLab_bearerOnlyWithToken(t *testing.T) {
 	want := []string{"", "Bearer " + testGitLabToken, "Bearer " + testGitLabToken, "Bearer " + testGitLabToken}
 	if strings.Join(f.auth, "|") != strings.Join(want, "|") {
 		t.Fatalf("Authorization headers = %q; want %q", f.auth, want)
+	}
+}
+
+// gitlabArchive is a project archive as GitLab serves it: gzip, one top
+// directory named project-ref-sha, and a node_modules entry nothing may keep.
+func gitlabArchive(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	top := "api-" + testSHA + "-" + testSHA + "/"
+	for _, e := range []struct{ name, body string }{
+		{"package.json", `{"name":"api"}`},
+		{"src/main.go", "package main\n"},
+		{"node_modules/x/index.js", "never written"},
+	} {
+		hdr := &tar.Header{Name: top + e.name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(e.body))}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestGitLab_FetchExtractsArchive(t *testing.T) {
+	f, g := newFakeGitLab(t)
+	f.tgz = gitlabArchive(t)
+	dest := t.TempDir()
+	st, err := g.Fetch(context.Background(), gitlabAPI, testSHA, testGitLabToken, dest)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if st.Files != 2 || st.Skipped != 1 {
+		t.Fatalf("stats %+v; want 2 files and 1 skipped", st)
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, "src", "main.go")); err != nil || string(got) != "package main\n" {
+		t.Fatalf("src/main.go = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "package.json")); err != nil {
+		t.Fatalf("package.json: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "node_modules")); !os.IsNotExist(err) {
+		t.Fatal("node_modules was written")
+	}
+	if f.archive.Get("sha") != testSHA || f.archive.Get("include_lfs_blobs") != "false" {
+		t.Fatalf("archive query %v; want sha=%s and include_lfs_blobs=false", f.archive, testSHA)
+	}
+	if got := f.auth[len(f.auth)-1]; got != "Bearer "+testGitLabToken {
+		t.Fatalf("Authorization %q", got)
+	}
+}
+
+func TestGitLab_FetchRefusesOversized(t *testing.T) {
+	f, g := newFakeGitLab(t)
+	f.tgz = gitlabArchive(t)
+	g.MaxArchiveBytes = 10
+	if _, err := g.Fetch(context.Background(), gitlabAPI, testSHA, "", t.TempDir()); !errors.Is(err, repositories.ErrTooLarge) {
+		t.Fatalf("Fetch over the archive limit: %v", err)
+	}
+}
+
+func TestGitLab_FetchRefusesPartialSHA(t *testing.T) {
+	f, g := newFakeGitLab(t)
+	f.tgz = gitlabArchive(t)
+	for _, sha := range []string{"main", "0123456", ""} {
+		if _, err := g.Fetch(context.Background(), gitlabAPI, sha, "", t.TempDir()); err == nil {
+			t.Fatalf("Fetch(%q) succeeded", sha)
+		}
+		if _, err := g.Download(context.Background(), gitlabAPI, sha, "", &bytes.Buffer{}); err == nil {
+			t.Fatalf("Download(%q) succeeded", sha)
+		}
+	}
+	if len(f.paths) != 0 {
+		t.Fatalf("a partial SHA reached GitLab: %v", f.paths)
+	}
+}
+
+func TestGitLab_FetchErrorsNameNoToken(t *testing.T) {
+	f, g := newFakeGitLab(t)
+	f.status = http.StatusInternalServerError
+	_, err := g.Fetch(context.Background(), gitlabAPI, testSHA, testGitLabToken, t.TempDir())
+	if err == nil || strings.Contains(err.Error(), testGitLabToken) {
+		t.Fatalf("Fetch error %v", err)
+	}
+	f.status = http.StatusNotFound
+	if _, err = g.Fetch(context.Background(), gitlabAPI, testSHA, "", t.TempDir()); !errors.Is(err, repositories.ErrNotFound) {
+		t.Fatalf("Fetch of a missing project: %v", err)
+	}
+}
+
+func TestGitLab_DownloadWritesTheArchive(t *testing.T) {
+	f, g := newFakeGitLab(t)
+	f.tgz = gitlabArchive(t)
+	var buf bytes.Buffer
+	n, err := g.Download(context.Background(), gitlabAPI, testSHA, "", &buf)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if n != int64(len(f.tgz)) || !bytes.Equal(buf.Bytes(), f.tgz) {
+		t.Fatalf("Download wrote %d bytes; the archive is %d", n, len(f.tgz))
+	}
+	if f.archive.Get("sha") != testSHA || f.archive.Get("include_lfs_blobs") != "false" {
+		t.Fatalf("archive query %v", f.archive)
+	}
+
+	g.MaxArchiveBytes = 10
+	if _, err := g.Download(context.Background(), gitlabAPI, testSHA, "", &bytes.Buffer{}); !errors.Is(err, repositories.ErrTooLarge) {
+		t.Fatalf("Download over the archive limit: %v", err)
 	}
 }
