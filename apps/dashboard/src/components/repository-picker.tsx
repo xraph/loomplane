@@ -9,16 +9,17 @@ import { GitBranchIcon, LockIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import {
-  useBitbucketRepositories,
   useBitbucketStatus,
-  useGithubRepositories,
   useGithubStatus,
-  useGitlabRepositories,
   useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import { HostMark } from "@/components/host-mark"
 import { QueryError } from "@/components/query-error"
+import {
+  type Listing,
+  RepositoryListings,
+} from "@/components/repository-listings"
 import {
   InputGroup,
   InputGroupAddon,
@@ -28,9 +29,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { repositoryKey, startsWithHost } from "@/lib/format"
 import {
-  fromBitbucket,
-  fromGitHub,
-  fromGitLab,
+  canReadBitbucket,
   type PickerRepository,
   pickerGroupLabel,
   type RepositoryChoice,
@@ -70,94 +69,27 @@ function HostAddon({ value }: { value: string }) {
   )
 }
 
-/** What a host's component says about its list, to whatever is inside. */
-type Listing = {
-  repositories: PickerRepository[]
-  loading: boolean
-  error?: unknown
-  retry?: () => Promise<unknown>
-}
-
-type ListingProps = { children: (l: Listing) => ReactNode }
-
-function GithubListing({ children }: ListingProps) {
-  const repos = useQuery(useGithubRepositories)
-  return children({
-    repositories: (repos.data?.repositories ?? []).map(fromGitHub),
-    loading: !repos.data && repos.status !== "error",
-    error: repos.status === "error" ? repos.error : undefined,
-    retry: repos.refetch,
-  })
-}
-
-function GitlabListing({ children }: ListingProps) {
-  const repos = useQuery(useGitlabRepositories)
-  return children({
-    repositories: (repos.data?.repositories ?? []).map(fromGitLab),
-    loading: !repos.data && repos.status !== "error",
-    error: repos.status === "error" ? repos.error : undefined,
-    retry: repos.refetch,
-  })
-}
-
-function BitbucketListing({ children }: ListingProps) {
-  const repos = useQuery(useBitbucketRepositories)
-  return children({
-    repositories: (repos.data?.repositories ?? []).map(fromBitbucket),
-    loading: !repos.data && repos.status !== "error",
-    error: repos.status === "error" ? repos.error : undefined,
-    retry: repos.refetch,
-  })
-}
-
-/**
- * Listings asks each host in turn and hands all their lists on together. A
- * hook can't be skipped, so each host's component is nested only when that
- * host has an account connected.
- */
-function Listings({
-  hosts,
-  taken = [],
-  children,
-}: {
-  hosts: ((p: ListingProps) => ReactNode)[]
-  taken?: Listing[]
-  children: (listings: Listing[]) => ReactNode
-}) {
-  const [Host, ...rest] = hosts
-  if (!Host) return children(taken)
-  return (
-    <Host>
-      {(l) => (
-        <Listings hosts={rest} taken={[...taken, l]}>
-          {children}
-        </Listings>
-      )}
-    </Host>
-  )
-}
-
 export function RepositoryPicker(props: FieldProps) {
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
   const bitbucket = useQuery(useBitbucketStatus)
   const installations = github.data?.installations ?? []
-  const workspaces = bitbucket.data?.workspaces ?? []
+  const hasGitHub = installations.length > 0
+  const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
+  const hasBitbucket = canReadBitbucket(bitbucket.data)
   // The lists ask the hosts, so they're only there once an account is
-  // connected. A workspace that needs a new sign-in can't be listed.
-  const hosts = [
-    installations.length > 0 && GithubListing,
-    (gitlab.data?.connections.length ?? 0) > 0 && GitlabListing,
-    bitbucket.data?.configured &&
-      workspaces.some((w) => w.status === "ready") &&
-      BitbucketListing,
-  ].filter((h): h is typeof GithubListing => !!h)
-  if (hosts.length === 0) return <PlainField {...props} />
-  const label = pickerGroupLabel(installations, workspaces)
+  // connected.
+  if (!hasGitHub && !hasGitLab && !hasBitbucket)
+    return <PlainField {...props} />
+  const label = pickerGroupLabel(installations, bitbucket.data?.workspaces)
   return (
-    <Listings hosts={hosts}>
+    <RepositoryListings
+      github={hasGitHub}
+      gitlab={hasGitLab}
+      bitbucket={hasBitbucket}
+    >
       {(listings) => <Picker {...props} label={label} listings={listings} />}
-    </Listings>
+    </RepositoryListings>
   )
 }
 

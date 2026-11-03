@@ -384,7 +384,7 @@ export function ConnectRepository({
         <EmptyTitle>No repository yet</EmptyTitle>
         <EmptyDescription>
           {mayEdit
-            ? "Add the GitHub or GitLab repository this project builds from. Public ones work as they are; private ones need the GitHub or GitLab connection."
+            ? "Add the GitHub, GitLab or Bitbucket repository this project builds from. Public ones work as they are; private ones need the matching connection."
             : "Someone with the developer role or above can add the repository this project builds from."}
         </EmptyDescription>
       </EmptyHeader>

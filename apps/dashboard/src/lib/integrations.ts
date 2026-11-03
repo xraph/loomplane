@@ -2,6 +2,7 @@
 // the repositories each GitHub account, GitLab connection and Bitbucket
 // workspace lets Loomplane read, and how the organization's clouds are doing.
 import type {
+  BitbucketStatus,
   BitbucketWorkspaceView,
   CloudForm,
   ConnectedBitbucketRepository,
@@ -76,6 +77,18 @@ export function fromBitbucket(
     group: `bitbucket:${r.workspace}`,
     defaultBranch: r.defaultBranch,
   }
+}
+
+/**
+ * canReadBitbucket is whether any Bitbucket repository can be listed: the
+ * instance has an OAuth consumer and a workspace whose sign-in works. A
+ * workspace that needs connecting again can't be asked.
+ */
+export function canReadBitbucket(status?: BitbucketStatus): boolean {
+  return (
+    !!status?.configured &&
+    (status.workspaces ?? []).some((w) => w.status === "ready")
+  )
 }
 
 /** What a group of repositories is headed with. */
