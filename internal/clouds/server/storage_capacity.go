@@ -15,7 +15,7 @@ type FilesystemCapacity struct {
 }
 
 // StorageCapacity samples the filesystem containing Docker's actual data root,
-// through the same pinned SSH host as the verified daemon.
+// through the same host access as the verified daemon.
 func (c *Client) StorageCapacity(ctx context.Context) (FilesystemCapacity, error) {
 	var daemon struct{ ID, DockerRootDir string }
 	if err := c.getJSON(ctx, "/info", &daemon); err != nil {
@@ -24,25 +24,13 @@ func (c *Client) StorageCapacity(ctx context.Context) (FilesystemCapacity, error
 	if daemon.ID == "" || c.Config == nil || (c.Config.Details["docker_id"] != "" && c.Config.Details["docker_id"] != daemon.ID) {
 		return FilesystemCapacity{}, errors.New("the checked Docker daemon identity changed")
 	}
-	command, err := storageCapacityCommand(daemon.DockerRootDir)
-	if err != nil {
+	if _, err := storageCapacityCommand(daemon.DockerRootDir); err != nil {
 		return FilesystemCapacity{}, err
 	}
-	if c.ssh == nil {
+	if c.access == nil {
 		return FilesystemCapacity{}, errors.New("filesystem observations require pinned SSH")
 	}
-	session, err := c.ssh.NewSession()
-	if err != nil {
-		return FilesystemCapacity{}, err
-	}
-	defer session.Close()
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stop()
-	raw, err := session.Output(command)
-	if err != nil {
-		return FilesystemCapacity{}, errors.New("docker data filesystem capacity is unavailable")
-	}
-	return parseFilesystemCapacity(raw)
+	return c.access.Filesystem(ctx, daemon.DockerRootDir)
 }
 func parseFilesystemCapacity(raw []byte) (FilesystemCapacity, error) {
 	var rawFacts struct {

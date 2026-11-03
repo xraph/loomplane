@@ -14,8 +14,8 @@ import (
 var containerNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 // DialContainerPort opens a TCP connection to one port of a running
-// container, through the SSH connection Dial pinned to the server's host
-// key. It reaches the port where Docker publishes it on the server's
+// container, through the host access Connect pinned, such as SSH pinned to
+// the server's host key. It reaches the port where Docker publishes it on the server's
 // loopback interface, which only the server can reach, so it never opens
 // a listener of its own. A port published beyond loopback is refused: it's
 // reachable by others, and isn't what a private component publishes.

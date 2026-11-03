@@ -32,7 +32,7 @@ const challengeImage = "ghcr.io/letsencrypt/pebble-challtestsrv:latest@sha256:12
 
 func ingressHTTPS(c *Client, address, hostname string, roots *x509.CertPool) *http.Client {
 	return &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: hostname, MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return c.ssh.DialContext(ctx, "tcp", address)
+		return c.access.DialContext(ctx, "tcp", address)
 	}}}
 }
 
