@@ -272,11 +272,11 @@ func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, ri
 	// Cortex asks before it checks the tool exists, so the name can be
 	// anything the model wrote: a tool Loomplane doesn't have is recorded
 	// as "unknown".
-	tool := inv.Call.Name
-	if _, ok := r.Lookup(tool); !ok {
-		tool = unknownTool
+	name := inv.Call.Name
+	if _, ok := r.Lookup(name); !ok {
+		name = unknownTool
 	}
-	r.write(ctx, call, tool, projectID, risk, decision)
+	r.write(ctx, call, name, projectID, risk, decision)
 }
 
 // EngineOptions give cortex every operation: a tool with its handler for

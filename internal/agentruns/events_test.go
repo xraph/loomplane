@@ -130,10 +130,11 @@ func (f *fakeWake) source() realtime.WakeSource {
 	}
 }
 
-func (f *fakeWake) wake(org string) {
+// wake wakes orgA's subscribers, as a write there would.
+func (f *fakeWake) wake() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, ch := range f.subs[org] {
+	for _, ch := range f.subs[orgA] {
 		select {
 		case ch <- struct{}{}:
 		default:
@@ -182,7 +183,7 @@ func TestWatchFollowsUntilDone(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	wake.wake(orgA)
+	wake.wake()
 	if e := <-ch; e.Seq != 2 || e.Kind != "token" {
 		t.Fatalf("second %+v", e)
 	}
@@ -192,7 +193,7 @@ func TestWatchFollowsUntilDone(t *testing.T) {
 	if _, err = w.svc.finish(runCtx(task), task, StatusCompleted, 0, ""); err != nil {
 		t.Fatal(err)
 	}
-	wake.wake(orgA)
+	wake.wake()
 	last := <-ch
 	if last.Kind != EventStatus || last.Seq != 4 {
 		t.Fatalf("last %+v", last)
@@ -232,7 +233,7 @@ func TestWatchStopsWhenTheWatcherLosesAccess(t *testing.T) {
 	if _, err = w.store.AppendEvents(context.Background(), orgA, task.ID, []NewEvent{{Kind: "token", Data: json.RawMessage(`{"text":"x"}`)}}); err != nil {
 		t.Fatal(err)
 	}
-	wake.wake(orgA)
+	wake.wake()
 	select {
 	case e, ok := <-ch:
 		if ok {
@@ -367,7 +368,7 @@ func TestWatchFromTheEndWaitsForTheFinalStatus(t *testing.T) {
 	if _, err = w.store.AppendEvents(ctx, orgA, task.ID, []NewEvent{*statusEvent(StatusCancelled, "")}); err != nil {
 		t.Fatal(err)
 	}
-	wake.wake(orgA)
+	wake.wake()
 	if e, ok := <-ch; !ok || !isFinalStatus(e) {
 		t.Fatalf("got %+v, %v", e, ok)
 	}
