@@ -1,6 +1,6 @@
 // What every page can reach for: the command menu, the new deployment and
-// new project dialogs and the shortcut sheet, plus the keyboard handling
-// that opens them.
+// new project dialogs, the agent's panel and the shortcut sheet, plus the
+// keyboard handling that opens them.
 import {
   createContext,
   type ReactNode,
@@ -12,6 +12,7 @@ import {
   useState,
 } from "react"
 
+import { AssistantPanel } from "@/components/assistant/assistant-panel"
 import { CommandMenu } from "@/components/command-menu"
 import type { DeployPreset } from "@/components/deploy-dialog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
@@ -19,10 +20,16 @@ import {
   type ShortcutGroup,
   ShortcutsDialog,
 } from "@/components/shortcuts-dialog"
+import { useAssistantAvailable } from "@/lib/agent-stream"
+import { projectIDFromPath } from "@/lib/command-menu"
 import { useOrganization } from "@/lib/organization"
-import { useNavigate } from "@/lib/router"
+import { useNavigate, usePath } from "@/lib/router"
+
+/** Where openAssistant opens the agent's panel. */
+export type AssistantTarget = { projectId?: string; conversationId?: string }
 
 type Shell = {
+  openAssistant: (opts?: AssistantTarget) => void
   openCommand: () => void
   openDeploy: (preset?: DeployPreset) => void
   openNewProject: () => void
@@ -70,6 +77,45 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [newProject, setNewProject] = useState(false)
   const [shortcuts, setShortcuts] = useState(false)
   const pendingG = useRef(0)
+  const path = usePath()
+  const assistantOn = useAssistantAvailable()
+  const [assistant, setAssistant] = useState<{
+    open: boolean
+    projectId?: string
+    conversationId?: string
+    // The panel started the conversation, so projectId is its project.
+    started: boolean
+    // The project page the panel was last opened from.
+    from?: string
+  }>({ open: false, started: false })
+
+  // The panel keeps its conversation and scope between openings. Opened
+  // from another project's page (or from none, after one), it takes that
+  // page's project for its next new conversation.
+  const openAssistant = useCallback(
+    (opts?: AssistantTarget) => {
+      if (!assistantOn) return
+      const here = projectIDFromPath(path)
+      setAssistant((cur) => {
+        const next = { ...cur, open: true, from: here }
+        if (opts?.conversationId)
+          return {
+            ...next,
+            conversationId: opts.conversationId,
+            projectId: opts.projectId,
+            started: false,
+          }
+        if (opts?.projectId) return { ...next, projectId: opts.projectId }
+        if (here !== cur.from) return { ...next, projectId: here }
+        return next
+      })
+    },
+    [assistantOn, path]
+  )
+  const toggleAssistant = useCallback(() => {
+    if (assistant.open) setAssistant((cur) => ({ ...cur, open: false }))
+    else openAssistant()
+  }, [assistant.open, openAssistant])
 
   const openCommand = useCallback(() => setCommand(true), [])
   const openNewProject = useCallback(() => setNewProject(true), [])
@@ -95,6 +141,18 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault()
         setCommand((open) => !open)
+        return
+      }
+      // With the agent unavailable, ⌘J stays the browser's.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "j" &&
+        assistantOn
+      ) {
+        e.preventDefault()
+        toggleAssistant()
         return
       }
       if (e.metaKey || e.ctrlKey || e.altKey || isEditable(e.target)) return
@@ -130,11 +188,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("keydown", onKey, { capture: true })
     return () => window.removeEventListener("keydown", onKey, { capture: true })
-  }, [navigate, mayDeploy, openDeploy])
+  }, [navigate, mayDeploy, openDeploy, assistantOn, toggleAssistant])
 
   const value = useMemo(
-    () => ({ openCommand, openDeploy, openNewProject, openShortcuts }),
-    [openCommand, openDeploy, openNewProject, openShortcuts]
+    () => ({
+      openAssistant,
+      openCommand,
+      openDeploy,
+      openNewProject,
+      openShortcuts,
+    }),
+    [openAssistant, openCommand, openDeploy, openNewProject, openShortcuts]
   )
 
   const groups: ShortcutGroup[] = [
@@ -142,6 +206,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       title: "Anywhere",
       keys: [
         [["⌘", "K"], "Open the command menu"],
+        ...(assistantOn
+          ? ([[["⌘", "J"], "Ask the agent"]] as [string[], string][])
+          : []),
         ...(mayDeploy
           ? ([[["N"], "New deployment"]] as [string[], string][])
           : []),
@@ -173,6 +240,32 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       {children}
       <CommandMenu open={command} onOpenChange={setCommand} />
       <NewProjectDialog open={newProject} onOpenChange={setNewProject} />
+      {assistantOn && (
+        <AssistantPanel
+          open={assistant.open}
+          onOpenChange={(open) => setAssistant((cur) => ({ ...cur, open }))}
+          projectId={assistant.projectId}
+          conversationId={assistant.conversationId}
+          scoped={assistant.started}
+          onConversation={(id) =>
+            setAssistant((cur) => ({
+              ...cur,
+              conversationId: id,
+              started: true,
+            }))
+          }
+          onScope={(projectId) =>
+            setAssistant((cur) => ({ ...cur, projectId }))
+          }
+          onNew={() =>
+            setAssistant((cur) => ({
+              ...cur,
+              conversationId: undefined,
+              started: false,
+            }))
+          }
+        />
+      )}
       <ShortcutsDialog
         groups={groups}
         open={shortcuts}

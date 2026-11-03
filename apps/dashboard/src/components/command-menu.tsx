@@ -16,6 +16,7 @@ import {
   ActivityIcon,
   ApiKeysIcon,
   ApproveIcon,
+  AssistantIcon,
   CloudsIcon,
   DeploymentsIcon,
   InfrastructureIcon,
@@ -44,6 +45,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { useAssistantAvailable } from "@/lib/agent-stream"
 import { analyzeItems, projectIDFromPath } from "@/lib/command-menu"
 import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -345,7 +347,9 @@ export function CommandMenu({
 }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
-  const { openDeploy, openNewProject, openShortcuts } = useShell()
+  const { openAssistant, openDeploy, openNewProject, openShortcuts } =
+    useShell()
+  const assistant = useAssistantAvailable()
   const { theme, setTheme } = useTheme()
   const list = useQuery(useProjectsList)
   const projects = list.data?.projects ?? []
@@ -458,6 +462,18 @@ export function CommandMenu({
             <RepositoryActions projectID={projectID} onAnalyze={analyze} />
           )}
           <CommandGroup heading="Actions">
+            {assistant && (
+              <CommandItem
+                value="ask the agent ask agent assistant chat ai"
+                onSelect={run(() => openAssistant())}
+              >
+                <Entry
+                  icon={<AssistantIcon />}
+                  label="Ask the agent"
+                  keys="⌘J"
+                />
+              </CommandItem>
+            )}
             {can("deployment:create") && (
               <CommandItem
                 value="new deployment deploy plan"

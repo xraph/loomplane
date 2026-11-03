@@ -1,5 +1,12 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
@@ -8,7 +15,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { ShellProvider, useShell } from "@/components/shell"
 import { ThemeProvider } from "@/components/theme-provider"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { FeaturesProvider } from "@/lib/features"
+import { AgentProvider, FeaturesProvider } from "@/lib/features"
 
 const { navigate, access } = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -154,4 +161,145 @@ it("adds Models to the AI group", () => {
   access.denied = ["ai:manage"]
   sidebar(true)
   expect(aiLinks()).toEqual([["Models", "/ai/models"]])
+})
+
+const asked: string[] = []
+
+function serveAgent(enabled: boolean) {
+  asked.length = 0
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    asked.push(path)
+    if (path === "/api/v1/agent/status")
+      return Response.json({ server: true, enabled, knowledge: false })
+    return Response.json({
+      projects: [],
+      installations: [],
+      requests: [],
+      conversations: [],
+      members: [],
+    })
+  })
+}
+
+function withAgent(ai: boolean, enabled = true) {
+  serveAgent(enabled)
+  render(
+    <ClientProvider client={forgeClient}>
+      <FeaturesProvider features={{ ai }}>
+        <AgentProvider>
+          <ThemeProvider>
+            <ShellProvider>
+              <p>Page</p>
+            </ShellProvider>
+          </ThemeProvider>
+        </AgentProvider>
+      </FeaturesProvider>
+    </ClientProvider>
+  )
+}
+
+// pressJ sends ⌘J and reports whether the shell took it.
+function pressJ(): boolean {
+  const event = new KeyboardEvent("keydown", {
+    key: "j",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  })
+  window.dispatchEvent(event)
+  return event.defaultPrevented
+}
+
+it("cmd+J opens the assistant when the agent is on", async () => {
+  withAgent(true)
+  await waitFor(() => {
+    act(() => {
+      expect(pressJ()).toBe(true)
+    })
+  })
+  expect(
+    await screen.findByRole("heading", { name: "Assistant" })
+  ).toBeVisible()
+  // ⌘J again puts it away.
+  act(() => {
+    pressJ()
+  })
+  await waitFor(() =>
+    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  )
+})
+
+it("cmd+J does nothing when the agent is off", async () => {
+  withAgent(false)
+  await screen.findByText("Page")
+  let prevented = true
+  act(() => {
+    prevented = pressJ()
+  })
+  expect(prevented).toBe(false)
+  expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+
+  // Nor with AI on and the workspace's agent off.
+  cleanup()
+  withAgent(true, false)
+  await waitFor(() => expect(asked).toContain("/api/v1/agent/status"))
+  act(() => {
+    prevented = pressJ()
+  })
+  expect(prevented).toBe(false)
+  expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+})
+
+it("the command menu offers Ask the agent only when on", async () => {
+  withAgent(true)
+  // Once the agent's status is in, the shortcut sheet lists ⌘J too.
+  await waitFor(() => {
+    act(() => {
+      expect(pressJ()).toBe(true)
+    })
+  })
+  act(() => {
+    pressJ()
+  })
+  await userEvent.keyboard("{Meta>}k{/Meta}")
+  const item = await screen.findByRole("option", { name: /Ask the agent/ })
+  expect(item).toHaveTextContent("⌘J")
+  await userEvent.click(item)
+  expect(
+    await screen.findByRole("heading", { name: "Assistant" })
+  ).toBeVisible()
+
+  cleanup()
+  withAgent(false)
+  await screen.findByText("Page")
+  await userEvent.keyboard("{Meta>}k{/Meta}")
+  await screen.findByRole("option", { name: /Toggle theme/ })
+  expect(screen.queryByRole("option", { name: /Ask the agent/ })).toBeNull()
+})
+
+it("lists cmd+J among the shortcuts only when the agent is on", async () => {
+  withAgent(true)
+  await waitFor(() => {
+    act(() => {
+      expect(pressJ()).toBe(true)
+    })
+  })
+  act(() => {
+    pressJ()
+  })
+  await waitFor(() =>
+    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  )
+  await userEvent.keyboard("?")
+  const sheet = await screen.findByRole("dialog")
+  expect(within(sheet).getByText("Ask the agent")).toBeInTheDocument()
+
+  cleanup()
+  withAgent(false)
+  await screen.findByText("Page")
+  await userEvent.keyboard("?")
+  const off = await screen.findByRole("dialog")
+  expect(within(off).getByText("Open the command menu")).toBeInTheDocument()
+  expect(within(off).queryByText("Ask the agent")).toBeNull()
 })
