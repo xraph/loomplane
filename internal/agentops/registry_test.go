@@ -256,3 +256,18 @@ func TestRefusedCallsAreAudited(t *testing.T) {
 		}
 	}
 }
+
+// A refused call to a tool that doesn't exist is audited as "unknown":
+// the model's name for it is unbounded text nobody scanned.
+func TestUnknownToolsAreAuditedWithoutTheirName(t *testing.T) {
+	w := newWorld(t)
+	name := "drop_everything\x1b]8;;https://x\x07" + strings.Repeat("x", 5000)
+	w.reg.RecordDecision(t.Context(), cortex.Invocation{
+		Subject: cortex.Subject{Scope: agentscope.Scope{OrgID: orgA}.Cortex(), Principal: as(orgA, ada), RunID: cortexid.NewAgentRunID()},
+		Call:    llm.ToolCall{ID: "c1", Name: name},
+	}, "", "", DecisionRefused)
+	events := w.audit.toolCalls()
+	if len(events) != 1 || events[0].Attributes["tool"] != "unknown" {
+		t.Fatalf("events %+v", events)
+	}
+}

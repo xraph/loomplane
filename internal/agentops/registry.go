@@ -245,6 +245,9 @@ const (
 	DecisionRequested = "requested"
 )
 
+// unknownTool is how the audit names a call to a tool that doesn't exist.
+const unknownTool = "unknown"
+
 // RecordDecision writes agent.tool.call for a call the tool authorizer
 // answered with decision (DecisionRefused, DecisionApproval or
 // DecisionRequested), which no handler records: a refusal, a pause, or a
@@ -266,7 +269,14 @@ func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, ri
 		call = Call{Principal: p, RunID: inv.RunID.String(), CallID: inv.Call.ID}
 	}
 	call.TaskID = TaskIDFrom(ctx)
-	r.write(ctx, call, inv.Call.Name, projectID, risk, decision)
+	// Cortex asks before it checks the tool exists, so the name can be
+	// anything the model wrote: a tool Loomplane doesn't have is recorded
+	// as "unknown".
+	tool := inv.Call.Name
+	if _, ok := r.Lookup(tool); !ok {
+		tool = unknownTool
+	}
+	r.write(ctx, call, tool, projectID, risk, decision)
 }
 
 // EngineOptions give cortex every operation: a tool with its handler for
