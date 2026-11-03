@@ -1,0 +1,93 @@
+---
+title: GitLab repositories
+description: Register a GitLab OAuth application once, sign in from Integrations, and re-analyze projects when their default branch moves.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Loomplane reads public projects on gitlab.com with no setup. A source is written `gitlab.com/<group>/<project>`, and you can paste the project's URL wherever Loomplane asks for one. Nested groups work, and so does a self-managed GitLab on version 17.0 or newer. An older version connects too, with a warning on its card.
+
+To read private projects you register an OAuth application once for the whole Loomplane instance, and your organization's owners and admins sign in to it from Integrations.
+
+## Register the application on gitlab.com
+
+In GitLab, open **Preferences**, then **Applications**, then **Add new application**.
+
+| Setting | Value |
+|---|---|
+| Name | Anything, such as Loomplane |
+| Redirect URI | `<public_url>/integrations/gitlab/callback` |
+| Confidential | On |
+| Scopes | `read_api`, and nothing else |
+
+Save it and copy the Application ID and the Secret. GitLab shows the secret once. Then set them in `config.yaml`, for both `loomplane` and `loomplane-worker`, and keep the secret out of any file you commit:
+
+```yaml
+gitlab:
+  client_id: "<the Application ID>"
+  client_secret: "<the Secret>"
+```
+
+Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
+
+## A self-managed GitLab
+
+The operator can list it under `gitlab.hosts`, with an application registered on that GitLab the same way as above:
+
+```yaml
+gitlab:
+  hosts:
+    - web_url: https://git.example.com
+      client_id: "<the Application ID>"
+      client_secret: "<the Secret>"
+```
+
+`web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
+
+An organization can add its own instead. Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters the address, an Application ID and a Secret. The dialog shows the callback URL to use. Loomplane is stricter about these:
+
+- The address has to be https and a host name of its own. A GitLab served under a path is refused.
+- Loomplane won't call private, loopback or link-local addresses for it, and it won't follow a redirect to http or to another host.
+
+An operator who doesn't want organizations adding their own sets `gitlab.allow_organization_hosts: false`. It defaults to true. The full list of settings is `gitlab.api_url` (gitlab.com's API, `https://gitlab.com` by default), `gitlab.client_id`, `gitlab.client_secret`, `gitlab.hosts`, `gitlab.allow_organization_hosts` and `gitlab.webhook_url`.
+
+## Sign in
+
+An owner or admin opens **Integrations**, finds the GitLab card and signs in to gitlab.com or to a self-managed GitLab. GitLab asks them to approve the application and sends them back.
+
+Loomplane acts as the GitLab user who signed in, so it can read whatever that user can. Create a dedicated GitLab user with Reporter access on the groups Loomplane should read, and sign in as that user. Once it's connected, any project in the organization whose repository that user can read is analyzed with access to it.
+
+Loomplane seals the tokens in its vault, and GitLab rotates them every two hours. If GitLab refuses to renew one, the card shows **Sign in again**, and signing in again replaces the old sign-in. Disconnecting removes the connection and revokes the sign-in at GitLab.
+
+## Re-analyze on push
+
+Each connection gets a webhook URL and a secret, shown once on its card. The URL is `<webhook_url>/api/v1/gitlab/webhook/<connection id>`, where `gitlab.webhook_url` defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do.
+
+<Steps>
+<Step>
+
+On the connection's card, choose **Create secret**. Copy the URL, the signing token and the secret token before you leave. If you'd rather use a signing token GitLab generated, paste it into the card first.
+
+</Step>
+<Step>
+
+In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Group webhooks need GitLab Premium on gitlab.com.
+
+</Step>
+<Step>
+
+Paste the URL, tick **Push events**, and paste a secret. On GitLab 19 and newer that's the signing token. On older versions it's the secret token.
+
+</Step>
+<Step>
+
+Push a change to the default branch. The project's Analyses tab should show another analysis finishing at the new commit, with `created_by` set to `gitlab-push`.
+
+</Step>
+</Steps>
+
+Only pushes to a project's default branch re-analyze, and only in the organization that owns the connection. A push to any other branch, a tag or a deleted branch does nothing.
+
+## Deploying
+
+Every deployment target but two builds from the archive Loomplane fetched. Render and DigitalOcean App Platform build from the repository themselves, through their own GitLab connection, so connect GitLab in Render's or DigitalOcean's dashboard first. They build gitlab.com sources only. A source on a self-managed GitLab can't deploy to either, and the plan reports it.
