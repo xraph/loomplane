@@ -84,6 +84,7 @@ func settings() (ops.Settings, error) {
 	}
 	return ops.Settings{
 		DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Optional: migrations.OptionalVersions(), OnDemand: onDemand,
-		Version: buildinfo.Version, AuthAppID: cfg.Identity.AppID, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL,
+		VectorDimensions: cfg.AI.Knowledge.Dimensions, Version: buildinfo.Version,
+		AuthAppID: cfg.Identity.AppID, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL,
 	}, nil
 }

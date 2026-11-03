@@ -5,6 +5,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func knowledgeRestore(t *testing.T, dimensions int) ops.RestoreOptions {
 	if err != nil || len(onDemand) != 1 {
 		t.Fatalf("on-demand groups %v, %v", onDemand, err)
 	}
-	return ops.RestoreOptions{OnDemand: onDemand, Optional: migrations.OptionalVersions()}
+	return ops.RestoreOptions{OnDemand: onDemand, Optional: migrations.OptionalVersions(), VectorDimensions: dimensions}
 }
 
 // A backup taken where knowledge was on restores with its vector table:
@@ -57,8 +58,12 @@ func TestKnowledgeBackupRestoresItsVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var backup bytes.Buffer
-	if _, err = ops.Backup(ctx, src, "test", &backup); err != nil {
+	m, err := ops.Backup(ctx, src, "test", &backup)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if m.VectorDimensions != 8 {
+		t.Fatalf("the manifest says the vectors have %d dimensions, want 8", m.VectorDimensions)
 	}
 
 	dst := freshPgvectorDatabase(t)
@@ -157,5 +162,84 @@ func TestKnowledgeBackupWithAIOffLeavesPgvectorAlone(t *testing.T) {
 	}
 	if dbValue[bool](t, dst, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') OR to_regclass('weave_vectors') IS NOT NULL OR to_regclass('grove_migrations') IS NOT NULL`) {
 		t.Fatal("a refused restore touched the target database")
+	}
+}
+
+// knowledgeBackup is a backup of a database with knowledge's vector table
+// at 8 dimensions, holding one vector.
+func knowledgeBackup(t *testing.T) []byte {
+	t.Helper()
+	ctx := context.Background()
+	src := freshPgvectorDatabase(t)
+	vectors, err := pgvector.Migrations(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ops.Migrate(ctx, src, append(migrations.All(), vectors)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO weave_vectors (id, embedding, content) VALUES ('v1', '[1,2,3,4,5,6,7,8]', 'kept')`)
+	_ = conn.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backup bytes.Buffer
+	if _, err = ops.Backup(ctx, src, "test", &backup); err != nil {
+		t.Fatal(err)
+	}
+	return backup.Bytes()
+}
+
+// untouched fails the test if a refused restore left anything on dsn: the
+// vector extension, the vector table, or grove's bookkeeping.
+func untouched(t *testing.T, dsn string) {
+	t.Helper()
+	if dbValue[bool](t, dsn, `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') OR to_regclass('weave_vectors') IS NOT NULL OR to_regclass('grove_migrations') IS NOT NULL OR to_regclass('weave_collections') IS NOT NULL`) {
+		t.Fatal("a refused restore touched the target database")
+	}
+}
+
+// A knowledge backup restored where ai.knowledge.dimensions is another
+// size is refused, naming both sizes, before the restore touches the
+// target. With the size put back, the same target takes it, without
+// --force.
+func TestKnowledgeRestoreRefusesAnotherSize(t *testing.T) {
+	ctx := context.Background()
+	backup := knowledgeBackup(t)
+	dst := freshPgvectorDatabase(t)
+	_, err := ops.Restore(ctx, dst, migrations.All(), bytes.NewReader(backup), knowledgeRestore(t, 4))
+	if err == nil || !strings.Contains(err.Error(), "have 8 dimensions, and ai.knowledge.dimensions is 4") || !strings.Contains(err.Error(), "set ai.knowledge.dimensions to 8") {
+		t.Fatalf("restoring 8-dimension vectors at 4: %v", err)
+	}
+	untouched(t, dst)
+
+	if _, err = ops.Restore(ctx, dst, migrations.All(), bytes.NewReader(backup), knowledgeRestore(t, 8)); err != nil {
+		t.Fatalf("restoring again at the backup's size: %v", err)
+	}
+	if got := dbValue[string](t, dst, `SELECT content FROM weave_vectors WHERE id = 'v1'`); got != "kept" {
+		t.Fatalf("restored vector content %q", got)
+	}
+}
+
+// A knowledge backup restored into a Postgres without pgvector is refused
+// with the reason, before the restore touches the target, so running it
+// again (into a Postgres that has it) needs no --force.
+func TestKnowledgeRestoreRefusesWithoutPgvector(t *testing.T) {
+	ctx := context.Background()
+	backup := knowledgeBackup(t)
+	dst := freshDatabase(t)
+	if dbValue[int64](t, dst, vectorAvailableOn) != 0 {
+		t.Skip("LOOMPLANE_TEST_DATABASE_URL has pgvector; this test needs a Postgres without it")
+	}
+	for attempt := range 2 {
+		_, err := ops.Restore(ctx, dst, migrations.All(), bytes.NewReader(backup), knowledgeRestore(t, 8))
+		if err == nil || !strings.Contains(err.Error(), "can't have pgvector") || errors.Is(err, ops.ErrNotEmpty) {
+			t.Fatalf("attempt %d: restoring a knowledge backup without pgvector: %v", attempt+1, err)
+		}
+		untouched(t, dst)
 	}
 }

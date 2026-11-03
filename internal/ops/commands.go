@@ -23,10 +23,12 @@ type Settings struct {
 	Optional []string
 	// OnDemand are the groups behind Optional that this configuration
 	// turns on (weave's pgvector group, with AI on and knowledge
-	// configured). A
-	// restore runs one for a backup that applied it.
+	// configured). A restore runs one for a backup that applied it.
 	OnDemand []*migrate.Group
-	Version  string
+	// VectorDimensions is ai.knowledge.dimensions: a restore refuses a
+	// backup whose knowledge vectors are another size.
+	VectorDimensions int
+	Version          string
 	// AuthAppID is Loomplane's authsome app, where platform roles live.
 	AuthAppID string
 	// SecretKey and PublicURL give the one-time setup link.
@@ -103,7 +105,7 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			}
 			defer f.Close()
 			m, err := Restore(ctx.Context(), s.DatabaseURL, s.Groups, f, RestoreOptions{
-				Force: ctx.Bool("force"), OnDemand: s.OnDemand, Optional: s.Optional,
+				Force: ctx.Bool("force"), OnDemand: s.OnDemand, Optional: s.Optional, VectorDimensions: s.VectorDimensions,
 			})
 			if err != nil {
 				return err
