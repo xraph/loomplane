@@ -34,6 +34,8 @@ import { Route as DomainsIndexRouteImport } from "./routes/domains.index"
 import { Route as DomainsZoneIdRouteImport } from "./routes/domains.$zoneId"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
+import { Route as NodesIndexRouteImport } from "./routes/nodes.index"
+import { Route as NodesIdRouteImport } from "./routes/nodes.$id"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
@@ -174,6 +176,16 @@ const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   path: "/invitations/accept",
   getParentRoute: () => rootRouteImport,
 } as any)
+const NodesIndexRoute = NodesIndexRouteImport.update({
+  id: "/nodes/",
+  path: "/nodes/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NodesIdRoute = NodesIdRouteImport.update({
+  id: "/nodes/$id",
+  path: "/nodes/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: "/projects/",
   path: "/projects/",
@@ -272,12 +284,14 @@ export interface FileRoutesByFullPath {
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
+  "/nodes/$id": typeof NodesIdRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
+  "/nodes/": typeof NodesIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -313,12 +327,14 @@ export interface FileRoutesByTo {
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
+  "/nodes/$id": typeof NodesIdRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
   "/domains": typeof DomainsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
+  "/nodes": typeof NodesIndexRoute
   "/projects": typeof ProjectsIndexRoute
   "/resources": typeof ResourcesIndexRoute
   "/services": typeof ServicesIndexRoute
@@ -355,12 +371,14 @@ export interface FileRoutesById {
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
+  "/nodes/$id": typeof NodesIdRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
   "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
+  "/nodes/": typeof NodesIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -398,12 +416,14 @@ export interface FileRouteTypes {
     | "/design/deployment"
     | "/domains/$zoneId"
     | "/invitations/accept"
+    | "/nodes/$id"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
     | "/integrations/"
+    | "/nodes/"
     | "/projects/"
     | "/resources/"
     | "/services/"
@@ -439,12 +459,14 @@ export interface FileRouteTypes {
     | "/design/deployment"
     | "/domains/$zoneId"
     | "/invitations/accept"
+    | "/nodes/$id"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds"
     | "/deployments"
     | "/domains"
     | "/integrations"
+    | "/nodes"
     | "/projects"
     | "/resources"
     | "/services"
@@ -480,12 +502,14 @@ export interface FileRouteTypes {
     | "/design/deployment"
     | "/domains/$zoneId"
     | "/invitations/accept"
+    | "/nodes/$id"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds/"
     | "/deployments/"
     | "/domains/"
     | "/integrations/"
+    | "/nodes/"
     | "/projects/"
     | "/resources/"
     | "/services/"
@@ -522,12 +546,14 @@ export interface RootRouteChildren {
   DesignDeploymentRoute: typeof DesignDeploymentRoute
   DomainsZoneIdRoute: typeof DomainsZoneIdRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
+  NodesIdRoute: typeof NodesIdRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
   DomainsIndexRoute: typeof DomainsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
+  NodesIndexRoute: typeof NodesIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
@@ -719,6 +745,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof InvitationsAcceptRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/nodes/": {
+      id: "/nodes/"
+      path: "/nodes"
+      fullPath: "/nodes/"
+      preLoaderRoute: typeof NodesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/nodes/$id": {
+      id: "/nodes/$id"
+      path: "/nodes/$id"
+      fullPath: "/nodes/$id"
+      preLoaderRoute: typeof NodesIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/": {
       id: "/projects/"
       path: "/projects"
@@ -842,12 +882,14 @@ const rootRouteChildren: RootRouteChildren = {
   DesignDeploymentRoute: DesignDeploymentRoute,
   DomainsZoneIdRoute: DomainsZoneIdRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
+  NodesIdRoute: NodesIdRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
   DomainsIndexRoute: DomainsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
+  NodesIndexRoute: NodesIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,

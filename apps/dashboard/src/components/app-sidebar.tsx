@@ -22,6 +22,7 @@ import {
   DeploymentsIcon,
   DomainsIcon,
   InfrastructureIcon,
+  NodesIcon,
   OverviewIcon,
   ProjectsIcon,
   ServicesIcon,
@@ -178,6 +179,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <InfrastructureIcon />,
       link: <Link to="/infrastructure" />,
       isActive: path.startsWith("/infrastructure"),
+    },
+    {
+      title: "Nodes",
+      icon: <NodesIcon />,
+      link: <Link to="/nodes" />,
+      isActive: path.startsWith("/nodes"),
     },
     {
       title: "Activity",
