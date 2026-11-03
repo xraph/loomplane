@@ -46,6 +46,7 @@ import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
@@ -242,6 +243,11 @@ const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
   path: "/services/catalog",
   getParentRoute: () => rootRouteImport,
 } as any)
+const SetupCloudSignInRoute = SetupCloudSignInRouteImport.update({
+  id: "/setup_/cloud-sign-in",
+  path: "/setup/cloud-sign-in",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
   id: "/workspaces/new",
   path: "/workspaces/new",
@@ -328,6 +334,7 @@ export interface FileRoutesByFullPath {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -377,6 +384,7 @@ export interface FileRoutesByTo {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
@@ -427,6 +435,7 @@ export interface FileRoutesById {
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -478,6 +487,7 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -527,6 +537,7 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds"
     | "/deployments"
@@ -576,6 +587,7 @@ export interface FileRouteTypes {
     | "/projects/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/setup_/cloud-sign-in"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -626,6 +638,7 @@ export interface RootRouteChildren {
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
+  SetupCloudSignInRoute: typeof SetupCloudSignInRoute
   WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
@@ -907,6 +920,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ServicesCatalogRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/setup_/cloud-sign-in": {
+      id: "/setup_/cloud-sign-in"
+      path: "/setup/cloud-sign-in"
+      fullPath: "/setup/cloud-sign-in"
+      preLoaderRoute: typeof SetupCloudSignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/workspaces/new": {
       id: "/workspaces/new"
       path: "/workspaces/new"
@@ -1010,6 +1030,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
+  SetupCloudSignInRoute: SetupCloudSignInRoute,
   WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,

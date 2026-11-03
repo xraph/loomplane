@@ -23,11 +23,13 @@ import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
 import { AuthPage } from "@/pages/auth"
+import { CloudSignInStep } from "@/pages/cloud-sign-in-step"
 import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
+const stepPath = "/setup/cloud-sign-in"
 const authPaths = ["/sign-in", "/sign-up"]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
@@ -54,7 +56,12 @@ export function App() {
   const path = usePath()
 
   const invite = usePendingInvite()
-  const { setupPending, requireEmailVerification } = useInstance()
+  const {
+    setupPending,
+    requireEmailVerification,
+    platformAdmin,
+    cloudSignInOffer,
+  } = useInstance()
 
   if (isLoading) return <PageLoading />
   // A fresh instance has nobody to sign in as: every address leads to setup,
@@ -107,6 +114,19 @@ export function App() {
               : undefined
           }
         />
+      </AuthLayout>
+    )
+  }
+  // A new instance's first platform admin is offered cloud sign-in apps once,
+  // on a page of its own, before anything else.
+  if (platformAdmin && cloudSignInOffer && path !== stepPath) {
+    return <Navigate to={stepPath} replace />
+  }
+  if (path === stepPath) {
+    if (!platformAdmin) return <Navigate to="/" replace />
+    return (
+      <AuthLayout title="Set up cloud sign-in">
+        <CloudSignInStep />
       </AuthLayout>
     )
   }
