@@ -346,6 +346,7 @@ func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, n *Node) error {
 	}
 	s := newSession(h, n, epoch, mux, ctrl)
 	s.conn = conn
+	s.remote = conn.RemoteAddr().String()
 	// Hello goes first, before the writer starts, so nothing can pass it.
 	if err := s.writeNow(nodeproto.Hello{Version: nodeproto.Version, Epoch: epoch}); err != nil {
 		s.close()

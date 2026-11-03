@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,8 @@ type session struct {
 	ctrl   net.Conn
 	// conn is the node's WebSocket, for the close frame that follows Revoked.
 	conn *websocket.Conn
+	// remote is the address the node connected from, as this replica saw it.
+	remote string
 
 	out  chan any
 	done chan struct{}
@@ -347,6 +350,7 @@ func (h *Hub) heartbeat(s *session, hb nodeproto.Heartbeat) {
 // report it sends Narrow with the stored endpoints, so a narrow made while
 // the node was away applies, then fires OnOnline.
 func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
+	inv = withRemoteAddress(inv, s.remote)
 	ctx, cancel := opCtx()
 	defer cancel()
 	old, err := h.store.GetByID(ctx, s.nodeID)
@@ -493,6 +497,29 @@ func (h *Hub) leave(s *session) {
 	// The revoke's own notice may have gone to another replica or been
 	// dropped; a second Revoked on this session is harmless.
 	s.deliver(nodeproto.Revoked{})
+}
+
+// withRemoteAddress adds the address the node connected from to its public
+// address candidates, after the ones it reported, when it is a public IP.
+// Many cloud machines have their public IP translated to a private one, so
+// no interface carries it. Behind a proxy the address is the proxy's; it
+// never answers the address check with the node's nonce, so it is never
+// confirmed.
+func withRemoteAddress(inv nodeproto.Inventory, remote string) nodeproto.Inventory {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return inv
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil || !nodeproto.PublicAddress(a) {
+		return inv
+	}
+	ip := a.Unmap().String()
+	if slices.Contains(inv.PublicAddresses, ip) {
+		return inv
+	}
+	inv.PublicAddresses = append(slices.Clone(inv.PublicAddresses), ip)
+	return inv.Bounded()
 }
 
 // inventoryEqual compares inventories by their wire encoding, so a nil slice
