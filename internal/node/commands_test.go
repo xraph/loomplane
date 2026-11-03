@@ -657,6 +657,8 @@ func apiServer(t *testing.T, revoked *atomic.Value) *httptest.Server {
 				Inventory: nodeproto.Inventory{Arch: "arm64"}},
 			{ID: "node_b", Name: "gpu-1", Status: "offline"},
 			{ID: "node_c", Name: "web-1x", Status: "online"},
+			// An earlier web-1, revoked, which frees its name.
+			{ID: "node_d", Name: "web-1", Status: "revoked"},
 		}})
 	})
 	mux.HandleFunc("POST /api/v1/nodes/{id}/revoke", func(w http.ResponseWriter, req *http.Request) {
@@ -686,7 +688,7 @@ func TestListAndRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nodes []client.Node
-	if err := json.Unmarshal(r.out.Bytes(), &nodes); err != nil || len(nodes) != 3 {
+	if err := json.Unmarshal(r.out.Bytes(), &nodes); err != nil || len(nodes) != 4 {
 		t.Fatalf("json: %v %s", err, r.out)
 	}
 	if err := r.run("node", "revoke", "web-1"); err != nil || revoked.Load() != "node_a" {

@@ -897,7 +897,8 @@ func (c *cmds) revoke(ctx cli.CommandContext) error {
 			match = []client.Node{n}
 			break
 		}
-		if n.Name == want {
+		// A revoked node gave its name up, so a name means a live node.
+		if n.Name == want && n.Status != "revoked" {
 			match = append(match, n)
 		}
 	}
