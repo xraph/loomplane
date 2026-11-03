@@ -84,7 +84,7 @@ func NativeCredentialsGroup() *migrate.Group {
 // needs the vector extension, so it runs on demand once a workspace turns
 // knowledge on. OptionalVersions names its migrations for the schema guard.
 func All() []*migrate.Group {
-	return []*migrate.Group{
+	groups := []*migrate.Group{
 		Group(),
 		authpg.Migrations,
 		waitlist.PostgresMigrations,
@@ -105,6 +105,8 @@ func All() []*migrate.Group {
 		shieldpg.Migrations,
 		weavepg.Migrations,
 	}
+	// Groups only this edition runs come last.
+	return append(groups, editionGroups()...)
 }
 
 // optionalDimensions is any size pgvector accepts. A migration's version
