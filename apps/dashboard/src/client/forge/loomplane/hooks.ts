@@ -357,6 +357,7 @@ export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);
 export const useSessionGet = query<IdentitySession>(ops['session.get']);
 export const useSetupStatus = query<SetupStatus>(ops['setup.status']);
 export const useSetupComplete = mutation(ops['setup.complete']);
+export const useSetupEndCloudSignInOffer = mutation(ops['setup.endCloudSignInOffer']);
 export const useTeamsList = query<TeamList>(ops['teams.list']);
 export const useTeamsCreate = mutation<Team, Team>(ops['teams.create']);
 export const useTeamsGet = query<Team>(ops['teams.get']);

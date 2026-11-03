@@ -49,7 +49,7 @@ func definition(spec KindSpec, tools []string) string {
 		MaxSteps  int            `json:"max_steps"`
 		MaxTokens int            `json:"max_tokens"`
 		Guard     map[string]any `json:"guardrails"`
-	}{spec.Prompt, tools, spec.MaxSteps, spec.MaxTokens, agentsafety.Guardrails()})
+	}{spec.Prompt, tools, spec.MaxSteps, spec.outputTokens(), agentsafety.Guardrails()})
 	if err != nil {
 		// Every field marshals; a failure would make each run update the
 		// config, which is harmless.

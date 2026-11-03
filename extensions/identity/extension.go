@@ -222,6 +222,7 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, e.engine),
 		forge.ProvideValue(c, e.keys),
 		forge.ProvideValue(c, Guard{e.guard()}),
+		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)

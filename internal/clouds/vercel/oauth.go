@@ -122,6 +122,9 @@ func (c *Client) Refresh(_ context.Context, _ oauth.App, g oauth.Grant) (oauth.G
 	return g, nil
 }
 
+// GrantOutlivesApp says a Vercel token keeps working whatever app is set.
+func (c *Client) GrantOutlivesApp() bool { return true }
+
 // Probe asks Vercel whose token this is, for the grant's team. A token
 // Vercel no longer honors, including one for an integration that has been
 // uninstalled or disabled, is oauth.ErrRefused.

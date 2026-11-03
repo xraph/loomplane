@@ -41,8 +41,26 @@ type KindSpec struct {
 	DefaultMaxTokens int
 	// MaxTokens is the most a StartInput may ask for.
 	MaxTokens int
+	// MaxOutputTokens is the most one model call may write, sent as the
+	// call's max_tokens. It is not the task's budget, which is far larger
+	// than any provider lets one call write. 0 means
+	// defaultMaxOutputTokens.
+	MaxOutputTokens int
 	// UseSummaryModel runs the kind on the workspace's summary model.
 	UseSummaryModel bool
+}
+
+// defaultMaxOutputTokens is a kind's per-call output cap when it sets
+// none: room for a long reply or a large tool call, and under every
+// supported provider's limit.
+const defaultMaxOutputTokens = 16_000
+
+// outputTokens is spec's per-call output cap.
+func (spec KindSpec) outputTokens() int {
+	if spec.MaxOutputTokens > 0 {
+		return spec.MaxOutputTokens
+	}
+	return defaultMaxOutputTokens
 }
 
 // A task's statuses.

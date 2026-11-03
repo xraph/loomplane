@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -33,5 +34,18 @@ func TestPublicConfigReportsTheAIFlag(t *testing.T) {
 		if body.ConsolePath != nil {
 			t.Fatalf("the static config carries a console path: %s", raw)
 		}
+	}
+}
+
+// An API key's request never runs the session middleware, so its context
+// has no user. That must read as "not a platform user" before any role is
+// looked up (the extension here has no role reader to look in).
+func TestPlatformUserSaysNoWithoutASessionUser(t *testing.T) {
+	e := New(config.Defaults())
+	if id, ok := e.platformUser(context.Background()); ok || id != "" {
+		t.Fatalf("platformUser without a session user = %q, %v; want no", id, ok)
+	}
+	if e.holdsPlatformRole(context.Background()) {
+		t.Fatal("holdsPlatformRole without a session user")
 	}
 }

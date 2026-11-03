@@ -380,6 +380,10 @@ func goReachEntrypoint(main *goPackage, mods []*goModule, pkgs map[string]*goPac
 			}
 		}
 	}
+	for dir := range reach.packages {
+		ep.Packages = append(ep.Packages, dir)
+	}
+	sort.Strings(ep.Packages)
 	sortFrameworks(ep.Frameworks)
 	sortResources(ep.Resources)
 	// Stable ordering also keeps registration-driven configuration deterministic.

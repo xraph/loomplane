@@ -124,6 +124,19 @@ func (s *PgStore) LeftSignIns(ctx context.Context, clouds []string) ([]*Connecti
 		ORDER BY c.org_id, c.id`, MethodOAuth, clouds, StatusSignInNeeded)
 }
 
+// SignedInWith counts the working sign-ins made with the app whose client
+// ID is clientID, and the organizations they belong to. Those already
+// waiting for someone to sign in again aren't counted.
+func (s *PgStore) SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error) {
+	err = s.db.QueryRow(ctx, `SELECT count(*), count(DISTINCT org_id) FROM loomplane_cloud_connections
+		WHERE cloud = $1 AND method = $2 AND oauth_client_id = $3 AND status <> $4`,
+		cloud, MethodOAuth, clientID, StatusSignInNeeded).Scan(&connections, &orgs)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count sign-ins: %w", err)
+	}
+	return connections, orgs, nil
+}
+
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Connection, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {

@@ -31,6 +31,13 @@ type Handout interface {
 	Handout(app oauth.App, g oauth.Grant, settings map[string]string) ([]byte, error)
 }
 
+// AppIndependent is a Provider whose grants keep working whatever app is
+// configured, such as Vercel's, which never expire and carry no refresh
+// token. Its connections stay usable when the app changes or goes.
+type AppIndependent interface {
+	GrantOutlivesApp() bool
+}
+
 // Where a sign-in app came from.
 const (
 	AppFromConfig   = "config"
@@ -49,6 +56,11 @@ type SignInApp struct {
 	// Problem is why the cloud last refused the app, until it's saved
 	// again or a sign-in with it works.
 	Problem string `json:"problem,omitempty"`
+	// Connections and Organizations count the sign-ins made with this app
+	// that still work, and the organizations they belong to. They are 0
+	// for a cloud whose grants outlive its app.
+	Connections   int `json:"connections"`
+	Organizations int `json:"organizations"`
 }
 
 // AppInput is the platform's app for a cloud. Slug is the app's
@@ -157,9 +169,27 @@ func (s *Service) SignInApps(ctx context.Context) ([]SignInApp, error) {
 			t := a.UpdatedAt.UTC()
 			entry.Source, entry.ClientID, entry.Slug, entry.UpdatedBy, entry.UpdatedAt = AppFromPlatform, a.ClientID, a.Slug, a.UpdatedBy, &t
 		}
+		if entry.ClientID != "" && !outlivesApp(s.Providers[cloud]) {
+			if counter, ok := s.store.(signedInCounter); ok {
+				if entry.Connections, entry.Organizations, err = counter.SignedInWith(ctx, cloud, entry.ClientID); err != nil {
+					return nil, err
+				}
+			}
+		}
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// signedInCounter is a Store that can count the sign-ins made with an
+// app. *PgStore is one.
+type signedInCounter interface {
+	SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error)
+}
+
+func outlivesApp(p Provider) bool {
+	a, ok := p.(AppIndependent)
+	return ok && a.GrantOutlivesApp()
 }
 
 // SignInClouds says which clouds can be signed in to: those with an app,
@@ -273,14 +303,41 @@ func (s *Service) app(ctx context.Context, cloud string) (oauth.App, error) {
 	return oauth.App{ClientID: stored.ClientID, ClientSecret: string(secret), Slug: stored.Slug}, nil
 }
 
-// appRejected records that cloud refused the platform's sign-in app, for
-// the settings page to show, and returns the message saying so. The record
-// is kept even if the caller gives up.
-func (s *Service) appRejected(ctx context.Context, cloud string) string {
+// connectionApp is the app to renew or hand out c's sign-in with. A grant
+// only works with the client that issued it, so a connection signed in with
+// another app, or with none on record, is ErrAppChanged. A cloud whose
+// grants outlive its app gets the current app, or an empty one.
+func (s *Service) connectionApp(ctx context.Context, c *Connection) (oauth.App, error) {
+	app, err := s.app(ctx, c.Cloud)
+	if outlivesApp(s.Providers[c.Cloud]) {
+		if errors.Is(err, ErrNoApp) {
+			return oauth.App{}, nil
+		}
+		return app, err
+	}
+	if err != nil {
+		return oauth.App{}, err
+	}
+	if c.OAuthClientID != app.ClientID {
+		return oauth.App{}, ErrAppChanged
+	}
+	return app, nil
+}
+
+// appRejected records that cloud refused the sign-in app clientID, for the
+// settings page to show, and returns the message saying so. It records
+// only if clientID is the platform's current app, so a refusal for an app
+// since replaced blames nothing. The record is kept even if the caller
+// gives up.
+func (s *Service) appRejected(ctx context.Context, cloud, clientID string) string {
 	why := fmt.Sprintf("Loomplane's %s sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret.", cloudTitle(cloud))
 	// A config app has no row of its own, and a platform row under it is
 	// not the app being refused, so nothing is recorded.
 	if _, ok := s.ConfigApps[cloud]; ok {
+		return why
+	}
+	current, err := s.Apps.GetApp(ctx, cloud)
+	if err != nil || current.ClientID != clientID {
 		return why
 	}
 	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), cloud, why, s.now().UTC()); err != nil {

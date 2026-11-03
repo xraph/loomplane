@@ -2046,6 +2046,13 @@ export interface EnvLink {
   subject: string;
 }
 
+export interface EnvUse {
+  confidence: string;
+  evidence: Evidence[];
+  example?: string;
+  name: string;
+}
+
 export interface EnvVar {
   from?: Ref;
   name: string;
@@ -3919,8 +3926,10 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  cloudSignInOffer?: boolean;
   consolePath?: string;
   features: Features;
+  platformAdmin?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;
@@ -4939,6 +4948,7 @@ export interface Service {
   deployable: boolean;
   ecosystem: string;
   entrypoint: string;
+  env?: EnvUse[];
   evidence: Evidence[];
   framework?: string;
   id: string;
