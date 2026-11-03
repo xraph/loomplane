@@ -1,0 +1,121 @@
+//go:build integration
+
+package integration
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/xraph/weave/vectorstore/pgvector"
+
+	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/ops"
+)
+
+// knowledgeRestore is how loomplane restore runs on a server with
+// knowledge at dimensions: weave's pgvector group is on demand.
+func knowledgeRestore(t *testing.T, dimensions int) ops.RestoreOptions {
+	t.Helper()
+	k := config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: dimensions}
+	onDemand, err := migrations.OnDemand(k)
+	if err != nil || len(onDemand) != 1 {
+		t.Fatalf("on-demand groups %v, %v", onDemand, err)
+	}
+	return ops.RestoreOptions{OnDemand: onDemand, Optional: migrations.OptionalVersions()}
+}
+
+// A backup taken where knowledge was on restores with its vector table:
+// weave's pgvector group runs before the rows load, the vectors come back,
+// and the schema guard knows the restored database.
+func TestKnowledgeBackupRestoresItsVectors(t *testing.T) {
+	ctx := context.Background()
+	src := freshPgvectorDatabase(t)
+	vectors, err := pgvector.Migrations(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ops.Migrate(ctx, src, append(migrations.All(), vectors)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO weave_vectors (id, embedding, content) VALUES ('v1', '[1,2,3,4,5,6,7,8]', 'kept')`)
+	_ = conn.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backup bytes.Buffer
+	if _, err = ops.Backup(ctx, src, "test", &backup); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := freshPgvectorDatabase(t)
+	if _, err = ops.Restore(ctx, dst, migrations.All(), bytes.NewReader(backup.Bytes()), knowledgeRestore(t, 8)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := dbValue[string](t, dst, `SELECT content FROM weave_vectors WHERE id = 'v1'`); got != "kept" {
+		t.Fatalf("restored vector content %q", got)
+	}
+	if got := dbValue[string](t, dst, embeddingColumn); got != "vector(8)" {
+		t.Fatalf("restored weave_vectors.embedding is %q, want vector(8)", got)
+	}
+	if n := dbValue[int64](t, dst, pgvectorRows); n != 1 {
+		t.Fatalf("%d weave_pgvector rows after the restore, want 1", n)
+	}
+	if err = ops.CheckCompatibleWith(ctx, dst, migrations.All(), migrations.OptionalVersions()); err != nil {
+		t.Fatalf("the schema guard refuses the restored database: %v", err)
+	}
+}
+
+// Restoring a backup that has weave's pgvector group, on a server where
+// knowledge isn't configured, is refused with what to set, not as a
+// newer Loomplane's schema. A backup without it restores as before.
+func TestKnowledgeBackupNeedsKnowledgeToRestore(t *testing.T) {
+	ctx := context.Background()
+	src := freshDatabase(t)
+	if err := ops.Migrate(ctx, src, migrations.All()); err != nil {
+		t.Fatal(err)
+	}
+	var plain bytes.Buffer
+	if _, err := ops.Backup(ctx, src, "test", &plain); err != nil {
+		t.Fatal(err)
+	}
+	// The bookkeeping row is enough for the manifest; this Postgres may
+	// have no pgvector to make the table with.
+	vectors, err := pgvector.Migrations(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mg := vectors.Migrations()[0]
+	_, err = conn.Exec(ctx, `INSERT INTO grove_migrations (version, name, "group") VALUES ($1, $2, $3)`, mg.Version, mg.Name, vectors.Name())
+	_ = conn.Close(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withVectors bytes.Buffer
+	if _, err = ops.Backup(ctx, src, "test", &withVectors); err != nil {
+		t.Fatal(err)
+	}
+
+	off := ops.RestoreOptions{Optional: migrations.OptionalVersions()}
+	_, err = ops.Restore(ctx, freshDatabase(t), migrations.All(), bytes.NewReader(withVectors.Bytes()), off)
+	if err == nil || !strings.Contains(err.Error(), "ai.knowledge") || strings.Contains(err.Error(), "or later") {
+		t.Fatalf("restoring a knowledge backup without knowledge: %v", err)
+	}
+	if _, err = ops.Restore(ctx, freshDatabase(t), migrations.All(), bytes.NewReader(plain.Bytes()), off); err != nil {
+		t.Fatalf("restoring a backup without the pgvector group: %v", err)
+	}
+	if empty, _ := migrations.OnDemand(config.AIKnowledgeConfig{Dimensions: 8}); len(empty) != 0 {
+		t.Fatalf("knowledge not configured, and on-demand groups %v", empty)
+	}
+}

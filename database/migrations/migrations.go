@@ -10,6 +10,8 @@
 package migrations
 
 import (
+	"fmt"
+
 	"github.com/xraph/authsome/plugins/waitlist"
 	authpg "github.com/xraph/authsome/store/postgres"
 	chronpg "github.com/xraph/chronicle/store/postgres"
@@ -27,6 +29,8 @@ import (
 	wardenpg "github.com/xraph/warden/store/postgres"
 	weavepg "github.com/xraph/weave/store/postgres"
 	"github.com/xraph/weave/vectorstore/pgvector"
+
+	"github.com/xraph/loomplane/internal/config"
 )
 
 // GroupName is the migration group for Loomplane's own tables.
@@ -80,8 +84,10 @@ func NativeCredentialsGroup() *migrate.Group {
 // The agent libraries (cortex, nexus, shield and weave) come last. Their
 // tables are made whether or not AI is on, so turning it on later needs no
 // migration step. Weave's pgvector group (weave_pgvector) is never here: it
-// needs the vector extension, so it runs on demand once a workspace turns
-// knowledge on. OptionalVersions names its migrations for the schema guard.
+// needs the vector extension, so it runs on demand when the server boots
+// with knowledge configured and pgvector there (agentknowledge.Boot).
+// OptionalVersions names its migrations for the schema guard, and OnDemand
+// gives the group to a restore.
 func All() []*migrate.Group {
 	return []*migrate.Group{
 		Group(),
@@ -124,4 +130,19 @@ func OptionalVersions() []string {
 		out = append(out, g.Name()+":"+m.Version)
 	}
 	return out
+}
+
+// OnDemand are the on-demand groups a server with these knowledge settings
+// runs: weave's pgvector group at ai.knowledge.dimensions when knowledge is
+// configured, and none when it isn't. Restoring a backup that applied the
+// group runs it, so the vector table comes back with its rows.
+func OnDemand(k config.AIKnowledgeConfig) ([]*migrate.Group, error) {
+	if !k.Configured() {
+		return nil, nil
+	}
+	g, err := pgvector.Migrations(k.Dimensions)
+	if err != nil {
+		return nil, fmt.Errorf("ai.knowledge.dimensions: %w", err)
+	}
+	return []*migrate.Group{g}, nil
 }

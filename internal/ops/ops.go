@@ -214,6 +214,17 @@ type RestoreOptions struct {
 	// Force replaces whatever the database has. Without it, only a
 	// database no Loomplane has migrated is restored into.
 	Force bool
+	// OnDemand are groups this Loomplane runs only when a feature is on:
+	// weave's pgvector group, when knowledge is configured
+	// (migrations.OnDemand). A backup that applied one is restored with
+	// it, so the tables it made come back with their rows; one it didn't
+	// apply stays off, as it was.
+	OnDemand []*migrate.Group
+	// Optional are the on-demand migrations, as group:version, this
+	// Loomplane knows (migrations.OptionalVersions). A backup that applied
+	// one that no OnDemand group carries is refused with what to set,
+	// not as a newer Loomplane's.
+	Optional []string
 }
 
 // migrated reports whether any Loomplane has migrated the database.
@@ -233,23 +244,17 @@ func migrated(ctx context.Context, dsn string) (bool, error) {
 }
 
 // Restore loads a backup into the database: it migrates it to the
-// backup's schema with groups, which must be this Loomplane's, then
-// replaces every table's rows, in one transaction.
+// backup's schema with groups, which must be this Loomplane's, plus the
+// on-demand groups the backup applied, then replaces every table's rows,
+// in one transaction.
 func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Reader, opts RestoreOptions) (*Manifest, error) {
 	m, files, err := read(r)
 	if err != nil {
 		return nil, err
 	}
-	known := map[string]bool{}
-	for _, g := range groups {
-		for _, mg := range g.Migrations() {
-			known[mg.Group+":"+mg.Version] = true
-		}
-	}
-	for _, mg := range m.Migrations {
-		if !known[mg] {
-			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane doesn't; restore it with Loomplane %s or later", mg, m.Version)
-		}
+	groups, err = restoreGroups(m, groups, opts)
+	if err != nil {
+		return nil, err
 	}
 	if !opts.Force {
 		used, uerr := migrated(ctx, dsn)
@@ -325,6 +330,43 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 		return nil, fmt.Errorf("the backup is loaded, but bringing it up to this Loomplane's schema failed: %w", err)
 	}
 	return m, nil
+}
+
+// restoreGroups are the groups a restore of m runs: groups, and each of
+// opts.OnDemand the backup applied any of. Every migration the backup
+// applied must be in one of them.
+func restoreGroups(m *Manifest, groups []*migrate.Group, opts RestoreOptions) ([]*migrate.Group, error) {
+	applied := make(map[string]bool, len(m.Migrations))
+	for _, mg := range m.Migrations {
+		applied[mg] = true
+	}
+	known := map[string]bool{}
+	add := func(g *migrate.Group) (used bool) {
+		for _, mg := range g.Migrations() {
+			known[g.Name()+":"+mg.Version] = true
+			used = used || applied[g.Name()+":"+mg.Version]
+		}
+		return used
+	}
+	for _, g := range groups {
+		add(g)
+	}
+	run := slices.Clip(groups)
+	for _, g := range opts.OnDemand {
+		if add(g) {
+			run = append(run, g)
+		}
+	}
+	for _, mg := range m.Migrations {
+		switch {
+		case known[mg]:
+		case slices.Contains(opts.Optional, mg):
+			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane runs only when the agent's knowledge is configured; set ai.knowledge in config.yaml, with the ai.knowledge.dimensions the backed-up server ran with, and restore again", mg)
+		default:
+			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane doesn't; restore it with Loomplane %s or later", mg, m.Version)
+		}
+	}
+	return run, nil
 }
 
 type restoreTrigger struct{ table, name, mode string }
