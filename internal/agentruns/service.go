@@ -613,7 +613,16 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	s.stopLocal(t.ID)
 	if eng := s.engine(); eng != nil {
 		if runID, perr := id.ParseAgentRunID(t.RunID); perr == nil {
-			cerr := eng.CancelRun(s.runContext(ctx, t), runID)
+			rctx := s.runContext(ctx, t)
+			cerr := eng.CancelRun(rctx, runID)
+			// The run stopLocal just stopped writes its own end, and when
+			// that lands between CancelRun's read and its write, the write
+			// conflicts. Read it again: by then the run has ended, which
+			// is ErrInvalidState, or it's still running and this write
+			// goes in.
+			for try := 1; try < cancelTries && errors.Is(cerr, cortex.ErrRunConflict); try++ {
+				cerr = eng.CancelRun(rctx, runID)
+			}
 			if cerr != nil && !errors.Is(cerr, cortex.ErrRunNotFound) && !errors.Is(cerr, cortex.ErrInvalidState) && !errors.Is(cerr, cortex.ErrNotSuspended) {
 				return moved, cerr
 			}
@@ -621,6 +630,10 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	}
 	return moved, nil
 }
+
+// cancelTries is how many times cancel asks cortex to end a run whose
+// record another writer keeps changing.
+const cancelTries = 3
 
 // runContext is ctx bound to the task when it can be, and otherwise ctx
 // with the task's cortex scope alone, which is all cancelling a run needs:
