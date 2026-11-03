@@ -1,0 +1,85 @@
+---
+title: What needs a person
+description: What the agent does alone, what it always asks for, who it asks, and how a secret reaches Loomplane without reaching the model.
+---
+
+The agent can read anything its role lets it read and change things within its permissions. A short list of changes always goes to a person, and Loomplane enforces it in code, not in the agent's instructions. A model that has been talked into something can at worst make a bad suggestion or a request you see. It can't push through an unapproved production change.
+
+## The risk table
+
+Every operation the agent has belongs to one of six classes. The class decides what the call needs.
+
+| Class | Examples | What happens |
+|---|---|---|
+| `read` | list projects, read a plan, logs, metrics, status | Allowed |
+| `change` | create a project or environment, save a manifest, add a source, set a variable that isn't secret, plan staging | Allowed within the permissions of the person it acts for |
+| `deploy_nonproduction` | approve a staging, preview or development plan | Allowed within those permissions |
+| `promote_production` | approve a production plan that deletes nothing | Passes the autonomy gate, otherwise asks |
+| `destroy_production` | a production plan with a delete, a delete or replace of anything that holds data, deleting a production environment, connection or project, removing a production variable | Always a person |
+| `secret_or_external` | set a secret, connect GitHub, create a cloud connection | Always a person, through a request |
+
+Anything that isn't a staging, preview or development environment counts as production, an unknown kind included.
+
+### What counts as destroying production
+
+Replacing a stateless service isn't destruction. Every routed blue/green release plans as a replace, and so does moving a service to another provider, region or connection, and in each case the old instance is kept and drained. Without that rule a routed service could never be promoted without a person.
+
+Replacing anything that holds data is destruction: a database, a volume, a bucket, a cache. The data doesn't move with the replacement. The same rule binds Loomplane's own automation, automatic rollback included.
+
+A plan that sets a default backup schedule also goes to a person, one who can manage backups, because the agent's role doesn't hold that permission.
+
+## The agent's identity
+
+The agent acts as `agent:<org>`, shown as "Loomplane agent" in plans, deployments, approvals and the audit log. It's not a member of the workspace and has no password or key. Its role is narrower than an admin's.
+
+Who it acts for depends on how the work started.
+
+When a person talks to the agent, it acts on that person's behalf, and a call is allowed only if both the agent's role and that person's role allow it. If the person is a developer, the agent can't do what an admin could. If the person leaves the workspace or loses their key while the agent waits, the next step fails and the run's pending requests are cancelled. Nothing runs as them afterwards.
+
+Background work, such as an investigation the agent starts because something broke, runs as the agent alone, with no person behind it. It can read and report. It can't approve a production change on anyone's authority, because nobody gave it any.
+
+A team's role counts for the person it's given to, so an agent acting for someone who has `deployment:approve` through a team on project P can approve there, and is refused on project Q.
+
+## Audit
+
+Every tool call the agent makes is recorded with `actor` set to `agent` and `actor_name` "Loomplane agent". The entry also carries `on_behalf_of` (the person, when there is one), `task_id`, `run_id` and `tool`. An approval records the person who decided it. The audit log never holds a secret value, a request's text or an answer to a question.
+
+## Requests
+
+When the agent needs a person it creates a request instead of guessing. There are five kinds.
+
+| Kind | What you do |
+|---|---|
+| Approve a plan | Approve or reject it, with the usual approval card, or decline |
+| Provide a secret | Type the value into Loomplane |
+| Answer a question | Choose one of its options or write an answer |
+| Connect GitHub | Install the GitHub app, then say you did |
+| Connect a cloud | Add the account under Clouds, then say you did |
+
+Every kind can be declined, with a reason the agent sees. A request that nobody answers expires: plan approvals follow `planning.approval_window` and questions last 24 hours. Loomplane checks that a connection exists before it believes you said so.
+
+### Who is asked
+
+A request goes to the project's [responsible team](/docs/concepts/teams) by default. If the project has none, or its team is empty, it goes to the workspace admins, and the request says why it fell through. The agent can name a different team for a question, a secret or a connection, but only with a reason, and the request shows both: "Sent to Payments", then why. A team that doesn't exist or has no members is passed over with a note. A request to approve a plan always goes to the project's team, never to one the agent picked.
+
+Every member of the team gets the notice under their own notification preferences, and any one of them can answer. The first answer settles it. A question you asked in a conversation goes to you alone.
+
+### Who can see and answer
+
+On the **Agent** page, **For you** shows what was asked of you, what went to a team you're in and, if you're an admin, what went to the admins. **Everyone** shows the rest you're allowed to see. The same filter on the command line is `loomctl agent requests --mine`.
+
+- A request about a project needs `agent:use` and `project:read` on that project.
+- A request with no project (a question in a workspace-wide chat, say) is seen by the person who asked, the team it was routed to, and anyone with `ai:manage`. A viewer who isn't any of those doesn't see it.
+- Answering is for the asker, a current member of the routed team, or an `ai:manage` holder, and the action needs its own permission: `deployment:approve` to approve a plan, `variable:manage` to provide a secret, `repository:connect` to connect GitHub, `cloud_account:manage` to connect a cloud.
+
+### Secrets
+
+The agent never sees a secret's value, and you never type one into a chat. When it needs one it asks with a request that names the key and the environment. You type the value into the field on the request, or pipe it to `loomctl agent requests provide <id>`. The value is sent once, stored as a secret variable by you, and cleared from the page. No response, audit entry, notice or model prompt carries it. If saving fails the request stays open, and your next try replaces the value.
+
+The command line refuses a value given as an argument, so it stays out of your shell history. It reads standard input, and hides what you type when that's a terminal.
+
+## Prompt injection
+
+Anything from outside Loomplane's own state is untrusted: logs, commit messages, README files, issue bodies, error output, and what people wrote elsewhere. Shield scans it before the model sees it, and what survives is wrapped as quoted data with its source. The agent is told never to follow instructions inside it.
+
+A scan can miss something, which is why the table above doesn't rest on the model behaving. The risk class, the permission check and the autonomy gate run in Loomplane's code on every call, and shield's checks on a tool call can only add restrictions. A hostile commit message can make the agent ask you a strange question. It can't make the agent delete a production database.
