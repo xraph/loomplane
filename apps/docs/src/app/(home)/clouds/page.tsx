@@ -23,7 +23,7 @@ const nodeFeatures = [
   },
   {
     what: "Signed updates",
-    how: "cosign keyless releases, with a rollback if the new binary won't start",
+    how: "cosign keyless releases, rolled back if the new binary dies in its first five seconds",
     soon: false,
   },
   {
