@@ -510,8 +510,18 @@ func TestRevokedKeyCannotConnect(t *testing.T) {
 	if err := r.svc.Revoke(context.Background(), admin, "node_1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.refused(r.signed("node_1", priv)); !errors.Is(err, ErrUnauthorized) {
+	a := r.signed("node_1", priv)
+	if err := r.refused(a); !errors.Is(err, ErrUnauthorized) || !errors.Is(err, ErrNodeRevoked) {
 		t.Fatalf("err %v", err)
+	}
+	// The nonce is spent all the same, so the answer can't be replayed.
+	if err := r.refused(a); errors.Is(err, ErrNodeRevoked) || !errors.Is(err, ErrNonceUsed) {
+		t.Fatalf("replayed: %v", err)
+	}
+	// Someone without the key learns nothing about the revoke.
+	_, other, _ := ed25519.GenerateKey(nil)
+	if err := r.refused(r.signed("node_1", other)); !errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNodeRevoked) {
+		t.Fatalf("another key: %v", err)
 	}
 	if r.hub.Online("node_1") {
 		t.Fatal("revoked node is online")

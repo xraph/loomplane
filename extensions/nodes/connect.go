@@ -69,7 +69,8 @@ func (e *Extension) challenge(w http.ResponseWriter, r *http.Request) {
 // session. A request that is not a WebSocket upgrade, or carries a browser
 // Origin, is answered before anything is checked, so it cannot spend a
 // challenge. A missing, malformed or refused assertion is an HTTP 401 and no
-// upgrade happens.
+// upgrade happens. A revoked node that signed correctly gets a 403 with
+// {"error":"revoked"}.
 func (e *Extension) connect(w http.ResponseWriter, r *http.Request) {
 	if !websocket.IsWebSocketUpgrade(r) {
 		http.Error(w, "this endpoint is a WebSocket", http.StatusBadRequest)
@@ -86,6 +87,12 @@ func (e *Extension) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := e.hub.Authenticate(r.Context(), a)
 	switch {
+	case errors.Is(err, nodes.ErrNodeRevoked):
+		// The signature checked out, so this is the node itself: tell it,
+		// and it stops for good instead of retrying.
+		e.Logger().Info("a revoked node tried to connect", forge.F("remote", r.RemoteAddr), forge.F("node", a.Challenge.NodeID))
+		writeJSONError(w, http.StatusForbidden, nodeproto.RevokedError)
+		return
 	case errors.Is(err, nodes.ErrUnauthorized):
 		// Why is for the log; the node learns only that it was refused.
 		e.Logger().Info("a node was refused", forge.F("remote", r.RemoteAddr), forge.F("reason", err.Error()))

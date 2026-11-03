@@ -47,6 +47,10 @@ var (
 	// ErrUnauthorized is returned by Accept for a connection it does not
 	// trust. The wrapped error says why, for logs; don't show it to the node.
 	ErrUnauthorized = errors.New("nodes: the node could not be authenticated")
+	// ErrNodeRevoked is returned by Authenticate, wrapped in ErrUnauthorized,
+	// for a revoked node whose signature checked out. Only the key holder can
+	// get it, so the node may be told it was revoked.
+	ErrNodeRevoked = errors.New("nodes: the node was revoked")
 	// ErrHubConfig is returned when the hub is missing what it needs to run.
 	ErrHubConfig = errors.New("nodes: hub configuration")
 	// ErrHopInsecure is returned when a hop would cross plain http and
@@ -241,9 +245,12 @@ func (h *Hub) checkNonce(nodeID, nonce string, now time.Time) (time.Time, error)
 }
 
 // Authenticate checks the assertion: a nonce issued for this node and not
-// expired, a node that exists and is not revoked, a signature by its key over
-// this instance's audience, and a nonce not used before. The key is looked up
-// by the challenge's node id, so a key can only answer for its own node.
+// expired, a node that exists, a signature by its key over this instance's
+// audience, a nonce not used before, and a node that is not revoked. The key
+// is looked up by the challenge's node id, so a key can only answer for its
+// own node. The revoke is checked last, once the signature has proved the
+// caller holds the key, so only the node itself learns that it was revoked
+// (ErrNodeRevoked); anyone else gets a plain ErrUnauthorized.
 func (h *Hub) Authenticate(ctx context.Context, a nodeproto.Assertion) (*Node, error) {
 	if h.store == nil {
 		return nil, fmt.Errorf("%w: Authenticate before Bind", ErrHubConfig)
@@ -264,9 +271,6 @@ func (h *Hub) Authenticate(ctx context.Context, a nodeproto.Assertion) (*Node, e
 	if n.ID != c.NodeID {
 		return nil, fmt.Errorf("%w: node id mismatch", ErrUnauthorized)
 	}
-	if n.RevokedAt != nil || n.Status == StatusRevoked {
-		return nil, fmt.Errorf("%w: node revoked", ErrUnauthorized)
-	}
 	if err := nodeproto.Verify(n.PublicKey, a, h.audience, now); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnauthorized, err)
 	}
@@ -275,6 +279,9 @@ func (h *Hub) Authenticate(ctx context.Context, a nodeproto.Assertion) (*Node, e
 			return nil, fmt.Errorf("%w: %w", ErrUnauthorized, err)
 		}
 		return nil, err
+	}
+	if n.RevokedAt != nil || n.Status == StatusRevoked {
+		return nil, fmt.Errorf("%w: %w", ErrUnauthorized, ErrNodeRevoked)
 	}
 	return n, nil
 }

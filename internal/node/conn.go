@@ -43,7 +43,7 @@ const (
 	maxControlLine     = 1 << 20
 	servingGrace       = 10 * time.Second
 
-	refusedKeyMessage = "Loomplane refused this node's key; if it was revoked, run loomctl node leave"
+	refusedKeyMessage = "Loomplane refused this node's key; to take this machine out, run loomctl node leave"
 )
 
 // errKeyRefused is a 401 on connect. It is logged where it happens.
@@ -95,6 +95,12 @@ type Runtime struct {
 	// revoked is closed when Run decides this node was revoked.
 	revoked     chan struct{}
 	revokedOnce sync.Once
+	// refused is set while Loomplane refuses this node's key (a 401 on
+	// connect), and cleared by the next connection it accepts.
+	refused atomic.Bool
+	// leaveNow asks Run to stop as revoked. Leave sends on it when the key
+	// was refused, so there is no session to ask Loomplane through.
+	leaveNow chan struct{}
 
 	// Tunables, set by tests.
 	minDelay, maxDelay, stableAfter time.Duration
@@ -118,7 +124,7 @@ func NewRuntime(st State, reg *Registry) (*Runtime, error) {
 		}
 		return nil, fmt.Errorf("reading this node's config (run loomctl node join if this machine has not joined): %w", err)
 	}
-	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{})}
+	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{}), leaveNow: make(chan struct{}, 1)}
 	r.live = NewLive(r.sanitized(cfg))
 	reg.Register(nodeproto.EndpointProbe, ProbeHandler(r.detectOptions))
 	return r, nil
@@ -214,16 +220,15 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return nil
 		}
 		var up *UpgradeError
+		if errors.Is(err, errKeyRefused) {
+			r.refused.Store(true)
+		}
 		// A node that asked to leave and is now refused was revoked by that
 		// request, even if the Revoked notice was lost with the connection.
 		revoked := errors.Is(err, ErrRevoked) || (r.leaving.Load() && errors.Is(err, errKeyRefused))
 		switch {
 		case revoked:
-			r.revokedOnce.Do(func() { close(r.revoked) })
-			if derr := r.st.DeleteConfig(); derr != nil {
-				r.log().Error("loomplane-node: removing node.json after a revoke", "error", derr)
-			}
-			return ErrRevoked
+			return r.stopRevoked()
 		case errors.As(err, &up):
 			return up
 		}
@@ -239,10 +244,25 @@ func (r *Runtime) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			t.Stop()
 			return nil
+		case <-r.leaveNow:
+			t.Stop()
+			if r.refused.Load() {
+				return r.stopRevoked()
+			}
 		case <-t.C:
 		}
 		delay = min(delay*2, maxDelay)
 	}
+}
+
+// stopRevoked ends Run for a node Loomplane no longer trusts: it tells a
+// waiting Leave, removes node.json and keeps the key.
+func (r *Runtime) stopRevoked() error {
+	r.revokedOnce.Do(func() { close(r.revoked) })
+	if derr := r.st.DeleteConfig(); derr != nil {
+		r.log().Error("loomplane-node: removing node.json after a revoke", "error", derr)
+	}
+	return ErrRevoked
 }
 
 // jitter spreads d by plus or minus 20%, so a fleet that lost its control
@@ -383,6 +403,12 @@ func (r *Runtime) dialError(err error, resp *http.Response) error {
 	case http.StatusUnauthorized:
 		r.log().Warn(refusedKeyMessage)
 		return errKeyRefused
+	case http.StatusForbidden:
+		// Only this node's own signature gets a 403 revoked back.
+		if serverMessage(body) == nodeproto.RevokedError {
+			r.log().Warn("loomplane-node: Loomplane revoked this node; stopping")
+			return ErrRevoked
+		}
 	case http.StatusUpgradeRequired:
 		return &UpgradeError{Message: serverMessage(body)}
 	}
@@ -517,6 +543,7 @@ func (s *session) greet(ctx context.Context, hello nodeproto.Hello) error {
 	// what is pending: nothing falls between the two. What the owner allowed
 	// goes before the first inventory, which the hub answers with a Narrow.
 	r.leaving.Store(false)
+	r.refused.Store(false)
 	r.attach(s)
 	if pending := r.live.Load().PendingAllowed; len(pending) > 0 {
 		if err := s.send(nodeproto.Allowed{Endpoints: pending}); err != nil {

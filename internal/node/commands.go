@@ -711,8 +711,10 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 		c.printf("This machine has not joined a Loomplane.\n")
 	}
 	if joined {
-		err := controlCall(ctx.Context(), filepath.Join(dir, controlSocket), controlRequest{Op: "leave"})
+		note, err := controlCallNote(ctx.Context(), filepath.Join(dir, controlSocket), controlRequest{Op: "leave"})
 		switch {
+		case err == nil && note != "":
+			c.printf("%s.\n", note)
 		case err == nil:
 			c.printf("Loomplane revoked this node.\n")
 		case errors.Is(err, errNoService):

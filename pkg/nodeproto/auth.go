@@ -93,6 +93,10 @@ func Fingerprint(pub ed25519.PublicKey) string {
 // "LoomplaneNode <base64url(JSON Assertion)>" on GET /node/v1/connect.
 const AuthScheme = "LoomplaneNode"
 
+// RevokedError is the "error" of the 403 a revoked node gets on connect, once
+// its signature has checked out. The node stops for good when it reads it.
+const RevokedError = "revoked"
+
 // MaxAuthorizationSize bounds the whole header value.
 const MaxAuthorizationSize = 8 << 10
 

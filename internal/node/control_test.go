@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"io"
 	"io/fs"
@@ -122,6 +123,36 @@ func TestLeaveWhileOfflineSaysSo(t *testing.T) {
 	r.join(t, nodeproto.EndpointProbe)
 	if err := r.runtime(t).Leave(t.Context()); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("Leave while offline: %v", err)
+	}
+}
+
+// A node whose key Loomplane refuses can't be asked to revoke itself, and it
+// can't connect again either, so leave lets it go: Run ends as revoked and
+// the answer says Loomplane was not told.
+func TestLeaveAfterTheKeyWasRefusedLetsTheNodeGo(t *testing.T) {
+	r := newRig(t)
+	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	other, _, _ := ed25519.GenerateKey(nil)
+	n := r.env.Store.Node(cfg.NodeID)
+	n.PublicKey = other
+	if err := r.env.Store.Update(t.Context(), n); err != nil {
+		t.Fatal(err)
+	}
+	rt := r.runtime(t)
+	done := start(t, rt)
+	eventually(t, "the key to be refused", func() bool { return rt.refused.Load() })
+	note, err := rt.leave(t.Context())
+	if err != nil || !strings.Contains(note, "refused") {
+		t.Fatalf("leave: %q %v", note, err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRevoked) {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run kept going after leave")
 	}
 }
 

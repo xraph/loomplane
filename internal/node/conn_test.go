@@ -277,6 +277,17 @@ func TestRunRevokedAtConnectExits77(t *testing.T) {
 	assertRevoked(t, r, done)
 }
 
+// A node revoked while it was off learns it at its next connect: the hub
+// answers its signed assertion with 403 revoked, and it exits 77.
+func TestRunRevokedWhileOfflineExits77(t *testing.T) {
+	r := newRig(t)
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	if err := r.env.Svc.Revoke(t.Context(), nodestest.Principal, cfg.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	assertRevoked(t, r, start(t, r.runtime(t)))
+}
+
 func assertRevoked(t *testing.T, r *rig, done chan error) {
 	t.Helper()
 	select {
@@ -324,7 +335,7 @@ func TestRunRetriesWhenKeyRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	start(t, r.runtime(t))
-	want := "Loomplane refused this node's key; if it was revoked, run loomctl node leave"
+	want := refusedKeyMessage
 	eventually(t, "the refusal to be logged twice", func() bool { return strings.Count(r.logs.String(), want) >= 2 })
 }
 

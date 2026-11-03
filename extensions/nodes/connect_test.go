@@ -292,3 +292,39 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A revoked node that signs with its own key is told so with a 403, and
+// anyone else still gets a plain 401.
+func TestConnectRevokedNodeIs403(t *testing.T) {
+	r := newRig(t)
+	priv := r.seed(t, nodeproto.EndpointProbe)
+	srv := serve(t, r)
+	if out := r.do(t, http.MethodPost, "/api/v1/nodes/node_1/revoke", "", &member); out.Code != http.StatusOK {
+		t.Fatalf("revoke: %d %s", out.Code, out.Body)
+	}
+	dial := func(key ed25519.PrivateKey) *http.Response {
+		a, err := nodeproto.Sign(key, challenge(t, srv.Client(), srv.URL, "node_1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := nodeproto.EncodeAuthorization(a)
+		ws, resp, err := dialWith(srv.URL, v)
+		if err == nil {
+			_ = ws.Close()
+			t.Fatal("a revoked node was upgraded")
+		}
+		return resp
+	}
+	resp := dial(priv)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), `"error":"revoked"`) {
+		t.Fatalf("revoked node: %d %s", resp.StatusCode, body)
+	}
+	_, other, _ := ed25519.GenerateKey(nil)
+	resp = dial(other)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("another key on a revoked node: %d", resp.StatusCode)
+	}
+}

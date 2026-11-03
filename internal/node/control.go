@@ -34,10 +34,12 @@ type controlRequest struct {
 	Endpoints []nodeproto.Endpoint `json:"endpoints,omitempty"`
 }
 
-// controlResponse answers a request with one JSON line.
+// controlResponse answers a request with one JSON line. Message, when set,
+// is something the caller should print.
 type controlResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // errNoService means nothing listens on the control socket: no node is running
@@ -102,14 +104,15 @@ func (r *Runtime) serveControl(ctx context.Context) (stop func(), err error) {
 func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(controlTimeout)) //nolint:errcheck // a failed deadline only loses the timeout
-	reply := func(err error) {
-		resp := controlResponse{OK: err == nil}
+	replyWith := func(note string, err error) {
+		resp := controlResponse{OK: err == nil, Message: sanitize(note)}
 		if err != nil {
 			resp.Error = sanitize(err.Error())
 		}
-		b, _ := json.Marshal(resp)      //nolint:errcheck // two plain fields
+		b, _ := json.Marshal(resp)      //nolint:errcheck // plain fields
 		_, _ = c.Write(append(b, '\n')) //nolint:errcheck // the client may be gone
 	}
+	reply := func(err error) { replyWith("", err) }
 	if ok, perr := peerAllowed(c); perr != nil || !ok {
 		reply(errors.New("this user may not use the node's control socket"))
 		return
@@ -132,7 +135,7 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 		}
 		reply(r.Allow(req.Endpoints))
 	case "leave":
-		reply(r.Leave(ctx))
+		replyWith(r.leave(ctx))
 	default:
 		reply(fmt.Errorf("unknown request %q", sanitize(req.Op)))
 	}
@@ -145,44 +148,78 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 // ended is not an answer, so Leave then returns an error and the node keeps
 // its config.
 func (r *Runtime) Leave(ctx context.Context) error {
+	_, err := r.leave(ctx)
+	return err
+}
+
+// leftUnannounced is what leave says when Loomplane refused this node's key,
+// so it could not be asked to revoke the node.
+const leftUnannounced = "Loomplane refused this node's key at its last connect, so it could not be told; if the node still shows in the dashboard, revoke it there"
+
+// leave is Leave, with a note for the person who asked. A node whose key
+// Loomplane refuses has no session to ask through, and can't connect again
+// either, so it stops as revoked, and the note says Loomplane was not told.
+func (r *Runtime) leave(ctx context.Context) (string, error) {
 	r.mu.Lock()
 	s := r.cur
 	r.mu.Unlock()
 	if s == nil {
-		return errors.New("this node is not connected to Loomplane right now")
+		if !r.refused.Load() {
+			return "", errors.New("this node is not connected to Loomplane right now")
+		}
+		select {
+		case r.leaveNow <- struct{}{}:
+		default:
+		}
+		t := time.NewTimer(leaveWait)
+		defer t.Stop()
+		select {
+		case <-r.revoked:
+			return leftUnannounced, nil
+		case <-t.C:
+			return "", errors.New("the node did not stop within " + leaveWait.String())
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	r.leaving.Store(true)
 	if err := s.send(nodeproto.Leave{}); err != nil {
 		r.leaving.Store(false)
-		return fmt.Errorf("asking Loomplane to revoke this node: %w", err)
+		return "", fmt.Errorf("asking Loomplane to revoke this node: %w", err)
 	}
 	t := time.NewTimer(leaveWait)
 	defer t.Stop()
 	select {
 	case <-r.revoked:
-		return nil
+		return "", nil
 	case <-t.C:
 		// Not revoked as far as this node knows: a later refusal is not ours.
 		r.leaving.Store(false)
-		return errors.New("Loomplane did not confirm that it revoked this node within " + leaveWait.String())
+		return "", errors.New("Loomplane did not confirm that it revoked this node within " + leaveWait.String())
 	case <-ctx.Done():
 		r.leaving.Store(false)
-		return ctx.Err()
+		return "", ctx.Err()
 	}
 }
 
 // controlCall sends one request to the node running on the socket at path.
 // It returns errNoService when nothing listens there.
 func controlCall(ctx context.Context, path string, req controlRequest) error {
+	_, err := controlCallNote(ctx, path, req)
+	return err
+}
+
+// controlCallNote is controlCall, and returns the note the node sent back.
+func controlCallNote(ctx context.Context, path string, req controlRequest) (string, error) {
 	var d net.Dialer
 	ctx, cancel := context.WithTimeout(ctx, controlTimeout)
 	defer cancel()
 	c, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
-			return errNoService
+			return "", errNoService
 		}
-		return fmt.Errorf("reaching the node's control socket %s: %w", path, err)
+		return "", fmt.Errorf("reaching the node's control socket %s: %w", path, err)
 	}
 	defer func() { _ = c.Close() }()
 	if dl, ok := ctx.Deadline(); ok {
@@ -190,17 +227,17 @@ func controlCall(ctx context.Context, path string, req controlRequest) error {
 	}
 	b, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := c.Write(append(b, '\n')); err != nil {
-		return err
+		return "", err
 	}
 	var resp controlResponse
 	if err := json.NewDecoder(io.LimitReader(c, 64<<10)).Decode(&resp); err != nil {
-		return fmt.Errorf("reading the node's answer: %w", err)
+		return "", fmt.Errorf("reading the node's answer: %w", err)
 	}
 	if !resp.OK {
-		return errors.New(resp.Error)
+		return "", errors.New(resp.Error)
 	}
-	return nil
+	return resp.Message, nil
 }
