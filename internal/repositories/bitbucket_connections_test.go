@@ -207,6 +207,9 @@ type fakeBBStore struct {
 	locks   map[string]*sync.Mutex
 	saves   int
 	nextID  int
+	// commit, when set, is what releasing a lock returns once its work
+	// succeeded, as the real store's commit may fail after the fact.
+	commit func(ctx context.Context) error
 }
 
 func newFakeBBStore() *fakeBBStore {
@@ -293,17 +296,24 @@ func (s *fakeBBStore) SetBitbucketWorkspaceStatus(_ context.Context, orgID, id, 
 	return nil
 }
 
-func (s *fakeBBStore) WithBitbucketLock(_ context.Context, orgID, id string, fn func() error) error {
+func (s *fakeBBStore) WithBitbucketLock(ctx context.Context, orgID, id string, fn func() error) error {
 	s.mu.Lock()
 	l := s.locks[orgID+"/"+id]
 	if l == nil {
 		l = &sync.Mutex{}
 		s.locks[orgID+"/"+id] = l
 	}
+	commit := s.commit
 	s.mu.Unlock()
 	l.Lock()
 	defer l.Unlock()
-	return fn()
+	if err := fn(); err != nil {
+		return err
+	}
+	if commit != nil {
+		return commit(ctx)
+	}
+	return nil
 }
 
 func (s *fakeBBStore) BitbucketConnectorIsMember(_ context.Context, orgID, userID string) (bool, error) {
@@ -1118,6 +1128,51 @@ func TestBitbucketDisconnect(t *testing.T) {
 		t.Fatalf("audit = %+v", last)
 	}
 	noTokens(t, "the audit records", fmt.Sprintf("%+v", f.audit.records))
+}
+
+// Once the row is deleted the workspace is disconnected, so the audit
+// records it even when releasing the lock then fails because the caller
+// gave up.
+func TestBitbucketDisconnect_auditsWhenTheLockReleaseFails(t *testing.T) {
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	var warned []string
+	f.conns.SetWarn(func(msg string, _ error) { warned = append(warned, msg) })
+
+	ctx, giveUp := context.WithCancel(context.Background())
+	f.store.commit = func(ctx context.Context) error {
+		giveUp()
+		return ctx.Err()
+	}
+	audited := len(f.audit.records)
+	if err := f.conns.Disconnect(ctx, admin, v.ID); err != nil {
+		t.Fatalf("Disconnect = %v; the workspace is gone, so it disconnected", err)
+	}
+	if f.store.row(v.ID) != nil {
+		t.Fatal("the row is still there")
+	}
+	if _, ok := f.secrets.get("aorg_a", v.ID); ok {
+		t.Fatal("the refresh token is still in Vault")
+	}
+	if len(f.audit.records) != audited+1 {
+		t.Fatalf("%d audit records for the disconnect, want 1", len(f.audit.records)-audited)
+	}
+	if last := f.audit.records[len(f.audit.records)-1]; last.action != "bitbucket.disconnect" || last.c.ID != v.ID {
+		t.Fatalf("audit = %+v", last)
+	}
+	if len(warned) != 1 {
+		t.Fatalf("warnings = %q, want the lock's", warned)
+	}
+
+	// Disconnecting it again finds nothing, and records nothing.
+	f.store.commit = nil
+	if err := f.conns.Disconnect(context.Background(), admin, v.ID); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("a second Disconnect = %v", err)
+	}
+	if len(f.audit.records) != audited+1 {
+		t.Fatal("a failed disconnect was recorded")
+	}
 }
 
 // A reconnect keeps the connection's ID, so a process that cached a token

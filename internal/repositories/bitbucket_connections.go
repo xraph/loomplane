@@ -400,10 +400,12 @@ func (c *BitbucketConnections) Disconnect(ctx context.Context, p security.Princi
 		c.onDisconnect(ctx, p.OrgID, id)
 	}
 	var vaultErr error
+	deleted := false
 	err = c.store.WithBitbucketLock(ctx, p.OrgID, id, func() error {
 		if delErr := c.store.DeleteBitbucketWorkspace(ctx, p.OrgID, id); delErr != nil {
 			return delErr
 		}
+		deleted = true
 		c.forget(p.OrgID, id)
 		// The row is gone, so a caller giving up now would leave the
 		// refresh token where nothing reaches it.
@@ -412,11 +414,16 @@ func (c *BitbucketConnections) Disconnect(ctx context.Context, p security.Princi
 		vaultErr = c.secrets.Delete(dctx, p.OrgID, id)
 		return nil
 	})
-	if err != nil {
+	if !deleted {
 		return err
 	}
+	// The row is gone whatever releasing the lock said, so the disconnect
+	// is recorded, even for a caller that has given up.
 	if c.audit != nil {
-		c.audit.RecordBitbucket(ctx, "bitbucket.disconnect", p, *row)
+		c.audit.RecordBitbucket(context.WithoutCancel(ctx), "bitbucket.disconnect", p, *row)
+	}
+	if err != nil {
+		c.warnf("release the Bitbucket lock after disconnecting "+id, err)
 	}
 	if vaultErr != nil {
 		return fmt.Errorf("the workspace is disconnected, but its sign-in couldn't be removed from Vault: %w", vaultErr)
