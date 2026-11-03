@@ -219,7 +219,10 @@ func (s *PgStore) GetHost(ctx context.Context, id string) (*Host, error) {
 }
 
 // LockHost reads a host and holds its row until tx ends, so placements on it
-// serialize.
+// serialize. Locks across the package are taken in one order: the
+// organization's advisory lock (cloudprofiles.LockOrganization), then the
+// tenant row (WithTenantLock), then host rows. Never lock a tenant while
+// holding a host.
 func (s *PgStore) LockHost(ctx context.Context, tx driverTx, hostID string) (*Host, error) {
 	return scanHost(tx.QueryRow(ctx, `SELECT `+hostColumns+` FROM loomplane_platform_hosts WHERE id=$1 FOR UPDATE`, hostID))
 }
@@ -440,16 +443,24 @@ func (s *PgStore) listPlacements(ctx context.Context, where string, arg string) 
 	defer rows.Close() //nolint:errcheck
 	out := []Placement{}
 	for rows.Next() {
-		var p Placement
-		var suspended *time.Time
-		if err = rows.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Resource, &p.Kind, &p.RegionID, &p.HostID, &p.VCPUs, &p.MemoryMiB, &p.DiskMiB,
-			&p.State, &p.RestoreRunning, &p.WaitingCapacity, &p.InstanceID, &p.Generation, &suspended); err != nil {
+		p, err := scanPlacement(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.SuspendedAt = suspended
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	return out, rows.Err()
+}
+
+func scanPlacement(row interface{ Scan(...any) error }) (*Placement, error) {
+	var p Placement
+	var suspended *time.Time
+	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Resource, &p.Kind, &p.RegionID, &p.HostID, &p.VCPUs, &p.MemoryMiB, &p.DiskMiB,
+		&p.State, &p.RestoreRunning, &p.WaitingCapacity, &p.InstanceID, &p.Generation, &suspended); err != nil {
+		return nil, storeError(err)
+	}
+	p.SuspendedAt = suspended
+	return &p, nil
 }
 
 // ListPlacements returns an organization's placements that are not released.

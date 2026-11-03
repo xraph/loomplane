@@ -13,6 +13,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/instance"
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 const (
@@ -47,7 +48,22 @@ type Service struct {
 	settings SettingsReader
 	orgs     OrgLister
 	secrets  Secrets
+	gate     metering.Gate
 	now      func() time.Time
+}
+
+// WithGate sets what decides whether an organization may start platform
+// work and returns the service. Nil lets everything run.
+func (s *Service) WithGate(g metering.Gate) *Service {
+	s.gate = g
+	return s
+}
+
+func (s *Service) canRun() metering.Gate {
+	if s.gate == nil {
+		return metering.AllowAll
+	}
+	return s.gate
 }
 
 // NewService returns the control plane over store. orgs lists every
