@@ -95,6 +95,30 @@ jobs:
       - run: go test -race -tags=integration -c -o /dev/null ./tests/integration/
       - run: python3 scripts/integration-cohorts.py --shard ${{ matrix.shard }} --shards 8
 
+  server-integration:
+    name: Server integration (${{ matrix.access }})
+    # Runs the internal/clouds/server ingress, TLS, DNS and volume suites
+    # against throwaway Docker-in-Docker hosts, once over SSH and once
+    # through a node joined to a hub in the test process. The tests and
+    # their assertions are the same in both.
+    strategy:
+      fail-fast: false
+      matrix:
+        access: [ssh, node]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LOOMPLANE_TEST_INGRESS: "1"
+      LOOMPLANE_TEST_ACCESS: ${{ matrix.access }}
+      LOOMPLANE_TEST_DOCKER_SOCKET: /var/run/docker.sock
+      LOOMPLANE_TEST_POSTGRES_IMAGE: postgres:17-alpine
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -tags integration -timeout 40m -v ./internal/clouds/server
+
   dashboard:
     name: Dashboard
     uses: xraph/workflows/.github/workflows/node-ci.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
