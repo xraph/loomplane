@@ -401,9 +401,11 @@ func TestSafeArguments(t *testing.T) {
 		`{"key":"PORT","value":"8080"}`:                                                             `{"key":"PORT","value":"8080"}`,
 		`{"items":[{"Token":"t","private_key":"pk","secret_value":"sv","n":12345678901234567890}]}`: `{"items":[{"Token":"[hidden]","n":12345678901234567890,"private_key":"[hidden]","secret_value":"[hidden]"}]}`,
 		`{"value":"v","secret":"true"}`:                                                             `{"secret":"true","value":"v"}`,
-		``:                                                                                          `{}`,
-		`not json`:                                                                                  `{}`,
-		`{"note":"` + strings.Repeat("x", 5<<10) + `"}`:                                             `{"truncated":true}`,
+		`{"value":"v","Secret":true}`:                                                               `{"Secret":true,"value":"[hidden]"}`,
+		`{"secret":false,"Secret":true,"Value":"v"}`:                                                `{"Secret":true,"Value":"[hidden]","secret":false}`,
+		``:         `{}`,
+		`not json`: `{}`,
+		`{"note":"` + strings.Repeat("x", 5<<10) + `"}`: `{"truncated":true}`,
 	} {
 		if got := string(SafeArguments(json.RawMessage(in))); got != want {
 			t.Errorf("SafeArguments(%.60s) = %.80s, want %s", in, got, want)
@@ -419,7 +421,7 @@ func toolCall(name, callID, args string) engine.StreamEvent {
 func TestToolCallEventCarriesSafeArguments(t *testing.T) {
 	w := newWorld(t)
 	task := w.adaChat(t)
-	events := make(chan engine.StreamEvent, 8)
+	events := make(chan engine.StreamEvent, 16)
 	events <- toolCall("set_variable", "call_1", `{"project":"mono","key":"DB_URL","value":"postgres://u:p@h/db"}`)
 	events <- toolCall("get_plan", "call_2", `{"plan_id":"plan_1","nested":{"api_key":"k","password":"p"}}`)
 	events <- toolCall("set_variable", "call_3", `{"project":"mono","key":"PORT","value":"8080"}`)
@@ -427,6 +429,9 @@ func TestToolCallEventCarriesSafeArguments(t *testing.T) {
 	// A secret_or_external call keeps no arguments, whatever they are.
 	events <- toolCall("request_secret", "call_5", `{"project":"mono","key":"API_TOKEN","reason":"hunter3"}`)
 	events <- toolCall("set_variable", "call_6", `{"project":"mono","key":"DB_PASSWORD","value":"hunter2","secret":true}`)
+	// set_variable reads "secret" in any case, the last of several.
+	events <- toolCall("set_variable", "call_7", `{"project":"mono","key":"DB_PASSWORD","value":"hunter4","Secret":true}`)
+	events <- toolCall("set_variable", "call_8", `{"project":"mono","key":"DB_PASSWORD","value":"hunter5","secret":false,"SECRET":true}`)
 	close(events)
 	w.svc.pump(context.Background(), task, events)
 	evs := w.store.eventsOf(task.ID)
@@ -437,6 +442,8 @@ func TestToolCallEventCarriesSafeArguments(t *testing.T) {
 		"call_4": `{"truncated":true}`,
 		"call_5": "",
 		"call_6": "",
+		"call_7": "",
+		"call_8": "",
 	}
 	seen := 0
 	for _, e := range evs {
@@ -462,7 +469,7 @@ func TestToolCallEventCarriesSafeArguments(t *testing.T) {
 		if want[data.CallID] == "" && strings.Contains(string(e.Data), "arguments") {
 			t.Errorf("%s keeps arguments: %s", data.CallID, e.Data)
 		}
-		for _, leak := range []string{"hunter2", "hunter3"} {
+		for _, leak := range []string{"hunter2", "hunter3", "hunter4", "hunter5"} {
 			if strings.Contains(string(e.Data), leak) {
 				t.Errorf("%s carries %q: %s", data.CallID, leak, e.Data)
 			}
@@ -505,6 +512,13 @@ func toolResults(t *testing.T, evs []Event) (results []toolResult, callSeq map[s
 		}
 	}
 	return results, callSeq
+}
+
+// logged reports whether the tool call callID is in evs.
+func logged(evs []Event, callID string) bool {
+	return slices.ContainsFunc(evs, func(e Event) bool {
+		return e.Kind == string(engine.EventToolCall) && strings.Contains(string(e.Data), `"call_id":"`+callID+`"`)
+	})
 }
 
 // Cortex fires a tool's hook on the run's goroutine while the pump may
@@ -562,11 +576,11 @@ func TestToolOutcomesFollowTheirCalls(t *testing.T) {
 		go func() {
 			defer close(events)
 			events <- toolCall("get_plan", "call_4", `{"plan_id":"plan_1"}`)
-			for {
-				if _, c := toolResults(t, w.store.eventsOf(task.ID)); c["call_4"] > 0 {
-					break
+			for deadline := time.Now().Add(5 * time.Second); !logged(w.store.eventsOf(task.ID), "call_4"); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Error("call_4 was never written")
+					return
 				}
-				time.Sleep(time.Millisecond)
 			}
 			if herr := h.OnToolFailed(ctx, runID, "get_plan", errors.New(strings.Repeat("é", 400))); herr != nil {
 				t.Error(herr)
@@ -618,6 +632,13 @@ func TestResumedOutcomesMatchThePausedCalls(t *testing.T) {
 
 func TestToolOutcomeWithoutAWriterIsDropped(t *testing.T) {
 	w := newWorld(t)
+	var mu sync.Mutex
+	dropped := 0
+	w.svc.debugFn = func(string, ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		dropped++
+	}
 	h := &Hooks{Service: w.svc}
 	task := w.adaChat(t)
 	before := len(w.store.eventsOf(task.ID))
@@ -634,6 +655,103 @@ func TestToolOutcomeWithoutAWriterIsDropped(t *testing.T) {
 	}
 	if after := len(w.store.eventsOf(task.ID)); after != before {
 		t.Fatalf("%d events written", after-before)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if dropped != 4 {
+		t.Fatalf("%d drops logged, want 4", dropped)
+	}
+}
+
+// A reclaimed run replays the calls its last worker had in flight and
+// fires their hooks without writing the calls again. Their outcomes land
+// on the logged calls, and the next call of the same tool gets its own.
+func TestReclaimedOutcomesKeepToTheirCalls(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	runID := mustRunID(t, task.RunID)
+	// The first worker wrote the calls and died before their outcomes.
+	first := make(chan engine.StreamEvent, 4)
+	first <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 1}}
+	first <- toolCall("get_plan", "call_1", `{"plan_id":"plan_1"}`)
+	first <- toolCall("get_plan", "call_2", `{"plan_id":"plan_2"}`)
+	close(first)
+	w.svc.pump(context.Background(), task, first)
+
+	err := w.svc.drive(context.Background(), task, func(_ context.Context, events chan<- engine.StreamEvent) error {
+		// Cortex replays both, then starts the next step, whose get_plan
+		// is refused.
+		for _, herr := range []error{
+			h.OnToolCompleted(runCtx(task), runID, "get_plan", "{}", time.Millisecond),
+			h.OnToolFailed(runCtx(task), runID, "get_plan", errors.New("cortex: the effect is uncertain")),
+		} {
+			if herr != nil {
+				t.Error(herr)
+			}
+		}
+		events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 2}}
+		events <- toolCall("get_plan", "call_3", `{"plan_id":"plan_3"}`)
+		if herr := h.OnToolDenied(runCtx(task), runID, "get_plan", "no"); herr != nil {
+			t.Error(herr)
+		}
+		close(events)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, calls := toolResults(t, w.store.eventsOf(task.ID))
+	want := []toolResult{
+		{Tool: "get_plan", CallID: "call_1", Outcome: OutcomeOK},
+		{Tool: "get_plan", CallID: "call_2", Outcome: OutcomeFailed, Message: "cortex: the effect is uncertain"},
+		{Tool: "get_plan", CallID: "call_3", Outcome: OutcomeDenied, Message: "no"},
+	}
+	if len(results) != len(want) {
+		t.Fatalf("results %+v", results)
+	}
+	for i, r := range results {
+		seq := r.Seq
+		r.Seq = 0
+		if r != want[i] || seq <= calls[r.CallID] {
+			t.Errorf("result %d %+v at %d, want %+v after %d", i, r, seq, want[i], calls[r.CallID])
+		}
+	}
+}
+
+// An outcome with no call (a replay of a call the log never got) is
+// dropped at the next step, never handed to a later call.
+func TestAStrayOutcomeNeverCrossesAStep(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	runID := mustRunID(t, task.RunID)
+	err := w.svc.drive(context.Background(), task, func(_ context.Context, events chan<- engine.StreamEvent) error {
+		if herr := h.OnToolCompleted(runCtx(task), runID, "list_projects", "[]", time.Millisecond); herr != nil {
+			t.Error(herr)
+		}
+		events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 2}}
+		events <- toolCall("list_projects", "call_9", `{}`)
+		go func() {
+			defer close(events)
+			for deadline := time.Now().Add(5 * time.Second); !logged(w.store.eventsOf(task.ID), "call_9"); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Error("call_9 was never written")
+					return
+				}
+			}
+			if herr := h.OnToolDenied(runCtx(task), runID, "list_projects", "no"); herr != nil {
+				t.Error(herr)
+			}
+		}()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, _ := toolResults(t, w.store.eventsOf(task.ID))
+	if len(results) != 1 || results[0].CallID != "call_9" || results[0].Outcome != OutcomeDenied {
+		t.Fatalf("results %+v", results)
 	}
 }
 

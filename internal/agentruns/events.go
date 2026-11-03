@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xraph/cortex"
@@ -87,7 +88,8 @@ func (s *Service) claim(ctx context.Context, t *Task, from []string, to string) 
 // and writes its events until then. A run whose context already ended (a
 // cancel, or the attempt over) isn't started. The run's writer is
 // registered before cortex is called, so a tool hook that fires before
-// the pump reads anything still finds it.
+// the pump reads anything still finds it. Cortex sends to the writer's
+// forward, which buffers for the pump (see forward).
 func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.Context, events chan<- engine.StreamEvent) error) error {
 	if s.beforeDrive != nil {
 		s.beforeDrive()
@@ -98,10 +100,11 @@ func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.
 		}
 		return nil
 	}
-	events := make(chan engine.StreamEvent, 64)
+	source := make(chan engine.StreamEvent)
 	w := s.newWriter(runCtx, t)
 	defer s.dropWriter(w)
-	if err := start(runCtx, events); err != nil {
+	events := w.forward(source)
+	if err := start(runCtx, source); err != nil {
 		return err
 	}
 	s.pumpWith(w, events)
@@ -113,7 +116,26 @@ func (s *Service) drive(runCtx context.Context, t *Task, start func(ctx context.
 func (s *Service) pump(ctx context.Context, t *Task, events <-chan engine.StreamEvent) {
 	w := s.newWriter(ctx, t)
 	defer s.dropWriter(w)
-	s.pumpWith(w, events)
+	s.pumpWith(w, w.forward(events))
+}
+
+// forward hands the events cortex sends on source to the pump through a
+// 64-event buffer, counting the steps among them. Source is unbuffered,
+// so cortex's send of an event returns only once forward has it: when a
+// tool's hook fires, every step before the tool's call is counted, and
+// none after it is, and the outcome is tagged with that step.
+func (w *eventWriter) forward(source <-chan engine.StreamEvent) <-chan engine.StreamEvent {
+	out := make(chan engine.StreamEvent, 64)
+	go func() {
+		defer close(out)
+		for ev := range source {
+			if ev.Type == engine.EventStep {
+				w.steps.Add(1)
+			}
+			out <- ev
+		}
+	}()
+	return out
 }
 
 // pumpWith writes a run's events to its log until events closes. Text
@@ -175,11 +197,16 @@ type eventWriter struct {
 	// text is the pump's alone.
 	text strings.Builder
 
+	// steps is the steps cortex has sent (forward counts them).
+	steps atomic.Int64
+
 	mu sync.Mutex
 	// open is the calls written with no outcome yet, by tool name,
 	// oldest first; waiting is the outcomes that came before their call.
 	open    map[string][]string
 	waiting map[string][]toolOutcome
+	// written is the steps the pump has written.
+	written int64
 }
 
 // toolOutcome is how one tool call ended, as its hook tells it.
@@ -187,17 +214,20 @@ type toolOutcome struct {
 	tool    string
 	outcome string
 	message string
+	// step is the steps cortex had sent when the hook fired: the call's
+	// own step.
+	step int64
 }
 
 // newWriter makes the task's run's writer and registers it under the
-// run's ID. A run that resumes from a pause gets the outcomes of the
-// calls it paused on first, so those calls start out open.
+// run's ID. A run that resumes or is reclaimed gets the outcomes of calls
+// an earlier job wrote first, so those calls start out open.
 func (s *Service) newWriter(ctx context.Context, t *Task) *eventWriter {
 	w := &eventWriter{
 		s: s, ctx: context.WithoutCancel(ctx), task: t,
 		open: map[string][]string{}, waiting: map[string][]toolOutcome{},
 	}
-	w.openPaused()
+	w.openLogged()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.writers == nil {
@@ -235,32 +265,34 @@ func (s *Service) toolOutcome(runID string, o toolOutcome) {
 	w.outcome(o)
 }
 
-// openPaused opens the calls of the run's last pause that have no
-// outcome in the log yet.
-func (w *eventWriter) openPaused() {
-	var paused []map[string]string
+// openLogged opens the calls already in the run's log that have no
+// outcome there yet, oldest first. Cortex fires the hooks of calls an
+// earlier job wrote without writing them again: the calls a resumed run
+// paused on, and the in-flight calls a reclaimed run replays. They come
+// before the run's next step, which closes whatever is still open.
+func (w *eventWriter) openLogged() {
+	type call struct{ tool, id string }
+	var calls []call
 	done := map[string]bool{}
 	var after int64
 	for {
 		evs, err := w.s.store.Events(w.ctx, w.task.OrgID, w.task.ID, after, 1000)
 		if err != nil {
-			w.s.warn("agentruns: couldn't read a run's log for its paused calls", err)
+			w.s.warn("agentruns: couldn't read a run's log for its open calls", err)
 			return
 		}
 		for _, e := range evs {
 			after = e.Seq
+			var data struct {
+				Tool   string `json:"tool"`
+				CallID string `json:"call_id"`
+			}
 			switch e.Kind {
-			case string(engine.EventSuspended):
-				var data struct {
-					Pending []map[string]string `json:"pending"`
-				}
-				if json.Unmarshal(e.Data, &data) == nil {
-					paused = data.Pending
+			case string(engine.EventToolCall):
+				if json.Unmarshal(e.Data, &data) == nil && data.Tool != "" {
+					calls = append(calls, call{data.Tool, data.CallID})
 				}
 			case EventToolResult:
-				var data struct {
-					CallID string `json:"call_id"`
-				}
 				if json.Unmarshal(e.Data, &data) == nil {
 					done[data.CallID] = true
 				}
@@ -270,9 +302,9 @@ func (w *eventWriter) openPaused() {
 			break
 		}
 	}
-	for _, c := range paused {
-		if c["tool"] != "" && !done[c["call_id"]] {
-			w.open[c["tool"]] = append(w.open[c["tool"]], c["call_id"])
+	for _, c := range calls {
+		if !done[c.id] {
+			w.open[c.tool] = append(w.open[c.tool], c.id)
 		}
 	}
 }
@@ -318,6 +350,8 @@ func (w *eventWriter) add(ev engine.StreamEvent) {
 	switch ev.Type {
 	case engine.EventRunStarted:
 		w.s.move(w.ctx, w.task, []string{StatusQueued, StatusWaiting}, StatusRunning)
+	case engine.EventStep:
+		w.closeStep()
 	case engine.EventSafetyBlock:
 		// The step's text is what the safety checks stopped: withhold
 		// it in the same write that records the stop.
@@ -347,6 +381,7 @@ func (w *eventWriter) called(tool, callID string) {
 // outcome writes o after the oldest open call of its tool, or keeps it
 // until that call is written.
 func (w *eventWriter) outcome(o toolOutcome) {
+	o.step = w.steps.Load()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if q := w.open[o.tool]; len(q) > 0 {
@@ -357,10 +392,36 @@ func (w *eventWriter) outcome(o toolOutcome) {
 	w.waiting[o.tool] = append(w.waiting[o.tool], o)
 }
 
+// closeStep starts a new step. Every call of a step gets its outcome
+// before cortex sends the next step, so a call still open never will.
+// An outcome still waiting from an earlier step has no call to follow
+// (a replay of a call the log never got): it's dropped, so it can't take
+// a later call's place. One of this step, whose call the pump hasn't read
+// yet, keeps waiting.
+func (w *eventWriter) closeStep() {
+	w.written++
+	clear(w.open)
+	for tool, q := range w.waiting {
+		kept := q[:0]
+		for _, o := range q {
+			if o.step >= w.written {
+				kept = append(kept, o)
+				continue
+			}
+			w.s.debug("agentruns: a tool outcome came with no call to follow", "run_id", w.task.RunID, "tool", tool)
+		}
+		w.waiting[tool] = kept
+	}
+}
+
 // dropWaiting lets go of the outcomes no call came for.
 func (w *eventWriter) dropWaiting() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.dropWaitingLocked()
+}
+
+func (w *eventWriter) dropWaitingLocked() {
 	for tool, q := range w.waiting {
 		if len(q) > 0 {
 			w.s.debug("agentruns: a tool outcome came with no call to follow", "run_id", w.task.RunID, "tool", tool)
@@ -483,7 +544,7 @@ var secretKeys = []string{"password", "token", "api_key", "secret_value", "priva
 
 // SafeArguments is a tool call's arguments as Loomplane shows them: at
 // any depth, the values of password, token, api_key, secret_value and
-// private_key (in any case), and value beside "secret": true, become
+// private_key, and value beside "secret": true, keys in any case, become
 // Hidden. Arguments longer than MaxArgumentBytes once hidden become
 // {"truncated":true}, and ones that aren't JSON become {}.
 func SafeArguments(raw json.RawMessage) json.RawMessage {
@@ -521,7 +582,7 @@ func decodeJSON(raw json.RawMessage) (any, bool) {
 func hide(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
-		secret := x["secret"] == true
+		secret := saysSecret(x)
 		for k, val := range x {
 			if slices.Contains(secretKeys, strings.ToLower(k)) || (secret && strings.EqualFold(k, "value")) {
 				x[k] = Hidden
@@ -537,11 +598,25 @@ func hide(v any) any {
 	return v
 }
 
-// flagsSecret reports whether any object in v says "secret": true.
+// saysSecret reports whether the object has a "secret" key, in any case,
+// set to true. An operation's input decodes its keys case-insensitively,
+// and the last of several matches wins, so any one of them may be the
+// one it reads.
+func saysSecret(x map[string]any) bool {
+	for k, v := range x {
+		if v == true && strings.EqualFold(k, "secret") {
+			return true
+		}
+	}
+	return false
+}
+
+// flagsSecret reports whether any object in v says "secret": true, in
+// any case.
 func flagsSecret(v any) bool {
 	switch x := v.(type) {
 	case map[string]any:
-		if x["secret"] == true {
+		if saysSecret(x) {
 			return true
 		}
 		for _, val := range x {

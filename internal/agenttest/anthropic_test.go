@@ -175,12 +175,11 @@ func TestFakeAnthropicFailsPastTheScript(t *testing.T) {
 }
 
 // post sends one Messages request to the fake over plain HTTP.
-func post(ctx context.Context, t *testing.T, f *agenttest.FakeAnthropic, stream bool) (*http.Response, error) {
-	t.Helper()
+func post(ctx context.Context, f *agenttest.FakeAnthropic, stream bool) (*http.Response, error) {
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":64,"stream":%t,"messages":[{"role":"user","content":"hi"}]}`, config.DefaultAIModel, stream)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.URL()+"/v1/messages", strings.NewReader(body))
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return http.DefaultClient.Do(req)
@@ -188,7 +187,7 @@ func post(ctx context.Context, t *testing.T, f *agenttest.FakeAnthropic, stream 
 
 func TestFakeAnthropicStreamsDeltas(t *testing.T) {
 	f := agenttest.Anthropic(t, agenttest.Turn{Deltas: []string{"Hel", "lo"}, DeltaGap: time.Millisecond})
-	resp, err := post(t.Context(), t, f, true)
+	resp, err := post(t.Context(), f, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +234,7 @@ func TestFakeAnthropicWaitsForItsGate(t *testing.T) {
 	f := agenttest.Anthropic(t, agenttest.Turn{Text: "done", Wait: gate})
 	got := make(chan error, 1)
 	go func() {
-		resp, err := post(t.Context(), t, f, false)
+		resp, err := post(t.Context(), f, false)
 		if err == nil {
 			_, err = io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
