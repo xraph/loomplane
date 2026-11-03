@@ -43,4 +43,10 @@ Restore migrates the database to this Loomplane's schema, then loads every table
 
 A backup made by a newer Loomplane can't be restored by an older one, because its rows fit a schema the older one lacks. Restore with the same version or a later one. A backup from before a released schema change still restores: restore loads a backup at the schema it was taken at and migrates it up from there.
 
+### Knowledge and backups
+
+If the agent's [knowledge](/docs/agents/knowledge) was on when you backed up, the backup includes its vector tables, and those need somewhere to go. Restore into a Loomplane that has `ai.enabled` on, `ai.knowledge` configured, the pgvector extension available in its Postgres and the same `ai.knowledge.dimensions` as the one that made the backup. If AI or knowledge isn't configured on the target, the restore refuses and names what to set. With pgvector missing, or the dimensions different, it fails partway. Because restore loads everything in one transaction, nothing is half done, and you can fix the target and run it again.
+
+A backup taken with knowledge off carries no vector tables and restores anywhere.
+
 After a restore, test sign-in, open a project, and run a plan to see that connections still decrypt.

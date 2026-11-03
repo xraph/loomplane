@@ -23,7 +23,7 @@ ai:
   model: claude-sonnet-5-5
 ```
 
-Then open **Settings, AI** as a workspace admin (`ai:manage`), pick a provider, give the agent a monthly budget and switch it on. [Workspace settings](/docs/agents/workspace-settings) walks through the page.
+Then open **Settings, AI** as a workspace admin (`ai:manage`), pick a provider, give the agent a monthly budget and switch it on. [Workspace settings](/docs/agents/workspace-settings) walks through the page, including the order: the workspace's AI budget comes first, then the agent's share of it, then the switch. Once it's on, [talk to it](/docs/agents/assistant).
 
 ## The server's key is optional
 
@@ -49,11 +49,11 @@ Their tables migrate with the rest of Loomplane even when the agent is off, so t
 
 ## Knowledge
 
-Knowledge lets the agent search Loomplane's own documentation and your workspace's documents before it answers. It needs two things on the server: the pgvector extension in your Postgres, and an embedding model set under `ai.knowledge` (`embedding_provider`, `embedding_model` and usually `embedding_api_key`). If either is missing, the knowledge switch on the settings page stays off and says which. The agent works fine without it.
+Knowledge lets the agent search Loomplane's own documentation and your workspace's documents before it answers. It needs two things on the server: the pgvector extension in your Postgres, and an embedding model set under `ai.knowledge` (`embedding_provider`, `embedding_model` and usually `embedding_api_key`). If either is missing, the knowledge switch on the settings page stays off and says which. The agent works fine without it. [Knowledge](/docs/agents/knowledge) has every reason and its fix.
 
 ## When it's off
 
-With `ai.enabled` false, the sidebar has no AI group and no Agent item, `/agent/...` and `/api/v1/ai/...` answer 404, and `loomctl agent` tells you the server doesn't run the agent. Turning a workspace's agent off while the server stays on cancels its running work and its pending requests, stops billing against the workspace and takes the agent's role away.
+With `ai.enabled` false, the sidebar has no AI group and no Agent item, `/agent/...` and `/api/v1/ai/...` answer 404, and `loomctl agent` tells you the server doesn't run the agent, and the Assistant page answers as an unknown address would. Turning a workspace's agent off while the server stays on cancels its running work and its pending requests, stops billing against the workspace and takes the agent's role away.
 
 ## How it relates to the MCP server
 

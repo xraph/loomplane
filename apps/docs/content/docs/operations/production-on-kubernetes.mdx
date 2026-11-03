@@ -96,6 +96,12 @@ helm upgrade loomplane oci://ghcr.io/xraph/charts/loomplane --version 1.2.4 \
 
 Migrations only go forward, and an older Loomplane refuses a database a newer one migrated. After an upgrade that migrated, `helm rollback` won't start the old version: restore your backup instead. When a release's notes ask for downtime, set `api.strategy.type` and `worker.strategy.type` to `Recreate` for that upgrade.
 
+## Knowledge needs pgvector
+
+The agent's [knowledge](/docs/agents/knowledge) keeps its vectors in Loomplane's own Postgres, so that database needs the pgvector extension. Use an image that ships it, such as `pgvector/pgvector:pg17` (or the same for CloudNativePG), or run `CREATE EXTENSION vector` on a managed Postgres that offers it. Set `ai.enabled` and `ai.knowledge` and Loomplane creates its vector table at start. Nothing changes without pgvector: Loomplane starts as always and the knowledge switch stays off with a reason.
+
+A backup taken with knowledge on includes its vector tables. Restoring it needs a target with `ai.enabled`, `ai.knowledge` configured, pgvector available and the same `dimensions`, or the restore refuses or fails on the dimensions. See [Backing up Loomplane](/docs/operations/backing-up-loomplane#knowledge-and-backups).
+
 ## Sizing
 
 Each API pod opens a little over 20 database connections and each worker about 16, so set PostgreSQL's `max_connections` for your replicas plus one extra of each during a rollout. Workers unpack repositories into an 8 GiB scratch volume by default (`worker.tmpSize`), because one analysis can take 2 GiB and a worker runs two at once. Turn on `api.autoscaling` and `worker.autoscaling` to scale on CPU.

@@ -133,6 +133,14 @@ Email is off until you configure SMTP. Production uses implicit TLS, usually on 
 
 `LOOMPLANE_BACKUP_URL` can point recovery objects at independent storage. Without it they share the local artifact volume. It doesn't schedule backups of Loomplane's own database.
 
+## Knowledge needs pgvector
+
+The agent's [knowledge](/docs/agents/knowledge) keeps its vectors in Loomplane's own Postgres, so that Postgres needs the pgvector extension. The default `postgres:17-alpine` doesn't have it. To use knowledge, set `POSTGRES_IMAGE` in `.env` to an image that does, such as `pgvector/pgvector:pg17`, and take a [backup](/docs/operations/backing-up-loomplane) first, because that image is Debian-based and an existing data volume can sort text differently. Loomplane creates the extension itself when `ai.enabled` and `ai.knowledge` are both set and the image has it.
+
+Nothing changes without it. With the stock image, Loomplane starts as always and the knowledge switch stays off with a reason.
+
+Backups follow knowledge. A backup taken with knowledge on includes its vector tables, so a restore needs a target with `ai.enabled`, `ai.knowledge` configured, pgvector available and the same `dimensions`. Otherwise the restore refuses, or fails on the dimensions. See [Backing up Loomplane](/docs/operations/backing-up-loomplane#knowledge-and-backups).
+
 ## Check health
 
 ```bash
