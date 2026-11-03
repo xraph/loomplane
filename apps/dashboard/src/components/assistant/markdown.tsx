@@ -15,7 +15,9 @@ const linkClass = "text-primary underline-offset-2 hover:underline"
 export function dashboardPath(
   href: string | undefined
 ): { to: string; search: Record<string, string>; hash: string } | undefined {
+  // "//host" and "/\host" are other sites, whatever they look like.
   if (!href || !href.startsWith("/") || href.startsWith("//")) return undefined
+  if (/\\|%5c/i.test(href)) return undefined
   const url = new URL(href, "http://dashboard.invalid")
   return {
     to: url.pathname,
@@ -26,6 +28,9 @@ export function dashboardPath(
 
 const components: Components = {
   a: ({ href, children }) => {
+    // react-markdown empties an unsafe address (javascript:, data: and the
+    // like): the words stay, as text.
+    if (!href) return <span>{children}</span>
     const page = dashboardPath(href)
     if (page)
       return (
@@ -40,6 +45,8 @@ const components: Components = {
           {children}
         </Link>
       )
+    // A path dashboardPath turned down ("//host", "/\host") is no link.
+    if (href.startsWith("/")) return <span>{children}</span>
     return (
       <a href={href} target="_blank" rel="noreferrer" className={linkClass}>
         {children}

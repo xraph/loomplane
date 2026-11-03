@@ -1,5 +1,5 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
@@ -10,29 +10,50 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { AgentProvider, FeaturesProvider } from "@/lib/features"
 import { FakeEventSource } from "@/test-fixtures/event-source"
 
-const where = vi.hoisted(() => ({ path: "/projects/proj_1" }))
-vi.mock("@/lib/router", () => ({
-  useNavigate: () => () => {},
-  usePath: () => where.path,
-  Link: ({
-    children,
-    to,
-    search,
-    onClick,
-  }: {
-    children?: ReactNode
-    to: string
-    search?: Record<string, string>
-    onClick?: () => void
-  }) => {
-    const query = new URLSearchParams(search ?? {}).toString()
-    return (
-      <a href={query ? `${to}?${query}` : to} onClick={onClick}>
-        {children}
-      </a>
-    )
-  },
+// The page's path, as the router would hand it out: a change re-renders
+// whoever reads it.
+const where = vi.hoisted(() => ({
+  path: "/projects/proj_1",
+  listeners: new Set<() => void>(),
 }))
+function goTo(path: string) {
+  act(() => {
+    where.path = path
+    where.listeners.forEach((fn) => fn())
+  })
+}
+vi.mock("@/lib/router", async () => {
+  const { useSyncExternalStore } = await import("react")
+  return {
+    useNavigate: () => () => {},
+    usePath: () =>
+      useSyncExternalStore(
+        (fn: () => void) => {
+          where.listeners.add(fn)
+          return () => where.listeners.delete(fn)
+        },
+        () => where.path
+      ),
+    Link: ({
+      children,
+      to,
+      search,
+      onClick,
+    }: {
+      children?: ReactNode
+      to: string
+      search?: Record<string, string>
+      onClick?: () => void
+    }) => {
+      const query = new URLSearchParams(search ?? {}).toString()
+      return (
+        <a href={query ? `${to}?${query}` : to} onClick={onClick}>
+          {children}
+        </a>
+      )
+    },
+  }
+})
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     session: { orgId: "org", userId: "usr_1" },
@@ -134,6 +155,13 @@ function serve() {
             id: "proj_1",
             name: "api",
             slug: "api",
+            description: "",
+            repositories: [],
+          },
+          {
+            id: "proj_2",
+            name: "web",
+            slug: "web",
             description: "",
             repositories: [],
           },
@@ -250,4 +278,42 @@ it("links to the full Assistant page", async () => {
   expect(
     await screen.findByRole("link", { name: /Open in Assistant/ })
   ).toHaveAttribute("href", "/assistant?c=conv_1")
+})
+
+it("keeps an open conversation's project when reopened on another project", async () => {
+  show()
+  await openPanel()
+  await send("Deploy staging?")
+  expect(
+    await screen.findByRole("link", { name: /Open in Assistant/ })
+  ).toBeInTheDocument()
+  await userEvent.click(screen.getByRole("button", { name: "Close" }))
+  await waitFor(() =>
+    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  )
+
+  // Over on the web project's page, the conversation is still about api.
+  goTo("/projects/proj_2")
+  await userEvent.click(screen.getByRole("button", { name: "Ask from here" }))
+  expect(await screen.findByText("In api")).toBeInTheDocument()
+  expect(screen.queryByText("In web")).toBeNull()
+
+  // A new conversation is about the page you're on.
+  await userEvent.click(
+    screen.getByRole("button", { name: "New conversation" })
+  )
+  expect(await screen.findByText("In web")).toBeInTheDocument()
+})
+
+it("moves to the project page it's opened on when no conversation is open", async () => {
+  show()
+  await openPanel()
+  expect(await screen.findByText("In api")).toBeInTheDocument()
+  await userEvent.click(screen.getByRole("button", { name: "Close" }))
+  await waitFor(() =>
+    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  )
+  goTo("/projects/proj_2")
+  await userEvent.click(screen.getByRole("button", { name: "Ask from here" }))
+  expect(await screen.findByText("In web")).toBeInTheDocument()
 })

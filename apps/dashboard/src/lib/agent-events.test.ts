@@ -255,3 +255,44 @@ test("historyToMessages pairs each message with the agent's turn", () => {
     },
   ])
 })
+
+test("reduceTurn withholds the step the stop names", () => {
+  seq = 0
+  // The server only names the latest step; the reducer still goes by the
+  // name, not by position.
+  const parts = reduceTurn([
+    ev("step"),
+    ev("token", { text: "Kept" }),
+    ev("step"),
+    ev("token", { text: "Withheld" }),
+    ev("step"),
+    ev("token", { text: "Later" }),
+    ev("safety_block", { message: SAFETY_STOPPED, step_seq: 3 }),
+  ])
+  expect(shown(parts)).toEqual([
+    { type: "text", text: "Kept", state: "done" },
+    { type: "text", text: "Later", state: "done" },
+    {
+      type: "data-blocked",
+      id: "blocked-7",
+      data: { message: SAFETY_STOPPED },
+    },
+  ])
+})
+
+test("a second stop in a step keeps the first", async () => {
+  seq = 0
+  const events = [
+    ev("step"),
+    ev("token", { text: "One" }),
+    ev("safety_block", { message: SAFETY_STOPPED, step_seq: 1 }),
+    ev("token", { text: "Two" }),
+    ev("safety_block", { message: SAFETY_STOPPED, step_seq: 1 }),
+  ]
+  const parts = reduceTurn(events)
+  expect(shown(parts).map((p) => p.type)).toEqual([
+    "data-blocked",
+    "data-blocked",
+  ])
+  expect(await live(events)).toEqual(parts)
+})

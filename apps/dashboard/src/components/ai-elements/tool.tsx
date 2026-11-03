@@ -7,7 +7,8 @@
 //     grammars and engine aren't worth their weight for them.
 //   - ToolHeader takes children, shown after the status, for the step's
 //     risk badge, and a statusLabel to say instead of the state's own.
-//   - The status labels are Loomplane's words.
+//   - The status labels are Loomplane's words, and the header's wrapper is a
+//     span: a button holds phrasing content only.
 "use client"
 
 import type { DynamicToolUIPart, ToolUIPart } from "ai"
@@ -104,14 +105,14 @@ export const ToolHeader = ({
       )}
       {...props}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <span className="flex min-w-0 flex-wrap items-center gap-2">
         <WrenchIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-mono text-[13px] font-medium">
           {title ?? derivedName}
         </span>
         {getStatusBadge(state, statusLabel)}
         {children}
-      </div>
+      </span>
       <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-open:rotate-180" />
     </CollapsibleTrigger>
   )

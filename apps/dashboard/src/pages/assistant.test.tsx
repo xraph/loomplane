@@ -383,3 +383,117 @@ it("renders a blocked answer as withheld", async () => {
   ).toBeInTheDocument()
   expect(screen.queryByText(/AKIA/)).toBeNull()
 })
+
+// The turn as the server keeps it once it's over.
+function storedHistory(status: string, text: string) {
+  return {
+    conversation: { ...conversation, status },
+    more: false,
+    turns: [
+      {
+        task_id: "atask_1",
+        message: "Deploy staging",
+        status,
+        error: "",
+        event_seq: 3,
+        created_at: "2026-11-03T10:00:00Z",
+        finished_at: "2026-11-03T10:00:09Z",
+        events: [
+          { task_id: "atask_1", seq: 1, kind: "step", data: {}, at: "" },
+          { task_id: "atask_1", seq: 2, kind: "token", data: { text }, at: "" },
+          {
+            task_id: "atask_1",
+            seq: 3,
+            kind: "status",
+            data: { status },
+            at: "",
+          },
+        ],
+      },
+    ],
+  }
+}
+
+it("finishes a turn from history when its stream is lost after the end", async () => {
+  serve(true, {
+    ...started,
+    "GET /api/v1/agent/tasks/atask_1": () =>
+      Response.json({ ...task, status: "completed" }),
+    "GET /api/v1/agent/conversations/conv_1": () =>
+      Response.json(storedHistory("completed", "Staging is on v1.5.")),
+  })
+  open("/assistant")
+  await ask("Deploy staging")
+  frame("step")
+  frame("token", { text: "Staging is" })
+  expect(await screen.findByText("Staging is")).toBeInTheDocument()
+  // The browser gives up: the server refused the reconnect.
+  FakeEventSource.latest().fail(true)
+  expect(await screen.findByText("Staging is on v1.5.")).toBeInTheDocument()
+  const box = screen.getByRole("textbox", { name: "Message the agent" })
+  await waitFor(() => expect(box).toBeEnabled())
+  expect(screen.queryByText(/Lost the connection/)).toBeNull()
+  expect(reads).toContain("/api/v1/agent/tasks/atask_1")
+})
+
+it("offers to pick a lost stream up again while the agent works", async () => {
+  serve(true, {
+    ...started,
+    "GET /api/v1/agent/tasks/atask_1": () =>
+      Response.json({ ...task, status: "running" }),
+  })
+  open("/assistant")
+  await ask("Deploy staging")
+  frame("step")
+  frame("token", { text: "Deploying " })
+  expect(await screen.findByText("Deploying")).toBeInTheDocument()
+  FakeEventSource.latest().fail(true)
+  expect(
+    await screen.findByText(/Lost the connection to the agent\./)
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("textbox", { name: "Message the agent" })
+  ).toBeDisabled()
+
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2))
+  // It picks up after the last event the page has.
+  expect(FakeEventSource.latest().url).toMatch(/\/atask_1\/stream\?after=2$/)
+  expect(screen.queryByText(/Lost the connection/)).toBeNull()
+  frame("token", { text: "staging now." })
+  FakeEventSource.latest().emit("agent.end", { status: "completed" })
+  expect(await screen.findByText("Deploying staging now.")).toBeInTheDocument()
+  await waitFor(() =>
+    expect(
+      screen.getByRole("textbox", { name: "Message the agent" })
+    ).toBeEnabled()
+  )
+})
+
+it("stops a turn whose stream was lost", async () => {
+  let status = "running"
+  serve(true, {
+    ...started,
+    "GET /api/v1/agent/tasks/atask_1": () => Response.json({ ...task, status }),
+    "POST /api/v1/agent/tasks/atask_1/cancel": () => {
+      status = "cancelled"
+      return Response.json({ ...task, status })
+    },
+    "GET /api/v1/agent/conversations/conv_1": () =>
+      Response.json(storedHistory("cancelled", "Deploying")),
+  })
+  open("/assistant")
+  await ask("Deploy staging")
+  frame("step")
+  frame("token", { text: "Deploying" })
+  FakeEventSource.latest().fail(true)
+  expect(await screen.findByText(/Lost the connection/)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole("button", { name: "Stop" }))
+  expect(await screen.findByText("Stopped.")).toBeInTheDocument()
+  await waitFor(() =>
+    expect(
+      screen.getByRole("textbox", { name: "Message the agent" })
+    ).toBeEnabled()
+  )
+  expect(screen.queryByText(/Lost the connection/)).toBeNull()
+})

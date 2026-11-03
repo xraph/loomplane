@@ -17,7 +17,13 @@ import {
   useAgentRequestsGet,
   useAgentTasksCancel,
 } from "@/client/forge/loomplane/hooks"
-import type { History, Sent } from "@/client/forge/loomplane/types"
+// Query bindings read once from a callback, not React hooks: renamed so
+// nothing mistakes them for one.
+import {
+  useAgentConversationsGet as historyQuery,
+  useAgentTasksGet as taskQuery,
+} from "@/client/forge/loomplane/hooks"
+import type { History, Sent, Task } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { AgentRequestCard } from "@/components/agent-request-card"
 import {
@@ -38,7 +44,11 @@ import {
   fromApi,
   historyToMessages,
 } from "@/lib/agent-events"
-import { AgentChatTransport, type OpenTurn } from "@/lib/agent-stream"
+import {
+  AgentChatTransport,
+  type OpenTurn,
+  STREAM_LOST,
+} from "@/lib/agent-stream"
 import { cn } from "@/lib/utils"
 
 const terminal = new Set(["completed", "failed", "cancelled"])
@@ -162,6 +172,8 @@ function ChatBody({
   const invalidate = useInvalidate()
   const [draft, setDraft] = useState("")
   const [stopError, setStopError] = useState<string>()
+  // The browser gave up on the stream while the task was still running.
+  const [lost, setLost] = useState(false)
   const [task, setTask] = useState(() => {
     const open = openTurnOf(history)
     return open ? { id: open.taskId, status: open.status } : undefined
@@ -173,54 +185,42 @@ function ChatBody({
     return t
   })
 
-  // What the transport calls back into, kept current for it.
-  useEffect(() => {
-    transport.handle({
-      start: async (body) => (await start.mutateAsync({ body })) as Sent,
-      send: async (id, body) =>
-        (await send.mutateAsync({ path: { id }, body })) as Sent,
-      onSent: (sent) => {
-        setTask({ id: sent.task.id, status: sent.task.status })
-        invalidate(useAgentConversationsList)
-        if (sent.conversation.id !== conversationId)
-          onCreated(sent.conversation.id)
-      },
-      onEnd: (taskId, end) => {
-        setTask((cur) =>
-          cur?.id === taskId ? { id: taskId, status: end.status } : cur
-        )
-        invalidate(useAgentConversationsList)
-        invalidate(useAgentConversationsGet)
-      },
-    })
-  })
-
   useEffect(() => {
     transport.setProject(projectId)
   }, [transport, projectId])
 
   const [initial] = useState(() => (history ? historyToMessages(history) : []))
   const [chatId] = useState(() => conversationId)
-  const { messages, sendMessage, status, error, setMessages } =
-    useChat<AgentMessage>({
-      id: chatId,
-      messages: initial,
-      transport,
-      resume: true,
-      onError: () => {
-        // The server refused the message: take it back off the page and
-        // put it back in the box, so it can go again.
-        setMessages((ms) => {
-          const last = ms.at(-1)
-          if (last?.role !== "user" || last.id.startsWith("user-")) return ms
-          const text = last.parts
-            .map((p) => (p.type === "text" ? p.text : ""))
-            .join("")
-          setDraft((d) => d || text)
-          return ms.slice(0, -1)
-        })
-      },
-    })
+  const {
+    messages,
+    sendMessage,
+    status,
+    error,
+    setMessages,
+    clearError,
+    resumeStream,
+  } = useChat<AgentMessage>({
+    id: chatId,
+    messages: initial,
+    transport,
+    resume: true,
+    onError: (err) => {
+      // A lost stream is the agent's message, not the person's: check
+      // the task instead (onLost).
+      if (err.message === STREAM_LOST) return
+      // The server refused the message: take it back off the page and
+      // put it back in the box, so it can go again.
+      setMessages((ms) => {
+        const last = ms.at(-1)
+        if (last?.role !== "user" || last.id.startsWith("user-")) return ms
+        const text = last.parts
+          .map((p) => (p.type === "text" ? p.text : ""))
+          .join("")
+        setDraft((d) => d || text)
+        return ms.slice(0, -1)
+      })
+    },
+  })
 
   const streaming = status === "submitted" || status === "streaming"
   const busy = streaming || (!!task && !terminal.has(task.status))
@@ -231,15 +231,98 @@ function ChatBody({
     void sendMessage({ text })
   }
 
+  // settle takes a task's status as the server tells it. Still running
+  // with no stream, the turn can be picked up again; over, it's read back
+  // from the conversation's stored turns, which have the whole answer.
+  const settle = async (id: string, taskStatus: string) => {
+    transport.settle(id, taskStatus)
+    setTask((cur) => (cur?.id === id ? { id, status: taskStatus } : cur))
+    if (!terminal.has(taskStatus)) {
+      setLost(true)
+      return
+    }
+    setLost(false)
+    clearError()
+    invalidate(useAgentConversationsList)
+    const convo = transport.conversationId
+    if (!convo) return
+    try {
+      const fresh = await historyQuery({ path: { id: convo } }).refetch()
+      setMessages(historyToMessages(fresh))
+    } catch {
+      // The page keeps what it streamed; the list shows the outcome.
+    }
+  }
+
+  // check reads a task whose stream the browser gave up on.
+  async function check(taskId: string) {
+    try {
+      const t = await taskQuery({ path: { id: taskId } }).refetch()
+      await settle(taskId, t.status)
+    } catch {
+      setLost(true)
+    }
+  }
+
+  // What the transport calls back into, kept current for it. The
+  // callbacks only run once a stream is under way, after this effect.
+  useEffect(() => {
+    transport.handle({
+      start: async (body) => (await start.mutateAsync({ body })) as Sent,
+      send: async (id, body) =>
+        (await send.mutateAsync({ path: { id }, body })) as Sent,
+      onSent: (sent) => {
+        setTask({ id: sent.task.id, status: sent.task.status })
+        invalidate(useAgentConversationsList)
+        invalidate(useAgentConversationsGet)
+        if (sent.conversation.id !== conversationId)
+          onCreated(sent.conversation.id)
+      },
+      onEnd: (taskId, end) => {
+        setTask((cur) =>
+          cur?.id === taskId ? { id: taskId, status: end.status } : cur
+        )
+        invalidate(useAgentConversationsList)
+        invalidate(useAgentConversationsGet)
+      },
+      onLost: (taskId) => void check(taskId),
+    })
+  })
+
+  const retry = () => {
+    setLost(false)
+    clearError()
+    void resumeStream()
+  }
+
   const stop = async () => {
     if (!task) return
     setStopError(undefined)
     try {
-      await cancel.mutateAsync({ path: { id: task.id } })
+      const t = (await cancel.mutateAsync({ path: { id: task.id } })) as Task
+      // With a stream open, its agent.end finishes the turn; without one,
+      // nothing else will.
+      if (!streaming) await settle(task.id, t.status)
     } catch (err) {
       setStopError(messageOf(err, "The agent couldn't be stopped."))
     }
   }
+
+  const problem =
+    lost && busy ? (
+      <>
+        {STREAM_LOST}{" "}
+        <button
+          type="button"
+          onClick={retry}
+          className="font-medium underline underline-offset-2"
+        >
+          Retry
+        </button>
+      </>
+    ) : (
+      (stopError ?? error?.message)
+    )
 
   const lastAgent = messages.findLast((m) => m.role === "assistant")
   return (
@@ -287,7 +370,7 @@ function ChatBody({
         status={status}
         onStop={() => void stop()}
         stopping={cancel.isPending}
-        error={stopError ?? error?.message}
+        error={problem}
         hint={hint}
       />
     </div>

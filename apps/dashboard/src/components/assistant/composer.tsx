@@ -36,8 +36,9 @@ export function Composer({
   status: ChatStatus
   onStop: () => void
   stopping: boolean
-  /** Why the last message didn't go, in the API's words. */
-  error?: string
+  /** Why the last message didn't go, in the API's words, or what went
+   * wrong with the answer. */
+  error?: React.ReactNode
   /** A line under the box, such as what the conversation is about. */
   hint?: React.ReactNode
   className?: string

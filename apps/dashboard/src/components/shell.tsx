@@ -90,8 +90,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }>({ open: false, started: false })
 
   // The panel keeps its conversation and scope between openings. Opened
-  // from another project's page (or from none, after one), it takes that
-  // page's project for its next new conversation.
+  // from another project's page (or from none, after one) with no
+  // conversation open, it takes that page's project for the next one.
   const openAssistant = useCallback(
     (opts?: AssistantTarget) => {
       if (!assistantOn) return
@@ -105,8 +105,21 @@ export function ShellProvider({ children }: { children: ReactNode }) {
             projectId: opts.projectId,
             started: false,
           }
-        if (opts?.projectId) return { ...next, projectId: opts.projectId }
-        if (here !== cur.from) return { ...next, projectId: here }
+        // Asked for a project by name: a conversation about another one
+        // gives way to a new one there.
+        if (opts?.projectId)
+          return opts.projectId === cur.projectId
+            ? next
+            : {
+                ...next,
+                projectId: opts.projectId,
+                conversationId: undefined,
+                started: false,
+              }
+        // A conversation's project is fixed by its first message, so the
+        // panel only moves to another project's page with none open.
+        if (here !== cur.from && !cur.conversationId)
+          return { ...next, projectId: here }
         return next
       })
     },
@@ -257,13 +270,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
           onScope={(projectId) =>
             setAssistant((cur) => ({ ...cur, projectId }))
           }
-          onNew={() =>
+          onNew={() => {
+            // A new conversation is about the page you're on.
+            const here = projectIDFromPath(path)
             setAssistant((cur) => ({
               ...cur,
               conversationId: undefined,
               started: false,
+              projectId: here,
+              from: here,
             }))
-          }
+          }}
         />
       )}
       <ShortcutsDialog

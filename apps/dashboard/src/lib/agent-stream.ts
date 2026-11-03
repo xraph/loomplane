@@ -51,6 +51,9 @@ export type AgentChatHandlers = {
   onSent?: (sent: Sent) => void
   /** onEnd hears that a task's stream is over. */
   onEnd?: (taskId: string, end: StreamEnd) => void
+  /** onLost hears that the browser gave up on a task's stream before its
+   * end: the task may have finished, or may still be running. */
+  onLost?: (taskId: string) => void
 }
 
 export type AgentChatOptions = Partial<AgentChatHandlers> & {
@@ -62,8 +65,7 @@ export type AgentChatOptions = Partial<AgentChatHandlers> & {
 const terminal = new Set(["completed", "failed", "cancelled"])
 
 /** Why the stream gave up, when the browser stops reconnecting. */
-export const STREAM_LOST =
-  "Lost the connection to the agent. Reload the page to pick its answer up again."
+export const STREAM_LOST = "Lost the connection to the agent."
 
 /**
  * AgentChatTransport is the ChatTransport useChat talks to the agent
@@ -98,6 +100,12 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
    * reconnectToStream can follow it if it's still running. */
   resumeFrom(turn: OpenTurn | undefined): void {
     this.open = turn
+  }
+
+  /** settle records a task's status read another way (a cancel, or a
+   * check after the stream was lost). */
+  settle(taskId: string, status: string): void {
+    if (this.open?.taskId === taskId) this.open = { ...this.open, status }
   }
 
   /** The task still running, if any: the one Stop cancels. */
@@ -219,7 +227,12 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
           if (!ev || ev.seq <= last || done) return
           last = ev.seq
           if (this.open?.taskId === turn.taskId) {
-            this.open = { ...this.open, eventSeq: ev.seq }
+            // Kept whole, so a reconnect can replay the turn and carry on.
+            this.open = {
+              ...this.open,
+              eventSeq: ev.seq,
+              events: [...this.open.events, ev],
+            }
             if (ev.kind === "status" && typeof ev.data.status === "string")
               this.open = { ...this.open, status: ev.data.status }
           }
@@ -250,6 +263,7 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
           if (done || source?.readyState !== EventSource.CLOSED) return
           stop()
           controller.error(new Error(STREAM_LOST))
+          this.options.onLost?.(turn.taskId)
         }
       },
       cancel: () => stop(),

@@ -134,6 +134,12 @@ function errorText(outcome: ToolOutcome, message: string): string {
     : "This step failed."
 }
 
+/** The step a safety stop names, when it names one. */
+function stepOf(e: AgentEvent): number | undefined {
+  const n = e.data.step_seq
+  return typeof n === "number" && n > 0 ? n : undefined
+}
+
 const requestPart = (e: AgentEvent) => ({
   type: "data-request" as const,
   id: `request-${str(e.data.request_id)}`,
@@ -156,6 +162,8 @@ const errorPart = (e: AgentEvent) => ({
 export function reduceTurn(events: readonly AgentEvent[]): AgentPart[] {
   let parts: AgentPart[] = []
   let text: { type: "text"; text: string; state: "done" } | undefined
+  // Each step's boundary part, by the seq of its step event.
+  const steps = new Map<number, AgentPart>()
   for (const e of events) {
     switch (e.kind) {
       case "token": {
@@ -168,10 +176,13 @@ export function reduceTurn(events: readonly AgentEvent[]): AgentPart[] {
         }
         break
       }
-      case "step":
+      case "step": {
         text = undefined
-        parts.push({ type: "step-start" })
+        const start: AgentPart = { type: "step-start" }
+        steps.set(e.seq, start)
+        parts.push(start)
         break
+      }
       case "tool_call": {
         text = undefined
         const c = toolCall(e)
@@ -220,11 +231,22 @@ export function reduceTurn(events: readonly AgentEvent[]): AgentPart[] {
         parts.push(requestPart(e))
         break
       case "safety_block": {
+        // The stop names the step it withheld (step_seq); the server only
+        // ever names the latest, and without one the latest is meant.
         text = undefined
-        const from = parts.findLastIndex((p) => p.type === "step-start") + 1
+        const named = stepOf(e)
+        const start =
+          (named !== undefined ? steps.get(named) : undefined) ??
+          parts.findLast((p) => p.type === "step-start")
+        const from = start ? parts.indexOf(start) + 1 : 0
+        const next = parts.findIndex(
+          (p, i) => i >= from && p.type === "step-start"
+        )
+        const to = next < 0 ? parts.length : next
         parts = [
           ...parts.slice(0, from),
-          ...parts.slice(from).filter((p) => p.type !== "text"),
+          ...parts.slice(from, to).filter((p) => p.type !== "text"),
+          ...parts.slice(to),
           blockedPart(e),
         ]
         break
@@ -247,6 +269,8 @@ type ToolStep = { kind: "tool"; call: ToolCall; result?: AgentChunk }
  */
 export class TurnChunker {
   private textId: string | undefined
+  // The seq of the step event the stream is in.
+  private step: number | undefined
   // The turn's calls by ID, and what the current step has added.
   private calls = new Map<string, ToolStep>()
   private stepParts: (ToolStep | { kind: "data"; chunk: AgentChunk })[] = []
@@ -274,6 +298,7 @@ export class TurnChunker {
       }
       case "step":
         this.stepParts = []
+        this.step = e.seq
         return [...this.closeText(), { type: "start-step" }]
       case "tool_call": {
         const step: ToolStep = { kind: "tool", call: toolCall(e) }
@@ -312,7 +337,20 @@ export class TurnChunker {
       }
       case "safety_block": {
         // The step's text is already on screen: reset the step, put its
-        // calls and requests back, and say why the rest is gone.
+        // calls and requests back, and say why the rest is gone. The stop
+        // names its step (step_seq), and the server only names the latest:
+        // the one a reset takes back. A stop naming an earlier step, which
+        // a stream can't take back, only says it stopped.
+        const named = stepOf(e)
+        if (
+          named !== undefined &&
+          this.step !== undefined &&
+          named !== this.step
+        ) {
+          const blocked = blockedPart(e)
+          this.stepParts.push({ kind: "data", chunk: blocked })
+          return [...this.closeText(), blocked]
+        }
         this.textId = undefined
         const out: AgentChunk[] = [{ type: "reset-step" }]
         for (const p of this.stepParts) {
@@ -322,7 +360,10 @@ export class TurnChunker {
             if (p.result) out.push(p.result)
           }
         }
-        out.push(blockedPart(e))
+        const blocked = blockedPart(e)
+        // Kept with the step, so a second stop in it puts this one back too.
+        this.stepParts.push({ kind: "data", chunk: blocked })
+        out.push(blocked)
         return out
       }
       case "error":
