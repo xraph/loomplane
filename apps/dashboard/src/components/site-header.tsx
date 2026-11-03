@@ -42,6 +42,7 @@ export type Crumb = {
     | "/variables"
     | "/activity"
     | "/services"
+    | "/services/catalog"
     | "/clouds"
     | "/notifications"
     | "/webhooks"

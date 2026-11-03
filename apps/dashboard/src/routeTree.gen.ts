@@ -16,6 +16,7 @@ import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
+import { Route as OnboardingRouteImport } from "./routes/onboarding"
 import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
 import { Route as SetupRouteImport } from "./routes/setup"
 import { Route as SignInRouteImport } from "./routes/sign-in"
@@ -33,6 +34,7 @@ import { Route as DesignDeploymentRouteImport } from "./routes/design.deployment
 import { Route as DomainsIndexRouteImport } from "./routes/domains.index"
 import { Route as DomainsZoneIdRouteImport } from "./routes/domains.$zoneId"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
+import { Route as IntegrationsResourcesRouteImport } from "./routes/integrations.resources"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
 import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
@@ -41,6 +43,7 @@ import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
+import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
@@ -85,6 +88,11 @@ const InfrastructureRoute = InfrastructureRouteImport.update({
 const MembersRoute = MembersRouteImport.update({
   id: "/members",
   path: "/members",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: "/onboarding",
+  path: "/onboarding",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -172,6 +180,11 @@ const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   path: "/integrations/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsResourcesRoute = IntegrationsResourcesRouteImport.update({
+  id: "/integrations/resources",
+  path: "/integrations/resources",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
   id: "/invitations/accept",
   path: "/invitations/accept",
@@ -210,6 +223,11 @@ const ServicesIndexRoute = ServicesIndexRouteImport.update({
 const ServicesKindRoute = ServicesKindRouteImport.update({
   id: "/services/$kind",
   path: "/services/$kind",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
+  id: "/services/catalog",
+  path: "/services/catalog",
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
@@ -276,6 +294,7 @@ export interface FileRoutesByFullPath {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
@@ -289,10 +308,12 @@ export interface FileRoutesByFullPath {
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -320,6 +341,7 @@ export interface FileRoutesByTo {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
@@ -333,10 +355,12 @@ export interface FileRoutesByTo {
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
@@ -365,6 +389,7 @@ export interface FileRoutesById {
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
+  "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
@@ -378,10 +403,12 @@ export interface FileRoutesById {
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
   "/domains/$zoneId": typeof DomainsZoneIdRoute
+  "/integrations/resources": typeof IntegrationsResourcesRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
+  "/services/catalog": typeof ServicesCatalogRoute
   "/workspaces/new": typeof WorkspacesNewRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
@@ -411,6 +438,7 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
@@ -424,10 +452,12 @@ export interface FileRouteTypes {
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -455,6 +485,7 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
@@ -468,10 +499,12 @@ export interface FileRouteTypes {
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
     | "/workspaces/new"
     | "/clouds"
     | "/deployments"
@@ -499,6 +532,7 @@ export interface FileRouteTypes {
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
+    | "/onboarding"
     | "/reset-password"
     | "/setup"
     | "/sign-in"
@@ -512,10 +546,12 @@ export interface FileRouteTypes {
     | "/deployments/new"
     | "/design/deployment"
     | "/domains/$zoneId"
+    | "/integrations/resources"
     | "/invitations/accept"
     | "/notifications/settings"
     | "/projects/$id"
     | "/services/$kind"
+    | "/services/catalog"
     | "/workspaces/new"
     | "/clouds/"
     | "/deployments/"
@@ -544,6 +580,7 @@ export interface RootRouteChildren {
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
+  OnboardingRoute: typeof OnboardingRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SetupRoute: typeof SetupRoute
   SignInRoute: typeof SignInRoute
@@ -557,10 +594,12 @@ export interface RootRouteChildren {
   DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
   DomainsZoneIdRoute: typeof DomainsZoneIdRoute
+  IntegrationsResourcesRoute: typeof IntegrationsResourcesRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
+  ServicesCatalogRoute: typeof ServicesCatalogRoute
   WorkspacesNewRoute: typeof WorkspacesNewRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
@@ -630,6 +669,13 @@ declare module "@tanstack/react-router" {
       path: "/members"
       fullPath: "/members"
       preLoaderRoute: typeof MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/onboarding": {
+      id: "/onboarding"
+      path: "/onboarding"
+      fullPath: "/onboarding"
+      preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/reset-password": {
@@ -751,6 +797,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/resources": {
+      id: "/integrations/resources"
+      path: "/integrations/resources"
+      fullPath: "/integrations/resources"
+      preLoaderRoute: typeof IntegrationsResourcesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/invitations/accept": {
       id: "/invitations/accept"
       path: "/invitations/accept"
@@ -805,6 +858,13 @@ declare module "@tanstack/react-router" {
       path: "/services/$kind"
       fullPath: "/services/$kind"
       preLoaderRoute: typeof ServicesKindRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/services/catalog": {
+      id: "/services/catalog"
+      path: "/services/catalog"
+      fullPath: "/services/catalog"
+      preLoaderRoute: typeof ServicesCatalogRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/workspaces/new": {
@@ -888,6 +948,7 @@ const rootRouteChildren: RootRouteChildren = {
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
+  OnboardingRoute: OnboardingRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SetupRoute: SetupRoute,
   SignInRoute: SignInRoute,
@@ -901,10 +962,12 @@ const rootRouteChildren: RootRouteChildren = {
   DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,
   DomainsZoneIdRoute: DomainsZoneIdRoute,
+  IntegrationsResourcesRoute: IntegrationsResourcesRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NotificationsSettingsRoute: NotificationsSettingsRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
+  ServicesCatalogRoute: ServicesCatalogRoute,
   WorkspacesNewRoute: WorkspacesNewRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,

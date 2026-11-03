@@ -124,7 +124,7 @@ function StorageEmpty({
 }: {
   title: string
   description: string
-  to: "/services" | "/integrations"
+  to: "/services/catalog" | "/integrations"
   action: string
 }) {
   return (
@@ -209,7 +209,7 @@ function StorageVolumes({
         <StorageEmpty
           title="No persistent volumes found"
           description="This target has no visible Loomplane-owned storage. Deploy a service with persistent storage to create a volume."
-          to="/services"
+          to="/services/catalog"
           action="Deploy a service"
         />
       ) : (

@@ -207,6 +207,7 @@ type Page = {
     | "/deployments"
     | "/projects"
     | "/services"
+    | "/services/catalog"
     | "/clouds"
     | "/infrastructure"
     | "/activity"
@@ -216,6 +217,7 @@ type Page = {
     | "/notifications/settings"
     | "/webhooks"
     | "/integrations"
+    | "/integrations/resources"
     | "/api-keys"
   label: string
   icon: ReactNode
@@ -250,8 +252,15 @@ const pages: Page[] = [
     to: "/services",
     label: "Services",
     icon: <ServicesIcon />,
-    search: "services catalog databases caches postgres redis",
+    search: "services deployed running managed",
     keys: "G S",
+  },
+  {
+    to: "/services/catalog",
+    label: "Service catalog",
+    icon: <ServicesIcon />,
+    search:
+      "services catalog databases caches postgres redis managed provider one click create deploy",
   },
   {
     to: "/clouds",
@@ -311,6 +320,12 @@ const pages: Page[] = [
     label: "Integrations",
     icon: <IntegrationsIcon />,
     search: "integrations github catalog",
+  },
+  {
+    to: "/integrations/resources",
+    label: "Provider resources",
+    icon: <IntegrationsIcon />,
+    search: "resources provider managed inventory buckets databases sync",
   },
   {
     to: "/api-keys",

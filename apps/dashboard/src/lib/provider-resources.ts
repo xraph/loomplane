@@ -226,3 +226,51 @@ export function providerResourceOutputs(resource: InventoryResource) {
   }
   return outputs[resource.kind] ?? []
 }
+
+/** A provider offering as one card in the Services catalog. */
+export type ManagedOffer = {
+  kind: string
+  provider: string
+  cloud: string
+  providerTitle: string
+  creates: string
+  accounts: number
+}
+
+// One card per kind a provider can create, however many checked accounts
+// can create it; the dialog picks the account.
+export function managedOffers(
+  providers: Provider[],
+  connections: Connection[]
+): ManagedOffer[] {
+  const cards = new Map<string, ManagedOffer>()
+  for (const { provider, offer } of resourceOfferings(providers, connections)) {
+    const key = `${provider.name}:${offer.kind}`
+    const card = cards.get(key)
+    if (card) card.accounts++
+    else
+      cards.set(key, {
+        kind: offer.kind,
+        provider: provider.name,
+        cloud: provider.cloud,
+        providerTitle: provider.title,
+        creates: offer.creates,
+        accounts: 1,
+      })
+  }
+  return [...cards.values()]
+}
+
+/**
+ * usableInDeployments says whether a discovered provider resource shows on
+ * the Services page as something your deployments can use. The full
+ * inventory, including what doesn't qualify, stays under Integrations.
+ */
+export function usableInDeployments(
+  resource: InventoryResource,
+  now: number
+): boolean {
+  // TODO(rex): decide which provider resources count as services.
+  void now
+  return resource.status !== "missing"
+}

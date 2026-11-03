@@ -39,16 +39,21 @@ import {
 } from "@/lib/provider-resources"
 import { useNavigate } from "@/lib/router"
 
+/** The kind and provider a catalog card opens creation with. */
+export type ResourceOffer = { kind: string; provider: string }
+
 export function ResourceReviewDialog({
   open,
   onOpenChange,
   resource,
+  offer,
   providers,
   connections,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   resource?: InventoryResource
+  offer?: ResourceOffer
   providers: Provider[]
   connections: Connection[]
 }) {
@@ -64,12 +69,12 @@ export function ResourceReviewDialog({
           <DialogTitle>
             {resource
               ? `Use ${resource.name} in deployment`
-              : "Create a resource"}
+              : "Create a provider-managed resource"}
           </DialogTitle>
           <DialogDescription>
             {resource
               ? "Add a reference to your manifest, choose its consumer, then review the deployment plan."
-              : "Choose a checked account and review its creation plan before approving any provider changes."}
+              : "Your provider creates and runs it in your account. Review the creation plan before any provider changes are made."}
           </DialogDescription>
         </DialogHeader>
         {projects.status === "error" ? (
@@ -117,6 +122,7 @@ export function ResourceReviewDialog({
               key={`${project.id}:${resource?.id ?? "new"}`}
               projectId={project.id}
               resource={resource}
+              offer={offer}
               providers={providers}
               connections={connections}
             />
@@ -129,11 +135,13 @@ export function ResourceReviewDialog({
 function ResourceDestination({
   projectId,
   resource,
+  offer,
   providers,
   connections,
 }: {
   projectId: string
   resource?: InventoryResource
+  offer?: ResourceOffer
   providers: Provider[]
   connections: Connection[]
 }) {
@@ -197,6 +205,7 @@ function ResourceDestination({
         projectId={projectId}
         environment={selected.name}
         resource={resource}
+        offer={offer}
         providers={providers}
         connections={connections}
         taken={takenNames(manifest.data.manifest)}
@@ -209,6 +218,7 @@ function ResourceReviewForm({
   projectId,
   environment,
   resource,
+  offer,
   providers,
   connections,
   taken,
@@ -217,6 +227,7 @@ function ResourceReviewForm({
   projectId: string
   environment: string
   resource?: InventoryResource
+  offer?: ResourceOffer
   providers: Provider[]
   connections: Connection[]
   taken: Set<string>
@@ -225,11 +236,11 @@ function ResourceReviewForm({
   const navigate = useNavigate()
   const offerings = resourceOfferings(providers, connections)
   const kinds = [...new Set(offerings.map((entry) => entry.offer.kind))]
-  const [kindValue, setKind] = useState("")
+  const [kindValue, setKind] = useState(offer?.kind ?? "")
   const kind =
     resource?.kind ?? (kinds.includes(kindValue) ? kindValue : kinds[0])
   const options = offerings.filter((entry) => entry.offer.kind === kind)
-  const [providerValue, setProvider] = useState("")
+  const [providerValue, setProvider] = useState(offer?.provider ?? "")
   const provider =
     options.find((entry) => entry.provider.name === providerValue)?.provider ??
     options[0]?.provider

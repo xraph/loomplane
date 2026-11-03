@@ -58,15 +58,19 @@ import { cloudHealth, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
+import { ProviderResources } from "@/pages/provider-resources"
 
-export type IntegrationsTab = "catalog" | "connected"
+export type IntegrationsTab = "catalog" | "connected" | "resources"
 
 export function Integrations({
   tab = "catalog",
   onTab,
+  connection,
 }: {
   tab?: IntegrationsTab
   onTab?: (tab: IntegrationsTab) => void
+  /** The account the Resources tab opens filtered to. */
+  connection?: string
 } = {}) {
   const navigate = useNavigate()
   // Each integration connects on a page of its own.
@@ -87,11 +91,20 @@ export function Integrations({
 
   return (
     <>
-      <SiteHeader crumbs={[{ label: "Integrations" }]} />
+      <SiteHeader
+        crumbs={
+          current === "resources"
+            ? [
+                { label: "Integrations", to: "/integrations" },
+                { label: "Resources" },
+              ]
+            : [{ label: "Integrations" }]
+        }
+      />
       <Page className="gap-6">
         <PageHeading
           title="Integrations"
-          description="Where Loomplane reads your code from, and the clouds it deploys to."
+          description="Where Loomplane reads your code from, the clouds it deploys to, and the resources those clouds run for you."
         />
         <Tabs
           value={current}
@@ -111,6 +124,7 @@ export function Integrations({
                 <TabsCount>{connectedCount}</TabsCount>
               )}
             </TabsTrigger>
+            <TabsTrigger value="resources">Resources</TabsTrigger>
           </TabsList>
           <TabsContent value="catalog">
             <IntegrationCatalog
@@ -124,6 +138,14 @@ export function Integrations({
               <GitHubPanel onStart={setStarting} />
               <CloudsPanel onConnect={connect} />
             </div>
+          </TabsContent>
+          <TabsContent value="resources">
+            {current === "resources" && (
+              <ProviderResources
+                key={connection ?? "all"}
+                connection={connection}
+              />
+            )}
           </TabsContent>
         </Tabs>
       </Page>
