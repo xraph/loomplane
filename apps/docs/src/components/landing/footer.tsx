@@ -19,6 +19,7 @@ const columns = [
       { href: "/agents#built-in-agent", text: "Built-in agent" },
       { href: "/agents", text: "loomctl" },
       { href: "/agents", text: "MCP for agents" },
+      { href: "/clouds#nodes", text: "Nodes" },
       { href: "/clouds", text: "Provider plugins" },
       { href: "/self-host", text: "Self-host" },
     ],

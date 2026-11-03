@@ -6,6 +6,7 @@ import { DashboardShot } from "@/components/landing/dashboard-shot";
 import { HeroCta } from "@/components/landing/hero-cta";
 import { HowItWorks } from "@/components/landing/how-it-works";
 import { MobileShot } from "@/components/landing/mobile-shot";
+import { NodeJoin } from "@/components/landing/node-join";
 import { cloudWaitlistUrl } from "@/components/landing/site";
 
 export const metadata: Metadata = {
@@ -212,7 +213,10 @@ export default function HomePage() {
             <b>
               6<em>+</em>
             </b>
-            <span>clouds for services, plus your own servers and clusters</span>
+            <span>
+              clouds for services, plus your own servers, clusters and any
+              machine you join as a node
+            </span>
           </div>
           <div className="stat">
             <b>6</b>
@@ -301,6 +305,57 @@ export default function HomePage() {
         </div>
       </section>
 
+      <section className="band" aria-labelledby="nodes-home">
+        <div className="wrap">
+          <div className="feature flip">
+            <div className="txt">
+              <div className="eyebrow">Nodes</div>
+              <h3 className="h3" id="nodes-home">
+                Turn any machine into a server node with one command.
+              </h3>
+              <p>
+                Run <code>loomctl node join</code> on a laptop, a box under the
+                desk, a GPU workstation or a VM in someone else&apos;s cloud,
+                and it joins your organization as a node. It dials out to
+                Loomplane over one connection and opens no port, so a machine
+                behind a router or a firewall joins the same way as one with a
+                public address. The server binary has the same command, as{" "}
+                <code>loomplane node join</code>.
+              </p>
+              <p>
+                You choose on the machine what Loomplane may use there: the
+                Docker socket, a local Kubernetes API, Firecracker, or only a
+                report of what the machine has. Loomplane can narrow that list
+                from the dashboard. It can never widen it.
+              </p>
+              <ul className="ticks">
+                <li>
+                  Each node makes its own Ed25519 key, and the private half
+                  never leaves the machine
+                </li>
+                <li>
+                  Updates are cosign-signed releases, and a binary that
+                  won&apos;t start is rolled back
+                </li>
+                <li>
+                  Revoke a node from the dashboard, the CLI or the machine
+                  itself, and it stops for good
+                </li>
+              </ul>
+              <div className="store-row">
+                <span className="store-soon">
+                  Deploying to nodes comes next
+                </span>
+                <Link className="store-link" href="/clouds#nodes">
+                  How nodes work <span className="arr">↗</span>
+                </Link>
+              </div>
+            </div>
+            <NodeJoin />
+          </div>
+        </div>
+      </section>
+
       <section className="band" aria-labelledby="explore-title">
         <div className="wrap sec">
           <div className="sec-head">
@@ -336,8 +391,8 @@ export default function HomePage() {
               <h4>Six clouds and your own hardware</h4>
               <p>
                 Vercel, Cloud Run, ECS, Render, App Platform and Container Apps,
-                plus SSH servers and Kubernetes. Pick targets by tag and move
-                between them.
+                plus SSH servers, Kubernetes and nodes that join from behind any
+                firewall. Pick targets by tag and move between them.
               </p>
               <span className="more">
                 See every target <span className="arr">↗</span>
@@ -685,7 +740,11 @@ export default function HomePage() {
               <p>
                 Yes. Connect an SSH server with Docker or a Kubernetes
                 namespace. For anything else, write a provider plugin and point
-                Loomplane at it without changing Loomplane itself.
+                Loomplane at it without changing Loomplane itself. A machine
+                with no public address can join as a node with{" "}
+                <code>loomctl node join</code>: it dials out, so there&apos;s no
+                port to open. Nodes join, report and update today, and deploying
+                to them comes next.
               </p>
             </details>
             <details>
