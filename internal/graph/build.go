@@ -58,6 +58,8 @@ func Build(r *discovery.Report) *Graph {
 	}
 
 	used := map[string]bool{}
+	// reach holds, per service, the Go packages its main imports.
+	var reach []map[string]bool
 	for _, u := range r.Units {
 		// A Node workspace root with nothing to run is the monorepo's
 		// tooling, not a package anything builds with.
@@ -77,6 +79,7 @@ func Build(r *discovery.Report) *Graph {
 				}
 			}
 			b.g.Services = append(b.g.Services, svc)
+			reach = append(reach, packageSet(ep.Packages))
 			for _, d := range u.DependsOn {
 				b.edge(svc.ID, packageID(d.Unit), Uses, discovery.Certain, d.Evidence)
 			}
@@ -94,7 +97,8 @@ func Build(r *discovery.Report) *Graph {
 	for _, ru := range r.Resources {
 		b.resource(ru)
 	}
-	assignEnv(b.g.Services, r.Env)
+	reach = append(reach, make([]map[string]bool, len(b.g.Services)-len(reach))...)
+	assignEnv(b.g.Services, reach, r.Env)
 	b.finish()
 	return b.g
 }
@@ -265,20 +269,49 @@ func imageService(img discovery.Image) Service {
 // closely, then to those whose source directory does, and a file none of
 // them holds, such as a root .env.example beside apps/api and apps/web,
 // belongs to every service.
-func assignEnv(services []Service, vars []discovery.EnvUse) {
+//
+// A Go source file goes by imports instead: it belongs to the services
+// whose main package reaches its package, so a config package only one
+// command imports doesn't show up for every command of the module. One
+// no main reaches is linked into none of them, and goes by directory to
+// the other services only when one holds it.
+func assignEnv(services []Service, reach []map[string]bool, vars []discovery.EnvUse) {
+	var plain []int // services that aren't Go mains
+	for i := range services {
+		if reach[i] == nil {
+			plain = append(plain, i)
+		}
+	}
 	owners := map[string][]int{}
 	ownersOf := func(file string) []int {
 		if o, ok := owners[file]; ok {
 			return o
 		}
-		o := closest(services, file, entryDir)
-		if o == nil {
-			o = closest(services, file, func(s Service) string { return s.Path })
-		}
-		if o == nil {
-			for i := range services {
-				o = append(o, i)
+		candidates := plain
+		goFile := path.Ext(file) == ".go" && len(plain) < len(services)
+		if goFile {
+			var o []int
+			for i, pkgs := range reach {
+				if pkgs[path.Dir(file)] {
+					o = append(o, i)
+				}
 			}
+			if o != nil {
+				owners[file] = o
+				return o
+			}
+		} else {
+			candidates = make([]int, len(services))
+			for i := range services {
+				candidates[i] = i
+			}
+		}
+		o := closest(services, candidates, file, entryDir)
+		if o == nil {
+			o = closest(services, candidates, file, func(s Service) string { return s.Path })
+		}
+		if o == nil && !goFile {
+			o = candidates
 		}
 		owners[file] = o
 		return o
@@ -310,14 +343,27 @@ func entryDir(s Service) string {
 	return s.Entrypoint
 }
 
-// closest returns the services whose directory, by dirOf, holds file
-// most closely, or nil when none does. A root directory holds a file
-// only for a service at the root.
-func closest(services []Service, file string, dirOf func(Service) string) []int {
+// packageSet is a Go main's packages as a set, nil for an entrypoint
+// that has none.
+func packageSet(dirs []string) map[string]bool {
+	if len(dirs) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		set[d] = true
+	}
+	return set
+}
+
+// closest returns the candidate services whose directory, by dirOf,
+// holds file most closely, or nil when none does. A root directory holds
+// a file only for a service at the root.
+func closest(services []Service, candidates []int, file string, dirOf func(Service) string) []int {
 	var out []int
 	best := -1
-	for i, s := range services {
-		d := path.Clean(dirOf(s))
+	for _, i := range candidates {
+		d := path.Clean(dirOf(services[i]))
 		if d == "." || d == "" || !within(file, d) {
 			continue
 		}
@@ -329,8 +375,8 @@ func closest(services []Service, file string, dirOf func(Service) string) []int 
 		}
 	}
 	if out == nil {
-		for i, s := range services {
-			if d := path.Clean(dirOf(s)); d == "." || d == "" {
+		for _, i := range candidates {
+			if d := path.Clean(dirOf(services[i])); d == "." || d == "" {
 				out = append(out, i)
 			}
 		}

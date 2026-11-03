@@ -118,7 +118,11 @@ type Entrypoint struct {
 	Resources  []ResourceUse `json:"resources,omitempty"`
 	// Commands are the entrypoint's own, when they aren't its unit's: a
 	// Procfile process or a task queue's worker beside a web app.
-	Commands *Commands  `json:"commands,omitempty"`
+	Commands *Commands `json:"commands,omitempty"`
+	// Packages are the directories of the repository's Go packages a
+	// main package imports, directly or not, its own among them. It's
+	// empty for other ecosystems.
+	Packages []string   `json:"packages,omitempty"`
 	Evidence []Evidence `json:"evidence"`
 }
 

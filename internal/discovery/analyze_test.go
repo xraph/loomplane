@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"io/fs"
 	"os"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/pkg/discovery"
 )
 
@@ -203,5 +205,35 @@ func TestAnalyze_emptyCheckout(t *testing.T) {
 	}
 	if len(r.Units) != 0 || r.Units == nil || r.Images == nil || r.Notes == nil {
 		t.Fatalf("report %+v", r)
+	}
+}
+
+func TestAnalyze_goServicesGetOnlyTheEnvTheirMainReaches(t *testing.T) {
+	src := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"go.mod":                  src("module example.com/app\n\ngo 1.26\n"),
+		".env.example":            src("LOG_LEVEL=info\n"),
+		"cmd/api/main.go":         src("package main\nimport \"example.com/app/internal/apiconfig\"\nfunc main() { apiconfig.Load() }\n"),
+		"cmd/worker/main.go":      src("package main\nimport \"example.com/app/internal/jobconfig\"\nfunc main() { jobconfig.Load() }\n"),
+		"internal/apiconfig/c.go": src("package apiconfig\nimport \"os\"\nfunc Load() string { return os.Getenv(\"API_ADDR\") }\n"),
+		"internal/jobconfig/c.go": src("package jobconfig\nimport \"os\"\nfunc Load() string { return os.Getenv(\"QUEUE_URL\") }\n"),
+	}
+	r, err := Analyze(context.Background(), fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range graph.Build(r).Services {
+		var names []string
+		for _, v := range s.Env {
+			names = append(names, v.Name)
+		}
+		got[s.Name] = strings.Join(names, " ")
+	}
+	want := map[string]string{"api": "API_ADDR LOG_LEVEL", "worker": "LOG_LEVEL QUEUE_URL"}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s env = %q, want %q", name, got[name], w)
+		}
 	}
 }
