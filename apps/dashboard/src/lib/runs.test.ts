@@ -183,6 +183,26 @@ describe("thread", () => {
     expect(r.phase).toBe("Failed at create api")
   })
 
+  it("stops the steps a cancelled deployment never finished", () => {
+    const r = toRun(
+      plan("approved", {
+        actions: [action("api", 1), action("web", 2), action("worker", 3)],
+      }),
+      deployment("cancelled", [
+        { actionId: "api", status: "succeeded" },
+        { actionId: "web", status: "deploying" },
+        { actionId: "worker", status: "pending" },
+      ])
+    )
+    const deploy = r.thread.slice(2)
+    expect(deploy.map((s) => s.state)).toEqual(["done", "canceled", "canceled"])
+    expect(deploy.map((s) => s.detail).slice(1)).toEqual([
+      "Cancelled while it ran",
+      "Not run",
+    ])
+    expect(deploy[1].progress).toBeUndefined()
+  })
+
   it("draws the deploy steps of a rejected plan as never run", () => {
     const r = toRun(plan("rejected"))
     expect(r.thread.map((s) => s.state)).toEqual([

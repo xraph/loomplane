@@ -226,12 +226,12 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 
 // Get returns one analysis.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Analysis, error) {
-	if err := s.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
-		return nil, err
-	}
 	a, err := s.store.GetAnalysis(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.authz.Require(ctx, p, security.ProjectRead, a.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	list, err := s.analysisSummaries(ctx, p.OrgID, a.ProjectID, []*Analysis{a})
 	if err != nil {
@@ -269,10 +269,15 @@ func (s *Service) analysisSummaries(ctx context.Context, orgID, projectID string
 	return out, nil
 }
 
-// Graph returns the application graph a succeeded analysis found.
+// Graph returns the application graph a succeeded analysis found. It
+// reads the analysis first, to check its project.
 func (s *Service) Graph(ctx context.Context, p security.Principal, id string) (*graph.Graph, error) {
-	if err := s.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
+	a, err := s.store.GetAnalysis(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
+	}
+	if aerr := s.authz.Require(ctx, p, security.ProjectRead, a.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	return s.store.Graph(ctx, p.OrgID, id)
 }

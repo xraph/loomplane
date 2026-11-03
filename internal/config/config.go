@@ -272,6 +272,7 @@ type CloudsConfig struct {
 	MultiLocationDelivery bool
 	ManagedClusters       ManagedClustersConfig
 	ClusterCapacity       ClusterCapacityConfig
+	AutomaticCapacity     AutomaticCapacityConfig
 
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
@@ -472,6 +473,7 @@ func FromSource(src Getter) (Config, error) {
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
 	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.boolean(&c.Clouds.AutomaticCapacity.Enabled, "clouds.automatic_capacity.enabled")
 	r.boolean(&c.Clouds.MultiLocationDelivery, "clouds.multi_location_delivery")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
@@ -873,3 +875,7 @@ func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String
 
 // ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
 type ClusterCapacityConfig struct{ Enabled bool }
+
+// AutomaticCapacityConfig lets server pools grow on their own from saved
+// capacity policies. It stays off until integrated qualification.
+type AutomaticCapacityConfig struct{ Enabled bool }

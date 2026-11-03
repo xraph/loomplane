@@ -41,6 +41,7 @@ var (
 	ErrEnvironmentExists   = errors.New("this project already has an environment with that name")
 	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
 	ErrRepository          = errors.New("the repository couldn't be attached")
+	ErrTeamNotFound        = errors.New("that team isn't in this workspace")
 )
 
 // Project is an application an organization deploys with Loomplane. Its
@@ -66,10 +67,15 @@ type Project struct {
 	// Exclusions keep analysis-found services out of the graph, plans
 	// and deploys. See Exclusion.
 	Exclusions []Exclusion `json:"exclusions"`
-	Status     string      `json:"status"`
-	CreatedBy  string      `json:"created_by"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// ResponsibleTeamID is the team that answers for the project: the
+	// agent sends it the project's requests, and its members hear about
+	// plans waiting there. Empty is none, and workspace admins hear
+	// instead. Deleting the team clears it.
+	ResponsibleTeamID string    `json:"responsible_team_id"`
+	Status            string    `json:"status"`
+	CreatedBy         string    `json:"created_by"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.

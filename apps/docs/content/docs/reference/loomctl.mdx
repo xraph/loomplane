@@ -35,6 +35,23 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 | `vars PROJECT [--json]` | Lists variables. Secrets show no value |
 | `vars set PROJECT KEY=VALUE [--env E] [--service S] [--secret]` | Sets a variable. `KEY=-` reads the value from standard input |
 
+## Teams
+
+| Command | What it does |
+|---|---|
+| `teams [--json]` | Lists teams with their member counts and roles, such as `developer on checkout-api` or `admin on the workspace` |
+| `teams show TEAM [--json]` | Shows a team's description, roles and members. `TEAM` is a slug, name or ID |
+| `teams create NAME [--description TEXT]` | Creates a team |
+| `teams delete TEAM --yes` | Deletes a team. Without `--yes` nothing is sent |
+| `teams add TEAM EMAIL` | Adds a workspace member, found by email |
+| `teams remove TEAM EMAIL` | Takes a person out of a team |
+| `teams grant TEAM viewer\|developer\|admin [--project P]` | Gives the team a role on a project, or on the whole workspace without `--project` |
+| `teams revoke TEAM [--project P]` | Removes the team's role on that project, or on the workspace |
+| `projects team PROJECT TEAM` | Names the team responsible for a project |
+| `projects team PROJECT --none` | Clears it |
+
+Managing teams needs `member:manage`. Setting a project's team needs `project:update` on it. See [Teams](/docs/concepts/teams).
+
 ## Plans and deployments
 
 | Command | What it does |

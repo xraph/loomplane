@@ -24,6 +24,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { ApprovalCard } from "@/components/approval"
+import { CancelDeployment } from "@/components/cancel-deployment"
 import { BuildLogPanel, type LogSource } from "@/components/build-log-panel"
 import { CanaryPanel } from "@/components/canary"
 import { providerName } from "@/components/cloud-detail/clusters"
@@ -75,7 +76,7 @@ import { commitURL, resourceLabel } from "@/lib/architecture"
 import { showsCanary } from "@/lib/canary"
 import { cloudLabel } from "@/lib/clouds"
 import { duration, formatDate, relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import {
   opLabel,
   planConnections,
@@ -177,7 +178,7 @@ function Loaded({
   tab?: DeploymentTab
 }) {
   const run = useRunFor(plan, refetch)
-  const { can } = useOrganization()
+  const can = useProjectCan(plan.projectId)
   const now = useNow()
   const person = usePeople()
   const lines = useMemo(() => runLog(run, (u) => person(u).name), [run, person])
@@ -302,7 +303,7 @@ const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`
 
 function Heading({ run, now }: { run: Run; now: number }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const navigate = useNavigate()
   const person = usePeople()
   const replan = useMutation(usePlansCreate)
@@ -409,6 +410,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
       }
       actions={
         <>
+          {d && <CancelDeployment deployment={d} />}
           {rollback && d ? (
             <RollbackOffer
               run={run}
@@ -689,7 +691,7 @@ function ProgressStrip({
  * stopped at, with a retry from that step.
  */
 function FailureCallout({ run }: { run: Run }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const retry = useMutation(useDeploymentsRetry)
   const invalidate = useInvalidate()
   const connections = useQuery(useConnectionsList)

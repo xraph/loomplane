@@ -16,6 +16,10 @@ type Store interface {
 	// lose each other. An error from change aborts and is returned.
 	UpdateExclusions(ctx context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error)
 	DeleteProject(ctx context.Context, orgID, id string) error
+	// SetResponsibleTeam names the team responsible for the project, or
+	// clears it for "". A team outside orgID is ErrTeamNotFound; a missing
+	// project is ErrNotFound.
+	SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error)
 
 	// CreateEnvironment adds an environment. A name the project already
 	// has is ErrEnvironmentExists; a missing project is ErrNotFound.

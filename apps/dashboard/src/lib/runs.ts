@@ -220,18 +220,30 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
   }
   for (const a of actions) {
     const s = stepsByAction.get(a.id)
-    const state = s ? stepState(s.status) : stopped ? "canceled" : "pending"
+    const recorded = s ? stepState(s.status) : undefined
+    // A cancelled deployment starts nothing more: a step still waiting never
+    // runs, and one it was in the middle of goes on only until it's done.
+    const cut =
+      d?.status === "cancelled" &&
+      (recorded === "pending" || recorded === "running")
+    const state = cut
+      ? "canceled"
+      : (recorded ?? (stopped ? "canceled" : "pending"))
     out.push({
       key: a.id,
       name: `${opLabel(a.op)} ${a.name}`,
       group: "Deploy",
       state,
-      progress: s ? stepProgress[s.status] : undefined,
-      detail: s
-        ? stepStatus(s.status).label
-        : state === "canceled"
-          ? "Not run"
-          : "Not started",
+      progress: s && !cut ? stepProgress[s.status] : undefined,
+      detail: cut
+        ? recorded === "running"
+          ? "Cancelled while it ran"
+          : "Not run"
+        : s
+          ? stepStatus(s.status).label
+          : state === "canceled"
+            ? "Not run"
+            : "Not started",
       startedAt: s?.startedAt,
       finishedAt: s?.finishedAt,
       step: s,

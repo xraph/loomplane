@@ -68,6 +68,7 @@ import { ProductIcon } from "@/components/product-icon"
 import { ProjectGeneral } from "@/components/project-general"
 import { ProjectServices } from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
+import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
@@ -105,7 +106,7 @@ import {
   parseResourceConfig,
 } from "@/lib/catalog-kinds"
 import { formatDate, relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { projectStyle } from "@/lib/project-style"
 import { isReady } from "@/lib/projects"
 import { Link, useNavigate } from "@/lib/router"
@@ -303,7 +304,7 @@ function Body({
   view: ProjectView | null
   viewError?: unknown
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const navigate = useNavigate()
   const { runs } = useRuns()
   const ownRuns = runs.filter((r) => r.projectId === project.id)
@@ -721,6 +722,7 @@ function Body({
         )}
 
         <TabsContent value="settings" className="grid max-w-[760px] gap-6">
+          <ProjectTeam project={project} />
           <ProjectGeneral
             key={`${project.id}:${project.updatedAt}`}
             project={project}

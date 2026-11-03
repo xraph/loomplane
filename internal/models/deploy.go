@@ -251,7 +251,7 @@ func DefaultAlias(e registry.Entry) string {
 // quantization, GPUs, context, kind, cost and resource name, and every
 // problem that stops it. ai:read; it writes nothing.
 func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, environmentID string, in DeployInput) (*DeployPreview, error) {
-	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
+	if err := s.d.Authz.Require(ctx, p, security.AIRead, projectID); err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
@@ -264,7 +264,7 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 		return nil, err
 	}
 	// Preview only reads, so it asks without repairing anything.
-	allowed, err := s.d.Authz.Allowed(ctx, p, writeNeed(env))
+	allowed, err := s.d.Authz.AllowedOn(ctx, p, writeNeed(env), env.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -917,7 +917,7 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, aerr
 	}
 	if s.d.Store == nil || s.d.Manifests == nil || s.d.Plans == nil {

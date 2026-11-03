@@ -73,6 +73,7 @@ import {
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import {
   placementRows,
   placementSettings,
@@ -506,7 +507,7 @@ export function SuggestedConfiguration({
   const draft = useQuery(useManifestsDraft, { path: { id: projectId } })
   const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
-  const { can } = useOrganization()
+  const can = useProjectCan(projectId)
   const [error, setError] = useState("")
   const initialize = async () => {
     if (!draft.data) return
@@ -691,7 +692,7 @@ export function ManifestEditor({
   draftedFrom?: string
   onPendingChange?: (pending: boolean) => void
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
   const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
@@ -840,7 +841,8 @@ export function FindingActions({
   project: Project
   environment: string
 }) {
-  const { can } = useOrganization()
+  const { can: workspaceCan } = useOrganization()
+  const can = useProjectCan(project.id)
   if (f.code === "no-connection")
     return (
       <Link
@@ -850,7 +852,10 @@ export function FindingActions({
         Connect one under Integrations
       </Link>
     )
-  if (can("cloud_account:manage") && f.path?.startsWith(connectionPath))
+  if (
+    workspaceCan("cloud_account:manage") &&
+    f.path?.startsWith(connectionPath)
+  )
     return (
       <ConnectionPicker
         project={project}

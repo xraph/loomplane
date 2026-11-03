@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { canaryLine, canaryFindings } from "@/lib/canary"
 import { dateTime, relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { changeCount, planServices } from "@/lib/plans"
 import { Link } from "@/lib/router"
 import type { Run } from "@/lib/runs"
@@ -198,7 +198,7 @@ function approvalTitle(run: Run): string {
  * the deploy log, then Reject or Approve and deploy.
  */
 export function ApprovalCard({ run }: { run: Run }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const { decide, busy, approving, rejecting } = useDecision(run)
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState("")

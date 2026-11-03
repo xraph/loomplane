@@ -604,6 +604,13 @@ it("says pools won't grow on their own while automatic expansion is off, and sav
       "Automatic expansion isn't on for this Loomplane yet"
     )
   ).toBeInTheDocument()
+  // It names the setting, so the operator knows exactly what to change.
+  expect(
+    screen.getByText("LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED=true")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText("clouds.automatic_capacity.enabled")
+  ).toBeInTheDocument()
   expect(
     screen.getByText(/nothing will appear here until it's turned on/)
   ).toBeInTheDocument()

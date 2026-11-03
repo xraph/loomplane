@@ -119,6 +119,8 @@ export const entities = {
   'StoredVolume': { idField: 'id' },
   'Sync': { idField: 'id', fields: { 'after': 'Target', 'before': 'Target' } },
   'Target': { idField: 'id' },
+  'Team': { idField: 'id' },
+  'TeamList': { fields: { 'teams': 'Team' } },
   'Tenant': { idField: 'id' },
   'TenantList': { fields: { 'tenants': 'Tenant' } },
   'Variable': { idField: 'id' },

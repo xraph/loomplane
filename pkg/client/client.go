@@ -178,6 +178,9 @@ type Project struct {
 	Repositories []string  `json:"repositories,omitempty"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
+	// ResponsibleTeamID is the team that gets the project's requests and
+	// notices, empty for none.
+	ResponsibleTeamID string `json:"responsible_team_id"`
 }
 
 // NewProject is a project to create.
@@ -939,6 +942,13 @@ func (c *Client) DeploymentForPlan(ctx context.Context, planID string) (*Deploym
 func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, error) {
 	var d Deployment
 	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/retry", nil, &d)
+}
+
+// Cancel cancels a running deployment, or one paused for capacity. The
+// action that's running finishes and nothing after it starts.
+func (c *Client) Cancel(ctx context.Context, deploymentID string) (*Deployment, error) {
+	var d Deployment
+	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/cancel", nil, &d)
 }
 
 // Binding is what runs a service or resource in an environment now.

@@ -129,11 +129,16 @@ export function Capacity({
           icon={ZapIcon}
           title="Automatic expansion isn't on for this Loomplane yet"
         >
-          You can set the policy now and it&apos;s saved. Until expansion is
-          enabled on the server, pools don&apos;t grow on their own: a
-          deployment that doesn&apos;t fit waits for a server you add. Pools
-          never shrink on their own either; you drain and remove servers
-          yourself.
+          You can set the policy now and it&apos;s saved. Pools grow on their
+          own once whoever runs this Loomplane sets{" "}
+          <code className="font-mono break-all">
+            LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED=true
+          </code>{" "}
+          (<code className="font-mono">clouds.automatic_capacity.enabled</code>)
+          and restarts it. It&apos;s off by default while it&apos;s being
+          qualified. Until then, a deployment that doesn&apos;t fit waits for a
+          server you add. Pools never shrink on their own either; you drain and
+          remove servers yourself.
         </CloudCallout>
       )}
       <CapacityUsage cloudId={cloudId} />

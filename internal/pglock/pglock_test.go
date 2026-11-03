@@ -201,3 +201,54 @@ func TestTryShared_neverRunsDuringDo(t *testing.T) {
 		t.Fatalf("lock still held after TryShared: %v", err)
 	}
 }
+
+// Try takes the lock when it's free and holds it while fn runs; while
+// another replica holds it, Try says so at once instead of waiting.
+func TestTry_skipsAHeldLock(t *testing.T) {
+	ctx := t.Context()
+	dsn := scratchDB(t)
+	first, second := open(t, dsn), open(t, dsn)
+	const name = "loomplane-test-try"
+
+	ran, err := TryFor(first)(ctx, name, func(ctx context.Context) error {
+		var free bool
+		if err := second.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, name).Scan(&free); err != nil {
+			return err
+		}
+		if free {
+			return errors.New("Try didn't hold the lock while fn ran")
+		}
+		return nil
+	})
+	if err != nil || !ran {
+		t.Fatalf("Try with nobody holding the lock: ran=%v err=%v", ran, err)
+	}
+
+	err = Do(ctx, first, name, func(ctx context.Context) error {
+		start := time.Now()
+		inner, terr := Try(ctx, second, name, func(context.Context) error { return errors.New("ran during Do") })
+		if terr != nil || inner {
+			return fmt.Errorf("Try during Do: ran=%v err=%w, want not run", inner, terr)
+		}
+		if waited := time.Since(start); waited > 2*time.Second {
+			return fmt.Errorf("Try waited %s for Do", waited)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("sync failed")
+	if ran, err = Try(ctx, second, name, func(context.Context) error { return boom }); !ran || !errors.Is(err, boom) {
+		t.Fatalf("Try with a failing fn: ran=%v err=%v", ran, err)
+	}
+	waited, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = Do(waited, first, name, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("lock still held after Try: %v", err)
+	}
+	if _, err = Try(ctx, nil, name, func(context.Context) error { return nil }); err == nil {
+		t.Fatal("Try without a database didn't fail")
+	}
+}

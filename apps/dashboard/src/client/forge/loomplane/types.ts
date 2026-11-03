@@ -1459,6 +1459,11 @@ export interface CreateTargetInputBody {
   tags?: string[];
 }
 
+export interface CreateTeamInputBody {
+  description?: string;
+  name: string;
+}
+
 export interface CreateVariableInputBody {
   environment?: string;
   key: string;
@@ -1630,6 +1635,7 @@ export interface DeployedRepository {
 
 export interface Deployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -1663,6 +1669,7 @@ export interface DeploymentList {
 
 export interface DeploymentsDeployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -3473,6 +3480,7 @@ export interface Project {
   name: string;
   orgId: string;
   repositories: string[];
+  responsibleTeamId: string;
   slug: string;
   status: string;
   updatedAt: string;
@@ -3503,6 +3511,10 @@ export interface ProjectGrant {
 
 export interface ProjectList {
   projects: Project[];
+}
+
+export interface ProjectPermissions {
+  permissions: string[];
 }
 
 export interface ProjectView {
@@ -4736,6 +4748,15 @@ export interface SetDefaultPlacementInputBody {
   revision: number;
 }
 
+export interface SetGrantInputBody {
+  projectId?: string;
+  role: string;
+}
+
+export interface SetTeamInputBody {
+  teamId?: string | null;
+}
+
 export interface Setting {
   key: string;
   label: string;
@@ -5012,6 +5033,35 @@ export interface TargetChoice {
   source: string;
 }
 
+export interface Team {
+  createdAt: string;
+  description: string;
+  grants: TeamGrant[];
+  id: string;
+  members: TeamMember[];
+  name: string;
+  orgId: string;
+  slug: string;
+  updatedAt: string;
+}
+
+export interface TeamGrant {
+  id: string;
+  projectId: string;
+  role: string;
+}
+
+export interface TeamList {
+  teams: Team[];
+}
+
+export interface TeamMember {
+  addedAt: string;
+  email: string;
+  name: string;
+  userId: string;
+}
+
 export interface Tenant {
   createdAt: string;
   id: string;
@@ -5091,6 +5141,11 @@ export interface UpdateTargetInputBody {
   displayName: string;
   revision: number;
   tags?: string[];
+}
+
+export interface UpdateTeamInputBody {
+  description?: string;
+  name?: string;
 }
 
 export interface UpdateVariableInputBody {

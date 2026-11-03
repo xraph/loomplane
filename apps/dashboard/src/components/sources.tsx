@@ -52,7 +52,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
 import { relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { useNow } from "@/lib/use-runs"
 
 /**
@@ -79,7 +79,7 @@ function sourceURL(s: Source): string {
  * from each: Analyze reads one again, its menu removes it.
  */
 export function Repositories({ project }: { project: Project }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const analyses = useAnalyses(project.id)
   const start = useMutation(useAnalysesCreate)

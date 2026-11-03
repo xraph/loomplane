@@ -172,7 +172,8 @@ type Deps struct {
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup
-	// EnableAutomaticCapacity stays false until integrated qualification.
+	// EnableAutomaticCapacity comes from clouds.automatic_capacity.enabled,
+	// which stays off by default until integrated qualification.
 	EnableAutomaticCapacity bool
 	Domains                 DomainStore
 	Registrations           RegistrationStore

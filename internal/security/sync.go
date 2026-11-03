@@ -2,7 +2,11 @@ package security
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"sync"
 
+	authid "github.com/xraph/authsome/id"
 	"github.com/xraph/authsome/organization"
 	"github.com/xraph/authsome/plugin"
 )
@@ -12,12 +16,22 @@ import (
 // owner role, and members get, change and lose their role as authsome
 // adds, changes and removes them.
 //
-// authsome logs a hook's error instead of failing the change, so a failed
-// sync leaves the member without a role. Authorizer.Require repairs that on
-// the member's next request.
+// authsome logs an "after" hook's error instead of failing the change, so
+// a failed sync leaves the member without a role. Authorizer.Require
+// repairs that on the member's next request. The "before remove" hook is
+// different: its error aborts the removal (see OnBeforeMemberRemove).
 type Sync struct {
-	authz *Authorizer
+	authz   *Authorizer
+	leaver  Leaver   // takes a leaving member out of their teams (teams.go)
+	requeue Requeuer // queues a person whose after-removal revoke failed
+
+	// leaving maps the ID of a member being removed to who they are, from
+	// the before-hook to the after-hook, which carries only the ID.
+	leaving sync.Map // member ID -> leavingMember
 }
+
+// leavingMember is who a member being removed is.
+type leavingMember struct{ orgID, userID string }
 
 // NewSync returns the plugin.
 func NewSync(authz *Authorizer) *Sync { return &Sync{authz: authz} }
@@ -28,6 +42,7 @@ var (
 	_ plugin.AfterMemberAdd        = (*Sync)(nil)
 	_ plugin.AfterMemberRoleChange = (*Sync)(nil)
 	_ plugin.BeforeMemberRemove    = (*Sync)(nil)
+	_ plugin.AfterMemberRemove     = (*Sync)(nil)
 )
 
 // Name implements plugin.Plugin.
@@ -54,9 +69,70 @@ func (s *Sync) OnAfterMemberRoleChange(ctx context.Context, m *organization.Memb
 	return s.authz.Assign(ctx, m.OrgID.String(), m.UserID.String(), RoleForMember(string(m.Role)), "authsome:member.role_change")
 }
 
-// OnBeforeMemberRemove takes the member's role away. It's the "before" hook
-// because the "after" one only carries the member's ID, not who left which
-// organization.
+// OnBeforeMemberRemove takes the member out of their teams, then takes
+// every role away. The after-hook (OnAfterMemberRemove) carries only the
+// member's ID, so this hook also remembers who is leaving for it.
+//
+// A leaver error is logged and never blocks the removal: a team row left
+// behind names a membership authsome is about to delete, and the teams
+// service's reads join on it, so the row grants nothing, now or after a
+// re-invite.
+//
+// Revoke runs under the person's sync lock, so a sync that read their teams
+// before the leaver ran finishes first and its rows go too. If the lock
+// can't be had, it revokes anyway and returns the lock's error. authsome
+// aborts the removal when this hook fails: the person stays a member, and
+// whatever this hook already revoked comes back on their next request
+// through Require's repair.
 func (s *Sync) OnBeforeMemberRemove(ctx context.Context, m *organization.Member) error {
-	return s.authz.Revoke(ctx, m.OrgID.String(), m.UserID.String())
+	orgID, userID := m.OrgID.String(), m.UserID.String()
+	if s.leaver != nil {
+		if err := s.leaver(ctx, orgID, userID); err != nil {
+			slog.ErrorContext(ctx, "take a leaving member out of their teams", "org", orgID, "user", userID, "error", err)
+		}
+	}
+	if err := s.revokeLocked(ctx, orgID, userID); err != nil {
+		return err
+	}
+	s.leaving.Store(m.ID.String(), leavingMember{orgID: orgID, userID: userID})
+	return nil
+}
+
+// OnAfterMemberRemove revokes the member's roles again, under their lock,
+// once authsome has deleted the membership. Between the before-hook and
+// the delete the person was still a member, so a sync in that window (a
+// repair from one of their own requests, or the teams queue) could write
+// their member role back. Any sync after the delete finds no membership
+// and revokes, and the lock makes one that started in the window finish
+// first. authsome only logs this hook's error, so when the revoke fails the
+// person is queued (SetRequeuer), and the queue's sync of a non-member
+// revokes everything.
+func (s *Sync) OnAfterMemberRemove(ctx context.Context, memberID authid.MemberID) error {
+	v, ok := s.leaving.LoadAndDelete(memberID.String())
+	if !ok {
+		return nil
+	}
+	who, ok := v.(leavingMember)
+	if !ok {
+		return nil
+	}
+	err := s.revokeLocked(ctx, who.orgID, who.userID)
+	if err != nil && s.requeue != nil {
+		err = errors.Join(err, s.requeue(ctx, who.orgID, who.userID))
+	}
+	return err
+}
+
+// revokeLocked revokes the person's roles under their sync lock, and
+// without it when the lock can't be had.
+func (s *Sync) revokeLocked(ctx context.Context, orgID, userID string) error {
+	revoked := false
+	err := s.authz.withPersonLock(ctx, orgID, userID, func(ctx context.Context) error {
+		revoked = true
+		return s.authz.Revoke(ctx, orgID, userID)
+	})
+	if !revoked {
+		err = errors.Join(err, s.authz.Revoke(ctx, orgID, userID))
+	}
+	return err
 }

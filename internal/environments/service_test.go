@@ -3,6 +3,7 @@ package environments
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -13,9 +14,11 @@ import (
 	vaultmem "github.com/xraph/vault/store/memory"
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/store/memory"
+	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/security/securitytest"
 )
 
 const (
@@ -427,5 +430,69 @@ func TestService_resolveShowsWhereEachValueComesFrom(t *testing.T) {
 	}
 	if _, err := f.svc.Resolve(ctx, dev, project, "staging", ""); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("resolving an environment the project doesn't have: %v", err)
+	}
+}
+
+// Changing a variable checks the variable's own project, so a team's grant
+// on that project counts there and nowhere else. An organization variable
+// still checks the whole workspace.
+func TestVariableChangesCheckTheVariablesProject(t *testing.T) {
+	ctx := context.Background()
+	w := securitytest.New(t, org)
+	rec := securitytest.NewRecorder(w.Authz)
+	store := &memStore{vars: map[string]*Variable{}}
+	secrets := newFixture(t).secrets
+	svc := NewService(store, secrets, fakeProjects{}, fakeServices{}, rec, nil, nil)
+	projA, projB := typeid.MustGenerate("proj").String(), typeid.MustGenerate("proj").String()
+	put := func(id, scope, projectID string) {
+		store.vars[id] = &Variable{ID: id, OrgID: org, Scope: scope, ProjectID: projectID, Key: "K", Value: "v"}
+	}
+
+	workspace := w.Workspace(t, "ausr_dev", security.RoleDeveloper)
+	grant := w.ProjectOnly(t, "ausr_grace", security.RoleDeveloper, projA)
+	type call struct {
+		name string
+		run  func(p security.Principal, id string) error
+	}
+	calls := []call{
+		{"Update", func(p security.Principal, id string) error {
+			_, err := svc.Update(ctx, p, id, UpdateVariableInput{Value: "w"})
+			return err
+		}},
+		{"Delete", func(p security.Principal, id string) error { return svc.Delete(ctx, p, id) }},
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			put("var_a", ScopeProject, projA)
+			put("var_b", ScopeProject, projB)
+			rec.Reset()
+			if err := c.run(workspace, "var_a"); err != nil {
+				t.Fatalf("workspace developer on A: %v", err)
+			}
+			if got, want := rec.Checks(), []string{"variable:read " + projA, "variable:manage " + projA}; !slices.Equal(got, want) {
+				t.Fatalf("checks %v, want %v", got, want)
+			}
+			if err := c.run(workspace, "var_b"); err != nil {
+				t.Fatalf("workspace developer on B: %v", err)
+			}
+			put("var_a", ScopeProject, projA)
+			if err := c.run(grant, "var_a"); err != nil {
+				t.Fatalf("project grant on A: %v", err)
+			}
+			put("var_b", ScopeProject, projB)
+			if err := c.run(grant, "var_b"); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("project grant on B: %v, want ErrForbidden", err)
+			}
+
+			put("var_org", ScopeOrganization, "")
+			admin := w.Workspace(t, "ausr_admin", security.RoleAdmin)
+			rec.Reset()
+			if err := c.run(admin, "var_org"); err != nil {
+				t.Fatalf("admin on an organization variable: %v", err)
+			}
+			if got, want := rec.Checks(), []string{"variable:read ", "organization_variable:manage "}; !slices.Equal(got, want) {
+				t.Fatalf("organization variable checks %v, want %v", got, want)
+			}
+		})
 	}
 }

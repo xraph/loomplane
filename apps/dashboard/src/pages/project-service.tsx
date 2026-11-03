@@ -77,7 +77,7 @@ import {
 } from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import {
   callersOf,
   deployedConfig,
@@ -206,7 +206,7 @@ function Loaded({
   environment?: string
   tab?: ServiceTab
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const navigate = useNavigate()
   const { rows, routes, routesQuery, bindings } = useServiceRows(
     project,
@@ -1463,7 +1463,7 @@ function ServiceEnvironments({
   row: ServiceRow
   environments: Environment[]
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const name = row.service.name
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
   const save = useMutation(useManifestsEdit)

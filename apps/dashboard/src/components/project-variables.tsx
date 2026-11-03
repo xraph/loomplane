@@ -53,7 +53,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { cn } from "@/lib/utils"
 import { layerLabel, ownLayer, reachLabel, type Target } from "@/lib/variables"
 
@@ -112,7 +112,7 @@ function Panel({
   services: ServiceOption[]
   initialEnvironment?: string
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayManage = can("variable:manage")
   const [chosenEnv, setEnv] = useState(initialEnvironment)
   const [chosenService, setService] = useState("")

@@ -1,0 +1,88 @@
+---
+title: Teams
+description: Give a group of people one role on a project or the whole workspace, and name the team that hears about a project's requests.
+---
+
+A team is a named group of workspace members. It carries a role on one project or on the whole workspace, and a project can name it as the team responsible for that project. Use one when the people who ship a service aren't the people who should be admins everywhere.
+
+## Set one up
+
+Admins and owners manage teams. That means anyone holding `member:manage`. Everyone else in the workspace can open **Settings, Teams** and read every team, its members and its roles, but can't change any of it.
+
+1. Open **Settings, Teams** and choose **Create team**. Give it a name and a short description. The description matters if you run the [AI agent](/docs/ai), because the agent reads it to pick a team for a request.
+2. Add members. The picker lists people already in the workspace, so invite someone first if they aren't.
+3. Give the team a role. Pick viewer, developer or admin, then pick **Whole workspace** or one project.
+
+From a terminal, the same steps look like this:
+
+```bash
+loomctl teams create Payments --description "Owns checkout and billing"
+loomctl teams add payments grace@example.com
+loomctl teams grant payments developer --project checkout-api
+```
+
+See [loomctl](/docs/reference/loomctl#teams) for every command.
+
+## Roles a team can give
+
+A team gives viewer, developer or admin. It never gives owner. A team has at most one role per scope, so setting a second role on the same project replaces the first.
+
+You can only give a role at or below your own. If your effective role is admin, you can't give a team owner, and you can't change a team whose role is above yours.
+
+## How a team's role reaches a person
+
+Loomplane copies a team's role onto each member as an ordinary role of their own. Nothing is checked at the team level when someone acts. That's why a team's role behaves exactly like a direct one, for the dashboard, for API keys and for an agent acting on someone's behalf.
+
+A person's effective role is the highest of their own and their teams'. Say Grace is a viewer in the workspace, and Payments gives her developer on `checkout-api`. On that project she's a developer. Everywhere else she's still a viewer.
+
+A role on a project only counts on that project. It doesn't open workspace settings, other projects, members or clouds. One project role does carry more weight than you might expect, though: an **admin** role on a project lets its members delete that project, manage its secrets and choose its cloud connection.
+
+The Members page shows each person's own role, the teams they're in, and a line for every team role above their own, such as "Admin on checkout-api through Payments".
+
+Project pages ask the API what you can do on that project, so a button appears when a team gives you the right even though your workspace role doesn't. `GET /api/v1/projects/{id}/permissions` returns the answer.
+
+## Leaving the workspace
+
+When someone leaves or is removed, their team memberships go and so do their team roles. If they're invited back, they start from their invitation role, with no teams.
+
+## A project's responsible team
+
+Open a project's **Settings** tab and use the **Responsible team** field, or run `loomctl projects team checkout-api payments`. Anyone with `project:update` on that project can set it, which includes a developer and anyone a team grants that right on the project. Clear it with **None** or `loomctl projects team checkout-api --none`. Deleting the team clears it too.
+
+The responsible team only decides who is told. It gives its members no rights on the project. Give the team a role as well if you want them to act.
+
+### Where the agent sends requests
+
+If you turn the AI agent on, the agent has to ask a person for things now and then: a secret, an answer, a connection. It picks who to ask in this order.
+
+1. A team it names itself, with a reason that the request shows. The team must exist and have at least one member.
+2. The project's responsible team, if it has members.
+3. Workspace admins.
+
+If a team it names, or the project's team, is empty or doesn't exist, the request falls through to the next choice and says why. A request always reaches someone. Every member of the team gets the notice under their own notification preferences, and any member who has the permission can act on it. The first to act settles it.
+
+A request to approve a plan always goes to the project's team and never to a team the agent picked. Teams work the same whether the agent is on or off. Only the routing needs it.
+
+## Things to know
+
+**Loomplane is the only writer of a person's Warden roles.** If you change someone's roles in Warden's console, Loomplane puts them back on the next sync, which runs when a team or member changes and at least once a minute. Make the change in Loomplane.
+
+**authsome's own team routes are switched off.** Requests to `/authsome/v1/orgs/{id}/teams` answer 404, so there's only one kind of team. Use `/api/v1/teams`.
+
+**The sync lock uses extra database connections.** Each replica keeps a separate pool of up to 4 connections for the lock that keeps one person's sync from running twice at once. Leave `max_connections` headroom for 4 per replica, on top of `database.pool_size`.
+
+## API
+
+| Method and path | What it does | Needs |
+|---|---|---|
+| `GET /api/v1/teams`, `GET /api/v1/teams/{id}` | Read teams, with members and roles | `member:read` |
+| `POST /api/v1/teams` | Create a team | `member:manage` |
+| `PATCH /api/v1/teams/{id}` | Rename a team or change its description | `member:manage` |
+| `DELETE /api/v1/teams/{id}` | Delete a team | `member:manage` |
+| `PUT` or `DELETE /api/v1/teams/{id}/members/{user_id}` | Add or remove a member | `member:manage` |
+| `PUT /api/v1/teams/{id}/grants` | Set the team's role on a project, or the workspace if `project_id` is empty | `member:manage`, at or below your own role |
+| `DELETE /api/v1/teams/{id}/grants/{grant_id}` | Remove a role | `member:manage` |
+| `PUT /api/v1/projects/{id}/team` | Set the responsible team, or clear it with `{"team_id": null}` | `project:update` on the project |
+| `GET /api/v1/projects/{id}/permissions` | What you may do on one project | `project:read` on the project |
+
+Every change is in the [audit trail](/docs/concepts/organizations-and-roles#the-audit-trail).

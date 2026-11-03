@@ -103,6 +103,16 @@ These exist so tests can stand fakes in for real clouds. Leave them empty in a l
 
 The setting `clouds.enrollment_url` (set it in `config.local.yaml`) is the reachable HTTPS callback base that managed servers use to enroll. Empty uses the public URL, and a local address can't provision remote servers.
 
+## Cloud capacity
+
+<Callout type="warn">
+  Automatic capacity is off by default and still being qualified. Turn it on only where you're ready for Loomplane to buy servers at your clouds on its own.
+</Callout>
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED` | `false` | Lets pools add servers on their own, within each Cloud's capacity policy (`clouds.automatic_capacity.enabled`). Off, you can still save a policy on the Cloud's **Capacity** tab, but nothing grows and nothing waits for approval: a deployment that doesn't fit waits for a server you add. Pools never shrink on their own either way |
+
 ## YAML-only settings
 
 These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.

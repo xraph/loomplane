@@ -51,7 +51,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { kindLabel, shortSHA } from "@/lib/architecture"
 import { formatDate } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import {
   covering,
   exclusionOf,
@@ -171,7 +171,7 @@ export function ProjectServices({
   environments: Environment[]
   view: ProjectView
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
   const { rows, bindings, bindingsFailed, refetchBindings } = useServiceRows(
     project,
@@ -872,7 +872,7 @@ export function ExcludedServices({
   project: Project
   excluded: Excluded[]
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const exclusions = useExclusions(project)
   if (excluded.length === 0) return null
   return (

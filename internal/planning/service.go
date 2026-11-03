@@ -551,10 +551,14 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID, env
 
 // Get returns one plan.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Plan, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	plan, err := s.store.GetPlan(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.GetPlan(ctx, p.OrgID, id)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, plan.ProjectID); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // Approve approves a ready plan, as of the revision the caller reviewed.
@@ -571,12 +575,13 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	if err := refuseAutomation(p); err != nil {
 		return nil, err
 	}
-	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
-		return nil, err
-	}
 	plan, err := s.store.GetPlan(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	// On the plan's project, so a team's approver there may decide it.
+	if aerr := s.authz.Require(ctx, p, security.DeploymentApprove, plan.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	if plan.ManagedInstanceID != "" || plan.Kind == KindInstance {
 		return nil, projects.ErrFleetManaged

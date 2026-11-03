@@ -26,7 +26,8 @@ const mount = (process.env.AUTHSOME_MOUNT ?? "/authsome").replace(/\/+$/, "")
 // The organization surface. Sign-in, sessions, MFA and the rest stay with the
 // @authsome/ui-* SDK, which owns the session; generating them here would give
 // the dashboard two clients fighting over one session. Teams are left out:
-// Loomplane has no use for groups inside an organization yet.
+// Loomplane blocks authsome's team routes (they answer 404) and serves its
+// own at /api/v1/teams, so a workspace has one kind of team.
 const KEEP = [/^\/v1\/orgs(?!\/[^/]+\/teams)(\/|$)/, /^\/v1\/me\/switch-org$/]
 
 function pinnedSpec() {
