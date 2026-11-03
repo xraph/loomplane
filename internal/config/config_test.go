@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -435,5 +436,69 @@ func TestConfig_gitLabHostValidation(t *testing.T) {
 	}
 	if _, err := FromSource(host(map[string]any{"web_url": "https://git.example.com", "client_id": "a", "client_secret": "b"})); err != nil {
 		t.Fatalf("a complete host should pass: %v", err)
+	}
+}
+
+func TestFromSource_passkeysFollowThePublicURL(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Identity.PasskeyRPID != "localhost" {
+		t.Errorf("rp id %q, want localhost", c.Identity.PasskeyRPID)
+	}
+	if want := []string{"http://localhost:8780"}; !slices.Equal(c.Identity.PasskeyOrigins, want) {
+		t.Errorf("origins %v, want %v", c.Identity.PasskeyOrigins, want)
+	}
+
+	c, err = FromSource(mapGetter{"database.url": testDSN, "public_url": "https://lp.example.com/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Identity.PasskeyRPID != "lp.example.com" || !slices.Equal(c.Identity.PasskeyOrigins, []string{"https://lp.example.com"}) {
+		t.Errorf("rp id %q, origins %v", c.Identity.PasskeyRPID, c.Identity.PasskeyOrigins)
+	}
+}
+
+func TestFromSource_passkeyOverrides(t *testing.T) {
+	c, err := FromSource(mapGetter{
+		"database.url":             testDSN,
+		"public_url":               "https://lp.example.com",
+		"identity.passkey_rp_id":   "example.com",
+		"identity.passkey_origins": "https://lp.example.com, https://console.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Identity.PasskeyRPID != "example.com" {
+		t.Errorf("rp id %q", c.Identity.PasskeyRPID)
+	}
+	if want := []string{"https://lp.example.com", "https://console.example.com"}; !slices.Equal(c.Identity.PasskeyOrigins, want) {
+		t.Errorf("origins %v, want %v", c.Identity.PasskeyOrigins, want)
+	}
+}
+
+func TestFromSource_rejectsPasskeySettings(t *testing.T) {
+	tests := []struct {
+		name string
+		src  mapGetter
+		want string
+	}{
+		{"rp id with a port", mapGetter{"identity.passkey_rp_id": "localhost:8780"}, "identity.passkey_rp_id"},
+		{"rp id as a url", mapGetter{"identity.passkey_rp_id": "https://example.com"}, "identity.passkey_rp_id"},
+		{"origin with a path", mapGetter{"identity.passkey_origins": "http://localhost:8780/app"}, "identity.passkey_origins"},
+		{"origin outside the rp id", mapGetter{"identity.passkey_origins": "http://evil.test"}, "identity.passkey_origins"},
+		{"origin that only ends like the rp id", mapGetter{
+			"public_url": "https://example.com", "identity.passkey_origins": "https://badexample.com",
+		}, "identity.passkey_origins"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.src["database.url"] = testDSN
+			_, err := FromSource(tt.src)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %v, want it to mention %q", err, tt.want)
+			}
+		})
 	}
 }

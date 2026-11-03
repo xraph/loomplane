@@ -132,8 +132,8 @@ func (e *Extension) cliRoutes(r forge.Router) error {
 	)
 }
 
-// cliUser is the signed-in user, held to the same email rule as the guard.
-func (e *Extension) cliUser(ctx context.Context) (authid.UserID, error) {
+// sessionUser is the signed-in user, held to the same email rule as the guard.
+func (e *Extension) sessionUser(ctx context.Context) (authid.UserID, error) {
 	uid, ok := authmw.UserIDFrom(ctx)
 	if !ok || uid.IsNil() {
 		return uid, forge.NewHTTPError(http.StatusUnauthorized, security.ErrUnauthenticated.Error())
@@ -148,7 +148,7 @@ func (e *Extension) cliUser(ctx context.Context) (authid.UserID, error) {
 
 func (e *Extension) cliOrganizations(c forge.Context) error {
 	ctx := c.Request().Context()
-	uid, err := e.cliUser(ctx)
+	uid, err := e.sessionUser(ctx)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (e *Extension) cliOrganizations(c forge.Context) error {
 
 func (e *Extension) cliUseOrganization(c forge.Context) error {
 	ctx := c.Request().Context()
-	uid, err := e.cliUser(ctx)
+	uid, err := e.sessionUser(ctx)
 	if err != nil {
 		return err
 	}

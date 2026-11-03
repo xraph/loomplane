@@ -33,8 +33,10 @@ import (
 	"github.com/xraph/authsome/environment"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/plugins/mfa"
 	"github.com/xraph/authsome/plugins/oauth2provider"
 	"github.com/xraph/authsome/plugins/organization"
+	"github.com/xraph/authsome/plugins/passkey"
 	"github.com/xraph/authsome/plugins/password"
 	"github.com/xraph/authsome/plugins/waitlist"
 	"github.com/xraph/authsome/ratelimit"
@@ -122,6 +124,10 @@ type Extension struct {
 	// signupLimit is authsome's sign-up limit, which refuseSignUps runs
 	// ahead of the gate. Nil when rate limiting is off.
 	signupLimit forge.Middleware
+
+	// mfa holds two-step verification; the account routes ask it whether
+	// a user has it on (account_mfa.go).
+	mfa *mfa.Plugin
 
 	// oauthClients is the OAuth provider's client store, where loomctl's
 	// client is seeded (cli.go).
@@ -262,6 +268,17 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	// TOTP secrets are encrypted at rest with the same key as other tokens,
+	// so a copy of the database holds no usable seeds.
+	e.mfa = mfa.New(mfa.Config{Issuer: "Loomplane"})
+	e.mfa.SetStore(mfa.NewEncryptedStore(mfa.NewPostgresStore(db), tokens))
+	// A passkey's stored half is a public key, so it needs no encryption.
+	passkeys := passkey.New(passkey.Config{
+		RPDisplayName: "Loomplane",
+		RPID:          e.cfg.Identity.PasskeyRPID,
+		RPOrigins:     e.cfg.Identity.PasskeyOrigins,
+	})
+	passkeys.SetStore(passkey.NewPostgresStore(db))
 	engine, err := authsome.NewEngine(
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
@@ -284,6 +301,8 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		),
 		authsome.WithHerald(e.notifications.AuthBridge()),
 		authsome.WithPlugin(password.New()),
+		authsome.WithPlugin(e.mfa),
+		authsome.WithPlugin(passkeys),
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
 		authsome.WithPlugin(memberSync),

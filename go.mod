@@ -102,6 +102,17 @@ require (
 )
 
 require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/go-webauthn/webauthn v0.17.4 // indirect
+	github.com/go-webauthn/x v0.2.6 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
+	github.com/tinylib/msgp v1.6.4 // indirect
+)
+
+require (
 	cloud.google.com/go/auth v0.24.1 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect
 	cloud.google.com/go/compute/metadata v0.10.0 // indirect
@@ -325,3 +336,5 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
+
+replace github.com/xraph/authsome => /Users/rexraphael/Work/xraph/forgery/authsome-mfa-gate
