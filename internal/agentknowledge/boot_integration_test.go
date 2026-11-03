@@ -95,7 +95,7 @@ func TestPgVectorsOnPgvector(t *testing.T) {
 	}
 
 	st := agentknowledge.Boot(ctx, knowledgeOn("text-embedding-3-small", 768), priced, v)
-	if !st.Configured || st.Available || !strings.Contains(st.Reason, "ai.knowledge.dimensions (768)") {
+	if !st.Configured || st.Available || !strings.Contains(st.Reason, "its vectors have 1536 dimensions, and ai.knowledge.dimensions is 768") {
 		t.Fatalf("another size: status %+v", st)
 	}
 	if got := one[string](t, db, embeddingType); got != "vector(1536)" {

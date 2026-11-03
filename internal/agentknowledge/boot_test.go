@@ -107,14 +107,29 @@ func TestBootProbeErrorKeepsKnowledgeOff(t *testing.T) {
 	}
 }
 
+// A table made for another size keeps knowledge off with a reason that
+// names the key and both sizes, and says to put the old ones back.
 func TestBootDimensionMismatch(t *testing.T) {
-	v := &fakeVectors{ok: true, migrateErr: fmt.Errorf("%w: weave_vectors.embedding has 1536 dimensions, want 768", weave.ErrDimensionMismatch)}
+	weaveErr := fmt.Errorf("%w: weave_vectors.embedding has 1536 dimensions, want 768", weave.ErrDimensionMismatch)
+	v := &fakeVectors{ok: true, migrateErr: agentknowledge.NewSizeMismatch(1536, weaveErr)}
 	st := agentknowledge.Boot(context.Background(), knowledgeOn("text-embedding-3-small", 768), priced, v)
-	if !st.Configured || st.Available || !strings.Contains(st.Reason, "ai.knowledge.dimensions (768)") {
+	if !st.Configured || st.Available {
 		t.Fatalf("status %+v", st)
 	}
-	if !strings.Contains(st.Reason, "weave_vectors") {
-		t.Errorf("reason %q doesn't say which table to drop", st.Reason)
+	for _, want := range []string{"1536 dimensions", "ai.knowledge.dimensions is 768", "set ai.knowledge.dimensions to 1536", "embedding model", "reset"} {
+		if !strings.Contains(st.Reason, want) {
+			t.Errorf("reason %q doesn't say %q", st.Reason, want)
+		}
+	}
+	if strings.Contains(st.Reason, "drop") {
+		t.Errorf("reason %q still says to drop the table, which leaves knowledge off", st.Reason)
+	}
+
+	// Without the table's own size, the reason still names the key.
+	v = &fakeVectors{ok: true, migrateErr: weaveErr}
+	st = agentknowledge.Boot(context.Background(), knowledgeOn("text-embedding-3-small", 768), priced, v)
+	if st.Available || !strings.Contains(st.Reason, "ai.knowledge.dimensions (768)") || !strings.Contains(st.Reason, "embedding model") {
+		t.Fatalf("status %+v", st)
 	}
 }
 

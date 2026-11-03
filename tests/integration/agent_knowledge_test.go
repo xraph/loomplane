@@ -162,26 +162,141 @@ func TestKnowledgeOnWithPgvector(t *testing.T) {
 }
 
 // Changing ai.knowledge.dimensions once the vector table exists turns
-// knowledge off with a reason naming the key and the size. The server
-// still boots and the agent still answers.
+// knowledge off with a reason naming the key and both sizes. The server
+// still boots, and a workspace that had knowledge on still chats: its
+// model just isn't offered knowledge_search.
 func TestKnowledgeDimensionMismatchAfterReboot(t *testing.T) {
 	dsn := freshPgvectorDatabase(t)
-	fake := agenttest.Anthropic(t)
+	fake := agenttest.Anthropic(t, agenttest.Turn{Text: "Your projects are fine."})
 	a := knowledgeOrg(t, dsn, knowledgeAI(t, fake, 1536), "")
 	if st := a.knowledge(t); !st.Available {
 		t.Fatalf("first boot: knowledge_status %+v", st)
 	}
+	knowledgeWorkspace(a, true)
 	a.r.stop()
 
 	a = knowledgeOrg(t, dsn, knowledgeAI(t, fake, 768), a.orgID)
 	defer a.r.stop()
 	st := a.knowledge(t)
-	if !st.Configured || st.Available || !strings.Contains(st.Reason, "ai.knowledge.dimensions (768)") {
+	if !st.Configured || st.Available || !strings.Contains(st.Reason, "its vectors have 1536 dimensions, and ai.knowledge.dimensions is 768") ||
+		!strings.Contains(st.Reason, "set ai.knowledge.dimensions to 1536") {
 		t.Fatalf("after changing the size: knowledge_status %+v", st)
 	}
 	if got := dbValue[string](t, dsn, embeddingColumn); got != "vector(1536)" {
 		t.Fatalf("the reboot changed weave_vectors.embedding to %q", got)
 	}
+
+	sent := converse(t, a.owner, "How are my projects?")
+	waitTask(t, a.owner, sent.Task.ID, func(task agentruns.Task) bool { return agentruns.Terminal(task.Status) })
+	if task := taskOf(t, a.owner, sent.Task.ID); task.Status != agentruns.StatusCompleted {
+		t.Fatalf("the chat after a size change ended %s: %s", task.Status, task.Error)
+	}
+	reqs := fake.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("%d model requests, want 1", len(reqs))
+	}
+	if tools := reqs[0].Tools; slices.Contains(tools, "knowledge_search") || !slices.Contains(tools, "list_projects") {
+		t.Errorf("with knowledge off for a size change the model is offered %v", tools)
+	}
+}
+
+// knowledgeReset is the manual reset the Knowledge docs give for changing
+// ai.knowledge.dimensions, statement for statement.
+var knowledgeReset = []string{
+	`DROP TABLE weave_vectors;`,
+	`DELETE FROM grove_migrations WHERE "group" = 'weave_pgvector';`,
+	`DELETE FROM weave_collections WHERE name IN ('loomplane-docs', 'workspace');`,
+}
+
+// The reset the Knowledge docs give for a new size works: after a size
+// change has turned knowledge off, the three statements and a restart
+// bring knowledge back on at the new size, with the docs indexed again
+// and the workspace's own documents gone.
+func TestKnowledgeResetForANewSize(t *testing.T) {
+	page := knowledgePage(t)
+	for _, stmt := range knowledgeReset {
+		if !strings.Contains(page, stmt) {
+			t.Fatalf("the Knowledge docs no longer give %q; keep this test and the page in step", stmt)
+		}
+	}
+	bundle, err := agentknowledge.EmbeddedDocs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents := int64(len(bundle.Pages) + 1) // every page and the schema
+	fake := agenttest.Anthropic(t)
+
+	dsn := freshPgvectorDatabase(t)
+	a := knowledgeOrg(t, dsn, docsAI(fake, newEmbeddingServer(t, 8), 8), "")
+	waitForDocs(t, dsn, readyDocs, documents)
+	knowledgeWorkspace(a, true)
+	knowledge := inject[*agentknowledge.Service](t, a.container())
+	if outcome, ierr := knowledge.Ingest(context.Background(), a.orgID, agentknowledge.Document{
+		SourceKey: "report/arep_canary", Kind: agentknowledge.KindReport, Title: "Checkout canary",
+		Content: canaryReport, URL: "/agent/reports/arep_canary",
+	}); ierr != nil || outcome != agentknowledge.OutcomeIndexed {
+		t.Fatalf("Ingest: %s, %v", outcome, ierr)
+	}
+	a.r.stop()
+
+	// The new size alone turns knowledge off.
+	a = knowledgeOrg(t, dsn, docsAI(fake, newEmbeddingServer(t, 4), 4), a.orgID)
+	if st := a.knowledge(t); st.Available {
+		t.Fatalf("after changing the size: knowledge_status %+v", st)
+	}
+	a.r.stop()
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(ctx, "BEGIN;\n"+strings.Join(knowledgeReset, "\n")+"\nCOMMIT;"); err != nil {
+		t.Fatalf("the documented reset: %v", err)
+	}
+	_ = conn.Close(ctx)
+	if n := dbValue[int64](t, dsn, `SELECT count(*) FROM weave_documents`); n != 0 {
+		t.Fatalf("%d knowledge documents left after the reset", n)
+	}
+
+	emb := newEmbeddingServer(t, 4)
+	a = knowledgeOrg(t, dsn, docsAI(fake, emb, 4), a.orgID)
+	defer a.r.stop()
+	if st := a.knowledge(t); !st.Configured || !st.Available || st.Reason != "" {
+		t.Fatalf("after the reset: knowledge_status %+v", st)
+	}
+	if got := dbValue[string](t, dsn, embeddingColumn); got != "vector(4)" {
+		t.Fatalf("after the reset weave_vectors.embedding is %q, want vector(4)", got)
+	}
+	if n := dbValue[int64](t, dsn, pgvectorRows); n != 1 {
+		t.Fatalf("%d weave_pgvector rows after the reset, want 1", n)
+	}
+	waitForDocs(t, dsn, readyDocs, documents)
+	if n := emb.requests.Load(); n < documents {
+		t.Fatalf("the docs were indexed again with %d embedding requests for %d documents", n, documents)
+	}
+	if n := dbValue[int64](t, dsn, `SELECT count(*) FROM weave_vectors`); n == 0 {
+		t.Fatal("no vectors at the new size")
+	}
+	if n := dbValue[int64](t, dsn, `SELECT count(*) FROM weave_documents WHERE tenant_id = '`+a.orgID+`'`); n != 0 {
+		t.Fatalf("%d of the workspace's documents survived the reset", n)
+	}
+}
+
+// knowledgePage is the Knowledge page's text, as the docs bundle has it.
+func knowledgePage(t *testing.T) string {
+	t.Helper()
+	bundle, err := agentknowledge.EmbeddedDocs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range bundle.Pages {
+		if p.Path == "agents/knowledge" {
+			return p.Text
+		}
+	}
+	t.Fatal("no Knowledge page in the docs bundle")
+	return ""
 }
 
 // embeddingServer is an OpenAI-compatible /v1/embeddings that counts its
