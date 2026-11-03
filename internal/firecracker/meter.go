@@ -24,6 +24,19 @@ type UsageReader interface {
 	Usage(context.Context, []VM) ([]UsageSample, error)
 }
 
+// meterInstallResult decides what a meter install outcome means for VM start.
+// Platform hosts bill from the meter, so a failure is fatal there. Per-org
+// hosts keep starting VMs unmetered, with an empty counter ID.
+func meterInstallResult(platform bool, id string, err error) (counterID string, fatal error) {
+	if err == nil {
+		return id, nil
+	}
+	if platform {
+		return "", err
+	}
+	return "", nil
+}
+
 func meterTable(vmID string) string { return "loomplane_meter_" + vmID }
 
 // meterPolicy counts everything a VM sends, after the VM's own policy at

@@ -56,6 +56,8 @@ type PlatformEvidence struct {
 }
 
 // CheckPlatform refuses a host that cannot safely serve every workspace.
+// Private ranges and the host's own addresses are not evidence here, because
+// networkPolicy always drops them.
 func CheckPlatform(e PlatformEvidence) error {
 	if !e.Isolation || len(e.RuntimeIdentity) != 64 || e.HostID == "" {
 		return errors.New("the platform host must pass its isolation check before accepting source")

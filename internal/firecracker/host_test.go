@@ -318,3 +318,18 @@ func TestPerOrgBackstopRefusesOneOrgFillingTheHost(t *testing.T) {
 		t.Fatal("redeploy refused", err)
 	}
 }
+
+func TestUsageMetersPendingVMThatNeverBecomesReady(t *testing.T) {
+	h, d, q := testHost(t)
+	d.fail = true
+	if _, err := h.Apply(t.Context(), q); err == nil {
+		t.Fatal("failed guest became ready")
+	}
+	got, err := h.Usage(t.Context(), "")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("usage %+v %v", got, err)
+	}
+	if got[0].Scope != q.Scope || got[0].VMID == "" {
+		t.Fatalf("sample %+v", got[0])
+	}
+}

@@ -224,3 +224,17 @@ func TestPerOrgPeerNamedPlatformStaysBoundToItsOrg(t *testing.T) {
 		t.Fatal("own org refused", w.Code, w.Body.String())
 	}
 }
+
+func TestUsageRefusesPerOrgPeerWithoutConnection(t *testing.T) {
+	h, _, q := testHost(t)
+	cert := &x509.Certificate{Raw: []byte("enrollment")}
+	sum := sha256.Sum256(cert.Raw)
+	api := Handler{Host: h, Peers: []Peer{{Fingerprint: hex.EncodeToString(sum[:]), Org: q.Scope.Org}}}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/usage", nil)
+	r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatal(w.Code)
+	}
+}

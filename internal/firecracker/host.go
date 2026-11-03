@@ -358,7 +358,9 @@ func (h *Host) Guest(ctx context.Context, q Request, action string, body io.Read
 
 func firecrackerSameSpec(a, b Spec) bool { return reflect.DeepEqual(a, b) }
 
-// Usage reports egress for current VMs. org "" means every org.
+// Usage reports egress for current and pending VMs. A VM stays pending until its
+// guest reports ready, and one that never does keeps running, so it is metered
+// too. org "" means every org.
 func (h *Host) Usage(ctx context.Context, org string) ([]UsageSample, error) {
 	reader, ok := h.Driver.(UsageReader)
 	if !ok || h.Store == nil {
@@ -371,11 +373,19 @@ func (h *Host) Usage(ctx context.Context, org string) ([]UsageSample, error) {
 	var vms []VM
 	scopes := map[string]Scope{}
 	for _, r := range records {
-		if r.Current == nil || (org != "" && r.Scope.Org != org) {
+		if org != "" && r.Scope.Org != org {
 			continue
 		}
-		vms = append(vms, *r.Current)
-		scopes[r.Current.ID] = r.Scope
+		for _, vm := range []*VM{r.Current, r.Pending} {
+			if vm == nil {
+				continue
+			}
+			if _, dup := scopes[vm.ID]; dup {
+				continue
+			}
+			vms = append(vms, *vm)
+			scopes[vm.ID] = r.Scope
+		}
 	}
 	samples, err := reader.Usage(ctx, vms)
 	if err != nil {

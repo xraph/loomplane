@@ -48,3 +48,16 @@ func TestMeterSampleSkipsResetAndUnreadableCounters(t *testing.T) {
 		t.Fatal("parse failure not reported", err)
 	}
 }
+
+func TestMeterInstallFailureIsFatalOnlyOnPlatformHosts(t *testing.T) {
+	boom := errors.New("nft failed")
+	if _, err := meterInstallResult(true, "", boom); !errors.Is(err, boom) {
+		t.Fatal("platform host started a VM without a meter")
+	}
+	if id, err := meterInstallResult(false, "", boom); err != nil || id != "" {
+		t.Fatal("per-org host failed on a meter error", id, err)
+	}
+	if id, err := meterInstallResult(true, "c1", nil); err != nil || id != "c1" {
+		t.Fatal(id, err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -420,9 +421,13 @@ func (d *linuxDriver) Start(ctx context.Context, vm VM, s Spec) error {
 		if e := d.installPolicy(call, vm, receipt); e != nil {
 			return e
 		}
-		id, e := d.installMeter(call, vm, receipt)
+		id, meterErr := d.installMeter(call, vm, receipt)
+		id, e := meterInstallResult(d.config.Platform != nil, id, meterErr)
 		if e != nil {
 			return e
+		}
+		if meterErr != nil {
+			log.Printf("Firecracker egress meter not installed for VM %s", vm.ID)
 		}
 		receipt.CounterID = id
 		raw, e := json.Marshal(receipt)

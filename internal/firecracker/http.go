@@ -52,6 +52,10 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/usage" && r.Method == http.MethodGet {
 		org := ""
 		if !platform {
+			if peer.Connection == "" {
+				http.Error(w, "host client identity is not authorized", http.StatusForbidden)
+				return
+			}
 			org = peer.Org
 		}
 		samples, err := a.Host.Usage(r.Context(), org)
