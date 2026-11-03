@@ -374,7 +374,7 @@ func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cl
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
+	if _, authErr := s.authorizeCapacityChange(ctx, p, cloud); authErr != nil {
 		return nil, authErr
 	}
 	st, ok := s.Store.(*PgStore)

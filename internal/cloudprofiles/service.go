@@ -138,6 +138,19 @@ func name(value string) (string, error) {
 	return value, nil
 }
 
+// cloudName is name for a Cloud the organization owns, which can't take a
+// name the platform-owned Loomplane Cloud uses.
+func cloudName(value string) (string, error) {
+	value, err := name(value)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(value, PlatformCloudName) || strings.EqualFold(value, PlatformCloudFallbackName) {
+		return "", fmt.Errorf("%w: %q is reserved for the Cloud this instance runs, so choose another name", ErrExists, value)
+	}
+	return value, nil
+}
+
 // normalizeTags returns sorted, distinct tags or explains the first bad one.
 func normalizeTags(in []string) ([]string, error) {
 	out := make([]string, 0, len(in))
@@ -212,7 +225,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +266,7 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 	if in.Revision != c.Revision {
 		return nil, ErrConflict
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}

@@ -32,6 +32,14 @@ func TestPlatformOwnedCloudTakesNoInfrastructure(t *testing.T) {
 	_, checks["scaling pool"] = svc.CreateScalingPool(ctx, p, "cloud", ScalingPoolInput{})
 	_, checks["capacity policy"] = svc.SaveCapacityPolicy(ctx, p, "cloud", CapacityPolicyInput{})
 	_, _, checks["cluster"] = svc.clusterAuthority(ctx, p, "cloud", ClusterInput{CloudRevision: 1})
+	_, checks["preview drain"] = svc.PreviewDrain(ctx, p, "cloud", "server")
+	_, checks["apply drain"] = svc.ApplyDrain(ctx, p, "cloud", "server", ApplyInput{})
+	_, checks["preview move"] = svc.PreviewMove(ctx, p, "cloud", MoveInput{})
+	_, checks["accept move"] = svc.AcceptMove(ctx, p, "cloud", MoveInput{})
+	_, checks["preview recovery"] = svc.PreviewReservationRecovery(ctx, p, "cloud", RecoveryInput{})
+	_, checks["recover reservation"] = svc.RecoverReservation(ctx, p, "cloud", RecoveryInput{})
+	_, checks["refresh capacity"] = svc.RefreshCapacity(ctx, p, "cloud")
+	_, checks["approve expansion"] = svc.ApproveExpansion(ctx, p, "cloud", "expansion", 1)
 	for name, err := range checks {
 		if !errors.Is(err, cloudprofiles.ErrPlatformOwned) {
 			t.Errorf("%s: err = %v, want ErrPlatformOwned", name, err)

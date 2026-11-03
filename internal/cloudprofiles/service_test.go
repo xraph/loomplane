@@ -359,3 +359,22 @@ func TestServiceRefusesUserPlatformTargets(t *testing.T) {
 		t.Fatalf("user platform target: %v %+v", err, st.target)
 	}
 }
+
+func TestServiceReservesPlatformCloudNames(t *testing.T) {
+	s, st, _ := fixture()
+	p := security.Principal{OrgID: "org_1"}
+	for _, reserved := range []string{PlatformCloudName, " loomplane cloud ", PlatformCloudFallbackName} {
+		if _, err := s.Create(t.Context(), p, "proj_1", CreateInput{Name: reserved}); !errors.Is(err, ErrExists) {
+			t.Fatalf("create %q: %v, want ErrExists", reserved, err)
+		}
+		if _, err := s.Update(t.Context(), p, "proj_1", "cloud_1", UpdateInput{Name: reserved, Revision: 1}); !errors.Is(err, ErrExists) {
+			t.Fatalf("rename to %q: %v, want ErrExists", reserved, err)
+		}
+	}
+	if st.profile.Name != "Production" {
+		t.Fatalf("profile renamed to %q", st.profile.Name)
+	}
+	if _, err := s.Create(t.Context(), p, "proj_1", CreateInput{Name: "Loomplane Cloud staging"}); err != nil {
+		t.Fatalf("a longer name is fine: %v", err)
+	}
+}

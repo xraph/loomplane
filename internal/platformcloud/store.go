@@ -294,19 +294,87 @@ func scanTenant(row interface{ Scan(...any) error }) (*Tenant, error) {
 	return &t, nil
 }
 
+// tenantArgs encodes the columns a tenant write sets.
+func tenantArgs(t *Tenant) (limits []byte, reasons []string, err error) {
+	if t.Limits != nil {
+		if limits, err = json.Marshal(t.Limits); err != nil {
+			return nil, nil, err
+		}
+	}
+	reasons = make([]string, 0, len(t.SuspendReasons))
+	for _, r := range t.SuspendReasons {
+		reasons = append(reasons, string(r))
+	}
+	return limits, reasons, nil
+}
+
+// withTx runs fn in a transaction and commits when it returns nil.
+func (s *PgStore) withTx(ctx context.Context, fn func(driverTx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if fnErr := fn(tx); fnErr != nil {
+		return fnErr
+	}
+	return tx.Commit()
+}
+
+// lockTenantTx reads the tenant and holds its row until tx ends. A missing
+// row is ErrNotFound and locks nothing, so callers that may create it
+// serialize on something else first.
+func lockTenantTx(ctx context.Context, tx driverTx, orgID string) (*Tenant, error) {
+	return scanTenant(tx.QueryRow(ctx, `SELECT `+tenantColumns+` FROM loomplane_platform_tenants WHERE org_id=$1 FOR UPDATE`, orgID))
+}
+
+// insertTenantTx creates the tenant at revision one unless a row for the
+// organization already exists, which it leaves alone. It reports whether it
+// created one.
+func insertTenantTx(ctx context.Context, q querier, t *Tenant) (bool, error) {
+	limits, reasons, err := tenantArgs(t)
+	if err != nil {
+		return false, err
+	}
+	err = q.QueryRow(ctx, `INSERT INTO loomplane_platform_tenants(org_id,status,limits,suspend_reasons,suspended_at,revision,created_at,updated_at)
+VALUES($1,$2,$3,$4,$5,1,now(),now()) ON CONFLICT(org_id) DO NOTHING RETURNING revision`, t.OrgID, t.Status, limits, reasons, t.SuspendedAt).Scan(&t.Revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, storeError(err)
+	}
+	return true, nil
+}
+
+// updateTenantTx writes t over the stored row at t.Revision and advances it.
+func updateTenantTx(ctx context.Context, q querier, t *Tenant) error {
+	limits, reasons, err := tenantArgs(t)
+	if err != nil {
+		return err
+	}
+	res, err := q.Exec(ctx, `UPDATE loomplane_platform_tenants SET status=$2,limits=$3,suspend_reasons=$4,suspended_at=$5,revision=revision+1,updated_at=now() WHERE org_id=$1 AND revision=$6`,
+		t.OrgID, t.Status, limits, reasons, t.SuspendedAt, t.Revision)
+	if err != nil {
+		return storeError(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	t.Revision++
+	return nil
+}
+
 // UpsertTenant creates the tenant or replaces it. A Revision of zero
 // replaces whatever is stored. Otherwise the stored revision must match.
 func (s *PgStore) UpsertTenant(ctx context.Context, t *Tenant) error {
-	var limits []byte
-	if t.Limits != nil {
-		var err error
-		if limits, err = json.Marshal(t.Limits); err != nil {
-			return err
-		}
-	}
-	reasons := make([]string, 0, len(t.SuspendReasons))
-	for _, r := range t.SuspendReasons {
-		reasons = append(reasons, string(r))
+	limits, reasons, err := tenantArgs(t)
+	if err != nil {
+		return err
 	}
 	if t.Revision == 0 {
 		return storeError(s.db.QueryRow(ctx, `INSERT INTO loomplane_platform_tenants(org_id,status,limits,suspend_reasons,suspended_at,revision,created_at,updated_at)

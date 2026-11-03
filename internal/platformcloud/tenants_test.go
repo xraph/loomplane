@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/xraph/grove/drivers/pgdriver"
 
@@ -158,8 +159,12 @@ func TestEnableTenantKeepsLimitsAndClearsOwnerSuspension(t *testing.T) {
 	if again, _ := s.GetTenant(ctx, "org_a"); len(again.SuspendReasons) != 1 {
 		t.Fatalf("reasons = %v", again.SuspendReasons)
 	}
-	if err = svc.DisableTenant(ctx, "org_missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("disable unknown org: %v", err)
+	// An organization with no tenant yet gets a disabled one.
+	if err = svc.DisableTenant(ctx, "org_new"); err != nil {
+		t.Fatal(err)
+	}
+	if fresh, getErr := s.GetTenant(ctx, "org_new"); getErr != nil || fresh.Status != "disabled" || !slices.Equal(fresh.SuspendReasons, []SuspendReason{ReasonPlatformOwner}) {
+		t.Fatalf("disable of an org with no tenant = %+v, %v", fresh, getErr)
 	}
 
 	enabled, err := svc.EnableTenant(ctx, "org_a", nil)
@@ -206,9 +211,12 @@ func TestSyncProjectionsAddsNewRegion(t *testing.T) {
 	if added == nil || added.DisplayName != "SA East" || added.Runtime != RuntimePlatform {
 		t.Fatalf("new region target = %+v", added)
 	}
-	// A disabled tenant gets no new regions.
+	// A disabled tenant gets no new regions and stays disabled.
 	if got := readProjection(t, pg, "org_b"); len(got.targets) != 2 {
 		t.Fatalf("disabled tenant targets = %d, want 2", len(got.targets))
+	}
+	if b, _ := s.GetTenant(ctx, "org_b"); b.Status != "disabled" {
+		t.Fatalf("sync re-enabled org_b: %+v", b)
 	}
 	// Running it again adds nothing.
 	if err := svc.SyncProjections(ctx); err != nil {
@@ -220,13 +228,17 @@ func TestSyncProjectionsAddsNewRegion(t *testing.T) {
 }
 
 func TestSyncProjectionsAllWorkspaces(t *testing.T) {
-	svc, s, pg := newTenantService(t, "org_a", "org_b", "org_c")
+	svc, s, pg := newTenantService(t, "org_a", "org_b", "org_c", "org_d")
 	ctx := t.Context()
 	seedRegions(t, s)
 	if _, err := svc.EnableTenant(ctx, "org_c", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.DisableTenant(ctx, "org_c"); err != nil {
+		t.Fatal(err)
+	}
+	// The owner keeps org_d out before its first sync.
+	if err := svc.DisableTenant(ctx, "org_d"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,16 +268,73 @@ func TestSyncProjectionsAllWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, org := range []string{"org_a", "org_b"} {
-		tenant, err := s.GetTenant(ctx, org)
-		if err != nil || tenant.Status != "enabled" {
-			t.Fatalf("tenant %s = %+v, %v", org, tenant, err)
+		tenant, getErr := s.GetTenant(ctx, org)
+		if getErr != nil || tenant.Status != "enabled" {
+			t.Fatalf("tenant %s = %+v, %v", org, tenant, getErr)
 		}
 		if got := readProjection(t, pg, org); got.profile == nil || len(got.targets) != 2 {
 			t.Fatalf("projection for %s = %+v", org, got)
 		}
 	}
-	// An org the owner disabled stays disabled.
-	if tenant, _ := s.GetTenant(ctx, "org_c"); tenant.Status != "disabled" {
-		t.Fatalf("all_workspaces re-enabled a disabled org: %+v", tenant)
+	// Orgs the owner disabled stay disabled, with or without a projection.
+	for _, org := range []string{"org_c", "org_d"} {
+		if tenant, _ := s.GetTenant(ctx, org); tenant.Status != "disabled" {
+			t.Fatalf("all_workspaces re-enabled %s: %+v", org, tenant)
+		}
+	}
+	if got := readProjection(t, pg, "org_d"); got.profile != nil {
+		t.Fatal("all_workspaces projected into an org disabled before its first sync")
+	}
+	// A second run changes none of it.
+	if err = svc.SyncProjections(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tenant, _ := s.GetTenant(ctx, "org_d"); tenant.Status != "disabled" {
+		t.Fatalf("second sync re-enabled org_d: %+v", tenant)
+	}
+}
+
+func TestEnableTenantWhenTheNameIsTaken(t *testing.T) {
+	svc, s, pg := newTenantService(t)
+	ctx := t.Context()
+	seedRegions(t, s)
+	clouds := cloudprofiles.NewPgStore(pg)
+	userCloud := func(org, id, name string) {
+		t.Helper()
+		now := time.Now().UTC()
+		if err := clouds.CreateProfile(ctx, &cloudprofiles.Profile{ID: id, OrgID: org, Name: name, Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A Cloud of the org's own made before the name was reserved: the
+	// projection takes the fallback name.
+	userCloud("org_a", "cloud_mine", ProjectionName)
+	if _, err := svc.EnableTenant(ctx, "org_a", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := readProjection(t, pg, "org_a")
+	if got.profile == nil || got.profile.Name != ProjectionFallbackName || len(got.targets) != 2 {
+		t.Fatalf("projection = %+v", got)
+	}
+	// Enabling again keeps the one projection.
+	if _, err := svc.EnableTenant(ctx, "org_a", nil); err != nil {
+		t.Fatal(err)
+	}
+	if again := readProjection(t, pg, "org_a"); again.profile.ID != got.profile.ID {
+		t.Fatal("repeat enable made another projection")
+	}
+
+	// Both names taken: the enable fails and leaves no tenant behind.
+	userCloud("org_b", "cloud_b1", ProjectionName)
+	userCloud("org_b", "cloud_b2", ProjectionFallbackName)
+	if _, err := svc.EnableTenant(ctx, "org_b", nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("enable with both names taken: %v, want ErrConflict", err)
+	}
+	if _, err := s.GetTenant(ctx, "org_b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed enable left a tenant: %v", err)
+	}
+	if got := readProjection(t, pg, "org_b"); got.profile != nil {
+		t.Fatal("failed enable left a projection")
 	}
 }

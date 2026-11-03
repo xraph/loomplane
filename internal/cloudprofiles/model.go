@@ -19,6 +19,14 @@ var (
 	ErrPlatformOwned = errors.New("Loomplane Cloud is run by this instance and can't be changed here.") //nolint:revive,staticcheck // the message is shown as written
 )
 
+// The names the platform-owned Loomplane Cloud goes by. The fallback is for
+// an organization that named a Cloud of its own after it before the name
+// was reserved. Neither can name an organization's own Cloud.
+const (
+	PlatformCloudName         = "Loomplane Cloud"
+	PlatformCloudFallbackName = "Loomplane Cloud (instance)"
+)
+
 // Profile is a named set of targets owned by one organization. ProjectID records creation provenance.
 // DefaultPlacement is the one provider and account a Cloud uses for services
 // that name no target or tag. A Cloud without targets therefore holds exactly
