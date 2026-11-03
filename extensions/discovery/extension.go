@@ -43,6 +43,9 @@ const Name = "loomplane-discovery"
 // repository through.
 var _ projects.Attacher = (*discovery.Service)(nil)
 
+// Deleting a project, or rolling a new one back, tells the service too.
+var _ projects.Reaper = (*discovery.Service)(nil)
+
 // Extension serves the analysis API and the GitHub connection.
 type Extension struct {
 	*forge.BaseExtension
@@ -134,6 +137,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("discovery needs the projects extension: %w", err)
 	}
 	projectSvc.SetAttacher(e.svc)
+	// Deleting a project takes its sources in the cascade, so discovery
+	// reads them first and releases their webhooks after.
+	projectSvc.AddReaper(e.svc)
 	// Deployments mint repository tokens with the same connections.
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)

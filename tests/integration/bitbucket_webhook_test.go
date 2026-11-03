@@ -222,3 +222,73 @@ func TestBitbucketWebhook_aPushReanalyzesOnlyItsOrganization(t *testing.T) {
 		}
 	}
 }
+
+func TestBitbucketWebhook_projectDeletionReleasesTheHook(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.PublicURL = "https://loomplane.example.test"
+	hooks := &fakeHooks{hooks: map[string]fakeHook{}}
+	bb := fakePrivateBitbucket(t, hooks.routes)
+	cfg.Bitbucket.APIURL, cfg.Bitbucket.WebURL = bb.URL, bb.URL
+	cfg.Bitbucket.ClientID, cfg.Bitbucket.ClientSecret = bbConsumerKey, bbConsumerSecret
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+	a := &bitbucketApp{t: t, c: c, cfg: cfg}
+	a.connect()
+
+	conn, err := pgx.Connect(context.Background(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	rows := func() int {
+		var n int
+		if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM loomplane_bitbucket_webhooks`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	count := func() (left, deleted int) {
+		hooks.mu.Lock()
+		defer hooks.mu.Unlock()
+		return len(hooks.hooks), len(hooks.deleted)
+	}
+
+	project := func(name string) string {
+		var proj struct {
+			ID string `json:"id"`
+		}
+		a.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": name, "repository_url": "https://bitbucket.org/acme/api"}, &proj)
+		return proj.ID
+	}
+	first, second := project("Api"), project("Api two")
+	if left, _ := count(); left != 1 || rows() != 1 {
+		t.Fatalf("two projects on acme/api: %d hooks on Bitbucket, %d rows", left, rows())
+	}
+	// Deleting one of the two keeps the hook the other still needs.
+	a.must(http.StatusNoContent, http.MethodDelete, "/api/v1/projects/"+first, nil, nil)
+	if left, deleted := count(); left != 1 || deleted != 0 || rows() != 1 {
+		t.Fatalf("after deleting one: %d left, %d deleted, %d rows", left, deleted, rows())
+	}
+	// Deleting the last takes it off Bitbucket and out of Loomplane.
+	a.must(http.StatusNoContent, http.MethodDelete, "/api/v1/projects/"+second, nil, nil)
+	if left, deleted := count(); left != 0 || deleted != 1 || rows() != 0 {
+		t.Fatalf("after deleting the last: %d left, %d deleted, %d rows", left, deleted, rows())
+	}
+
+	// A new project whose second repository can't be read is rolled back,
+	// and so is the hook its first one got.
+	status, body := a.call(http.MethodPost, "/api/v1/projects", map[string]any{
+		"name":         "Half",
+		"repositories": []map[string]string{{"repository": "https://bitbucket.org/acme/api"}, {"repository": "https://bitbucket.org/acme/missing"}},
+	})
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("creating a half-readable project: %d %s", status, body)
+	}
+	if left, deleted := count(); left != 0 || deleted != 2 || rows() != 0 {
+		t.Fatalf("after the rollback: %d left, %d deleted, %d rows", left, deleted, rows())
+	}
+}

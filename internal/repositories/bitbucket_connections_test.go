@@ -319,6 +319,9 @@ func (s *fakeBBStore) GetBitbucketHook(context.Context, string) (*BitbucketHook,
 	return nil, ErrHookNotFound
 }
 func (s *fakeBBStore) UpdateBitbucketHook(context.Context, *BitbucketHook) error { return nil }
+func (s *fakeBBStore) UpdateBitbucketHookIfOff(context.Context, *BitbucketHook) (bool, error) {
+	return true, nil
+}
 func (s *fakeBBStore) BitbucketHookFor(context.Context, string, string) (*BitbucketHook, error) {
 	return nil, ErrHookNotFound
 }

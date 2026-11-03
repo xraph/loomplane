@@ -92,6 +92,11 @@ type HookStore interface {
 	// reason and update time in place, such as turning an off hook on. It
 	// returns ErrHookNotFound for an unknown ID.
 	UpdateBitbucketHook(ctx context.Context, h *BitbucketHook) error
+	// UpdateBitbucketHookIfOff is UpdateBitbucketHook only while the row
+	// holds no Bitbucket hook, so of two tries to turn one hook on, one
+	// wins. It reports false when the row is gone or another try got
+	// there first.
+	UpdateBitbucketHookIfOff(ctx context.Context, h *BitbucketHook) (bool, error)
 	// BitbucketHookFor returns ErrHookNotFound when the repository has none.
 	BitbucketHookFor(ctx context.Context, orgID, repository string) (*BitbucketHook, error)
 	BitbucketHooksIn(ctx context.Context, orgID, connectionID string) ([]*BitbucketHook, error)
@@ -318,6 +323,21 @@ func (s *PgStore) UpdateBitbucketHook(ctx context.Context, h *BitbucketHook) err
 		return ErrHookNotFound
 	}
 	return nil
+}
+
+// UpdateBitbucketHookIfOff implements HookStore.
+func (s *PgStore) UpdateBitbucketHookIfOff(ctx context.Context, h *BitbucketHook) (bool, error) {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_bitbucket_webhooks
+		SET connection_id = $2, bitbucket_hook_uuid = $3, status = $4, reason = $5, updated_at = $6
+		WHERE hook_id = $1 AND bitbucket_hook_uuid = ''`, h.HookID, h.ConnectionID, h.BitbucketHookUUID, h.Status, h.Reason, h.UpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("update Bitbucket webhook: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
 }
 
 // BitbucketHookFor implements HookStore. It compares the repository

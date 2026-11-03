@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -61,6 +62,20 @@ func (m *memHooks) UpdateBitbucketHook(_ context.Context, h *repositories.Bitbuc
 	}
 	o.ConnectionID, o.BitbucketHookUUID, o.Status, o.Reason, o.UpdatedAt = h.ConnectionID, h.BitbucketHookUUID, h.Status, h.Reason, h.UpdatedAt
 	return nil
+}
+
+func (m *memHooks) UpdateBitbucketHookIfOff(ctx context.Context, h *repositories.BitbucketHook) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err // as a database call would
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	o, ok := m.hooks[h.HookID]
+	if !ok || o.BitbucketHookUUID != "" {
+		return false, nil
+	}
+	o.ConnectionID, o.BitbucketHookUUID, o.Status, o.Reason, o.UpdatedAt = h.ConnectionID, h.BitbucketHookUUID, h.Status, h.Reason, h.UpdatedAt
+	return true, nil
 }
 
 func (m *memHooks) BitbucketHookFor(_ context.Context, orgID, repository string) (*repositories.BitbucketHook, error) {
@@ -133,6 +148,8 @@ type fakeHookAPI struct {
 	deleted   []string // token/uuid
 	createErr error
 	deleteErr error
+	// during runs inside CreateHook, once Bitbucket has the hook.
+	during func()
 }
 
 func (f *fakeHookAPI) CreateHook(_ context.Context, token string, repo repositories.Repository, url, secret string) (string, error) {
@@ -141,10 +158,16 @@ func (f *fakeHookAPI) CreateHook(_ context.Context, token string, repo repositor
 	}
 	uuid := fmt.Sprintf("{hook-%d}", len(f.created)+1)
 	f.created = append(f.created, createdHook{token: token, repo: repo.FullName(), url: url, secret: secret, uuid: uuid})
+	if f.during != nil {
+		f.during()
+	}
 	return uuid, nil
 }
 
-func (f *fakeHookAPI) DeleteHook(_ context.Context, token string, _ repositories.Repository, uuid string) error {
+func (f *fakeHookAPI) DeleteHook(ctx context.Context, token string, _ repositories.Repository, uuid string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.deleted = append(f.deleted, token+"/"+uuid)
 	return f.deleteErr
 }
@@ -618,4 +641,141 @@ func (m *memStore) byRepository(_ context.Context, repository string) ([]*Source
 		}
 	}
 	return out, nil
+}
+
+func TestBitbucketWebhooks_aTurnOnThatLosesTheRaceRemovesItsHook(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	f.api.createErr = repositories.ErrHookNotAdmin
+	f.w.Ensure(ctx, "org_a", acmeAPI)
+	row := f.hooks.all()[0]
+	f.api.createErr = nil
+	// Another Turn on gets its hook in while this one is still adding.
+	f.api.during = func() {
+		f.api.during = nil
+		won, err := f.hooks.UpdateBitbucketHookIfOff(ctx, &repositories.BitbucketHook{HookID: row.HookID, ConnectionID: "bbws_a", BitbucketHookUUID: "{winner}", Status: repositories.HookOn})
+		if err != nil || !won {
+			t.Fatalf("the other Turn on: %v, %v", won, err)
+		}
+	}
+	if st := f.w.Ensure(ctx, "org_a", acmeAPI); !st.On {
+		t.Fatalf("state %+v", st)
+	}
+	if !slices.Equal(f.api.deleted, []string{"token-a/{hook-1}"}) {
+		t.Fatalf("deleted %v, want the losing hook", f.api.deleted)
+	}
+	if got := f.hooks.all(); len(got) != 1 || got[0].BitbucketHookUUID != "{winner}" || got[0].Status != repositories.HookOn {
+		t.Fatalf("rows %+v", got)
+	}
+	// A try that fails while another turned the row on leaves it on.
+	f.api.createErr = repositories.ErrHookNotAdmin
+	if got := f.w.off(ctx, "org_a", "bitbucket.org/acme/api", row, "bbws_a", "nope"); !got.On {
+		t.Fatalf("off over an on row: %+v", got)
+	}
+	if got := f.hooks.all(); got[0].Status != repositories.HookOn {
+		t.Fatalf("the on row was turned off: %+v", got[0])
+	}
+}
+
+func TestBitbucketWebhooks_aCancelledRequestStillKeepsTheHook(t *testing.T) {
+	f := newHookFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	// The caller goes away once Bitbucket has added the hook.
+	f.api.during = cancel
+	if st := f.w.Ensure(ctx, "org_a", acmeAPI); !st.On {
+		t.Fatalf("state %+v", st)
+	}
+	if got := f.hooks.all(); len(got) != 1 || got[0].Status != repositories.HookOn || got[0].BitbucketHookUUID != "{hook-1}" {
+		t.Fatalf("rows %+v", got)
+	}
+}
+
+func TestBitbucketWebhooks_aDeliveryWithNoLiveSourceReleasesTheHook(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src := f.add("src_1", "org_a", "bitbucket.org/acme/api", "")
+	f.add("src_2", "org_b", "bitbucket.org/acme/api", "")
+	hook, _ := f.hooks.BitbucketHookFor(ctx, "org_a", "bitbucket.org/acme/api")
+	// The source went without Removed running, as a project's cascade did
+	// before reapers covered it.
+	now := time.Now()
+	src.RemovedAt = &now
+	body := pushPayload("acme/api", branchChange("branch", "trunk"))
+	n, err := f.w.Deliver(ctx, hook.HookID, "repo:push", signBitbucket(f.w.Secret(hook.HookID), body), body)
+	if err != nil || n != 0 || len(f.started) != 0 {
+		t.Fatalf("delivery: %d, %v, started %v", n, err, f.started)
+	}
+	if !slices.Equal(f.api.deleted, []string{"token-a/" + hook.BitbucketHookUUID}) {
+		t.Fatalf("deleted %v", f.api.deleted)
+	}
+	if _, err = f.hooks.GetBitbucketHook(ctx, hook.HookID); !errors.Is(err, repositories.ErrHookNotFound) {
+		t.Fatalf("the row is still there: %v", err)
+	}
+	if _, err = f.hooks.BitbucketHookFor(ctx, "org_b", "bitbucket.org/acme/api"); err != nil {
+		t.Fatalf("org_b's hook went too: %v", err)
+	}
+	// A forged delivery releases nothing.
+	hookB, _ := f.hooks.BitbucketHookFor(ctx, "org_b", "bitbucket.org/acme/api")
+	f.sources[1].RemovedAt = &now
+	if _, err = f.w.Deliver(ctx, hookB.HookID, "repo:push", "sha256=00", body); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("forged: %v", err)
+	}
+	if _, err = f.hooks.GetBitbucketHook(ctx, hookB.HookID); err != nil {
+		t.Fatalf("a forged delivery released the hook: %v", err)
+	}
+}
+
+func TestBitbucketWebhooks_deletingAProjectReleasesItsHooks(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.prj["proj_two"] = &projects.Project{ID: "proj_two", OrgID: org}
+	h := newHookFixture(t)
+	h.conns.conns[org] = &repositories.BitbucketConnection{ID: "bbws_o", OrgID: org, WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	h.conns.token[org] = "token-o"
+	h.w.Sources = f.store.byRepository
+	f.svc.SetSourceHooks(h.w.SourceHooks())
+	for _, p := range []string{"proj_bare", "proj_two"} {
+		if _, err := f.svc.AddSource(ctx, dev, p, AddSourceInput{Repository: "bitbucket.org/acme/api"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.svc.AddSource(ctx, dev, "proj_two", AddSourceInput{Repository: "bitbucket.org/acme/web", Alias: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.api.created) != 2 {
+		t.Fatalf("created %+v", h.api.created)
+	}
+	// deleteProject does what projects.Service.Delete does around the
+	// store's cascade.
+	deleteProject := func(projectID string) {
+		after := f.svc.Reap(ctx, org, projectID, "")
+		f.store.cascade(projectID)
+		if after != nil {
+			after(ctx)
+		}
+	}
+	deleteProject("proj_bare")
+	if len(h.api.deleted) != 0 || len(h.hooks.all()) != 2 {
+		t.Fatalf("deleting one of two projects on acme/api: deleted %v, rows %d", h.api.deleted, len(h.hooks.all()))
+	}
+	deleteProject("proj_two")
+	if len(h.api.deleted) != 2 || len(h.hooks.all()) != 0 {
+		t.Fatalf("deleting the last project: deleted %v, rows %+v", h.api.deleted, h.hooks.all())
+	}
+	// Deleting an environment isn't a source's business.
+	if f.svc.Reap(ctx, org, "proj_bare", "env_1") != nil {
+		t.Fatal("an environment's deletion was reaped")
+	}
+}
+
+// cascade drops a project's sources, as deleting its row does.
+func (m *memStore) cascade(projectID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sources {
+		if s.ProjectID == projectID {
+			delete(m.sources, id)
+		}
+	}
 }

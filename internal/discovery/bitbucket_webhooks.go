@@ -22,6 +22,11 @@ import (
 // is made from. The secrets themselves are never stored.
 const BitbucketWebhookKeyLabel = "loomplane/bitbucket webhook v1"
 
+// hookFinishTimeout bounds what Ensure does once Bitbucket has added a
+// hook: recording it, or taking it off again. That runs even when the
+// caller has gone, so a hook never outlives the row that knows of it.
+const hookFinishTimeout = 15 * time.Second
+
 // BitbucketPushActor is who an analysis a Bitbucket push started is
 // recorded as created by.
 const BitbucketPushActor = "bitbucket-push"
@@ -47,11 +52,42 @@ type PushState struct {
 // SourceHooks are told when a source is attached or removed, and asked
 // whether pushes re-analyze one. Neither Added nor Removed can fail the
 // change: it's already saved. Push returns nil for a source whose host has
-// no say.
+// no say. Warn reports what the Service couldn't do for them.
 type SourceHooks struct {
 	Added   func(ctx context.Context, orgID string, src *Source)
 	Removed func(ctx context.Context, orgID string, src *Source)
 	Push    func(ctx context.Context, orgID string, src *Source) *PushState
+	Warn    func(msg string, err error)
+}
+
+// Reap implements projects.Reaper. A project's sources go with it in the
+// database's cascade, where Removed never hears of them, so they're read
+// before the deletion and Removed runs for each once it's done. An
+// environment's deletion leaves the sources alone.
+func (s *Service) Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
+	if environmentID != "" || s.hooks.Removed == nil {
+		return nil
+	}
+	list, err := s.store.ListSources(ctx, orgID, projectID, false)
+	if err != nil {
+		if s.hooks.Warn != nil {
+			s.hooks.Warn("list the sources of project "+projectID+" before deleting it", err)
+		}
+		return nil
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	return func(ctx context.Context) {
+		seen := map[string]bool{}
+		for _, src := range list {
+			k := strings.ToLower(src.Repository)
+			if !seen[k] {
+				seen[k] = true
+				s.hooks.Removed(ctx, orgID, src)
+			}
+		}
+	}
 }
 
 // SetSourceHooks sets what hears about sources being attached and removed.
@@ -129,7 +165,7 @@ type bitbucketPush struct {
 
 // SourceHooks returns the hooks a Service calls for this.
 func (w *BitbucketWebhooks) SourceHooks() SourceHooks {
-	return SourceHooks{Added: w.added, Removed: w.removed, Push: w.State}
+	return SourceHooks{Added: w.added, Removed: w.removed, Push: w.State, Warn: w.warn}
 }
 
 // Secret is the secret Bitbucket signs a hook's deliveries with: the hex
@@ -217,17 +253,28 @@ func (w *BitbucketWebhooks) Ensure(ctx context.Context, orgID string, repo repos
 		}
 		return w.off(ctx, orgID, key, row, conn.ID, reason)
 	}
+	// Bitbucket has the hook now, so a caller giving up mustn't leave it
+	// there with no row that knows of it.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hookFinishTimeout)
+	defer cancel()
 	row.ConnectionID, row.BitbucketHookUUID, row.Status, row.Reason, row.UpdatedAt = conn.ID, uuid, repositories.HookOn, "", w.clock()
-	if err := w.Hooks.UpdateBitbucketHook(ctx, row); err != nil {
-		// Bitbucket has a hook nothing here knows of, so it's taken off again.
-		w.warn("turn the Bitbucket webhook of "+key+" on", err)
-		if derr := w.API.DeleteHook(ctx, token, repo, uuid); derr != nil {
+	won, err := w.Hooks.UpdateBitbucketHookIfOff(fctx, row)
+	if err != nil || !won {
+		// Either the row can't record it, or another try turned it on
+		// first. This hook is one too many either way.
+		if err != nil {
+			w.warn("turn the Bitbucket webhook of "+key+" on", err)
+		}
+		if derr := w.API.DeleteHook(fctx, token, repo, uuid); derr != nil {
 			w.warn("remove the Bitbucket webhook just added to "+key, derr)
 		}
-		return PushState{Reason: reasonTryAgain}
+		if err != nil {
+			return PushState{Reason: reasonTryAgain}
+		}
+		return w.State(fctx, orgID, &Source{Repository: key}).orOff()
 	}
 	if w.Audit != nil {
-		w.Audit.RecordHook(ctx, "bitbucket.webhook.add", orgID, key, row.HookID)
+		w.Audit.RecordHook(fctx, "bitbucket.webhook.add", orgID, key, row.HookID)
 	}
 	return PushState{On: true}
 }
@@ -272,9 +319,15 @@ func (w *BitbucketWebhooks) off(ctx context.Context, orgID, key string, row *rep
 		}
 		return PushState{Reason: reason}
 	}
-	row.ConnectionID, row.BitbucketHookUUID, row.Status, row.Reason, row.UpdatedAt = connectionID, "", repositories.HookOff, reason, now
-	if err := w.Hooks.UpdateBitbucketHook(ctx, row); err != nil {
+	// Only a row with no hook on Bitbucket is marked off: one another try
+	// turned on meanwhile stays on.
+	off := *row
+	off.ConnectionID, off.BitbucketHookUUID, off.Status, off.Reason, off.UpdatedAt = connectionID, "", repositories.HookOff, reason, now
+	switch updated, err := w.Hooks.UpdateBitbucketHookIfOff(ctx, &off); {
+	case err != nil:
 		w.warn("save the Bitbucket webhook of "+key, err)
+	case !updated:
+		return w.State(ctx, orgID, &Source{Repository: key}).orOff()
 	}
 	return PushState{Reason: reason}
 }
@@ -313,8 +366,13 @@ func (w *BitbucketWebhooks) Enable(ctx context.Context, p security.Principal, re
 	if err := w.Authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
 		return PushState{}, err
 	}
-	repo, err := repositories.ParseURL(repository)
-	if err != nil || !strings.EqualFold(repo.Host, repositories.HostBitbucket) {
+	parsed, err := repositories.ParseURL(repository)
+	if err != nil {
+		return PushState{}, fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrInvalidSource, repository)
+	}
+	// The same key attaching gives it, lowercase.
+	repo, ok := onBitbucket(parsed.Key())
+	if !ok {
 		return PushState{}, fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrInvalidSource, repository)
 	}
 	live, err := w.live(ctx, p.OrgID, repo.Key(), "")
@@ -424,6 +482,20 @@ func (w *BitbucketWebhooks) Deliver(ctx context.Context, hookID, event, signatur
 	}
 	if verr := w.Verify(hookID, signature, body); verr != nil {
 		return 0, verr
+	}
+	// A hook outliving every source of its organization on the repository
+	// (a cleanup that failed, say) goes as soon as it's heard from.
+	live, err := w.live(ctx, row.OrgID, row.Repository, "")
+	if err != nil {
+		return 0, err
+	}
+	if !live {
+		if repo, ok := onBitbucket(row.Repository); ok {
+			w.drop(ctx, row, repo, w.tokenFor(ctx, row.OrgID, repo.Owner, row))
+		} else {
+			w.dropRow(ctx, row)
+		}
+		return 0, nil
 	}
 	if event != "repo:push" {
 		return 0, nil

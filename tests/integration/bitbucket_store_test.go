@@ -228,6 +228,27 @@ func TestBitbucketStore_hookPerOrgAndRepository(t *testing.T) {
 		t.Fatalf("updating an unknown hook: %v", err)
 	}
 
+	// Of two tries to turn one off hook on, only the first lands.
+	race := hook("hook_race", "org_1", "bitbucket.org/acme/race")
+	race.BitbucketHookUUID, race.Status = "", repositories.HookOff
+	if err := store.SaveBitbucketHook(ctx, race); err != nil {
+		t.Fatal(err)
+	}
+	first := &repositories.BitbucketHook{HookID: "hook_race", ConnectionID: "bbw_1", BitbucketHookUUID: "{first}", Status: repositories.HookOn, UpdatedAt: later}
+	second := &repositories.BitbucketHook{HookID: "hook_race", ConnectionID: "bbw_1", BitbucketHookUUID: "{second}", Status: repositories.HookOn, UpdatedAt: later}
+	if ok, err := store.UpdateBitbucketHookIfOff(ctx, first); err != nil || !ok {
+		t.Fatalf("the first try: %v, %v", ok, err)
+	}
+	if ok, err := store.UpdateBitbucketHookIfOff(ctx, second); err != nil || ok {
+		t.Fatalf("the second try: %v, %v", ok, err)
+	}
+	if got, _ := store.GetBitbucketHook(ctx, "hook_race"); got.BitbucketHookUUID != "{first}" {
+		t.Fatalf("the race left %+v", got)
+	}
+	if ok, err := store.UpdateBitbucketHookIfOff(ctx, &repositories.BitbucketHook{HookID: "nope"}); err != nil || ok {
+		t.Fatalf("an unknown hook: %v, %v", ok, err)
+	}
+
 	if err := store.DeleteBitbucketHook(ctx, "hook_1"); err != nil {
 		t.Fatal(err)
 	}
