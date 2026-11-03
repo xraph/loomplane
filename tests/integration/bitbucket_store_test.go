@@ -183,16 +183,16 @@ func TestBitbucketStore_hookPerOrgAndRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := store.BitbucketHookFor(ctx, "org_1", "bitbucket.org/acme/api")
-	if err != nil || got.HookID != "hook_1" || got.Repository != "bitbucket.org/ACME/api" || got.Status != repositories.HookOn || !got.CreatedAt.Equal(now) {
-		t.Fatalf("hook for the repository: %+v %v", got, err)
+	got, gotErr := store.BitbucketHookFor(ctx, "org_1", "bitbucket.org/acme/api")
+	if gotErr != nil || got.HookID != "hook_1" || got.Repository != "bitbucket.org/ACME/api" || got.Status != repositories.HookOn || !got.CreatedAt.Equal(now) {
+		t.Fatalf("hook for the repository: %+v %v", got, gotErr)
 	}
 	if _, err := store.BitbucketHookFor(ctx, "org_1", "bitbucket.org/acme/other"); !errors.Is(err, repositories.ErrHookNotFound) {
 		t.Fatalf("hook for another repository: %v", err)
 	}
-	byID, err := store.GetBitbucketHook(ctx, "hook_3")
-	if err != nil || byID.OrgID != "org_2" {
-		t.Fatalf("hook by ID: %+v %v", byID, err)
+	byID, byIDErr := store.GetBitbucketHook(ctx, "hook_3")
+	if byIDErr != nil || byID.OrgID != "org_2" {
+		t.Fatalf("hook by ID: %+v %v", byID, byIDErr)
 	}
 	if _, err := store.GetBitbucketHook(ctx, "nope"); !errors.Is(err, repositories.ErrHookNotFound) {
 		t.Fatalf("missing hook: %v", err)
@@ -204,9 +204,9 @@ func TestBitbucketStore_hookPerOrgAndRepository(t *testing.T) {
 	if err := store.SaveBitbucketHook(ctx, off); err != nil {
 		t.Fatal(err)
 	}
-	hooks, err := store.BitbucketHooksIn(ctx, "org_1", "bbw_1")
-	if err != nil || len(hooks) != 2 || hooks[0].HookID != "hook_1" || hooks[1].Status != repositories.HookOff || hooks[1].Reason == "" {
-		t.Fatalf("hooks in the workspace: %+v %v", hooks, err)
+	hooks, listErr := store.BitbucketHooksIn(ctx, "org_1", "bbw_1")
+	if listErr != nil || len(hooks) != 2 || hooks[0].HookID != "hook_1" || hooks[1].Status != repositories.HookOff || hooks[1].Reason == "" {
+		t.Fatalf("hooks in the workspace: %+v %v", hooks, listErr)
 	}
 	if hooks, _ := store.BitbucketHooksIn(ctx, "org_1", "bbw_2"); len(hooks) != 0 {
 		t.Fatalf("another workspace's hooks: %+v", hooks)
@@ -218,11 +218,11 @@ func TestBitbucketStore_hookPerOrgAndRepository(t *testing.T) {
 	if err := store.UpdateBitbucketHook(ctx, turnOn); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.GetBitbucketHook(ctx, "hook_4")
-	if err != nil || updated.Status != repositories.HookOn || updated.Reason != "" || updated.BitbucketHookUUID != "{hook_4}" ||
+	updated, updErr := store.GetBitbucketHook(ctx, "hook_4")
+	if updErr != nil || updated.Status != repositories.HookOn || updated.Reason != "" || updated.BitbucketHookUUID != "{hook_4}" ||
 		updated.ConnectionID != "bbw_2" || !updated.UpdatedAt.Equal(later) || !updated.CreatedAt.Equal(now) ||
 		updated.OrgID != "org_1" || updated.Repository != "bitbucket.org/acme/web" {
-		t.Fatalf("hook after turning it on: %+v %v", updated, err)
+		t.Fatalf("hook after turning it on: %+v %v", updated, updErr)
 	}
 	if err := store.UpdateBitbucketHook(ctx, &repositories.BitbucketHook{HookID: "nope", Status: repositories.HookOn}); !errors.Is(err, repositories.ErrHookNotFound) {
 		t.Fatalf("updating an unknown hook: %v", err)
