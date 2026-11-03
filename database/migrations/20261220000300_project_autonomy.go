@@ -11,8 +11,11 @@ import (
 // promote a release it was asked for to production without asking first,
 // and how long the release must have soaked in staging before it may.
 // Every project starts at "ask first", with no minimum soak. The soak is
-// at most a week; the check is added NOT VALID and then validated, so the
-// table is never locked against writes for a full scan.
+// at most a week. The check is added NOT VALID and then validated, but in
+// the same transaction as ADD COLUMN, which already holds ACCESS
+// EXCLUSIVE, so the validating scan runs under that lock too. Every row
+// has the default 0 here, and the projects table is small; split the
+// migration if that ever stops being true.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
