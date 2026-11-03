@@ -106,6 +106,11 @@ func TestRunEndToEnd(t *testing.T) {
 			t.Errorf("no %s event in %v", want, kinds)
 		}
 	}
+	// The task reads finished only once its log is whole: done, then the
+	// final status, last.
+	if n := len(kinds); n < 2 || kinds[n-2] != "done" || kinds[n-1] != agentruns.EventStatus {
+		t.Errorf("the log of a finished task ends %v, want done then its status", kinds)
+	}
 	if text != "hello" {
 		t.Errorf("text %q", text)
 	}

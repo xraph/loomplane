@@ -535,6 +535,9 @@ type fakeEngine struct {
 	// onGetAgent, when set, runs inside GetAgentByName: a test's way in
 	// between a job binding its task and driving the run.
 	onGetAgent func()
+	// script, when set, plays a run's stream instead of events, the way a
+	// test needs cortex to order it. It closes nothing; replay does.
+	script func(events chan<- engine.StreamEvent)
 }
 
 func newFakeEngine() *fakeEngine {
@@ -548,9 +551,14 @@ func agentKey(ctx context.Context, name string) string {
 func (f *fakeEngine) replay(events chan<- engine.StreamEvent) {
 	f.mu.Lock()
 	evs := slices.Clone(f.events)
+	script := f.script
 	f.mu.Unlock()
 	go func() {
 		defer close(events)
+		if script != nil {
+			script(events)
+			return
+		}
 		for _, e := range evs {
 			events <- e
 		}

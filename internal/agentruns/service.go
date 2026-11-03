@@ -159,8 +159,8 @@ type Service struct {
 	mu      sync.RWMutex
 	kinds   map[Kind]KindSpec
 	handler SuspensionHandler
-	// running cancels the runs this process's jobs are driving, by task.
-	running map[string]context.CancelFunc
+	// running is the runs this process's jobs are driving, by task.
+	running map[string]*localRun
 
 	// beforeClaim and beforeDrive, when set, run at those points of a
 	// job: tests use them to land a cancel there.
@@ -172,7 +172,7 @@ func NewService(d Deps) *Service {
 	s := &Service{
 		store: d.Store, jobs: d.Jobs, binder: d.Binder, registry: d.Registry, codec: d.Codec, wake: d.Wake,
 		now: d.Now, warnFn: d.Warn, poll: watchPoll,
-		kinds: map[Kind]KindSpec{}, running: map[string]context.CancelFunc{},
+		kinds: map[Kind]KindSpec{}, running: map[string]*localRun{},
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -749,10 +749,10 @@ func (s *Service) fail(ctx context.Context, t *Task, why string) {
 func (s *Service) finish(ctx context.Context, t *Task, status string, tokens int, why string) (bool, error) {
 	why = reason(why)
 	tr := Transition{From: open, Status: status, Error: why}
-	// A run this process is driving still has events on their way, its
-	// last outcome among them: the pump writes the final status after
-	// them, so a watcher never stops short of them.
-	if !s.isLocal(t.ID) {
+	// A run this process is still pumping has events on their way: the
+	// pump writes the final status after them, so a watcher never stops
+	// short of them.
+	if !s.pumping(t.ID) {
 		tr.Event = statusEvent(status, why)
 	}
 	if tokens >= 0 {
@@ -774,6 +774,38 @@ func (s *Service) finish(ctx context.Context, t *Task, status string, tokens int
 	return true, nil
 }
 
+// finishRun finishes the task of a run that ended, as its terminal hook
+// reports it. Cortex fires that hook before it sends the run's last
+// events, so while this process is still pumping them the outcome waits
+// for the pump: the task turns terminal only after done is in the log,
+// in the same write as its final status. Until then the task reads as
+// running, and a continuation is claimed so that, if this process dies
+// first, the sweep continues the run in five minutes and settles the
+// task from cortex's record.
+func (s *Service) finishRun(ctx context.Context, t *Task, status string, tokens int, why string) {
+	if s.deferFinish(t.ID, outcome{status: status, tokens: tokens, why: why}) {
+		if _, err := s.store.ClaimContinue(ctx, t.OrgID, t.ID, s.now().UTC(), continueStale); err != nil {
+			s.warn("agentruns: couldn't mark a finished run for the sweep", err)
+		}
+		return
+	}
+	if _, err := s.finish(ctx, t, status, tokens, why); err != nil {
+		s.warn("agentruns: couldn't finish a task", err)
+	}
+}
+
+// settleOutcome applies an outcome finishRun left for the pump.
+func (s *Service) settleOutcome(ctx context.Context, t *Task, o *outcome) bool {
+	if o == nil {
+		return false
+	}
+	moved, err := s.finish(ctx, t, o.status, o.tokens, o.why)
+	if err != nil {
+		s.warn("agentruns: couldn't finish a task", err)
+	}
+	return moved
+}
+
 // move moves an open task to running or waiting.
 func (s *Service) move(ctx context.Context, t *Task, from []string, to string) {
 	if _, err := s.store.Transition(ctx, t.OrgID, t.ID, Transition{From: from, Status: to, Event: statusEvent(to, "")}); err != nil {
@@ -781,28 +813,86 @@ func (s *Service) move(ctx context.Context, t *Task, from []string, to string) {
 	}
 }
 
+// localRun is a run this process's job is driving.
+type localRun struct {
+	cancel context.CancelFunc
+	// ended is set once the pump has written the run's last event.
+	ended bool
+	// outcome is how the run ended, when its hook came while the pump
+	// still had events to write.
+	outcome *outcome
+}
+
+// outcome is how a run ended, as finish takes it.
+type outcome struct {
+	status string
+	tokens int
+	why    string
+}
+
 func (s *Service) trackLocal(taskID string, cancel context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.running[taskID] = cancel
+	s.running[taskID] = &localRun{cancel: cancel}
 }
 
-func (s *Service) untrackLocal(taskID string) {
+// untrackLocal lets the run go, with any outcome its pump never wrote.
+func (s *Service) untrackLocal(taskID string) *outcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	r := s.running[taskID]
 	delete(s.running, taskID)
+	if r == nil || r.ended {
+		return nil
+	}
+	return r.outcome
 }
 
-func (s *Service) isLocal(taskID string) bool {
+// pumping reports whether this process is still writing the task's run's
+// events.
+func (s *Service) pumping(taskID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.running[taskID]
-	return ok
+	r, ok := s.running[taskID]
+	return ok && !r.ended
+}
+
+// deferFinish leaves o for the pump when it's still writing the run's
+// events, and reports whether it did.
+func (s *Service) deferFinish(taskID string, o outcome) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.running[taskID]
+	if !ok || r.ended {
+		return false
+	}
+	if r.outcome == nil {
+		r.outcome = &o
+	}
+	return true
+}
+
+// endPump marks the run's last event written and hands back the outcome
+// its hook left, if any.
+func (s *Service) endPump(taskID string) *outcome {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.running[taskID]
+	if !ok {
+		return nil
+	}
+	r.ended = true
+	o := r.outcome
+	r.outcome = nil
+	return o
 }
 
 func (s *Service) stopLocal(taskID string) {
 	s.mu.Lock()
-	cancel := s.running[taskID]
+	var cancel context.CancelFunc
+	if r := s.running[taskID]; r != nil {
+		cancel = r.cancel
+	}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()

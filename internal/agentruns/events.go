@@ -43,7 +43,9 @@ func (s *Service) begin(bound context.Context, t *Task) (runCtx context.Context,
 	stop := context.AfterFunc(bound, func() { cancel(cortex.ErrRunInterrupted) })
 	return ctx, func() {
 		stop()
-		s.untrackLocal(t.ID)
+		// A run whose hook came but whose pump never ended (its stream
+		// never started) finishes here.
+		s.settleOutcome(context.WithoutCancel(bound), t, s.untrackLocal(t.ID))
 		cancel(nil)
 	}
 }
@@ -157,8 +159,13 @@ func (w *eventWriter) flush() {
 }
 
 // end writes the task's final status once the run's last event is in,
-// when the run finished while it was being driven.
+// when the run finished while it was being driven. An outcome the run's
+// hook left moves the task and writes its status in one step; a task
+// that finished another way (a cancel) gets its status written here.
 func (w *eventWriter) end() {
+	if w.s.settleOutcome(w.ctx, w.task, w.s.endPump(w.task.ID)) {
+		return
+	}
 	t, err := w.s.store.Get(w.ctx, w.task.OrgID, w.task.ID)
 	if err != nil || !Terminal(t.Status) {
 		return
@@ -273,6 +280,13 @@ func (s *Service) Watch(ctx context.Context, p security.Principal, taskID string
 		ticker := time.NewTicker(s.poll)
 		defer ticker.Stop()
 		cursor, last := after, Event{}
+		// A stream that picks up where it left off needs the event it
+		// stopped at, to know whether that was the end.
+		if after > 0 {
+			if prev, perr := s.store.Events(wctx, t.OrgID, t.ID, after-1, 1); perr == nil && len(prev) == 1 && prev[0].Seq == after {
+				last = prev[0]
+			}
+		}
 		for {
 			if ok, verr := s.visible(wctx, p, t); verr != nil || !ok {
 				return
@@ -296,7 +310,7 @@ func (s *Service) Watch(ctx context.Context, p security.Principal, taskID string
 				continue
 			}
 			cur, gerr := s.store.Get(wctx, t.OrgID, t.ID)
-			if gerr == nil && finished(cur, cursor, after, last, s.now()) {
+			if gerr == nil && finished(cur, cursor, last, s.now()) {
 				return
 			}
 			select {
@@ -310,15 +324,16 @@ func (s *Service) Watch(ctx context.Context, p security.Principal, taskID string
 	return out, cancel, nil
 }
 
-// finished reports whether a watch has everything: the task ended and its
-// final status event was sent, or the watcher had it all already, or the
-// task ended a while ago and nothing more came (its driver died before
-// writing the final status).
-func finished(t *Task, cursor, after int64, last Event, now time.Time) bool {
+// finished reports whether a watch has everything: the task ended and the
+// last event the watcher has is its final status, or the task ended a
+// while ago and nothing more came (its driver died before writing the
+// final status). A finished row alone isn't enough: a run this process
+// drives can be cancelled before its last events are written.
+func finished(t *Task, cursor int64, last Event, now time.Time) bool {
 	if !Terminal(t.Status) || t.EventSeq > cursor {
 		return false
 	}
-	if cursor == after || isFinalStatus(last) {
+	if isFinalStatus(last) {
 		return true
 	}
 	return now.Sub(t.UpdatedAt) > finalGrace

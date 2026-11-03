@@ -117,7 +117,8 @@ func (h *Hooks) OnRunTerminated(ctx context.Context, _ id.AgentID, runID id.Agen
 }
 
 // finish moves the task to status with the tokens and error the run
-// recorded. A task that already finished is left as it is.
+// recorded, once its last events are written (see finishRun). A task that
+// already finished is left as it is.
 func (h *Hooks) finish(ctx context.Context, runID id.AgentRunID, status, hookError string) {
 	s, t, ok := h.task(ctx, runID)
 	if !ok || Terminal(t.Status) {
@@ -130,7 +131,5 @@ func (h *Hooks) finish(ctx context.Context, runID id.AgentRunID, status, hookErr
 			tokens, runError = r.TokensUsed, r.Error
 		}
 	}
-	if _, err := s.finish(ctx, t, status, tokens, failure(status, runError, hookError)); err != nil {
-		s.warn("agentruns: couldn't finish a task", err)
-	}
+	s.finishRun(ctx, t, status, tokens, failure(status, runError, hookError))
 }
