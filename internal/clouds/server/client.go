@@ -21,9 +21,8 @@ type Client struct {
 	transport    *http.Transport
 }
 
-// Dial reaches cfg's host over pinned SSH.
-//
-// Deprecated: use Connect, which also reaches joined nodes.
+// Dial reaches cfg's host over pinned SSH. It is Connect without node
+// streams; prefer Connect, which also reaches joined nodes.
 func Dial(ctx context.Context, cfg *Config) (*Client, error) {
 	return Connect(ctx, cfg, nil)
 }

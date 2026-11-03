@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
@@ -157,6 +158,31 @@ func NodeCredential(orgID, nodeID string) []byte {
 	return raw
 }
 
+// validNodeID reports whether id is a node ID as the nodes service makes
+// them: node_ and a UUID in its canonical form.
+func validNodeID(id string) bool {
+	rest, ok := strings.CutPrefix(id, "node_")
+	if !ok {
+		return false
+	}
+	parsed, err := uuid.Parse(rest)
+	return err == nil && parsed.String() == rest
+}
+
+// validOrgID reports whether id is 1 to 128 printable ASCII characters,
+// none of them a space.
+func validOrgID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := range len(id) {
+		if id[i] <= ' ' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
 // IsNodeCredential reports whether raw is a node connection's credential.
 func IsNodeCredential(raw []byte) bool {
 	var marker nodeMarker
@@ -173,10 +199,10 @@ func parseNodeConfig(raw []byte, settings map[string]string) (*Config, error) {
 		return nil, fmt.Errorf("%w: malformed node credential", ErrInvalid)
 	}
 	orgID, nodeID := marker.Node.OrgID, marker.Node.NodeID
-	if orgID == "" || nodeID == "" || len(orgID) > 128 || len(nodeID) > 128 {
+	if !validOrgID(orgID) || !validNodeID(nodeID) {
 		return nil, fmt.Errorf("%w: the node credential names no node", ErrInvalid)
 	}
-	if recorded := settings["node_id"]; recorded != "" && recorded != nodeID {
+	if settings["node_id"] != nodeID {
 		return nil, fmt.Errorf("%w: the node credential names another node", ErrInvalid)
 	}
 	generation, err := strconv.ParseInt(settings["identity_generation"], 10, 64)

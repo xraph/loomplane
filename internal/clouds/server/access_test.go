@@ -161,7 +161,7 @@ func (s *fakeStreams) Open(_ context.Context, orgID, nodeID string, hdr nodeprot
 }
 
 func TestConnectNodeWithoutStreamsIsInvalid(t *testing.T) {
-	cfg := &Config{Socket: "/var/run/docker.sock", Node: &NodeTarget{OrgID: "org", NodeID: "node_1", IdentityGeneration: 1}, Details: map[string]string{}}
+	cfg := &Config{Socket: "/var/run/docker.sock", Node: &NodeTarget{OrgID: "org", NodeID: testNodeID, IdentityGeneration: 1}, Details: map[string]string{}}
 	if c, err := Connect(t.Context(), cfg, nil); !errors.Is(err, ErrInvalid) || c != nil {
 		t.Fatalf("node without streams: %v", err)
 	}
@@ -176,24 +176,27 @@ func TestConnectNodeWithoutStreamsIsInvalid(t *testing.T) {
 	}
 }
 
+// testNodeID is a node ID in the form the nodes service makes them.
+const testNodeID = "node_0b6f2c1e-4a8d-4c3b-9f1e-2d7a5c8e9b10"
+
 func TestParseConfigNodeMarker(t *testing.T) {
-	marker := NodeCredential("org_1", "node_abc")
-	cfg, err := ParseConfig(marker, map[string]string{"identity_generation": "3", "docker_socket": "/run/user/1000/docker.sock", "advertise_host": "box.example.com", "build_workers": "shared"})
+	marker := NodeCredential("org_1", testNodeID)
+	cfg, err := ParseConfig(marker, map[string]string{"node_id": testNodeID, "identity_generation": "3", "docker_socket": "/run/user/1000/docker.sock", "advertise_host": "box.example.com", "build_workers": "shared"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Node == nil || *cfg.Node != (NodeTarget{OrgID: "org_1", NodeID: "node_abc", IdentityGeneration: 3}) {
+	if cfg.Node == nil || *cfg.Node != (NodeTarget{OrgID: "org_1", NodeID: testNodeID, IdentityGeneration: 3}) {
 		t.Fatalf("node %+v", cfg.Node)
 	}
 	if cfg.Signer != nil || cfg.HostKey != nil || cfg.Address != "" || cfg.User != "" || cfg.Socket != "/run/user/1000/docker.sock" {
 		t.Fatalf("config %+v", cfg)
 	}
-	want := map[string]string{"node_id": "node_abc", "identity_generation": "3", "docker_socket": "/run/user/1000/docker.sock", "advertise_host": "box.example.com", "build_workers": "shared"}
+	want := map[string]string{"node_id": testNodeID, "identity_generation": "3", "docker_socket": "/run/user/1000/docker.sock", "advertise_host": "box.example.com", "build_workers": "shared"}
 	if !maps.Equal(cfg.Details, want) {
 		t.Fatalf("details %v", cfg.Details)
 	}
 
-	cfg, err = ParseConfig(marker, map[string]string{"identity_generation": "1"})
+	cfg, err = ParseConfig(marker, map[string]string{"node_id": testNodeID, "identity_generation": "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,21 +204,44 @@ func TestParseConfigNodeMarker(t *testing.T) {
 		t.Fatalf("defaults %+v", cfg)
 	}
 
+	// node is the settings a node connection records, with extra on top.
+	node := func(id string, extra ...string) map[string]string {
+		settings := map[string]string{"node_id": id, "identity_generation": "1"}
+		for i := 0; i+1 < len(extra); i += 2 {
+			settings[extra[i]] = extra[i+1]
+		}
+		return settings
+	}
+	other := "node_7c1d9e2a-5b3f-4e6a-8d0c-1f2e3a4b5c6d"
 	for name, tc := range map[string]struct {
 		raw      []byte
 		settings map[string]string
 	}{
-		"runtime class":          {marker, map[string]string{"identity_generation": "1", "build_runtime_class": "kata"}},
-		"bad build workers":      {marker, map[string]string{"identity_generation": "1", "build_workers": "everyone"}},
-		"no identity generation": {marker, map[string]string{}},
-		"zero generation":        {marker, map[string]string{"identity_generation": "0"}},
-		"word generation":        {marker, map[string]string{"identity_generation": "three"}},
-		"relative socket":        {marker, map[string]string{"identity_generation": "1", "docker_socket": "docker.sock"}},
-		"bad advertise host":     {marker, map[string]string{"identity_generation": "1", "advertise_host": "a/b"}},
-		"other node in settings": {marker, map[string]string{"identity_generation": "1", "node_id": "node_other"}},
-		"empty node":             {NodeCredential("org_1", ""), map[string]string{"identity_generation": "1"}},
-		"empty org":              {NodeCredential("", "node_abc"), map[string]string{"identity_generation": "1"}},
-		"marker with extras":     {[]byte(`{"loomplane_node":{"org_id":"org_1","node_id":"node_abc"},"host":"evil.example"}`), map[string]string{"identity_generation": "1"}},
+		"runtime class":          {marker, node(testNodeID, "build_runtime_class", "kata")},
+		"bad build workers":      {marker, node(testNodeID, "build_workers", "everyone")},
+		"no identity generation": {marker, map[string]string{"node_id": testNodeID}},
+		"zero generation":        {marker, node(testNodeID, "identity_generation", "0")},
+		"word generation":        {marker, node(testNodeID, "identity_generation", "three")},
+		"relative socket":        {marker, node(testNodeID, "docker_socket", "docker.sock")},
+		"bad advertise host":     {marker, node(testNodeID, "advertise_host", "a/b")},
+		"other node in settings": {marker, node(other)},
+		"no node in settings":    {marker, map[string]string{"identity_generation": "1"}},
+		"empty node in settings": {marker, node("")},
+		"empty node":             {NodeCredential("org_1", ""), node("")},
+		"node without uuid":      {NodeCredential("org_1", "node_abc"), node("node_abc")},
+		"node without prefix":    {NodeCredential("org_1", testNodeID[len("node_"):]), node(testNodeID[len("node_"):])},
+		"node uppercase uuid":    {NodeCredential("org_1", strings.ToUpper(testNodeID)), node(strings.ToUpper(testNodeID))},
+		"node braced uuid":       {NodeCredential("org_1", "node_{"+testNodeID[len("node_"):]+"}"), node("node_{" + testNodeID[len("node_"):] + "}")},
+		"node urn uuid":          {NodeCredential("org_1", "node_urn:uuid:"+testNodeID[len("node_"):]), node("node_urn:uuid:" + testNodeID[len("node_"):])},
+		"empty org":              {NodeCredential("", testNodeID), node(testNodeID)},
+		"org with space":         {NodeCredential("org 1", testNodeID), node(testNodeID)},
+		"org with tab":           {NodeCredential("org\t1", testNodeID), node(testNodeID)},
+		"org with newline":       {NodeCredential("org_1\n", testNodeID), node(testNodeID)},
+		"org with control":       {NodeCredential("org\x00", testNodeID), node(testNodeID)},
+		"org with delete":        {NodeCredential("org\x7f", testNodeID), node(testNodeID)},
+		"org not ascii":          {NodeCredential("orgé", testNodeID), node(testNodeID)},
+		"org too long":           {NodeCredential(strings.Repeat("o", 129), testNodeID), node(testNodeID)},
+		"marker with extras":     {[]byte(`{"loomplane_node":{"org_id":"org_1","node_id":"` + testNodeID + `"},"host":"evil.example"}`), node(testNodeID)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ParseConfig(tc.raw, tc.settings); !errors.Is(err, ErrInvalid) {

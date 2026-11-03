@@ -72,12 +72,12 @@ func (c *noHalfClose) CloseWrite() error {
 	return nil
 }
 
-var nodeTestTarget = NodeTarget{OrgID: "org_1", NodeID: "node_abc", IdentityGeneration: 2}
+var nodeTestTarget = NodeTarget{OrgID: "org_1", NodeID: testNodeID, IdentityGeneration: 2}
 
 // nodeClient is a Client reaching nodeTestTarget through streams.
 func nodeClient(t *testing.T, streams NodeStreams, dockerID string) *Client {
 	t.Helper()
-	cfg, err := ParseConfig(NodeCredential(nodeTestTarget.OrgID, nodeTestTarget.NodeID), map[string]string{"identity_generation": "2"})
+	cfg, err := ParseConfig(NodeCredential(nodeTestTarget.OrgID, nodeTestTarget.NodeID), map[string]string{"node_id": nodeTestTarget.NodeID, "identity_generation": "2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestNodeConnectReachesDockerThroughStreams(t *testing.T) {
 		t.Fatal("no stream opened")
 	}
 	for i, hdr := range headers {
-		if targets[i] != "org_1/node_abc" || hdr.Fence != nil || hdr.Arg != "" {
+		if targets[i] != "org_1/"+testNodeID || hdr.Fence != nil || hdr.Arg != "" {
 			t.Fatalf("stream %d: %s %+v", i, targets[i], hdr)
 		}
 	}
@@ -203,7 +203,7 @@ func TestNodeDialSendsTarget(t *testing.T) {
 	}
 	targets, headers := stub.opened()
 	want := nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDial, Target: "127.0.0.1:5432", Arg: "tcp"}
-	if len(headers) != 1 || targets[0] != "org_1/node_abc" || !reflect.DeepEqual(headers[0], want) {
+	if len(headers) != 1 || targets[0] != "org_1/"+testNodeID || !reflect.DeepEqual(headers[0], want) {
 		t.Fatalf("opened %v %+v", targets, headers)
 	}
 
@@ -285,7 +285,7 @@ func TestNodeFencedHeader(t *testing.T) {
 	for i, mode := range []string{nodeproto.FenceAdvance, nodeproto.FenceRequest} {
 		want := nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker, Target: nodeproto.DockerTargetFenced,
 			Fence: &nodeproto.Fence{Resource: "org_1/runtime/web", Generation: 7, Mode: mode, Daemon: "daemon-1"}}
-		if targets[i] != "org_1/node_abc" || !reflect.DeepEqual(headers[i], want) {
+		if targets[i] != "org_1/"+testNodeID || !reflect.DeepEqual(headers[i], want) {
 			t.Fatalf("stream %d: %s %+v %+v", i, targets[i], headers[i], headers[i].Fence)
 		}
 	}
@@ -481,7 +481,7 @@ func TestNodeProbesReadTheirTargets(t *testing.T) {
 		{Endpoint: nodeproto.EndpointProbe, Target: nodeproto.ProbeFilesystem, Arg: "/var/lib/docker"},
 		{Endpoint: nodeproto.EndpointProbe, Target: nodeproto.ProbeListeners},
 	}
-	if !reflect.DeepEqual(headers, want) || !slices.Equal(targets, []string{"org_1/node_abc", "org_1/node_abc", "org_1/node_abc"}) {
+	if !reflect.DeepEqual(headers, want) || !slices.Equal(targets, []string{"org_1/" + testNodeID, "org_1/" + testNodeID, "org_1/" + testNodeID}) {
 		t.Fatalf("opened %v %+v", targets, headers)
 	}
 
