@@ -78,6 +78,7 @@ type fakeBBAPI struct {
 	lookupErr  error // Workspace fails with it
 	delay      time.Duration
 	issued     int
+	exchanges  int // Exchange calls, spent code or not
 	refreshes  int
 	lookups    int // Workspace calls
 	repos      map[string][]BitbucketRepository
@@ -112,11 +113,12 @@ func (f *fakeBBAPI) issue(refresh string) BitbucketGrant {
 }
 
 func (f *fakeBBAPI) Exchange(_ context.Context, code string) (BitbucketGrant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exchanges++
 	if code != bbGoodCode {
 		return BitbucketGrant{}, ErrBitbucketRefused
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.noRefresh {
 		return f.issue(""), nil
 	}
@@ -585,6 +587,26 @@ func TestBitbucketConnect(t *testing.T) {
 			t.Fatalf("a developer connecting: %v", err)
 		}
 	})
+}
+
+func TestBitbucketConnect_emptyCodeOrStateNeverReachesBitbucket(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	state := f.stateFor(t, admin, "acme")
+	for name, in := range map[string]BitbucketConnectInput{
+		"no code":    {State: state},
+		"no state":   {Code: bbGoodCode},
+		"neither":    {},
+		"blank code": {Code: "   ", State: state},
+	} {
+		if _, err := f.conns.Connect(ctx, admin, in); !errors.Is(err, ErrBadState) {
+			t.Fatalf("%s: %v, want ErrBadState", name, err)
+		}
+	}
+	if f.api.exchanges != 0 {
+		t.Fatalf("Bitbucket was asked to exchange %d codes", f.api.exchanges)
+	}
 }
 
 func TestBitbucketAuthorize_needsRepositoryConnect(t *testing.T) {

@@ -259,6 +259,11 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 	if c.api == nil {
 		return nil, ErrBitbucketNotConfigured
 	}
+	// A callback missing either half proves nothing, so Bitbucket isn't
+	// asked about it.
+	if strings.TrimSpace(in.Code) == "" || strings.TrimSpace(in.State) == "" {
+		return nil, ErrBadState
+	}
 	st, err := VerifyState(c.stateKey, in.State, c.now())
 	if err != nil {
 		return nil, err
