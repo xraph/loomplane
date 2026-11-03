@@ -104,7 +104,12 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 		cortexext.WithShieldOptions(shieldsafety.WithApp(agentscope.App)),
 	}
 	if e.cfg.AI.Knowledge.Configured() {
-		opts = append(opts, cortexext.WithWeaveOptions(knowledgeOptions()...))
+		opts = append(opts,
+			cortexext.WithWeaveOptions(knowledgeOptions()...),
+			// A host engine option runs after the weave adapter is wired,
+			// so this wraps it.
+			cortexext.WithEngineOption(quietKnowledgeOption(e.warnKnowledge)),
+		)
 	}
 	engineOpts := e.engineOptions()
 	out := make([]cortexext.ExtOption, 0, len(opts)+len(engineOpts)+1)

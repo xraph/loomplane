@@ -216,3 +216,46 @@ func TestShieldSeesKnowledgeSearchAsARead(t *testing.T) {
 		t.Errorf("create_project under a profile that asks about reads: %v", err)
 	}
 }
+
+// Every knowledge_search is in the audit, as the workspace's agent and the
+// person it acts for, under its own name: allowed ones too, since no
+// handler runs a builtin to record it.
+func TestKnowledgeSearchIsAudited(t *testing.T) {
+	w := newWorld(t)
+	w.a.Knowledge = knowledgeIn(orgA)
+	layered := w.shielded()
+	for _, c := range []struct {
+		name          string
+		p             security.Principal
+		org, person   string
+		decision, out string
+	}{
+		{"allowed", as(orgA, ada), orgA, ada, "allowed", "success"},
+		{"refused", as(orgB, bob), orgB, bob, "forbidden", "denied"},
+	} {
+		before := len(w.audit.toolCalls())
+		err := w.authorize(layered, c.p, agentauthz.KnowledgeSearch, search("canary thresholds"))
+		if (err == nil) != (c.decision == "allowed") {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		events := w.audit.toolCalls()[before:]
+		if len(events) != 1 {
+			t.Fatalf("%s: audit %+v", c.name, events)
+		}
+		e := events[0]
+		person, ok := e.Principal.Person()
+		if e.Attributes["tool"] != agentauthz.KnowledgeSearch || e.Attributes["risk"] != string(defs.RiskRead) ||
+			e.Attributes["outcome"] != c.decision || e.Outcome != c.out ||
+			!e.Principal.IsAgent() || e.Principal.OrgID != c.org || !ok || person.UserID != c.person {
+			t.Errorf("%s: audit %+v", c.name, e)
+		}
+	}
+	// A tool that's neither an operation nor a builtin is still "unknown".
+	before := len(w.audit.toolCalls())
+	if err := w.authorize(layered, as(orgA, ada), "agent_send", map[string]string{"to": "x"}); err == nil {
+		t.Fatal("agent_send was allowed")
+	}
+	if events := w.audit.toolCalls()[before:]; len(events) != 1 || events[0].Attributes["tool"] != "unknown" {
+		t.Fatalf("agent_send audit %+v", events)
+	}
+}

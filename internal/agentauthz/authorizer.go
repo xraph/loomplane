@@ -379,7 +379,8 @@ func (n *decisionNote) get() (risk defs.Risk, project string, known bool) {
 // registry's class is what the audit records.
 //
 // Layered also records agent.tool.call for every call no handler runs:
-// a refusal, a pause and a request to a person.
+// a refusal, a pause, a request to a person, and any call of a cortex
+// builtin (knowledge_search), allowed or not.
 func Layered(a *Authorizer, shield *shieldengine.Engine) cortex.ToolAuthorizer {
 	inner := shieldsafety.NewToolAuthorizer(shield, a, shieldsafety.ToolCallOptions{
 		RiskClass: a.shieldClass, Profile: presets.InfraAgentTools, ApprovalTTL: a.ApprovalWindow,
@@ -413,12 +414,19 @@ func (l *layered) Authorize(ctx context.Context, s cortex.Subject, tc llm.ToolCa
 }
 
 // record writes agent.tool.call for a call no handler will record.
+// A cortex builtin the agent may use has no handler, so its call is
+// recorded here whatever the decision, under its own name.
 func (l *layered) record(ctx context.Context, s cortex.Subject, tc llm.ToolCall, note *decisionNote, err error) {
+	inv := cortex.Invocation{Subject: s, Call: tc}
+	op, isOp := l.a.Registry.Lookup(tc.Name)
+	_, isBuiltin := BuiltinRisk(tc.Name)
+	isBuiltin = isBuiltin && !isOp
 	decision := agentops.DecisionRefused
 	switch {
+	case err == nil && isBuiltin:
+		decision = agentops.DecisionAllowed
 	case err == nil:
-		op, ok := l.a.Registry.Lookup(tc.Name)
-		if !ok || !op.External() {
+		if !isOp || !op.External() {
 			return // its handler records it
 		}
 		decision = agentops.DecisionRequested
@@ -426,7 +434,11 @@ func (l *layered) record(ctx context.Context, s cortex.Subject, tc llm.ToolCall,
 		decision = agentops.DecisionApproval
 	}
 	risk, project, _ := note.get()
-	l.a.Registry.RecordDecision(ctx, cortex.Invocation{Subject: s, Call: tc}, risk, project, decision)
+	if isBuiltin {
+		l.a.Registry.RecordBuiltinDecision(ctx, inv, risk, decision)
+		return
+	}
+	l.a.Registry.RecordDecision(ctx, inv, risk, project, decision)
 }
 
 // shieldClass is the risk class shield scans a call under: the registry's,

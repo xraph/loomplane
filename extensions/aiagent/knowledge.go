@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	cortexengine "github.com/xraph/cortex/engine"
+	"github.com/xraph/cortex/knowledge"
 	"github.com/xraph/dispatch/cron"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/dispatch/job"
@@ -155,5 +157,58 @@ func (e *Extension) startKnowledge(ctx context.Context) {
 	}
 	if err := dispatchengine.RegisterCron(ctx, eng, recoverCron()); err != nil {
 		warn("aiagent: couldn't schedule knowledge's recovery", err)
+	}
+}
+
+// errSearchNotReady is what the model reads when a knowledge search
+// fails, after cortex's "retrieval failed: ". The most likely reason is
+// the first boot, before the docs job has made the docs collection,
+// which fails every search; whatever it is, the model gets no internal
+// error text, and the log gets the error.
+var errSearchNotReady = errors.New("knowledge search isn't ready yet; answer from your tools")
+
+// quietKnowledge is cortex's knowledge provider with its errors replaced
+// by errSearchNotReady and logged.
+type quietKnowledge struct {
+	knowledge.Provider
+	warn func(msg string, err error)
+}
+
+func (q quietKnowledge) Retrieve(ctx context.Context, query string, params *knowledge.RetrieveParams) ([]knowledge.ScoredChunk, error) {
+	chunks, err := q.Provider.Retrieve(ctx, query, params)
+	if err != nil {
+		q.warn("aiagent: a knowledge search failed", err)
+		return nil, errSearchNotReady
+	}
+	return chunks, nil
+}
+
+func (q quietKnowledge) ListCollections(ctx context.Context) ([]knowledge.CollectionInfo, error) {
+	cols, err := q.Provider.ListCollections(ctx)
+	if err != nil {
+		q.warn("aiagent: listing knowledge collections failed", err)
+		return nil, errSearchNotReady
+	}
+	return cols, nil
+}
+
+// quietKnowledgeOption wraps the knowledge provider cortex has by the
+// time the host's engine options run (the weave adapter it wired) in
+// quietKnowledge. With none, it does nothing.
+func quietKnowledgeOption(warn func(msg string, err error)) cortexengine.Option {
+	return func(eng *cortexengine.Engine) error {
+		k := eng.Knowledge()
+		if k == nil {
+			return nil
+		}
+		return cortexengine.WithKnowledge(quietKnowledge{Provider: k, warn: warn})(eng)
+	}
+}
+
+// warnKnowledge logs a knowledge search's failure, once the extension has
+// a logger.
+func (e *Extension) warnKnowledge(msg string, err error) {
+	if l := e.Logger(); l != nil {
+		l.Warn(msg, forge.F("error", err.Error()))
 	}
 }
