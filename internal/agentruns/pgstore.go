@@ -270,13 +270,17 @@ func (s *PgStore) WithholdStep(ctx context.Context, orgID, taskID string, e NewE
 	if err != nil {
 		return 0, err
 	}
+	var step int64
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM loomplane_agent_run_events
+		WHERE org_id = $1 AND task_id = $2 AND kind = 'step'`, orgID, taskID).Scan(&step); err != nil {
+		return 0, fmt.Errorf("find the stopped step: %w", err)
+	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_agent_run_events SET data = $3
-		WHERE org_id = $1 AND task_id = $2 AND kind = 'token'
-		AND seq > COALESCE((SELECT max(seq) FROM loomplane_agent_run_events
-			WHERE org_id = $1 AND task_id = $2 AND kind = 'step'), 0)`,
-		orgID, taskID, []byte(withheldText)); err != nil {
+		WHERE org_id = $1 AND task_id = $2 AND kind = 'token' AND seq > $4`,
+		orgID, taskID, []byte(withheldText), step); err != nil {
 		return 0, fmt.Errorf("withhold agent run text: %w", err)
 	}
+	e.Data = withStep(e.Data, step)
 	if seq, err = appendEvents(ctx, tx, orgID, taskID, []NewEvent{e}); err != nil {
 		return 0, err
 	}

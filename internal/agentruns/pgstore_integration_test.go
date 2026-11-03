@@ -219,7 +219,7 @@ func TestPgStoreWithholdsTheStoppedStep(t *testing.T) {
 	}
 	want := []string{
 		`{"index": 1}`, `{"text": "Hello"}`, `{"tool": "list_projects", "call_id": "c1"}`, `{"index": 2}`,
-		`{"text": "", "withheld": true}`, `{"text": "", "withheld": true}`, `{"message": "blocked"}`,
+		`{"text": "", "withheld": true}`, `{"text": "", "withheld": true}`, `{"message": "blocked", "step_seq": 4}`,
 	}
 	for i, e := range evs {
 		var got, w any

@@ -333,6 +333,7 @@ func (m *memStore) WithholdStep(_ context.Context, orgID, taskID string, e NewEv
 			evs[i].Data = json.RawMessage(withheldText)
 		}
 	}
+	e.Data = withStep(e.Data, step)
 	return m.append(t, []NewEvent{e}), nil
 }
 

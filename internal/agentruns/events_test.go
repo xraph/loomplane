@@ -789,7 +789,91 @@ func TestSafetyBlockWithholdsTheStepsText(t *testing.T) {
 			t.Fatalf("step 2's text %d: %s", e.Seq, e.Data)
 		}
 	}
-	if !strings.Contains(string(got[6].Data), "blocked") {
-		t.Fatalf("safety_block %s", got[6].Data)
+	var stop struct {
+		Message string `json:"message"`
+		StepSeq int64  `json:"step_seq"`
+	}
+	if err = json.Unmarshal(got[6].Data, &stop); err != nil || stop.Message != SafetyStopped || stop.StepSeq != got[3].Seq {
+		t.Fatalf("safety_block %s, want the fixed message and step %d", got[6].Data, got[3].Seq)
+	}
+	if strings.Contains(string(got[6].Data), "cortex") {
+		t.Fatalf("safety_block keeps cortex's error: %s", got[6].Data)
+	}
+}
+
+// A watcher reads a step's tokens as they're written, before any stop.
+// The rows withheld later sit below its cursor, so the safety_block it
+// reads next names the step whose text it must replace, with the fixed
+// message.
+func TestAWatcherLearnsWhichStepWasStopped(t *testing.T) {
+	w := newWorld(t)
+	wake := &fakeWake{subs: map[string][]chan struct{}{}}
+	w.svc.wake = wake.source()
+	w.svc.poll = time.Hour // only wakes move it
+	task := w.adaChat(t)
+	ctx := context.Background()
+	ch, stop, err := w.svc.Watch(ctx, person(orgA, ada), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for !wake.subscribed(orgA) {
+		time.Sleep(time.Millisecond)
+	}
+
+	events := make(chan engine.StreamEvent, 16)
+	pumped := make(chan struct{})
+	go func() {
+		defer close(pumped)
+		w.svc.pump(ctx, task, events)
+	}()
+	events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 1, "type": "generation"}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": "Here you go."}}
+	// Step 2 is the one stopped; the tool call flushes its text to the log.
+	events <- engine.StreamEvent{Type: engine.EventStep, Data: map[string]any{"index": 2, "type": "generation"}}
+	events <- engine.StreamEvent{Type: engine.EventToken, Data: map[string]any{"content": "Setting it. AKIA"}}
+	events <- engine.StreamEvent{Type: engine.EventToolCall, Data: map[string]any{"tool_name": "list_projects", "tool_id": "call_1", "arguments": `{}`}}
+
+	read := func() Event {
+		t.Helper()
+		for {
+			wake.wake()
+			select {
+			case e := <-ch:
+				return e
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
+	var step Event
+	for {
+		e := read()
+		if e.Kind == string(engine.EventStep) {
+			step = e
+		}
+		if e.Kind == string(engine.EventToken) && step.Seq != 0 && strings.Contains(string(e.Data), "Setting it.") {
+			break
+		}
+	}
+	events <- engine.StreamEvent{Type: engine.EventSafetyBlock, Data: map[string]any{"message": "cortex: content blocked"}}
+	close(events)
+	<-pumped
+
+	for {
+		e := read()
+		if e.Kind != string(engine.EventSafetyBlock) {
+			continue
+		}
+		var data struct {
+			Message string `json:"message"`
+			StepSeq int64  `json:"step_seq"`
+		}
+		if err = json.Unmarshal(e.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.StepSeq != step.Seq || data.Message != SafetyStopped {
+			t.Fatalf("safety_block %s, want step %d and %q", e.Data, step.Seq, SafetyStopped)
+		}
+		return
 	}
 }

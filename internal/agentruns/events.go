@@ -479,6 +479,11 @@ func (s *Service) eventData(ev engine.StreamEvent) json.RawMessage {
 			}
 			out["pending"] = pending
 		}
+	case engine.EventSafetyBlock:
+		// Cortex's message is its error, which names the check that
+		// stopped the run; people read the fixed one. The store adds the
+		// step whose text it withheld.
+		out["message"] = SafetyStopped
 	default:
 		for _, k := range eventFields {
 			if v, ok := ev.Data[k]; ok {
