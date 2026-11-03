@@ -305,15 +305,20 @@ type gitlabAuditor struct {
 var _ repositories.GitLabAuditor = gitlabAuditor{}
 
 // gitlabAuditKeys are the details an event may carry.
-var gitlabAuditKeys = []string{"host", "username", "host_id", "connection_id", "revoke_error"}
+var gitlabAuditKeys = []string{"host", "username", "host_id", "connection_id", "revoke_error", "list_error"}
 
 func (a gitlabAuditor) Record(ctx context.Context, action string, p security.Principal, details map[string]any) {
 	kind, id := "gitlab_connection", fmt.Sprint(details["connection_id"])
 	if strings.HasPrefix(action, "gitlab.host.") {
 		kind, id = "gitlab_host", fmt.Sprint(details["host_id"])
 	}
-	b := a.chronicle.Info(ctx, action, kind, id).
-		Category("integrations").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success")
+	// A listing that left a connection out is a warning about that
+	// connection. Everything else records a change that happened.
+	b, outcome := a.chronicle.Info(ctx, action, kind, id), "success"
+	if action == repositories.AuditGitLabListFailed {
+		b, outcome = a.chronicle.Warning(ctx, action, kind, id), "failure"
+	}
+	b = b.Category("integrations").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome(outcome)
 	for _, k := range gitlabAuditKeys {
 		if v, ok := details[k]; ok {
 			b = b.Meta(k, v)

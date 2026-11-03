@@ -63,12 +63,24 @@ func (v *VaultSecrets) Put(ctx context.Context, orgID, connectionID string, cred
 func (v *VaultSecrets) Reveal(ctx context.Context, orgID, connectionID string) ([]byte, error) {
 	sec, err := v.svc.Get(ctx, vaultKey(orgID, connectionID), v.appID)
 	if errors.Is(err, core.ErrSecretNotFound) {
-		return nil, ErrNotFound
+		return nil, secretNotFoundError{}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read credential: %w", err)
 	}
 	return sec.Value, nil
+}
+
+// secretNotFoundError is Reveal's error for a secret that isn't kept. It
+// reads as ErrNotFound, and is both ErrNotFound and
+// repositories.ErrSecretNotFound, so the repositories package can tell a
+// missing secret from Vault failing without importing this one.
+type secretNotFoundError struct{}
+
+func (secretNotFoundError) Error() string { return ErrNotFound.Error() }
+
+func (secretNotFoundError) Is(target error) bool {
+	return target == ErrNotFound || target == repositories.ErrSecretNotFound
 }
 
 // Delete implements Secrets. One that's already gone is not an error.

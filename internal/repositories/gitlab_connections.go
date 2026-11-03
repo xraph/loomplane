@@ -34,6 +34,9 @@ const (
 	AuditGitLabHostAdd       = "gitlab.host.add"
 	AuditGitLabHostRemove    = "gitlab.host.remove"
 	AuditGitLabWebhookSecret = "gitlab.webhook.secret" //nolint:gosec // G101: an audit action's name, not a credential
+	// AuditGitLabListFailed records a connection left out of a project
+	// listing because GitLab couldn't list its projects.
+	AuditGitLabListFailed = "gitlab.list.failed"
 )
 
 // GitLabVaultAppID is the Vault app GitLab sign-ins, webhook secrets and
@@ -53,9 +56,15 @@ const instanceHostPrefix = "instance:"
 // at once, as cloud sign-ins do: each holds a pooled connection for its lock.
 const gitlabMaxRenewals = 4
 
+// ErrSecretNotFound means Secrets holds nothing under that ID. Reveal's
+// error for a missing secret is one, so callers can tell it from Vault
+// failing.
+var ErrSecretNotFound = errors.New("no secret is kept under that ID")
+
 // Secrets keeps credentials sealed, per organization. A connection's grant
 // is under its ID, its webhook secret under "<ID>/webhook", and an
-// organization host's client secret under "host/<host ID>".
+// organization host's client secret under "host/<host ID>". Reveal of a
+// missing secret is an error that is ErrSecretNotFound.
 // *connections.VaultSecrets is the real one.
 type Secrets interface {
 	Put(ctx context.Context, orgID, id string, value []byte) error
@@ -279,7 +288,10 @@ func (c *GitLabConnections) AddHost(ctx context.Context, p security.Principal, i
 
 // RemoveHost removes one of the caller's organization's hosts, and its
 // secret. An instance host, or another organization's, is
-// ErrGitLabHostNotFound.
+// ErrGitLabHostNotFound, and one a connection still uses is
+// ErrGitLabHostInUse, which keeps both. The secret goes first, so a Vault
+// that fails leaves the host in place to remove again rather than a secret
+// nothing points at.
 func (c *GitLabConnections) RemoveHost(ctx context.Context, p security.Principal, id string) error {
 	if err := c.cfg.Authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
 		return err
@@ -291,11 +303,28 @@ func (c *GitLabConnections) RemoveHost(ctx context.Context, p security.Principal
 	if err != nil {
 		return err
 	}
-	if err := c.cfg.Store.DeleteHost(ctx, p.OrgID, id); err != nil {
+	conns, err := c.cfg.Store.ListConnections(ctx, p.OrgID)
+	if err != nil {
 		return err
 	}
+	for _, conn := range conns {
+		if conn.HostID == id {
+			return ErrGitLabHostInUse
+		}
+	}
+	// Kept to put back should the row's delete fail after all, such as
+	// for a connection made since the check above.
+	secret, revealErr := c.cfg.Secrets.Reveal(ctx, p.OrgID, hostSecretKey(id))
 	if err := c.cfg.Secrets.Delete(ctx, p.OrgID, hostSecretKey(id)); err != nil {
 		return fmt.Errorf("forget the GitLab host's secret: %w", err)
+	}
+	if err := c.cfg.Store.DeleteHost(ctx, p.OrgID, id); err != nil {
+		if revealErr == nil {
+			if putErr := c.cfg.Secrets.Put(context.WithoutCancel(ctx), p.OrgID, hostSecretKey(id), secret); putErr != nil {
+				return errors.Join(err, fmt.Errorf("keep the GitLab host's secret: %w", putErr))
+			}
+		}
+		return err
 	}
 	c.record(ctx, AuditGitLabHostRemove, p, map[string]any{"host": h.Host, "host_id": id})
 	return nil
@@ -403,7 +432,10 @@ func webhookSecretBytes(token string) ([]byte, error) {
 // It takes no principal, since the delivery has none; the ID in the URL
 // names the connection, and the secret is what proves the sender. A
 // connection that is gone, or has no secret yet, is
-// ErrGitLabConnectionNotFound.
+// ErrGitLabConnectionNotFound. So is one marked as having a secret that
+// Vault doesn't hold: a 404 tells GitLab the hook is unknown, where a 500
+// on every delivery would only get the hook disabled. Any other failure
+// reading the secret is returned as it is.
 func (c *GitLabConnections) WebhookTarget(ctx context.Context, id string) (orgID, host string, secret []byte, err error) {
 	conn, err := c.cfg.Store.GetConnection(ctx, id)
 	if err != nil {
@@ -413,6 +445,9 @@ func (c *GitLabConnections) WebhookTarget(ctx context.Context, id string) (orgID
 		return "", "", nil, ErrGitLabConnectionNotFound
 	}
 	secret, err = c.cfg.Secrets.Reveal(ctx, conn.OrgID, webhookSecretKey(conn.ID))
+	if errors.Is(err, ErrSecretNotFound) {
+		return "", "", nil, ErrGitLabConnectionNotFound
+	}
 	if err != nil {
 		return "", "", nil, fmt.Errorf("read the GitLab webhook secret: %w", err)
 	}
@@ -470,6 +505,10 @@ func (c *GitLabConnections) Repositories(ctx context.Context, p security.Princip
 	sortOldestFirst(conns)
 	out := []GitLabRepository{}
 	seen := map[string]bool{}
+	var (
+		asked, failed int
+		lastErr       error
+	)
 	for _, conn := range conns {
 		if conn.LapsedAt != nil {
 			continue
@@ -481,16 +520,21 @@ func (c *GitLabConnections) Repositories(ctx context.Context, p security.Princip
 		if !ok {
 			continue
 		}
-		g, err := c.grant(ctx, conn)
+		projects, err := c.listProjects(ctx, h, conn)
 		if errors.Is(err, ErrGitLabSignInLapsed) {
 			continue
 		}
+		asked++
 		if err != nil {
-			return nil, err
-		}
-		projects, err := c.client(h).Projects(ctx, g.AccessToken)
-		if err != nil {
-			return nil, fmt.Errorf("list the projects of %s on %s: %w", conn.Username, conn.Host, err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			failed++
+			lastErr = err
+			c.record(ctx, AuditGitLabListFailed, p, map[string]any{
+				"host": conn.Host, "username": conn.Username, "connection_id": conn.ID, "list_error": err.Error(),
+			})
+			continue
 		}
 		for _, pr := range projects {
 			r, ok := gitlabRepository(h.Host, conn.ID, pr)
@@ -500,6 +544,9 @@ func (c *GitLabConnections) Repositories(ctx context.Context, p security.Princip
 			seen[strings.ToLower(r.Key)] = true
 			out = append(out, r)
 		}
+	}
+	if asked > 0 && failed == asked {
+		return nil, lastErr
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
@@ -512,6 +559,20 @@ func (c *GitLabConnections) Repositories(ctx context.Context, p security.Princip
 		return strings.ToLower(a.FullName) < strings.ToLower(b.FullName)
 	})
 	return out, nil
+}
+
+// listProjects lists the projects conn can read on h. Its errors never
+// hold a token.
+func (c *GitLabConnections) listProjects(ctx context.Context, h GitLabHost, conn *GitLabConnection) ([]GitLabProject, error) {
+	g, err := c.grant(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	projects, err := c.client(h).Projects(ctx, g.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("list the projects of %s on %s: %w", conn.Username, conn.Host, err)
+	}
+	return projects, nil
 }
 
 // gitlabRepository reads a listed project. One whose path isn't a GitLab

@@ -184,3 +184,45 @@ func TestWebhookTarget_missingConnectionOrSecret(t *testing.T) {
 		t.Fatalf("after disconnecting: %v", err)
 	}
 }
+
+func TestWebhookTarget_secretMissingFromVaultIsNotFound(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	v := f.connect(t, p, "instance:"+gcHost, "alice")
+	ctx := context.Background()
+	if _, err := f.svc.SetWebhookSecret(ctx, p, v.ID, repositories.SetGitLabWebhookInput{}); err != nil {
+		t.Fatal(err)
+	}
+	// The connection says it has a secret, but Vault lost it.
+	_ = f.secrets.Delete(ctx, "org-a", v.ID+"/webhook")
+	if _, _, _, err := f.svc.WebhookTarget(ctx, v.ID); !errors.Is(err, repositories.ErrGitLabConnectionNotFound) {
+		t.Fatalf("a secret missing from Vault = %v, want ErrGitLabConnectionNotFound", err)
+	}
+}
+
+func TestWebhookTarget_vaultFailureIsNotNotFound(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	v := f.connect(t, p, "instance:"+gcHost, "alice")
+	ctx := context.Background()
+	if _, err := f.svc.SetWebhookSecret(ctx, p, v.ID, repositories.SetGitLabWebhookInput{}); err != nil {
+		t.Fatal(err)
+	}
+	down := errors.New("vault is down")
+	svc := repositories.NewGitLabConnections(repositories.GitLabConnectionsConfig{
+		Store: f.store, Secrets: failingReveals{err: down}, Authz: allowAll,
+	})
+	_, _, _, err := svc.WebhookTarget(ctx, v.ID)
+	if !errors.Is(err, down) || errors.Is(err, repositories.ErrGitLabConnectionNotFound) {
+		t.Fatalf("Vault down = %v, want its error and not ErrGitLabConnectionNotFound", err)
+	}
+}
+
+// failingReveals is Secrets whose Reveal always fails with err.
+type failingReveals struct{ err error }
+
+func (failingReveals) Put(context.Context, string, string, []byte) error { return nil }
+
+func (s failingReveals) Reveal(context.Context, string, string) ([]byte, error) { return nil, s.err }
+
+func (failingReveals) Delete(context.Context, string, string) error { return nil }

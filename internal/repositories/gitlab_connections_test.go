@@ -251,7 +251,7 @@ func (m *memSecrets) Reveal(_ context.Context, orgID, id string) ([]byte, error)
 	defer m.mu.Unlock()
 	v, ok := m.vals[orgID+"/"+id]
 	if !ok {
-		return nil, errors.New("no such secret")
+		return nil, fmt.Errorf("no secret %s: %w", id, repositories.ErrSecretNotFound)
 	}
 	return v, nil
 }
@@ -352,9 +352,11 @@ type gcFake struct {
 	revokeHints []string
 	// revokeStatus, when set, answers every revoke.
 	revokeStatus int
-	forms        []url.Values
-	seq          int
-	slow         time.Duration // delay on each refresh
+	// failList are the users whose project listing GitLab answers 401.
+	failList map[string]bool
+	forms    []url.Values
+	seq      int
+	slow     time.Duration // delay on each refresh
 	// refreshStatus and refreshBody, when set, answer every refresh.
 	refreshStatus int
 	refreshBody   string
@@ -443,7 +445,10 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"version":%q}`, v)
 	case r.URL.Path == "/api/v4/projects":
 		u, ok := f.userOf(r)
-		if !ok {
+		f.mu.Lock()
+		revoked := f.failList[u.name]
+		f.mu.Unlock()
+		if !ok || revoked {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -1342,4 +1347,108 @@ func TestGitLabConnect_reconnectRevokeFailureIsAudited(t *testing.T) {
 	if strings.Contains(string(raw), old.RefreshToken) || strings.Contains(string(raw), old.AccessToken) {
 		t.Fatalf("audit holds a token: %s", raw)
 	}
+}
+
+func TestGitLabRepositories_skipsAConnectionWhoseListingFails(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	alice := f.connect(t, p, "instance:"+gcHost, "alice")
+	carol := f.connect(t, p, "instance:gitlab.com", "carol")
+	aliceGrant := f.secrets.grant(t, alice.ID)
+	// GitLab revoked alice's token early, so it answers her listing 401.
+	f.fake.mu.Lock()
+	f.fake.failList = map[string]bool{"alice": true}
+	f.fake.mu.Unlock()
+	repos, err := f.svc.Repositories(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Repositories with one bad connection = %v, want the others' projects", err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "abc/x" || repos[0].Connection != carol.ID {
+		t.Fatalf("repositories = %+v, want carol's only", repos)
+	}
+	last := len(f.audit.actions) - 1
+	if f.audit.actions[last] != repositories.AuditGitLabListFailed || f.audit.details[last]["connection_id"] != alice.ID {
+		t.Fatalf("audit = %v %v, want alice's listing failure", f.audit.actions, f.audit.details)
+	}
+	if _, ok := f.audit.details[last]["list_error"]; !ok {
+		t.Fatalf("audit details = %v, want the error", f.audit.details[last])
+	}
+	raw, _ := json.Marshal(f.audit.details[last])
+	if strings.Contains(string(raw), aliceGrant.AccessToken) || strings.Contains(string(raw), aliceGrant.RefreshToken) {
+		t.Fatalf("audit holds a token: %s", raw)
+	}
+
+	// When every connection fails, the last error is returned.
+	f.fake.mu.Lock()
+	f.fake.failList = map[string]bool{"alice": true, "carol": true}
+	f.fake.mu.Unlock()
+	if repos, err := f.svc.Repositories(context.Background(), p); !errors.Is(err, repositories.ErrNotFound) {
+		t.Fatalf("Repositories with every connection failing = %+v, %v; want ErrNotFound", repos, err)
+	}
+}
+
+func TestGitLabRemoveHost_vaultFailureKeepsTheHost(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	h, err := f.svc.AddHost(context.Background(), p, repositories.AddGitLabHostInput{WebURL: "https://git.a.example", ClientID: "a-app", ClientSecret: gcOrgSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing := &failingDeletes{memSecrets: f.secrets, err: errors.New("vault is down")}
+	svc := repositories.NewGitLabConnections(repositories.GitLabConnectionsConfig{
+		Store: f.store, Secrets: failing, Authz: allowAll, Audit: f.audit,
+		Registry: &repositories.GitLabRegistry{Store: f.store, AllowOrganizationHosts: true},
+	})
+	if err := svc.RemoveHost(context.Background(), p, h.ID); err == nil {
+		t.Fatal("RemoveHost with Vault down = nil, want its error")
+	}
+	// The host is still there to remove again, with its secret.
+	if hs, _ := f.store.ListHosts(context.Background(), "org-a"); len(hs) != 1 {
+		t.Fatalf("hosts = %v, want the host kept", hs)
+	}
+	if _, err := f.secrets.Reveal(context.Background(), "org-a", "host/"+h.ID); err != nil {
+		t.Fatalf("the host's secret: %v", err)
+	}
+	failing.err = nil
+	if err := svc.RemoveHost(context.Background(), p, h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if hs, _ := f.store.ListHosts(context.Background(), "org-a"); len(hs) != 0 {
+		t.Fatalf("hosts = %v, want none", hs)
+	}
+	if _, err := f.secrets.Reveal(context.Background(), "org-a", "host/"+h.ID); !errors.Is(err, repositories.ErrSecretNotFound) {
+		t.Fatalf("the host's secret after removing it: %v", err)
+	}
+}
+
+func TestGitLabRemoveHost_inUseKeepsItsSecret(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	h, err := f.svc.AddHost(context.Background(), p, repositories.AddGitLabHostInput{WebURL: "https://git.a.example", ClientID: "a-app", ClientSecret: gcOrgSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.connect(t, p, h.ID, "alice")
+	if err := f.svc.RemoveHost(context.Background(), p, h.ID); !errors.Is(err, repositories.ErrGitLabHostInUse) {
+		t.Fatalf("RemoveHost of a host in use = %v, want ErrGitLabHostInUse", err)
+	}
+	if hs, _ := f.store.ListHosts(context.Background(), "org-a"); len(hs) != 1 {
+		t.Fatalf("hosts = %v, want the host kept", hs)
+	}
+	if _, err := f.secrets.Reveal(context.Background(), "org-a", "host/"+h.ID); err != nil {
+		t.Fatalf("a refused remove lost the host's secret: %v", err)
+	}
+}
+
+// failingDeletes is memSecrets whose Delete fails with err while it is set.
+type failingDeletes struct {
+	*memSecrets
+	err error
+}
+
+func (s *failingDeletes) Delete(ctx context.Context, orgID, id string) error {
+	if s.err != nil {
+		return s.err
+	}
+	return s.memSecrets.Delete(ctx, orgID, id)
 }
