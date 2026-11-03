@@ -81,3 +81,70 @@ func TestEnrollmentCertificateCannotRunWorkloads(t *testing.T) {
 		t.Fatal("enrollment started VM")
 	}
 }
+
+func platformRequest(t *testing.T, api Handler, cert *x509.Certificate, path string, q Request) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, bytes.NewReader(body))
+	if cert != nil {
+		r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}
+	}
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, r)
+	return w
+}
+
+func TestPlatformPeerAcceptsAnyOrgOnPlatformConnection(t *testing.T) {
+	h, d, q := testHost(t)
+	cert := &x509.Certificate{Raw: []byte("platform")}
+	sum := sha256.Sum256(cert.Raw)
+	api := Handler{Host: h, Platform: hex.EncodeToString(sum[:])}
+	q.Scope.Connection = PlatformConnection
+	for _, org := range []string{"org-a", "org-b"} {
+		in := q
+		in.Scope.Org = org
+		if w := platformRequest(t, api, cert, "/v1/apply", in); w.Code != http.StatusOK {
+			t.Fatal(org, w.Code, w.Body.String())
+		}
+	}
+	records, err := h.Store.List(t.Context())
+	if err != nil || d.starts != 2 || len(records) != 2 {
+		t.Fatalf("starts %d records %d %v", d.starts, len(records), err)
+	}
+	in := q
+	in.Scope.Connection = "conn"
+	if w := platformRequest(t, api, cert, "/v1/apply", in); w.Code != http.StatusForbidden {
+		t.Fatal("platform peer used a non-platform connection", w.Code)
+	}
+	other := &x509.Certificate{Raw: []byte("other")}
+	if w := platformRequest(t, api, other, "/v1/apply", q); w.Code != http.StatusForbidden {
+		t.Fatal("unknown certificate accepted", w.Code)
+	}
+	if d.starts != 2 {
+		t.Fatal("rejected requests launched a VM")
+	}
+}
+
+func TestPlatformPeerCannotTouchAnotherOrgsRecord(t *testing.T) {
+	h, d, q := testHost(t)
+	cert := &x509.Certificate{Raw: []byte("platform")}
+	sum := sha256.Sum256(cert.Raw)
+	api := Handler{Host: h, Platform: hex.EncodeToString(sum[:])}
+	q.Scope.Connection = PlatformConnection
+	q.Scope.Org = "org-a"
+	if w := platformRequest(t, api, cert, "/v1/apply", q); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	stop := q
+	stop.Scope.Org = "org-b"
+	stop.Authority.Operation = "stop-1"
+	if w := platformRequest(t, api, cert, "/v1/stop", stop); w.Code != http.StatusNotFound {
+		t.Fatal("cross-org stop", w.Code, w.Body.String())
+	}
+	if len(d.live) != 1 {
+		t.Fatal("org-a VM was stopped")
+	}
+}
