@@ -76,6 +76,8 @@ var (
 
 	OrganizationAdminister = Permission{"organization", "administer"}
 
+	NodeRead   = Permission{"nodes", "read"}
+	NodeManage = Permission{"nodes", "manage"}
 	// AgentUse is held by every role: talk to the workspace's AI agent and
 	// see its requests. Its settings need AIManage.
 	AgentUse = Permission{"agent", "use"}
@@ -102,7 +104,7 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
-		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead, AgentUse,
+		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead, NodeRead, AgentUse,
 	}
 	developer := append(clone(viewer),
 		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
@@ -111,7 +113,7 @@ func Catalog() []RoleDef {
 	admin := append(clone(developer),
 		OrganizationCloudManage, ClusterManage, ClusterDelete, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
-		AIManage,
+		AIManage, NodeManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister, BackupRetire)
 	return []RoleDef{

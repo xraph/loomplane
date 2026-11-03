@@ -3,7 +3,7 @@ title: loomctl
 description: Every loomctl command, grouped by what it does, with its main flags.
 ---
 
-`loomctl` is Loomplane's command-line client and MCP server. It calls the API with an API key through `pkg/client`, so anything it does, a script can do the same way. Run `loomctl --help`, or `loomctl <command> --help`, for the flags on your version.
+`loomctl` is Loomplane's command-line client and MCP server. It calls the API through `pkg/client`, signed in as you or with an API key, so anything it does, a script can do the same way. Run `loomctl --help`, or `loomctl <command> --help`, for the flags on your version.
 
 ## Install
 
@@ -15,13 +15,26 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 
 ## Connect to Loomplane
 
-`loomctl` finds the server and key in `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, which suit CI, or in the file `loomctl login` writes (`loomctl.json` under `loomplane` in your user config directory, readable only by you). The environment wins over the saved login.
+On your own machine, sign in as yourself:
+
+```bash
+loomctl login --url https://loomplane.example.com
+```
+
+It prints a short code and opens the dashboard's **/device** page with the code filled in. Sign in there if you aren't already, check the code matches the one in your terminal, and approve it. `loomctl` picks up the sign-in a few seconds later. If you belong to more than one organization it asks which one to act in, or you can name it up front with `--org`. On a machine with no browser, add `--no-browser` and open the address it prints on your phone or laptop instead.
+
+The sign-in is your own account, with your role in each organization, so you don't make or paste a key for it. loomctl renews it while you use it, and `loomctl logout` ends the session on the server as well as forgetting it here.
+
+CI wants an API key instead, since nobody is there to approve a code. `loomctl` finds the server and key in `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, or in the file `loomctl login` writes (`loomctl.json` under `loomplane` in your user config directory, readable only by you). The environment wins over the saved login.
 
 | Command | What it does |
 |---|---|
-| `login --url URL --key KEY` | Checks the key and saves where Loomplane is. `--key -` reads the key from standard input |
-| `logout` | Forgets the saved key. It still works until you revoke it |
-| `whoami [--json]` | Who the key acts as and what it may do |
+| `login --url URL [--org ORG] [--no-browser]` | Signs you in through the browser and saves the sign-in |
+| `login --url URL --key KEY` | Checks an API key and saves it in place of a sign-in. `--key -` reads the key from standard input |
+| `organizations [--json]` | Lists the organizations your sign-in can act in, with a `*` by the current one |
+| `organizations use ORG` | Acts in another of your organizations, by slug, name or ID. An API key stays in its own |
+| `logout` | Forgets the saved login. A sign-in's session ends with it; a key still works until you revoke it |
+| `whoami [--json]` | Who loomctl acts as and what it may do |
 
 ## Projects and analysis
 
@@ -119,6 +132,24 @@ Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default
 | `domain-routes PROJECT`, `preview`, `apply`, `show`, `retry`, `verify`, `remove`, `ttl`, `history` | Domain routes |
 
 Most of these review before they act and apply only with `--yes`. Many take `--wait`, `--timeout` and `--request-id`. [Cloud targets](/docs/clouds/cloud-targets), [Adopting and moving services](/docs/clouds/adopting-and-moving) and [Your own servers](/docs/clouds/your-own-servers) show them in context.
+
+## Nodes
+
+`loomctl node` joins and manages machines that connect to Loomplane. `loomplane node` has the same subcommands. See [Nodes](/docs/clouds/nodes).
+
+| Command | What it does |
+|---|---|
+| `node join [--token TOKEN] [--name NAME] [--label K=V] [--allow ENDPOINTS] [--cloud ID] [--builder dedicated] [--edge] [--foreground] [--state-dir DIR]` | Joins this machine and installs the service. Reads the token from `LOOMPLANE_JOIN_TOKEN` too. Without a token it mints one with your login, and under `sudo` that is the login of the user who ran `sudo`. Needs root on Linux |
+| `node run [--state-dir DIR] [--root-allowlist]` | Runs the node in the foreground. `--root-allowlist` trusts only a root-owned `allow.json`; the systemd unit sets it |
+| `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
+| `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Writes `allow.json`, then tells the running node. Needs root on Linux |
+| `node leave` | Revokes this node, stops its service and removes its config. The next join makes a fresh key |
+| `node list [--json]` | Lists the organization's nodes |
+| `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
+| `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start or stops within five seconds |
+| `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
+
+`join`, `list` and `revoke` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
 
 ## AI agents
 

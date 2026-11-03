@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// ErrBadSignature is a webhook delivery GitHub didn't sign with the
-// secret Loomplane has.
+// ErrBadSignature is a webhook delivery that wasn't signed with the secret
+// Loomplane has for it.
 var ErrBadSignature = errors.New("the webhook's signature doesn't match")
 
 // Webhooks re-analyzes the sources tracking a repository's default branch
@@ -95,10 +95,24 @@ func (w *Webhooks) Handle(ctx context.Context, event string, body []byte) (int, 
 	if err != nil {
 		return 0, err
 	}
+	allow := func(string) bool { return true }
+	if orgs != nil {
+		allow = func(orgID string) bool { return orgs[orgID] }
+	}
+	return startTracking(ctx, candidates, repo.FullName, repo.DefaultBranch, allow, w.Start)
+}
+
+// startTracking starts an analysis of each candidate that builds from the
+// repository stored as key, whatever its case, and tracks defaultBranch,
+// among the organizations allow lets through. It returns how many it
+// started. A source with an analysis under way is left alone, and doesn't
+// count. The other failures come back together, after every candidate has
+// had its turn.
+func startTracking(ctx context.Context, candidates []*Source, key, defaultBranch string, allow func(orgID string) bool, start func(context.Context, *Source) (*Analysis, error)) (int, error) {
 	started := 0
 	var errs []error
 	for _, src := range candidates {
-		if orgs != nil && !orgs[src.OrgID] {
+		if !allow(src.OrgID) {
 			continue
 		}
 		// A source tracks the default branch when it names none. One that
@@ -106,10 +120,10 @@ func (w *Webhooks) Handle(ctx context.Context, event string, body []byte) (int, 
 		// A ref saved before sources were tidied may still read
 		// "refs/heads/main".
 		ref := branchRef(src.Ref)
-		if !strings.EqualFold(src.Repository, repo.FullName) || (ref != "" && ref != repo.DefaultBranch) {
+		if !strings.EqualFold(src.Repository, key) || (ref != "" && ref != defaultBranch) {
 			continue
 		}
-		switch _, err := w.Start(ctx, src); {
+		switch _, err := start(ctx, src); {
 		case err == nil:
 			started++
 		case errors.Is(err, ErrAlreadyActive):

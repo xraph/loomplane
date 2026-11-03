@@ -57,7 +57,7 @@ const goTo = {
   a: "/activity",
   v: "/variables",
   m: "/members",
-  k: "/api-keys",
+  k: "/settings/api-keys",
 } as const
 
 function isEditable(target: EventTarget | null) {

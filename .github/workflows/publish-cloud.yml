@@ -1,0 +1,91 @@
+name: Publish (Cloud)
+
+# Builds the private Cloud edition (Go build tag cloud, dashboard edition
+# cloud) and pushes it to a private GHCR package. Nothing here is public.
+#
+# Who may run it is the cloud-production environment's job: give that
+# environment a required reviewer and every run waits for approval.
+#
+# The image goes to ghcr.io/xraph/loomplane-cloud, which must already exist and
+# be private. Create it once by hand (see the PR notes). Pushing :latest on
+# every run means re-publishing an older version moves latest back to it.
+#
+# Stripe keys are runtime secrets of the Cloud deployment. They are never
+# build inputs, so this workflow never sees them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build and tag, e.g. v1.2.3.
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/xraph/loomplane-cloud
+
+concurrency:
+  group: publish-cloud
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push the Cloud image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: cloud-production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require a private package before pushing
+        env:
+          # A classic personal access token with read:packages, stored as a
+          # secret of the cloud-production environment. Fine-grained tokens
+          # don't work on this endpoint, and GITHUB_TOKEN can't read it.
+          GH_TOKEN: ${{ secrets.CLOUD_PACKAGES_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::CLOUD_PACKAGES_TOKEN is empty. Add it as a cloud-production environment secret (classic PAT, read:packages)."
+            exit 1
+          fi
+          visibility=$(gh api /orgs/xraph/packages/container/loomplane-cloud --jq .visibility) || {
+            echo "::error::Couldn't read ghcr.io/xraph/loomplane-cloud (missing, or the token can't see it). Create it as a private package before re-running."
+            exit 1
+          }
+          if [ "$visibility" != "private" ]; then
+            echo "::error::ghcr.io/xraph/loomplane-cloud is ${visibility}. Make the package private before re-running."
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.version }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            VERSION=${{ inputs.version }}
+            GO_TAGS=cloud
+            LOOMPLANE_EDITION=cloud
+          cache-from: type=gha,scope=cloud
+          cache-to: type=gha,mode=max,scope=cloud
+      - name: Check the package is not anonymously readable
+        run: |
+          code=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' 'https://ghcr.io/token?scope=repository:xraph/loomplane-cloud:pull') || code=000
+          # A private package answers an anonymous pull token request with
+          # 401 or 403. Anything else, a network failure included, means we
+          # couldn't confirm it, so the job fails.
+          if [ "$code" != "401" ] && [ "$code" != "403" ]; then
+            echo "::error::Expected 401 or 403 from the anonymous token endpoint for ghcr.io/xraph/loomplane-cloud, got ${code}. If it is 200 the package is anonymously readable: make it private and delete the pushed tags. Otherwise the check couldn't run: re-run the job."
+            exit 1
+          fi

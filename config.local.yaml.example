@@ -8,3 +8,21 @@ database:
 identity:
   # Contributors sign up freely, so the waitlist stays off.
   waitlist: false
+
+# To read private GitLab projects, register an OAuth application on gitlab.com
+# with the redirect URI <public_url>/integrations/gitlab/callback, the
+# read_api scope and Confidential ticked (docs/gitlab.md). Public projects
+# need none of this. Set client_id and client_secret together.
+# gitlab:
+#   client_id: ""
+#   client_secret: ""
+#   # Self-managed GitLabs you trust for every organization. They may be
+#   # http, and Loomplane doesn't filter their addresses.
+#   hosts:
+#     - web_url: https://git.example.com
+#       client_id: ""
+#       client_secret: ""
+#   # Let organizations add a GitLab of their own from Integrations.
+#   allow_organization_hosts: true
+#   # Where GitLab reaches this Loomplane. Defaults to public_url.
+#   webhook_url: ""

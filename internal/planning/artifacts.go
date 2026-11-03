@@ -2,10 +2,13 @@ package planning
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 // digestReference is an image named by its digest: repository@sha256:<64 hex>.
@@ -16,6 +19,70 @@ var digestReference = regexp.MustCompile(`@sha256:[a-f0-9]{64}$`)
 var commitBuilders = map[string]string{
 	"render": "Render builds each deployment from the commit itself",
 	"vercel": "Vercel builds each deployment from the commit itself",
+}
+
+// gitBuildHosts are the repository hosts each target that builds from a
+// repository itself can read, in the order a refusal names them. A target
+// not in the table builds from the code Loomplane fetched, whatever host it
+// came from. "github.com" stands for the keys that name no host.
+var gitBuildHosts = map[string][]string{
+	"render":       {"github.com", "gitlab.com", "bitbucket.org"},
+	"digitalocean": {"github.com", "gitlab.com"},
+}
+
+// gitBuildTitles name those targets in a refusal.
+var gitBuildTitles = map[string]string{"render": "Render", "digitalocean": "App Platform"}
+
+// GitBuildable is nil when provider can build the repository stored as key.
+func GitBuildable(provider, key string) error {
+	hosts, ok := gitBuildHosts[provider]
+	if !ok {
+		return nil
+	}
+	r, err := repositories.ParseKey(key)
+	if err != nil {
+		// Not a repository key; whatever reads it will say so.
+		return nil
+	}
+	host := r.Host
+	if host == repositories.HostGitHub {
+		host = "github.com"
+	}
+	if slices.ContainsFunc(hosts, func(h string) bool { return strings.EqualFold(h, host) }) {
+		return nil
+	}
+	return fmt.Errorf("%s builds from %s repositories only, so it can't build %s", gitBuildTitles[provider], joinHosts(hosts), key)
+}
+
+// joinHosts lists hosts as "a", "a and b" or "a, b and c".
+func joinHosts(hosts []string) string {
+	if len(hosts) < 2 {
+		return strings.Join(hosts, "")
+	}
+	return strings.Join(hosts[:len(hosts)-1], ", ") + " and " + hosts[len(hosts)-1]
+}
+
+// checkGitBuilds makes a plan problem of every service a target would build
+// from a repository on a host it can't read.
+func checkGitBuilds(plan *Plan, result *Result) {
+	for _, a := range result.Actions {
+		if !deploysBuiltCode(a) {
+			continue
+		}
+		if _, builds := gitBuildHosts[a.Provider]; !builds {
+			continue
+		}
+		for _, src := range plan.Sources {
+			// The same match the deployment makes to find a service's repository.
+			if src.Alias != a.Service.Repo && (len(plan.Sources) != 1 || (a.Service.Repo != "" && src.Alias != "")) {
+				continue
+			}
+			if err := GitBuildable(a.Provider, src.Repository); err != nil {
+				result.Problems = append(result.Problems, Finding{Code: "git-host-unsupported", Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: err.Error()})
+				result.Executable = false
+			}
+		}
+	}
 }
 
 // pullAccounts says, for a target that pulls the images Loomplane builds

@@ -334,3 +334,53 @@ func TestMCP_getReleaseWatch(t *testing.T) {
 		t.Fatalf("watch %+v", w)
 	}
 }
+
+func TestNodeCommandsAreMounted(t *testing.T) {
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(string) string { return "" }, ConfigPath: t.TempDir() + "/none.json"})
+	var node cli.Command
+	for _, c := range app.commands() {
+		if c.Name() == "node" {
+			node = c
+		}
+	}
+	if node == nil {
+		t.Fatal("loomctl has no node command")
+	}
+	subs := make([]string, 0, len(node.Subcommands()))
+	for _, s := range node.Subcommands() {
+		subs = append(subs, s.Name())
+	}
+	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke"} {
+		if !slices.Contains(subs, want) {
+			t.Errorf("node %s is missing; have %v", want, subs)
+		}
+	}
+	if err := app.Run([]string{"node", "status", "--state-dir", t.TempDir() + "/state"}); err != nil {
+		t.Fatalf("node status: %v", err)
+	}
+	if !strings.Contains(out.String(), "Not joined") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestNodeListUsesTheSavedLogin(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"nodes":[{"id":"node_1","name":"web-1","status":"online"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	cfg := t.TempDir() + "/loomctl.json"
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(string) string { return "" }, ConfigPath: cfg})
+	if err := app.save(Settings{URL: srv.URL, Key: "lp_test_saved"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run([]string{"node", "list"}); err != nil {
+		t.Fatalf("node list: %v", err)
+	}
+	if auth != "Bearer lp_test_saved" || !strings.Contains(out.String(), "web-1") {
+		t.Fatalf("auth %q, output:\n%s", auth, out.String())
+	}
+}

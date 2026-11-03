@@ -10,6 +10,8 @@ import (
 	"github.com/xraph/forge/cli"
 	"github.com/xraph/grove/migrate"
 
+	"github.com/xraph/loomplane/internal/buildinfo"
+	"github.com/xraph/loomplane/internal/node"
 	"github.com/xraph/loomplane/internal/platformadmin"
 )
 
@@ -40,6 +42,23 @@ type Settings struct {
 // a command runs, so loading the configuration can fail there, with the
 // command's own error.
 func Commands(settings func() (Settings, error)) []cli.Command {
+	// The node commands take no settings: a machine that joins as a node has
+	// no database, and its commands must not load Loomplane's configuration.
+	return append(serverCommands(settings), node.Commands(node.Options{Version: buildinfo.Version})...)
+}
+
+// IsNodeCommand reports whether cmd is the node command or one under it. Those
+// run without the Forge app, so the binary skips building it for them.
+func IsNodeCommand(cmd cli.Command) bool {
+	for ; cmd != nil; cmd = cmd.Parent() {
+		if cmd.Name() == "node" {
+			return true
+		}
+	}
+	return false
+}
+
+func serverCommands(settings func() (Settings, error)) []cli.Command {
 	return []cli.Command{
 		cli.NewCommand("backup", "Back up Loomplane's database to a file", func(ctx cli.CommandContext) error {
 			s, err := settings()

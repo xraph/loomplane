@@ -236,3 +236,83 @@ func TestBuild_envGoesToTheServiceThatReadsIt(t *testing.T) {
 		}
 	}
 }
+
+func TestBuild_goEnvFollowsWhatEachMainReaches(t *testing.T) {
+	ev := func(p string) pd.Evidence { return pd.Evidence{Path: p, Line: 1} }
+	r := &pd.Report{
+		Units: []pd.Unit{
+			{ID: "go:.", Ecosystem: pd.Go, Path: ".", Entrypoints: []pd.Entrypoint{
+				{Name: "api", Path: "cmd/api", Packages: []string{"cmd/api", "internal/apiconfig", "internal/shared"}},
+				{Name: "worker", Path: "cmd/worker", Packages: []string{"cmd/worker", "internal/jobconfig", "internal/shared"}},
+			}},
+			{ID: "node:web", Ecosystem: pd.Node, Path: "web", Entrypoints: []pd.Entrypoint{{Name: "web", Path: "web"}}},
+		},
+		Env: []pd.EnvUse{
+			{Name: "API_ADDR", Evidence: []pd.Evidence{ev("internal/apiconfig/config.go")}},
+			{Name: "QUEUE_URL", Evidence: []pd.Evidence{ev("internal/jobconfig/config.go")}},
+			{Name: "SHARED", Evidence: []pd.Evidence{ev("internal/shared/shared.go")}},
+			// No main imports this package, so nothing gets its variable.
+			{Name: "UNUSED", Evidence: []pd.Evidence{ev("internal/unused/unused.go")}},
+			// A Go file in web's tree belongs to web, which isn't a Go main.
+			{Name: "WEB_TOOL", Evidence: []pd.Evidence{ev("web/tools/gen.go")}},
+			{Name: "ROOT_EXAMPLE", Evidence: []pd.Evidence{ev(".env.example")}},
+		},
+	}
+	got := map[string]string{}
+	for _, s := range Build(r).Services {
+		var names []string
+		for _, v := range s.Env {
+			names = append(names, v.Name)
+		}
+		got[s.Name] = strings.Join(names, " ")
+	}
+	want := map[string]string{
+		"api":    "API_ADDR SHARED ROOT_EXAMPLE",
+		"worker": "QUEUE_URL SHARED ROOT_EXAMPLE",
+		"web":    "WEB_TOOL",
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s env = %q, want %q", name, got[name], w)
+		}
+	}
+}
+
+func TestBuild_strayFilesStayWithTheirOwn(t *testing.T) {
+	ev := func(p string) pd.Evidence { return pd.Evidence{Path: p, Line: 1} }
+	r := &pd.Report{
+		Units: []pd.Unit{
+			{ID: "go:.", Ecosystem: pd.Go, Path: ".", Entrypoints: []pd.Entrypoint{
+				{Name: "app", Path: "cmd/app", Packages: []string{"cmd/app"}},
+				{Name: "app-push-gateway", Path: "cmd/app-push-gateway", Packages: []string{"cmd/app-push-gateway"}},
+			}},
+			{ID: "python:ml", Ecosystem: pd.Python, Path: "ml", Entrypoints: []pd.Entrypoint{{Name: "ml", Path: "ml"}}},
+		},
+		Env: []pd.EnvUse{
+			{Name: "ROOT", Evidence: []pd.Evidence{ev(".env.example")}},
+			// A deploy stack's file is for the stack, not for every service.
+			{Name: "STACK", Evidence: []pd.Evidence{ev("deployments/production/.env.example")}},
+			{Name: "GATEWAY", Evidence: []pd.Evidence{ev("deployments/push-gateway/.env.example")}},
+			// A Python script outside ml is still Python, never Go.
+			{Name: "FONTS", Evidence: []pd.Evidence{ev("brand/wordmark.py")}},
+		},
+	}
+	got := map[string]string{}
+	for _, s := range Build(r).Services {
+		var names []string
+		for _, v := range s.Env {
+			names = append(names, v.Name)
+		}
+		got[s.Name] = strings.Join(names, " ")
+	}
+	want := map[string]string{
+		"app":              "ROOT",
+		"app-push-gateway": "ROOT GATEWAY",
+		"ml":               "FONTS",
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s env = %q, want %q", name, got[name], w)
+		}
+	}
+}

@@ -890,19 +890,28 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Revoke an API key, at once
+     * Revoke an API key, at once. With compromised=true, also list the nodes that joined with a token it made.
      */
-    revoke: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+    revoke: async (id: string, compromised?: boolean | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CompromisedRevoke | void> => {
       let __path = `/api/v1/api-keys/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (compromised !== undefined) {
+        queryParams['compromised'] = compromised;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'DELETE',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
         allowEmptyBody: true,
+        responseCodec: CODECS["CompromisedRevoke"],
       };
 
-      await this.request(config);
+      return this.request<types.CompromisedRevoke | void>(config);
     },
 
   };
@@ -963,6 +972,114 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.BindingList>(config);
+    },
+
+  };
+
+  public readonly bitbucket = {
+    /**
+     * The Bitbucket link that starts connecting a workspace
+     */
+    authorize: async (body: types.AuthorizeBitbucketInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketAuthorization> => {
+      let __path = `/api/v1/bitbucket/authorize`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AuthorizeBitbucketInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketAuthorization"],
+      };
+
+      return this.request<types.BitbucketAuthorization>(config);
+    },
+
+    /**
+     * Connect a Bitbucket workspace, from what Bitbucket's redirect carried back
+     */
+    connect: async (body: types.BitbucketConnectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketWorkspaceView> => {
+      let __path = `/api/v1/bitbucket/workspaces`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BitbucketConnectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketWorkspaceView"],
+      };
+
+      return this.request<types.BitbucketWorkspaceView>(config);
+    },
+
+    /**
+     * Disconnect a workspace. The consumer stays approved on Bitbucket.
+     */
+    disconnect: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/bitbucket/workspaces/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The repositories the organization's workspaces can read
+     */
+    repositories: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketRepositoryList> => {
+      let __path = `/api/v1/bitbucket/repositories`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketRepositoryList"],
+      };
+
+      return this.request<types.BitbucketRepositoryList>(config);
+    },
+
+    /**
+     * The organization's Bitbucket workspaces, and whether this Loomplane has an OAuth consumer
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BitbucketStatus> => {
+      let __path = `/api/v1/bitbucket`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["BitbucketStatus"],
+      };
+
+      return this.request<types.BitbucketStatus>(config);
+    },
+
+    webhook: {
+      /**
+       * Try again to add the push webhook that re-analyzes a repository's sources
+       */
+      enable: async (body: types.EnableBitbucketWebhookInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushState> => {
+        let __path = `/api/v1/bitbucket/webhooks`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["EnableBitbucketWebhookInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushState"],
+        };
+
+        return this.request<types.PushState>(config);
+      },
+
     },
 
   };
@@ -1700,59 +1817,6 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ServerUsage>(config);
-    },
-
-  };
-
-  public readonly cloudSignInApps = {
-    /**
-     * Remove the organization's own sign-in app for a cloud
-     */
-    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'DELETE',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
-    },
-
-    /**
-     * The clouds you can sign in to, where each one's app comes from, and the callback URL to register
-     */
-    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
-      let __path = `/api/v1/cloud-sign-in/apps`;
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInAppList"],
-      };
-
-      return this.request<types.SignInAppList>(config);
-    },
-
-    /**
-     * Set the organization's own sign-in app for a cloud. The secret is never returned
-     */
-    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
-      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
-      const config: RequestConfig = {
-        method: 'PUT',
-        url: __path,
-        body,
-        bodyCodec: CODECS["AppInputBody"],
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["SignInApp"],
-      };
-
-      return this.request<types.SignInApp>(config);
     },
 
   };
@@ -3841,6 +3905,145 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly gitlab = {
+    /**
+     * Register a GitLab of the organization's own, with the OAuth application made on it
+     */
+    addHost: async (body: types.AddGitLabHostInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabHostView> => {
+      let __path = `/api/v1/gitlab/hosts`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AddGitLabHostInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabHostView"],
+      };
+
+      return this.request<types.GitLabHostView>(config);
+    },
+
+    /**
+     * Connect a GitLab account, from what GitLab's redirect carried back
+     */
+    connect: async (body: types.ConnectGitLabInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabConnectionView> => {
+      let __path = `/api/v1/gitlab/connections`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ConnectGitLabInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabConnectionView"],
+      };
+
+      return this.request<types.GitLabConnectionView>(config);
+    },
+
+    /**
+     * Disconnect an account, and revoke its sign-in at GitLab
+     */
+    disconnect: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/gitlab/connections/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * Remove a host the organization registered. Its accounts have to be disconnected first.
+     */
+    removeHost: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/gitlab/hosts/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The projects the organization's connected accounts can read
+     */
+    repositories: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabRepositoryList> => {
+      let __path = `/api/v1/gitlab/repositories`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabRepositoryList"],
+      };
+
+      return this.request<types.GitLabRepositoryList>(config);
+    },
+
+    /**
+     * Start signing in to a GitLab host, and get the address to send the browser to
+     */
+    startSignIn: async (body: types.StartGitLabSignInInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabSignInStart> => {
+      let __path = `/api/v1/gitlab/sign-ins`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["StartGitLabSignInInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabSignInStart"],
+      };
+
+      return this.request<types.GitLabSignInStart>(config);
+    },
+
+    /**
+     * The organization's GitLab hosts and connected accounts
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabStatus> => {
+      let __path = `/api/v1/gitlab`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabStatus"],
+      };
+
+      return this.request<types.GitLabStatus>(config);
+    },
+
+    /**
+     * Create or replace a connection's webhook secret, shown once
+     */
+    webhookSecret: async (id: string, body?: types.SetGitLabWebhookInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabWebhookSecret> => {
+      let __path = `/api/v1/gitlab/connections/${encodeURIComponent(String(id))}/webhook`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetGitLabWebhookInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabWebhookSecret"],
+      };
+
+      return this.request<types.GitLabWebhookSecret>(config);
+    },
+
+  };
+
   public readonly gpuTargets = {
     /**
      * Where GPUs can run and what they cost per hour
@@ -4540,6 +4743,146 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeRetentionPolicy>(config);
+    },
+
+  };
+
+  public readonly nodeJoinTokens = {
+    /**
+     * Cancel a join token no machine has used, so none can
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/nodes/join-tokens/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * Make a single-use token for one machine to join, and the command that uses it
+     */
+    create: async (body: types.JoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinToken> => {
+      let __path = `/api/v1/nodes/join-tokens`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["JoinTokenRequestBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["JoinToken"],
+      };
+
+      return this.request<types.JoinToken>(config);
+    },
+
+    /**
+     * The join tokens no machine has used yet: who made them, with which key, for what, and when they expire
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.JoinTokenList> => {
+      let __path = `/api/v1/nodes/join-tokens`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["JoinTokenList"],
+      };
+
+      return this.request<types.JoinTokenList>(config);
+    },
+
+  };
+
+  public readonly nodes = {
+    /**
+     * One node
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
+     * A machine joins with a join token. The token is spent.
+     */
+    join: async (body: types.NodeJoinBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeJoined> => {
+      let __path = `/api/v1/nodes/join`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NodeJoinBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeJoined"],
+      };
+
+      return this.request<types.NodeJoined>(config);
+    },
+
+    /**
+     * The machines joined to this organization
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeList> => {
+      let __path = `/api/v1/nodes`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeList"],
+      };
+
+      return this.request<types.NodeList>(config);
+    },
+
+    /**
+     * Stop trusting a node, at once. Its key can't connect again.
+     */
+    revoke: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/revoke`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
+     * Rename a node, relabel it, narrow what it serves or set its ingress mode
+     */
+    update: async (id: string, body: types.NodeUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NodeUpdateBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
     },
 
   };
@@ -5401,6 +5744,59 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Soak>(config);
+    },
+
+  };
+
+  public readonly platformCloudSignInApps = {
+    /**
+     * Remove the platform's sign-in app for a cloud
+     */
+    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The clouds people can sign in to, where each one's app comes from, how many sign-ins use it, and the callback URL to register
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInAppList"],
+      };
+
+      return this.request<types.SignInAppList>(config);
+    },
+
+    /**
+     * Set the platform's sign-in app for a cloud. The secret is never returned
+     */
+    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
+      let __path = `/api/v1/platform/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AppInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInApp"],
+      };
+
+      return this.request<types.SignInApp>(config);
     },
 
   };
@@ -6425,6 +6821,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.SetupResponse>(config);
+    },
+
+    /**
+     * Stop offering to set up cloud sign-in
+     */
+    endCloudSignInOffer: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/setup/cloud-sign-in-offer`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
     },
 
     /**

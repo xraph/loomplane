@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -568,6 +569,10 @@ func TestRunner_failures(t *testing.T) {
 		reason     string
 	}{
 		{"permanent", repositories.ErrNotFound, 3, false, repositories.ErrNotFound.Error()},
+		{
+			"lapsed GitLab sign-in", &repositories.GitLabSignInLapsedError{Username: "alice", Host: "gitlab.example.com"},
+			3, false, "The GitLab sign-in for alice on gitlab.example.com needs signing in again",
+		},
 		{"transient, then out of attempts", errors.New("connection reset"), 2, true, "the analysis failed: connection reset"},
 	}
 	for _, tt := range tests {
@@ -670,7 +675,7 @@ func TestSources_refusals(t *testing.T) {
 	}{
 		{"viewer", viewer, "proj_bare", AddSourceInput{Repository: "acme/site"}, security.ErrForbidden},
 		{"another org's project", dev, "proj_elsewhere", AddSourceInput{Repository: "acme/site"}, projects.ErrNotFound},
-		{"not GitHub", dev, "proj_bare", AddSourceInput{Repository: "https://gitlab.com/acme/site"}, ErrInvalidSource},
+		{"a host nothing reads", dev, "proj_bare", AddSourceInput{Repository: "https://git.example.com/acme/site"}, ErrInvalidSource},
 		{"reserved alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "go"}, ErrAliasReserved},
 		{"bad alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "Web"}, ErrInvalidSource},
 		{"root climbs out", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Root: "../x"}, ErrInvalidSource},
@@ -704,7 +709,7 @@ func TestSources_attachingANewProjectsRepositorySaysWhatsWrongWithIt(t *testing.
 		name, url string
 		want      error
 	}{
-		{"not GitHub", "https://gitlab.com/acme/site", ErrInvalidSource},
+		{"a host nothing reads", "https://git.example.com/acme/site", ErrInvalidSource},
 		{"alias taken", "acme/platform", ErrAliasTaken},
 		{"overlapping root", "acme/mono", ErrRootsOverlap},
 	}
@@ -904,4 +909,89 @@ func TestAnalysisReadsCheckTheProject(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "bb", "bitbucket.org/Acme/API", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same Bitbucket repository in another case: %v", err)
+	}
+}
+
+func TestAddSource_mixedCaseGitLabDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "gl", "gitlab.com/acme/api", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://GitLab.com/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same GitLab project in another case: %v", err)
+	}
+}
+
+func TestRunner_unparseableKeyFailsPermanently(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 3)
+	now := time.Now().UTC()
+	err := f.store.CreateAnalysis(ctx, &Analysis{
+		ID: "anl_bad", OrgID: org, ProjectID: project, Source: "bb", Status: StatusQueued,
+		Repository: "bitbucket.org/acme", CreatedBy: "ausr_seed", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.Run(ctx, org, "anl_bad"); err != nil {
+		t.Fatalf("an unparseable key was retried: %v", err)
+	}
+	got, _ := f.store.GetAnalysis(ctx, org, "anl_bad")
+	if got.Status != StatusFailed || got.Error != repositories.ErrInvalidURL.Error() {
+		t.Fatalf("analysis %+v", got)
+	}
+}
+
+func TestAddSource_aHostNothingReadsIsAnInvalidSource(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	// The URL parses, since Bitbucket is a static host, but the wired
+	// readers only know GitHub.
+	f.svc.SetAccess(Access{
+		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{"github.com": &fakeReader{}}},
+	})
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, ErrInvalidSource) || !errors.Is(err, repositories.ErrUnsupportedHost) {
+		t.Fatalf("AddSource: %v", err)
+	}
+	_, _, err = f.svc.AttachRepository(ctx, dev, &projects.Project{ID: "proj_bare", OrgID: org}, projects.RepositoryInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("AttachRepository: %v", err)
+	}
+	// Changing the branch of a stored source on such a host is refused the same way.
+	f.source(t, "proj_bare", "bb", "bitbucket.org/acme/api", "")
+	ref := "main"
+	if _, err = f.svc.UpdateSource(ctx, dev, "proj_bare", "bb", UpdateSourceInput{Ref: &ref}); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("UpdateSource: %v", err)
+	}
+}
+
+// fakeReader is a Reader that finds every repository.
+type fakeReader struct{}
+
+func (*fakeReader) Resolve(context.Context, repositories.Repository, string, string) (string, error) {
+	return commit, nil
+}
+
+func (*fakeReader) Fetch(context.Context, repositories.Repository, string, string, string) (repositories.Stats, error) {
+	return repositories.Stats{}, nil
+}
+
+func (*fakeReader) Download(context.Context, repositories.Repository, string, string, io.Writer) (int64, error) {
+	return 0, nil
 }

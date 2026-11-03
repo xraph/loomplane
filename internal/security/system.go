@@ -11,6 +11,10 @@ const (
 	// KindSystem is Loomplane automation: the identity that rolls back a
 	// release whose watch or canary failed, with or without the AI agent.
 	KindSystem Kind = "system"
+	// KindNodeJoin is a single-use token that lets one machine join an
+	// organization as a node. It's never a request principal: it can't
+	// authenticate as an API key, only be consumed once to enrol a node.
+	KindNodeJoin Kind = "node-join"
 	// KindAgent is a workspace's AI agent, acting alone or for a person.
 	KindAgent Kind = "agent"
 )

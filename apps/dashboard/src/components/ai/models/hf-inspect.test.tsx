@@ -154,7 +154,7 @@ it("shows the server's reason for a repo it can't serve", async () => {
   expect(alert).toHaveTextContent(`${gated}.`)
   expect(
     within(alert).getByRole("link", { name: "Open AI settings" })
-  ).toHaveAttribute("href", "/ai/settings")
+  ).toHaveAttribute("href", "/settings/ai")
   expect(screen.queryByRole("article")).toBeNull()
 
   await userEvent.clear(field)

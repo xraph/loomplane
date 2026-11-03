@@ -3,6 +3,8 @@
   "pages": [
     "deploy-a-monorepo",
     "private-repositories",
+    "bitbucket-repositories",
+    "gitlab-repositories",
     "ci-with-loomctl",
     "notifications-and-webhooks"
   ]

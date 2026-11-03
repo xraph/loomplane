@@ -1,6 +1,6 @@
 // AI settings: what the AI in every project of the workspace shares. That's
-// the workspace's agent, for admins, and the Hugging Face token gated models
-// download with. The token is write-only: once saved, only its last characters, the account it belongs
+// the workspace's monthly AI budget, the agent (for admins), and the Hugging
+// Face token gated models download with. The token is write-only: once saved, only its last characters, the account it belongs
 // to and when it was set come back.
 import { CheckIcon, LockIcon } from "lucide-react"
 import { type FormEvent, useId, useState } from "react"
@@ -14,10 +14,12 @@ import {
 import type { HuggingFaceToken } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { AgentSettings } from "@/components/agent-settings"
+import { AIBudget } from "@/components/ai-budget"
 import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { Panel } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
+import { SettingsSection } from "@/components/settings-section"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -57,7 +59,7 @@ export function AISettings() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "AI settings" }]} />
-      <Page className="max-w-[880px]">
+      <Page className="gap-6">
         <PageHeading title="AI settings" description={description} />
 
         {denied && <Restricted />}
@@ -74,7 +76,10 @@ export function AISettings() {
             className="h-56 w-full rounded-[14px]"
           />
         )}
-        {settings.data && can("ai:manage") && <AgentSettings />}
+        {settings.data && <AIBudget settings={settings.data} />}
+        {settings.data && can("ai:manage") && (
+          <AgentSettings unallocatedUsd={settings.data.unallocatedUsd} />
+        )}
         {settings.data && (
           <HuggingFaceSection
             token={settings.data.huggingface}
@@ -109,27 +114,22 @@ function HuggingFaceSection({
   token?: HuggingFaceToken
   manage: boolean
 }) {
-  const heading = useId()
   return (
-    <Panel aria-labelledby={heading} className="gap-4 px-4 py-4 md:px-5">
-      <div className="grid gap-1">
-        <h2 id={heading} className="text-[15px] font-semibold tracking-tight">
-          Hugging Face token
-        </h2>
-        <p className="max-w-[64ch] text-[13px] leading-relaxed text-pretty text-muted-foreground">
-          Gated or private Hugging Face models download with it. Loomplane keeps
-          it encrypted and never shows it again.
-        </p>
-      </div>
-      {token ? <TokenSummary token={token} /> : <NoToken manage={manage} />}
-      {manage ? (
-        <TokenForm hasToken={!!token} />
-      ) : (
-        <p className="text-[12.5px] text-muted-foreground">
-          Only workspace admins can change the token.
-        </p>
-      )}
-    </Panel>
+    <SettingsSection
+      title="Hugging Face token"
+      description="Gated or private Hugging Face models download with it. Loomplane keeps it encrypted and never shows it again."
+    >
+      <Panel className="gap-4 px-4 py-4 md:px-5">
+        {token ? <TokenSummary token={token} /> : <NoToken manage={manage} />}
+        {manage ? (
+          <TokenForm hasToken={!!token} />
+        ) : (
+          <p className="text-[12.5px] text-muted-foreground">
+            Only workspace admins can change the token.
+          </p>
+        )}
+      </Panel>
+    </SettingsSection>
   )
 }
 

@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/xraph/authsome/environment"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/plugins/oauth2provider"
 	"github.com/xraph/authsome/plugins/organization"
 	"github.com/xraph/authsome/plugins/password"
 	"github.com/xraph/authsome/plugins/waitlist"
@@ -56,6 +58,7 @@ import (
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/instance"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
@@ -87,18 +90,21 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	pg            *pgdriver.PgDB
-	store         *authpg.Store
-	orgs          *organization.Plugin
-	warden        *warden.Engine
-	authz         *security.Authorizer
-	audit         *chronicle.Chronicle
-	auditStore    chronstore.Store
-	smith         *keysmith.Engine
-	engine        *authsome.Engine
-	keys          *apikeys.Service
-	teams         *teams.Service
-	lockPG        *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	pg         *pgdriver.PgDB
+	store      *authpg.Store
+	orgs       *organization.Plugin
+	warden     *warden.Engine
+	authz      *security.Authorizer
+	audit      *chronicle.Chronicle
+	auditStore chronstore.Store
+	smith      *keysmith.Engine
+	engine     *authsome.Engine
+	keys       *apikeys.Service
+	teams      *teams.Service
+	lockPG     *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	// joined finds the nodes a key's join tokens brought in. The nodes
+	// extension registers after this one, so it is looked up per request.
+	joined        func() JoinedNodes
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
 	instance      *instance.Settings
@@ -117,6 +123,10 @@ type Extension struct {
 	// signupLimit is authsome's sign-up limit, which refuseSignUps runs
 	// ahead of the gate. Nil when rate limiting is off.
 	signupLimit forge.Middleware
+
+	// oauthClients is the OAuth provider's client store, where loomctl's
+	// client is seeded (cli.go).
+	oauthClients oauth2provider.Store
 
 	// consoleBase is the console's base path, once the dashboard reports
 	// it (console.go).
@@ -196,20 +206,29 @@ func (e *Extension) register(fapp forge.App) error {
 		return fmt.Errorf("keysmith: %w", err)
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
-	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, apikeys.WithPlatformAdmins(e))
 	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}
 	// ProvideValue keys on its type parameter, so each value goes in with
 	// its own concrete type.
 	c := fapp.Container()
+	e.joined = func() JoinedNodes {
+		svc, err := forge.InjectType[*nodes.Service](c)
+		if err != nil {
+			return nil
+		}
+		return svc
+	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
 		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
+		forge.ProvideValue(c, e.keys),
 		forge.ProvideValue(c, Guard{e.guard()}),
+		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
@@ -244,7 +263,11 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	engine, err := authsome.NewEngine(
+	options, err := e.editionOptions(db)
+	if err != nil {
+		return nil, err
+	}
+	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
 		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
@@ -271,9 +294,12 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		authsome.WithPlugin(memberSync),
 		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
 		authsome.WithPlugin(e.waitlist),
+		authsome.WithPlugin(e.oauthProvider(db)),
+	}, options)
+	engine, err := authsome.NewEngine(append(opts,
 		// Last, so it judges a sign-up the other plugins have accepted.
 		authsome.WithPlugin(e.gate),
-	)
+	)...)
 	if err != nil {
 		return nil, fmt.Errorf("authsome engine: %w", err)
 	}
@@ -395,10 +421,10 @@ func (e *Extension) Health(ctx context.Context) error {
 }
 
 // middleware authenticates the authsome session (its HttpOnly cookie, or a
-// bearer token for API clients), keeps it alive (sessions.go) and resolves
-// the principal.
+// bearer token for API clients), keeps it alive (sessions.go), admits
+// loomctl's OAuth tokens (cli.go) and resolves the principal.
 func (e *Extension) middleware() []forge.Middleware {
-	return append(e.sessionMiddleware(), e.requirePrincipal)
+	return append(e.sessionMiddleware(), admitCLI(), e.requirePrincipal)
 }
 
 func (e *Extension) requirePrincipal(next forge.Handler) forge.Handler {
@@ -474,6 +500,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 	}
 	// After authsome's bootstrap, which applies the platform roles.
 	e.grantConsoleReads(ctx)
+	if err := e.seedCLIClient(ctx); err != nil {
+		return err
+	}
 	if err := e.recordEarlierSetup(ctx); err != nil {
 		return err
 	}

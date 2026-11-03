@@ -56,10 +56,10 @@ export default function PlatformPage() {
               It reads your monorepo so you don't have to describe it.
             </h3>
             <p>
-              Point Loomplane at a GitHub URL. It walks the checkout and finds
-              the services it would build, the packages they share and the
-              databases they need. Every result carries source evidence you can
-              open.
+              Point Loomplane at a GitHub or GitLab URL. It walks the checkout
+              and finds the services it would build, the packages they share and
+              the databases they need. Every result carries source evidence you
+              can open.
             </p>
             <ul className="ticks">
               <li>
@@ -72,8 +72,12 @@ export default function PlatformPage() {
                 default graph
               </li>
               <li>
-                Private repositories through a GitHub App, re-analyzed on every
-                push
+                Private repositories through a GitHub App or a GitLab sign-in,
+                re-analyzed on every push
+              </li>
+              <li>
+                gitlab.com and self-managed GitLab 17.0 or newer, nested groups
+                included
               </li>
               <li>
                 An application split across several repositories, analyzed as

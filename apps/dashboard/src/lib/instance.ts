@@ -13,6 +13,10 @@ export type Instance = {
   requireEmailVerification?: boolean
   /** Where the instance console lives. Platform admins only. */
   consolePath?: string
+  /** The signed-in account is a platform owner or admin. */
+  platformAdmin?: boolean
+  /** Setup should offer cloud sign-in apps. Sent to platform owners and admins. */
+  cloudSignInOffer?: boolean
 }
 
 const current: { instance: Instance } = {

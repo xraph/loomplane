@@ -108,6 +108,13 @@ spec:
     - key: LOOMPLANE_GITHUB_WEBHOOK_SECRET
       scope: RUN_TIME
       type: SECRET
+    # Optional GitLab OAuth application for private projects on gitlab.com
+    # (docs/gitlab.md). Set the client ID and client secret together, or neither.
+    - key: LOOMPLANE_GITLAB_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GITLAB_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
     - key: LOOMPLANE_ARTIFACT_BUCKET
       scope: RUN_TIME
     - key: LOOMPLANE_BACKUP_BUCKET

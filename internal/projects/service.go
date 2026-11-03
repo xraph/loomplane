@@ -216,7 +216,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err := s.attach(ctx, p, proj, repos); err != nil {
 		// A project that can't read its own repositories is worse than
 		// none, so take it back out, with any it attached.
-		if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
+		if derr := s.rollBack(ctx, proj); derr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
 		}
 		return nil, err
@@ -224,7 +224,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	if err := s.init.InitializeProject(ctx, proj.OrgID, proj.ID); err != nil {
 		// Without its job the project would stay initializing forever, so
 		// take it back out rather than leave it stranded.
-		if derr := s.store.DeleteProject(context.WithoutCancel(ctx), proj.OrgID, proj.ID); derr != nil {
+		if derr := s.rollBack(ctx, proj); derr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the project again: %w", derr))
 		}
 		return nil, fmt.Errorf("start project initialization: %w", err)
@@ -232,6 +232,20 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 	s.record(ctx, AuditEvent{Action: "project.create", Severity: "info", ProjectID: proj.ID, Principal: p,
 		Attributes: map[string]any{"slug": proj.Slug}})
 	return proj, nil
+}
+
+// rollBack deletes a project Create couldn't finish, with the reapers
+// around it like any deletion: a repository attached before the failure
+// may already have set something up outside the database, such as a
+// webhook. It carries on when the caller has gone.
+func (s *Service) rollBack(ctx context.Context, proj *Project) error {
+	ctx = context.WithoutCancel(ctx)
+	reaped := s.reap(ctx, proj.OrgID, proj.ID, "")
+	if err := s.store.DeleteProject(ctx, proj.OrgID, proj.ID); err != nil {
+		return err
+	}
+	reaped(ctx)
+	return nil
 }
 
 // attach attaches each repository a new project starts with, and lists

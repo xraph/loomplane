@@ -9,8 +9,14 @@ import {
   useApiKeysCreate,
   useApiKeysList,
   useApiKeysRevoke,
+  useNodesList,
+  useNodesRevoke,
 } from "@/client/forge/loomplane/hooks"
-import type { APIKey, CreatedKey } from "@/client/forge/loomplane/types"
+import type {
+  APIKey,
+  CompromisedRevoke,
+  CreatedKey,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
@@ -19,7 +25,6 @@ import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -67,6 +72,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
+import { statusLabel } from "@/lib/nodes"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 
@@ -187,20 +193,7 @@ export function ApiKeys() {
 }
 
 function KeyRow({ apiKey: k, mine }: { apiKey: APIKey; mine: boolean }) {
-  const revoke = useMutation(useApiKeysRevoke)
-  const invalidate = useInvalidate()
   const active = k.state === "active"
-
-  const doRevoke = async () => {
-    try {
-      await revoke.mutateAsync({ path: { id: k.id } })
-      toast.success(`${k.name} is revoked`)
-    } catch (err) {
-      toast.error(messageOf(err, "The key wasn't revoked."))
-    } finally {
-      invalidate(useApiKeysList)
-    }
-  }
 
   return (
     <TableRow>
@@ -234,43 +227,213 @@ function KeyRow({ apiKey: k, mine }: { apiKey: APIKey; mine: boolean }) {
         {k.expiresAt ? formatDate(k.expiresAt) : "Never"}
       </TableCell>
       <TableCell>
-        {active && (
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-destructive hover:text-destructive"
-                  disabled={revoke.isPending}
-                >
-                  Revoke
-                </Button>
-              }
-            />
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Revoke {k.name}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Anything using it stops working at once. You can't undo this;
-                  make a new key instead.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Keep it</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => void doRevoke()}
-                >
-                  Revoke
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
+        {/* Stays mounted after the revoke: the answer to it is in the dialog. */}
+        <RevokeKey apiKey={k} active={active} />
       </TableCell>
     </TableRow>
   )
+}
+
+/**
+ * RevokeKey ends a key. Ticking "Revoke as compromised" also asks the server
+ * which nodes joined with a token the key made, and the dialog then offers to
+ * revoke them too. The server lists them only in the answer to the revoke
+ * itself, so the dialog keeps that answer.
+ */
+function RevokeKey({ apiKey: k, active }: { apiKey: APIKey; active: boolean }) {
+  const { can } = useOrganization()
+  const revoke = useMutation(useApiKeysRevoke)
+  const revokeNode = useMutation(useNodesRevoke)
+  const invalidate = useInvalidate()
+  const [open, setOpen] = useState(false)
+  const [compromised, setCompromised] = useState(false)
+  const [result, setResult] = useState<CompromisedRevoke>()
+  const [error, setError] = useState("")
+  const [revoked, setRevoked] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+
+  const close = (next: boolean) => {
+    setOpen(next)
+    if (!next) {
+      setCompromised(false)
+      setResult(undefined)
+      setError("")
+      setRevoked(new Set())
+    }
+  }
+
+  const doRevoke = async () => {
+    setError("")
+    try {
+      const out = (await revoke.mutateAsync({
+        path: { id: k.id },
+        ...(compromised && { query: { compromised: true } }),
+      })) as CompromisedRevoke | undefined
+      toast.success(`${k.name} is revoked`)
+      if (compromised) setResult(out ?? emptyRevoke(k))
+      else close(false)
+    } catch (err) {
+      setError(messageOf(err, "The key wasn't revoked."))
+    } finally {
+      invalidate(useApiKeysList)
+    }
+  }
+
+  const revokeJoined = async () => {
+    if (!result) return
+    setBusy(true)
+    setError("")
+    const todo = result.joinedNodes.filter(
+      (n) => n.status !== "revoked" && !revoked.has(n.id)
+    )
+    const done = new Set(revoked)
+    const failed: string[] = []
+    for (const n of todo) {
+      try {
+        await revokeNode.mutateAsync({ path: { id: n.id } })
+        done.add(n.id)
+      } catch {
+        failed.push(n.name)
+      }
+    }
+    setRevoked(done)
+    setBusy(false)
+    invalidate(useNodesList)
+    if (failed.length > 0) {
+      setError(`These nodes weren't revoked: ${failed.join(", ")}.`)
+    } else {
+      toast.success("Nodes revoked")
+    }
+  }
+
+  if (!active && !open) return null
+
+  const joined = result?.joinedNodes ?? []
+  const pending = joined.filter(
+    (n) => n.status !== "revoked" && !revoked.has(n.id)
+  )
+
+  return (
+    <AlertDialog open={open} onOpenChange={close}>
+      <AlertDialogTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+          >
+            Revoke
+          </Button>
+        }
+      />
+      <AlertDialogContent>
+        {result ? (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{k.name} is revoked</AlertDialogTitle>
+              <AlertDialogDescription>
+                {joined.length > 0
+                  ? "These nodes joined with a token this key made. A leaked key could have added them."
+                  : result.joinedNodesWithheld
+                    ? "No nodes to show."
+                    : "No nodes joined with a token this key made."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {joined.length > 0 && (
+              <ul className="grid gap-1.5 text-[13px]">
+                {joined.map((n) => (
+                  <li
+                    key={n.id}
+                    className="flex items-center justify-between gap-3 rounded-lg bg-muted px-3 py-2"
+                  >
+                    <span className="font-medium">{n.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {n.status === "revoked" || revoked.has(n.id)
+                        ? "Revoked"
+                        : statusLabel(n)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {result.joinedNodesWithheld && (
+              <Alert>
+                <AlertDescription>
+                  You can't see every node that joined with this key. An owner
+                  or an admin should check Nodes.
+                </AlertDescription>
+              </Alert>
+            )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <AlertDialogFooter>
+              {pending.length > 0 && can("nodes:manage") && (
+                <Button
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void revokeJoined()}
+                >
+                  {busy && <Spinner />}
+                  Revoke these nodes too
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => close(false)}>
+                Done
+              </Button>
+            </AlertDialogFooter>
+          </>
+        ) : (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Revoke {k.name}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Anything using it stops working at once. You can't undo this;
+                make a new key instead.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <label className="flex items-start gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={compromised}
+                onChange={(e) => setCompromised(e.target.checked)}
+                className="mt-0.5 size-4 accent-[var(--primary)]"
+              />
+              <span>
+                <span className="font-medium">Revoke as compromised</span>
+                <span className="block text-xs text-muted-foreground">
+                  Also lists the nodes that joined with a token this key made,
+                  so you can revoke them too.
+                </span>
+              </span>
+            </label>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep it</AlertDialogCancel>
+              <Button
+                variant="destructive"
+                disabled={revoke.isPending}
+                onClick={() => void doRevoke()}
+              >
+                {revoke.isPending && <Spinner />}
+                Revoke
+              </Button>
+            </AlertDialogFooter>
+          </>
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+function emptyRevoke(k: APIKey): CompromisedRevoke {
+  return { revoked: k, joinedNodes: [], joinedNodesWithheld: false }
 }
 
 function CreateKeyDialog({

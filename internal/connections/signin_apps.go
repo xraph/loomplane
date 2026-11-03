@@ -115,10 +115,15 @@ type AppStore interface {
 	// says how many.
 	SweepSignIns(ctx context.Context, before time.Time) (int64, error)
 	// SetAppProblem records why the platform's app for a cloud stopped
-	// working, replacing any earlier message. A cloud with no app has
-	// nothing to record on, so that is a no-op.
-	SetAppProblem(ctx context.Context, cloud, message string, at time.Time) error
+	// working, replacing any earlier message. It lands only on a row that
+	// still holds clientID, so an app replaced since is not blamed. A cloud
+	// with no such app has nothing to record on, so that is a no-op.
+	SetAppProblem(ctx context.Context, cloud, clientID, message string, at time.Time) error
 	ClearAppProblem(ctx context.Context, cloud string) error
+	// SignedInWith counts the working sign-ins made with the app whose
+	// client ID is clientID, and the organizations they belong to. It reads
+	// across every organization.
+	SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error)
 	// AppProblems maps each cloud with a problem to its message.
 	AppProblems(ctx context.Context) (map[string]string, error)
 	// PutReservation holds a keyless connection's ID. An ID already held
@@ -146,8 +151,16 @@ func (s *Service) recordApp(ctx context.Context, action, userID, cloud, clientID
 }
 
 // SignInApps lists each cloud that can be signed in to and where its app
-// comes from. Who may see it is the caller's to decide.
+// comes from, with how many sign-ins work with it. Who may see it is the
+// caller's to decide.
 func (s *Service) SignInApps(ctx context.Context) ([]SignInApp, error) {
+	return s.signInApps(ctx, true)
+}
+
+// signInApps is SignInApps, counting the sign-ins only when withCounts. The
+// counts read across every organization, so only the platform's own list
+// asks for them.
+func (s *Service) signInApps(ctx context.Context, withCounts bool) ([]SignInApp, error) {
 	stored, err := s.Apps.ListApps(ctx)
 	if err != nil {
 		return nil, err
@@ -162,29 +175,22 @@ func (s *Service) SignInApps(ctx context.Context) ([]SignInApp, error) {
 	}
 	out := []SignInApp{}
 	for _, cloud := range slices.Sorted(maps.Keys(s.Providers)) {
-		entry := SignInApp{Cloud: cloud, Source: AppFromNone, Problem: problems[cloud]}
+		entry := SignInApp{Cloud: cloud, Source: AppFromNone}
 		if cfg, ok := s.ConfigApps[cloud]; ok {
 			entry.Source, entry.ClientID, entry.Slug = AppFromConfig, cfg.ClientID, cfg.Slug
 		} else if a, ok := byCloud[cloud]; ok {
 			t := a.UpdatedAt.UTC()
 			entry.Source, entry.ClientID, entry.Slug, entry.UpdatedBy, entry.UpdatedAt = AppFromPlatform, a.ClientID, a.Slug, a.UpdatedBy, &t
+			entry.Problem = problems[cloud]
 		}
-		if entry.ClientID != "" && !outlivesApp(s.Providers[cloud]) {
-			if counter, ok := s.store.(signedInCounter); ok {
-				if entry.Connections, entry.Organizations, err = counter.SignedInWith(ctx, cloud, entry.ClientID); err != nil {
-					return nil, err
-				}
+		if withCounts && entry.ClientID != "" && !outlivesApp(s.Providers[cloud]) {
+			if entry.Connections, entry.Organizations, err = s.Apps.SignedInWith(ctx, cloud, entry.ClientID); err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, entry)
 	}
 	return out, nil
-}
-
-// signedInCounter is a Store that can count the sign-ins made with an
-// app. *PgStore is one.
-type signedInCounter interface {
-	SignedInWith(ctx context.Context, cloud, clientID string) (connections, orgs int, err error)
 }
 
 func outlivesApp(p Provider) bool {
@@ -195,7 +201,7 @@ func outlivesApp(p Provider) bool {
 // SignInClouds says which clouds can be signed in to: those with an app,
 // from configuration or the platform.
 func (s *Service) SignInClouds(ctx context.Context) (map[string]bool, error) {
-	apps, err := s.SignInApps(ctx)
+	apps, err := s.signInApps(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -326,8 +332,8 @@ func (s *Service) connectionApp(ctx context.Context, c *Connection) (oauth.App, 
 
 // appRejected records that cloud refused the sign-in app clientID, for the
 // settings page to show, and returns the message saying so. It records
-// only if clientID is the platform's current app, so a refusal for an app
-// since replaced blames nothing. The record is kept even if the caller
+// only on the platform's app still holding clientID, so a refusal for an
+// app since replaced blames nothing. The record is kept even if the caller
 // gives up.
 func (s *Service) appRejected(ctx context.Context, cloud, clientID string) string {
 	why := fmt.Sprintf("Loomplane's %s sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret.", cloudTitle(cloud))
@@ -336,11 +342,9 @@ func (s *Service) appRejected(ctx context.Context, cloud, clientID string) strin
 	if _, ok := s.ConfigApps[cloud]; ok {
 		return why
 	}
-	current, err := s.Apps.GetApp(ctx, cloud)
-	if err != nil || current.ClientID != clientID {
-		return why
-	}
-	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), cloud, why, s.now().UTC()); err != nil {
+	// One conditional statement, so an app replaced since the refusal is
+	// not blamed for it.
+	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), cloud, clientID, why, s.now().UTC()); err != nil {
 		s.warn("record the problem with a sign-in app", err)
 	}
 	return why

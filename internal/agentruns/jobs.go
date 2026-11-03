@@ -401,7 +401,7 @@ func (s *Service) describe(cfg *cortexagent.Config, spec KindSpec, tools []strin
 	cfg.Sections = nil
 	cfg.Tools = tools
 	cfg.MaxSteps = spec.MaxSteps
-	cfg.MaxTokens = spec.MaxTokens
+	cfg.MaxTokens = spec.outputTokens() // per call; the task's budget goes in the run's Budget
 	cfg.Guardrails = agentsafety.Guardrails()
 	cfg.Enabled = true
 	md := maps.Clone(cfg.Metadata)

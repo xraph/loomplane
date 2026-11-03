@@ -2,12 +2,13 @@
 // from it, the controls that analyze one or all of them, and the dialog
 // that adds another.
 import { FolderGit2Icon, ScanSearchIcon } from "lucide-react"
-import { type FormEvent, useState } from "react"
+import { Fragment, type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
   useAnalysesCreate,
+  useBitbucketWebhookEnable,
   useProjectsGet,
   useProjectsGraph,
   useProjectsList,
@@ -15,7 +16,13 @@ import {
   useSourcesDelete,
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
-import type { Analysis, Project, Source } from "@/client/forge/loomplane/types"
+import type {
+  Analysis,
+  DiscoverySource,
+  Project,
+  PushState,
+  Source,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { useAnalyses } from "@/components/architecture"
 import {
@@ -51,7 +58,8 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
-import { relative } from "@/lib/format"
+import { relative, repositoryHost, repositoryURL } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
 import { useNow } from "@/lib/use-runs"
 
@@ -68,10 +76,24 @@ function refreshRepositories(
   invalidate(useProjectsList)
 }
 
-/** sourceURL links to a source on GitHub, at its directory when it has one. */
+/**
+ * sourceURL links to a source on its host, at its directory when it has one.
+ * Each host has its own page for a directory.
+ */
 function sourceURL(s: Source): string {
-  const base = `https://github.com/${s.repository}`
-  return s.root ? `${base}/tree/${s.ref || "HEAD"}/${s.root}` : base
+  const base = repositoryURL(s.repository)
+  if (!s.root) return base
+  const ref = s.ref || "HEAD"
+  const host = repositoryHost(s.repository)
+  if (host === "github.com") return `${base}/tree/${ref}/${s.root}`
+  if (host === "bitbucket.org") return `${base}/src/${ref}/${s.root}`
+  return `${base}/-/tree/${ref}/${s.root}`
+}
+
+/** hostLabel is what "Open on" names: GitHub, or the key's own host. */
+function hostLabel(s: Source): string {
+  const host = repositoryHost(s.repository)
+  return host === "github.com" ? "GitHub" : host
 }
 
 /**
@@ -98,6 +120,9 @@ export function Repositories({ project }: { project: Project }) {
   const list = sources.data?.sources ?? []
   const mayEdit = can("project:update")
   const mayRun = can("analysis:run")
+  // Connecting repositories is a workspace permission, which a project's
+  // own permissions never list, and what the server checks to turn push on.
+  const mayConnect = useOrganization().can("repository:connect")
 
   const analyze = (alias?: string) =>
     start
@@ -171,66 +196,77 @@ export function Repositories({ project }: { project: Project }) {
           {list.map((s) => {
             const state = states.get(s.alias)
             const running = !!state?.latest && isActive(state.latest.status)
+            const push = pushOff(s)
             return (
-              <CloudTableRow key={s.id}>
-                <Cell className="truncate font-mono text-[12.5px]">
-                  {s.alias}
-                </Cell>
-                <NameCell
-                  tile={<FolderGit2Icon />}
-                  name={
-                    <a
-                      className="font-mono font-medium underline-offset-2 hover:underline"
-                      href={sourceURL(s)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {s.repository}
-                      {s.root ? `/${s.root}` : ""}
-                    </a>
-                  }
-                  meta={readFrom(s, state?.shown)}
-                />
-                <Cell className="text-muted-foreground">
-                  {lastReadAt(state?.latest, now)}
-                </Cell>
-                <ActionsCell>
-                  {mayRun && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={running || start.isPending}
-                      onClick={() => void analyze(s.alias)}
-                    >
-                      Analyze
-                    </Button>
-                  )}
-                  <RowMenu label={`More actions for ${s.alias}`}>
-                    <DropdownMenuItem
-                      render={
-                        <a
-                          href={sourceURL(s)}
-                          target="_blank"
-                          rel="noreferrer"
-                        />
-                      }
-                    >
-                      Open on GitHub
-                    </DropdownMenuItem>
-                    {mayEdit && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={() => setRemoving(s)}
-                        >
-                          Remove {s.alias}
-                        </DropdownMenuItem>
-                      </>
+              <Fragment key={s.id}>
+                <CloudTableRow className={push && "not-last:border-b-0"}>
+                  <Cell className="truncate font-mono text-[12.5px]">
+                    {s.alias}
+                  </Cell>
+                  <NameCell
+                    tile={<FolderGit2Icon />}
+                    name={
+                      <a
+                        className="font-mono font-medium underline-offset-2 hover:underline"
+                        href={sourceURL(s)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {s.repository}
+                        {s.root ? `/${s.root}` : ""}
+                      </a>
+                    }
+                    meta={readFrom(s, state?.shown)}
+                  />
+                  <Cell className="text-muted-foreground">
+                    {lastReadAt(state?.latest, now)}
+                  </Cell>
+                  <ActionsCell>
+                    {mayRun && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={running || start.isPending}
+                        onClick={() => void analyze(s.alias)}
+                      >
+                        Analyze
+                      </Button>
                     )}
-                  </RowMenu>
-                </ActionsCell>
-              </CloudTableRow>
+                    <RowMenu label={`More actions for ${s.alias}`}>
+                      <DropdownMenuItem
+                        render={
+                          <a
+                            href={sourceURL(s)}
+                            target="_blank"
+                            rel="noreferrer"
+                          />
+                        }
+                      >
+                        Open on {hostLabel(s)}
+                      </DropdownMenuItem>
+                      {mayEdit && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => setRemoving(s)}
+                          >
+                            Remove {s.alias}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </RowMenu>
+                  </ActionsCell>
+                </CloudTableRow>
+                {push && (
+                  <PushNotice
+                    source={s}
+                    push={push}
+                    projectID={project.id}
+                    mayTurnOn={mayConnect}
+                  />
+                )}
+              </Fragment>
             )
           })}
         </CloudTable>
@@ -247,6 +283,83 @@ export function Repositories({ project }: { project: Project }) {
       />
     </section>
   )
+}
+
+/**
+ * pushOff is what a source says when a push to its repository doesn't
+ * re-analyze it. Hosts that have no say send nothing.
+ */
+function pushOff(s: DiscoverySource): PushState | undefined {
+  return s.push && !s.push.on ? s.push : undefined
+}
+
+/**
+ * PushNotice says why pushes don't re-analyze a source, with a button that
+ * tries to add the webhook again. Only Bitbucket sources carry the state, and
+ * its webhook is the one that button adds.
+ */
+function PushNotice({
+  source,
+  push,
+  projectID,
+  mayTurnOn,
+}: {
+  source: DiscoverySource
+  push: PushState
+  projectID: string
+  mayTurnOn: boolean
+}) {
+  const enable = useMutation(useBitbucketWebhookEnable)
+  const invalidate = useInvalidate()
+  const [failure, setFailure] = useState<string | null>(null)
+  const turnOn = async () => {
+    setFailure(null)
+    try {
+      await enable.mutateAsync({ body: { repository: source.repository } })
+    } catch (err) {
+      setFailure(messageOf(err, "Push re-analysis wasn't turned on."))
+    } finally {
+      // Either way the list says where it stands now.
+      invalidate(useSourcesList, { path: { id: projectID } })
+    }
+  }
+  return (
+    <div
+      role="row"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-subtle px-4 py-2 text-xs text-muted-foreground not-last:border-b"
+    >
+      <div role="cell" className="min-w-0 flex-[1_1_240px]">
+        <span className="font-medium text-weld-ink">
+          Pushes don&apos;t re-analyze {source.alias}.
+        </span>{" "}
+        {push.reason ? sentence(push.reason) : null}
+        {failure && (
+          <p role="alert" className="mt-1 text-destructive">
+            {failure}
+          </p>
+        )}
+      </div>
+      {mayTurnOn && (
+        <div role="cell">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={enable.isPending}
+            onClick={() => void turnOn()}
+          >
+            {enable.isPending && <Spinner />}
+            Turn on
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** sentence ends a reason the server wrote as a clause. */
+function sentence(s: string): string {
+  const t = s.charAt(0).toUpperCase() + s.slice(1)
+  return /[.!?]$/.test(t) ? t : `${t}.`
 }
 
 /** readFrom names the branch and commit a source's graph was read from. */
@@ -354,8 +467,8 @@ export function AddSourceDialog({
             <DialogTitle>Add a repository</DialogTitle>
             <DialogDescription>
               Public repositories work as they are. A private one needs the
-              GitHub connection to see it, and Loomplane checks that before
-              adding it.
+              GitHub, GitLab or Bitbucket connection to see it, and Loomplane
+              checks that before adding it.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">

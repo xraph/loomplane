@@ -325,3 +325,115 @@ func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
 		}
 	}
 }
+
+func TestConfig_bitbucket(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://api.bitbucket.org/2.0" || c.Bitbucket.WebURL != "https://bitbucket.org" {
+		t.Errorf("defaults %+v", c.Bitbucket)
+	}
+	if c.Bitbucket.Configured() {
+		t.Error("a default config shouldn't have a Bitbucket consumer")
+	}
+
+	c, err = FromSource(mapGetter{
+		"database.url":            testDSN,
+		"bitbucket.api_url":       "https://bb.example.com/2.0",
+		"bitbucket.web_url":       "https://bb.example.com",
+		"bitbucket.client_id":     "key",
+		"bitbucket.client_secret": "secret",
+	})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://bb.example.com/2.0" || c.Bitbucket.WebURL != "https://bb.example.com" || !c.Bitbucket.Configured() {
+		t.Errorf("overrides %+v", c.Bitbucket)
+	}
+
+	for name, src := range map[string]mapGetter{
+		"client_id without client_secret": {"database.url": testDSN, "bitbucket.client_id": "key"},
+		"client_secret without client_id": {"database.url": testDSN, "bitbucket.client_secret": "secret"},
+	} {
+		_, err := FromSource(src)
+		if err == nil || !strings.Contains(err.Error(), "bitbucket.client_id and client_secret") {
+			t.Errorf("%s: error %v, want it to say both are needed", name, err)
+		}
+	}
+	for _, key := range []string{"bitbucket.api_url", "bitbucket.web_url"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, key: "bitbucket"})
+		if err == nil || !strings.Contains(err.Error(), key+" must be an absolute URL") {
+			t.Errorf("%s: error %v", key, err)
+		}
+	}
+}
+
+func TestConfig_gitLabDefaults(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitLab.APIURL != "https://gitlab.com" || !c.GitLab.AllowOrganizationHosts || len(c.GitLab.Hosts) != 0 {
+		t.Fatalf("GitLab defaults %+v", c.GitLab)
+	}
+	c, err = FromSource(mapGetter{
+		"database.url":                    testDSN,
+		"gitlab.client_id":                "id",
+		"gitlab.client_secret":            "secret",
+		"gitlab.allow_organization_hosts": "no",
+		"gitlab.webhook_url":              "https://hooks.example.com/gitlab",
+		"gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.corp.example", "client_id": "a", "client_secret": "b"},
+			map[string]any{"web_url": "http://127.0.0.1:9000"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := c.GitLab
+	if g.ClientID != "id" || g.ClientSecret != "secret" || g.AllowOrganizationHosts || g.WebhookURL != "https://hooks.example.com/gitlab" ||
+		len(g.Hosts) != 2 || g.Hosts[0] != (GitLabHostConfig{WebURL: "https://git.corp.example", ClientID: "a", ClientSecret: "b"}) ||
+		g.Hosts[1].WebURL != "http://127.0.0.1:9000" {
+		t.Fatalf("GitLab settings %+v", g)
+	}
+}
+
+func TestConfig_gitLabHostValidation(t *testing.T) {
+	host := func(m map[string]any) mapGetter {
+		return mapGetter{"database.url": testDSN, "gitlab.hosts": []any{m}}
+	}
+	tests := []struct {
+		name string
+		src  mapGetter
+		want string
+	}{
+		{"client id without secret", host(map[string]any{"web_url": "https://git.example.com", "client_id": "a"}), "client_secret"},
+		{"client secret without id", host(map[string]any{"web_url": "https://git.example.com", "client_secret": "b"}), "client_id"},
+		{"sub-path web url", host(map[string]any{"web_url": "https://example.com/gitlab"}), "web_url"},
+		{"no web url", host(map[string]any{"client_id": "a", "client_secret": "b"}), "web_url"},
+		{"the same host twice", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "HTTPS://Git.Example.com/"},
+		}}, "twice"},
+		{"the same host over http and https", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "http://git.example.com"}, map[string]any{"web_url": "https://git.example.com"},
+		}}, "twice"},
+		{"the same host with its default port", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "https://git.example.com:443"},
+		}}, "twice"},
+		{"gitlab.com id without secret", mapGetter{"database.url": testDSN, "gitlab.client_id": "a"}, "gitlab.client_secret"},
+		{"relative api url", mapGetter{"database.url": testDSN, "gitlab.api_url": "gitlab.com"}, "gitlab.api_url"},
+		{"relative webhook url", mapGetter{"database.url": testDSN, "gitlab.webhook_url": "/hook"}, "gitlab.webhook_url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := FromSource(tt.src)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FromSource = %v, want an error mentioning %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := FromSource(host(map[string]any{"web_url": "https://git.example.com", "client_id": "a", "client_secret": "b"})); err != nil {
+		t.Fatalf("a complete host should pass: %v", err)
+	}
+}

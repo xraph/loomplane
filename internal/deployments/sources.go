@@ -9,44 +9,34 @@ import (
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
-// Downloader downloads a repository's tarball at a commit.
-// *repositories.GitHub is the real one.
-type Downloader interface {
-	Download(ctx context.Context, repo repositories.Repository, sha, token string, w io.Writer) (int64, error)
-}
-
-// Tokens mints a token that reads a repository for an organization, or
-// returns "" for a public one. *repositories.Connections is the real one.
-type Tokens interface {
-	Token(ctx context.Context, orgID string, repo repositories.Repository) (string, error)
-}
-
-// GitHubSources stores commits from GitHub as artifacts.
-type GitHubSources struct {
-	GitHub    Downloader
-	Tokens    Tokens
+// RepositorySources stores commits from Git hosts as artifacts.
+// repositories.Readers and repositories.Tokens are the real ones, and pick
+// by the repository's host.
+type RepositorySources struct {
+	Readers   repositories.Reader
+	Tokens    repositories.TokenSource
 	Artifacts *artifacts.Store
 }
 
-var _ Sources = (*GitHubSources)(nil)
+var _ Sources = (*RepositorySources)(nil)
 
-// Store implements Sources. It streams the tarball from GitHub straight
+// Store implements Sources. It streams the tarball from the host straight
 // into storage, without reading what's inside.
-func (g *GitHubSources) Store(ctx context.Context, orgID, repository, sha, key string) error {
+func (g *RepositorySources) Store(ctx context.Context, orgID, repository, sha, key string) error {
 	if ok, err := g.Artifacts.Exists(ctx, key); err != nil || ok {
 		return err
 	}
-	repo, err := repositories.ParseGitHubURL("github.com/" + repository)
+	repo, err := repositories.ParseKey(repository)
 	if err != nil {
 		return err
 	}
 	token, err := g.Tokens.Token(ctx, orgID, repo)
 	if err != nil {
-		return fmt.Errorf("get a token for %s: %w", repo.FullName(), err)
+		return fmt.Errorf("get a token for %s: %w", repo.Key(), err)
 	}
 	pr, pw := io.Pipe()
 	go func() {
-		_, err := g.GitHub.Download(ctx, repo, sha, token, pw)
+		_, err := g.Readers.Download(ctx, repo, sha, token, pw)
 		pw.CloseWithError(err)
 	}()
 	if _, err := g.Artifacts.Put(ctx, key, pr, "application/gzip"); err != nil {
@@ -57,6 +47,6 @@ func (g *GitHubSources) Store(ctx context.Context, orgID, repository, sha, key s
 }
 
 // Open implements Sources.
-func (g *GitHubSources) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+func (g *RepositorySources) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	return g.Artifacts.Open(ctx, key)
 }

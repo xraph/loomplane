@@ -1,9 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 
-import { requireFeature } from "@/lib/features"
-import { AISettings } from "@/pages/ai-settings"
-
+// AI settings moved under /settings. Links and bookmarks to the old address
+// still land there.
 export const Route = createFileRoute("/ai/settings")({
-  beforeLoad: () => requireFeature("ai"),
-  component: AISettings,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/ai", replace: true })
+  },
 })

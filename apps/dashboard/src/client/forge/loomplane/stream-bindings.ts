@@ -283,6 +283,15 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/events',
+    message: 'node.updated',
+    entity: 'Node',
+    intent: 'upsert',
+    invalidates: ['Node[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['Node']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/events',
     message: 'build.log',
     entity: 'Log',
     intent: 'upsert',
@@ -612,6 +621,15 @@ export const streams = [
     intent: 'upsert',
     invalidates: ['NotificationList'],
     decode: (payload: unknown) => decode(payload, CODECS['NotificationCreated']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/ws',
+    message: 'node.updated',
+    entity: 'Node',
+    intent: 'upsert',
+    invalidates: ['Node[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['Node']),
   },
   {
     kind: 'entity',

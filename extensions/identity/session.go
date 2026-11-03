@@ -19,6 +19,9 @@ type Session struct {
 	UserID      string   `json:"user_id"`
 	OrgID       string   `json:"org_id"`
 	Permissions []string `json:"permissions"`
+	// SessionID is the authsome session making the request, so the account
+	// page can mark it among the user's sessions. An API key has none.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // PublicConfig is what the dashboard needs before anyone signs in. Nothing
@@ -46,7 +49,18 @@ type PublicConfig struct {
 	// ConsolePath is where the instance console is mounted, for platform
 	// admins only.
 	ConsolePath string `json:"console_path,omitempty"`
+	// PlatformAdmin is true for a session holding a platform role. It
+	// decides whether the dashboard shows the platform's own settings.
+	PlatformAdmin bool `json:"platform_admin,omitempty"`
+	// CloudSignInOffer is true for a platform user while the instance
+	// still offers to set up cloud sign-in, until the owner ends it.
+	CloudSignInOffer bool `json:"cloud_sign_in_offer,omitempty"`
 }
+
+// PlatformUser says whether the request is a session whose user holds a
+// platform role, and who that is. Other extensions take it from DI to
+// gate platform-wide routes. An API key is never a platform user.
+type PlatformUser func(ctx context.Context) (userID string, ok bool)
 
 // Features says which optional sections the server runs, so the dashboard
 // shows only those.
@@ -59,6 +73,9 @@ func (e *Extension) routes(r forge.Router) error {
 		return err
 	}
 	if err := e.setupRoutes(r); err != nil {
+		return err
+	}
+	if err := e.cliRoutes(r); err != nil {
 		return err
 	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
@@ -112,6 +129,8 @@ func (e *Extension) publicConfig(c forge.Context) error {
 	out.Waitlist = e.waitlistOn(ctx)
 	if e.holdsPlatformRole(ctx) {
 		out.ConsolePath = e.cfg.Console.Path
+		out.PlatformAdmin = true
+		out.CloudSignInOffer = e.cloudSignInOffer(ctx)
 	}
 	// The answer changes with setup, the waitlist and who asks.
 	c.Response().Header().Set("Cache-Control", "no-store")
@@ -122,12 +141,35 @@ func (e *Extension) publicConfig(c forge.Context) error {
 // platform owner or admin. Without a session, or when the roles can't be
 // read, it says no.
 func (e *Extension) holdsPlatformRole(ctx context.Context) bool {
+	_, ok := e.platformUser(ctx)
+	return ok
+}
+
+// platformUser is the PlatformUser other extensions use. The user comes
+// from the session middleware, which an API key's request never runs, so a
+// key has no user here and is refused. The roles are read live.
+func (e *Extension) platformUser(ctx context.Context) (string, bool) {
 	userID, ok := authmw.UserIDFrom(ctx)
 	if !ok {
-		return false
+		return "", false
 	}
 	roles, ok := e.appRoles(ctx, userID.String())
-	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID)
+	if !ok || !platformadmin.Holds(roles, e.cfg.Identity.AppID) {
+		return "", false
+	}
+	return userID.String(), true
+}
+
+// cloudSignInOffer reports whether the instance still offers cloud sign-in
+// setup. A setting that can't be read counts as off, so a hiccup never
+// nags.
+func (e *Extension) cloudSignInOffer(ctx context.Context) bool {
+	on, err := e.instance.CloudSignInOffer(ctx)
+	if err != nil {
+		e.Logger().Error("read the cloud sign-in offer", forge.F("error", err.Error()))
+		return false
+	}
+	return on
 }
 
 // appRoles reads a user's roles in Loomplane's app, live from Warden rather
@@ -140,6 +182,15 @@ func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.
 		return nil, false
 	}
 	return roles, true
+}
+
+// IsPlatformAdmin reports whether a user holds a platform role now, read
+// live from Warden. It is what the instance console checks, offered to
+// apikeys so it can gate instance-wide node join tokens. A failure to read
+// roles says no.
+func (e *Extension) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
+	roles, ok := e.appRoles(ctx, userID)
+	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID), nil
 }
 
 func (e *Extension) getSession(c forge.Context) error {
@@ -166,6 +217,9 @@ func (e *Extension) getSession(c forge.Context) error {
 	}
 	perms := security.AllPermissions()
 	out := Session{UserID: p.UserID, OrgID: p.OrgID, Permissions: make([]string, 0, len(perms))}
+	if sid, ok := authmw.SessionIDFrom(ctx); ok {
+		out.SessionID = sid.String()
+	}
 	for _, perm := range perms {
 		allowed, err := e.authz.Allowed(ctx, p, perm)
 		if err != nil {

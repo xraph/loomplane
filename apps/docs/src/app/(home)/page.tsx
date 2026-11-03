@@ -36,14 +36,14 @@ export default function HomePage() {
             <span className="hl-bold">woven together.</span>
           </h1>
           <p className="lede rise" style={{ "--d": ".18s" } as CSSProperties}>
-            Give Loomplane your monorepo, or an application split across several
-            repositories. It reads the code (never runs it), finds the services
-            and the databases they need, drafts a <code>loomplane.yaml</code>{" "}
-            and shows you the exact plan. Approve it, and a Next.js app goes to
-            Vercel, a Go API to Cloud Run, a worker to ECS on Fargate and
-            Postgres to Cloud SQL, wired together. Turn on the built-in agent
-            and it carries each release through staging, then asks your team
-            before production.
+            Give Loomplane your monorepo on GitHub or GitLab, or an application
+            split across several repositories. It reads the code (never runs
+            it), finds the services and the databases they need, drafts a{" "}
+            <code>loomplane.yaml</code> and shows you the exact plan. Approve
+            it, and a Next.js app goes to Vercel, a Go API to Cloud Run, a
+            worker to ECS on Fargate and Postgres to Cloud SQL, wired together.
+            Turn on the built-in agent and it carries each release through
+            staging, then asks your team before production.
           </p>
 
           <HeroCta />
@@ -326,7 +326,10 @@ export default function HomePage() {
                 You choose on the machine what Loomplane may use there: the
                 Docker socket, a local Kubernetes API, Firecracker, or only a
                 report of what the machine has. Loomplane can narrow that list
-                from the dashboard. It can never widen it.
+                from the dashboard. It can never widen it. Today only the report
+                does anything, and allowing Docker hands over root on that
+                machine, so allow it only where you&apos;d let Loomplane
+                administer.
               </p>
               <ul className="ticks">
                 <li>
@@ -334,8 +337,8 @@ export default function HomePage() {
                   never leaves the machine
                 </li>
                 <li>
-                  Updates are cosign-signed releases, and a binary that
-                  won&apos;t start is rolled back
+                  Updates are cosign-signed releases, and one that dies in its
+                  first five seconds is rolled back
                 </li>
                 <li>
                   Revoke a node from the dashboard, the CLI or the machine
@@ -378,9 +381,9 @@ export default function HomePage() {
               <span className="tag">Platform</span>
               <h4>Discovery, manifests and plans</h4>
               <p>
-                Static analysis of your repositories, a versioned{" "}
-                <code>loomplane.yaml</code>, and plans that list every action
-                before anything moves.
+                Static analysis of your GitHub and GitLab repositories, a
+                versioned <code>loomplane.yaml</code>, and plans that list every
+                action before anything moves.
               </p>
               <span className="more">
                 Explore the platform <span className="arr">↗</span>
@@ -745,6 +748,16 @@ export default function HomePage() {
                 <code>loomctl node join</code>: it dials out, so there&apos;s no
                 port to open. Nodes join, report and update today, and deploying
                 to them comes next.
+              </p>
+            </details>
+            <details>
+              <summary>Does it work with GitLab?</summary>
+              <p>
+                Yes. Public projects on gitlab.com need no setup. For private
+                ones you register an OAuth application once, and an owner or
+                admin signs in from Integrations. A self-managed GitLab on 17.0
+                or newer works the same way, and a push webhook re-analyzes a
+                project when its default branch moves.
               </p>
             </details>
             <details>

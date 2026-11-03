@@ -11,7 +11,9 @@ package migrations
 
 import (
 	"fmt"
+	"slices"
 
+	"github.com/xraph/authsome/plugins/oauth2provider"
 	"github.com/xraph/authsome/plugins/waitlist"
 	authpg "github.com/xraph/authsome/store/postgres"
 	chronpg "github.com/xraph/chronicle/store/postgres"
@@ -89,10 +91,12 @@ func NativeCredentialsGroup() *migrate.Group {
 // OptionalVersions names its migrations for the schema guard, and OnDemand
 // gives the group to a restore.
 func All() []*migrate.Group {
-	return []*migrate.Group{
+	// Groups only this edition runs come last.
+	return slices.Concat([]*migrate.Group{
 		Group(),
 		authpg.Migrations,
 		waitlist.PostgresMigrations,
+		oauth2provider.PostgresMigrations,
 		wardenpg.Migrations,
 		chronpg.Migrations,
 		dispatchpg.Migrations,
@@ -108,7 +112,7 @@ func All() []*migrate.Group {
 		nexuspg.Migrations,
 		shieldpg.Migrations,
 		weavepg.Migrations,
-	}
+	}, editionGroups())
 }
 
 // optionalDimensions is any size pgvector accepts. A migration's version

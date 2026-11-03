@@ -44,6 +44,10 @@ export interface DeclineInvitationRequest {
   token: string;
 }
 
+export interface DeviceCompleteResponse {
+  status: string;
+}
+
 export interface Invitation {
   createdAt: string;
   email: string;

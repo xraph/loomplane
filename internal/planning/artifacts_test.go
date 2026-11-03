@@ -323,3 +323,91 @@ func TestArtifacts_onlyForPromotionsAndRollbacks(t *testing.T) {
 		t.Fatalf("a release consulted history %v: %+v", history.asked, result.Artifacts)
 	}
 }
+
+func TestGitBuildable_refusesSelfManaged(t *testing.T) {
+	for _, tc := range []struct {
+		provider, key, want string
+	}{
+		{"render", "gitlab.example.com/team/api", "Render builds from github.com, gitlab.com and bitbucket.org repositories only, so it can't build gitlab.example.com/team/api"},
+		{"digitalocean", "gitlab.example.com/team/api", "App Platform builds from github.com and gitlab.com repositories only, so it can't build gitlab.example.com/team/api"},
+		{"render", "gitlab.com/a/b", ""},
+		{"render", "bitbucket.org/acme/api", ""},
+		{"render", "Bitbucket.org/Acme/API", ""},
+		{"digitalocean", "bitbucket.org/acme/api", "App Platform builds from github.com and gitlab.com repositories only, so it can't build bitbucket.org/acme/api"},
+		{"render", "gitlab.com/grp/sub/api", ""},
+		{"render", "GitLab.com/a/b", ""},
+		{"render", "acme/api", ""},
+		{"render", "github.com/acme/api", ""},
+		{"digitalocean", "gitlab.com/a/b", ""},
+		{"digitalocean", "acme/api", ""},
+		{"cloud-run", "gitlab.example.com/team/api", ""},
+		{"vercel", "gitlab.example.com/team/api", ""},
+	} {
+		err := GitBuildable(tc.provider, tc.key)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s %s: %v", tc.provider, tc.key, err)
+		case tc.want != "" && (err == nil || err.Error() != tc.want):
+			t.Errorf("%s %s: %v, want %q", tc.provider, tc.key, err, tc.want)
+		}
+	}
+}
+
+func TestJoinHosts(t *testing.T) {
+	for want, hosts := range map[string][]string{
+		"github.com":                               {"github.com"},
+		"github.com and gitlab.com":                {"github.com", "gitlab.com"},
+		"github.com, gitlab.com and bitbucket.org": {"github.com", "gitlab.com", "bitbucket.org"},
+		"a, b, c and d":                            {"a", "b", "c", "d"},
+	} {
+		if got := joinHosts(hosts); got != want {
+			t.Errorf("joinHosts(%v) = %q, want %q", hosts, got, want)
+		}
+	}
+}
+
+func TestCheckGitBuilds_refusesAtPlanTime(t *testing.T) {
+	plan := &Plan{Sources: []PlanSource{{Alias: "api", Repository: "gitlab.example.com/team/api"}, {Alias: "web", Repository: "gitlab.com/team/web"}}}
+	action := func(name, provider, repo string) Action {
+		return Action{ID: "service:" + name, Op: Create, Subject: ServiceSubject, Name: name, Provider: provider,
+			Service: &ServiceConfig{Provider: provider, Repo: repo, CommitSHA: artifactCommit, Source: "."}}
+	}
+	result := &Result{Executable: true, Actions: []Action{
+		action("api", "render", "api"), action("web", "render", "web"), action("worker", "cloud-run", "api"), action("legacy", "digitalocean", "api"),
+	}}
+	checkGitBuilds(plan, result)
+	if result.Executable || len(result.Problems) != 2 {
+		t.Fatalf("executable %v, problems %+v", result.Executable, result.Problems)
+	}
+	if p := result.Problems[0]; p.Name != "api" || !strings.Contains(p.Message, "so it can't build gitlab.example.com/team/api") {
+		t.Fatalf("problem %+v", p)
+	}
+	if p := result.Problems[1]; p.Name != "legacy" || !strings.HasPrefix(p.Message, "App Platform builds from") {
+		t.Fatalf("problem %+v", p)
+	}
+}
+
+func TestCheckGitBuilds_singleSourceWithNoRepo(t *testing.T) {
+	// One source with no alias, or a service with no repo: the same match
+	// the deployment makes.
+	for _, tc := range []struct{ alias, repo string }{{"", ""}, {"", "api"}, {"api", ""}} {
+		plan := &Plan{Sources: []PlanSource{{Alias: tc.alias, Repository: "gitlab.example.com/team/api"}}}
+		result := &Result{Executable: true, Actions: []Action{{
+			ID: "service:api", Op: Create, Subject: ServiceSubject, Name: "api", Provider: "render",
+			Service: &ServiceConfig{Provider: "render", Repo: tc.repo, CommitSHA: artifactCommit, Source: "."},
+		}}}
+		checkGitBuilds(plan, result)
+		if result.Executable || len(result.Problems) != 1 {
+			t.Errorf("alias %q repo %q: executable %v, problems %+v", tc.alias, tc.repo, result.Executable, result.Problems)
+		}
+	}
+	two := &Plan{Sources: []PlanSource{{Alias: "a", Repository: "gitlab.example.com/t/a"}, {Alias: "b", Repository: "acme/b"}}}
+	result := &Result{Executable: true, Actions: []Action{{
+		ID: "service:api", Op: Create, Subject: ServiceSubject, Name: "api", Provider: "render",
+		Service: &ServiceConfig{Provider: "render", Repo: "", CommitSHA: artifactCommit, Source: "."},
+	}}}
+	checkGitBuilds(two, result)
+	if !result.Executable {
+		t.Fatalf("a service with no repo among two sources matched one: %+v", result.Problems)
+	}
+}

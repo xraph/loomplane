@@ -40,6 +40,7 @@ import (
 	federationext "github.com/xraph/loomplane/extensions/federation"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
+	nodesext "github.com/xraph/loomplane/extensions/nodes"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
@@ -152,6 +153,11 @@ func Extensions(cfg config.Config) []forge.Extension {
 		cpext.WithLeaderElection(""),
 	)
 
+	// The hub holds the node sessions this replica owns. Later extensions
+	// open streams to nodes through nodes.Hub(). The replica is named the way
+	// Dispatch names this process: host and pid.
+	nodes := nodesext.New(cfg, owner())
+
 	exts := []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
@@ -172,6 +178,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		octopusext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
+		nodes,
 	}
 	// The AI section exists only when ai.enabled is on: with it off, no AI
 	// route, hook or setting is registered at all.
@@ -188,8 +195,12 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// nothing else of the AI section.
 		exts = append(exts, aiext.NewOff(jobs.Engine))
 	}
+	// What only this edition adds, such as Loomplane Cloud's billing, comes
+	// after the sections it builds on and before the console, which depends
+	// on every extension before it.
+	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
 	exts = append(exts, console(exts))
-	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))
+	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/"))
 }
 
 // queues are the Dispatch queues this process works: the default and
@@ -200,7 +211,7 @@ func queues(cfg config.Config) []string {
 	if cfg.AI.Enabled {
 		q = append(q, aiagent.Queue)
 	}
-	return q
+	return append(q, editionQueues()...)
 }
 
 // console is the Forge dashboard's API, mounted for platform admins as the

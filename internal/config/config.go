@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/xraph/confy"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 const (
@@ -64,6 +66,8 @@ type Config struct {
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
+	Bitbucket     BitbucketConfig
+	GitLab        GitLabConfig
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
@@ -75,6 +79,7 @@ type Config struct {
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
+	Nodes         NodesConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -165,6 +170,102 @@ func (g GitHubConfig) appSettingsSet() int {
 		}
 	}
 	return n
+}
+
+// BitbucketConfig is how Loomplane reaches Bitbucket Cloud. Public
+// repositories need none of it.
+type BitbucketConfig struct {
+	// APIURL is Bitbucket Cloud's REST API: https://api.bitbucket.org/2.0.
+	APIURL string
+	// WebURL is Bitbucket itself, where repository archives are served:
+	// https://bitbucket.org.
+	WebURL string
+
+	// ClientID and ClientSecret are an OAuth consumer's key and secret,
+	// which connect an organization to its private repositories. Leave
+	// both empty to read public repositories only; set both otherwise.
+	ClientID     string
+	ClientSecret string
+}
+
+// GitLabConfig is how Loomplane reaches GitLab.
+type GitLabConfig struct {
+	// APIURL is the address Loomplane reads gitlab.com from:
+	// https://gitlab.com.
+	APIURL string
+	// ClientID and ClientSecret are gitlab.com's OAuth application. Set
+	// both to let people connect a gitlab.com account, or neither.
+	ClientID     string
+	ClientSecret string
+	// Hosts are the self-managed GitLabs this Loomplane reads for every
+	// organization. They are yours, so they may be plain http and on a
+	// private network.
+	Hosts []GitLabHostConfig
+	// AllowOrganizationHosts lets organizations register a GitLab of their
+	// own. Loomplane connects to those only at public addresses.
+	AllowOrganizationHosts bool
+	// WebhookURL is where GitLab reaches this Loomplane's webhook, when
+	// PublicURL isn't an address GitLab can reach. Empty means PublicURL's.
+	WebhookURL string
+}
+
+// GitLabHostConfig is one self-managed GitLab.
+type GitLabHostConfig struct {
+	// WebURL is the GitLab's address with no path: https://git.example.com.
+	WebURL string
+	// ClientID and ClientSecret are the OAuth application registered in
+	// that GitLab. Set both, or neither to read public projects only.
+	ClientID     string
+	ClientSecret string
+}
+
+// Configured reports whether an OAuth consumer is set up.
+func (b BitbucketConfig) Configured() bool {
+	return b.ClientID != "" && b.ClientSecret != ""
+}
+
+// Validate reports GitLab settings Loomplane can't run with.
+func (g GitLabConfig) Validate() error {
+	var errs []error
+	if u, err := url.Parse(g.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("gitlab.api_url must be an absolute URL, got %q", g.APIURL))
+	}
+	if g.WebhookURL != "" {
+		if u, err := url.Parse(g.WebhookURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("gitlab.webhook_url must be an absolute URL, got %q", g.WebhookURL))
+		}
+	}
+	if (g.ClientID == "") != (g.ClientSecret == "") {
+		missing := "gitlab.client_secret"
+		if g.ClientID == "" {
+			missing = "gitlab.client_id"
+		}
+		errs = append(errs, fmt.Errorf("%s is required when the other of gitlab.client_id and gitlab.client_secret is set", missing))
+	}
+	seen := map[string]bool{}
+	for i, h := range g.Hosts {
+		key := fmt.Sprintf("gitlab.hosts[%d]", i)
+		_, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
+		switch {
+		case err != nil || h.WebURL == "":
+			if err == nil {
+				err = errors.New("it is required")
+			}
+			errs = append(errs, fmt.Errorf("%s.web_url must be the address of a GitLab with no path, such as https://git.example.com: %w", key, err))
+		case seen[host]:
+			errs = append(errs, fmt.Errorf("%s.web_url lists %s twice", key, host))
+		default:
+			seen[host] = true
+		}
+		if (h.ClientID == "") != (h.ClientSecret == "") {
+			missing := "client_secret"
+			if h.ClientID == "" {
+				missing = "client_id"
+			}
+			errs = append(errs, fmt.Errorf("%s.%s is required when the other of client_id and client_secret is set", key, missing))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // AnalysisConfig tunes repository analysis, which loomplane-worker runs.
@@ -357,18 +458,21 @@ func Defaults() Config {
 			Concurrency:  4,
 			PollInterval: time.Second,
 		},
-		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
-		Analysis: AnalysisConfig{Concurrency: 2},
-		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
-		Drift:    DriftConfig{Interval: 30 * time.Minute},
-		Worker:   WorkerConfig{HTTPAddr: ":8781"},
+		GitHub:    GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
+		Bitbucket: BitbucketConfig{APIURL: "https://api.bitbucket.org/2.0", WebURL: "https://bitbucket.org"},
+		GitLab:    GitLabConfig{APIURL: "https://gitlab.com", AllowOrganizationHosts: true},
+		Analysis:  AnalysisConfig{Concurrency: 2},
+		Planning:  PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:     DriftConfig{Interval: 30 * time.Minute},
+		Worker:    WorkerConfig{HTTPAddr: ":8781"},
 		AI: AIConfig{
 			Provider:  AIProviderAnthropic,
 			Model:     DefaultAIModel,
 			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
 			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions, DocsBudgetUSD: DefaultDocsBudgetUSD},
 		},
-		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
 	}
 }
 
@@ -456,6 +560,16 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.GitHub.ClientID, "github.client_id")
 	r.str(&c.GitHub.ClientSecret, "github.client_secret")
 	r.str(&c.GitHub.WebhookSecret, "github.webhook_secret")
+	r.str(&c.Bitbucket.APIURL, "bitbucket.api_url")
+	r.str(&c.Bitbucket.WebURL, "bitbucket.web_url")
+	r.str(&c.Bitbucket.ClientID, "bitbucket.client_id")
+	r.str(&c.Bitbucket.ClientSecret, "bitbucket.client_secret")
+	r.str(&c.GitLab.APIURL, "gitlab.api_url")
+	r.str(&c.GitLab.ClientID, "gitlab.client_id")
+	r.str(&c.GitLab.ClientSecret, "gitlab.client_secret")
+	r.gitlabHosts(&c.GitLab.Hosts, "gitlab.hosts")
+	r.boolean(&c.GitLab.AllowOrganizationHosts, "gitlab.allow_organization_hosts")
+	r.str(&c.GitLab.WebhookURL, "gitlab.webhook_url")
 	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
@@ -527,6 +641,11 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
 	r.boolean(&c.Push.Enabled, "push.enabled")
 	r.str(&c.Push.GatewayURL, "push.gateway_url")
+	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
+	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
+	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
+	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
+	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -546,7 +665,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment))
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}
@@ -608,6 +727,15 @@ func (c *Config) Validate() error {
 	}
 	if n := c.GitHub.appSettingsSet(); n != 0 && n != 5 {
 		errs = append(errs, errors.New("a GitHub App needs all of github.app_id, app_slug, private_key (or private_key_file), client_id and client_secret"))
+	}
+	if u, err := url.Parse(c.Bitbucket.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.api_url must be an absolute URL, got %q", c.Bitbucket.APIURL))
+	}
+	if u, err := url.Parse(c.Bitbucket.WebURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.web_url must be an absolute URL, got %q", c.Bitbucket.WebURL))
+	}
+	if (c.Bitbucket.ClientID == "") != (c.Bitbucket.ClientSecret == "") {
+		errs = append(errs, errors.New("a Bitbucket OAuth consumer needs both bitbucket.client_id and client_secret"))
 	}
 	if c.Analysis.Concurrency < 1 {
 		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))
@@ -687,6 +815,33 @@ func (r *reader) plugins(dst *[]PluginConfig, key string) {
 			return ""
 		}
 		*dst = append(*dst, PluginConfig{URL: get("url"), Token: get("token")})
+	}
+}
+
+// gitlabHosts reads a list of {web_url, client_id, client_secret}.
+func (r *reader) gitlabHosts(dst *[]GitLabHostConfig, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {web_url, client_id, client_secret}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{web_url, client_id, client_secret}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, GitLabHostConfig{WebURL: get("web_url"), ClientID: get("client_id"), ClientSecret: get("client_secret")})
 	}
 }
 

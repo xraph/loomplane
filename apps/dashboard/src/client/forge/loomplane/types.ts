@@ -82,6 +82,12 @@ export interface ActivitySummary {
   since: string;
 }
 
+export interface AddGitLabHostInputBody {
+  clientId: string;
+  clientSecret: string;
+  webUrl: string;
+}
+
 export interface AddSourceInputBody {
   alias?: string;
   ref?: string;
@@ -265,6 +271,10 @@ export interface AttachmentPrerequisites {
   storageClass?: string;
 }
 
+export interface AuthorizeBitbucketInputBody {
+  workspace: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -330,6 +340,39 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface BitbucketAuthorization {
+  url: string;
+}
+
+export interface BitbucketConnectInputBody {
+  code: string;
+  state: string;
+}
+
+export interface BitbucketRepositoryList {
+  problems: string[];
+  repositories: ConnectedBitbucketRepository[];
+}
+
+export interface BitbucketStatus {
+  canConnect: boolean;
+  configured: boolean;
+  problems: string[];
+  workspaces: BitbucketWorkspaceView[];
+}
+
+export interface BitbucketWorkspaceView {
+  avatarUrl: string;
+  connectedBy: string;
+  createdAt: string;
+  id: string;
+  manageUrl: string;
+  message: string;
+  name: string;
+  status: string;
+  workspace: string;
 }
 
 export interface Board {
@@ -1390,10 +1433,28 @@ export interface CompositionConfig {
   version: string;
 }
 
+export interface CompromisedRevoke {
+  joinedNodes: Node[];
+  joinedNodesWithheld: boolean;
+  revoked: APIKey;
+}
+
 export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
   state: string;
+}
+
+export interface ConnectGitLabInputBody {
+  code: string;
+  state: string;
+}
+
+export interface ConnectedBitbucketRepository {
+  defaultBranch: string;
+  fullName: string;
+  private: boolean;
+  workspace: string;
 }
 
 export interface ConnectedRepository {
@@ -1789,6 +1850,7 @@ export interface DiscoverySource {
   id: string;
   orgId: string;
   projectId: string;
+  push?: PushState;
   ref: string;
   removedAt?: string;
   repository: string;
@@ -1995,6 +2057,10 @@ export interface Embeddings {
   mode: string;
   model: string;
   provider?: string;
+}
+
+export interface EnableBitbucketWebhookInputBody {
+  repository: string;
 }
 
 export interface EndpointList {
@@ -2449,6 +2515,61 @@ export interface GitHubStatus {
   installations: GitHubInstallation[];
 }
 
+export interface GitLabConnectionView {
+  avatarUrl: string;
+  createdAt: string;
+  host: string;
+  id: string;
+  lapsed: boolean;
+  username: string;
+  version: string;
+  versionSupported: boolean;
+  webhookSet: boolean;
+  webhookUrl: string;
+}
+
+export interface GitLabHostView {
+  clientId: string;
+  createdAt?: string;
+  host: string;
+  id: string;
+  instance: boolean;
+  webUrl: string;
+}
+
+export interface GitLabRepository {
+  connection: string;
+  defaultBranch: string;
+  fullName: string;
+  host: string;
+  key: string;
+  name: string;
+  namespace: string;
+  private: boolean;
+}
+
+export interface GitLabRepositoryList {
+  repositories: GitLabRepository[];
+}
+
+export interface GitLabSignInStart {
+  authorizeUrl: string;
+}
+
+export interface GitLabStatus {
+  callbackUrl: string;
+  canConnect: boolean;
+  connections: GitLabConnectionView[];
+  hosts: GitLabHostView[];
+  organizationHosts: boolean;
+}
+
+export interface GitLabWebhookSecret {
+  secretToken: string;
+  signingToken: string;
+  url: string;
+}
+
 export interface Graph {
   buildSystems: BuildSystem[];
   edges: Edge[];
@@ -2543,6 +2664,7 @@ export interface HuggingFaceTokenInputBody {
 export interface IdentitySession {
   orgId: string;
   permissions: string[];
+  sessionId?: string;
   userId: string;
 }
 
@@ -2598,6 +2720,41 @@ export interface InstanceStatus {
   reporting: boolean;
   routes: InstanceRouteStats[];
   snapshotVersion: number;
+}
+
+export interface Inventory {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+}
+
+export interface JoinToken {
+  command: string;
+  expiresAt: string;
+  token: string;
+}
+
+export interface JoinTokenList {
+  tokens: PendingNodeJoinToken[];
+}
+
+export interface JoinTokenRequestBody {
+  cloudId?: string;
+  edge?: boolean;
+  edgeScope?: string;
+  endpoints?: string[];
+  labels?: Record<string, any>;
+  lifetimeMinutes?: number;
 }
 
 export interface KeyView {
@@ -3150,6 +3307,68 @@ export interface NewKeyBody {
   name: string;
 }
 
+export interface Node {
+  createdAt: string;
+  edgeScope: string;
+  endpoints: string[];
+  id: string;
+  identityGeneration: number;
+  ingressMode: string;
+  inventory: Inventory;
+  joinedBy: string;
+  joinedByKeyId: string;
+  keyFingerprint: string;
+  labels: Record<string, any>;
+  lastSeenAt?: string;
+  name: string;
+  orgId: string;
+  protocolVersion: number;
+  revokedAt?: string;
+  revokedBy: string;
+  role: string;
+  status: string;
+  updatedAt: string;
+  version: string;
+}
+
+export interface NodeJoinBody {
+  endpoints?: string[];
+  inventory: {
+  arch: string;
+  cpus: number;
+  diskGib: number;
+  docker?: Runtime;
+  endpoints?: string[];
+  gpus?: NodeprotoGPU[];
+  hostname?: string;
+  kernel: string;
+  memoryMib: number;
+  os: string;
+  podman?: Runtime;
+  ports80443?: string;
+  publicAddresses?: string[];
+};
+  labels?: Record<string, any>;
+  name?: string;
+  nodeVersion: string;
+  protocolVersion: number;
+  publicKey: string;
+  signature: string;
+  token: string;
+}
+
+export interface NodeJoined {
+  cloudId?: string;
+  endpoints: string[];
+  identityGeneration: number;
+  nodeId: string;
+  orgId: string;
+}
+
+export interface NodeList {
+  nodes: Node[];
+}
+
 export interface NodePoolSpec {
   autoscale: boolean;
   count: number;
@@ -3167,6 +3386,19 @@ export interface NodePoolTaint {
   effect: string;
   key: string;
   value: string;
+}
+
+export interface NodeUpdateBody {
+  endpoints?: string[];
+  ingressMode?: string;
+  labels?: Record<string, any>;
+  name?: string;
+}
+
+export interface NodeprotoGPU {
+  memoryMib: number;
+  model: string;
+  vendor: string;
 }
 
 export interface Note {
@@ -3351,6 +3583,20 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PendingNodeJoinToken {
+  cloudId?: string;
+  createdAt: string;
+  edge: boolean;
+  edgeScope?: string;
+  endpoints: string[];
+  expiresAt: string;
+  hint: string;
+  id: string;
+  labels?: Record<string, any>;
+  mintedBy: string;
+  mintedByKeyId?: string;
 }
 
 export interface PinStatus {
@@ -3846,8 +4092,10 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  cloudSignInOffer?: boolean;
   consolePath?: string;
   features: Features;
+  platformAdmin?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;
@@ -3871,6 +4119,11 @@ export interface PushDevice {
   quietHours?: QuietHours;
   settings: Record<string, any>;
   timeZone: string;
+}
+
+export interface PushState {
+  on: boolean;
+  reason?: string;
 }
 
 export interface QuantizationView {
@@ -4630,6 +4883,11 @@ export interface Runs {
   workload: string;
 }
 
+export interface Runtime {
+  socket: string;
+  version: string;
+}
+
 export interface RuntimeAccessProfile {
   cleanupDependents: boolean;
   hpa: boolean;
@@ -4976,6 +5234,10 @@ export interface SetDefaultPlacementInputBody {
   revision: number;
 }
 
+export interface SetGitLabWebhookInputBody {
+  signingToken?: string;
+}
+
 export interface SetGrantInputBody {
   projectId?: string;
   role: string;
@@ -5030,6 +5292,8 @@ export interface SignIn {
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  connections: number;
+  organizations: number;
   problem?: string;
   slug?: string;
   source: string;
@@ -5151,6 +5415,10 @@ export interface SpendReport {
 export interface StartAnalysisInputBody {
   ref?: string;
   sources?: string[];
+}
+
+export interface StartGitLabSignInInputBody {
+  hostId: string;
 }
 
 export interface StartInputBody {

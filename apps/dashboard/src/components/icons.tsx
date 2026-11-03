@@ -8,6 +8,7 @@ export {
   DatabaseIcon as ServicesIcon,
   CloudIcon as CloudsIcon,
   HardDrivesIcon as InfrastructureIcon,
+  DesktopTowerIcon as NodesIcon,
   PulseIcon as ActivityIcon,
   BellSimpleIcon as NotificationsIcon,
   UsersIcon as MembersIcon,
@@ -29,4 +30,8 @@ export {
   WebhooksLogoIcon as WebhooksIcon,
   BrainIcon as ModelsIcon,
   SparkleIcon as AssistantIcon,
+  GearSixIcon as SettingsIcon,
+  UsersThreeIcon as TeamsIcon,
+  SparkleIcon as AISettingsIcon,
+  SignInIcon as CloudSignInIcon,
 } from "@phosphor-icons/react"

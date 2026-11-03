@@ -10,7 +10,7 @@ import { useCallback, useEffect } from "react"
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
-import { AuthRedirect } from "@/components/auth-redirect"
+import { AuthRedirect, FreshLoad } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
 import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
@@ -22,12 +22,21 @@ import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
 import { AuthPage } from "@/pages/auth"
+import { CloudSignInStep } from "@/pages/cloud-sign-in-step"
 import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
+const stepPath = "/setup/cloud-sign-in"
 const authPaths = ["/sign-in", "/sign-up"]
+// Full-load callbacks that carry a code or state in their query. The step
+// must not take them over; it shows on the next ordinary navigation.
+const callbackPaths = [
+  "/integrations/oauth/callback",
+  "/integrations/github/setup",
+  "/device",
+]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
 // Every signed-out screen shares one AuthLayout, returned from the same place
@@ -53,7 +62,12 @@ export function App() {
   const path = usePath()
 
   const invite = usePendingInvite()
-  const { setupPending, requireEmailVerification } = useInstance()
+  const {
+    setupPending,
+    requireEmailVerification,
+    platformAdmin,
+    cloudSignInOffer,
+  } = useInstance()
 
   if (isLoading) return <PageLoading />
   // A fresh instance has nobody to sign in as: every address leads to setup,
@@ -72,8 +86,10 @@ export function App() {
   }
   // A signed-in account whose email is already verified has no code to
   // enter, so the verify page would only ask for one that doesn't exist.
+  // A full load: the public config was read before this account verified,
+  // so it can't yet say whether to offer cloud sign-in.
   if (path === "/verify-email" && isAuthenticated && user?.email_verified) {
-    return <Navigate to="/" replace />
+    return <FreshLoad to="/" />
   }
   if (recoveryPaths.includes(path)) {
     return (
@@ -109,10 +125,30 @@ export function App() {
       </AuthLayout>
     )
   }
+  // A new instance's first platform admin is offered cloud sign-in apps once,
+  // on a page of its own, before anything else.
+  if (
+    platformAdmin &&
+    cloudSignInOffer &&
+    path !== stepPath &&
+    !callbackPaths.includes(path)
+  ) {
+    return <Navigate to={stepPath} replace />
+  }
+  if (path === stepPath) {
+    if (!platformAdmin) return <Navigate to="/" replace />
+    return (
+      <AuthLayout title="Set up cloud sign-in">
+        <CloudSignInStep />
+      </AuthLayout>
+    )
+  }
   if (authPaths.includes(path)) return <AuthRedirect authenticated />
   // The invitation has a page of its own, outside any workspace. Wherever
   // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  // So has approving a loomctl sign-in, which isn't tied to a workspace.
+  if (path === "/device") return <Outlet />
   if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }

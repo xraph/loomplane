@@ -1,9 +1,10 @@
 // Package ctl is loomctl, Loomplane's command-line client. It calls the API
-// with an API key through pkg/client, so anything it does, a script can do
-// the same way.
+// through pkg/client, so anything it does, a script can do the same way.
 //
 // It finds the server and key in LOOMPLANE_URL and LOOMPLANE_API_KEY, which
 // suit CI, or in the file `loomctl login` writes, readable by you only.
+// That file holds an API key, or the token of signing in as yourself in the
+// browser, which loomctl renews as it runs out.
 package ctl
 
 import (
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -33,7 +35,12 @@ const (
 // Settings are where loomctl finds Loomplane.
 type Settings struct {
 	URL string `json:"url"`
+	// Key is an API key, or a sign-in's access token.
 	Key string `json:"key"`
+	// RefreshToken and ExpiresAt are a sign-in's. loomctl renews Key with
+	// them shortly before it expires.
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitzero"`
 }
 
 // Options configure a loomctl. Tests replace all of them.
@@ -56,6 +63,13 @@ type Options struct {
 	// Recipes describes the catalog kinds. Nil means the registry the
 	// server binary registers its kinds in.
 	Recipes *recipes.Registry
+	// OpenBrowser opens the sign-in page. Nil means the system's browser.
+	OpenBrowser func(url string) error
+
+	// euid and lookupUser stand in for os.Geteuid and user.Lookup in tests
+	// of the sudo login.
+	euid       func() int
+	lookupUser func(name string) (*user.User, error)
 }
 
 // ExitError is a run that ended with a status other than 0 and nothing more
@@ -97,6 +111,15 @@ func New(opts Options) *App {
 	if opts.Recipes == nil {
 		opts.Recipes = recipes.Default()
 	}
+	if opts.OpenBrowser == nil {
+		opts.OpenBrowser = openBrowser
+	}
+	if opts.euid == nil {
+		opts.euid = os.Geteuid
+	}
+	if opts.lookupUser == nil {
+		opts.lookupUser = user.Lookup
+	}
 	if opts.ConfigPath == "" {
 		dir, err := os.UserConfigDir()
 		if err != nil {
@@ -123,15 +146,24 @@ func (a *App) Run(args []string) error {
 	return c.Run(append([]string{"loomctl"}, args...))
 }
 
-// settings reads where to find Loomplane: the environment, then the saved
-// login.
-func (a *App) settings() (Settings, error) {
+// saved reads the saved login alone.
+func (a *App) saved() (Settings, error) {
 	var s Settings
 	if data, err := os.ReadFile(a.opts.ConfigPath); err == nil {
 		if jerr := json.Unmarshal(data, &s); jerr != nil {
 			return s, fmt.Errorf("read %s: %w", a.opts.ConfigPath, jerr)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return s, err
+	}
+	return s, nil
+}
+
+// settings reads where to find Loomplane: the environment, then the saved
+// login.
+func (a *App) settings() (Settings, error) {
+	s, err := a.saved()
+	if err != nil {
 		return s, err
 	}
 	if v := a.opts.Getenv(EnvURL); v != "" {
@@ -147,7 +179,7 @@ func (a *App) save(s Settings) error {
 	if err := os.MkdirAll(filepath.Dir(a.opts.ConfigPath), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := json.MarshalIndent(s, "", "  ") // #nosec G117 -- the login file is the credential, written for you only.
 	if err != nil {
 		return err
 	}
@@ -163,6 +195,9 @@ func (a *App) client() (*client.Client, error) {
 	}
 	if s.URL == "" || s.Key == "" {
 		return nil, fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
+	}
+	if err := a.renew(&s); err != nil {
+		return nil, err
 	}
 	return client.New(s.URL, s.Key), nil
 }

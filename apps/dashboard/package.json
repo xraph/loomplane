@@ -15,6 +15,7 @@
     "gen:specs": "curl -fsS ${LOOMPLANE_API_URL:-http://localhost:8780}/openapi.json | node scripts/loomplane-spec.mjs && curl -fsS ${LOOMPLANE_API_URL:-http://localhost:8780}/asyncapi.json | node scripts/loomplane-stream-spec.mjs && node scripts/authsome-spec.mjs",
     "gen:client": "forge client generate",
     "check:client": "forge client check",
+    "check:oss-bundle": "node scripts/check-oss-bundle.mjs dist",
     "routes:generate": "tsr generate"
   },
   "dependencies": {

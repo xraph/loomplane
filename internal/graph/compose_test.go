@@ -270,3 +270,86 @@ func TestCompose_rootRecomputesWhatItsResourcesRestOn(t *testing.T) {
 		t.Fatalf("rooted changed its input: %+v", g.Resources[0])
 	}
 }
+
+func TestComposeLinks_gitLabGoModule(t *testing.T) {
+	app := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Name: "gitlab.com/acme/app", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "app", Path: "cmd/app"}},
+		Requires:    []pd.Requirement{{Name: "gitlab.com/grp/sub/api/pkg", Version: "v1.0.0", Evidence: pd.Evidence{Path: "go.mod", Line: 5}}},
+	}}})
+	g := Compose([]Part{{Source: ref("app", "acme/app"), Graph: app}, {Source: ref("lib", "gitlab.com/grp/sub/api"), Graph: kitGraph("gitlab.com/grp/sub/api/pkg")}})
+	e := edgeBetween(g, "svc:app:go:cmd/app", "pkg:lib:go:.")
+	if e == nil || e.Kind != Uses || e.Confidence != pd.Certain {
+		t.Fatalf("edge %+v in %+v", e, g.Edges)
+	}
+}
+
+func TestStructural_gitLabKeys(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		req  pd.Requirement
+		eco  pd.Ecosystem
+		repo string
+		want bool
+	}{
+		{"go module of the project", pd.Requirement{Name: "gitlab.com/grp/sub/api/pkg"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module that is the project", pd.Requirement{Name: "gitlab.com/grp/sub/api"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module compares without case", pd.Requirement{Name: "GitLab.com/Grp/Sub/API/v2"}, pd.Go, "gitlab.com/grp/sub/api", true},
+		{"go module of a longer name", pd.Requirement{Name: "gitlab.com/grp/sub/apiary"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go module of the parent group", pd.Requirement{Name: "gitlab.com/grp/sub"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go module on another host", pd.Requirement{Name: "gitlab.example.com/grp/sub/api"}, pd.Go, "gitlab.com/grp/sub/api", false},
+		{"go github path does not match a gitlab key", pd.Requirement{Name: "github.com/grp/api"}, pd.Go, "gitlab.com/grp/api", false},
+		{"go self-managed host", pd.Requirement{Name: "git.corp.example/grp/api/x"}, pd.Go, "git.corp.example/grp/api", true},
+		{"rust https url", pd.Requirement{Git: "https://gitlab.com/grp/sub/api.git"}, pd.Rust, "gitlab.com/grp/sub/api", true},
+		{"rust ssh url", pd.Requirement{Git: "git@gitlab.com:grp/sub/api.git"}, pd.Rust, "gitlab.com/grp/sub/api", true},
+		{"rust other project", pd.Requirement{Git: "https://gitlab.com/grp/sub/other"}, pd.Rust, "gitlab.com/grp/sub/api", false},
+		{"rust other host", pd.Requirement{Git: "https://github.com/grp/sub/api"}, pd.Rust, "gitlab.com/grp/sub/api", false},
+	} {
+		if got := structural(tt.req, tt.eco, tt.repo); got != tt.want {
+			t.Errorf("%s: structural = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestStructural_bitbucketKeys(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		req  pd.Requirement
+		eco  pd.Ecosystem
+		repo string
+		want bool
+	}{
+		{"go module of the repository", pd.Requirement{Name: "bitbucket.org/acme/lib/sub"}, pd.Go, "bitbucket.org/acme/lib", true},
+		{"go module that is the repository", pd.Requirement{Name: "bitbucket.org/acme/lib"}, pd.Go, "bitbucket.org/acme/lib", true},
+		{"go module compares without case", pd.Requirement{Name: "Bitbucket.org/Acme/Lib/v2"}, pd.Go, "bitbucket.org/acme/lib", true},
+		{"go module of a longer name", pd.Requirement{Name: "bitbucket.org/acme/library"}, pd.Go, "bitbucket.org/acme/lib", false},
+		{"go github path does not match a bitbucket key", pd.Requirement{Name: "github.com/acme/lib"}, pd.Go, "bitbucket.org/acme/lib", false},
+		{"rust https url", pd.Requirement{Git: "https://bitbucket.org/acme/lib.git"}, pd.Rust, "bitbucket.org/acme/lib", true},
+		{"rust ssh url", pd.Requirement{Git: "git@bitbucket.org:acme/lib.git"}, pd.Rust, "bitbucket.org/acme/lib", true},
+		{"rust other repository", pd.Requirement{Git: "https://bitbucket.org/acme/library"}, pd.Rust, "bitbucket.org/acme/lib", false},
+	} {
+		if got := structural(tt.req, tt.eco, tt.repo); got != tt.want {
+			t.Errorf("%s: structural = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestComposeLinks_bitbucketGoModule(t *testing.T) {
+	app := Build(&pd.Report{Units: []pd.Unit{{
+		ID: "go:.", Ecosystem: pd.Go, Name: "github.com/acme/app", Path: ".",
+		Entrypoints: []pd.Entrypoint{{Name: "app", Path: "cmd/app"}},
+		Requires:    []pd.Requirement{{Name: "bitbucket.org/acme/lib/sub", Version: "v1.0.0", Evidence: pd.Evidence{Path: "go.mod", Line: 5}}},
+	}}})
+	link := func(libKey string) *Edge {
+		g := Compose([]Part{{Source: ref("app", "acme/app"), Graph: app}, {Source: ref("lib", libKey), Graph: kitGraph("bitbucket.org/acme/lib/sub")}})
+		return edgeBetween(g, "svc:app:go:cmd/app", "pkg:lib:go:.")
+	}
+	if e := link("bitbucket.org/acme/lib"); e == nil || e.Kind != Uses || e.Confidence != pd.Certain {
+		t.Fatalf("no certain edge to bitbucket.org/acme/lib: %+v", e)
+	}
+	// The package here is named for the module, so the name still gives a
+	// guess. Only the repository itself makes it certain.
+	if e := link("bitbucket.org/acme/library"); e != nil && e.Confidence == pd.Certain {
+		t.Fatalf("a module of acme/lib is certain to be in acme/library: %+v", e)
+	}
+}

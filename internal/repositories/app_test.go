@@ -299,6 +299,7 @@ func TestConnections_connect(t *testing.T) {
 		"someone else's installation": {InstallationID: someoneElse, Code: goodCode, State: state(admin)},
 		"state for another person":    {InstallationID: installed, Code: goodCode, State: state(dev)},
 		"no state":                    {InstallationID: installed, Code: goodCode},
+		"a Bitbucket state":           {InstallationID: installed, Code: goodCode, State: bitbucketState(t, f.key, admin)},
 	}
 	for name, in := range refusals {
 		t.Run(name, func(t *testing.T) {
@@ -356,10 +357,10 @@ func TestConnections_tokensOnlyFromTheOrganizationsOwnInstallations(t *testing.T
 		repo      Repository
 		want      string
 	}{
-		{"owner matches, any case", "aorg_a", Repository{"acme", "mono"}, repoToken},
-		{"the installation can't see the repository", "aorg_a", Repository{"acme", "secret"}, ""},
-		{"another owner", "aorg_a", Repository{"globex", "mono"}, ""},
-		{"another organization", "aorg_b", Repository{"acme", "mono"}, ""},
+		{"owner matches, any case", "aorg_a", Repository{Owner: "acme", Name: "mono"}, repoToken},
+		{"the installation can't see the repository", "aorg_a", Repository{Owner: "acme", Name: "secret"}, ""},
+		{"another owner", "aorg_a", Repository{Owner: "globex", Name: "mono"}, ""},
+		{"another organization", "aorg_b", Repository{Owner: "acme", Name: "mono"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -382,7 +383,7 @@ func TestConnections_withoutAnApp(t *testing.T) {
 	if _, err := f.conns.Connect(ctx, admin, ConnectGitHubInput{InstallationID: installed}); !errors.Is(err, ErrAppNotConfigured) {
 		t.Fatalf("connect: %v", err)
 	}
-	if tok, err := f.conns.Token(ctx, "aorg_a", Repository{"acme", "mono"}); err != nil || tok != "" {
+	if tok, err := f.conns.Token(ctx, "aorg_a", Repository{Owner: "acme", Name: "mono"}); err != nil || tok != "" {
 		t.Fatalf("token %q, %v", tok, err)
 	}
 }
@@ -399,4 +400,15 @@ func TestAccountURLs(t *testing.T) {
 	if avatar != "https://github.com/rex.png" || manage != "https://github.com/settings/installations/8" {
 		t.Fatalf("a person's: %q, %q", avatar, manage)
 	}
+}
+
+// bitbucketState is a Bitbucket connect state for p, signed with GitHub's
+// key, which GitHub's flow must still refuse.
+func bitbucketState(t *testing.T, key []byte, p security.Principal) string {
+	t.Helper()
+	s, err := SignWorkspaceState(key, p.OrgID, p.UserID, "acme", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

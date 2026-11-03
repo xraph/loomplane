@@ -1,21 +1,92 @@
 package ctl
 
 import (
-	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/xraph/forge/cli"
 
+	"github.com/xraph/loomplane/internal/node"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
 var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 
+// commands are loomctl's commands: its own, then the node group it shares
+// with loomplane.
 func (a *App) commands() []cli.Command {
+	return append(a.ownCommands(), node.Commands(node.Options{
+		Version: a.opts.Version, Out: a.opts.Out, Getenv: a.opts.Getenv, Login: a.nodeLogin,
+	})...)
+}
+
+// nodeLogin is the login node join, list and revoke act with: the saved one,
+// or the environment's. Under sudo, root usually has no login of its own
+// and sudo drops LOOMPLANE_*, so when root has nothing it reads the login of
+// the user who ran sudo (SUDO_USER), after checking that the file is theirs
+// and that nobody else can write it.
+func (a *App) nodeLogin() (url, key string, err error) {
+	s, err := a.settings()
+	if err != nil {
+		return "", "", err
+	}
+	if s.URL == "" && s.Key == "" {
+		su, serr := a.sudoSettings()
+		if serr != nil {
+			return "", "", serr
+		}
+		// Renewing the user's sign-in as root would spend their refresh
+		// token on a file root can't save back to theirs.
+		if su.RefreshToken != "" && time.Until(su.ExpiresAt) <= renewBefore {
+			return "", "", fmt.Errorf("%s's sign-in has expired: run `loomctl login` as %[1]s, then try again", a.opts.Getenv("SUDO_USER"))
+		}
+		s = su
+	} else if err := a.renew(&s); err != nil {
+		return "", "", err
+	}
+	if s.URL == "" || s.Key == "" {
+		return "", "", fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
+	}
+	return s.URL, s.Key, nil
+}
+
+// sudoSettings is the saved login of the user who ran sudo, when root runs
+// loomctl through sudo. It returns empty Settings when that doesn't apply or
+// the user has no login, and an error when the file is there but can't be
+// trusted.
+func (a *App) sudoSettings() (Settings, error) {
+	name := a.opts.Getenv("SUDO_USER")
+	if a.opts.euid() != 0 || name == "" || name == "root" {
+		return Settings{}, nil
+	}
+	u, err := a.opts.lookupUser(name)
+	if err != nil {
+		return Settings{}, fmt.Errorf("finding %s, who ran sudo: %w", name, err)
+	}
+	if sudoUID := a.opts.Getenv("SUDO_UID"); sudoUID != "" && sudoUID != u.Uid {
+		return Settings{}, fmt.Errorf("SUDO_UID %s is not the uid of %s (%s), so their login isn't used", sudoUID, name, u.Uid)
+	}
+	path := filepath.Join(u.HomeDir, userConfigDir, "loomplane", "loomctl.json")
+	data, err := readOwnedBy(path, u.Uid)
+	if errors.Is(err, os.ErrNotExist) {
+		return Settings{}, nil
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("not using %s's login: %w", name, err)
+	}
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Settings{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return s, nil
+}
+
+func (a *App) ownCommands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
 		a.agentCommand(),
@@ -36,13 +107,9 @@ func (a *App) commands() []cli.Command {
 		a.servicesCommand(),
 		a.storageCommand(),
 		a.teamsCommand(),
-		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
-			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
-			cli.WithFlags(
-				cli.NewStringFlag("url", "", "Loomplane's address", ""),
-				cli.NewStringFlag("key", "", "An API key from Settings, API keys; - reads it from standard input", ""),
-			)),
-		cli.NewCommand("logout", "Forget the saved key", a.logout),
+		a.loginCommand(),
+		cli.NewCommand("logout", "Forget the saved login, and end a sign-in's session", a.logout),
+		a.organizationsCommand(),
 		cli.NewCommand("whoami", "Who the key acts as, and what it may do", a.whoami, cli.WithFlag(jsonFlag)),
 		cli.NewCommand("projects", "List the organization's projects", a.projects,
 			cli.WithFlag(jsonFlag),
@@ -117,47 +184,6 @@ func (a *App) commands() []cli.Command {
 					cli.NewStringFlag("service", "s", "One service's graph ID; every service if empty", ""),
 					cli.NewBoolFlag("secret", "", "Keep it secret: write-only, and in the cloud's secret store", false))))),
 	}
-}
-
-func (a *App) login(ctx cli.CommandContext) error {
-	s, err := a.settings()
-	if err != nil {
-		return err
-	}
-	if v := ctx.String("url"); v != "" {
-		s.URL = strings.TrimRight(v, "/")
-	}
-	key := ctx.String("key")
-	if key == "-" {
-		line, rerr := bufio.NewReader(a.opts.In).ReadString('\n')
-		if rerr != nil && line == "" {
-			return fmt.Errorf("read the key: %w", rerr)
-		}
-		key = line
-	}
-	if key = strings.TrimSpace(key); key != "" {
-		s.Key = key
-	}
-	if s.URL == "" || s.Key == "" {
-		return errors.New("give both --url and --key; make a key under Settings, API keys")
-	}
-	who, err := client.New(s.URL, s.Key).Session(ctxOf(ctx))
-	if err != nil {
-		return fmt.Errorf("that key doesn't work at %s: %w", s.URL, err)
-	}
-	if err := a.save(s); err != nil {
-		return err
-	}
-	a.printf("Logged in to %s, in organization %s.\n", s.URL, who.OrgID)
-	return nil
-}
-
-func (a *App) logout(cli.CommandContext) error {
-	if err := os.Remove(a.opts.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	a.printf("Logged out. The key still works until you revoke it under Settings, API keys.\n")
-	return nil
 }
 
 func (a *App) whoami(ctx cli.CommandContext) error {

@@ -43,13 +43,23 @@ const Name = "loomplane-discovery"
 // repository through.
 var _ projects.Attacher = (*discovery.Service)(nil)
 
-// Extension serves the analysis API and the GitHub connection.
+// Deleting a project, or rolling a new one back, tells the service too.
+var _ projects.Reaper = (*discovery.Service)(nil)
+
+// Extension serves the analysis API and the GitHub, Bitbucket and GitLab
+// connections.
 type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
 	engineOf func() *engine.Engine
 	svc      *discovery.Service
 	github   *repositories.Connections
+	// bitbucket is the Bitbucket workspaces, which read public repositories
+	// even where no OAuth consumer is configured.
+	bitbucket *repositories.BitbucketConnections
+	// bitbucketHooks keeps the push webhooks on Bitbucket repositories.
+	bitbucketHooks *discovery.BitbucketWebhooks
+	gitlab         *repositories.GitLabConnections
 }
 
 // New returns the API extension. engineOf returns the dispatch
@@ -100,7 +110,29 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
-	e.svc.SetAccess(discovery.GitHubAccess{Tokens: e.github, Fetcher: repositories.NewGitHub(e.cfg.GitHub.APIURL)})
+	if e.bitbucket, err = bitbucketConnections(e.cfg, db, authz,
+		bitbucketAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+		return err
+	}
+	var registry *repositories.GitLabRegistry
+	e.gitlab, registry, err = gitlabConnections(e.cfg, db, pg, authz, gitlabAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	if err != nil {
+		return err
+	}
+	// A source may be on any GitLab the organization can use.
+	e.svc.SetHosts(repositories.Hosts{Registry: registry})
+	e.svc.SetAccess(discovery.Access{
+		Tokens:  SourceTokens(e.github, e.bitbucket, e.gitlab),
+		Fetcher: SourceReaders(e.cfg, registry),
+	})
+	if e.bitbucketHooks, err = bitbucketWebhooks(e.cfg, pg, e.bitbucket, authz, e.svc,
+		bitbucketHookAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+		return err
+	}
+	e.svc.SetSourceHooks(e.bitbucketHooks.SourceHooks())
+	// A disconnect removes the workspace's webhooks before its row and
+	// sign-in go.
+	e.bitbucket.SetOnDisconnect(e.bitbucketHooks.ReleaseAll)
 	// A new project's repository is attached as its first source, which
 	// only discovery knows how to do.
 	projectSvc, err := forge.InjectType[*projects.Service](c)
@@ -108,9 +140,21 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("discovery needs the projects extension: %w", err)
 	}
 	projectSvc.SetAttacher(e.svc)
+	// Deleting a project takes its sources in the cascade, so discovery
+	// reads them first and releases their webhooks after.
+	projectSvc.AddReaper(e.svc)
 	// Deployments mint repository tokens with the same connections.
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)
+	}
+	if err := forge.ProvideValue(c, e.bitbucket); err != nil {
+		return fmt.Errorf("provide the Bitbucket connections: %w", err)
+	}
+	if err := forge.ProvideValue(c, e.gitlab); err != nil {
+		return fmt.Errorf("provide the GitLab connections: %w", err)
+	}
+	if err := forge.ProvideValue(c, registry); err != nil {
+		return fmt.Errorf("provide the GitLab hosts: %w", err)
 	}
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the discovery service: %w", err)
@@ -121,11 +165,27 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.githubRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
-	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
+	if err := e.bitbucketRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.bitbucketWebhookRoute(fapp.Router(), e.bitbucketHooks); err != nil {
+		return err
+	}
+	if err := e.gitlabRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.webhookRoute(fapp.Router(), &discovery.Webhooks{
 		Secret:        []byte(e.cfg.GitHub.WebhookSecret),
 		Installations: repositories.NewPgStore(pg).InstallationOrgs,
 		Sources:       discovery.NewPgStore(pg).SourcesByRepository,
 		Start:         e.svc.StartFromPush,
+	}); err != nil {
+		return err
+	}
+	return e.gitlabWebhookRoute(fapp.Router(), &discovery.GitLabWebhooks{
+		Target:  e.gitlab.WebhookTarget,
+		Sources: discovery.NewPgStore(pg).SourcesByRepository,
+		Start:   e.svc.StartFromGitLabPush,
 	})
 }
 
@@ -187,12 +247,27 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, repositories.ErrBadState):
+	case errors.Is(err, repositories.ErrBadState), errors.Is(err, repositories.ErrBadWorkspace), errors.Is(err, repositories.ErrGitLabBadState):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
-	case errors.Is(err, repositories.ErrNotYourInstallation):
-		return forge.NewHTTPError(http.StatusForbidden, err.Error())
-	case errors.Is(err, repositories.ErrAppNotConfigured):
+	case errors.Is(err, repositories.ErrGitLabHostExists), errors.Is(err, repositories.ErrGitLabHostInUse), errors.Is(err, repositories.ErrGitLabSignInLapsed):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrGitLabHostsOff):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
+	case errors.Is(err, repositories.ErrGitLabSubpath), errors.Is(err, repositories.ErrGitLabInsecure),
+		errors.Is(err, repositories.ErrGitLabHostIncomplete), errors.Is(err, repositories.ErrGitLabSigningToken), errors.Is(err, repositories.ErrPrivateAddress):
+		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrGitLabConnectionNotFound), errors.Is(err, repositories.ErrGitLabHostNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, repositories.ErrNotYourInstallation), errors.Is(err, repositories.ErrNotAMember):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
+	case errors.Is(err, repositories.ErrWorkspaceNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, repositories.ErrAppNotConfigured), errors.Is(err, repositories.ErrBitbucketNotConfigured), errors.Is(err, repositories.ErrBitbucketRefused):
+		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrBitbucketConsumerRejected):
+		// Like a consumer that isn't set up at all, it's the operator's
+		// configuration that's wrong, and nothing the caller can retry.
+		return forge.NewHTTPError(http.StatusConflict, repositories.ErrBitbucketConsumerRejected.Error())
 	case errors.Is(err, repositories.ErrRateLimited):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
 	}
@@ -258,8 +333,18 @@ func (w *Worker) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	runner := discovery.NewRunner(discovery.NewPgStore(pg), repositories.NewGitHub(w.cfg.GitHub.APIURL),
-		conns, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
+	// Likewise Bitbucket's and GitLab's: no Authorizer or auditor.
+	bitbucket, err := bitbucketConnections(w.cfg, db, nil, nil, w.Logger())
+	if err != nil {
+		return err
+	}
+	glConns, registry, err := gitlabConnections(w.cfg, db, pg, nil, nil)
+	if err != nil {
+		return err
+	}
+	readers := SourceReaders(w.cfg, registry)
+	tokens := SourceTokens(conns, bitbucket, glConns)
+	runner := discovery.NewRunner(discovery.NewPgStore(pg), readers, tokens, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
 	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))
 	return nil

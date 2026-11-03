@@ -220,7 +220,7 @@ type Page = {
     | "/webhooks"
     | "/integrations"
     | "/integrations/resources"
-    | "/api-keys"
+    | "/settings/api-keys"
   label: string
   icon: ReactNode
   search: string
@@ -330,7 +330,7 @@ const pages: Page[] = [
     search: "resources provider managed inventory buckets databases sync",
   },
   {
-    to: "/api-keys",
+    to: "/settings/api-keys",
     label: "API keys",
     icon: <ApiKeysIcon />,
     search: "api keys tokens cli",

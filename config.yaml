@@ -69,6 +69,24 @@ push:
   # gateway can reach the store app.
   gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
 
+nodes:
+  # Where the other replicas of this Loomplane reach this one, for the hop
+  # that carries a node's streams between replicas (/_/nodes/hop). Leave it
+  # empty on a single replica. With several, set each replica's own URL, and
+  # keep it on a private network or behind https.
+  advertise_url: "${LOOMPLANE_NODES_ADVERTISE_URL:-}"
+  # Allows that hop over plain http. The hop carries stream bytes, so turn
+  # this on only on a private network.
+  hop_insecure: "${LOOMPLANE_NODES_HOP_INSECURE:-false}"
+  # A PEM file of the roots that verify the other replicas' certificates on
+  # an https hop. Empty uses the system roots.
+  hop_ca_file: "${LOOMPLANE_NODES_HOP_CA_FILE:-}"
+  # How many joins one address may send a minute, and how many connect
+  # challenges it may ask for. Every node behind one NAT shares the challenge
+  # budget, and each asks once per reconnect. 0 turns a limit off.
+  join_rate_limit: "${LOOMPLANE_NODES_JOIN_RATE_LIMIT:-10}"
+  challenge_rate_limit: "${LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT:-120}"
+
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).
   dir: "${LOOMPLANE_DASHBOARD_DIR:-}"
@@ -97,6 +115,40 @@ github:
   # on the App's webhook, to re-analyze projects when their default
   # branch moves. Empty turns webhooks off.
   webhook_secret: "${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}"
+
+bitbucket:
+  # Bitbucket Cloud's REST API.
+  api_url: "${LOOMPLANE_BITBUCKET_API_URL:-https://api.bitbucket.org/2.0}"
+  # Where Bitbucket serves repository archives.
+  web_url: "${LOOMPLANE_BITBUCKET_WEB_URL:-https://bitbucket.org}"
+  # An OAuth consumer that reads private repositories. Leave both empty
+  # to read public repositories only; set both otherwise. Keep the secret
+  # in the environment.
+  client_id: "${LOOMPLANE_BITBUCKET_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_BITBUCKET_CLIENT_SECRET:-}"
+
+gitlab:
+  # Where Loomplane reads gitlab.com from. You'd change it only to point at
+  # a test double.
+  api_url: "${LOOMPLANE_GITLAB_API_URL:-https://gitlab.com}"
+  # The OAuth application that reads private projects on gitlab.com
+  # (docs/gitlab.md). Set both or neither, and keep the secret in the
+  # environment.
+  client_id: "${LOOMPLANE_GITLAB_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_GITLAB_CLIENT_SECRET:-}"
+  # Whether organizations may add a self-managed GitLab of their own.
+  # true or false.
+  allow_organization_hosts: "${LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS:-true}"
+  # Where GitLab reaches this Loomplane's webhook, when public_url isn't an
+  # address GitLab can reach. Empty means public_url.
+  webhook_url: "${LOOMPLANE_GITLAB_WEBHOOK_URL:-}"
+  # Self-managed GitLabs you trust go here, in config.local.yaml, since a
+  # list can't come from one variable. Every organization can sign in to
+  # them, and they may be http and on a private network:
+  # hosts:
+  #   - web_url: https://git.example.com
+  #     client_id: "<the Application ID>"
+  #     client_secret: "<the Secret>"
 
 # Repository analysis, which loomplane-worker runs.
 analysis:
@@ -175,8 +227,10 @@ clouds:
   # account token mounted; the Helm chart's inCluster values do both.
   kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
-  # in. Leave both empty to keep token entry only. Keep the secret in the
-  # environment.
+  # in. These win over anything registered on the dashboard's Cloud sign-in
+  # page (Settings, platform owners and admins only), which is the
+  # alternative to setting them here. Leave both empty to use the page, or
+  # to keep token entry only. Keep the secret in the environment.
   oauth:
     cloudflare:
       client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"

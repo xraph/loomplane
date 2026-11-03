@@ -86,20 +86,29 @@ afterEach(() => {
   setFeatures({ ai: false })
 })
 
-it("redirects /ai/settings to / when AI is off", async () => {
+it("redirects /settings/ai to / when AI is off", async () => {
   setFeatures({ ai: false })
   const off = createDashboardRouter(
-    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+    createMemoryHistory({ initialEntries: ["/settings/ai"] })
   )
   await off.load()
   expect(off.state.location.pathname).toBe("/")
 
   setFeatures({ ai: true })
   const on = createDashboardRouter(
-    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+    createMemoryHistory({ initialEntries: ["/settings/ai"] })
   )
   await on.load()
-  expect(on.state.location.pathname).toBe("/ai/settings")
+  expect(on.state.location.pathname).toBe("/settings/ai")
+})
+
+it("sends the old /ai/settings address to /settings/ai", async () => {
+  setFeatures({ ai: true })
+  const router = createDashboardRouter(
+    createMemoryHistory({ initialEntries: ["/ai/settings"] })
+  )
+  await router.load()
+  expect(router.state.location.pathname).toBe("/settings/ai")
 })
 
 it("keeps the Hugging Face token write-only", async () => {
@@ -343,7 +352,8 @@ it("saves a workspace key without ever showing it again", async () => {
     </Wrapped>
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
-  expect(within(section).getByText("Server default")).toBeInTheDocument()
+  // The section holds its place while the agent's settings load.
+  expect(await within(section).findByText("Server default")).toBeInTheDocument()
   expect(
     within(section).getByText("Anthropic, claude-sonnet-5-5")
   ).toBeInTheDocument()
@@ -394,7 +404,7 @@ it("needs a budget before turning the agent on", async () => {
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
   await userEvent.click(
-    within(section).getByRole("switch", { name: "Turn the agent on" })
+    await within(section).findByRole("switch", { name: "Turn the agent on" })
   )
   const budget = within(section).getByLabelText("Monthly budget (USD)")
   const alert = await within(section).findByRole("alert")
@@ -424,7 +434,7 @@ it("explains why knowledge is off", async () => {
   )
   const section = await screen.findByRole("region", { name: "AI agent" })
   expect(
-    within(section).getByRole("switch", {
+    await within(section).findByRole("switch", {
       name: "Search the workspace's documents",
     })
   ).toHaveAttribute("aria-disabled", "true")
@@ -445,5 +455,72 @@ it("shows no agent settings to someone without ai:manage", async () => {
   )
   await screen.findByRole("heading", { name: "AI settings" })
   expect(screen.queryByRole("region", { name: "AI agent" })).toBeNull()
+  expect(writes).toEqual([])
+})
+
+it("sets the workspace's monthly AI budget", async () => {
+  const writes = stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+    "PUT /api/v1/ai/settings/budget": () =>
+      Response.json(
+        view({
+          monthly_budget_usd: "100.00",
+          unallocated_usd: "100.00",
+          revision: 2,
+        })
+      ),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI budget" })
+  const field = within(section).getByLabelText("Workspace budget (USD)")
+  await userEvent.type(field, "100")
+  await userEvent.click(within(section).getByRole("button", { name: "Save" }))
+
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        method: "PUT",
+        path: "/api/v1/ai/settings/budget",
+        body: { monthly_budget_usd: "100", revision: 1 },
+      },
+    ])
+  )
+})
+
+it("tells you what's left before the agent asks for more", async () => {
+  const writes = stub({
+    "GET /api/v1/ai/settings": () =>
+      Response.json(
+        view({ monthly_budget_usd: "50.00", unallocated_usd: "50.00" })
+      ),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(
+    await within(section).findByText(
+      "Up to $50.00 from the workspace's AI budget."
+    )
+  ).toBeInTheDocument()
+
+  const budget = within(section).getByLabelText("Monthly budget (USD)")
+  await userEvent.type(budget, "80")
+  await userEvent.click(
+    within(section).getByRole("button", { name: "Save budget" })
+  )
+  const alert = await within(section).findByRole("alert")
+  expect(alert).toHaveTextContent(
+    "The agent can have up to $50.00 of the workspace's AI budget. Raise the workspace's budget above to give it more."
+  )
+  expect(budget.closest("[data-slot=field]")).toContainElement(alert)
   expect(writes).toEqual([])
 })

@@ -9,7 +9,7 @@ import (
 
 func TestAllRunsLibraryGroupsAfterLoomplanes(t *testing.T) {
 	want := []string{
-		"loomplane", "authsome", "authsome-waitlist", "warden", "chronicle", "dispatch",
+		"loomplane", "authsome", "authsome-waitlist", "authsome-oauth2", "warden", "chronicle", "dispatch",
 		"ctrlplane", "loomplane_managed_instances", "vault", "loomplane_native_credentials", "keysmith", "trove", "herald", "relay",
 		"cortex", "nexus", "shield", "weave",
 	}

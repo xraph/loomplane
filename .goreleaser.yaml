@@ -6,6 +6,8 @@
 #
 #   loomctl      the CLI, for macOS, Linux and Windows. Homebrew and Scoop
 #                install this one.
+#   loomctl image  ghcr.io/xraph/loomctl, loomctl as the entrypoint, for
+#                Linux on amd64 and arm64.
 #   loomplane    the API with its dashboard and config.yaml, plus
 #                loomplane-worker, as one archive for Linux and macOS.
 #
@@ -83,6 +85,26 @@ archives:
       # flattens it.
       - src: apps/dashboard/dist
         dst: dashboard
+
+# ghcr.io/xraph/loomctl, with loomctl as its entrypoint, so a container joins
+# as a node with `docker run ghcr.io/xraph/loomctl node run`. The release
+# workflow turns on Docker for this job. The image carries the binary and CA
+# certificates, which the node needs to reach Loomplane over TLS.
+dockers_v2:
+  - id: loomctl
+    ids: [loomctl]
+    dockerfile: deployments/loomctl/Dockerfile
+    images:
+      - ghcr.io/xraph/loomctl
+    # latest moves only for a stable release; an empty tag is dropped.
+    tags:
+      - "{{ .Tag }}"
+      - '{{ if not .Prerelease }}latest{{ end }}'
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.source: https://github.com/xraph/loomplane
+      org.opencontainers.image.version: "{{ .Tag }}"
+      org.opencontainers.image.licenses: FSL-1.1-ALv2
 
 checksum:
   # publish-docker.yml already uploads SHA256SUMS for the Docker bundle.
