@@ -285,6 +285,9 @@ jobs:
     with:
       ref: ${{ needs.plan.outputs.tag }}
       go-version-file: go.mod
+      # The loomctl image (.goreleaser.yaml dockers) needs QEMU, Buildx and a
+      # GHCR login.
+      docker: true
       # The server archives carry the built dashboard.
       node-version: "24"
       pnpm-directory: apps/dashboard

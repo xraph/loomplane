@@ -6,6 +6,8 @@
 #
 #   loomctl      the CLI, for macOS, Linux and Windows. Homebrew and Scoop
 #                install this one.
+#   loomctl image  ghcr.io/xraph/loomctl, loomctl as the entrypoint, for
+#                Linux on amd64 and arm64.
 #   loomplane    the API with its dashboard and config.yaml, plus
 #                loomplane-worker, as one archive for Linux and macOS.
 #
@@ -83,6 +85,50 @@ archives:
       # flattens it.
       - src: apps/dashboard/dist
         dst: dashboard
+
+# ghcr.io/xraph/loomctl, with loomctl as its entrypoint, so a container joins
+# as a node with `docker run ghcr.io/xraph/loomctl node run`. The release
+# workflow turns on Docker for this job. The image carries the binary and CA
+# certificates, which the node needs to reach Loomplane over TLS.
+dockers:
+  - id: loomctl-amd64
+    ids: [loomctl]
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: deployments/loomctl/Dockerfile
+    image_templates:
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/xraph/loomplane"
+      - "--label=org.opencontainers.image.version={{ .Tag }}"
+      - "--label=org.opencontainers.image.licenses=FSL-1.1-ALv2"
+  - id: loomctl-arm64
+    ids: [loomctl]
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: deployments/loomctl/Dockerfile
+    image_templates:
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/xraph/loomplane"
+      - "--label=org.opencontainers.image.version={{ .Tag }}"
+      - "--label=org.opencontainers.image.licenses=FSL-1.1-ALv2"
+
+docker_manifests:
+  - name_template: "ghcr.io/xraph/loomctl:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-amd64"
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-arm64"
+  # latest moves only for a stable release.
+  - name_template: "ghcr.io/xraph/loomctl:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-amd64"
+      - "ghcr.io/xraph/loomctl:{{ .Tag }}-arm64"
 
 checksum:
   # publish-docker.yml already uploads SHA256SUMS for the Docker bundle.

@@ -24,8 +24,9 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
 }
 
-// mountNodeEndpoints serves what sits outside /api/: a node asks for a
-// challenge and connects, and replicas hop to each other. None of them is in
+// mountNodeEndpoints serves what sits outside /api/: node.sh, which installs
+// a node, a node asking for a challenge and connecting, and replicas hopping
+// to each other. None of them is in
 // the generated API client.
 func (e *Extension) mountNodeEndpoints(r forge.Router) error {
 	mux := http.NewServeMux()
@@ -37,6 +38,9 @@ func (e *Extension) mountNodeEndpoints(r forge.Router) error {
 		_, _ = w.Write([]byte(`{"error":"not found"}`)) //nolint:errcheck // the client went away; nothing to do
 	})
 	if err := r.Handle("/node/", mux); err != nil {
+		return err
+	}
+	if err := r.Handle("/install/node.sh", http.HandlerFunc(e.nodeSh)); err != nil {
 		return err
 	}
 	return r.Handle(nodes.HopPath, e.hub.HopHandler())

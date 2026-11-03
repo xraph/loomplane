@@ -10,9 +10,11 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -59,6 +61,13 @@ type Options struct {
 	isTerminal func() bool
 	// serviceReady checks that this system can host the service.
 	serviceReady func() error
+	// releaseBase, goarch, httpc and verifyRelease are where node update
+	// finds releases, the architecture it asks for, how it downloads and how
+	// it checks the signature.
+	releaseBase   string
+	goarch        string
+	httpc         *http.Client
+	verifyRelease func(ctx context.Context, version string, checksums, bundle []byte, artifact, sum string) error
 }
 
 type cmds struct {
@@ -106,6 +115,12 @@ func Commands(opts Options) []cli.Command {
 	if o.runNode == nil {
 		o.runNode = c.runForeground
 	}
+	if o.releaseBase == "" {
+		o.releaseBase = releaseBase
+	}
+	if o.goarch == "" {
+		o.goarch = runtime.GOARCH
+	}
 
 	stateFlag := cli.NewStringFlag("state-dir", "", "Where the node keeps its identity and config (default: "+DefaultStateDir(o.goos, o.home)+")", "")
 	jsonFlag := cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
@@ -134,6 +149,16 @@ func Commands(opts Options) []cli.Command {
 		cli.WithSubcommand(cli.NewCommand("allow", "Widen what Loomplane may use on this machine", c.guard(c.allow),
 			cli.WithUsage("node allow docker [dial probe kube firecracker]"),
 			cli.WithFlag(stateFlag))),
+		cli.WithSubcommand(cli.NewCommand("update", "Replace the node's binary with a signed release and restart the service", c.guard(c.update),
+			cli.WithUsage("node update --release v1.9.0"),
+			cli.WithFlags(stateFlag, cli.NewStringFlag("release", "", "The release to install, such as v1.9.0", "")))),
+		cli.WithSubcommand(cli.NewCommand("verify-release", "Check a downloaded release against its signature", c.guard(c.verifyRelease),
+			cli.WithUsage("node verify-release --release v1.9.0 --archive loomctl_1.9.0_linux_amd64.tar.gz --checksums binaries-checksums.txt --bundle binaries-checksums.txt.sigstore.json"),
+			cli.WithFlags(
+				cli.NewStringFlag("release", "", "The release the files belong to", ""),
+				cli.NewStringFlag("archive", "", "The downloaded release archive", ""),
+				cli.NewStringFlag("checksums", "", "binaries-checksums.txt", ""),
+				cli.NewStringFlag("bundle", "", "binaries-checksums.txt.sigstore.json", "")))),
 		cli.WithSubcommand(cli.NewCommand("list", "List the organization's nodes", c.guard(c.list),
 			cli.WithFlags(urlFlag, keyFlag, jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("revoke", "Stop trusting a node, by name or id", c.guard(c.revoke),

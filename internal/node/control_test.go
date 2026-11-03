@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -170,6 +171,44 @@ func TestLeaveIsAnErrorWhenTheSessionEndsWithoutRevoked(t *testing.T) {
 	}
 	if rt.leaving.Load() {
 		t.Fatal("a timed-out leave left the node 'leaving', so a later 401 would read as a revoke")
+	}
+}
+
+// A Leave that is cancelled is no longer leaving: a 401 after it is not a
+// revoke the node asked for.
+func TestLeaveCancelledClearsLeaving(t *testing.T) {
+	nodeEnd, hubEnd := net.Pipe()
+	cfg := yamux.DefaultConfig()
+	cfg.LogOutput = io.Discard
+	hub, err := yamux.Client(hubEnd, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux, err := yamux.Server(nodeEnd, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hub.Close(); _ = mux.Close() })
+	hubCtrl, err := hub.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCtrl, err := mux.AcceptStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &Runtime{revoked: make(chan struct{})}
+	rt.attach(&session{r: rt, mux: mux, ctrl: nodeCtrl, done: make(chan struct{})})
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() { // the "hub" reads the Leave and says nothing; the caller gives up
+		_, _ = bufio.NewReader(hubCtrl).ReadBytes('\n')
+		cancel()
+	}()
+	if err = rt.Leave(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Leave: %v", err)
+	}
+	if rt.leaving.Load() {
+		t.Fatal("a cancelled leave left the node 'leaving', so a later 401 would read as a revoke")
 	}
 }
 
