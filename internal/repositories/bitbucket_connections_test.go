@@ -644,6 +644,21 @@ func TestBitbucketAuthorize_needsRepositoryConnect(t *testing.T) {
 			t.Fatalf("Authorize(%q): %v, want ErrBadWorkspace", bad, err)
 		}
 	}
+	// A typed slug is held to the rule an address is, so a workspace that
+	// connects is one a source can name, and the other way round.
+	for _, slug := range []string{"acme", "Acme", "ACME-2", "a_b", "0acme", "a.b", "-acme", "_acme", "a+b", "é", strings.Repeat("a", 62), strings.Repeat("a", 63)} {
+		_, err := f.conns.Authorize(ctx, admin, slug)
+		_, parseErr := ParseURL("https://bitbucket.org/" + slug + "/api")
+		if (err == nil) != (parseErr == nil) {
+			t.Fatalf("Authorize(%q) = %v, but ParseURL said %v", slug, err, parseErr)
+		}
+		if err != nil && !errors.Is(err, ErrBadWorkspace) {
+			t.Fatalf("Authorize(%q): %v, want ErrBadWorkspace", slug, err)
+		}
+	}
+	if st, err := VerifyState(f.key, f.stateFor(t, admin, "Acme"), f.clock.now()); err != nil || st.Workspace != "acme" {
+		t.Fatalf("a slug typed in capitals = %+v, %v; want it folded", st, err)
+	}
 	none := NewBitbucketConnections(f.store, nil, f.secrets, f.authz, nil, f.key)
 	if _, err := none.Authorize(ctx, admin, "acme"); !errors.Is(err, ErrBitbucketNotConfigured) {
 		t.Fatalf("unconfigured Authorize: %v", err)

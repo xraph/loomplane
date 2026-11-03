@@ -32,9 +32,19 @@ var ErrBitbucketConsumerRejected = errors.New("Bitbucket refused Loomplane's OAu
 // workspace it was asked to connect.
 var ErrNotAMember = errors.New("your Bitbucket account isn't a member of that workspace")
 
-// bitbucketSlug is what a workspace slug can look like. Checking it keeps a
-// typed slug from rewriting the filter or the path it's put into.
-var bitbucketSlug = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
+// validWorkspace reports whether slug can be a Bitbucket workspace, by the
+// same rule ParseURL holds an address to. Checking it keeps a typed slug
+// from rewriting the filter or the path it's put into.
+func validWorkspace(slug string) bool {
+	return workspacePattern.MatchString(strings.ToLower(slug))
+}
+
+// validBitbucketRepo reports whether repo's workspace and name are ones
+// ParseURL would accept.
+func validBitbucketRepo(repo Repository) bool {
+	name := strings.ToLower(repo.Name)
+	return validWorkspace(repo.Owner) && bitbucketRepoPattern.MatchString(name) && name != "." && name != ".."
+}
 
 // bitbucketUUID is what a workspace UUID looks like, braces included. It's
 // checked for the same reason as the slug.
@@ -245,7 +255,7 @@ func (o *BitbucketOAuth) CurrentUser(ctx context.Context, token string) (Bitbuck
 // need. The slug is also compared on our side, so a filter the server
 // ignored can't make anyone a member.
 func (o *BitbucketOAuth) Membership(ctx context.Context, token, slug string) (BitbucketWorkspace, error) {
-	if !bitbucketSlug.MatchString(slug) {
+	if !validWorkspace(slug) {
 		return BitbucketWorkspace{}, ErrNotAMember
 	}
 	return o.findWorkspace(ctx, token, `workspace.slug="`+slug+`"`, func(w BitbucketWorkspace) bool {
@@ -310,7 +320,7 @@ func (o *BitbucketOAuth) findWorkspace(ctx context.Context, token, q string, mat
 // account is a member of (GET /2.0/repositories/{workspace}?role=member),
 // following next links for up to maxPages pages.
 func (o *BitbucketOAuth) Repositories(ctx context.Context, token, workspaceSlug string) ([]BitbucketRepository, error) {
-	if !bitbucketSlug.MatchString(workspaceSlug) {
+	if !validWorkspace(workspaceSlug) {
 		return nil, fmt.Errorf("%w: %q isn't a valid workspace", ErrNotFound, workspaceSlug)
 	}
 	next := fmt.Sprintf("%s/repositories/%s?role=member&pagelen=%d", o.apiURL, url.PathEscape(workspaceSlug), perPage)
@@ -362,7 +372,7 @@ var ErrHookNotAdmin = errors.New("Bitbucket only lets a repository admin add a w
 // (POST /2.0/repositories/{workspace}/{repo}/hooks). Neither the token nor
 // the secret, nor anything Bitbucket answered, goes into an error.
 func (o *BitbucketOAuth) CreateHook(ctx context.Context, token string, repo Repository, hookURL, secret string) (string, error) {
-	if !bitbucketSlug.MatchString(repo.Owner) || !bitbucketSlug.MatchString(repo.Name) {
+	if !validBitbucketRepo(repo) {
 		return "", fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrNotFound, repo.FullName())
 	}
 	body, err := json.Marshal(map[string]any{
@@ -396,7 +406,7 @@ func (o *BitbucketOAuth) CreateHook(ctx context.Context, token string, repo Repo
 // (DELETE /2.0/repositories/{workspace}/{repo}/hooks/{uuid}). One that's
 // already gone is no error.
 func (o *BitbucketOAuth) DeleteHook(ctx context.Context, token string, repo Repository, uuid string) error {
-	if !bitbucketSlug.MatchString(repo.Owner) || !bitbucketSlug.MatchString(repo.Name) {
+	if !validBitbucketRepo(repo) {
 		return fmt.Errorf("%w: %q isn't a Bitbucket repository", ErrNotFound, repo.FullName())
 	}
 	if !bitbucketUUID.MatchString(uuid) {

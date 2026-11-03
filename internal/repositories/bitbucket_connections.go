@@ -237,7 +237,10 @@ func (c *BitbucketConnections) Authorize(ctx context.Context, p security.Princip
 	if c.api == nil {
 		return "", ErrBitbucketNotConfigured
 	}
-	if !bitbucketSlug.MatchString(workspace) {
+	// Slugs are lowercase, and an address names one in any case, so the
+	// typed one is held to the rule ParseURL holds an address to.
+	workspace = strings.ToLower(workspace)
+	if !validWorkspace(workspace) {
 		return "", ErrBadWorkspace
 	}
 	state, err := SignWorkspaceState(c.stateKey, p.OrgID, p.UserID, workspace, c.now())
@@ -285,7 +288,7 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 	if err != nil {
 		return nil, err
 	}
-	if ws.UUID == "" || !bitbucketSlug.MatchString(ws.Slug) {
+	if ws.UUID == "" || !validWorkspace(ws.Slug) {
 		// The UUID is what the row is keyed on, so a workspace without
 		// one can't be kept apart from another.
 		return nil, errors.New("Bitbucket didn't say which workspace that is; try connecting again")
@@ -684,7 +687,7 @@ func (c *BitbucketConnections) followRename(ctx context.Context, cur *BitbucketC
 		c.warnf("look up the Bitbucket workspace of "+cur.ID, err)
 		return true
 	}
-	if !bitbucketSlug.MatchString(ws.Slug) || !strings.EqualFold(ws.UUID, cur.WorkspaceUUID) {
+	if !validWorkspace(ws.Slug) || !strings.EqualFold(ws.UUID, cur.WorkspaceUUID) {
 		return true
 	}
 	next := *cur
