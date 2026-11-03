@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/nodeproto"
@@ -66,6 +67,8 @@ type ddnsDomains struct {
 	accepted  []*RouteOperation
 	published []Route
 	busy      map[string]error
+	// busyFor refuses a route's next n operations as busy.
+	busyFor map[string]int
 }
 
 func (d *ddnsDomains) Zones(_ context.Context, org string) ([]*Zone, error) {
@@ -100,10 +103,26 @@ func (d *ddnsDomains) AcceptRoute(_ context.Context, op *RouteOperation) error {
 	if err := d.busy[op.Route.ID]; err != nil {
 		return err
 	}
+	if d.busyFor[op.Route.ID] > 0 {
+		d.busyFor[op.Route.ID]--
+		return ErrBusy
+	}
 	copied := *op
 	d.accepted = append(d.accepted, &copied)
 	d.log.add("accept:" + op.Route.ID)
 	return nil
+}
+
+func (d *ddnsDomains) LatestRouteOperations(_ context.Context, org string, ids []string) (map[string]*RouteOperation, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := map[string]*RouteOperation{}
+	for _, op := range d.accepted {
+		if op.Route.OrgID == org && slices.Contains(ids, op.Route.ID) {
+			out[op.Route.ID] = op
+		}
+	}
+	return out, nil
 }
 
 func (d *ddnsDomains) PublishRoute(_ context.Context, op *RouteOperation) error {
@@ -271,7 +290,7 @@ func newDDNSRig(t *testing.T) *ddnsRig {
 	binding := RouteBinding{BindingID: "binding_web", ServerID: "srv_1", TargetID: "target", ConnectionID: a.conn.ID, ConnectionGeneration: 1, InstanceID: "instance", ReleaseID: "release", ContainerID: "container", RuntimeID: "daemon-1", Address: ddnsOld}
 	verified := RouteVerification{DNS: true, TLS: true, Backend: true, CheckedAt: now.Add(-time.Hour), CertExpires: now.Add(60 * 24 * time.Hour)}
 	receipt := ddnsReceipt
-	r.domains = &ddnsDomains{log: log, busy: map[string]error{},
+	r.domains = &ddnsDomains{log: log, busy: map[string]error{}, busyFor: map[string]int{},
 		zones: []*Zone{
 			{ID: "zone_m", OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account", ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}, ProjectIDs: []string{"shop"}, VerifiedAt: now, Revision: 1},
 			{ID: "zone_x", OrgID: "org", Name: "shop.dev", Mode: "external", ProjectIDs: []string{"shop"}, VerifiedAt: now, Revision: 1},
@@ -597,49 +616,275 @@ func TestDDNSLeavesANodeWithoutDirectIngress(t *testing.T) {
 	}
 }
 
-func TestDDNSSkipsABusyRoute(t *testing.T) {
+func TestDDNSHoldsABusyRouteUntilItsDeadline(t *testing.T) {
 	r := newDDNSRig(t)
 	r.answering[ddnsNew] = true
 	r.domains.busy["route_x"] = ErrBusy
-	r.follow(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := r.svc.FollowNodeAddress(ctx, r.node); err != nil {
+		t.Fatal(err)
+	}
 	ops := r.domains.ops()
 	if len(ops) != 1 || ops[0].Route.ID != "route_m" {
 		t.Fatalf("operations %+v", ops)
 	}
-	// The node still moves, so the routes that did follow match it.
-	if r.advertised(t) != ddnsNew || len(r.ingress.list()) != 1 {
-		t.Fatal("a busy route held the node back")
+	// The node still moves, so the routes that did follow match it, and
+	// the follow settled after its own deadline.
+	if r.advertised(t) != ddnsNew || len(r.ingress.list()) != 1 || r.log.index("enqueue:") < 0 {
+		t.Fatalf("a busy route held the node back: %v", r.log.list())
 	}
-	if len(r.warned) != 1 || !strings.Contains(r.warned[0], "api.shop.dev") {
-		t.Fatalf("warned %v", r.warned)
+	want := "node_1: route api.shop.dev stays on " + ddnsOld + "; another change held it"
+	if d := r.nodeIn.recorded(); !slices.Equal(d, []string{want}) {
+		t.Fatalf("details %v", d)
+	}
+	if len(r.warned) != 1 || !strings.Contains(r.warned[0], "api.shop.dev") || !slices.Contains(r.audit.actions(), "domain.route.address_held") {
+		t.Fatalf("warned %v, audit %v", r.warned, r.audit.actions())
 	}
 }
 
-func TestRenewalStateShowsWhileDNSFollows(t *testing.T) {
+func TestDDNSWaitsForARunningChange(t *testing.T) {
+	// A to B is still running on route_x when B to C arrives: the follow
+	// offers it again until that run lets go, and nothing is held.
 	r := newDDNSRig(t)
-	now := time.Now().UTC()
-	renewing := RouteVerification{DNS: true, TLS: true, Backend: true, CheckedAt: now.Add(-time.Minute), CertExpires: now.Add(3 * 24 * time.Hour)}
-	r.domains.routes[0].Verification, r.domains.routes[1].Verification = renewing, renewing
 	r.answering[ddnsNew] = true
+	r.domains.busyFor["route_x"] = 3
 	r.follow(t)
-	for _, c := range []struct{ route, zone string }{{"route_m", "zone_m"}, {"route_x", "zone_x"}} {
-		op := r.domains.op(t, c.route)
-		zone := r.domains.zone(c.zone)
-		zone.ProofName, zone.ProofValue, zone.ProofExpiresAt = "_loomplane."+zone.Name, "proof", now.Add(time.Hour)
-		// Pending, before it wrote anything.
-		if got := DeriveRouteStatus(op.Route, zone, op, now); got.Certificate != DomainRenewing || got.Message != op.Message {
-			t.Fatalf("%s pending: %+v", c.route, got)
+	if len(r.domains.ops()) != 2 || r.domains.busyFor["route_x"] != 0 || len(r.nodeIn.recorded()) != 0 || len(r.warned) != 0 {
+		t.Fatalf("ops %d busy %d details %v warned %v", len(r.domains.ops()), r.domains.busyFor["route_x"], r.nodeIn.recorded(), r.warned)
+	}
+}
+
+// addressRunStore is the route store one address operation runs against.
+type addressRunStore struct {
+	DomainStore
+	mu         sync.Mutex
+	op         RouteOperation
+	route      Route
+	zone       *Zone
+	binding    RouteBinding
+	resolveErr error
+	publishes  int
+}
+
+func (s *addressRunStore) RouteOperation(context.Context, string, string) (*RouteOperation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	op := s.op
+	return &op, nil
+}
+
+func (s *addressRunStore) SaveRouteOperation(_ context.Context, op *RouteOperation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.op = *op
+	return nil
+}
+
+func (s *addressRunStore) BeginIngress(_ context.Context, op *RouteOperation) (*IngressState, error) {
+	op.Generation = 7
+	if err := s.SaveRouteOperation(context.Background(), op); err != nil {
+		return nil, err
+	}
+	return &IngressState{Generation: 7, Current: &server.IngressSnapshot{ContainerID: "proxy", ETag: "1"}}, nil
+}
+
+func (*addressRunStore) GuardRouteOwnership(context.Context, Route) error { return nil }
+
+func (s *addressRunStore) ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error) {
+	return s.binding, s.resolveErr
+}
+
+func (s *addressRunStore) Zones(context.Context, string) ([]*Zone, error) {
+	copied := *s.zone
+	return []*Zone{&copied}, nil
+}
+
+func (s *addressRunStore) PublishRoute(_ context.Context, op *RouteOperation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	op.Route.Receipt, op.Route.OperationID = op.Receipt, op.ID
+	op.Route.Revision++
+	s.route, s.publishes = op.Route, s.publishes+1
+	s.op = *op
+	return nil
+}
+
+func TestDDNSOperationRunBeforeSettleWaits(t *testing.T) {
+	now := time.Now().UTC()
+	zone := &Zone{ID: "zone_m", OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account",
+		ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}, ProjectIDs: []string{"shop"}, ProofName: "_loomplane.example.com", ProofValue: "proof", ProofExpiresAt: now.Add(time.Hour), VerifiedAt: now, Revision: 1}
+	old := RouteBinding{BindingID: "binding_web", ServerID: "srv_1", ConnectionID: "conn_node_1", ConnectionGeneration: 1, InstanceID: "instance", ReleaseID: "release", ContainerID: "container", RuntimeID: "daemon-1", Address: ddnsOld}
+	route := Route{ID: "route_m", OrgID: "org", ProjectID: "shop", Input: RouteInput{ZoneID: "zone_m", CloudID: "cloud", EnvironmentID: "prod", Service: "web", Hostname: "app.example.com", Port: 8080},
+		Binding: old, Status: "ready", Receipt: &ddnsReceipt, Revision: 3}
+	moved := route
+	moved.Binding.Address = ddnsNew
+	record := ddnsReceipt
+	record.Value = ddnsNew
+	system := security.SystemPrincipal("org")
+	op := RouteOperation{ID: "routeop_m", Kind: "address", Automatic: true, Status: "pending", Attempt: 1, Revision: 1, Route: moved, PreviousAddress: ddnsOld,
+		DesiredRecord: record, PreviousReceipt: &ddnsReceipt, Principal: system, ExecutionPrincipal: &system, Message: "address changed to " + ddnsNew + ", DNS updating"}
+	st := &addressRunStore{op: op, route: route, zone: zone, binding: old}
+	adapter := &routeDNSAdapter{records: []provider.DNSRecord{ddnsReceipt}}
+	registry := NewAdapters()
+	if err := registry.RegisterDNS("digitalocean", adapter); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(Deps{Domains: st, Store: newAdoptionStore(), Authz: adoptionAuthz{}, Adapters: registry, Connections: routeDNSCredentials{"digitalocean"}, Resolver: proofResolver{[]string{"proof"}}})
+	var probes int
+	var seen RouteVerification
+	svc.routeAddressProbe = func(_ context.Context, op *RouteOperation, state *IngressState) (func(context.Context, Route) RouteVerification, func(), error) {
+		if op.Generation != 7 || state.Current == nil {
+			t.Errorf("probe of %+v / %+v", op, state)
 		}
-		if err := r.svc.settleRouteAddress(t.Context(), r.domains, op, zone, RouteVerification{}); !errors.Is(err, ErrPending) {
+		probes++
+		return func(context.Context, Route) RouteVerification { return seen }, func() {}, nil
+	}
+	run := func() error {
+		t.Helper()
+		return svc.ReconcileRoute(t.Context(), "org", "routeop_m", nil)
+	}
+	waiting := "Waiting for the node to settle on " + ddnsNew + "."
+
+	// Recovery runs it before the node settled: the binding still names
+	// the old address, and then none while the node's two writes land.
+	for _, c := range []struct {
+		name string
+		err  error
+	}{{"old address", nil}, {"between the writes", errUnconfirmedNodeAddress}} {
+		st.resolveErr = c.err
+		if err := run(); !errors.Is(err, ErrPending) {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if st.op.Status != "waiting" || st.op.Message != waiting || adapter.writes != 0 || probes != 0 || st.publishes != 0 {
+			t.Fatalf("%s: op %s %q, writes %d, probes %d", c.name, st.op.Status, st.op.Message, adapter.writes, probes)
+		}
+	}
+	// A binding that moved some other way is a conflict, as before.
+	st.resolveErr = nil
+	other := old
+	other.ReleaseID = "release_2"
+	st.binding = other
+	if err := run(); err != nil || st.op.Status != "failed" || adapter.writes != 0 {
+		t.Fatalf("other change: %v, op %s", err, st.op.Status)
+	}
+
+	// Settled: the record moves, and the route waits for DNS.
+	op.Status = "waiting"
+	st.op, st.binding = op, moved.Binding
+	if err := run(); !errors.Is(err, ErrPending) {
+		t.Fatal(err)
+	}
+	if adapter.writes != 1 || adapter.records[0].Value != ddnsNew || probes != 1 || st.route.Status != RouteRoutingPending || st.op.Status != "waiting" || st.op.Message != op.Message {
+		t.Fatalf("writes %d records %+v probes %d route %s op %s %q", adapter.writes, adapter.records, probes, st.route.Status, st.op.Status, st.op.Message)
+	}
+	// Seen on the new address: ready, and the record isn't written again.
+	seen = RouteVerification{DNS: true, TLS: true, Backend: true, CheckedAt: now}
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.writes != 1 || st.route.Status != "ready" || st.route.Verification != seen || st.route.Binding.Address != ddnsNew || st.op.Status != "succeeded" {
+		t.Fatalf("writes %d route %+v op %s", adapter.writes, st.route, st.op.Status)
+	}
+}
+
+// behindStore lists the nodes a reconcile looks at.
+type behindStore struct {
+	*adoptionStore
+	behind []*nodes.Node
+}
+
+func (s *behindStore) NodesBehindAddress(context.Context, int) ([]*nodes.Node, error) {
+	return s.behind, nil
+}
+
+func TestDDNSSettleFailureLeavesTheConnectionAsItWas(t *testing.T) {
+	r := newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	r.ingress.err = errors.New("database went away")
+	if err := r.svc.FollowNodeAddress(t.Context(), r.node); err == nil {
+		t.Fatal("a failed settle passed")
+	}
+	// The connection names the address the node still holds, so routes
+	// keep reaching it there, and nothing started.
+	if a := r.advertised(t); a != ddnsOld {
+		t.Fatalf("advertise_host %q", a)
+	}
+	if r.log.index("enqueue:") >= 0 || len(r.domains.ops()) != 2 {
+		t.Fatalf("log %v", r.log.list())
+	}
+
+	// The reconcile finishes it, reusing the operations already stored.
+	r.ingress.err = nil
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r.advertised(t) != ddnsNew || len(r.domains.ops()) != 2 || len(r.ingress.list()) != 2 {
+		t.Fatalf("advertise %q ops %d ingress %v", r.advertised(t), len(r.domains.ops()), r.ingress.list())
+	}
+	// A node that is consistent costs no check.
+	fetched := len(r.fetches())
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.fetches()) != fetched || len(r.ingress.list()) != 2 || len(r.domains.ops()) != 2 {
+		t.Fatal("a consistent node was followed again")
+	}
+}
+
+func TestDDNSReconcileMovesALeftBehindRoute(t *testing.T) {
+	r := newDDNSRig(t)
+	// The node settled on the new address, but route_x is still on the old.
+	r.records.set(func(n *nodes.Node) { n.PublicAddress = ddnsNew })
+	if err := r.conns.SetNodeAdvertiseHost(t.Context(), "org", r.conn.ID, ddnsNew); err != nil {
+		t.Fatal(err)
+	}
+	r.records.set(func(n *nodes.Node) { n.IngressDetail = HeldRouteDetail("api.shop.dev", ddnsOld) })
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// No check: the address is the node's confirmed one already.
+	if len(r.fetches()) != 0 || len(r.ingress.list()) != 0 {
+		t.Fatalf("checked again: %v %v", r.fetches(), r.ingress.list())
+	}
+	if len(r.domains.ops()) != 2 || r.domains.op(t, "route_x").Route.Binding.Address != ddnsNew || r.log.index("enqueue:") < 0 {
+		t.Fatalf("ops %+v log %v", r.domains.ops(), r.log.list())
+	}
+	// What the node said about the held route is cleared.
+	if d := r.nodeIn.recorded(); !slices.Equal(d, []string{"node_1: "}) {
+		t.Fatalf("details %v", d)
+	}
+}
+
+func TestDDNSReconcileChecksAnUnansweredAddressSeldom(t *testing.T) {
+	r := newDDNSRig(t)
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	for range 3 {
+		if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		got := DeriveRouteStatus(r.domains.lastPublished(), zone, op, now)
-		wantDNS := DomainProvisioning
-		if zone.Mode == "external" {
-			wantDNS = DomainAwaitingVerification
-		}
-		if got.Certificate != DomainRenewing || got.DNS != wantDNS || got.Route != DomainProvisioning {
-			t.Fatalf("%s routing pending: %+v", c.route, got)
-		}
+	}
+	if f := r.fetches(); len(f) != 1 {
+		t.Fatalf("fetched %v", f)
+	}
+	// The hook doesn't wait for that.
+	r.follow(t)
+	if f := r.fetches(); len(f) != 2 {
+		t.Fatalf("fetched %v", f)
+	}
+}
+
+func TestDDNSHandoffProceedsOnARoutingPendingRoute(t *testing.T) {
+	svc, st, _ := subdomainFixture()
+	in := subdomainInput()
+	in.CloudID = "cloud_1"
+	st.routes = append(st.routes, &Route{ID: "route_app", OrgID: "org", ProjectID: "shop", Status: RouteRoutingPending, Revision: 1, Input: in,
+		Binding: RouteBinding{BindingID: "binding_old", ServerID: "srv_old", Address: "192.0.2.9"}})
+	svc.Resolver = proofResolver{[]string{"proof"}}
+	op, err := svc.PrepareRouteHandoff(t.Context(), overviewDev, "shop", "route_app", HandoffInput{Revision: 1, DestinationCloudID: "cloud_1"})
+	if err != nil || op.Kind != "prepare" {
+		t.Fatalf("handoff on a routing pending route: %+v %v", op, err)
 	}
 }

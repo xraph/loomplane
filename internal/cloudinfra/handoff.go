@@ -58,7 +58,7 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if source.Binding.BackendName() == RouteBackendPlatform {
 		return nil, errPlatformHandoff
 	}
-	if source.Revision != in.Revision || source.Status != "ready" {
+	if source.Revision != in.Revision || (source.Status != "ready" && source.Status != RouteRoutingPending) {
 		return nil, ErrConflict
 	}
 	input := source.Input
@@ -313,7 +313,7 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	} else if !reflect.DeepEqual(current.Binding, prepared.Route.Binding) {
 		return nil, ErrConflict
 	}
-	if current.Status != "ready" {
+	if current.Status != "ready" && current.Status != RouteRoutingPending {
 		return nil, ErrConflict
 	}
 	drainSeconds = max(drainSeconds, prepared.Source.Input.ExternalTTLSeconds, prepared.Route.Input.ExternalTTLSeconds, current.Input.ExternalTTLSeconds)

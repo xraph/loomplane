@@ -231,6 +231,10 @@ var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.exte
  AND (b.subject='service' OR (` + routableComponent + `))
  ORDER BY b.subject='service' DESC`
 
+// errUnconfirmedNodeAddress is a node binding whose connection doesn't
+// name the node's confirmed address, as while an address change settles.
+var errUnconfirmedNodeAddress = fmt.Errorf("%w: the node this service runs on has no confirmed public address on this connection yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
 	var config []byte
@@ -241,7 +245,7 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
 	if node != "" && out.Address == "" {
-		return out, fmt.Errorf("%w: the node this service runs on has no confirmed public address on this connection yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+		return out, errUnconfirmedNodeAddress
 	}
 	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)
@@ -524,8 +528,15 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if current != route.Revision {
 			return ErrConflict
 		}
-		if op.Kind == "address" {
+		switch op.Kind {
+		case "address":
 			if checkErr := acceptAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
+		case "prepare":
+			// A handoff goes ahead of an address change still waiting; the
+			// change is made again once the handoff is done.
+			if checkErr := yieldAddressRoute(ctx, tx, op); checkErr != nil {
 				return checkErr
 			}
 		}

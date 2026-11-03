@@ -164,16 +164,21 @@ func (e *Extension) adoptOnConnect(infra *cloudinfra.Service) {
 }
 
 // followAddressChanges follows a node whose public addresses change to its
-// new address. The follow outlasts the hook's deadline, so it gets its own.
+// new address, and a node that comes back online, which may have moved
+// while away. The follow outlasts the hook's deadline, so it gets its own.
+// What a follow leaves unfinished, cloud infrastructure's reconcile picks up.
 func (e *Extension) followAddressChanges(infra *cloudinfra.Service) {
-	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
-		if slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
-			return
-		}
+	follow := func(ctx context.Context, n *nodes.Node) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloudinfra.NodeAddressFollowWait)
 		defer cancel()
 		if err := infra.FollowNodeAddress(ctx, n); err != nil {
-			e.Logger().Warn("Follow a node to its new address; the next address change tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+			e.Logger().Warn("Follow a node to its new address; the reconcile tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+		}
+	}
+	e.hub.OnOnline(follow)
+	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
+		if !slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
+			follow(ctx, n)
 		}
 	})
 }

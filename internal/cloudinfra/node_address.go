@@ -210,7 +210,7 @@ func (s *Service) ConfirmNodeAddress(ctx context.Context, org, connectionID stri
 		}
 		return "", ErrNoPublicAddress
 	}
-	if settleErr := s.settleNodeAddress(ctx, conn, nodeID, found); settleErr != nil {
+	if settleErr := s.settleNodeAddress(ctx, conn, nodeID, found, ""); settleErr != nil {
 		return "", settleErr
 	}
 	return found, nil
@@ -262,13 +262,29 @@ func (s *Service) checkNodeAddress(ctx context.Context, org, connectionID string
 }
 
 // settleNodeAddress makes a confirmed address the node's: the connection
-// names it before the node marks it confirmed, so a route never reads a
-// confirmed node with an older address.
-func (s *Service) settleNodeAddress(ctx context.Context, conn *connections.Connection, nodeID, address string) error {
-	if err := s.NodeAddresses.SetNodeAdvertiseHost(ctx, conn.OrgID, conn.ID, address); err != nil {
-		return err
+// names it, then the node marks it confirmed. A route reaches the node only
+// while both name the same address, so until the second write it reaches
+// none; when that write fails, the connection goes back to the address it
+// named, which the node still holds. current is the address the node holds
+// now: a write that is already in place isn't made again, so a node keeps
+// the time its address was confirmed. "" always writes both.
+func (s *Service) settleNodeAddress(ctx context.Context, conn *connections.Connection, nodeID, address, current string) error {
+	previous := conn.Details["advertise_host"]
+	if previous != address {
+		if err := s.NodeAddresses.SetNodeAdvertiseHost(ctx, conn.OrgID, conn.ID, address); err != nil {
+			return err
+		}
 	}
-	return s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressDirect, address)
+	if current == address {
+		return nil
+	}
+	err := s.NodeIngress.SetIngress(ctx, nodeID, nodeproto.IngressDirect, address)
+	if err != nil && previous != address && net.ParseIP(previous) != nil {
+		if backErr := s.NodeAddresses.SetNodeAdvertiseHost(context.WithoutCancel(ctx), conn.OrgID, conn.ID, previous); backErr != nil {
+			err = errors.Join(err, backErr)
+		}
+	}
+	return err
 }
 
 // firstAnswering is the first address whose answer is exactly the nonce,

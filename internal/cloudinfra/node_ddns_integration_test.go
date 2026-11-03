@@ -4,13 +4,16 @@ package cloudinfra
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/nodeproto"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -116,5 +119,77 @@ func TestDDNSAcceptReplacesAnEarlierAddressChange(t *testing.T) {
 	}
 	if s := status("op_second"); s != "waiting" {
 		t.Fatalf("second is %s", s)
+	}
+
+	// A handoff goes ahead of an address change that is only waiting, and
+	// waits for one that is running.
+	// One that failed with its write unanswered still holds the route;
+	// a retry reconciles that write first.
+	exec(`UPDATE loomplane_route_operations SET status='failed',body=jsonb_set(body,'{status}','"failed"') WHERE id='op_second'`)
+	if err = st.AcceptRoute(ctx, address("op_waiting")); !errors.Is(err, ErrBusy) {
+		t.Fatalf("accepted over a failed unanswered write: %v", err)
+	}
+	exec(`UPDATE loomplane_route_operations SET status='cancelled',body=jsonb_set(body,'{status}','"cancelled"') WHERE id='op_second'`)
+	if err = st.AcceptRoute(ctx, address("op_waiting")); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE loomplane_route_operations SET status='running',body=jsonb_set(body,'{status}','"running"') WHERE id='op_waiting'`)
+	source := route
+	prepare := func() *RouteOperation {
+		return &RouteOperation{ID: "op_prepare", Kind: "prepare", Status: "pending", Attempt: 1, Revision: 1, Route: route, Source: &source, Principal: user}
+	}
+	if err = st.AcceptRoute(ctx, prepare()); !errors.Is(err, ErrBusy) {
+		t.Fatalf("handoff over a running address change: %v", err)
+	}
+	exec(`UPDATE loomplane_route_operations SET status='waiting',body=jsonb_set(body,'{status}','"waiting"') WHERE id='op_waiting'`)
+	if err = st.AcceptRoute(ctx, prepare()); err != nil {
+		t.Fatal(err)
+	}
+	if s := status("op_waiting"); s != "cancelled" {
+		t.Fatalf("waiting address change is %s", s)
+	}
+	if s := status("op_prepare"); s != "pending" {
+		t.Fatalf("prepare is %s", s)
+	}
+}
+
+func TestDDNSNodesBehindAddressQuery(t *testing.T) {
+	pg := routeBindingDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ns := nodes.NewPgStore(pg)
+	cs := connections.NewPgStore(pg)
+	add := func(id, advertise string, offered []string) {
+		t.Helper()
+		n := &nodes.Node{ID: id, OrgID: "org", Name: id, PublicKey: []byte(id), KeyFingerprint: "fp-" + id, IdentityGeneration: 1, Status: nodes.StatusOnline,
+			Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}, IngressMode: "none", Role: "node", Labels: map[string]string{}, Version: "1.0.0", ProtocolVersion: 1,
+			Inventory: nodeproto.Inventory{OS: "linux", PublicAddresses: offered}, JoinedBy: "usr", JoinedByKeyID: "key", CreatedAt: now, UpdatedAt: now}
+		if err := ns.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ns.SetIngress(ctx, id, nodes.IngressSetting{Mode: "direct", PublicAddress: "203.0.113.7", ConfirmedAt: &now, SentAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if err := cs.CreateConnection(ctx, &connections.Connection{ID: "conn_" + id, OrgID: "org", Cloud: connections.Server, Method: connections.MethodNode, Name: id, Status: connections.StatusReady,
+			Details: map[string]string{"node_id": id, "advertise_host": advertise, "docker_id": "daemon-" + id}, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("node_settled", "203.0.113.7", []string{"203.0.113.7"})
+	add("node_half", "198.51.100.9", []string{"198.51.100.9"})
+	add("node_moved", "203.0.113.7", []string{"198.51.100.9"})
+	behind, err := NewPgStore(pg).NodesBehindAddress(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(behind))
+	for _, n := range behind {
+		if n.OrgID != "org" {
+			t.Fatalf("node %+v", n)
+		}
+		ids = append(ids, n.ID)
+	}
+	if !slices.Equal(ids, []string{"node_half", "node_moved"}) {
+		t.Fatalf("behind %v", ids)
 	}
 }

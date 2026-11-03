@@ -144,6 +144,11 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			}
 		default:
 			current, err := st.ResolveRouteBinding(ctx, route.OrgID, route.ProjectID, route.Input)
+			if op.Kind == "address" {
+				if waitErr := addressNotSettled(op, current, err); waitErr != nil {
+					return waitErr
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -179,6 +184,10 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
+	// A node's new address moves DNS alone; the proxy config stays.
+	if op.Kind == "address" {
+		return s.followRouteAddress(ctx, st, op, state, zone)
+	}
 	client := s.routeClient
 	if op.Kind == "remove" || op.Kind == "release" {
 		client = s.routeCleanupClient
@@ -191,10 +200,6 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	ctx = server.WithEffectFence(ctx, server.EffectFence{Operation: route.OrgID + "/ingress/" + route.Binding.ServerID, Generation: op.Generation})
 	if checkErr := c.ArmEffectFence(ctx, server.EffectFence{Operation: route.OrgID + "/ingress/" + route.Binding.ServerID, Generation: op.Generation}); checkErr != nil {
 		return checkErr
-	}
-	// A node's new address moves DNS alone; the proxy config stays.
-	if op.Kind == "address" {
-		return s.followRouteAddress(ctx, st, c, op, state, zone)
 	}
 	if op.Kind == "release" {
 		if checkErr := s.recoverHandoffConfig(ctx, st, c, op, state); checkErr != nil {

@@ -155,6 +155,25 @@ func (e *Extension) Start(context.Context) error {
 			}
 		}()
 		defer func() { <-registryDone }()
+		// A node's address change that didn't finish is picked up here, on
+		// its own loop: one node can take a while.
+		addressesDone := make(chan struct{})
+		go func() {
+			defer close(addressesDone)
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				if err := e.svc.ReconcileNodeAddresses(ctx); err != nil && ctx.Err() == nil {
+					e.Logger().Warn("Follow nodes to their addresses", forge.F("error", err.Error()))
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		defer func() { <-addressesDone }()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		var swept time.Time
