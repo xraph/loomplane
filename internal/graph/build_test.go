@@ -277,3 +277,42 @@ func TestBuild_goEnvFollowsWhatEachMainReaches(t *testing.T) {
 		}
 	}
 }
+
+func TestBuild_strayFilesStayWithTheirOwn(t *testing.T) {
+	ev := func(p string) pd.Evidence { return pd.Evidence{Path: p, Line: 1} }
+	r := &pd.Report{
+		Units: []pd.Unit{
+			{ID: "go:.", Ecosystem: pd.Go, Path: ".", Entrypoints: []pd.Entrypoint{
+				{Name: "app", Path: "cmd/app", Packages: []string{"cmd/app"}},
+				{Name: "app-push-gateway", Path: "cmd/app-push-gateway", Packages: []string{"cmd/app-push-gateway"}},
+			}},
+			{ID: "python:ml", Ecosystem: pd.Python, Path: "ml", Entrypoints: []pd.Entrypoint{{Name: "ml", Path: "ml"}}},
+		},
+		Env: []pd.EnvUse{
+			{Name: "ROOT", Evidence: []pd.Evidence{ev(".env.example")}},
+			// A deploy stack's file is for the stack, not for every service.
+			{Name: "STACK", Evidence: []pd.Evidence{ev("deployments/production/.env.example")}},
+			{Name: "GATEWAY", Evidence: []pd.Evidence{ev("deployments/push-gateway/.env.example")}},
+			// A Python script outside ml is still Python, never Go.
+			{Name: "FONTS", Evidence: []pd.Evidence{ev("brand/wordmark.py")}},
+		},
+	}
+	got := map[string]string{}
+	for _, s := range Build(r).Services {
+		var names []string
+		for _, v := range s.Env {
+			names = append(names, v.Name)
+		}
+		got[s.Name] = strings.Join(names, " ")
+	}
+	want := map[string]string{
+		"app":              "ROOT",
+		"app-push-gateway": "ROOT GATEWAY",
+		"ml":               "FONTS",
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s env = %q, want %q", name, got[name], w)
+		}
+	}
+}

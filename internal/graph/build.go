@@ -266,9 +266,10 @@ func imageService(img discovery.Image) Service {
 
 // assignEnv gives each service the variables read in its own code. A file
 // belongs to the services whose entrypoint directory holds it most
-// closely, then to those whose source directory does, and a file none of
-// them holds, such as a root .env.example beside apps/api and apps/web,
-// belongs to every service.
+// closely, then to those whose source directory does. A file none of them
+// holds, such as a root .env.example beside apps/api and apps/web, is a
+// stray: it goes to the services at the root, or to every service when
+// none is, and a source file only to services of its own ecosystem.
 //
 // A Go source file goes by imports instead: it belongs to the services
 // whose main package reaches its package, so a config package only one
@@ -276,42 +277,57 @@ func imageService(img discovery.Image) Service {
 // no main reaches is linked into none of them, and goes by directory to
 // the other services only when one holds it.
 func assignEnv(services []Service, reach []map[string]bool, vars []discovery.EnvUse) {
-	var plain []int // services that aren't Go mains
+	var all, plain []int // plain are the services that aren't Go mains
 	for i := range services {
+		all = append(all, i)
 		if reach[i] == nil {
 			plain = append(plain, i)
 		}
 	}
+	srcPath := func(s Service) string { return s.Path }
 	owners := map[string][]int{}
 	ownersOf := func(file string) []int {
 		if o, ok := owners[file]; ok {
 			return o
 		}
-		candidates := plain
+		candidates := all
 		goFile := path.Ext(file) == ".go" && len(plain) < len(services)
 		if goFile {
-			var o []int
+			candidates = plain
 			for i, pkgs := range reach {
 				if pkgs[path.Dir(file)] {
-					o = append(o, i)
+					owners[file] = append(owners[file], i)
 				}
 			}
-			if o != nil {
-				owners[file] = o
+			if o := owners[file]; o != nil {
 				return o
 			}
-		} else {
-			candidates = make([]int, len(services))
-			for i := range services {
-				candidates[i] = i
-			}
 		}
-		o := closest(services, candidates, file, entryDir)
+		o := holding(services, candidates, file, entryDir)
 		if o == nil {
-			o = closest(services, candidates, file, func(s Service) string { return s.Path })
+			o = atRoot(services, candidates, entryDir)
 		}
-		if o == nil && !goFile {
-			o = candidates
+		if o == nil {
+			o = holding(services, candidates, file, srcPath)
+		}
+		if o == nil {
+			if dotenvFile(file) {
+				o = strayEnvFile(services, candidates, file)
+			} else if eco := sourceEcosystem(file); eco != "" {
+				var same []int
+				for _, i := range candidates {
+					if e := services[i].Ecosystem; e == eco || e == discovery.Container {
+						same = append(same, i)
+					}
+				}
+				if o = atRoot(services, same, srcPath); o == nil && !goFile {
+					o = same
+				}
+			} else {
+				if o = atRoot(services, candidates, srcPath); o == nil && !goFile {
+					o = candidates
+				}
+			}
 		}
 		owners[file] = o
 		return o
@@ -332,6 +348,57 @@ func assignEnv(services []Service, reach []map[string]bool, vars []discovery.Env
 			services[i].Env = append(services[i].Env, *got[i])
 		}
 	}
+}
+
+// strayEnvFile decides who gets a dotenv file, such as an .env.example,
+// that no candidate service's directory holds. That's a root file beside
+// apps/api and apps/web, but also a deploy stack's own file such as
+// deployments/production/.env.example, which sits under no service.
+//
+// Only a root file is shared, with the root services or else every
+// service. One in a subdirectory describes something else, such as a
+// deploy stack, and goes only to the service its directory is named for:
+// deployments/push-gateway to loomplane-push-gateway.
+func strayEnvFile(services []Service, candidates []int, file string) []int {
+	dir := path.Dir(file)
+	if dir == "." {
+		if o := atRoot(services, candidates, func(s Service) string { return s.Path }); o != nil {
+			return o
+		}
+		return candidates
+	}
+	name := path.Base(dir)
+	var out []int
+	for _, i := range candidates {
+		if n := services[i].Name; n == name || strings.HasSuffix(n, "-"+name) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// dotenvFile reports whether file is a dotenv file, an example or not.
+func dotenvFile(file string) bool {
+	base := strings.ToLower(path.Base(file))
+	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || base == "env.example"
+}
+
+// sourceEcosystem is the ecosystem a source file's language builds with,
+// or "" for one no detector builds, such as Ruby.
+func sourceEcosystem(file string) discovery.Ecosystem {
+	switch path.Ext(file) {
+	case ".go":
+		return discovery.Go
+	case ".rs":
+		return discovery.Rust
+	case ".py":
+		return discovery.Python
+	case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte", ".astro":
+		return discovery.Node
+	case ".java", ".kt", ".kts", ".scala", ".groovy", ".properties", ".yml", ".yaml":
+		return discovery.JVM
+	}
+	return ""
 }
 
 // entryDir is the directory a service's entrypoint is: the entrypoint
@@ -356,10 +423,10 @@ func packageSet(dirs []string) map[string]bool {
 	return set
 }
 
-// closest returns the candidate services whose directory, by dirOf,
-// holds file most closely, or nil when none does. A root directory holds
-// a file only for a service at the root.
-func closest(services []Service, candidates []int, file string, dirOf func(Service) string) []int {
+// holding returns the candidate services whose directory, by dirOf,
+// holds file most closely, or nil when none does. A root directory isn't
+// counted here: see atRoot.
+func holding(services []Service, candidates []int, file string, dirOf func(Service) string) []int {
 	var out []int
 	best := -1
 	for _, i := range candidates {
@@ -374,11 +441,16 @@ func closest(services []Service, candidates []int, file string, dirOf func(Servi
 			out = append(out, i)
 		}
 	}
-	if out == nil {
-		for _, i := range candidates {
-			if d := path.Clean(dirOf(services[i])); d == "." || d == "" {
-				out = append(out, i)
-			}
+	return out
+}
+
+// atRoot returns the candidate services whose directory, by dirOf, is the
+// repository root.
+func atRoot(services []Service, candidates []int, dirOf func(Service) string) []int {
+	var out []int
+	for _, i := range candidates {
+		if d := path.Clean(dirOf(services[i])); d == "." || d == "" {
+			out = append(out, i)
 		}
 	}
 	return out
