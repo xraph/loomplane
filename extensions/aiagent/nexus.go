@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/forge"
@@ -23,6 +24,7 @@ import (
 	shieldengine "github.com/xraph/shield/engine"
 	"github.com/xraph/shield/presets"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -396,4 +398,36 @@ func (s shieldSeeder) Seed(ctx context.Context, orgID string) error {
 	}
 	eng.InvalidateProfiles(orgID)
 	return nil
+}
+
+// SystemTenant is the nexus tenant indexing the docs is billed to
+// ("loomplane-system"), never a workspace's. It is made on first use with
+// ai.knowledge.docs_budget_usd, which EnsureTenant also sets on a tenant
+// that exists, so a changed budget takes effect on the next start. The ID
+// is kept for the life of the process.
+type SystemTenant struct {
+	gateway   agentsettings.Gateway
+	budgetUSD string
+
+	mu sync.Mutex
+	id string
+}
+
+// ID returns the tenant's ID, making the tenant if it isn't there.
+func (s *SystemTenant) ID(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.id != "" {
+		return s.id, nil
+	}
+	budget := s.budgetUSD
+	if budget == "" {
+		budget = config.DefaultDocsBudgetUSD
+	}
+	id, err := s.gateway.EnsureTenant(ctx, agentknowledge.SystemOrg, budget)
+	if err != nil {
+		return "", err
+	}
+	s.id = id
+	return id, nil
 }

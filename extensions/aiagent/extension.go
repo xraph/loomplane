@@ -110,6 +110,10 @@ type Extension struct {
 	runs  *agentruns.Service
 	// requests are what the agent asks of people.
 	requests *agentrequests.Service
+	// knowledge indexes the docs and each workspace's documents; system
+	// is the nexus tenant indexing the docs is billed to.
+	knowledge *agentknowledge.Service
+	system    *SystemTenant
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -158,9 +162,9 @@ func (e *Extension) agentSettings() *agentsettings.Service { return e.settings.L
 
 // Register resolves the agent's settings from the AI section and binds
 // nexus and the guardrail seeder to them, so a workspace can turn the
-// agent on. It provides the scope binder, the scanner, the runs and the
-// conversations, and serves the agent's status, each project's autonomy,
-// its requests, and the conversations and their tasks.
+// agent on. It provides the scope binder, the scanner, the runs, the
+// conversations and knowledge, and serves the agent's status, each
+// project's autonomy, its requests, and the conversations and their tasks.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -214,6 +218,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
+	if knowledgeErr := e.registerKnowledge(c, settings); knowledgeErr != nil {
+		return knowledgeErr
+	}
 	if routesErr := mountRoutes(fapp.Router(), guard, settings, projectSvc); routesErr != nil {
 		return routesErr
 	}
@@ -250,12 +257,11 @@ func sweepCron() *cron.Definition[struct{}] {
 }
 
 // Start turns knowledge on if this server can have it, and records why
-// not if it can't; knowledge never stops the agent starting. The library
+// not if it can't; knowledge never stops the agent starting. When it's on,
+// the docs are indexed by a job and recovery is scheduled. The library
 // extensions have started by now, and no agent job has run.
 func (e *Extension) Start(ctx context.Context) error {
-	if s := e.agentSettings(); s != nil {
-		s.SetKnowledge(agentknowledge.Boot(ctx, e.cfg.AI, e.embeddingsPriced, agentknowledge.PgVectors(e.db)))
-	}
+	e.startKnowledge(ctx)
 	// Only here: with AI off this extension doesn't exist, and nothing is
 	// scheduled; a schedule left from when AI was on lands on aiext.Off.
 	if eng := e.jobs(); eng != nil {

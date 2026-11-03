@@ -23,6 +23,7 @@ import (
 	"github.com/xraph/weave/vectorstore"
 	vectormemory "github.com/xraph/weave/vectorstore/memory"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -357,6 +358,10 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	if ext.weave.IsStarted() {
 		t.Fatal("weave still reads as started")
 	}
+	// Weave's extension sets no chunker of its own, and ingest needs one.
+	if c := ext.weave.Engine().Components().Chunker; !c.Configured {
+		t.Fatalf("weave has no chunker: %+v", c)
+	}
 }
 
 // Cortex refuses a tool authorizer without a principal codec, so the two
@@ -393,5 +398,52 @@ func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
 func TestTheSweepRunsOnTheDefaultQueue(t *testing.T) {
 	if c := sweepCron(); c.Queue != "default" || c.JobName != agentruns.JobSweep || c.Schedule != "@every 15s" {
 		t.Fatalf("cron %+v", c)
+	}
+}
+
+// Knowledge's recovery is scheduled on the default queue, as the sweep is,
+// so a server later run with AI off answers it with the AI-off handler.
+func TestKnowledgeRecoveryRunsOnTheDefaultQueue(t *testing.T) {
+	c := recoverCron()
+	if c.Queue != agentruns.SweepQueue || c.Name != agentknowledge.CronRecover || c.JobName != agentknowledge.JobRecover || c.Schedule != "@every 5m" {
+		t.Fatalf("cron %+v", c)
+	}
+}
+
+// tenantGateway records EnsureTenant.
+type tenantGateway struct {
+	agentsettings.Gateway
+	calls [][2]string
+}
+
+func (g *tenantGateway) EnsureTenant(_ context.Context, orgID, budget string) (string, error) {
+	g.calls = append(g.calls, [2]string{orgID, budget})
+	return "nx-" + orgID, nil
+}
+
+// The docs are billed to the system's own tenant, made once a process
+// with ai.knowledge.docs_budget_usd (the default when it's empty).
+func TestSystemTenant(t *testing.T) {
+	ctx := context.Background()
+	g := &tenantGateway{}
+	s := &SystemTenant{gateway: g, budgetUSD: "12.50"}
+	for range 2 {
+		id, err := s.ID(ctx)
+		if err != nil || id != "nx-system" {
+			t.Fatalf("ID = %q, %v", id, err)
+		}
+	}
+	if len(g.calls) != 1 || g.calls[0] != [2]string{agentknowledge.SystemOrg, "12.50"} {
+		t.Fatalf("EnsureTenant calls %v", g.calls)
+	}
+	if got := tenantSlug(agentknowledge.SystemOrg); got != "loomplane-system" {
+		t.Fatalf("slug %q", got)
+	}
+	g = &tenantGateway{}
+	if _, err := (&SystemTenant{gateway: g}).ID(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if g.calls[0][1] != config.DefaultDocsBudgetUSD {
+		t.Fatalf("budget %q, want the default", g.calls[0][1])
 	}
 }

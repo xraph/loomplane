@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/dispatch/job"
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
 )
 
@@ -74,6 +75,10 @@ func RegisterOffJobs(eng *engine.Engine) {
 	}, job.WithMaxRetries(0)))
 	// The agent's sweep, scheduled while AI was on.
 	engine.Register(eng, job.NewDefinition(agentruns.JobSweep, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// Knowledge's recovery, scheduled while AI and knowledge were on.
+	engine.Register(eng, job.NewDefinition(agentknowledge.JobRecover, func(context.Context, struct{}) error {
 		return nil
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
 }
