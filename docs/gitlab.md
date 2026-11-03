@@ -25,9 +25,9 @@ gitlab:
   client_secret: "<the Secret>"
 ```
 
-Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read. Restart `loomplane` and `loomplane-worker` after you change them.
+You can set them as `LOOMPLANE_GITLAB_CLIENT_ID` and `LOOMPLANE_GITLAB_CLIENT_SECRET` instead, which is how the Docker Compose, Helm and App Platform setups take them. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read. Restart `loomplane` and `loomplane-worker` after you change them.
 
-`gitlab.api_url` is the address Loomplane reads gitlab.com from, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double.
+`gitlab.api_url` (`LOOMPLANE_GITLAB_API_URL`) is the address Loomplane reads gitlab.com from, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double.
 
 ## A self-managed GitLab
 
@@ -45,13 +45,13 @@ gitlab:
       client_secret: "<the Secret>"
 ```
 
-`web_url` is the GitLab's address with no path, and it may be http or https. Set `client_id` and `client_secret` together, or leave both out to read that GitLab's public projects only. These hosts are yours, so Loomplane trusts them: it doesn't filter the addresses they resolve to, which means a GitLab on your private network works.
+A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in `config.local.yaml`. `web_url` is the GitLab's address with no path, and it may be http or https. Set `client_id` and `client_secret` together, or leave both out to read that GitLab's public projects only. These hosts are yours, so Loomplane trusts them: it doesn't filter the addresses they resolve to, which means a GitLab on your private network works.
 
 ### As an organization
 
 Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters its address, an Application ID and a Secret. The dialog shows the callback URL to use when they create the application on their GitLab. They can then sign in to it from the same card.
 
-An operator who doesn't want this sets `gitlab.allow_organization_hosts: false`. It defaults to true.
+An operator who doesn't want this sets `gitlab.allow_organization_hosts: false`, or `LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS=false`. It defaults to true.
 
 Because anyone with the right role can add one of these, Loomplane is stricter about where it sends requests:
 
@@ -81,7 +81,7 @@ Each connection gets its own URL, and a secret that its card shows once. The URL
 <webhook_url>/api/v1/gitlab/webhook/<connection id>
 ```
 
-`gitlab.webhook_url` defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do, such as an internal one.
+`gitlab.webhook_url` (`LOOMPLANE_GITLAB_WEBHOOK_URL`) defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do, such as an internal one.
 
 In GitLab, open **Settings**, then **Webhooks**, on the project or on its group. Paste the URL, tick **Push events** and paste a secret. The card gives you two, because GitLab checks deliveries in two ways:
 

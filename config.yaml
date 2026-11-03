@@ -98,6 +98,29 @@ github:
   # branch moves. Empty turns webhooks off.
   webhook_secret: "${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}"
 
+gitlab:
+  # Where Loomplane reads gitlab.com from. You'd change it only to point at
+  # a test double.
+  api_url: "${LOOMPLANE_GITLAB_API_URL:-https://gitlab.com}"
+  # The OAuth application that reads private projects on gitlab.com
+  # (docs/gitlab.md). Set both or neither, and keep the secret in the
+  # environment.
+  client_id: "${LOOMPLANE_GITLAB_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_GITLAB_CLIENT_SECRET:-}"
+  # Whether organizations may add a self-managed GitLab of their own.
+  # true or false.
+  allow_organization_hosts: "${LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS:-true}"
+  # Where GitLab reaches this Loomplane's webhook, when public_url isn't an
+  # address GitLab can reach. Empty means public_url.
+  webhook_url: "${LOOMPLANE_GITLAB_WEBHOOK_URL:-}"
+  # Self-managed GitLabs you trust go here, in config.local.yaml, since a
+  # list can't come from one variable. Every organization can sign in to
+  # them, and they may be http and on a private network:
+  # hosts:
+  #   - web_url: https://git.example.com
+  #     client_id: "<the Application ID>"
+  #     client_secret: "<the Secret>"
+
 # Repository analysis, which loomplane-worker runs.
 analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the

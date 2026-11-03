@@ -28,7 +28,7 @@ gitlab:
   client_secret: "<the Secret>"
 ```
 
-Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
+You can set them as `LOOMPLANE_GITLAB_CLIENT_ID` and `LOOMPLANE_GITLAB_CLIENT_SECRET` instead. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
 
 ## A self-managed GitLab
 
@@ -42,14 +42,23 @@ gitlab:
       client_secret: "<the Secret>"
 ```
 
-`web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
+A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works.
 
 An organization can add its own instead. Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters the address, an Application ID and a Secret. The dialog shows the callback URL to use. Loomplane is stricter about these:
 
 - The address has to be https and a host name of its own. A GitLab served under a path is refused.
 - Loomplane won't call private, loopback or link-local addresses for it, and it won't follow a redirect to http or to another host.
 
-An operator who doesn't want organizations adding their own sets `gitlab.allow_organization_hosts: false`. It defaults to true. The full list of settings is `gitlab.api_url` (gitlab.com's API, `https://gitlab.com` by default), `gitlab.client_id`, `gitlab.client_secret`, `gitlab.hosts`, `gitlab.allow_organization_hosts` and `gitlab.webhook_url`.
+An operator who doesn't want organizations adding their own sets `gitlab.allow_organization_hosts: false`. It defaults to true. The full list of settings, with their environment variables, is:
+
+| Setting | Variable |
+|---|---|
+| `gitlab.api_url` (gitlab.com's API, `https://gitlab.com` by default) | `LOOMPLANE_GITLAB_API_URL` |
+| `gitlab.client_id` | `LOOMPLANE_GITLAB_CLIENT_ID` |
+| `gitlab.client_secret` | `LOOMPLANE_GITLAB_CLIENT_SECRET` |
+| `gitlab.allow_organization_hosts` | `LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS` |
+| `gitlab.webhook_url` | `LOOMPLANE_GITLAB_WEBHOOK_URL` |
+| `gitlab.hosts` | None. Use `config.local.yaml` |
 
 ## Sign in
 
@@ -61,7 +70,7 @@ Loomplane seals the tokens in its vault, and GitLab rotates them every two hours
 
 ## Re-analyze on push
 
-Each connection gets a webhook URL and a secret, shown once on its card. The URL is `<webhook_url>/api/v1/gitlab/webhook/<connection id>`, where `gitlab.webhook_url` defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do.
+Each connection gets a webhook URL and a secret, shown once on its card. The URL is `<webhook_url>/api/v1/gitlab/webhook/<connection id>`, where `gitlab.webhook_url` (`LOOMPLANE_GITLAB_WEBHOOK_URL`) defaults to your `public_url`. Set it only when GitLab reaches Loomplane at a different address than people do.
 
 <Steps>
 <Step>

@@ -56,6 +56,20 @@ Set the five App settings together, or none. Loomplane refuses to start with som
 | `LOOMPLANE_GITHUB_CLIENT_SECRET` | Unset | The App's OAuth client secret |
 | `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Unset | The secret GitHub signs deliveries with. Empty turns webhooks off |
 
+## GitLab
+
+Public projects on gitlab.com need none of this. Set the client ID and client secret together, or neither. Loomplane refuses to start with only one. See [GitLab repositories](/docs/guides/gitlab-repositories).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_GITLAB_API_URL` | `https://gitlab.com` | Where Loomplane reads gitlab.com from. Change it only to point at a test double |
+| `LOOMPLANE_GITLAB_CLIENT_ID` | Unset | The Application ID of the OAuth application registered on gitlab.com |
+| `LOOMPLANE_GITLAB_CLIENT_SECRET` | Unset | That application's Secret |
+| `LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS` | `true` | Whether organizations may add a self-managed GitLab of their own. `true` or `false` |
+| `LOOMPLANE_GITLAB_WEBHOOK_URL` | Unset | Where GitLab reaches the webhook, when the public URL isn't an address GitLab can reach. Empty uses `LOOMPLANE_PUBLIC_URL` |
+
+Self-managed GitLabs that you trust are a list, so they have no variable. Put them under `gitlab.hosts` in `config.local.yaml`.
+
 ## Email
 
 An empty host, with no Resend key or mail directory, disables email. Setting a username, password or sender without a host is an error.
