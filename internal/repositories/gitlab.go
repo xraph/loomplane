@@ -143,7 +143,8 @@ func (g *GitLab) Project(ctx context.Context, repo Repository, token string) (Gi
 // reporter access, skipping archived ones, up to gitlabMaxPages pages.
 func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, error) {
 	var all []GitLabProject
-	for page := 1; page > 0 && page <= gitlabMaxPages; {
+	page := 1
+	for range gitlabMaxPages {
 		p := "/api/v4/projects?membership=true&min_access_level=20&archived=false&simple=true&order_by=path&sort=asc&per_page=100&page=" + strconv.Itoa(page)
 		resp, err := g.get(ctx, p, token)
 		if err != nil {
@@ -157,10 +158,13 @@ func (g *GitLab) Projects(ctx context.Context, token string) ([]GitLabProject, e
 			return nil, fmt.Errorf("decode GitLab response: %w", err)
 		}
 		all = append(all, batch...)
-		page = 0 // no X-Next-Page, or one that isn't a number, ends the listing
-		if n, err := strconv.Atoi(next); err == nil {
-			page = n
+		// No X-Next-Page, one that isn't a number, or one that doesn't move
+		// forward ends the listing, so a host can't hold the loop on a page.
+		n, err := strconv.Atoi(next)
+		if err != nil || n <= page {
+			break
 		}
+		page = n
 	}
 	return all, nil
 }

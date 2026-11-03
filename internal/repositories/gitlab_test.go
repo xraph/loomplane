@@ -80,7 +80,8 @@ type fakeGitLab struct {
 	auth     []string
 	status   int // answers every request with this status when set
 	retry    string
-	pages    int // how many pages /projects has; the last has no X-Next-Page
+	pages    int    // how many pages /projects has; the last has no X-Next-Page
+	next     string // when set, X-Next-Page on every page, whatever its number
 	pageSeen []string
 }
 
@@ -117,7 +118,9 @@ func (f *fakeGitLab) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.pageSeen = append(f.pageSeen, q.Get("page"))
 		f.mu.Unlock()
-		if page < f.pages {
+		if f.next != "" {
+			w.Header().Set("X-Next-Page", f.next)
+		} else if page < f.pages {
 			w.Header().Set("X-Next-Page", strconv.Itoa(page+1))
 		} else {
 			w.Header().Set("X-Next-Page", "")
@@ -262,6 +265,23 @@ func TestGitLab_ProjectsPagesAndCaps(t *testing.T) {
 	}
 	if len(f.pageSeen) != 10 {
 		t.Fatalf("made %d requests; want exactly 10", len(f.pageSeen))
+	}
+
+	// X-Next-Page that points at the same page, or back, must not loop.
+	for _, next := range []string{"1", "0", "abc"} {
+		f, g = newFakeGitLab(t)
+		f.next = next
+		got, err = g.Projects(context.Background(), "tok")
+		if err != nil || len(f.pageSeen) > 10 || len(f.pageSeen) != 1 || len(got) != 1 {
+			t.Fatalf("X-Next-Page %q: %d requests, %d projects, %v; want 1 request", next, len(f.pageSeen), len(got), err)
+		}
+	}
+	f, g = newFakeGitLab(t)
+	f.next = "2"
+	f.pages = 1 // page 2 answers X-Next-Page: 2 again
+	_, err = g.Projects(context.Background(), "tok")
+	if err != nil || len(f.pageSeen) != 2 {
+		t.Fatalf("X-Next-Page 2 repeated: %d requests, %v; want 2", len(f.pageSeen), err)
 	}
 
 	f, g = newFakeGitLab(t)
