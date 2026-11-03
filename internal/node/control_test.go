@@ -156,6 +156,25 @@ func TestLeaveAfterTheKeyWasRefusedLetsTheNodeGo(t *testing.T) {
 	}
 }
 
+// When leave gives up waiting, a Run that gets to the request afterwards must
+// not act on it: the person was told the node and its config were kept.
+func TestLeaveTimeoutDrainsTheRequest(t *testing.T) {
+	old := leaveWait
+	leaveWait = 50 * time.Millisecond
+	t.Cleanup(func() { leaveWait = old })
+	r := newRig(t)
+	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
+	r.join(t, nodeproto.EndpointProbe)
+	rt := r.runtime(t)
+	rt.refused.Store(true)
+	if _, err := rt.leave(t.Context()); err == nil || !strings.Contains(err.Error(), "did not stop") {
+		t.Fatalf("leave: %v", err)
+	}
+	if n := len(rt.leaveNow); n != 0 {
+		t.Fatalf("%d leave request(s) left queued after the timeout", n)
+	}
+}
+
 // A session that ends with no Revoked and no unauthorized close is a network
 // blip, not a revoke: Leave must say it could not confirm.
 func TestLeaveIsAnErrorWhenTheSessionEndsWithoutRevoked(t *testing.T) {

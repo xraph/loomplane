@@ -564,6 +564,9 @@ func (s *session) run(ctx context.Context) error {
 	// before it hung up, so keep reading and report the write error after.
 	greetErr := s.greet(ctx, hello)
 	if greetErr == nil {
+		// A connected node is not refused, so a leave request left over from
+		// before it connected is stale.
+		r.drainLeaveNow()
 		r.log().Info("loomplane-node: connected to Loomplane", "epoch", hello.Epoch)
 		s.wg.Add(3)
 		go func() { defer s.wg.Done(); s.beat(ctx) }()

@@ -165,6 +165,16 @@ func (r *Runtime) Leave(ctx context.Context) error {
 // so it could not be asked to revoke the node.
 const leftUnannounced = "Loomplane refused this node's key at its last connect, so it could not be told; if the node still shows in the dashboard, revoke it there"
 
+// drainLeaveNow takes back a leave request nobody acted on, so a Run that
+// gets to it later doesn't delete node.json after the person was told the
+// node was kept.
+func (r *Runtime) drainLeaveNow() {
+	select {
+	case <-r.leaveNow:
+	default:
+	}
+}
+
 // leave is Leave, with a note for the person who asked. A node whose key
 // Loomplane refuses has no session to ask through, and can't connect again
 // either, so it stops as revoked, and the note says Loomplane was not told.
@@ -186,8 +196,10 @@ func (r *Runtime) leave(ctx context.Context) (string, error) {
 		case <-r.revoked:
 			return leftUnannounced, nil
 		case <-t.C:
+			r.drainLeaveNow()
 			return "", errors.New("the node did not stop within " + leaveWait.String())
 		case <-ctx.Done():
+			r.drainLeaveNow()
 			return "", ctx.Err()
 		}
 	}
