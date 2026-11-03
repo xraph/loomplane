@@ -120,7 +120,7 @@ var _ AppSecrets = (*VaultAppSecrets)(nil)
 // Put implements AppSecrets.
 func (v *VaultAppSecrets) Put(ctx context.Context, cloud string, value []byte) error {
 	if _, err := v.svc.Set(ctx, cloud, value, v.appID); err != nil {
-		return fmt.Errorf("store sign-in app secret: %w", err)
+		return fmt.Errorf("store app secret: %w", err)
 	}
 	return nil
 }
@@ -132,7 +132,7 @@ func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, err
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read sign-in app secret: %w", err)
+		return nil, fmt.Errorf("read app secret: %w", err)
 	}
 	return sec.Value, nil
 }
@@ -141,7 +141,7 @@ func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, err
 func (v *VaultAppSecrets) Delete(ctx context.Context, cloud string) error {
 	err := v.svc.Delete(ctx, cloud, v.appID)
 	if err != nil && !errors.Is(err, core.ErrSecretNotFound) {
-		return fmt.Errorf("delete sign-in app secret: %w", err)
+		return fmt.Errorf("delete app secret: %w", err)
 	}
 	return nil
 }

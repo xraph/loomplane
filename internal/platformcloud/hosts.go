@@ -51,8 +51,9 @@ type NewHost struct {
 	ClientFingerprint string
 }
 
-// Fresh reports whether the host's evidence is recent enough, at now, for it
-// to take placements.
+// Fresh reports whether the host's last check is recent enough at now. A
+// failed check stamps CheckedAt too, so a host takes placements only when
+// Status == "ready" && Fresh(now).
 func (h *Host) Fresh(now time.Time) bool {
 	return !h.Evidence.CheckedAt.IsZero() && now.Sub(h.Evidence.CheckedAt) <= EvidenceMaxAge
 }
@@ -195,15 +196,17 @@ func (s *Service) CheckHost(ctx context.Context, _ /* actor */, hostID string) (
 		return nil, err
 	}
 	defer c.Close()
-	caps, checkErr := c.Check(ctx)
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	caps, checkErr := c.Check(checkCtx)
 	if checkErr == nil || caps.Version != 0 {
 		ev = evidenceFrom(caps, now)
 	}
 	switch {
+	case caps.Version != 0 && caps.HostID != h.HostID:
+		reason = "the host reports a different host ID"
 	case checkErr != nil:
 		reason = "the host did not pass its check: " + checkErr.Error()
-	case caps.HostID != h.HostID:
-		reason = "the host reports a different host ID"
 	default:
 		if err = buildpolicy.CheckPlatform(platformEvidence(caps)); err != nil {
 			reason = err.Error()
@@ -267,29 +270,38 @@ func (s *Service) DrainHost(ctx context.Context, _ /* actor */, hostID string) (
 	return h, nil
 }
 
-// RetireHost takes a host out of service for good and deletes its
-// credential. It refuses while any placement is still on the host.
+// RetireHost takes a drained host out of service for good and deletes its
+// credential. It refuses a host that is not draining, and one that still has
+// a placement. The status, the placement check and the update happen under
+// the host's row lock, so a reservation can't slip in between; the
+// credential goes only after that commits.
 func (s *Service) RetireHost(ctx context.Context, _ /* actor */, hostID string) error {
 	vault, err := s.secretStore()
 	if err != nil {
 		return err
 	}
-	h, err := s.store.GetHost(ctx, hostID)
+	err = s.store.withTx(ctx, func(tx driverTx) error {
+		h, lockErr := s.store.LockHost(ctx, tx, hostID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if h.Status != hostDraining {
+			return fmt.Errorf("%w: drain the host before retiring it", ErrConflict)
+		}
+		var placed int
+		if scanErr := tx.QueryRow(ctx, `SELECT count(*) FROM loomplane_platform_placements WHERE host_id=$1 AND state<>'released'`, hostID).Scan(&placed); scanErr != nil {
+			return scanErr
+		}
+		if placed > 0 {
+			return fmt.Errorf("%w: %d placements are still on the host", ErrConflict, placed)
+		}
+		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_hosts SET status=$2,revision=revision+1,updated_at=now() WHERE id=$1`, hostID, hostRetired)
+		return execErr
+	})
 	if err != nil {
 		return err
 	}
-	placed, err := s.store.PlacementsOnHost(ctx, hostID)
-	if err != nil {
-		return err
-	}
-	if len(placed) > 0 {
-		return fmt.Errorf("%w: %d placements are still on the host", ErrConflict, len(placed))
-	}
-	h.Status = hostRetired
-	if err = s.store.UpdateHost(ctx, h); err != nil {
-		return err
-	}
-	return vault.Delete(ctx, hostSecretKey(h.ID))
+	return vault.Delete(ctx, hostSecretKey(hostID))
 }
 
 // SetAllotment changes how much of the host the platform may use. The new

@@ -148,7 +148,7 @@ func TestCheckHostReadyOnlyWithPlatformEvidence(t *testing.T) {
 
 	e.driver.caps.SMTActive = false
 	e.driver.caps.HostID = "other"
-	if h, err = e.svc.CheckHost(t.Context(), "owner", id); err != nil || h.Status != "pending" {
+	if h, err = e.svc.CheckHost(t.Context(), "owner", id); err != nil || h.Status != "pending" || !strings.Contains(h.Evidence.Reason, "different host ID") {
 		t.Fatalf("host id mismatch: %v %+v", err, h)
 	}
 
@@ -183,23 +183,33 @@ func TestCheckHostRefusesAllotmentBeyondAgentLimits(t *testing.T) {
 	}
 }
 
-func TestRetireRefusesWithPlacements(t *testing.T) {
+func TestRetireOnlyDrainedHostsWithoutPlacements(t *testing.T) {
 	e := newHostEnv(t)
 	e.serve(t, agentLimits())
 	nh, err := e.svc.AddHost(t.Context(), "owner", e.in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pg := e.pg
+	e.trust(t, nh)
 	host := nh.Host.ID
-	addPlacement(t, pg, "p1", "org1", "service", "running", &host, 1, 128, 10)
+	key := "platform-cloud/host/" + host
+	if _, err = e.svc.CheckHost(t.Context(), "owner", host); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.RetireHost(t.Context(), "owner", host); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retire of a ready host: %v", err)
+	}
+	if _, err = e.svc.DrainHost(t.Context(), "owner", host); err != nil {
+		t.Fatal(err)
+	}
+	addPlacement(t, e.pg, "p1", "org1", "service", "running", &host, 1, 128, 10)
 	if err = e.svc.RetireHost(t.Context(), "owner", host); !errors.Is(err, ErrConflict) {
 		t.Fatalf("retire with placement: %v", err)
 	}
-	if _, err = e.secret.Reveal(t.Context(), "platform-cloud/host/"+host); err != nil {
+	if _, err = e.secret.Reveal(t.Context(), key); err != nil {
 		t.Fatal("secret deleted despite refusal")
 	}
-	if _, err = pg.Exec(t.Context(), `UPDATE loomplane_platform_placements SET state='released' WHERE id='p1'`); err != nil {
+	if _, err = e.pg.Exec(t.Context(), `UPDATE loomplane_platform_placements SET state='released' WHERE id='p1'`); err != nil {
 		t.Fatal(err)
 	}
 	if err = e.svc.RetireHost(t.Context(), "owner", host); err != nil {
@@ -209,7 +219,7 @@ func TestRetireRefusesWithPlacements(t *testing.T) {
 	if got.Status != "retired" {
 		t.Fatal(got.Status)
 	}
-	if _, err = e.secret.Reveal(t.Context(), "platform-cloud/host/"+host); err == nil {
+	if _, err = e.secret.Reveal(t.Context(), key); err == nil {
 		t.Fatal("secret kept after retire")
 	}
 }
