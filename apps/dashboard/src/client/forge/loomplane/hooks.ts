@@ -132,6 +132,7 @@ export const useConnectionKeylessReplace = mutation<Connection, Connection>(ops[
 export const useConnectionStorageList = query<StorageVolumeList>(ops['connectionStorage.list']);
 export const useDeploymentsGet = query<DeploymentsDeployment>(ops['deployments.get']);
 export const useDeploymentsCanary = query<CanaryReport>(ops['deployments.canary']);
+export const useDeploymentsCancel = mutation<DeploymentsDeployment, DeploymentsDeployment>(ops['deployments.cancel']);
 export const useDeploymentsCancelCapacity = mutation<DeploymentsDeployment, DeploymentsDeployment>(ops['deployments.cancelCapacity']);
 export const useDeploymentsResumeCapacity = mutation<DeploymentsDeployment, DeploymentsDeployment>(ops['deployments.resumeCapacity']);
 export const useDeploymentsCleanup = query<FailedCleanup>(ops['deployments.cleanup']);

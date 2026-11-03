@@ -34,13 +34,13 @@ var (
 )
 
 const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, sources,
-	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait, canary`
+	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait, canary, cancel_requested_at`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
 	var sources, steps, wait, canary []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait, &canary); err != nil {
+		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait, &canary, &d.CancelRequestedAt); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(sources, &d.Sources); err != nil {
@@ -79,7 +79,7 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 		return nil, err
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL, $16)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL, $16, NULL)
 		ON CONFLICT (plan_id) DO NOTHING`,
 		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, sources,
 		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt, canary)
@@ -273,7 +273,7 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 	}
 	for i := range steps {
 		if retried(steps[i].Status) {
-			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt = StepPending, "Waiting to retry", nil, nil
+			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt, steps[i].Claimed = StepPending, "Waiting to retry", nil, nil, false
 		}
 	}
 	if raw, err = encodeSteps(steps); err != nil {
@@ -293,7 +293,7 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments
-		SET status = 'running', error = '', finished_at = NULL, steps = $3, canary = $4, retries = retries + 1
+		SET status = 'running', error = '', finished_at = NULL, cancel_requested_at = NULL, steps = $3, canary = $4, retries = retries + 1
 		WHERE org_id = $1 AND id = $2`, orgID, id, raw, rawCanary); err != nil {
 		return false, fmt.Errorf("reopen deployment: %w", err)
 	}
@@ -308,6 +308,7 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 type storedStep struct {
 	Checkpoint           []byte `json:"checkpoint,omitempty"`
 	CloudCleanupComplete bool   `json:"cloud_cleanup_complete,omitempty"`
+	Claimed              bool   `json:"claimed,omitempty"`
 	Step
 	Replaced *planning.Binding `json:"replaced,omitempty"`
 }
@@ -315,7 +316,7 @@ type storedStep struct {
 func encodeSteps(steps []Step) ([]byte, error) {
 	out := make([]storedStep, len(steps))
 	for i, s := range steps {
-		out[i] = storedStep{Step: s, Replaced: s.Replaced, Checkpoint: s.Checkpoint, CloudCleanupComplete: s.CloudCleanupComplete}
+		out[i] = storedStep{Step: s, Replaced: s.Replaced, Checkpoint: s.Checkpoint, CloudCleanupComplete: s.CloudCleanupComplete, Claimed: s.Claimed}
 	}
 	return json.Marshal(out)
 }
@@ -331,6 +332,7 @@ func decodeSteps(raw []byte) ([]Step, error) {
 		out[i].Replaced = s.Replaced
 		out[i].Checkpoint = s.Checkpoint
 		out[i].CloudCleanupComplete = s.CloudCleanupComplete
+		out[i].Claimed = s.Claimed
 	}
 	return out, nil
 }

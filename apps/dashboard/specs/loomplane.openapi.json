@@ -5148,6 +5148,38 @@
         }
       }
     },
+    "/api/v1/deployments/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Cancel a running deployment before its next step, or a paused one at once; steps that finished stay as they are",
+        "operationId": "deployments.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deployment, cancelled or stopping before its next step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentsDeployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/deployments/{id}/watch": {
       "get": {
         "tags": [
@@ -19745,6 +19777,9 @@
         "properties": {
           "canary": {
             "$ref": "#/components/schemas/Canary"
+          },
+          "cancel_requested_at": {
+            "type": "string"
           },
           "capacity_wait": {
             "$ref": "#/components/schemas/CapacityWait"

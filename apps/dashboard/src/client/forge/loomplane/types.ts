@@ -1701,6 +1701,7 @@ export interface DeployedRepository {
 
 export interface Deployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -1734,6 +1735,7 @@ export interface DeploymentList {
 
 export interface DeploymentsDeployment {
   canary?: Canary;
+  cancelRequestedAt?: string;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;

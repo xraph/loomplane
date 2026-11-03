@@ -306,7 +306,36 @@ func capacityErr(err error) error {
 }
 
 func (a *App) resume(ctx cli.CommandContext) error { return a.decideWait(ctx, true) }
-func (a *App) cancel(ctx cli.CommandContext) error { return a.decideWait(ctx, false) }
+
+// cancel cancels a deployment. With --revision it cancels the capacity wait
+// that revision names, and refuses one that changed since. Without, a
+// paused deployment is cancelled at once and a running one before its next
+// step.
+func (a *App) cancel(ctx cli.CommandContext) error {
+	if ctx.String("revision") != "" {
+		return a.decideWait(ctx, false)
+	}
+	if ctx.Arg(0) == "" {
+		return errors.New("give the deployment ID")
+	}
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	d, err := c.Cancel(ctxOf(ctx), ctx.Arg(0))
+	if err != nil {
+		return err
+	}
+	if ctx.Bool("json") {
+		return a.json(d)
+	}
+	if d.Status == "cancelled" {
+		a.printf("Cancelled %s.\n", d.ID)
+	} else {
+		a.printf("Cancelling %s once the step that's running finishes.\n", d.ID)
+	}
+	return nil
+}
 
 func (a *App) decideWait(ctx cli.CommandContext, resume bool) error {
 	if ctx.Arg(0) == "" {

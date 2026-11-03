@@ -693,6 +693,21 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if step.Status == StepSucceeded || step.Status == StepRamping {
 		return nil
 	}
+	// The action is claimed before it has any effect, so a requested cancel
+	// lands only here, with nothing in flight for its fences to cut off. A
+	// retry of an attempt that claimed it, or a compensation's inner Run,
+	// finds it claimed and runs on.
+	if claimer, ok := r.store.(StepClaimer); ok && resume == nil && unclaimed(*step) {
+		stop, claimErr := claimer.ClaimStep(ctx, orgID, deploymentID, actionID)
+		if claimErr != nil {
+			return claimErr
+		}
+		if stop {
+			return r.stopRequested(ctx, orgID, deploymentID)
+		}
+		// Every step write replaces the step, so keep the claim in this one.
+		step.Claimed = true
+	}
 	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
 	if err != nil {
 		return err
@@ -825,6 +840,11 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			return errors.Join(ErrCapacityCancelled, err)
 		}
 		if blocks, blockErr := capacityBlocks(err); blockErr == nil && len(blocks) > 0 {
+			// Capacity refused the action before its effects, so a
+			// requested cancel needn't wait for room.
+			if current.CancelRequestedAt != nil {
+				return r.stopRequested(ctx, orgID, d.ID)
+			}
 			st, ok := r.store.(CapacityStore)
 			if !ok {
 				return errors.New("capacity wait store is unavailable")
@@ -856,6 +876,19 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// stopRequested cancels a deployment whose cancel was requested, at a point
+// where none of its actions has effects in flight, and reports it cancelled.
+func (r *Runner) stopRequested(ctx context.Context, orgID, deploymentID string) error {
+	stopper, ok := r.store.(Stopper)
+	if !ok {
+		return errors.New("deployment cancellation is unavailable")
+	}
+	if _, err := stopper.StopDeployment(ctx, orgID, deploymentID, r.now().UTC()); err != nil {
+		return err
+	}
+	return ErrCapacityCancelled
 }
 
 // Preserve the boundary's rejection before consulting mutable deployment

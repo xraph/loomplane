@@ -201,6 +201,7 @@ const deploymentStatuses: Record<string, { label: string; tone: Tone }> = {
   running: { label: "Deploying", tone: "wait" },
   succeeded: { label: "Deployed", tone: "ok" },
   failed: { label: "Failed", tone: "bad" },
+  cancelled: { label: "Canceled", tone: "quiet" },
 }
 
 /**

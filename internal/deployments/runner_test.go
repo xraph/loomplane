@@ -139,10 +139,10 @@ func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
 	if d.Status != StatusFailed {
 		return false, nil
 	}
-	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
+	d.Status, d.Error, d.FinishedAt, d.CancelRequestedAt = StatusRunning, "", nil, nil
 	for i := range d.Steps {
 		if retried(d.Steps[i].Status) {
-			d.Steps[i].Status = StepPending
+			d.Steps[i].Status, d.Steps[i].Claimed = StepPending, false
 		}
 	}
 	if d.Canary != nil {
