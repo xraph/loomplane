@@ -1,19 +1,23 @@
-// A repository field: type or paste any GitHub or GitLab repository, or pick
-// one the organization's connected GitHub accounts and GitLab connections let
-// Loomplane read, from a list grouped by account or namespace. New project and
-// Add a repository both use it. The field holds the key a source stores:
+// A repository field: type or paste any GitHub, GitLab or Bitbucket
+// repository, or pick one the organization's connected GitHub accounts,
+// GitLab connections and Bitbucket workspaces let Loomplane read, from a
+// list grouped by account, namespace or workspace. New project and Add a
+// repository both use it. The field holds the key a source stores:
 // owner/name for GitHub, host/path for anything else.
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { GitBranchIcon, LockIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import {
+  useBitbucketRepositories,
+  useBitbucketStatus,
   useGithubRepositories,
   useGithubStatus,
   useGitlabRepositories,
   useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import { HostMark } from "@/components/host-mark"
 import { QueryError } from "@/components/query-error"
 import {
   InputGroup,
@@ -24,6 +28,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { repositoryKey, startsWithHost } from "@/lib/format"
 import {
+  fromBitbucket,
   fromGitHub,
   fromGitLab,
   type PickerRepository,
@@ -65,7 +70,7 @@ function HostAddon({ value }: { value: string }) {
   )
 }
 
-/** What one host's list of repositories is doing. */
+/** What a host's component says about its list, to whatever is inside. */
 type Listing = {
   repositories: PickerRepository[]
   loading: boolean
@@ -73,9 +78,9 @@ type Listing = {
   retry?: () => Promise<unknown>
 }
 
-const nothing: Listing = { repositories: [], loading: false }
+type ListingProps = { children: (l: Listing) => ReactNode }
 
-function GithubListing({ children }: { children: (l: Listing) => ReactNode }) {
+function GithubListing({ children }: ListingProps) {
   const repos = useQuery(useGithubRepositories)
   return children({
     repositories: (repos.data?.repositories ?? []).map(fromGitHub),
@@ -85,7 +90,7 @@ function GithubListing({ children }: { children: (l: Listing) => ReactNode }) {
   })
 }
 
-function GitlabListing({ children }: { children: (l: Listing) => ReactNode }) {
+function GitlabListing({ children }: ListingProps) {
   const repos = useQuery(useGitlabRepositories)
   return children({
     repositories: (repos.data?.repositories ?? []).map(fromGitLab),
@@ -95,28 +100,64 @@ function GitlabListing({ children }: { children: (l: Listing) => ReactNode }) {
   })
 }
 
+function BitbucketListing({ children }: ListingProps) {
+  const repos = useQuery(useBitbucketRepositories)
+  return children({
+    repositories: (repos.data?.repositories ?? []).map(fromBitbucket),
+    loading: !repos.data && repos.status !== "error",
+    error: repos.status === "error" ? repos.error : undefined,
+    retry: repos.refetch,
+  })
+}
+
+/**
+ * Listings asks each host in turn and hands all their lists on together. A
+ * hook can't be skipped, so each host's component is nested only when that
+ * host has an account connected.
+ */
+function Listings({
+  hosts,
+  taken = [],
+  children,
+}: {
+  hosts: ((p: ListingProps) => ReactNode)[]
+  taken?: Listing[]
+  children: (listings: Listing[]) => ReactNode
+}) {
+  const [Host, ...rest] = hosts
+  if (!Host) return children(taken)
+  return (
+    <Host>
+      {(l) => (
+        <Listings hosts={rest} taken={[...taken, l]}>
+          {children}
+        </Listings>
+      )}
+    </Host>
+  )
+}
+
 export function RepositoryPicker(props: FieldProps) {
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const installations = github.data?.installations ?? []
-  const hasGitHub = installations.length > 0
-  const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
+  const workspaces = bitbucket.data?.workspaces ?? []
   // The lists ask the hosts, so they're only there once an account is
-  // connected.
-  if (!hasGitHub && !hasGitLab) return <PlainField {...props} />
-  const label = pickerGroupLabel(installations)
-  const withGitLab = (g: Listing) =>
-    hasGitLab ? (
-      <GitlabListing>
-        {(l) => <Picker {...props} label={label} listings={[g, l]} />}
-      </GitlabListing>
-    ) : (
-      <Picker {...props} label={label} listings={[g]} />
-    )
-  return hasGitHub ? (
-    <GithubListing>{withGitLab}</GithubListing>
-  ) : (
-    withGitLab(nothing)
+  // connected. A workspace that needs a new sign-in can't be listed.
+  const hosts = [
+    installations.length > 0 && GithubListing,
+    (gitlab.data?.connections.length ?? 0) > 0 && GitlabListing,
+    bitbucket.data?.configured &&
+      workspaces.some((w) => w.status === "ready") &&
+      BitbucketListing,
+  ].filter((h): h is typeof GithubListing => !!h)
+  if (hosts.length === 0) return <PlainField {...props} />
+  const label = pickerGroupLabel(installations, workspaces)
+  return (
+    <Listings hosts={hosts}>
+      {(listings) => <Picker {...props} label={label} listings={listings} />}
+    </Listings>
   )
 }
 
@@ -232,6 +273,11 @@ function Picker({
                           <span className="size-4 rounded-[4px] border bg-muted" />
                         )}
                         {group.account}
+                        <HostMark
+                          provider={group.provider}
+                          host={group.host}
+                          className="size-3 shrink-0"
+                        />
                       </Autocomplete.GroupLabel>
                       <Autocomplete.Collection>
                         {(c: RepositoryChoice) => (

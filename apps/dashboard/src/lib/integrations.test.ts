@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import type {
+  BitbucketWorkspaceView,
+  ConnectedBitbucketRepository,
   ConnectedRepository,
   Connection,
   GitHubInstallation,
@@ -9,6 +11,7 @@ import type {
 import {
   cloudCatalogue,
   cloudHealth,
+  fromBitbucket,
   fromGitHub,
   fromGitLab,
   groupRepositories,
@@ -47,6 +50,33 @@ const lab = (
   host,
   connection,
   private: false,
+  defaultBranch: "main",
+})
+
+const workspace = (
+  id: string,
+  slug: string,
+  name = slug
+): BitbucketWorkspaceView => ({
+  id,
+  workspace: slug,
+  name,
+  avatarUrl: `https://bitbucket.org/workspaces/${slug}/avatar`,
+  manageUrl: `https://bitbucket.org/${slug}/workspace/settings`,
+  connectedBy: "rex",
+  status: "ready",
+  message: "",
+  createdAt: "2026-11-02T00:00:00Z",
+})
+
+const bb = (
+  fullName: string,
+  connection = "w1",
+  priv = false
+): ConnectedBitbucketRepository => ({
+  fullName,
+  workspace: connection,
+  private: priv,
   defaultBranch: "main",
 })
 
@@ -154,6 +184,92 @@ describe("fromGitHub and fromGitLab", () => {
       group: "gitlab:git.acme.dev:team",
       defaultBranch: "main",
     })
+  })
+})
+
+describe("fromBitbucket", () => {
+  it("keys a repository by its lowercased path on bitbucket.org", () => {
+    expect(fromBitbucket(bb("Acme/API", "w1", true))).toEqual({
+      key: "bitbucket.org/acme/api",
+      fullName: "Acme/API",
+      host: "bitbucket.org",
+      provider: "bitbucket",
+      private: true,
+      group: "bitbucket:w1",
+      defaultBranch: "main",
+    })
+  })
+})
+
+describe("Bitbucket groups", () => {
+  const label = pickerGroupLabel(
+    [installation("1", "acme")],
+    [workspace("w1", "acme", "Acme Inc"), workspace("w2", "tools")]
+  )
+  const all = [
+    fromGitHub(repo("acme/web", "1")),
+    fromBitbucket(bb("acme/api", "w1")),
+    fromBitbucket(bb("tools/cli", "w2")),
+  ]
+
+  it("keeps a GitHub acme and a Bitbucket acme apart", () => {
+    const same = pickerGroupLabel(
+      [installation("1", "acme")],
+      [workspace("w1", "acme")]
+    )
+    const groups = groupRepositories(
+      [fromGitHub(repo("acme/web", "1")), fromBitbucket(bb("acme/api", "w1"))],
+      same
+    )
+    expect(groups.map((g) => [g.account, g.host, g.provider, g.key])).toEqual([
+      ["acme", "github.com", "github", "1"],
+      ["acme", "bitbucket.org", "bitbucket", "bitbucket:w1"],
+    ])
+  })
+
+  it("heads a workspace's group with its name and avatar", () => {
+    const g = groupRepositories(all, label).find(
+      (x) => x.key === "bitbucket:w1"
+    )
+    expect(g).toMatchObject({
+      account: "Acme Inc",
+      avatarUrl: "https://bitbucket.org/workspaces/acme/avatar",
+      provider: "bitbucket",
+    })
+  })
+
+  it("falls back to the workspace slug when it has no name", () => {
+    const bare = pickerGroupLabel(
+      [],
+      [{ ...workspace("w2", "tools"), name: "" }]
+    )
+    expect(bare("bitbucket:w2", all[2]).account).toBe("tools")
+  })
+
+  it("names a group by its owner once the workspace is disconnected", () => {
+    const gone = pickerGroupLabel([], [])
+    expect(gone("bitbucket:w9", fromBitbucket(bb("old/thing", "w9")))).toEqual({
+      account: "old",
+    })
+  })
+
+  it("matches on the key, so bitbucket.org/ narrows to Bitbucket", () => {
+    expect(
+      groupRepositories(all, label, "bitbucket.org/")
+        .flatMap((g) => g.repositories)
+        .map((r) => r.key)
+    ).toEqual(["bitbucket.org/acme/api", "bitbucket.org/tools/cli"])
+  })
+
+  it("marks an added bitbucket.org/Acme/API whatever its case", () => {
+    const offered = repositoryChoices(all, label, "", [
+      "bitbucket.org/Acme/API",
+    ]).flatMap((g) =>
+      g.items.map((c) => `${c.repository.key}${c.added ? " (added)" : ""}`)
+    )
+    expect(offered).toContain("bitbucket.org/acme/api (added)")
+    expect(offered).toContain("bitbucket.org/tools/cli")
+    expect(offered).toContain("acme/web")
   })
 })
 

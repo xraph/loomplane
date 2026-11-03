@@ -1,8 +1,10 @@
 // What the Integrations page shows, worked out from what the API returns:
-// the repositories each GitHub account and GitLab connection lets Loomplane
-// read, and how the organization's clouds are doing.
+// the repositories each GitHub account, GitLab connection and Bitbucket
+// workspace lets Loomplane read, and how the organization's clouds are doing.
 import type {
+  BitbucketWorkspaceView,
   CloudForm,
+  ConnectedBitbucketRepository,
   ConnectedRepository,
   Connection,
   GitHubInstallation,
@@ -13,16 +15,22 @@ import { cloudLabel } from "@/lib/clouds"
 /**
  * A repository a repository field can offer, from whichever host lists it.
  * Its key is what a source stores: owner/name on GitHub, host/path anywhere
- * else.
+ * else. Bitbucket keys are lowercased.
  */
 export type PickerRepository = {
   key: string
-  /** The name without the host: owner/name, or the GitLab project's path. */
+  /**
+   * The name without the host: owner/name, or the GitLab project's path.
+   * Bitbucket's keeps the case Bitbucket shows.
+   */
   fullName: string
   host: string
-  provider: "github" | "gitlab"
+  provider: "github" | "gitlab" | "bitbucket"
   private: boolean
-  /** What the field groups it under: an installation, or a namespace. */
+  /**
+   * What the field groups it under: an installation, a namespace, or a
+   * Bitbucket workspace's connection.
+   */
   group: string
   defaultBranch?: string
 }
@@ -51,18 +59,49 @@ export function fromGitLab(r: GitLabRepository): PickerRepository {
   }
 }
 
+/**
+ * fromBitbucket is a repository one of the organization's Bitbucket
+ * workspaces can read. Its group is the workspace's connection, which the
+ * list names in `workspace`.
+ */
+export function fromBitbucket(
+  r: ConnectedBitbucketRepository
+): PickerRepository {
+  return {
+    key: `bitbucket.org/${r.fullName.toLowerCase()}`,
+    fullName: r.fullName,
+    host: "bitbucket.org",
+    provider: "bitbucket",
+    private: r.private,
+    group: `bitbucket:${r.workspace}`,
+    defaultBranch: r.defaultBranch,
+  }
+}
+
 /** What a group of repositories is headed with. */
 export type GroupLabel = { account: string; avatarUrl?: string }
 
 /**
- * pickerGroupLabel names a group: a GitHub account, or a GitLab namespace
- * that says its host when that isn't gitlab.com.
+ * pickerGroupLabel names a group: a GitHub account, a Bitbucket workspace
+ * by its name or slug, or a GitLab namespace that says its host when that
+ * isn't gitlab.com.
  */
 export function pickerGroupLabel(
-  installations: GitHubInstallation[]
+  installations: GitHubInstallation[],
+  workspaces: BitbucketWorkspaceView[] = []
 ): (group: string, sample: PickerRepository) => GroupLabel {
   const accounts = new Map(installations.map((i) => [i.id, i]))
+  const bitbucket = new Map(workspaces.map((w) => [`bitbucket:${w.id}`, w]))
   return (group, sample) => {
+    if (sample.provider === "bitbucket") {
+      const w = bitbucket.get(group)
+      // A workspace disconnected since the list was fetched.
+      if (!w) return { account: sample.fullName.split("/")[0] }
+      return {
+        account: w.name || w.workspace,
+        avatarUrl: w.avatarUrl || undefined,
+      }
+    }
     if (sample.provider === "gitlab") {
       const prefix = `gitlab:${sample.host}:`
       const namespace = group.startsWith(prefix)
@@ -86,6 +125,9 @@ export type RepositoryGroup = {
   key: string
   account: string
   avatarUrl?: string
+  /** Where its repositories live, so equal names on two hosts differ. */
+  host: string
+  provider: PickerRepository["provider"]
   repositories: PickerRepository[]
 }
 
@@ -114,7 +156,13 @@ export function groupRepositories(
     if (!matches(r, q)) continue
     let group = groups.get(r.group)
     if (!group) {
-      group = { key: r.group, ...label(r.group, r), repositories: [] }
+      group = {
+        key: r.group,
+        ...label(r.group, r),
+        host: r.host,
+        provider: r.provider,
+        repositories: [],
+      }
       groups.set(r.group, group)
     }
     group.repositories.push(r)
@@ -193,6 +241,8 @@ export type ChoiceGroup = {
   key: string
   account: string
   avatarUrl?: string
+  host: string
+  provider: PickerRepository["provider"]
   items: RepositoryChoice[]
 }
 
@@ -220,6 +270,8 @@ export function repositoryChoices(
     key: g.key,
     account: g.account,
     avatarUrl: g.avatarUrl,
+    host: g.host,
+    provider: g.provider,
     items: g.repositories.map((r) => ({
       repository: r,
       added: added.has(r.key.toLowerCase()),
