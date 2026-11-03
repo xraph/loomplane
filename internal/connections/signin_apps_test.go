@@ -302,3 +302,29 @@ func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
 		}
 	}
 }
+
+// usePlatformApp makes app the platform's app for cloud, with no
+// configuration over it.
+func usePlatformApp(s *Service, cloud string, app oauth.App) {
+	delete(s.ConfigApps, cloud)
+	s.Apps.(*fakeAppStore).apps[cloud] = &StoredApp{Cloud: cloud, ClientID: app.ClientID, Slug: app.Slug}
+	s.AppSecrets.(*fakeAppSecrets).kept[cloud] = app.ClientSecret
+}
+
+// A config app that the cloud refuses is not the platform app under it, so
+// the platform row doesn't get its problem.
+func TestRefusedConfigAppLeavesTheShadowedPlatformRowAlone(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg", ClientSecret: "x"}})
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	if why := s.appRejected(t.Context(), GCP); why == "" {
+		t.Fatal("no message")
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+	s.ConfigApps = nil
+	s.appRejected(t.Context(), GCP)
+	if got, _ := store.AppProblems(t.Context()); len(got) != 1 {
+		t.Fatalf("a platform app's problem wasn't recorded: %v", got)
+	}
+}

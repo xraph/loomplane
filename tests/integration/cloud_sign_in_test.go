@@ -69,6 +69,7 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	defer do.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.DigitalOceanEndpoint = do.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"digitalocean": {ClientID: clientID, ClientSecret: clientSecret}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
@@ -121,26 +122,8 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 		return nil
 	}
 
-	if got := source(); got != connections.AppFromNone {
-		t.Fatalf("source before setting an app: %q", got)
-	}
-	if got := methods(); strings.Join(got, ",") != "token" {
-		t.Fatalf("methods without an app: %v", got)
-	}
-	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections/sign-ins",
-		connections.SignInInput{Cloud: connections.DigitalOcean, Name: "DigitalOcean"}, nil)
-	c.must(http.StatusNotFound, http.MethodDelete, "/api/v1/cloud-sign-in/apps/digitalocean", nil, nil)
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/digitalocean",
-		connections.AppInput{ClientID: clientID}, nil)
-
-	var set json.RawMessage
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/digitalocean",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
-	if strings.Contains(string(set), clientSecret) {
-		t.Fatalf("setting an app returned its secret: %s", set)
-	}
-	if got := source(); got != connections.AppFromPlatform {
-		t.Fatalf("source after setting an app: %q", got)
+	if got := source(); got != connections.AppFromConfig {
+		t.Fatalf("source of the configured app: %q", got)
 	}
 	if body := c.raw("/api/v1/cloud-sign-in/apps"); strings.Contains(body, clientSecret) {
 		t.Fatalf("the app list shows the secret: %s", body)
@@ -196,12 +179,40 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 		t.Fatalf("replaced %+v", replaced)
 	}
 
-	c.must(http.StatusNoContent, http.MethodDelete, "/api/v1/cloud-sign-in/apps/digitalocean", nil, nil)
-	if got := source(); got != connections.AppFromNone {
-		t.Fatalf("source after deleting the app: %q", got)
+}
+
+// Until the platform-admin routes arrive, nobody sets or removes the
+// platform's sign-in apps over HTTP, and a cloud with no app offers only
+// tokens.
+func TestCloudSignIn_appRoutesAreClosedForNow(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+
+	var list struct {
+		Apps []connections.SignInApp `json:"apps"`
 	}
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/nowhere",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, nil)
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	for _, a := range list.Apps {
+		if a.Source != connections.AppFromNone {
+			t.Fatalf("an app with nothing set: %+v", a)
+		}
+	}
+	c.must(http.StatusUnprocessableEntity, http.MethodPost, "/api/v1/connections/sign-ins",
+		connections.SignInInput{Cloud: connections.DigitalOcean, Name: "DigitalOcean"}, nil)
+	c.must(http.StatusNotFound, http.MethodPut, "/api/v1/cloud-sign-in/apps/digitalocean",
+		connections.AppInput{ClientID: "id", ClientSecret: "secret"}, nil)
+	c.must(http.StatusNotFound, http.MethodDelete, "/api/v1/cloud-sign-in/apps/digitalocean", nil, nil)
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	for _, a := range list.Apps {
+		if a.Source != connections.AppFromNone {
+			t.Fatalf("a refused PUT set an app: %+v", a)
+		}
+	}
 }
 
 // An organization sets up its own Google app, signs in to a project it
@@ -281,18 +292,12 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	defer google.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.GoogleEndpoint = google.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"gcp": {ClientID: clientID, ClientSecret: clientSecret}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
-
-	var set json.RawMessage
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/gcp",
-		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
-	if strings.Contains(string(set), clientSecret) {
-		t.Fatalf("setting an app returned its secret: %s", set)
-	}
 
 	var forms struct {
 		Clouds []struct {
@@ -354,7 +359,7 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 	if sent == "" {
 		t.Fatal("Google never got a PKCE verifier")
 	}
-	bodies := []string{string(set), string(raw), c.raw("/api/v1/connections/" + conn.ID), c.raw("/api/v1/connections"),
+	bodies := []string{string(raw), c.raw("/api/v1/connections/" + conn.ID), c.raw("/api/v1/connections"),
 		c.raw("/api/v1/cloud-sign-in/apps"), c.raw("/api/v1/connection-clouds")}
 	for _, body := range bodies {
 		for _, leak := range []string{"refresh_token", "client_secret", "access_token", firstToken, freshToken, refreshToken, clientSecret, sent} {
@@ -367,7 +372,7 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 
 // A Vercel app is installed by its slug, so one without is refused, and
 // the slug saved comes back and names the install page.
-func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
+func TestCloudSignIn_vercelInstallUsesTheAppSlug(t *testing.T) {
 	cfg := config.Defaults()
 	vercel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("asked Vercel %s %s", r.Method, r.URL)
@@ -376,20 +381,13 @@ func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
 	defer vercel.Close()
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Clouds.VercelEndpoint = vercel.URL
+	cfg.Clouds.OAuth = map[string]config.OAuthApp{"vercel": {ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}}
 	cfg.Storage.URL = "file://" + t.TempDir()
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	signedIn(t, c)
 
-	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
-		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret"}, nil)
-	var set connections.SignInApp
-	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
-		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}, &set)
-	if set.Slug != "loomplane-acme" || set.Source != connections.AppFromPlatform {
-		t.Fatalf("set %+v", set)
-	}
 	var list struct {
 		Apps []connections.SignInApp `json:"apps"`
 	}

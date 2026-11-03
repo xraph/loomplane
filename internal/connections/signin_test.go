@@ -609,7 +609,7 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 	// An exchange the cloud refuses for the app is recorded the same way.
 	s := newSignInRig(t)
 	s.provider.errs = map[string]error{"code-bad-app": oauth.ErrAppRejected}
-	s.apps.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "cfg-id"}
+	usePlatformApp(s.s, DigitalOcean, oauth.App{ClientID: "cfg-id", ClientSecret: "cfg-secret"})
 	state := s.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
 	if _, err := s.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-bad-app"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), why) {
 		t.Fatalf("complete: %v", err)

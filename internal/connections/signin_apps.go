@@ -278,6 +278,11 @@ func (s *Service) app(ctx context.Context, cloud string) (oauth.App, error) {
 // is kept even if the caller gives up.
 func (s *Service) appRejected(ctx context.Context, cloud string) string {
 	why := fmt.Sprintf("Loomplane's %s sign-in app was refused. Whoever runs Loomplane needs to check its client ID and secret.", cloudTitle(cloud))
+	// A config app has no row of its own, and a platform row under it is
+	// not the app being refused, so nothing is recorded.
+	if _, ok := s.ConfigApps[cloud]; ok {
+		return why
+	}
 	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), cloud, why, s.now().UTC()); err != nil {
 		s.warn("record the problem with a sign-in app", err)
 	}
