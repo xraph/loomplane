@@ -21,6 +21,8 @@ type HostConfig struct {
 	UIDBase                                             int
 	Limits                                              Limits
 	Peers                                               []Peer
+	Platform                                            *PlatformPeer
+	DeniedPorts                                         []int
 }
 
 var deviceName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)

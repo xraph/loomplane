@@ -112,8 +112,14 @@ type Capabilities struct {
 	IngressAddress                        string
 	Isolation                             bool
 	Limits                                Limits
+	Platform, SMTActive                   bool
+	DeniedPorts                           []int
 }
-type Limits struct{ VMs, VCPUs, MemoryMiB, DiskMiB int }
+type OrgLimits struct{ VMs, VCPUs, MemoryMiB int }
+type Limits struct {
+	VMs, VCPUs, MemoryMiB, DiskMiB int
+	PerOrg                         OrgLimits
+}
 
 func (q Request) Validate(now time.Time) error {
 	if err := q.ValidateAuthority(now); err != nil {
