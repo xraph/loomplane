@@ -105,7 +105,7 @@ import {
 import { commitURL, resourceLabel } from "@/lib/architecture"
 import { cloudLabel } from "@/lib/clouds"
 import { dateTime, duration, relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { scopeBody, planConnections } from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
@@ -175,7 +175,7 @@ function Loaded({
   refetch: () => Promise<unknown>
 }) {
   const run = useRunFor(plan, refetch)
-  const { can } = useOrganization()
+  const can = useProjectCan(plan.projectId)
   const now = useNow()
   const person = usePeople()
   const lines = useMemo(() => runLog(run, (u) => person(u).name), [run, person])
@@ -293,7 +293,7 @@ function Loaded({
 }
 
 function Heading({ run, now }: { run: Run; now: number }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const navigate = useNavigate()
   const person = usePeople()
   const replan = useMutation(usePlansCreate)

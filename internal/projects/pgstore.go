@@ -15,6 +15,9 @@ import (
 // pgUniqueViolation is Postgres's SQLSTATE for a unique constraint failure.
 const pgUniqueViolation = "23505"
 
+// pgForeignKeyViolation is Postgres's SQLSTATE for a foreign key failure.
+const pgForeignKeyViolation = "23503"
+
 // PgStore is the Postgres Store, over the grove pgdriver pool the grove
 // extension owns. The schema is migration group "loomplane"
 // (database/migrations).
@@ -33,7 +36,7 @@ const projectColumns = `id, org_id, name, slug, description, icon, color, status
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
 const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
-	p.created_by, p.created_at, p.updated_at, p.exclusions, p.deployment_mode,
+	p.created_by, p.created_at, p.updated_at, p.exclusions, p.deployment_mode, coalesce(p.responsible_team_id, ''),
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
 		FROM (SELECT s.repository, min(s.alias) AS first_alias FROM loomplane_project_sources s
 			WHERE s.project_id = p.id AND s.removed_at IS NULL GROUP BY s.repository) r), '{}')
@@ -43,7 +46,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
 	var exclusions []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.DeploymentMode, &p.Repositories); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.DeploymentMode, &p.ResponsibleTeamID, &p.Repositories); err != nil {
 		return nil, err
 	}
 	if len(exclusions) > 0 {
@@ -187,6 +190,32 @@ func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return p, nil
+}
+
+// SetResponsibleTeam implements Store. The team must be in the project's
+// organization; when nothing changes, one more read tells a missing project
+// from a team that isn't there.
+func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID string) (*Project, error) {
+	res, execErr := s.db.Exec(ctx, `UPDATE loomplane_projects
+		SET responsible_team_id = NULLIF($3, ''), updated_at = now()
+		WHERE org_id = $1 AND id = $2
+			AND ($3 = '' OR EXISTS (SELECT 1 FROM loomplane_teams t WHERE t.id = $3 AND t.org_id = $1))`,
+		orgID, id, teamID)
+	if err := teamWriteError(execErr); err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("rows affected: %w", err)
+	}
+	p, err := s.GetProject(ctx, orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrTeamNotFound
 	}
 	return p, nil
 }
@@ -342,6 +371,20 @@ func requireOneRow(res interface{ RowsAffected() (int64, error) }) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// teamWriteError maps the error of the responsible-team update. A foreign
+// key violation means the team was deleted between the check and the write,
+// so the caller named a team that isn't there.
+func teamWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgForeignKeyViolation {
+		return ErrTeamNotFound
+	}
+	return fmt.Errorf("set responsible team: %w", err)
 }
 
 func isUniqueViolation(err error) bool {

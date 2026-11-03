@@ -642,7 +642,9 @@ func TestUsageRequiresAccountIncarnationAndOwnershipReceipt(t *testing.T) {
 type projectOnlyAuth struct{}
 
 func (projectOnlyAuth) Require(_ context.Context, p security.Principal, perm security.Permission, id string) error {
-	if p.OrgID == "org" && ((id == "project" && (perm == security.ProjectRead || perm == security.DeploymentCreate)) || ((id == "production" || id == "staging") && perm == security.EnvironmentRead)) {
+	// Every check is on the project, environment:read included, so a team's
+	// grant there is enough.
+	if p.OrgID == "org" && id == "project" && (perm == security.ProjectRead || perm == security.DeploymentCreate || perm == security.EnvironmentRead) {
 		return nil
 	}
 	return security.ErrForbidden

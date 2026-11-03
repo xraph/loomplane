@@ -22,6 +22,8 @@ Roles are Warden roles, checked in the service layer on every action. The dashbo
 
 Owners and admins invite people from the dashboard. With SMTP configured, Loomplane emails the invitation and reports whether it was sent, disabled or failed. Either way you get a manual link that works once, for a week, and only for an account with that address. Owners and admins change roles and remove people, never above their own role.
 
+A role can also come from a team. If the people who ship one service shouldn't be admins everywhere, put them in a [team](/docs/concepts/teams) and give it a role on that project. Your effective role is the highest of your own and your teams'.
+
 ## API keys
 
 Make a key under **Settings, API keys**. It acts as you, with your role, in your organization, and never more. Pick read-only and it fails every permission that isn't a read.

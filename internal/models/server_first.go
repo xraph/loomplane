@@ -738,7 +738,7 @@ func (s *Service) waitingRow(ctx context.Context, p security.Principal, projectI
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, aerr
 	}
 	if s.d.Store == nil {
@@ -1078,7 +1078,7 @@ func (s *Service) stillAllowed(ctx context.Context, p security.Principal, env *p
 			return false, err
 		}
 	}
-	return s.d.Authz.Allowed(ctx, p, writeNeed(env))
+	return s.d.Authz.AllowedOn(ctx, p, writeNeed(env), env.ProjectID)
 }
 
 // environmentDeleted deletes a waiting deployment whose environment is

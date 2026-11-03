@@ -69,7 +69,7 @@ func (s *Service) pinOf(resource string, r manifest.Resource) error {
 // CheckPin says whether a model resource in the environment has an update
 // from a registry re-pin, as that environment runs it. ai:read.
 func (s *Service) CheckPin(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*PinStatus, error) {
-	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
+	if err := s.d.Authz.Require(ctx, p, security.AIRead, projectID); err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
@@ -130,7 +130,7 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, aerr
 	}
 	if s.d.Plans == nil || s.d.Manifests == nil {

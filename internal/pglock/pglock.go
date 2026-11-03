@@ -87,3 +87,38 @@ func TryShared(ctx context.Context, pg *pgdriver.PgDB, name string, fn func(cont
 	}
 	return true, nil
 }
+
+// Try runs fn while this process holds the advisory lock called name, as
+// Do does, and reports whether it ran. When another process holds the
+// lock, Try returns false at once rather than wait, for background work
+// that can come back to it later and mustn't keep a connection waiting.
+func Try(ctx context.Context, pg *pgdriver.PgDB, name string, fn func(context.Context) error) (bool, error) {
+	if pg == nil || name == "" || fn == nil {
+		return false, errors.New("pglock: Try needs a database, a lock name and a function")
+	}
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("pglock: begin %s: %w", name, err)
+	}
+	var held bool
+	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, name).Scan(&held); err != nil {
+		return false, errors.Join(fmt.Errorf("pglock: lock %s: %w", name, err), tx.Rollback())
+	}
+	if !held {
+		return false, tx.Rollback()
+	}
+	if err = fn(ctx); err != nil {
+		return true, errors.Join(err, tx.Rollback())
+	}
+	if err = tx.Rollback(); err != nil {
+		return true, fmt.Errorf("pglock: unlock %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// TryFor is Try on pg, as For is Do on pg.
+func TryFor(pg *pgdriver.PgDB) func(ctx context.Context, name string, fn func(context.Context) error) (bool, error) {
+	return func(ctx context.Context, name string, fn func(context.Context) error) (bool, error) {
+		return Try(ctx, pg, name, fn)
+	}
+}

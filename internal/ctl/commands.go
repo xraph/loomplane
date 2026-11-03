@@ -34,6 +34,7 @@ func (a *App) commands() []cli.Command {
 		a.retirementsCommand(),
 		a.servicesCommand(),
 		a.storageCommand(),
+		a.teamsCommand(),
 		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
 			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
 			cli.WithFlags(
@@ -48,7 +49,11 @@ func (a *App) commands() []cli.Command {
 				cli.WithUsage("projects create <name> --repo acme/web --repo billing=other/web"),
 				cli.WithFlags(
 					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
-					jsonFlag)))),
+					jsonFlag))),
+			cli.WithSubcommand(cli.NewCommand("team", "Name the team responsible for a project, or clear it", a.projectTeam,
+				cli.WithUsage("projects team <project> <team> | projects team <project> --none"),
+				cli.WithFlag(cli.NewBoolFlag("none", "", "Clear the responsible team", false)))),
+		),
 		cli.NewCommand("analyze", "Read a project's repositories and find their services", a.analyze,
 			cli.WithUsage("analyze <project> [--source web] [--ref main]"),
 			cli.WithFlags(

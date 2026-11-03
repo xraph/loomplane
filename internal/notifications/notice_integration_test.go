@@ -6,6 +6,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -290,6 +291,46 @@ func TestNoticeNeedIsCheckedAtDelivery(t *testing.T) {
 	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-b"})
 	if err != nil || len(list.Items) != 0 {
 		t.Fatalf("user-b sees: %+v %v", list, err)
+	}
+}
+
+// needRecorder allows everything and records each check as
+// user|permission|resource.
+type needRecorder struct {
+	mu     sync.Mutex
+	checks []string
+}
+
+func (r *needRecorder) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, p.UserID+"|"+permission.Name()+"|"+resource)
+	return nil
+}
+
+func TestGenericNoticeNeedIsCheckedOnItsProject(t *testing.T) {
+	for project, want := range map[string]string{"project-a": "user-a|agent:use|project-a", "": "user-a|agent:use|"} {
+		svc, _ := noticeService(t)
+		ctx := t.Context()
+		rec := &needRecorder{}
+		svc.SetAuthorizer(rec)
+		n := requestNotice()
+		n.ProjectID, n.Need, n.Recipients = project, "agent:use", []string{"user-a"}
+		if err := Enqueue(ctx, svc.pg, n); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.drain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var needs []string
+		for _, c := range rec.checks {
+			if strings.Contains(c, "|agent:use|") {
+				needs = append(needs, c)
+			}
+		}
+		if !slices.Equal(needs, []string{want}) {
+			t.Fatalf("project %q: need checks %v, want %s", project, needs, want)
+		}
 	}
 }
 

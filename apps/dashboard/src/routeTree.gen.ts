@@ -21,6 +21,7 @@ import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
 import { Route as SetupRouteImport } from "./routes/setup"
 import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
+import { Route as TeamsRouteImport } from "./routes/teams"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
 import { Route as AiSettingsRouteImport } from "./routes/ai.settings"
@@ -107,6 +108,11 @@ const SignInRoute = SignInRouteImport.update({
 const SignUpRoute = SignUpRouteImport.update({
   id: "/sign-up",
   path: "/sign-up",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeamsRoute = TeamsRouteImport.update({
+  id: "/teams",
+  path: "/teams",
   getParentRoute: () => rootRouteImport,
 } as any)
 const VariablesRoute = VariablesRouteImport.update({
@@ -263,6 +269,7 @@ export interface FileRoutesByFullPath {
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/ai/settings": typeof AiSettingsRoute
@@ -304,6 +311,7 @@ export interface FileRoutesByTo {
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/ai/settings": typeof AiSettingsRoute
@@ -346,6 +354,7 @@ export interface FileRoutesById {
   "/setup": typeof SetupRoute
   "/sign-in": typeof SignInRoute
   "/sign-up": typeof SignUpRoute
+  "/teams": typeof TeamsRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
   "/ai/settings": typeof AiSettingsRoute
@@ -389,6 +398,7 @@ export interface FileRouteTypes {
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
     | "/ai/settings"
@@ -430,6 +440,7 @@ export interface FileRouteTypes {
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
     | "/ai/settings"
@@ -471,6 +482,7 @@ export interface FileRouteTypes {
     | "/setup"
     | "/sign-in"
     | "/sign-up"
+    | "/teams"
     | "/variables"
     | "/verify-email"
     | "/ai/settings"
@@ -513,6 +525,7 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
+  TeamsRoute: typeof TeamsRoute
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   AiSettingsRoute: typeof AiSettingsRoute
@@ -626,6 +639,13 @@ declare module "@tanstack/react-router" {
       path: "/sign-up"
       fullPath: "/sign-up"
       preLoaderRoute: typeof SignUpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/teams": {
+      id: "/teams"
+      path: "/teams"
+      fullPath: "/teams"
+      preLoaderRoute: typeof TeamsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/variables": {
@@ -833,6 +853,7 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
+  TeamsRoute: TeamsRoute,
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   AiSettingsRoute: AiSettingsRoute,

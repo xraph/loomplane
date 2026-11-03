@@ -218,7 +218,7 @@ func (s *Service) listProject(ctx context.Context, p security.Principal, project
 
 // Status says how one model in the environment is. ai:read.
 func (s *Service) Status(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*Status, error) {
-	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
+	if err := s.d.Authz.Require(ctx, p, security.AIRead, projectID); err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
@@ -408,7 +408,7 @@ func (s *Service) statusFrom(ctx context.Context, p security.Principal, projectI
 		st.MoveCost = &c
 	}
 	st.ProjectedUSD = projected(st.Cost, st.MonthToDateUSD, now)
-	if allowed, aerr := s.d.Authz.Allowed(ctx, p, writeNeed(env)); aerr == nil {
+	if allowed, aerr := s.d.Authz.AllowedOn(ctx, p, writeNeed(env), env.ProjectID); aerr == nil {
 		st.CanEdit = allowed
 	}
 	return st, nil
@@ -651,7 +651,7 @@ func (s *Service) changeRow(ctx context.Context, p security.Principal, projectID
 	if err != nil {
 		return nil, nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, nil, aerr
 	}
 	if s.d.Store == nil {
@@ -676,7 +676,7 @@ func waitingRefusal(row *Deployment, what string) error {
 // deploy. ai:read; it writes nothing, except the review of a GPU server
 // when in.ReviewServer asks for one.
 func (s *Service) MovePreview(ctx context.Context, p security.Principal, projectID, environmentID, resource string, in MoveInput) (*DeployPreview, error) {
-	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
+	if err := s.d.Authz.Require(ctx, p, security.AIRead, projectID); err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
@@ -694,7 +694,7 @@ func (s *Service) MovePreview(ctx context.Context, p security.Principal, project
 	if cerr := s.moveProblem(ctx, p, projectID, env, pv); cerr != nil {
 		return nil, cerr
 	}
-	allowed, err := s.d.Authz.Allowed(ctx, p, writeNeed(env))
+	allowed, err := s.d.Authz.AllowedOn(ctx, p, writeNeed(env), env.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +753,7 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, aerr
 	}
 	if s.d.Manifests == nil || s.d.Plans == nil {
@@ -1106,7 +1106,7 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	if err != nil {
 		return nil, err
 	}
-	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
+	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), env.ProjectID); aerr != nil {
 		return nil, aerr
 	}
 	if s.d.Manifests == nil || s.d.Plans == nil {

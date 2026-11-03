@@ -4,6 +4,8 @@ package notifications
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -402,5 +404,222 @@ func TestDecidedReachesAPhoneThatGotTheWaitingPushWhileAnotherFailed(t *testing.
 	sends := gw.taken()[before:]
 	if len(sends) != 1 || sends[0].Handle != "h1.a" || sends[0].Env.Category != "update" || sends[0].Env.Body != "Approved by Ada Lovelace." {
 		t.Fatalf("decided sends: %+v", sends)
+	}
+}
+
+// teamApprovers allows deployment:approve to Ada and Bo (owner and admin)
+// anywhere and to Dee on project-a only, allows everything else, and
+// records every check as user|permission|resource.
+type teamApprovers struct {
+	mu     sync.Mutex
+	checks []string
+}
+
+func (a *teamApprovers) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
+	a.mu.Lock()
+	a.checks = append(a.checks, p.UserID+"|"+permission.Name()+"|"+resource)
+	a.mu.Unlock()
+	if permission != security.DeploymentApprove {
+		return nil
+	}
+	if p.UserID == "ada" || p.UserID == "bo" || (p.UserID == "dee" && resource == "project-a") {
+		return nil
+	}
+	return security.ErrForbidden
+}
+
+func (a *teamApprovers) recorded() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.checks)
+}
+
+// teamPlanRig is planRig plus the teams migration, with members recording
+// their authsome member ID. Dee (viewer) is in team A, an admin on
+// project-a; Eve (viewer) is in team B, an admin on project-c, another
+// org-a project; Fay (viewer) is in team F, project-a's responsible team.
+// The agent (agent:org-a) is in team A too. Member rows are dated 2000, so
+// a join on timestamps would accept any of them.
+func teamPlanRig(t *testing.T) (*Service, *teamApprovers) {
+	t.Helper()
+	svc, _, _ := planRig(t)
+	ctx := t.Context()
+	authz := &teamApprovers{}
+	svc.SetAuthorizer(authz)
+	run := func(qs ...string) {
+		t.Helper()
+		for _, q := range qs {
+			if _, err := svc.pg.Exec(ctx, q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+	}
+	run(
+		`ALTER TABLE authsome_members ADD COLUMN id TEXT, ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01'`,
+		`UPDATE authsome_members SET id='amem_'||user_id`,
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('dee','app','dee@example.com'),('eve','app','eve@example.com'),('fay','app','fay@example.com'),('agent:org-a','app','agent@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_dee','org-a','dee','viewer'),('amem_eve','org-a','eve','viewer'),('amem_fay','org-a','fay','viewer'),('amem_agent','org-a','agent:org-a','viewer')`,
+		`INSERT INTO loomplane_projects(id,org_id)VALUES('project-c','org-a')`,
+	)
+	executor, err := migrate.NewExecutorFor(svc.pg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "teams" {
+			if err = m.Up(ctx, executor); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	run(
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-a','org-a','A','a','ada'),('team-b','org-a','B','b','ada'),('team-f','org-a','F','f','ada')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-a','org-a','dee','amem_dee','ada'),('team-a','org-a','agent:org-a','amem_agent','ada'),('team-b','org-a','eve','amem_eve','ada'),('team-f','org-a','fay','amem_fay','ada')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-a','team-a','org-a','admin','project-a','ada'),('grant-b','team-b','org-a','admin','project-c','ada')`,
+		`UPDATE loomplane_projects SET responsible_team_id='team-f' WHERE id='project-a'`,
+	)
+	return svc, authz
+}
+
+func inboxTotal(t *testing.T, svc *Service, user string) int {
+	t.Helper()
+	items, err := svc.mailStore.ListNotifications(t.Context(), "app", user, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(items)
+}
+
+func waitingUsers(t *testing.T, svc *Service) []string {
+	t.Helper()
+	rows := planRows(t, svc, KindPlanWaiting)
+	users := make([]string, 0, len(rows))
+	for user := range rows {
+		users = append(users, user)
+	}
+	slices.Sort(users)
+	return users
+}
+
+func TestPlanWaitingReachesTeamApprovers(t *testing.T) {
+	svc, authz := teamPlanRig(t)
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	// Bo as an admin, Dee through team A's grant on project-a, Fay through
+	// project-a's responsible team. Never Ada (she made it), Cy (developer),
+	// Eve (her team's grant is on another project) or the agent.
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee", "fay"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
+	}
+	release(t, svc)
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for user, want := range map[string]int{"bo": 1, "dee": 1, "fay": 0} {
+		if got := inboxTotal(t, svc, user); got != want {
+			t.Errorf("%s inbox: %d, want %d", user, got, want)
+		}
+	}
+	if fay := planRows(t, svc, KindPlanWaiting)["fay"]; !fay.complete {
+		t.Fatalf("fay's row: %+v", fay)
+	}
+	checks := authz.recorded()
+	if !slices.Contains(checks, "dee|deployment:approve|project-a") || slices.Contains(checks, "dee|deployment:approve|") {
+		t.Fatalf("checks: %v", checks)
+	}
+}
+
+func TestPlanWaitingSkipsLeftoverTeamMembers(t *testing.T) {
+	for name, qs := range map[string][]string{
+		"left": {`DELETE FROM authsome_members WHERE user_id='dee'`},
+		// Invited back: a new member ID, dated before the team row, so only
+		// the member ID tells the leftover row apart.
+		"invited back": {
+			`DELETE FROM authsome_members WHERE user_id='dee'`,
+			`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_dee2','org-a','dee','viewer')`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := teamPlanRig(t)
+			for _, q := range qs {
+				if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			newPlan(t, svc, "env-a", "ada")
+			setPlan(t, svc, "ready", "")
+			if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "fay"}) {
+				t.Fatalf("plan.waiting rows for %v", got)
+			}
+		})
+	}
+}
+
+func TestPlanWaitingStaysInItsOrg(t *testing.T) {
+	svc, _ := teamPlanRig(t)
+	// An org-b team with an admin grant on project-a, and another org-b
+	// team named as project-a's responsible team. The schema can't stop
+	// either; the trigger must not follow them out of org-a.
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('yan','app','yan@example.com'),('zed','app','zed@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_yan','org-b','yan','viewer'),('amem_zed','org-b','zed','viewer')`,
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-y','org-b','Y','y','user-b'),('team-z','org-b','Z','z','user-b')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-y','org-b','yan','amem_yan','user-b'),('team-z','org-b','zed','amem_zed','user-b')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-y','team-y','org-b','admin','project-a','user-b')`,
+		`UPDATE loomplane_projects SET responsible_team_id='team-z' WHERE id='project-a'`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
+	}
+}
+
+// Only an admin grant makes a team's members approvers. Gus's team has a
+// developer grant on project-a and another on the whole workspace, so he
+// gets no plan.waiting row.
+func TestPlanWaitingSkipsADeveloperGrant(t *testing.T) {
+	svc, _ := teamPlanRig(t)
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('gus','app','gus@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_gus','org-a','gus','viewer')`,
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-d','org-a','D','d','ada')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-d','org-a','gus','amem_gus','ada')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-d1','team-d','org-a','developer','project-a','ada'),('grant-d2','team-d','org-a','developer',NULL,'ada')`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee", "fay"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
+	}
+}
+
+// An admin grant on the whole workspace (project_id NULL) reaches every
+// project's plans: Hal gets a row for a plan on project-a.
+func TestPlanWaitingReachesAWorkspaceAdminGrant(t *testing.T) {
+	svc, _ := teamPlanRig(t)
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('hal','app','hal@example.com')`,
+		`INSERT INTO authsome_members(id,org_id,user_id,role)VALUES('amem_hal','org-a','hal','viewer')`,
+		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by)VALUES('team-w','org-a','W','w','ada')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by)VALUES('team-w','org-a','hal','amem_hal','ada')`,
+		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by)VALUES('grant-w','team-w','org-a','admin',NULL,'ada')`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	newPlan(t, svc, "env-a", "ada")
+	setPlan(t, svc, "ready", "")
+	if got := waitingUsers(t, svc); !slices.Equal(got, []string{"bo", "dee", "fay", "hal"}) {
+		t.Fatalf("plan.waiting rows for %v", got)
 	}
 }

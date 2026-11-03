@@ -64,6 +64,10 @@ func (b *byUser) Allowed(ctx context.Context, p security.Principal, perm securit
 	return b.of(p).Allowed(ctx, p, perm)
 }
 
+func (b *byUser) AllowedOn(ctx context.Context, p security.Principal, perm security.Permission, projectID string) (bool, error) {
+	return b.of(p).AllowedOn(ctx, p, perm, projectID)
+}
+
 // fakeServers is cloudinfra as the models service uses it, in memory. It
 // records every call, and checks organization cloud management as the
 // real one does.

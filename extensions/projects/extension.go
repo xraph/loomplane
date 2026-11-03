@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/xraph/chronicle"
+	"github.com/xraph/dispatch/cron"
 	"github.com/xraph/dispatch/engine"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
@@ -23,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 )
 
 // Name is the extension's name.
@@ -34,6 +36,7 @@ type Extension struct {
 	cfg      config.Config
 	engineOf func() *engine.Engine
 	svc      *projects.Service
+	authz    *security.Authorizer
 }
 
 // New returns the projects extension. engineOf returns the dispatch
@@ -83,21 +86,37 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("projects needs the audit trail: %w", err)
 	}
+	t, err := forge.InjectType[*teams.Service](c)
+	if err != nil {
+		return fmt.Errorf("projects needs the identity extension's teams: %w", err)
+	}
 	eng := e.engineOf()
 	if eng == nil {
 		return errors.New("projects needs the dispatch extension to have registered")
 	}
 	store := projects.NewPgStore(pgdriver.Unwrap(db))
+	e.authz = authz
 	e.svc = projects.NewService(store, authz, orchestration.NewEnqueuer(eng), NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
+	// Deleting a project takes its team grants with it, so the people
+	// they reached are synced once it's gone.
+	e.svc.AddReaper(t)
 	engine.Register(eng, orchestration.ProjectInitJob(e.svc))
+	engine.Register(eng, teams.SyncJob(t))
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide project service: %w", err)
 	}
 	return e.routes(fapp.Router(), guard)
 }
 
-// Start has nothing to start: the routes and the job are registered.
-func (e *Extension) Start(context.Context) error {
+// Start schedules the teams.sync job, which every minute brings anyone a
+// failed or interrupted sync left behind back in line. The routes and the
+// jobs are already registered.
+func (e *Extension) Start(ctx context.Context) error {
+	if err := engine.RegisterCron(ctx, e.engineOf(), &cron.Definition[teams.SyncPayload]{
+		Name: teams.JobSync, JobName: teams.JobSync, Schedule: "@every 1m", Queue: orchestration.Queue,
+	}); err != nil {
+		return fmt.Errorf("schedule %s: %w", teams.JobSync, err)
+	}
 	e.MarkStarted()
 	return nil
 }
@@ -112,7 +131,7 @@ func fail(err error) error {
 	case errors.Is(err, projects.ErrSlugTaken), errors.Is(err, projects.ErrEnvironmentExists),
 		errors.Is(err, projects.ErrLastEnvironment), errors.Is(err, projects.ErrFleetManaged):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, projects.ErrRepository):
+	case errors.Is(err, projects.ErrRepository), errors.Is(err, projects.ErrTeamNotFound):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, projects.ErrInvalid):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())

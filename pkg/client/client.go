@@ -178,6 +178,9 @@ type Project struct {
 	Repositories []string  `json:"repositories,omitempty"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
+	// ResponsibleTeamID is the team that gets the project's requests and
+	// notices, empty for none.
+	ResponsibleTeamID string `json:"responsible_team_id"`
 }
 
 // NewProject is a project to create.

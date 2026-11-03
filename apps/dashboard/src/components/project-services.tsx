@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/input-group"
 import { kindLabel, resourceLabel } from "@/lib/architecture"
 import { formatDate } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import {
   covering,
   deployedConfig,
@@ -179,7 +179,7 @@ export function ProjectServices({
   environments: Environment[]
   view: ProjectView
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const mayEdit = can("project:update")
   const { rows, bindings } = useServiceRows(project, environments, view)
   // The resource of a kind that runs somewhere, the first environment
@@ -905,7 +905,7 @@ export function ExcludedServices({
   project: Project
   excluded: Excluded[]
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const exclusions = useExclusions(project)
   if (excluded.length === 0) return null
   return (

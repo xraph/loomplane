@@ -51,6 +51,7 @@ import {
   ProjectServices,
 } from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
+import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { EnvBadge } from "@/components/runs"
 import {
@@ -106,7 +107,7 @@ import {
   parseResourceConfig,
 } from "@/lib/catalog-kinds"
 import { formatDate } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
+import { useProjectCan } from "@/lib/project-permissions"
 import { ServiceRecovery } from "@/pages/service-catalog"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
@@ -244,7 +245,7 @@ function Body({
   view: ProjectView | null
   viewError?: unknown
 }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(project.id)
   const { openDeploy } = useShell()
   const { runs } = useRuns()
   const ownRuns = runs.filter((r) => r.projectId === project.id)
@@ -528,6 +529,7 @@ function Body({
           </TabsContent>
         )}
         <TabsContent value="settings" className="grid max-w-[760px] gap-3">
+          <ProjectTeam project={project} />
           <ProjectGeneral
             key={`${project.id}:${project.updatedAt}`}
             project={project}

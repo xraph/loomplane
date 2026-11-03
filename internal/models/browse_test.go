@@ -100,6 +100,10 @@ func (a perms) Allowed(_ context.Context, _ security.Principal, perm security.Pe
 	return slices.Contains(a, perm), nil
 }
 
+func (a perms) AllowedOn(ctx context.Context, p security.Principal, perm security.Permission, _ string) (bool, error) {
+	return a.Allowed(ctx, p, perm)
+}
+
 var (
 	developer = perms{security.AIRead, security.AIEdit, security.InfrastructureRead, security.CloudAccountRead}
 	viewer    = perms{security.AIRead, security.InfrastructureRead, security.CloudAccountRead}

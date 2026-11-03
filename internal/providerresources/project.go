@@ -20,7 +20,9 @@ func (s *Service) projectBinding(ctx context.Context, p security.Principal, proj
 			return nil, err
 		}
 	}
-	if err := s.deps.Authorizer.Require(ctx, p, security.EnvironmentRead, environmentID); err != nil {
+	// On the project, like every environment check: an environment ID
+	// isn't a project namespace, so it checked at the root.
+	if err := s.deps.Authorizer.Require(ctx, p, security.EnvironmentRead, projectID); err != nil {
 		return nil, err
 	}
 	bindings, err := s.deps.Usage(ctx, p.OrgID)

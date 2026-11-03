@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudCluster, CloudClusterOperation, CloudClusterOperationPage, CloudClusterPage, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ClusterCapacity, ClusterOptions, ClusterPage, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, Coverage, DeliveryList, DeployedList, DeploymentList, DeploymentsDeployment, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EdgeState, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FabriqloomStatus, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManagedRegistryView, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderResource, ProviderResourceList, ProviderResourceSync, ProviderZoneList, PublicConfig, PushConfig, PushDevice, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, ReleaseEvidence, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RollbackTarget, RouteOperation, RouteSummary, RuntimeAttachmentPage, Server, ServerList, ServerOptions, ServerUsage, SetupStatus, SignInAppList, Snapshot, Soak, SourceList, SpendReport, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, Watch, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudCluster, CloudClusterOperation, CloudClusterOperationPage, CloudClusterPage, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ClusterCapacity, ClusterOptions, ClusterPage, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, Coverage, DeliveryList, DeployedList, DeploymentList, DeploymentsDeployment, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EdgeState, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FabriqloomStatus, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManagedRegistryView, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectPermissions, ProjectView, ProjectZoneList, ProviderList, ProviderResource, ProviderResourceList, ProviderResourceSync, ProviderZoneList, PublicConfig, PushConfig, PushDevice, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, ReleaseEvidence, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RollbackTarget, RouteOperation, RouteSummary, RuntimeAttachmentPage, Server, ServerList, ServerOptions, ServerUsage, SetupStatus, SignInAppList, Snapshot, Soak, SourceList, SpendReport, StorageVolumeList, Sync, Target, Team, TeamList, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, Watch, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAiModelDeploymentsList = query<ModelDeploymentList>(ops['aiModelDeployments.list']);
@@ -245,6 +245,7 @@ export const useManifestsEdit = mutation<Revision, Revision>(ops['manifests.edit
 export const useManifestsHistory = query<RevisionList>(ops['manifests.history']);
 export const useNativeRecoveryCopiesList = query<NativeRecoveryCopies>(ops['nativeRecoveryCopies.list']);
 export const useNativeRecoverySourcesList = query<NativeRecoverySources>(ops['nativeRecoverySources.list']);
+export const useProjectsPermissions = query<ProjectPermissions>(ops['projects.permissions']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);
 export const useRollbacksCreate = mutation<Plan, Plan>(ops['rollbacks.create']);
@@ -256,6 +257,7 @@ export const useSourcesList = query<SourceList>(ops['sources.list']);
 export const useSourcesCreate = mutation<DiscoverySource, DiscoverySource>(ops['sources.create']);
 export const useSourcesUpdate = mutation<DiscoverySource, DiscoverySource>(ops['sources.update']);
 export const useSourcesDelete = mutation(ops['sources.delete']);
+export const useProjectsSetTeam = mutation<Project, Project>(ops['projects.setTeam']);
 export const useProjectVariablesList = query<VariableList>(ops['projectVariables.list']);
 export const useProjectVariablesCreate = mutation<Variable, Variable>(ops['projectVariables.create']);
 export const useVariablesResolve = query<Resolution>(ops['variables.resolve']);
@@ -335,6 +337,15 @@ export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);
 export const useSessionGet = query<IdentitySession>(ops['session.get']);
 export const useSetupStatus = query<SetupStatus>(ops['setup.status']);
 export const useSetupComplete = mutation(ops['setup.complete']);
+export const useTeamsList = query<TeamList>(ops['teams.list']);
+export const useTeamsCreate = mutation<Team, Team>(ops['teams.create']);
+export const useTeamsGet = query<Team>(ops['teams.get']);
+export const useTeamsUpdate = mutation<Team, Team>(ops['teams.update']);
+export const useTeamsDelete = mutation(ops['teams.delete']);
+export const useTeamsSetGrant = mutation<Team, Team>(ops['teams.setGrant']);
+export const useTeamsRemoveGrant = mutation<Team, Team>(ops['teams.removeGrant']);
+export const useTeamsAddMember = mutation<Team, Team>(ops['teams.addMember']);
+export const useTeamsRemoveMember = mutation<Team, Team>(ops['teams.removeMember']);
 export const useUsageSpend = query<SpendReport>(ops['usage.spend']);
 export const useUsageTraffic = query<TrafficReport>(ops['usage.traffic']);
 export const useVariablesList = query<VariableList>(ops['variables.list']);
