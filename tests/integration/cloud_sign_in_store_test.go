@@ -155,17 +155,21 @@ func TestAppProblemsRoundTrip(t *testing.T) {
 		}
 	}
 	for _, p := range [][2]string{{"vercel", "first"}, {"gcp", "gcp broke"}} {
-		if err := store.SetAppProblem(ctx, p[0], p[1], now); err != nil {
+		if err := store.SetAppProblem(ctx, p[0], p[0]+"-id", p[1], now); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Setting again replaces the message.
-	if err := store.SetAppProblem(ctx, "vercel", "second", now.Add(time.Minute)); err != nil {
+	if err := store.SetAppProblem(ctx, "vercel", "vercel-id", "second", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	// A cloud with no app has no row to put a problem on.
-	if err := store.SetAppProblem(ctx, "digitalocean", "nowhere", now); err != nil {
+	if err := store.SetAppProblem(ctx, "digitalocean", "digitalocean-id", "nowhere", now); err != nil {
 		t.Fatalf("problem for a cloud with no app: %v", err)
+	}
+	// A row holding another client ID is a replaced app: not blamed.
+	if err := store.SetAppProblem(ctx, "azure", "an-older-id", "stale", now); err != nil {
+		t.Fatalf("problem for a replaced app: %v", err)
 	}
 	got, err := store.AppProblems(ctx)
 	if err != nil || len(got) != 2 || got["vercel"] != "second" || got["gcp"] != "gcp broke" {

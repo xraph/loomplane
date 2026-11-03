@@ -124,10 +124,10 @@ func (s *PgStore) SweepSignIns(ctx context.Context, before time.Time) (int64, er
 	return tag.RowsAffected()
 }
 
-// SetAppProblem implements AppStore. A cloud with no app row updates
-// nothing.
-func (s *PgStore) SetAppProblem(ctx context.Context, cloud, message string, at time.Time) error {
-	if _, err := s.db.Exec(ctx, `UPDATE loomplane_platform_oauth_apps SET problem = $2, problem_at = $3 WHERE cloud = $1`, cloud, message, at); err != nil {
+// SetAppProblem implements AppStore. A cloud with no app row, or whose row
+// holds another client ID, updates nothing.
+func (s *PgStore) SetAppProblem(ctx context.Context, cloud, clientID, message string, at time.Time) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_platform_oauth_apps SET problem = $3, problem_at = $4 WHERE cloud = $1 AND client_id = $2`, cloud, clientID, message, at); err != nil {
 		return fmt.Errorf("save sign-in app problem: %w", err)
 	}
 	return nil

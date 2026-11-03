@@ -18,6 +18,8 @@ type fakeAppStore struct {
 	apps     map[string]*StoredApp
 	signIns  map[string]*PendingSignIn
 	problems map[string]string
+	// setProblemErr fails SetAppProblem when set.
+	setProblemErr error
 	// counts are what SignedInWith reports by cloud, and counted how often
 	// it was asked.
 	counts  map[string][2]int
@@ -267,8 +269,11 @@ func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64,
 	return n, nil
 }
 
-func (f *fakeAppStore) SetAppProblem(_ context.Context, cloud, message string, _ time.Time) error {
-	if _, ok := f.apps[cloud]; !ok {
+func (f *fakeAppStore) SetAppProblem(_ context.Context, cloud, clientID, message string, _ time.Time) error {
+	if f.setProblemErr != nil {
+		return f.setProblemErr
+	}
+	if a, ok := f.apps[cloud]; !ok || a.ClientID != clientID {
 		return nil
 	}
 	if f.problems == nil {
@@ -379,25 +384,17 @@ func TestSignInCloudsSkipsTheCounts(t *testing.T) {
 	}
 }
 
-type failingGet struct {
-	*fakeAppStore
-	err error
-}
-
-func (f failingGet) GetApp(context.Context, string) (*StoredApp, error) { return nil, f.err }
-
-func TestAppRejectedWarnsWhenItCannotReadTheApp(t *testing.T) {
+func TestAppRejectedWarnsWhenItCannotRecordTheProblem(t *testing.T) {
 	s, store, _, _ := signInService(nil)
-	store.problems = map[string]string{}
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	store.setProblemErr = errors.New("db down")
 	var warned []string
 	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
-	s.Apps = failingGet{store, errors.New("db down")}
-	s.appRejected(t.Context(), GCP, "platform")
+	if why := s.appRejected(t.Context(), GCP, "platform"); why == "" {
+		t.Fatal("no message")
+	}
 	if len(warned) != 1 {
 		t.Fatalf("warned %v", warned)
-	}
-	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
-		t.Fatalf("a problem was recorded on a read error: %v", got)
 	}
 }
 
@@ -405,9 +402,39 @@ func TestAppRejectedIsQuietWhenThereIsNoApp(t *testing.T) {
 	s, store, _, _ := signInService(nil)
 	var warned []string
 	s.warn = func(msg string, _ error) { warned = append(warned, msg) }
-	s.Apps = failingGet{store, ErrNotFound}
 	s.appRejected(t.Context(), GCP, "platform")
 	if len(warned) != 0 {
 		t.Fatalf("warned %v", warned)
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+}
+
+// A refusal for an app since replaced blames the new one for nothing: the
+// record only lands on the row still holding the refused client ID.
+func TestAppRejectedBlamesOnlyTheAppThatWasRefused(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "replacement"}
+	s.appRejected(t.Context(), GCP, "old")
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("the replacement was blamed: %v", got)
+	}
+}
+
+// A config app wins over a platform row, so the list must not show the
+// shadowed row's problem on it.
+func TestSignInAppsShowsNoPlatformProblemOnAConfigApp(t *testing.T) {
+	s, store, _, _ := signInService(map[string]oauth.App{GCP: {ClientID: "cfg", ClientSecret: "x"}})
+	store.apps[GCP] = &StoredApp{Cloud: GCP, ClientID: "platform"}
+	store.problems = map[string]string{GCP: "the shadowed row's problem"}
+	apps, err := s.SignInApps(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		if a.Cloud == GCP && (a.Source != AppFromConfig || a.Problem != "") {
+			t.Fatalf("%+v", a)
+		}
 	}
 }
