@@ -77,6 +77,12 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	}
 	inv.Endpoints = slices.Clone(eps)
 
+	// There is no node.json, so any key here belonged to a node that left,
+	// was revoked or never finished joining. Loomplane refuses a key it has
+	// seen, so start a fresh one.
+	if err = o.State.RetireIdentity(time.Now()); err != nil {
+		return nil, err
+	}
 	priv, err := o.State.Identity()
 	if err != nil {
 		return nil, err

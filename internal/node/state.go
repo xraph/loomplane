@@ -14,7 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -172,6 +174,59 @@ func (s State) readKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("%s is not a valid identity key", path)
 	}
 	return ed25519.PrivateKey(b), nil
+}
+
+// retiredKeyPrefix starts the name a retired identity key is kept under:
+// identity.key.revoked-<unix seconds>.
+const retiredKeyPrefix = identityFile + ".revoked-"
+
+// RetireIdentity moves identity.key aside, to identity.key.revoked-<unix>,
+// so the next Identity makes a fresh key. A join calls it when there is no
+// node.json: whatever node the old key belonged to is gone or revoked, and
+// a key never joins twice. The old key is kept, not deleted, for whoever
+// needs to look into what it did. A missing key is not an error.
+func (s State) RetireIdentity(now time.Time) error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	path := filepath.Join(s.Dir, identityFile)
+	fi, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file; remove it", path)
+	}
+	for i := 0; ; i++ {
+		dst := filepath.Join(s.Dir, retiredKeyPrefix+strconv.FormatInt(now.Unix(), 10))
+		if i > 0 {
+			dst += "-" + strconv.Itoa(i)
+		}
+		// A link never replaces an older retired key; then the old name goes.
+		lerr := os.Link(path, dst)
+		if errors.Is(lerr, fs.ErrExist) {
+			continue
+		}
+		if lerr != nil {
+			if !linkUnsupported(lerr) {
+				return fmt.Errorf("keeping the old key as %s: %w", dst, lerr)
+			}
+			if _, serr := os.Lstat(dst); serr == nil {
+				continue
+			}
+			if rerr := os.Rename(path, dst); rerr != nil {
+				return fmt.Errorf("keeping the old key as %s: %w", dst, rerr)
+			}
+			return syncDir(s.Dir)
+		}
+		if rerr := os.Remove(path); rerr != nil {
+			return rerr
+		}
+		return syncDir(s.Dir)
+	}
 }
 
 // LoadConfig reads node.json. A missing file returns an error wrapping

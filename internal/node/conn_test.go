@@ -306,6 +306,37 @@ func assertRevoked(t *testing.T, r *rig, done chan error) {
 	}
 }
 
+// A machine that joins again after a revoke gets a fresh key, and the old
+// one is kept beside it under a name that says it was retired.
+func TestRejoinMakesAFreshKey(t *testing.T) {
+	r := newRig(t)
+	first := r.join(t, nodeproto.EndpointProbe)
+	if err := r.env.Svc.Revoke(t.Context(), nodestest.Principal, first.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	assertRevoked(t, r, start(t, r.runtime(t)))
+	before := fingerprint(r.st)
+	second, err := Join(t.Context(), JoinOptions{URL: r.srv.URL, Token: "lpj_live_y", Name: "web-2",
+		State: r.st, Out: io.Discard, Detect: quietDetect()})
+	if err != nil {
+		t.Fatalf("rejoin: %v", err)
+	}
+	after := fingerprint(r.st)
+	if before == "" || after == "" || before == after {
+		t.Fatalf("fingerprints before %q, after %q", before, after)
+	}
+	if n := r.env.Store.Node(second.NodeID); n == nil || n.KeyFingerprint != after {
+		t.Fatalf("the new node has key %v, want %s", n, after)
+	}
+	retired, _ := filepath.Glob(filepath.Join(r.st.Dir, "identity.key.revoked-*"))
+	if len(retired) != 1 {
+		t.Fatalf("retired keys: %v", retired)
+	}
+	if err := checkJoinDir(r.st.Dir); err != nil {
+		t.Fatalf("a retired key makes the dir foreign: %v", err)
+	}
+}
+
 func TestRunReconnectsAfterServerRestart(t *testing.T) {
 	r := newRig(t)
 	cfg := r.join(t, nodeproto.EndpointProbe)

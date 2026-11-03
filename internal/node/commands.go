@@ -490,15 +490,16 @@ func checkJoinDir(dir string) error {
 	return nil
 }
 
-// ownStateFile names what a node puts in its state dir: the key, the config,
-// the copied binary's folder, the control socket, the macOS log and the temp
-// files an atomic write leaves behind.
+// ownStateFile names what a node puts in its state dir: the key, the keys a
+// rejoin retired, the config, the copied binary's folder, the control
+// socket, the macOS log and the temp files an atomic write leaves behind.
 func ownStateFile(name string) bool {
 	switch name {
 	case identityFile, configFile, "bin", controlSocket, "node.log":
 		return true
 	}
-	return strings.HasPrefix(name, "."+configFile+".tmp-") || strings.HasPrefix(name, "."+identityFile+".tmp-")
+	return strings.HasPrefix(name, "."+configFile+".tmp-") || strings.HasPrefix(name, "."+identityFile+".tmp-") ||
+		strings.HasPrefix(name, retiredKeyPrefix)
 }
 
 func (c *cmds) refuseMacRoot(what string) error {
@@ -744,7 +745,7 @@ func (c *cmds) leave(ctx cli.CommandContext) error {
 			return err
 		}
 	}
-	c.printf("Removed this node's service and config. Its key stays in %s.\n", dir)
+	c.printf("Removed this node's service and config. Its key stays in %s, and a later join makes a fresh one.\n", dir)
 	return nil
 }
 
