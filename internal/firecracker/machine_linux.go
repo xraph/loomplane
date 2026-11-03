@@ -162,23 +162,12 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 		}
 	}
 	platform, smt := d.config.Platform != nil, false
-	fingerprint := ""
 	if platform {
-		fingerprint = d.config.Platform.Fingerprint
 		if smt, err = smtActive("/sys/devices/system/cpu/smt"); err != nil {
 			return Capabilities{}, err
 		}
 	}
-	raw, err := json.Marshal(struct {
-		Assets              []Asset
-		CNI                 map[string]string
-		Subnet              string
-		DNS, Egress, Denied []string
-		UID                 int
-		Limits              Limits
-		Platform            string
-		DeniedPorts         []int
-	}{[]Asset{d.config.Firecracker, d.config.Jailer, d.config.Kernel, d.config.RootFS}, d.config.CNIHashes, d.config.Subnet, d.config.DNS, d.config.EgressCIDRs, d.config.DeniedCIDRs, d.config.UIDBase, d.config.Limits, fingerprint, d.config.DeniedPorts})
+	raw, err := identityInput(d.config)
 	if err != nil {
 		return Capabilities{}, err
 	}

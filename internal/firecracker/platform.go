@@ -14,6 +14,11 @@ var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type PlatformPeer struct{ Fingerprint string }
 
 func ValidatePlatform(cfg HostConfig) error {
+	// A half-set backstop would make every apply fail, on any host.
+	o := cfg.Limits.PerOrg
+	if o.VMs < 0 || o.VCPUs < 0 || o.MemoryMiB < 0 || (o != OrgLimits{} && (o.VMs == 0 || o.VCPUs == 0 || o.MemoryMiB == 0)) {
+		return fmt.Errorf("%w: per-org limits must set VMs, vCPUs and memory together", ErrInvalid)
+	}
 	if cfg.Platform == nil {
 		return nil
 	}
@@ -35,7 +40,7 @@ func ValidatePlatform(cfg HostConfig) error {
 			return fmt.Errorf("%w: mail port %d must be denied", ErrInvalid, p)
 		}
 	}
-	l, o := cfg.Limits, cfg.Limits.PerOrg
+	l := cfg.Limits
 	if o.VMs < 1 || o.VCPUs < 1 || o.MemoryMiB < 1 {
 		return fmt.Errorf("%w: platform mode needs a per-org backstop", ErrInvalid)
 	}

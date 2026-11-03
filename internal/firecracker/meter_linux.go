@@ -66,6 +66,7 @@ func (d *linuxDriver) Usage(ctx context.Context, vms []VM) ([]UsageSample, error
 		}
 		after, err := d.readReceipt(vm)
 		if err != nil {
+			log.Printf("Firecracker egress meter receipt unreadable for VM %s", vm.ID)
 			continue
 		}
 		sample, err := meterSample(vm.ID, receipt.CounterID, after.CounterID, stdout.Bytes())

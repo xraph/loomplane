@@ -76,6 +76,7 @@ func TestCapabilitiesOmitPlatformFieldsWhenUnset(t *testing.T) {
 
 func TestRunHostRefusesPlatformWithPeers(t *testing.T) {
 	cfg := HostConfig{
+		HostKey:  strings.Repeat("ab", 32),
 		Platform: &PlatformPeer{Fingerprint: strings.Repeat("a", 64)},
 		Peers:    []Peer{{Fingerprint: strings.Repeat("b", 64), Org: "org"}},
 	}
@@ -89,5 +90,37 @@ func TestRunHostRefusesPlatformWithPeers(t *testing.T) {
 	}
 	if err = RunHost(context.Background(), path); !errors.Is(err, ErrInvalid) {
 		t.Fatal("platform config with per-org peers started", err)
+	}
+}
+
+func TestValidatePlatformRejectsPartialPerOrg(t *testing.T) {
+	for _, o := range []OrgLimits{{VMs: 2}, {VMs: 2, VCPUs: 2}, {VMs: -1, VCPUs: 1, MemoryMiB: 1}} {
+		if !errors.Is(ValidatePlatform(HostConfig{Limits: Limits{PerOrg: o}}), ErrInvalid) {
+			t.Fatal("accepted", o)
+		}
+	}
+	if ValidatePlatform(HostConfig{Limits: Limits{PerOrg: OrgLimits{VMs: 2, VCPUs: 2, MemoryMiB: 512}}}) != nil {
+		t.Fatal("complete per-org limits rejected")
+	}
+}
+
+func TestIdentityInputUnchangedForNonPlatformHosts(t *testing.T) {
+	cfg := HostConfig{
+		Firecracker: Asset{Path: "/fc", SHA256: "f"}, Jailer: Asset{Path: "/j", SHA256: "j"},
+		Kernel: Asset{Path: "/k", SHA256: "k"}, RootFS: Asset{Path: "/r", SHA256: "r"},
+		CNIHashes: map[string]string{"ptp": "p"}, Subnet: "10.9.0.0/16",
+		DNS: []string{"1.1.1.1"}, EgressCIDRs: []string{"0.0.0.0/0"}, DeniedCIDRs: []string{"10.0.0.0/8"},
+		UIDBase: 20000, Limits: Limits{VMs: 4, VCPUs: 8, MemoryMiB: 8192, DiskMiB: 32768},
+	}
+	// Literal output of the ed649bd4 hash struct for this config.
+	want := `{"Assets":[{"Path":"/fc","SHA256":"f"},{"Path":"/j","SHA256":"j"},{"Path":"/k","SHA256":"k"},{"Path":"/r","SHA256":"r"}],"CNI":{"ptp":"p"},"Subnet":"10.9.0.0/16","DNS":["1.1.1.1"],"Egress":["0.0.0.0/0"],"Denied":["10.0.0.0/8"],"UID":20000,"Limits":{"VMs":4,"VCPUs":8,"MemoryMiB":8192,"DiskMiB":32768}}`
+	got, err := identityInput(cfg)
+	if err != nil || string(got) != want {
+		t.Fatal(string(got), err)
+	}
+	cfg.Platform = &PlatformPeer{Fingerprint: strings.Repeat("a", 64)}
+	cfg.DeniedPorts = []int{25}
+	if got, _ = identityInput(cfg); string(got) == want {
+		t.Fatal("platform config shares the per-org identity")
 	}
 }
