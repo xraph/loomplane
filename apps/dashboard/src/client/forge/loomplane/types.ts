@@ -213,6 +213,10 @@ export interface AttachmentPrerequisites {
   storageClass?: string;
 }
 
+export interface AuthorizeBitbucketInputBody {
+  workspace: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -273,6 +277,39 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface BitbucketAuthorization {
+  url: string;
+}
+
+export interface BitbucketConnectInputBody {
+  code: string;
+  state: string;
+}
+
+export interface BitbucketRepositoryList {
+  problems: string[];
+  repositories: ConnectedBitbucketRepository[];
+}
+
+export interface BitbucketStatus {
+  canConnect: boolean;
+  configured: boolean;
+  problems: string[];
+  workspaces: BitbucketWorkspaceView[];
+}
+
+export interface BitbucketWorkspaceView {
+  avatarUrl: string;
+  connectedBy: string;
+  createdAt: string;
+  id: string;
+  manageUrl: string;
+  message: string;
+  name: string;
+  status: string;
+  workspace: string;
 }
 
 export interface Board {
@@ -1331,6 +1368,13 @@ export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
   state: string;
+}
+
+export interface ConnectedBitbucketRepository {
+  defaultBranch: string;
+  fullName: string;
+  private: boolean;
+  workspace: string;
 }
 
 export interface ConnectedRepository {

@@ -329,6 +329,9 @@ func (s *fakeBBStore) DeleteBitbucketHook(context.Context, string) error { retur
 type fakeSecrets struct {
 	mu   sync.Mutex
 	vals map[string][]byte
+	// missing makes Reveal report ErrBitbucketSecretMissing, as the real
+	// Vault's adapter does for a secret that's gone.
+	missing bool
 }
 
 func newFakeSecrets() *fakeSecrets { return &fakeSecrets{vals: map[string][]byte{}} }
@@ -344,6 +347,9 @@ func (v *fakeSecrets) Reveal(_ context.Context, orgID, id string) ([]byte, error
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	raw, ok := v.vals[orgID+"/"+id]
+	if v.missing {
+		return nil, ErrBitbucketSecretMissing
+	}
 	if !ok {
 		return nil, errors.New("no such secret")
 	}
@@ -1107,5 +1113,27 @@ func TestBitbucketToken_accountLeftTheWorkspace(t *testing.T) {
 	f.conns.mu.Unlock()
 	if cached {
 		t.Fatal("the access token is still in memory")
+	}
+}
+
+func TestBitbucketToken_missingSecretMarksReconnect(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	// Vault lost the sign-in, as the real one reports it.
+	f.secrets.missing = true
+	f.expire()
+
+	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme", "api"))
+	if tok != "" || err != nil {
+		t.Fatalf("Token with the sign-in gone = %q, %v; want an anonymous read", tok, err)
+	}
+	row := f.store.row(v.ID)
+	if row.Status != BitbucketReconnectNeeded || row.Message != bitbucketUnreadableMessage {
+		t.Fatalf("row = %s %q", row.Status, row.Message)
+	}
+	if refreshes, _ := f.api.counts(); refreshes != 0 {
+		t.Fatalf("%d refreshes with no refresh token to spend", refreshes)
 	}
 }

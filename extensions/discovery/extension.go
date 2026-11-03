@@ -50,6 +50,9 @@ type Extension struct {
 	engineOf func() *engine.Engine
 	svc      *discovery.Service
 	github   *repositories.Connections
+	// bitbucket is the Bitbucket workspaces, which read public repositories
+	// even where no OAuth consumer is configured.
+	bitbucket *repositories.BitbucketConnections
 }
 
 // New returns the API extension. engineOf returns the dispatch
@@ -100,8 +103,15 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
+	if e.bitbucket, err = bitbucketConnections(e.cfg, db, authz,
+		bitbucketAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+		return err
+	}
 	e.svc.SetAccess(discovery.Access{
-		Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": e.github}},
+		Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{
+			"github.com":    e.github,
+			"bitbucket.org": e.bitbucket,
+		}},
 		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{
 			"github.com":    repositories.NewGitHub(e.cfg.GitHub.APIURL),
 			"bitbucket.org": repositories.NewBitbucket(e.cfg.Bitbucket.APIURL, e.cfg.Bitbucket.WebURL),
@@ -118,10 +128,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.github); err != nil {
 		return fmt.Errorf("provide the GitHub connections: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.bitbucket); err != nil {
+		return fmt.Errorf("provide the Bitbucket connections: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	if err := e.githubRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.bitbucketRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
@@ -190,11 +206,13 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, repositories.ErrBadState):
+	case errors.Is(err, repositories.ErrBadState), errors.Is(err, repositories.ErrBadWorkspace):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
-	case errors.Is(err, repositories.ErrNotYourInstallation):
+	case errors.Is(err, repositories.ErrNotYourInstallation), errors.Is(err, repositories.ErrNotAMember):
 		return forge.NewHTTPError(http.StatusForbidden, err.Error())
-	case errors.Is(err, repositories.ErrAppNotConfigured):
+	case errors.Is(err, repositories.ErrWorkspaceNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, repositories.ErrAppNotConfigured), errors.Is(err, repositories.ErrBitbucketNotConfigured), errors.Is(err, repositories.ErrBitbucketRefused):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, repositories.ErrRateLimited):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
@@ -265,7 +283,15 @@ func (w *Worker) Register(fapp forge.App) error {
 		"github.com":    repositories.NewGitHub(w.cfg.GitHub.APIURL),
 		"bitbucket.org": repositories.NewBitbucket(w.cfg.Bitbucket.APIURL, w.cfg.Bitbucket.WebURL),
 	}}
-	tokens := repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": conns}}
+	// Likewise Bitbucket's: no Authorizer or auditor.
+	bitbucket, err := bitbucketConnections(w.cfg, db, nil, nil, w.Logger())
+	if err != nil {
+		return err
+	}
+	tokens := repositories.Tokens{Static: map[string]repositories.TokenSource{
+		"github.com":    conns,
+		"bitbucket.org": bitbucket,
+	}}
 	runner := discovery.NewRunner(discovery.NewPgStore(pg), readers, tokens, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
 	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))

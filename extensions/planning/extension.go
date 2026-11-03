@@ -197,6 +197,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the discovery extension: %w", err)
 	}
+	bitbucket, err := forge.InjectType[*repositories.BitbucketConnections](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the discovery extension: %w", err)
+	}
 	files, err := forge.InjectType[*trove.Trove](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the trove extension: %w", err)
@@ -532,7 +536,10 @@ func (e *Extension) Register(fapp forge.App) error {
 				"github.com":    repositories.NewGitHub(e.cfg.GitHub.APIURL),
 				"bitbucket.org": repositories.NewBitbucket(e.cfg.Bitbucket.APIURL, e.cfg.Bitbucket.WebURL),
 			}},
-			Tokens:    repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": github}},
+			Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{
+				"github.com":    github,
+				"bitbucket.org": bitbucket,
+			}},
 			Artifacts: e.artifacts,
 		},
 		Providers:            catalog,

@@ -440,6 +440,141 @@
         }
       }
     },
+    "/api/v1/bitbucket": {
+      "get": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The organization's Bitbucket workspaces, and whether this Loomplane has an OAuth consumer",
+        "operationId": "bitbucket.status",
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/authorize": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The Bitbucket link that starts connecting a workspace",
+        "operationId": "bitbucket.authorize",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeBitbucketInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to approve the consumer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketAuthorization"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/repositories": {
+      "get": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The repositories the organization's workspaces can read",
+        "operationId": "bitbucket.repositories",
+        "responses": {
+          "200": {
+            "description": "Repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketRepositoryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/workspaces": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "Connect a Bitbucket workspace, from what Bitbucket's redirect carried back",
+        "operationId": "bitbucket.connect",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BitbucketConnectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketWorkspaceView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/workspaces/{id}": {
+      "delete": {
+        "operationId": "bitbucket.disconnect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Disconnect a workspace. The consumer stays approved on Bitbucket.",
+        "tags": [
+          "Bitbucket"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "BitbucketWorkspace"
+        }
+      }
+    },
     "/api/v1/catalog/endpoints": {
       "get": {
         "tags": [
@@ -14327,6 +14462,17 @@
           }
         }
       },
+      "AuthorizeBitbucketInputBody": {
+        "type": "object",
+        "required": [
+          "workspace"
+        ],
+        "properties": {
+          "workspace": {
+            "type": "string"
+          }
+        }
+      },
       "AutoRenewInputBody": {
         "type": "object",
         "required": [
@@ -14551,6 +14697,127 @@
         ],
         "type": "object",
         "x-forge-envelope": "bindings"
+      },
+      "BitbucketAuthorization": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "BitbucketConnectInputBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "BitbucketRepositoryList": {
+        "type": "object",
+        "required": [
+          "repositories",
+          "problems"
+        ],
+        "properties": {
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedBitbucketRepository"
+            }
+          }
+        }
+      },
+      "BitbucketStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "can_connect",
+          "workspaces",
+          "problems"
+        ],
+        "properties": {
+          "can_connect": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BitbucketWorkspaceView"
+            }
+          }
+        }
+      },
+      "BitbucketWorkspaceView": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace",
+          "name",
+          "avatar_url",
+          "manage_url",
+          "connected_by",
+          "status",
+          "message",
+          "created_at"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": "string"
+          },
+          "connected_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manage_url": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        }
       },
       "Board": {
         "type": "object",
@@ -18192,6 +18459,29 @@
             "type": "integer"
           },
           "state": {
+            "type": "string"
+          }
+        }
+      },
+      "ConnectedBitbucketRepository": {
+        "type": "object",
+        "required": [
+          "full_name",
+          "private",
+          "default_branch",
+          "workspace"
+        ],
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "workspace": {
             "type": "string"
           }
         }

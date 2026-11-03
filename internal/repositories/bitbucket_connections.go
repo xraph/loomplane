@@ -24,6 +24,12 @@ var ErrBitbucketNotConfigured = errors.New("this Loomplane has no Bitbucket OAut
 // ErrBadWorkspace means what was typed can't be a Bitbucket workspace slug.
 var ErrBadWorkspace = errors.New("that isn't a Bitbucket workspace: use the part after bitbucket.org/, such as acme")
 
+// ErrBitbucketSecretMissing is what Secrets.Reveal returns when the
+// workspace's stored sign-in is gone. Renewing treats it like a refusal:
+// there is nothing left to renew from, so the workspace needs connecting
+// again.
+var ErrBitbucketSecretMissing = errors.New("the stored Bitbucket sign-in is missing")
+
 // Why a workspace needs connecting again, as the card shows it.
 const (
 	bitbucketRefusedMessage       = "Bitbucket no longer accepts this workspace's sign-in. Connect the workspace again."
@@ -601,7 +607,7 @@ func (c *BitbucketConnections) mint(ctx context.Context, row *BitbucketConnectio
 // renew trades cur's refresh token for an access token, holding cur's
 // lock. It checks first that the member whose sign-in it is still belongs
 // to the organization. A refusal, a member who left, or a sign-in that
-// can't be read marks cur reconnect_needed and gives "". Anything else
+// can't be read or is gone from Vault marks cur reconnect_needed and gives "". Anything else
 // that goes wrong is an error and changes nothing.
 func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnection) (string, error) {
 	member, err := c.store.BitbucketConnectorIsMember(ctx, cur.OrgID, cur.CreatedBy)
@@ -612,6 +618,9 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 		return "", c.needReconnect(ctx, cur, bitbucketConnectorLeftMessage)
 	}
 	raw, err := c.secrets.Reveal(ctx, cur.OrgID, cur.ID)
+	if errors.Is(err, ErrBitbucketSecretMissing) {
+		return "", c.needReconnect(ctx, cur, bitbucketUnreadableMessage)
+	}
 	if err != nil {
 		return "", fmt.Errorf("read the Bitbucket sign-in for %s: %w", cur.WorkspaceSlug, err)
 	}
