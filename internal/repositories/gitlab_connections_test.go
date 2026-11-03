@@ -202,6 +202,18 @@ func (s *memGitLabStore) WithGrantLock(_ context.Context, orgID, id string, fn f
 	return fn()
 }
 
+func (s *memGitLabStore) SetWebhookSet(_ context.Context, orgID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.conns {
+		if c.OrgID == orgID && c.ID == id {
+			c.WebhookSet = true
+			return nil
+		}
+	}
+	return repositories.ErrGitLabConnectionNotFound
+}
+
 func (s *memGitLabStore) setWebhook(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

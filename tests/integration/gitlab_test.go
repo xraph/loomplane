@@ -3,11 +3,20 @@
 package integration
 
 import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/config"
 )
@@ -342,4 +351,247 @@ func TestGitLab_viewerCantAddHost(t *testing.T) {
 	ada.must(http.StatusNotFound, http.MethodDelete, "/api/v1/gitlab/hosts/instance:"+host, nil, nil)
 	ada.must(http.StatusNoContent, http.MethodDelete, "/api/v1/gitlab/hosts/"+added.ID, nil, nil)
 	ada.must(http.StatusNotFound, http.MethodDelete, "/api/v1/gitlab/hosts/"+added.ID, nil, nil)
+}
+
+// gitLabPush is the part of GitLab's Push Hook the webhook reads.
+func gitLabPush(path, ref string) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"object_kind": "push", "ref": ref, "after": "da1560886d4f094c3e6c9ef40349f7d38b5d27d7",
+		"project": map[string]any{"path_with_namespace": path, "default_branch": "main"},
+	})
+	return b
+}
+
+func TestGitLab_pushReanalyzes(t *testing.T) {
+	fake := fakeGitLab(t, tarball(t, "api-"+exampleSHA+"-"+exampleSHA, siteFiles))
+	cfg, host := gitLabInstance(t, fake)
+	// No worker runs, so the analyses a push starts stay queued.
+	r := start(t, cfg)
+	defer r.stop()
+	ada := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, ada)
+
+	state, _ := gitLabSignIn(t, ada, "instance:"+host)
+	var conn struct {
+		ID         string `json:"id"`
+		WebhookSet bool   `json:"webhook_set"`
+		WebhookURL string `json:"webhook_url"`
+	}
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/gitlab/connections", map[string]string{"code": fakeGitLabCode, "state": state}, &conn)
+	if conn.WebhookSet || conn.WebhookURL != strings.TrimRight(cfg.PublicURL, "/")+"/api/v1/gitlab/webhook/"+conn.ID {
+		t.Fatalf("a new connection %+v", conn)
+	}
+
+	var proj struct {
+		ID string `json:"id"`
+	}
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Lab"}, &proj)
+	var src sourceBody
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/projects/"+proj.ID+"/sources",
+		map[string]string{"repository": fake.URL + "/grp/sub/api", "alias": "api"}, &src)
+	if src.Repository != host+"/grp/sub/api" {
+		t.Fatalf("attached source %+v", src)
+	}
+
+	// Grace's organization has a project on the same GitLab project, which
+	// Ada's connection has nothing to do with.
+	grace := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	account(t, grace, "grace@example.com")
+	var org struct {
+		ID string `json:"id"`
+	}
+	grace.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Other", "slug": "other"}, &org)
+	grace.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	var graceProj struct {
+		ID string `json:"id"`
+	}
+	grace.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Theirs"}, &graceProj)
+	db, err := pgx.Connect(context.Background(), cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(context.Background())
+	if _, err = db.Exec(context.Background(), `INSERT INTO loomplane_project_sources
+		(id, org_id, project_id, alias, repository, root, ref, created_by, created_at, updated_at)
+		VALUES ('src_grace', $1, $2, 'api', $3, '', '', 'test', now(), now())`,
+		org.ID, graceProj.ID, strings.ToUpper(host)+"/Grp/Sub/API"); err != nil {
+		t.Fatal(err)
+	}
+
+	hookURL := r.srv.URL + "/api/v1/gitlab/webhook/" + conn.ID
+	analyses := func(c *client, projectID string) []analysisBody {
+		t.Helper()
+		var list struct {
+			Analyses []analysisBody `json:"analyses"`
+		}
+		c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+projectID+"/analyses", nil, &list)
+		return list.Analyses
+	}
+	// deliver posts a Push Hook the way GitLab does, signed or with its
+	// secret token, and returns the status, the body and how many started.
+	deliver := func(url string, body []byte, headers map[string]string) (int, string, int) {
+		t.Helper()
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewReader(body))
+		if reqErr != nil {
+			t.Fatal(reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Gitlab-Event", "Push Hook")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		res, doErr := http.DefaultClient.Do(req)
+		if doErr != nil {
+			t.Fatal(doErr)
+		}
+		defer res.Body.Close()
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(res.Body)
+		var out struct {
+			Started int `json:"analyses_started"`
+		}
+		_ = json.Unmarshal(buf.Bytes(), &out)
+		return res.StatusCode, buf.String(), out.Started
+	}
+	signWith := func(secret, body []byte) map[string]string {
+		stamp := strconv.FormatInt(time.Now().Unix(), 10)
+		m := hmac.New(sha256.New, secret)
+		m.Write([]byte("msg_1." + stamp + "."))
+		m.Write(body)
+		return map[string]string{
+			"Webhook-Id": "msg_1", "Webhook-Timestamp": stamp,
+			"Webhook-Signature": "v1," + base64.StdEncoding.EncodeToString(m.Sum(nil)),
+		}
+	}
+	push := gitLabPush("grp/sub/api", "refs/heads/main")
+
+	// Before a secret exists, nothing can be verified: the webhook isn't there.
+	if code, _, _ := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": "guessed"}); code != http.StatusNotFound {
+		t.Fatalf("a delivery before any secret got %d, want 404", code)
+	}
+
+	// Only a member who can connect makes one, only for an own connection.
+	var read keyBody
+	ada.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]any{"name": "dashboards", "access": "read"}, &read)
+	viewer := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey, token: read.Secret}
+	viewer.must(http.StatusForbidden, http.MethodPost, "/api/v1/gitlab/connections/"+conn.ID+"/webhook", nil, nil)
+	grace.must(http.StatusNotFound, http.MethodPost, "/api/v1/gitlab/connections/"+conn.ID+"/webhook", nil, nil)
+	ada.must(http.StatusNotFound, http.MethodPost, "/api/v1/gitlab/connections/glc_none/webhook", nil, nil)
+	// A pasted signing token has to be whsec_ and 32 bytes of base64.
+	ada.must(http.StatusBadRequest, http.MethodPost, "/api/v1/gitlab/connections/"+conn.ID+"/webhook", map[string]string{"signing_token": "whsec_c2hvcnQ="}, nil)
+
+	var secret struct {
+		URL          string `json:"url"`
+		SigningToken string `json:"signing_token"`
+		SecretToken  string `json:"secret_token"`
+	}
+	ada.must(http.StatusOK, http.MethodPost, "/api/v1/gitlab/connections/"+conn.ID+"/webhook", nil, &secret)
+	raw, ok := strings.CutPrefix(secret.SigningToken, "whsec_")
+	if !ok || secret.URL != conn.WebhookURL || secret.SecretToken == "" {
+		t.Fatalf("secret %+v", secret)
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil || len(key) != 32 || base64.RawURLEncoding.EncodeToString(key) != secret.SecretToken {
+		t.Fatalf("signing token %q decodes to %d bytes, %v", secret.SigningToken, len(key), err)
+	}
+	// It's shown once: the status says one is set and nothing more.
+	var status struct {
+		Connections []struct {
+			ID         string `json:"id"`
+			WebhookSet bool   `json:"webhook_set"`
+		} `json:"connections"`
+	}
+	ada.must(http.StatusOK, http.MethodGet, "/api/v1/gitlab", nil, &status)
+	if len(status.Connections) != 1 || !status.Connections[0].WebhookSet {
+		t.Fatalf("status %+v", status)
+	}
+	if body := ada.raw("/api/v1/gitlab"); strings.Contains(body, secret.SecretToken) || strings.Contains(body, raw) {
+		t.Fatalf("status leaks the webhook secret: %s", body)
+	}
+
+	// A forged delivery, a stale one, and one for a connection that isn't
+	// there are refused, and answer with none of what was sent.
+	wrong := bytes.Repeat([]byte{9}, 32)
+	code, resp, _ := deliver(hookURL, push, signWith(wrong, push))
+	if code != http.StatusUnauthorized || strings.Contains(resp, secret.SecretToken) || strings.Contains(resp, "grp/sub/api") {
+		t.Fatalf("a delivery signed with the wrong secret got %d %q", code, resp)
+	}
+	if code, _, _ = deliver(hookURL, push, map[string]string{"X-Gitlab-Token": base64.RawURLEncoding.EncodeToString(wrong)}); code != http.StatusUnauthorized {
+		t.Fatalf("a wrong secret token got %d", code)
+	}
+	if code, _, _ = deliver(hookURL, push, nil); code != http.StatusUnauthorized {
+		t.Fatalf("an unsigned delivery got %d", code)
+	}
+	stale := signWith(key, push)
+	old := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("msg_1." + old + "."))
+	m.Write(push)
+	stale["Webhook-Timestamp"], stale["Webhook-Signature"] = old, "v1,"+base64.StdEncoding.EncodeToString(m.Sum(nil))
+	if code, _, _ = deliver(hookURL, push, stale); code != http.StatusUnauthorized {
+		t.Fatalf("a replayed delivery got %d", code)
+	}
+	if code, _, _ = deliver(r.srv.URL+"/api/v1/gitlab/webhook/glc_none", push, signWith(key, push)); code != http.StatusNotFound {
+		t.Fatalf("a delivery for an unknown connection got %d", code)
+	}
+	if a := analyses(ada, proj.ID); len(a) != 0 {
+		t.Fatalf("refused deliveries started %+v", a)
+	}
+
+	// Events and branches that aren't the default branch's push do nothing.
+	if code, _, n := deliver(hookURL, push, mergeEvent(signWith(key, push))); code != http.StatusAccepted || n != 0 {
+		t.Fatalf("a merge request event: %d, %d", code, n)
+	}
+	other := gitLabPush("grp/sub/api", "refs/heads/feature")
+	if code, _, n := deliver(hookURL, other, signWith(key, other)); code != http.StatusAccepted || n != 0 {
+		t.Fatalf("a push to another branch: %d, %d", code, n)
+	}
+
+	// The signed push re-analyzes Ada's source, whatever case GitLab spells
+	// the path in, and Grace's source on the same project hears nothing.
+	cased := gitLabPush("Grp/Sub/API", "refs/heads/main")
+	if code, resp, n := deliver(hookURL, cased, signWith(key, cased)); code != http.StatusAccepted || n != 1 {
+		t.Fatalf("the signed push: %d, %d, %s", code, n, resp)
+	}
+	if a := analyses(ada, proj.ID); len(a) != 1 || a[0].Status != "queued" || a[0].Source != "api" {
+		t.Fatalf("ada's analyses %+v", a)
+	}
+	if a := analyses(grace, graceProj.ID); len(a) != 0 {
+		t.Fatalf("a push through Ada's connection started analyses in another organization: %+v", a)
+	}
+	// GitLab before 19 sends the secret token instead. With an analysis
+	// already under way the source is left alone, but the delivery is taken.
+	if code, _, n := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": secret.SecretToken}); code != http.StatusAccepted || n != 0 {
+		t.Fatalf("the secret token while one runs: %d, %d", code, n)
+	}
+	if a := analyses(ada, proj.ID); len(a) != 1 {
+		t.Fatalf("a push during an analysis queued another: %+v", a)
+	}
+
+	// Rotating replaces the secret: the old one stops working at once.
+	var rotated struct {
+		SecretToken string `json:"secret_token"`
+	}
+	ada.must(http.StatusOK, http.MethodPost, "/api/v1/gitlab/connections/"+conn.ID+"/webhook", nil, &rotated)
+	if rotated.SecretToken == secret.SecretToken {
+		t.Fatal("rotating kept the secret")
+	}
+	if code, _, _ := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": secret.SecretToken}); code != http.StatusUnauthorized {
+		t.Fatalf("the old secret token got %d after rotating", code)
+	}
+	if code, _, _ := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": rotated.SecretToken}); code != http.StatusAccepted {
+		t.Fatalf("the new secret token got %d", code)
+	}
+
+	// Disconnected, the webhook goes with the connection.
+	ada.must(http.StatusNoContent, http.MethodDelete, "/api/v1/gitlab/connections/"+conn.ID, nil, nil)
+	if code, _, _ := deliver(hookURL, push, map[string]string{"X-Gitlab-Token": rotated.SecretToken}); code != http.StatusNotFound {
+		t.Fatalf("a delivery after disconnecting got %d", code)
+	}
+}
+
+// mergeEvent turns a signed delivery's event into one the webhook ignores.
+func mergeEvent(h map[string]string) map[string]string {
+	h["X-Gitlab-Event"] = "Merge Request Hook"
+	return h
 }

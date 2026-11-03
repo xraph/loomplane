@@ -138,11 +138,18 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.gitlabRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
-	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
+	if err := e.webhookRoute(fapp.Router(), &discovery.Webhooks{
 		Secret:        []byte(e.cfg.GitHub.WebhookSecret),
 		Installations: repositories.NewPgStore(pg).InstallationOrgs,
 		Sources:       discovery.NewPgStore(pg).SourcesByRepository,
 		Start:         e.svc.StartFromPush,
+	}); err != nil {
+		return err
+	}
+	return e.gitlabWebhookRoute(fapp.Router(), &discovery.GitLabWebhooks{
+		Target:  e.gitlab.WebhookTarget,
+		Sources: discovery.NewPgStore(pg).SourcesByRepository,
+		Start:   e.svc.StartFromPush,
 	})
 }
 
@@ -211,7 +218,7 @@ func fail(err error) error {
 	case errors.Is(err, repositories.ErrGitLabHostsOff):
 		return forge.NewHTTPError(http.StatusForbidden, err.Error())
 	case errors.Is(err, repositories.ErrGitLabSubpath), errors.Is(err, repositories.ErrGitLabInsecure),
-		errors.Is(err, repositories.ErrGitLabHostIncomplete), errors.Is(err, repositories.ErrPrivateAddress):
+		errors.Is(err, repositories.ErrGitLabHostIncomplete), errors.Is(err, repositories.ErrGitLabSigningToken), errors.Is(err, repositories.ErrPrivateAddress):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
 	case errors.Is(err, repositories.ErrGitLabConnectionNotFound), errors.Is(err, repositories.ErrGitLabHostNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())

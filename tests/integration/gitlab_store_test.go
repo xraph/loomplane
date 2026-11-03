@@ -238,6 +238,33 @@ func TestGitLabStore_reconnectKeepsWebhookSet(t *testing.T) {
 	}
 }
 
+func TestGitLabStore_setWebhookSetIsPerOrganization(t *testing.T) {
+	s, _, _ := gitlabStore(t)
+	ctx := t.Context()
+	id, err := s.SaveConnection(ctx, &repositories.GitLabConnection{
+		OrgID: "org-a", Host: "gitlab.com", Kind: "oauth", GitLabUserID: 42, Username: "rex",
+		CreatedBy: "usr-1", CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetWebhookSet(ctx, "org-b", id); !errors.Is(err, repositories.ErrGitLabConnectionNotFound) {
+		t.Fatalf("another organization's SetWebhookSet = %v", err)
+	}
+	if err = s.SetWebhookSet(ctx, "org-a", "glc_none"); !errors.Is(err, repositories.ErrGitLabConnectionNotFound) {
+		t.Fatalf("a missing connection's SetWebhookSet = %v", err)
+	}
+	if c, getErr := s.GetConnection(ctx, id); getErr != nil || c.WebhookSet {
+		t.Fatalf("after refused calls %+v, %v", c, getErr)
+	}
+	if err = s.SetWebhookSet(ctx, "org-a", id); err != nil {
+		t.Fatal(err)
+	}
+	if c, getErr := s.GetConnection(ctx, id); getErr != nil || !c.WebhookSet {
+		t.Fatalf("after SetWebhookSet %+v, %v", c, getErr)
+	}
+}
+
 func TestGitLabStore_hostInUseCantBeDeleted(t *testing.T) {
 	s, _, _ := gitlabStore(t)
 	ctx := t.Context()

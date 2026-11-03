@@ -2,6 +2,8 @@ package repositories
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -20,6 +22,9 @@ var (
 	// ErrGitLabHostIncomplete means a host was added without its OAuth
 	// application's ID or secret.
 	ErrGitLabHostIncomplete = errors.New("a GitLab host needs its OAuth application's ID and secret")
+	// ErrGitLabSigningToken means a pasted webhook signing token isn't
+	// "whsec_" followed by the base64 of 32 bytes.
+	ErrGitLabSigningToken = errors.New("a webhook signing token is whsec_ followed by the base64 of 32 bytes")
 )
 
 // Audit actions for GitLab hosts and connections.
@@ -151,6 +156,31 @@ type GitLabConnectionView struct {
 	WebhookURL string    `json:"webhook_url"`
 	CreatedAt  time.Time `json:"created_at"`
 }
+
+// SetGitLabWebhookInput creates or rotates a connection's webhook secret.
+type SetGitLabWebhookInput struct {
+	// SigningToken is a token to use as the secret: "whsec_" and the
+	// standard base64 of 32 bytes. Empty makes a random one.
+	SigningToken string `json:"signing_token,omitempty"`
+}
+
+// GitLabWebhookSecret is a connection's webhook secret in the two forms
+// GitLab takes, and the address to give it. It is shown once, when the
+// secret is made.
+type GitLabWebhookSecret struct {
+	URL string `json:"url"`
+	// SigningToken is for GitLab 19.0 and newer, which signs deliveries.
+	SigningToken string `json:"signing_token"`
+	// SecretToken is the same bytes for older versions, which send them
+	// in X-Gitlab-Token.
+	SecretToken string `json:"secret_token"`
+}
+
+// webhookSecretLen is how many random bytes a webhook secret is.
+const webhookSecretLen = 32
+
+// signingTokenPrefix starts a webhook signing token.
+const signingTokenPrefix = "whsec_"
 
 // AddGitLabHostInput registers an organization's own GitLab, with the OAuth
 // application made on it.
@@ -307,6 +337,89 @@ func (c *GitLabConnections) Disconnect(ctx context.Context, p security.Principal
 	}
 	c.record(ctx, AuditGitLabDisconnect, p, details)
 	return nil
+}
+
+// SetWebhookSecret creates or replaces the webhook secret of one of the
+// caller's organization's connections, and returns it. The bytes are kept
+// in Vault and shown only here, as a signing token for GitLab 19 and newer
+// and as a secret token for older versions. The audit names the connection
+// and never holds either.
+func (c *GitLabConnections) SetWebhookSecret(ctx context.Context, p security.Principal, id string, in SetGitLabWebhookInput) (*GitLabWebhookSecret, error) {
+	if err := c.cfg.Authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
+		return nil, err
+	}
+	conn, err := c.ownConnection(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	key, err := webhookSecretBytes(in.SigningToken)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.cfg.Secrets.Put(ctx, conn.OrgID, webhookSecretKey(conn.ID), key); err != nil {
+		return nil, fmt.Errorf("keep the GitLab webhook secret: %w", err)
+	}
+	if err := c.cfg.Store.SetWebhookSet(ctx, conn.OrgID, conn.ID); err != nil {
+		// A connection disconnected meanwhile has no use for the secret.
+		if errors.Is(err, ErrGitLabConnectionNotFound) {
+			if delErr := c.cfg.Secrets.Delete(context.WithoutCancel(ctx), conn.OrgID, webhookSecretKey(conn.ID)); delErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("forget the GitLab webhook secret: %w", delErr))
+			}
+		}
+		return nil, err
+	}
+	c.record(ctx, AuditGitLabWebhookSecret, p, map[string]any{"host": conn.Host, "connection_id": conn.ID})
+	return &GitLabWebhookSecret{
+		URL:          c.connectionView(conn).WebhookURL,
+		SigningToken: signingTokenPrefix + base64.StdEncoding.EncodeToString(key),
+		SecretToken:  base64.RawURLEncoding.EncodeToString(key),
+	}, nil
+}
+
+// webhookSecretBytes reads a pasted signing token, or makes 32 random bytes
+// when none was given. The error never quotes the token.
+func webhookSecretBytes(token string) ([]byte, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		key := make([]byte, webhookSecretLen)
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("make a webhook secret: %w", err)
+		}
+		return key, nil
+	}
+	enc, ok := strings.CutPrefix(token, signingTokenPrefix)
+	if !ok {
+		return nil, ErrGitLabSigningToken
+	}
+	key, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil || len(key) != webhookSecretLen {
+		return nil, ErrGitLabSigningToken
+	}
+	return key, nil
+}
+
+// WebhookTarget finds what a GitLab delivery for connection id is checked
+// against: the connection's organization and host, and its webhook secret.
+// It takes no principal, since the delivery has none; the ID in the URL
+// names the connection, and the secret is what proves the sender. A
+// connection that is gone, or has no secret yet, is
+// ErrGitLabConnectionNotFound.
+func (c *GitLabConnections) WebhookTarget(ctx context.Context, id string) (orgID, host string, secret []byte, err error) {
+	conn, err := c.cfg.Store.GetConnection(ctx, id)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if !conn.WebhookSet {
+		return "", "", nil, ErrGitLabConnectionNotFound
+	}
+	secret, err = c.cfg.Secrets.Reveal(ctx, conn.OrgID, webhookSecretKey(conn.ID))
+	if err != nil {
+		return "", "", nil, fmt.Errorf("read the GitLab webhook secret: %w", err)
+	}
+	if len(secret) == 0 {
+		return "", "", nil, ErrGitLabConnectionNotFound
+	}
+	return conn.OrgID, conn.Host, secret, nil
 }
 
 // revoke asks GitLab to stop honoring conn's grant. Its error never holds

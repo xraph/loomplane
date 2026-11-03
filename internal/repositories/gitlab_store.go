@@ -111,6 +111,10 @@ type GitLabStore interface {
 	// webhook. A missing one is ErrGitLabConnectionNotFound.
 	GetConnection(ctx context.Context, id string) (*GitLabConnection, error)
 	MarkLapsed(ctx context.Context, orgID, id string, at time.Time) error
+	// SetWebhookSet records that the organization's connection has a
+	// webhook secret. A connection the organization doesn't have is
+	// ErrGitLabConnectionNotFound.
+	SetWebhookSet(ctx context.Context, orgID, id string) error
 	DeleteConnection(ctx context.Context, orgID, id string) error
 
 	// WithGrantLock runs fn holding connection id's grant lock, across

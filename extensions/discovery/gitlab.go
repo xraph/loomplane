@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -74,6 +75,14 @@ func (e *Extension) gitlabRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithSummary("Disconnect an account, and revoke its sign-in at GitLab"),
 		forge.WithNoContentResponse(),
 		forge.WithEntity(forge.EntityDef{Type: "GitLabConnectionView", IDField: "id"}),
+	); err != nil {
+		return err
+	}
+	if err := g.POST("/connections/:id/webhook", e.gitlabWebhookSecret,
+		forge.WithName("gitlab.webhookSecret"),
+		forge.WithSummary("Create or replace a connection's webhook secret, shown once"),
+		forge.WithRequestSchema(repositories.SetGitLabWebhookInput{}),
+		forge.WithResponseSchema(http.StatusOK, "The secret in the two forms GitLab takes", repositories.GitLabWebhookSecret{}),
 	); err != nil {
 		return err
 	}
@@ -172,6 +181,25 @@ func (e *Extension) gitlabDisconnect(c forge.Context) error {
 		return fail(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (e *Extension) gitlabWebhookSecret(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	// The body is optional: without one, Loomplane makes the secret.
+	var in repositories.SetGitLabWebhookInput
+	if c.Request().ContentLength != 0 {
+		if err = c.BindJSON(&in); err != nil && !errors.Is(err, io.EOF) {
+			return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON, such as {\"signing_token\": \"whsec_...\"}, or empty")
+		}
+	}
+	created, err := e.gitlab.SetWebhookSecret(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, created)
 }
 
 func (e *Extension) gitlabRepositories(c forge.Context) error {

@@ -255,6 +255,18 @@ func (s *GitLabPgStore) MarkLapsed(ctx context.Context, orgID, id string, at tim
 	return nil
 }
 
+// SetWebhookSet implements GitLabStore.
+func (s *GitLabPgStore) SetWebhookSet(ctx context.Context, orgID, id string) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_gitlab_connections SET webhook_set = TRUE WHERE org_id = $1 AND id = $2`, orgID, id)
+	if err != nil {
+		return fmt.Errorf("mark GitLab connection's webhook set: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrGitLabConnectionNotFound
+	}
+	return nil
+}
+
 // DeleteConnection implements GitLabStore.
 func (s *GitLabPgStore) DeleteConnection(ctx context.Context, orgID, id string) error {
 	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_gitlab_connections WHERE org_id = $1 AND id = $2`, orgID, id)
