@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
 func TestIngressExecFenceCompletion(t *testing.T) {
@@ -38,8 +40,8 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 		{name: "still_running", running: true},
 		{name: "unrelated_owned_container", foreign: true, clean: true},
 		{name: "detached", detach: true, clean: true},
-		{name: "token_removal", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, args: []string{"-c", ingressTokenScript, "dns", "zone_1"}},
-		{name: "token_removal_outside_dns", clean: true, foreign: true, args: []string{"-c", ingressTokenScript, "dns", "../zone"}},
+		{name: "token_removal", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, args: []string{"-c", fencerules.IngressTokenScript, "dns", "zone_1"}},
+		{name: "token_removal_outside_dns", clean: true, foreign: true, args: []string{"-c", fencerules.IngressTokenScript, "dns", "../zone"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("/tmp", "lp-ingress-fence-")
@@ -59,7 +61,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 			var starts atomic.Int32
 			args := tc.args
 			if args == nil {
-				args = []string{"-c", ingressAdminScript, "ingress", "read", "", ""}
+				args = []string{"-c", fencerules.IngressAdminScript, "ingress", "read", "", ""}
 			}
 			api := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {

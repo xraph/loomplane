@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
 type EffectFence struct {
@@ -109,7 +111,7 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 
 // fenceScript is effectFenceScript naming the images an owned proxy may run.
 func fenceScript() (string, error) {
-	images, err := json.Marshal(ingressImages())
+	images, err := json.Marshal(fencerules.IngressImages())
 	if err != nil {
 		return "", err
 	}
@@ -185,9 +187,9 @@ def main():
   assert not process['tty'] and not process['privileged']
  if ingress:
   assert process['entrypoint']=='sh' and args[0]=='-c'
-  admin=r"""` + ingressAdminScript + `"""
-  probe=r"""` + ingressProbeScript + `"""
-  token=r"""` + ingressTokenScript + `"""
+  admin=r"""` + fencerules.IngressAdminScript + `"""
+  probe=r"""` + fencerules.IngressProbeScript + `"""
+  token=r"""` + fencerules.IngressTokenScript + `"""
   assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply','reload')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3])) or (len(args)==4 and args[1]==token and args[2]=='dns' and re.fullmatch(r'[a-z0-9_]{1,64}',args[3]))
   c.request('GET','/containers/'+container+'/json');r=c.getresponse();owned=json.loads(r.read());assert r.status==200
   assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image'] in INGRESS_IMAGES

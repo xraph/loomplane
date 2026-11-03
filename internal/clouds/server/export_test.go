@@ -1,14 +1,18 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
+)
 
 // pinIngressImageForTest stands a test image in for the published
 // DNS-capable proxy until the test ends.
 func pinIngressImageForTest(t testing.TB, image string) {
 	t.Helper()
-	previous := dnsIngressImage
-	dnsIngressImage = image
-	t.Cleanup(func() { dnsIngressImage = previous })
+	previous := fencerules.DNSImage
+	fencerules.DNSImage = image
+	t.Cleanup(func() { fencerules.DNSImage = previous })
 }
 
 // failUpgradeForTest fails UpgradeIngress after step until the test ends.

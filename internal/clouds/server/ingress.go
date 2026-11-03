@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
 const ingressOwner = "loomplane.ingress"
@@ -49,7 +50,7 @@ func ingressContainerNamed(ctx context.Context, c *Client, org, server, name str
 	if err := dockerJSON(ctx, c, http.MethodGet, "/containers/"+name+"/json", nil, &out); err != nil {
 		return nil, err
 	}
-	if out.Config.Labels[owned.LabelOrg] != org || out.Config.Labels[ingressOwner] != server || !slices.Contains(ingressImages(), out.Config.Image) {
+	if out.Config.Labels[owned.LabelOrg] != org || out.Config.Labels[ingressOwner] != server || !slices.Contains(fencerules.IngressImages(), out.Config.Image) {
 		return nil, ErrOwned
 	}
 	return &out, nil
@@ -148,24 +149,6 @@ func ingressArchive(ctx context.Context, c *Client, container string, body io.Re
 	return err
 }
 
-// The fixed script only talks to the container's loopback admin. A non-detached
-// exec start stays inside the daemon fence until wget exits and readback ends.
-const ingressAdminScript = `set -eu
-d=$(mktemp -d)
-trap 'rm -rf "$d"' EXIT
-if [ "$1" = apply ]; then
- printf '%s' "$3" | base64 -d > "$d/new.json"
- wget -q -T 20 --header='Content-Type: application/json' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
-fi
-if [ "$1" = reload ]; then
- printf '%s' "$3" | base64 -d > "$d/new.json"
- wget -q -T 20 --header='Content-Type: application/json' --header='Cache-Control: must-revalidate' --header="If-Match: $2" --post-file="$d/new.json" -O "$d/result" http://127.0.0.1:2019/config/
-fi
-wget -S -T 20 -O "$d/config" http://127.0.0.1:2019/config/ 2> "$d/headers"
-awk 'tolower($1)=="etag:" {sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, ""); print}' "$d/headers"
-cat "$d/config"
-`
-
 func ReadIngress(ctx context.Context, c *Client, org, server string) (*IngressSnapshot, error) {
 	container, err := ingressContainer(ctx, c, org, server)
 	if err != nil {
@@ -176,7 +159,7 @@ func ReadIngress(ctx context.Context, c *Client, org, server string) (*IngressSn
 
 func ingressAdmin(ctx context.Context, c *Client, container, action, etag string, config []byte) (*IngressSnapshot, error) {
 	var out bytes.Buffer
-	err := execIngressOutput(ctx, c, container, []string{"sh", "-c", ingressAdminScript, "ingress", action, etag, base64.StdEncoding.EncodeToString(config)}, &out)
+	err := execIngressOutput(ctx, c, container, []string{"sh", "-c", fencerules.IngressAdminScript, "ingress", action, etag, base64.StdEncoding.EncodeToString(config)}, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -339,8 +322,6 @@ func ConnectIngressBackend(ctx context.Context, c *Client, org, server string, b
 	return b, nil
 }
 
-const ingressProbeScript = `wget -q -S -T 20 --header="Host: $1" -O /dev/null http://127.0.0.1:8081/ 2>&1 || true`
-
 func ProbeIngressBackend(ctx context.Context, c *Client, v IngressConfig, expected *IngressSnapshot, routeID string) error {
 	return probeIngress(ctx, c, v, expected, routeID, false)
 }
@@ -379,7 +360,7 @@ func probeIngress(ctx context.Context, c *Client, v IngressConfig, expected *Ing
 		return ErrOwned
 	}
 	var out bytes.Buffer
-	err = execIngressOutput(ctx, c, before.ContainerID, []string{"sh", "-c", ingressProbeScript, "probe", IngressProbeHostname(route.ID, route.Hostname)}, &out)
+	err = execIngressOutput(ctx, c, before.ContainerID, []string{"sh", "-c", fencerules.IngressProbeScript, "probe", IngressProbeHostname(route.ID, route.Hostname)}, &out)
 	if err != nil {
 		return err
 	}
@@ -478,7 +459,7 @@ func IngressNeedsUpgrade(ctx context.Context, c *Client, org, server string) (bo
 	if err != nil {
 		return false, err
 	}
-	if container.Config.Image != dnsIngressImage {
+	if container.Config.Image != fencerules.DNSImage {
 		return true, nil
 	}
 	// An upgrade that stopped before removing the old proxy, or before
@@ -504,7 +485,7 @@ func UpgradeIngress(ctx context.Context, c *Client, org, server string, current 
 	if err := ingressFence(ctx, c); err != nil {
 		return nil, err
 	}
-	image, previous := dnsIngressImage, previousIngressName(org, server)
+	image, previous := fencerules.DNSImage, previousIngressName(org, server)
 	proxy, err := ingressContainer(ctx, c, org, server)
 	if err == nil && proxy.Config.Image == image {
 		if proxy.State.Running {
@@ -752,9 +733,6 @@ func dnsTokenArchive(zoneID string, token []byte) (*bytes.Buffer, error) {
 	return &body, nil
 }
 
-// The fixed script removes one token file; the fence checks the zone ID.
-const ingressTokenScript = `rm -f /config/dns/"$1".token` //nolint:gosec // G101: a shell command naming a token file, not a credential
-
 // RemoveIngressDNSToken deletes a zone's token once no wildcard route on
 // the server needs it.
 func RemoveIngressDNSToken(ctx context.Context, c *Client, org, server, zoneID string) error {
@@ -768,5 +746,5 @@ func RemoveIngressDNSToken(ctx context.Context, c *Client, org, server, zoneID s
 	if err != nil {
 		return err
 	}
-	return execIngressOutput(ctx, c, container.ID, []string{"sh", "-c", ingressTokenScript, "dns", zoneID}, io.Discard)
+	return execIngressOutput(ctx, c, container.ID, []string{"sh", "-c", fencerules.IngressTokenScript, "dns", zoneID}, io.Discard)
 }

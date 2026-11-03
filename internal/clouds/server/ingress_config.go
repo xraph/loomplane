@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
-// LegacyIngressImage pins the multi-platform Caddy 2.11.7 Alpine release.
-// It has no DNS provider modules, so it can't answer DNS-01 challenges.
-const LegacyIngressImage = "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
+// LegacyIngressImage is the stock proxy image. It lives in fencerules so the
+// node's fence checks read the same value.
+const LegacyIngressImage = fencerules.LegacyIngressImage
 
 // IngressImageTag is the same Caddy built with the Cloudflare DNS module,
 // from deployments/ingress. IngressImage pins it by its multi-platform
@@ -23,30 +25,19 @@ const LegacyIngressImage = "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478
 // wildcard routes.
 const (
 	IngressImageTag = "ghcr.io/xraph/loomplane-ingress:2.11.7-1"
-	IngressImage    = ""
+	IngressImage    = fencerules.IngressImage
 )
-
-// dnsIngressImage is IngressImage. Tests stand an image in through export_test.go.
-var dnsIngressImage = IngressImage
 
 // IngressImagePinned reports whether the DNS-capable proxy image is
 // published and pinned, so servers can serve wildcard routes.
-func IngressImagePinned() bool { return dnsIngressImage != "" }
+func IngressImagePinned() bool { return fencerules.DNSImage != "" }
 
 // ingressCreateImage is what a new proxy runs.
 func ingressCreateImage() string {
 	if IngressImagePinned() {
-		return dnsIngressImage
+		return fencerules.DNSImage
 	}
 	return LegacyIngressImage
-}
-
-// ingressImages are the images an owned proxy may run.
-func ingressImages() []string {
-	if IngressImagePinned() {
-		return []string{LegacyIngressImage, dnsIngressImage}
-	}
-	return []string{LegacyIngressImage}
 }
 
 // IngressDNSChallenge names the zone whose DNS answers a wildcard route's
