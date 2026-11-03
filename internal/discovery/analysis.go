@@ -36,8 +36,8 @@ type Analysis struct {
 	SourceID string `json:"source_id"`
 	Source   string `json:"source"`
 	Status   string `json:"status"`
-	// Repository is "owner/name" on GitHub, as it was when the analysis
-	// started.
+	// Repository is the repository's stored key, owner/name on GitHub and
+	// host/path elsewhere, as it was when the analysis started.
 	Repository string `json:"repository"`
 	// Ref is the branch, tag or commit asked for; empty means the default
 	// branch.

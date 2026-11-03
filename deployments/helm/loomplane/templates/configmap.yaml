@@ -27,6 +27,14 @@ data:
   {{- with .Values.github.clientID }}
   LOOMPLANE_GITHUB_CLIENT_ID: {{ . | quote }}
   {{- end }}
+  LOOMPLANE_GITLAB_API_URL: {{ .Values.gitlab.apiURL | quote }}
+  {{- with .Values.gitlab.clientID }}
+  LOOMPLANE_GITLAB_CLIENT_ID: {{ . | quote }}
+  {{- end }}
+  LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS: {{ .Values.gitlab.allowOrganizationHosts | toString | quote }}
+  {{- with .Values.gitlab.webhookURL }}
+  LOOMPLANE_GITLAB_WEBHOOK_URL: {{ . | quote }}
+  {{- end }}
   {{- if .Values.secrets.resendApiKey }}
   LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
   {{- else if .Values.notifications.smtpHost }}

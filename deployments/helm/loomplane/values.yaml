@@ -34,8 +34,8 @@ secrets:
   # LOOMPLANE_STORAGE_URL, LOOMPLANE_BACKUP_URL,
   # LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY, LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD,
   # LOOMPLANE_GITHUB_PRIVATE_KEY,
-  # LOOMPLANE_GITHUB_CLIENT_SECRET and LOOMPLANE_GITHUB_WEBHOOK_SECRET when
-  # you use them.
+  # LOOMPLANE_GITHUB_CLIENT_SECRET, LOOMPLANE_GITHUB_WEBHOOK_SECRET and
+  # LOOMPLANE_GITLAB_CLIENT_SECRET when you use them.
   existingSecret: ""
   # Otherwise the chart makes one from these values.
   #
@@ -50,6 +50,7 @@ secrets:
   githubPrivateKey: ""
   githubClientSecret: ""
   githubWebhookSecret: ""
+  gitlabClientSecret: ""
 
 # ── Database ─────────────────────────────────────────────────────────────────
 database:
@@ -89,6 +90,17 @@ github:
   appID: ""
   appSlug: ""
   clientID: ""
+
+# Private projects on gitlab.com need an OAuth application: set clientID here
+# and secrets.gitlabClientSecret, or neither (docs/gitlab.md).
+gitlab:
+  apiURL: https://gitlab.com
+  clientID: ""
+  # Whether organizations may add a self-managed GitLab of their own.
+  allowOrganizationHosts: true
+  # Where GitLab reaches the webhook, when publicURL isn't an address GitLab
+  # can reach. Empty uses publicURL.
+  webhookURL: ""
 
 notifications:
   smtpHost: ""

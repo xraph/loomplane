@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -20,7 +21,7 @@ import (
 // background workers and static sites) and provisions Render Postgres and
 // Key Value for them. It's a Loomplane capability adapter, like Vercel's:
 // Render builds each service itself, from the repository through its own
-// GitHub connection, and Loomplane tells it which commit.
+// connection to the repository's host, and Loomplane tells it which commit.
 //
 // Each service and environment is a Render service of its own, named the
 // way a Vercel project is, created with automatic deploys off so that
@@ -102,7 +103,7 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if job.CommitSHA == "" {
 		return nil, errors.New("render deploys a commit, and the deployment has none for this service")
 	}
-	spec, err := renderSpec(job, cfg, "https://github.com/"+repo)
+	spec, err := renderSpec(job, cfg, renderRepoURL(repo))
 	if err != nil {
 		return nil, err
 	}
@@ -153,8 +154,19 @@ func renderAddress(kind string, svc *render.Service, port int) string {
 	return ""
 }
 
-// repositoryFor is the GitHub repository a service is built from, as
-// owner/name.
+// renderRepoURL is the web address Render builds a repository from: the
+// repository's own page on its host. A key that doesn't parse is a GitHub
+// owner/name, as keys always were.
+func renderRepoURL(key string) string {
+	r, err := repositories.ParseKey(key)
+	if err != nil {
+		return "https://github.com/" + key
+	}
+	return r.URL()
+}
+
+// repositoryFor is the repository a service is built from, as the source
+// stores it: owner/name for GitHub, host/owner/.../name otherwise.
 func repositoryFor(job *Job) (string, error) {
 	alias := ""
 	if job.Action.Service != nil {

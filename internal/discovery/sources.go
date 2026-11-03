@@ -13,22 +13,27 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// Access checks that Loomplane can read a repository at a ref, the way an
+// Checker checks that Loomplane can read a repository at a ref, the way an
 // analysis would, so a source that can't be analyzed fails when it's
 // added, not three steps later.
-type Access interface {
+type Checker interface {
 	Check(ctx context.Context, orgID string, repo repositories.Repository, ref string) error
 }
 
-// GitHubAccess reads through the organization's installations, or
-// anonymously when none covers the repository.
-type GitHubAccess struct {
+// Access reads through each host's token source, which for GitHub is the
+// organization's installations, or anonymously when none covers the
+// repository. With repositories.Readers and repositories.Tokens it reaches
+// every host they do.
+type Access struct {
 	Tokens  TokenSource
 	Fetcher Fetcher
 }
 
-// Check implements Access.
-func (a GitHubAccess) Check(ctx context.Context, orgID string, repo repositories.Repository, ref string) error {
+// GitHubAccess is Access, under the name it had when GitHub was the only host.
+type GitHubAccess = Access
+
+// Check implements Checker.
+func (a Access) Check(ctx context.Context, orgID string, repo repositories.Repository, ref string) error {
 	token := ""
 	if a.Tokens != nil {
 		t, err := a.Tokens.Token(ctx, orgID, repo)
@@ -37,7 +42,7 @@ func (a GitHubAccess) Check(ctx context.Context, orgID string, repo repositories
 		}
 		token = t
 	}
-	// Resolving a commit SHA never reaches GitHub, so it would prove
+	// Resolving a commit SHA never reaches the host, so it would prove
 	// nothing. Reading the default branch does: it fails the same way for
 	// a repository Loomplane can't see.
 	if repositories.IsCommitSHA(ref) {
@@ -49,11 +54,16 @@ func (a GitHubAccess) Check(ctx context.Context, orgID string, repo repositories
 
 // SetAccess sets how sources are checked before they're attached. Without
 // one, nothing is checked. Call it while the app registers.
-func (s *Service) SetAccess(a Access) { s.access = a }
+func (s *Service) SetAccess(a Checker) { s.access = a }
+
+// SetHosts sets the hosts a repository may be on beyond GitHub and
+// Bitbucket, such as a self-managed GitLab an organization registered. The
+// zero value knows the static hosts only. Call it while the app registers.
+func (s *Service) SetHosts(h repositories.Hosts) { s.hosts = h }
 
 // AddSourceInput attaches a repository to a project.
 type AddSourceInput struct {
-	// Repository is a GitHub URL or "owner/name".
+	// Repository is a repository URL, or "owner/name" for GitHub.
 	Repository string `json:"repository"`
 	// Alias names the source. Empty picks one from the repository's name.
 	Alias string `json:"alias,omitempty"`
@@ -93,7 +103,7 @@ func (s *Service) AttachRepository(ctx context.Context, p security.Principal, pr
 	if errors.Is(err, ErrAliasTaken) {
 		// A new project has used no alias but the ones it's attaching, so
 		// two of them clashed, and "never reused" means nothing yet.
-		return "", "", aliasClashError{alias: aliasOf(in)}
+		return "", "", aliasClashError{alias: s.aliasOf(ctx, p.OrgID, in)}
 	}
 	if err != nil {
 		for _, target := range []error{ErrInvalidSource, ErrAliasReserved, ErrRootsOverlap, ErrSourceInaccessible} {
@@ -119,18 +129,18 @@ func (e aliasClashError) Unwrap() []error { return []error{projects.ErrRepositor
 
 // aliasOf is the alias a repository gets: the one it names, or one from
 // its name.
-func aliasOf(in projects.RepositoryInput) string {
+func (s *Service) aliasOf(ctx context.Context, orgID string, in projects.RepositoryInput) string {
 	if alias := strings.TrimSpace(in.Alias); alias != "" {
 		return alias
 	}
-	if repo, err := ParseRepository(in.Repository); err == nil {
+	if repo, err := ParseRepository(ctx, s.hosts, orgID, in.Repository); err == nil {
 		return AliasFor(repo.Name)
 	}
 	return ""
 }
 
 func (s *Service) addSource(ctx context.Context, p security.Principal, projectID string, in AddSourceInput) (*Source, error) {
-	repo, err := ParseRepository(in.Repository)
+	repo, err := ParseRepository(ctx, s.hosts, p.OrgID, in.Repository)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSource, err)
 	}
@@ -158,7 +168,7 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 		if e.Alias == alias {
 			return nil, ErrAliasTaken
 		}
-		if e.RemovedAt == nil && strings.EqualFold(e.Repository, repo.FullName()) && RootsOverlap(e.Root, root) {
+		if e.RemovedAt == nil && strings.EqualFold(e.Repository, repo.Key()) && RootsOverlap(e.Root, root) {
 			return nil, ErrRootsOverlap
 		}
 	}
@@ -172,7 +182,7 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 	}
 	now := s.now().UTC()
 	src := &Source{
-		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Alias: alias, Repository: repo.FullName(),
+		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, Alias: alias, Repository: repo.Key(),
 		Root: root, Ref: ref, CreatedBy: p.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CreateSource(ctx, src); err != nil {
@@ -183,7 +193,8 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 }
 
 // check reads the repository the way an analysis would. A 404 from GitHub
-// means no access as often as no repository, so it says both.
+// means no access as often as no repository, so it says both. A host
+// nothing reads is the caller's mistake, like any other invalid source.
 func (s *Service) check(ctx context.Context, orgID string, repo repositories.Repository, ref string) error {
 	if s.access == nil {
 		return nil
@@ -191,6 +202,9 @@ func (s *Service) check(ctx context.Context, orgID string, repo repositories.Rep
 	err := s.access.Check(ctx, orgID, repo, ref)
 	if errors.Is(err, repositories.ErrNotFound) {
 		return ErrSourceInaccessible
+	}
+	if errors.Is(err, repositories.ErrUnsupportedHost) || errors.Is(err, repositories.ErrInvalidURL) {
+		return fmt.Errorf("%w: %w", ErrInvalidSource, err)
 	}
 	return err
 }
@@ -241,8 +255,11 @@ func (s *Service) UpdateSource(ctx context.Context, p security.Principal, projec
 		if ref != "" && !repositories.ValidRef(ref) {
 			return nil, fmt.Errorf("%w: %q isn't a branch, tag or commit name", ErrInvalidSource, ref)
 		}
-		owner, name, _ := strings.Cut(src.Repository, "/")
-		if err := s.check(ctx, p.OrgID, repositories.Repository{Owner: owner, Name: name}, ref); err != nil {
+		repo, err := s.hosts.ParseKey(ctx, p.OrgID, src.Repository)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidSource, err)
+		}
+		if err := s.check(ctx, p.OrgID, repo, ref); err != nil {
 			return nil, err
 		}
 		src.Ref = ref
