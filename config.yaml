@@ -175,8 +175,10 @@ clouds:
   # account token mounted; the Helm chart's inCluster values do both.
   kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
-  # in. Leave both empty to keep token entry only. Keep the secret in the
-  # environment.
+  # in. These win over anything registered on the dashboard's Cloud sign-in
+  # page (Settings, platform owners and admins only), which is the
+  # alternative to setting them here. Leave both empty to use the page, or
+  # to keep token entry only. Keep the secret in the environment.
   oauth:
     cloudflare:
       client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"

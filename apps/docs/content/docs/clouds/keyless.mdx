@@ -17,7 +17,7 @@ The clouds fetch Loomplane's keys themselves, over the internet, so your `public
 | Discovery | `https://loomplane.example.com/.well-known/openid-configuration` |
 | Signing keys (JWKS) | `https://loomplane.example.com/.well-known/jwks.json` |
 
-Open **Settings**, then **Cloud sign-in**, and you'll see **Keyless: on** with the issuer, or **Keyless: off** with what's wrong, such as `public_url isn't HTTPS`. Check from a machine outside your network too:
+As a platform owner or admin, open **Settings**, then **Cloud sign-in**, and you'll see **Keyless: on** with the issuer, or **Keyless: off** with what's wrong, such as `public_url isn't HTTPS`. Check from a machine outside your network too:
 
 ```bash
 curl https://loomplane.example.com/.well-known/openid-configuration
@@ -33,7 +33,7 @@ In the development environment you can also use a loopback issuer such as `http:
 <Steps>
 <Step>
 
-Open **Integrations**, choose AWS, Google Cloud or Microsoft Azure, and type a name. Choose **Connect keylessly**. When your organization has a sign-in app for that cloud, the sign-in button comes first and **Connect keylessly instead** sits under it.
+Open **Integrations**, choose AWS, Google Cloud or Microsoft Azure, and type a name. Choose **Connect keylessly**. When the platform has a sign-in app for that cloud, the sign-in button comes first and **Connect keylessly instead** sits under it.
 
 </Step>
 <Step>
