@@ -162,7 +162,13 @@ func registerProjects(r *Registry, d *Deps) {
 		if call.Scope.ProjectID != "" {
 			return nil, errProjectScoped
 		}
-		p, err := d.Projects.Create(ctx, call.Principal, projects.CreateProjectInput{Name: in.Name, RepositoryURL: in.Repository})
+		// Repositories, not RepositoryURL: it takes owner/name as well as a
+		// URL, which the definition promises.
+		create := projects.CreateProjectInput{Name: in.Name}
+		if repo := strings.TrimSpace(in.Repository); repo != "" {
+			create.Repositories = []projects.RepositoryInput{{Repository: repo}}
+		}
+		p, err := d.Projects.Create(ctx, call.Principal, create)
 		if err != nil {
 			return nil, err
 		}

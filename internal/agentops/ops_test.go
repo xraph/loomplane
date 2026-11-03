@@ -1,6 +1,7 @@
 package agentops
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -450,5 +451,29 @@ func TestARefusedRiskReadIsNotAllowed(t *testing.T) {
 	}
 	if got := w.audit.toolCalls(); len(got) != 1 || got[0].Attributes["outcome"] != "forbidden" {
 		t.Fatalf("audit %+v", got)
+	}
+}
+
+// recordingAttacher attaches every repository it's given, as discovery
+// does once it can read it.
+type recordingAttacher struct{ got []projects.RepositoryInput }
+
+func (a *recordingAttacher) AttachRepository(_ context.Context, _ security.Principal, _ *projects.Project, in projects.RepositoryInput) (string, string, error) {
+	a.got = append(a.got, in)
+	return in.Repository, "api", nil
+}
+
+// create_project takes its repository as owner/name, as its definition
+// says, as well as a URL.
+func TestCreateProjectTakesARepositoryByOwnerAndName(t *testing.T) {
+	for _, repo := range []string{"acme/api", "https://github.com/acme/api"} {
+		w := newWorld(t)
+		att := &recordingAttacher{}
+		w.projects.SetAttacher(att)
+		var p projects.Project
+		w.callOK(orgA, ada, "create_project", map[string]string{"name": "API", "repository": repo}, &p)
+		if len(att.got) != 1 || att.got[0].Repository != repo || len(p.Repositories) != 1 {
+			t.Fatalf("%s: attached %+v, project %+v", repo, att.got, p)
+		}
 	}
 }
