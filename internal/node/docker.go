@@ -51,6 +51,11 @@ var (
 // response reached it. The daemon call finished, but the journal stays dirty.
 var errCallerGone = errors.New("the caller went away before the whole fenced response was relayed, so the fence journal stays dirty")
 
+// errCallerGoneFirst ends a fenced request whose caller went away while it
+// waited for the lock or its checks. Nothing reached the daemon, and the
+// journal is unchanged.
+var errCallerGoneFirst = errors.New("the caller went away before the fenced request ran, so nothing ran")
+
 // hopHeaders are request headers the fence drops before it forwards a request:
 // they describe the hop from the caller, not the request.
 var hopHeaders = []string{"Connection", "Content-Length", "Expect", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Transfer-Encoding", "Upgrade"}
@@ -274,6 +279,12 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 		if inspect, container, err = d.checkExec(ctx, f, req, body); err != nil {
 			return err
 		}
+	}
+	// A caller that gave up while this request queued for the lock, or
+	// during its checks, is waiting for nothing. Running the effect anyway
+	// would leave the journal dirty for good, so it stops here instead.
+	if out.lost() {
+		return errCallerGoneFirst
 	}
 	// From the dirty marker on, the daemon call runs to its end whatever
 	// happens to the stream, as the SSH helper ignores SIGHUP and SIGTERM. A

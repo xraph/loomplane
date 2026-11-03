@@ -41,6 +41,9 @@ type fakeDaemon struct {
 	reached chan struct{}
 	// output is what an exec start writes, already framed.
 	output []byte
+	// afterStart is what an exec's inspect says once it has started. Nil
+	// means it finished with exit code 0.
+	afterStart map[string]any
 }
 
 func startDaemon(t *testing.T, id string) *fakeDaemon {
@@ -117,6 +120,9 @@ func startDaemon(t *testing.T, id string) *fakeDaemon {
 		d.mu.Lock()
 		if e := d.execs[r.PathValue("id")]; e != nil {
 			e["Running"], e["ExitCode"] = false, 0
+			for k, v := range d.afterStart {
+				e[k] = v
+			}
 		}
 		d.mu.Unlock()
 	})
@@ -233,14 +239,22 @@ func newRequest(t *testing.T, method, path, body string) *http.Request {
 	return req
 }
 
-// fencedDo sends one fenced request and reads the whole response. A
-// response that does not frame completely fails the test.
-func fencedDo(t *testing.T, h Handler, f nodeproto.Fence, req *http.Request) (int, string) {
+// fencedResult is what one fenced request gave the caller and the handler.
+type fencedResult struct {
+	code    int
+	body    string
+	readErr error // reading the body; set when the response never framed completely
+	err     error // the handler's
+}
+
+// fencedTry sends one fenced request, written with send, and reads the
+// whole response.
+func fencedTry(t *testing.T, h Handler, f nodeproto.Fence, req *http.Request, send func(io.Writer) error) fencedResult {
 	t.Helper()
 	hub, node := yamuxPair(t)
 	c, s := openStream(t, hub, node)
 	done := serveStream(h, nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker, Target: nodeproto.DockerTargetFenced, Fence: &f}, s)
-	if err := req.Write(c); err != nil {
+	if err := send(c); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(c), req)
@@ -248,15 +262,24 @@ func fencedDo(t *testing.T, h Handler, f nodeproto.Fence, req *http.Request) (in
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("reading a %d response: %v", resp.StatusCode, err)
-	}
+	body, readErr := io.ReadAll(resp.Body)
 	_ = c.Close()
-	if err := wait(t, done); err != nil && resp.StatusCode < 300 {
-		t.Fatalf("the handler failed after a %d: %v", resp.StatusCode, err)
+	return fencedResult{code: resp.StatusCode, body: string(body), readErr: readErr, err: wait(t, done)}
+}
+
+// fencedDo sends one fenced request and reads the whole response. A
+// response that does not frame completely, or a handler that fails after a
+// success, fails the test.
+func fencedDo(t *testing.T, h Handler, f nodeproto.Fence, req *http.Request) (int, string) {
+	t.Helper()
+	r := fencedTry(t, h, f, req, req.Write)
+	if r.readErr != nil {
+		t.Fatalf("reading a %d response: %v", r.code, r.readErr)
 	}
-	return resp.StatusCode, string(body)
+	if r.err != nil && r.code < 300 {
+		t.Fatalf("the handler failed after a %d: %v", r.code, r.err)
+	}
+	return r.code, r.body
 }
 
 func openJournal(t *testing.T) (*FenceJournal, string) {
@@ -484,6 +507,186 @@ func TestRegisterDockerNeedsAllowAndSocket(t *testing.T) {
 			}
 			if registered := reg.handlers[nodeproto.EndpointDocker] != nil; registered != (tc.want != "") {
 				t.Fatalf("registered %v", registered)
+			}
+		})
+	}
+}
+
+// eofConn closes ended once a read on it has failed, which is when the
+// handler's watcher has seen the caller go.
+type eofConn struct {
+	net.Conn
+	once  sync.Once
+	ended chan struct{}
+}
+
+func (c *eofConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if err != nil {
+		c.once.Do(func() { close(c.ended) })
+	}
+	return n, err
+}
+
+func TestFencedCallerGoneWhileQueuedRunsNothing(t *testing.T) {
+	d := startDaemon(t, "daemon-1")
+	j, _ := openJournal(t)
+	h := DockerHandler(d.socket, j)
+	if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 2), newRequest(t, http.MethodPost, "/", "")); code != http.StatusOK {
+		t.Fatalf("advance: %d", code)
+	}
+	// Another fenced request holds the daemon, so this one queues.
+	if err := j.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	hub, node := yamuxPair(t)
+	c, s := openStream(t, hub, node)
+	served := &eofConn{Conn: s, ended: make(chan struct{})}
+	f := fence(nodeproto.FenceRequest, deployOp, 2)
+	done := serveStream(h, nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker, Target: nodeproto.DockerTargetFenced, Fence: &f}, served)
+	if err := newRequest(t, http.MethodPost, "/containers/create", `{}`).Write(c); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	select {
+	case <-served.ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler never saw the caller go")
+	}
+	j.Unlock()
+	if err := wait(t, done); err == nil {
+		t.Fatal("the handler reported success for a caller that went away")
+	}
+	if got := d.seen(); len(got) != 0 {
+		t.Fatalf("daemon saw %v; nobody was waiting for it", got)
+	}
+	got, err := loadJournal(t, j)
+	if err != nil || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
+		t.Fatalf("journal %+v %v, want clean at generation 2", got, err)
+	}
+	if code, _ := fencedDo(t, h, f, newRequest(t, http.MethodPost, "/containers/create", `{}`)); code != http.StatusCreated {
+		t.Fatalf("the next request: %d", code)
+	}
+}
+
+func TestFencedTrailingBytesAreRefused(t *testing.T) {
+	d := startDaemon(t, "daemon-1")
+	j, _ := openJournal(t)
+	h := DockerHandler(d.socket, j)
+	if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 2), newRequest(t, http.MethodPost, "/", "")); code != http.StatusOK {
+		t.Fatalf("advance: %d", code)
+	}
+	req := newRequest(t, http.MethodPost, "/containers/create", `{}`)
+	r := fencedTry(t, h, fence(nodeproto.FenceRequest, deployOp, 2), req, func(w io.Writer) error {
+		var b strings.Builder
+		if err := req.Write(&b); err != nil {
+			return err
+		}
+		// One write, so the extra request arrives with the first.
+		_, err := io.WriteString(w, b.String()+"GET /_ping HTTP/1.1\r\nHost: docker\r\n\r\n")
+		return err
+	})
+	if r.code != http.StatusConflict || r.body != "" || r.err == nil {
+		t.Fatalf("%d %q %v", r.code, r.body, r.err)
+	}
+	if got := d.seen(); len(got) != 0 {
+		t.Fatalf("daemon saw %v", got)
+	}
+	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+		t.Fatalf("journal %+v %v", got, err)
+	}
+}
+
+func TestFencedStreamsForOneDaemonRunOneAtATime(t *testing.T) {
+	d := startDaemon(t, "daemon-1")
+	j, _ := openJournal(t)
+	h := DockerHandler(d.socket, j)
+	if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 2), newRequest(t, http.MethodPost, "/", "")); code != http.StatusOK {
+		t.Fatalf("advance: %d", code)
+	}
+	hold, reached := make(chan struct{}), make(chan struct{}, 2)
+	d.set(func(d *fakeDaemon) { d.hold, d.reached = hold, reached })
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() {
+			req := newRequest(t, http.MethodPost, "/containers/create", `{}`)
+			r := fencedTry(t, h, fence(nodeproto.FenceRequest, deployOp, 2), req, req.Write)
+			if r.readErr != nil || r.err != nil {
+				t.Errorf("%d %v %v", r.code, r.readErr, r.err)
+			}
+			codes <- r.code
+		}()
+	}
+	<-reached
+	select {
+	case <-reached:
+		t.Fatal("two fenced requests reached the daemon at once")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(hold)
+	for range 2 {
+		select {
+		case code := <-codes:
+			if code != http.StatusCreated {
+				t.Fatalf("request: %d", code)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("a request never finished")
+		}
+	}
+	if got := d.seen(); len(got) != 2 {
+		t.Fatalf("daemon saw %v", got)
+	}
+	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+		t.Fatalf("journal %+v %v", got, err)
+	}
+}
+
+func TestFencedExecWaitsForTheExit(t *testing.T) {
+	oldPolls, oldInterval := execExitPolls, execExitInterval
+	execExitPolls, execExitInterval = 3, time.Millisecond
+	t.Cleanup(func() { execExitPolls, execExitInterval = oldPolls, oldInterval })
+	execID, container := strings.Repeat("c", 64), strings.Repeat("d", 64)
+	frames := "\x02\x00\x00\x00\x00\x00\x00\x04oops"
+	for _, tc := range []struct {
+		name       string
+		afterStart map[string]any
+		clean      bool
+	}{
+		{"exited", nil, true},
+		{"still running", map[string]any{"Running": true, "ExitCode": nil}, false},
+		{"no exit code", map[string]any{"ExitCode": nil}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := startDaemon(t, "daemon-1")
+			j, _ := openJournal(t)
+			h := DockerHandler(d.socket, j)
+			d.set(func(d *fakeDaemon) {
+				d.execs[execID] = map[string]any{
+					"ContainerID": container, "Running": false, "ExitCode": nil,
+					"ProcessConfig": map[string]any{"entrypoint": "pg_dump", "arguments": []string{"-Fc"}, "tty": false, "privileged": false},
+				}
+				d.output = []byte(frames)
+				d.afterStart = tc.afterStart
+			})
+			if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 2), newRequest(t, http.MethodPost, "/", "")); code != http.StatusOK {
+				t.Fatalf("advance: %d", code)
+			}
+			req := newRequest(t, http.MethodPost, "/exec/"+execID+"/start", `{"Detach":false,"Tty":false}`)
+			r := fencedTry(t, h, fence(nodeproto.FenceExec, deployOp, 2), req, req.Write)
+			if r.code != http.StatusOK || r.body != frames {
+				t.Fatalf("%d %q", r.code, r.body)
+			}
+			_, jerr := loadJournal(t, j)
+			if tc.clean {
+				if r.readErr != nil || r.err != nil || jerr != nil {
+					t.Fatalf("read %v, handler %v, journal %v", r.readErr, r.err, jerr)
+				}
+				return
+			}
+			// The outcome is unknown: no last chunk, and the journal stays dirty.
+			if r.readErr == nil || r.err == nil || !errors.Is(jerr, fencerules.ErrDirty) {
+				t.Fatalf("read %v, handler %v, journal %v", r.readErr, r.err, jerr)
 			}
 		})
 	}

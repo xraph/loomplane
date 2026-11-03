@@ -88,8 +88,8 @@ func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 	}
 	// The rules every handler shares, such as a fenced docker stream
 	// carrying a whole fence, are checked once here.
-	if err := hdr.Validate(); err != nil {
-		r.refuse(stream, err.Error())
+	if verr := hdr.Validate(); verr != nil {
+		r.refuse(stream, verr.Error())
 		return
 	}
 	r.mu.RLock()
