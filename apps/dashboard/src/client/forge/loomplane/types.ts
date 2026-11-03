@@ -3689,9 +3689,9 @@ export interface PublicConfig {
   consolePath?: string;
   features: Features;
   publishableKey: string;
+  requireEmailVerification: boolean;
   setupPending: boolean;
   setupTokenRequired: boolean;
-  requireEmailVerification: boolean;
   waitlist: boolean;
 }
 

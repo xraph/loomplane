@@ -26123,6 +26123,9 @@
           "publishable_key": {
             "type": "string"
           },
+          "require_email_verification": {
+            "type": "boolean"
+          },
           "setup_pending": {
             "type": "boolean"
           },
@@ -26135,9 +26138,6 @@
         }
       },
       "PushConfig": {
-          "require_email_verification": {
-            "type": "boolean"
-          },
         "type": "object",
         "required": [
           "enabled",
