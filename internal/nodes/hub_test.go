@@ -1217,6 +1217,30 @@ func TestHubWarnsWhenAReplicaCannotBeReached(t *testing.T) {
 	}
 }
 
+// After a restart on a single replica, a node's session row still names the
+// dead process until the node reconnects. That row was written before this
+// hub started, so it is no sign of a replica that can't be reached.
+func TestHubDoesNotWarnAboutItsOwnPredecessor(t *testing.T) {
+	store := newFakeStore()
+	var logs syncLog
+	seedNode(t, store, "node_1", "web-1", nodeproto.EndpointProbe)
+	if _, err := store.ClaimSession(context.Background(), Session{NodeID: "node_1", Replica: "replica:host-1:4242", ConnectedAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHub(HubConfig{Audience: "https://lp.example.com", Replica: "host-1:4343", HopSecret: []byte("hop-secret-for-tests-only-000000"),
+		ChallengeSecret: []byte("challenge-secret-for-tests-00000"), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err := h.Bind(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	var off ErrNodeOffline
+	if _, err := h.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.As(err, &off) {
+		t.Fatalf("open: %v", err)
+	}
+	if strings.Contains(logs.String(), "has no nodes.advertise_url") {
+		t.Fatalf("warned about the process this one replaced:\n%s", logs.String())
+	}
+}
+
 type syncLog struct {
 	mu sync.Mutex
 	b  strings.Builder

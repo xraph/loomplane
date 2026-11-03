@@ -147,6 +147,9 @@ type Hub struct {
 	// unreachableOnce warns once that another replica holds sessions with no
 	// advertise URL, so this one can't reach its nodes.
 	unreachableOnce sync.Once
+	// started is when this hub was made. A session row connected before it
+	// may be one this process's predecessor left behind.
+	started time.Time
 }
 
 // NewHub returns a hub. It does no I/O; Bind checks the configuration.
@@ -154,7 +157,7 @@ func NewHub(cfg HubConfig) *Hub {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	h := &Hub{cfg: cfg, log: cfg.Log, sessions: map[string]*session{}}
+	h := &Hub{cfg: cfg, log: cfg.Log, sessions: map[string]*session{}, started: cfg.Now()}
 	if h.log == nil {
 		h.log = slog.Default()
 	}
@@ -511,7 +514,10 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 	if s != nil && row != nil && row.Epoch > s.epoch {
 		s.close()
 	}
-	if row != nil && row.Replica != h.self && !hopTarget(row.Replica) {
+	// A row connected before this process started proves nothing about a
+	// live replica: on a single replica it is the dead process's own
+	// "replica:<host>:<pid>" row, left until the node reconnects here.
+	if row != nil && row.Replica != h.self && !hopTarget(row.Replica) && !row.ConnectedAt.Before(h.started) {
 		h.unreachableOnce.Do(func() {
 			h.log.Warn("nodes: another replica holds node sessions but has no nodes.advertise_url, so this replica can't reach those nodes and revokes reach them only through the heartbeat; set nodes.advertise_url on every replica", "replica", row.Replica, "node", n.ID)
 		})
