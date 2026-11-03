@@ -956,6 +956,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	result.Warnings = append(result.Warnings, warnings...)
+	checkGitBuilds(plan, result)
 	released, from, reuse, err := s.releasedImages(ctx, plan)
 	if err != nil {
 		return nil, "", fmt.Errorf("read what %s ran: %w", from, err)

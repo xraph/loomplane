@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
@@ -63,14 +62,14 @@ func newFakeOAuth(t *testing.T) (*fakeOAuth, *repositories.BitbucketOAuth, strin
 	f := &fakeOAuth{}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	o := repositories.NewBitbucketOAuth(config.BitbucketConfig{
+	o := repositories.NewBitbucketOAuth(repositories.BitbucketOAuthConfig{
 		APIURL: srv.URL, WebURL: srv.URL, ClientID: oauthClientID, ClientSecret: oauthClientSecret,
 	})
 	return f, o, srv.URL
 }
 
 func TestBitbucketOAuth_authorizeURL(t *testing.T) {
-	o := repositories.NewBitbucketOAuth(config.BitbucketConfig{
+	o := repositories.NewBitbucketOAuth(repositories.BitbucketOAuthConfig{
 		APIURL: "https://api.example.test/2.0", WebURL: "https://bb.example.test/", ClientID: "k&1", ClientSecret: "s",
 	})
 	got := o.AuthorizeURL("a b&c=d/e")

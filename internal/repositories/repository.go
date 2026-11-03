@@ -10,7 +10,7 @@ import (
 // Errors reading a repository from what someone typed or stored. Each is
 // permanent: retrying won't help.
 var (
-	ErrUnsupportedHost = errors.New("Loomplane reads GitHub and Bitbucket repositories so far") //nolint:staticcheck // ST1005: a sentence people read, and Loomplane is a name
+	ErrUnsupportedHost = errors.New("Loomplane can't read repositories from that host yet; for a self-managed GitLab, add its host on Integrations first") //nolint:staticcheck // ST1005: a sentence people read, and Loomplane is a name
 	ErrInvalidURL      = errors.New("that isn't a repository URL Loomplane can read")
 )
 
@@ -19,6 +19,7 @@ var (
 const (
 	HostGitHub    = ""
 	HostBitbucket = "bitbucket.org"
+	HostGitLab    = "gitlab.com"
 
 	githubDomain = "github.com"
 )
@@ -81,6 +82,7 @@ var staticPaths = map[string]PathParser{
 	githubDomain:     githubPath,
 	"www.github.com": githubPath,
 	HostBitbucket:    bitbucketPath,
+	HostGitLab:       gitlabPath,
 }
 
 // ParseURL reads a repository from the URLs people paste, on a host

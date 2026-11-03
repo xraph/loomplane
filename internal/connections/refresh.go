@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/oauth"
@@ -49,65 +48,6 @@ type grantStore interface {
 	LeftSignIns(ctx context.Context, clouds []string) ([]*Connection, error)
 	KeylessConnections(ctx context.Context) ([]*Connection, error)
 	WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
-}
-
-// renewGate queues renewals in the process before they reach the
-// database. A caller waiting on the database lock holds a pooled
-// connection, so without it many callers of one connection could take
-// the whole pool and leave none for the caller holding the lock.
-type renewGate struct {
-	mu    sync.Mutex
-	queue map[string]*renewQueue
-	slots chan struct{}
-}
-
-// renewQueue lets one caller of a connection through at a time.
-type renewQueue struct {
-	turn  chan struct{}
-	users int
-}
-
-func newRenewGate(slots int) *renewGate {
-	return &renewGate{queue: map[string]*renewQueue{}, slots: make(chan struct{}, slots)}
-}
-
-// enter waits for key's turn and then for a free slot, or for ctx to end.
-// The caller calls leave when done.
-func (g *renewGate) enter(ctx context.Context, key string) (leave func(), err error) {
-	g.mu.Lock()
-	q := g.queue[key]
-	if q == nil {
-		q = &renewQueue{turn: make(chan struct{}, 1)}
-		g.queue[key] = q
-	}
-	q.users++
-	g.mu.Unlock()
-	forget := func() {
-		g.mu.Lock()
-		q.users--
-		if q.users == 0 {
-			delete(g.queue, key)
-		}
-		g.mu.Unlock()
-	}
-	select {
-	case q.turn <- struct{}{}:
-	case <-ctx.Done():
-		forget()
-		return nil, ctx.Err()
-	}
-	select {
-	case g.slots <- struct{}{}:
-	case <-ctx.Done():
-		<-q.turn
-		forget()
-		return nil, ctx.Err()
-	}
-	return func() {
-		<-g.slots
-		<-q.turn
-		forget()
-	}, nil
 }
 
 // RefreshReport counts what one pass over the sign-ins did. Probed is how
@@ -181,7 +121,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 	if s.grants == nil || s.renewals == nil {
 		return oauth.Grant{}, false, fmt.Errorf("%w: renewing a sign-in needs the database", ErrUnavailable)
 	}
-	leave, err := s.renewals.enter(ctx, c.OrgID+"/"+c.ID)
+	leave, err := s.renewals.Enter(ctx, c.OrgID+"/"+c.ID)
 	if err != nil {
 		return oauth.Grant{}, false, err
 	}

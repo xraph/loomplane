@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/xraph/loomplane/internal/config"
 )
 
 // ErrBitbucketRefused means Bitbucket won't honour the grant any more: the
@@ -116,9 +114,19 @@ type BitbucketOAuth struct {
 	api *Bitbucket
 }
 
+// BitbucketOAuthConfig is the consumer a BitbucketOAuth signs in with, and
+// where it reaches Bitbucket. It mirrors config.BitbucketConfig, which this
+// package can't import: config imports repositories.
+type BitbucketOAuthConfig struct {
+	APIURL       string
+	WebURL       string
+	ClientID     string
+	ClientSecret string
+}
+
 // NewBitbucketOAuth returns a client for the consumer in cfg. Empty URLs mean
 // bitbucket.org's.
-func NewBitbucketOAuth(cfg config.BitbucketConfig) *BitbucketOAuth {
+func NewBitbucketOAuth(cfg BitbucketOAuthConfig) *BitbucketOAuth {
 	api := NewBitbucket(cfg.APIURL, cfg.WebURL)
 	return &BitbucketOAuth{
 		clientID:     cfg.ClientID,

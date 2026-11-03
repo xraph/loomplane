@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useGithubStatus,
+  useGitlabStatus,
   useProjectsCreate,
 } from "@/client/forge/loomplane/hooks"
 import type { CreateProjectInputBody } from "@/client/forge/loomplane/types"
@@ -46,7 +47,7 @@ import {
 } from "@/components/ui/item"
 import { Spinner } from "@/components/ui/spinner"
 import { aliasFor, aliasProblem } from "@/lib/alias"
-import { githubRepo, repositoryURL } from "@/lib/format"
+import { repositoryKey, repositoryURL } from "@/lib/format"
 import {
   ProjectIcon,
   type ProjectColorName,
@@ -67,6 +68,11 @@ const maxRepositories = 10
 /** A repository the project starts with, as typed. */
 type RepoRow = { key: number; repo: string; alias: string }
 
+/** repoNameOf is the repository's own name, without its owner or groups. */
+function repoNameOf(repo: string): string {
+  return repositoryKey(repo).split("/").pop() ?? ""
+}
+
 /**
  * planAliases is the alias each row gets, and what's wrong with it: one
  * typed that the API won't take, or one another row already has. Rows
@@ -75,7 +81,7 @@ type RepoRow = { key: number; repo: string; alias: string }
 function planAliases(rows: RepoRow[]): { alias: string; problem: string }[] {
   const seen = new Set<string>()
   return rows.map((r) => {
-    const name = githubRepo(repositoryURL(r.repo)).split("/")[1] ?? ""
+    const name = repoNameOf(r.repo)
     if (!r.repo.trim()) return { alias: "", problem: "" }
     const typed = r.alias.trim()
     const alias = typed || aliasFor(name || r.repo)
@@ -122,7 +128,16 @@ function NewProjectForm({
   const navigate = useNavigate()
   const create = useMutation(useProjectsCreate)
   const github = useQuery(useGithubStatus)
-  const connected = (github.data?.installations.length ?? 0) > 0
+  const gitlab = useQuery(useGitlabStatus)
+  const hasGitHub = (github.data?.installations.length ?? 0) > 0
+  const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
+  const connected = hasGitHub || hasGitLab
+  const connection =
+    hasGitHub && hasGitLab
+      ? "GitHub or GitLab connection"
+      : hasGitLab
+        ? "GitLab connection"
+        : "GitHub connection"
   const [rows, setRows] = useState<RepoRow[]>([
     { key: 0, repo: repository, alias: "" },
   ])
@@ -133,7 +148,7 @@ function NewProjectForm({
   const [error, setError] = useState("")
 
   // The name follows the first repository until someone types their own.
-  const repoName = githubRepo(repositoryURL(rows[0].repo)).split("/")[1] ?? ""
+  const repoName = repoNameOf(rows[0].repo)
   const name = typedName ?? repoName
   const slug = slugify(name)
   const busy = create.isPending
@@ -306,8 +321,8 @@ function NewProjectForm({
             {several
               ? "Each one gets an alias, from its name unless you give it one. Plans and variables name it by that alias, and it can't change later."
               : connected
-                ? "From your GitHub connection, or any public repository. You can add it later, or more of them."
-                : "Any public GitHub repository. Connect GitHub under Integrations for private ones. You can add it later, or more of them."}
+                ? `From your ${connection}, or any public repository. You can add it later, or more of them.`
+                : "Any public GitHub or GitLab repository. Connect one under Integrations for private ones. You can add it later, or more of them."}
           </FieldDescription>
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">

@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -166,6 +167,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 	repo, err := repositoryFor(job)
 	if err != nil {
 		return nil, err
+	}
+	if hostErr := planning.GitBuildable("digitalocean", repo); hostErr != nil {
+		return nil, hostErr
 	}
 	if job.CommitSHA == "" {
 		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
@@ -454,9 +458,11 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 		region = doRegion
 	}
 	spec := digitalocean.AppSpec{Name: DigitalOceanName(job), Region: region}
-	comp := digitalocean.Component{
-		Name:   doName(job.Action.Name),
-		GitHub: &digitalocean.GitHubSource{Repo: repo, Branch: branch},
+	comp := digitalocean.Component{Name: doName(job.Action.Name)}
+	if r, err := repositories.ParseKey(repo); err == nil && r.Host == "gitlab.com" {
+		comp.GitLab = &digitalocean.GitLabSource{Repo: r.FullName(), Branch: branch}
+	} else {
+		comp.GitHub = &digitalocean.GitHubSource{Repo: repo, Branch: branch}
 	}
 	root := strings.Trim(cfg.Source, "/")
 	if root == "." {

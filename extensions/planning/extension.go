@@ -201,6 +201,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the discovery extension: %w", err)
 	}
+	gitlab, err := forge.InjectType[*repositories.GitLabConnections](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the discovery extension: %w", err)
+	}
+	gitlabHosts, err := forge.InjectType[*repositories.GitLabRegistry](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the discovery extension: %w", err)
+	}
 	files, err := forge.InjectType[*trove.Trove](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the trove extension: %w", err)
@@ -532,14 +540,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.RepositorySources{
-			Readers: repositories.Readers{Static: map[string]repositories.Reader{
-				"github.com":    repositories.NewGitHub(e.cfg.GitHub.APIURL),
-				"bitbucket.org": repositories.NewBitbucket(e.cfg.Bitbucket.APIURL, e.cfg.Bitbucket.WebURL),
-			}},
-			Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{
-				"github.com":    github,
-				"bitbucket.org": bitbucket,
-			}},
+			Readers:   discoveryext.SourceReaders(e.cfg, gitlabHosts),
+			Tokens:    discoveryext.SourceTokens(github, bitbucket, gitlab),
 			Artifacts: e.artifacts,
 		},
 		Providers:            catalog,

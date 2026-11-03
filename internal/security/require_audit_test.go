@@ -39,12 +39,21 @@ var workspaceChecks = map[string]int{
 	"internal/repositories/connections.go:Repositories":         1,
 	// A Bitbucket workspace is connected to the whole organization, like a
 	// GitHub installation, and so is a repository's push webhook.
-	"internal/repositories/bitbucket_connections.go:Status":                   1,
-	"internal/repositories/bitbucket_connections.go:Authorize":                1,
-	"internal/repositories/bitbucket_connections.go:Connect":                  1,
-	"internal/repositories/bitbucket_connections.go:Disconnect":               1,
-	"internal/repositories/bitbucket_connections.go:Repositories":             1,
-	"internal/discovery/bitbucket_webhooks.go:Enable":                         1,
+	"internal/repositories/bitbucket_connections.go:Status":       1,
+	"internal/repositories/bitbucket_connections.go:Authorize":    1,
+	"internal/repositories/bitbucket_connections.go:Connect":      1,
+	"internal/repositories/bitbucket_connections.go:Disconnect":   1,
+	"internal/repositories/bitbucket_connections.go:Repositories": 1,
+	"internal/discovery/bitbucket_webhooks.go:Enable":             1,
+	// A GitLab host or account is the organization's too.
+	"internal/repositories/gitlab_connections.go:AddHost":                     1,
+	"internal/repositories/gitlab_connections.go:Disconnect":                  1,
+	"internal/repositories/gitlab_connections.go:RemoveHost":                  1,
+	"internal/repositories/gitlab_connections.go:Repositories":                1,
+	"internal/repositories/gitlab_connections.go:SetWebhookSecret":            1,
+	"internal/repositories/gitlab_connections.go:Status":                      1,
+	"internal/repositories/gitlab_signin.go:Connect":                          1,
+	"internal/repositories/gitlab_signin.go:StartSignIn":                      1,
 	"internal/models/custom.go:Inspect":                                       1,
 	"internal/models/browse.go:Registry":                                      1,
 	"internal/models/browse.go:Entry":                                         1,
@@ -191,8 +200,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 84 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added and the 6 Bitbucket ones", total)
+	if total != 92 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the 6 Bitbucket ones and the 8 GitLab ones", total)
 	}
 
 	var models []string

@@ -140,9 +140,12 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	return out, nil
 }
 
-// PushActor is who an analysis a GitHub push started is recorded as
-// created by.
-const PushActor = "github-push"
+// PushActor is who an analysis a GitHub push started is recorded as created
+// by, and GitLabPushActor who an analysis a GitLab push started is.
+const (
+	PushActor       = "github-push"
+	GitLabPushActor = "gitlab-push"
+)
 
 // StartFromPush queues an analysis of a source's tracked branch because
 // GitHub said it moved. It skips the permission check, since nobody asked:
@@ -156,6 +159,12 @@ func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, er
 // the analysis records as BitbucketPushActor's.
 func (s *Service) StartFromBitbucketPush(ctx context.Context, src *Source) (*Analysis, error) {
 	return s.startFromPush(ctx, src, BitbucketPushActor)
+}
+
+// StartFromGitLabPush is StartFromPush for a push GitLab announced, recorded
+// as GitLabPushActor's.
+func (s *Service) StartFromGitLabPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, GitLabPushActor)
 }
 
 func (s *Service) startFromPush(ctx context.Context, src *Source, actor string) (*Analysis, error) {

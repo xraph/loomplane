@@ -46,7 +46,8 @@ var _ projects.Attacher = (*discovery.Service)(nil)
 // Deleting a project, or rolling a new one back, tells the service too.
 var _ projects.Reaper = (*discovery.Service)(nil)
 
-// Extension serves the analysis API and the GitHub connection.
+// Extension serves the analysis API and the GitHub, Bitbucket and GitLab
+// connections.
 type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
@@ -58,6 +59,7 @@ type Extension struct {
 	bitbucket *repositories.BitbucketConnections
 	// bitbucketHooks keeps the push webhooks on Bitbucket repositories.
 	bitbucketHooks *discovery.BitbucketWebhooks
+	gitlab         *repositories.GitLabConnections
 }
 
 // New returns the API extension. engineOf returns the dispatch
@@ -112,15 +114,16 @@ func (e *Extension) Register(fapp forge.App) error {
 		bitbucketAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
 		return err
 	}
+	var registry *repositories.GitLabRegistry
+	e.gitlab, registry, err = gitlabConnections(e.cfg, db, pg, authz, gitlabAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	if err != nil {
+		return err
+	}
+	// A source may be on any GitLab the organization can use.
+	e.svc.SetHosts(repositories.Hosts{Registry: registry})
 	e.svc.SetAccess(discovery.Access{
-		Tokens: repositories.Tokens{Static: map[string]repositories.TokenSource{
-			"github.com":    e.github,
-			"bitbucket.org": e.bitbucket,
-		}},
-		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{
-			"github.com":    repositories.NewGitHub(e.cfg.GitHub.APIURL),
-			"bitbucket.org": repositories.NewBitbucket(e.cfg.Bitbucket.APIURL, e.cfg.Bitbucket.WebURL),
-		}},
+		Tokens:  SourceTokens(e.github, e.bitbucket, e.gitlab),
+		Fetcher: SourceReaders(e.cfg, registry),
 	})
 	if e.bitbucketHooks, err = bitbucketWebhooks(e.cfg, pg, e.bitbucket, authz, e.svc,
 		bitbucketHookAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
@@ -147,6 +150,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.bitbucket); err != nil {
 		return fmt.Errorf("provide the Bitbucket connections: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.gitlab); err != nil {
+		return fmt.Errorf("provide the GitLab connections: %w", err)
+	}
+	if err := forge.ProvideValue(c, registry); err != nil {
+		return fmt.Errorf("provide the GitLab hosts: %w", err)
+	}
 	if err := e.routes(fapp.Router(), guard); err != nil {
 		return err
 	}
@@ -159,11 +168,21 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.bitbucketWebhookRoute(fapp.Router(), e.bitbucketHooks); err != nil {
 		return err
 	}
-	return e.webhookRoute(fapp.Router(), &discovery.Webhooks{
+	if err := e.gitlabRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.webhookRoute(fapp.Router(), &discovery.Webhooks{
 		Secret:        []byte(e.cfg.GitHub.WebhookSecret),
 		Installations: repositories.NewPgStore(pg).InstallationOrgs,
 		Sources:       discovery.NewPgStore(pg).SourcesByRepository,
 		Start:         e.svc.StartFromPush,
+	}); err != nil {
+		return err
+	}
+	return e.gitlabWebhookRoute(fapp.Router(), &discovery.GitLabWebhooks{
+		Target:  e.gitlab.WebhookTarget,
+		Sources: discovery.NewPgStore(pg).SourcesByRepository,
+		Start:   e.svc.StartFromGitLabPush,
 	})
 }
 
@@ -225,8 +244,17 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, readable(err))
 	case errors.Is(err, repositories.ErrInstallationNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, repositories.ErrBadState), errors.Is(err, repositories.ErrBadWorkspace):
+	case errors.Is(err, repositories.ErrBadState), errors.Is(err, repositories.ErrBadWorkspace), errors.Is(err, repositories.ErrGitLabBadState):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrGitLabHostExists), errors.Is(err, repositories.ErrGitLabHostInUse), errors.Is(err, repositories.ErrGitLabSignInLapsed):
+		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrGitLabHostsOff):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
+	case errors.Is(err, repositories.ErrGitLabSubpath), errors.Is(err, repositories.ErrGitLabInsecure),
+		errors.Is(err, repositories.ErrGitLabHostIncomplete), errors.Is(err, repositories.ErrGitLabSigningToken), errors.Is(err, repositories.ErrPrivateAddress):
+		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrGitLabConnectionNotFound), errors.Is(err, repositories.ErrGitLabHostNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, repositories.ErrNotYourInstallation), errors.Is(err, repositories.ErrNotAMember):
 		return forge.NewHTTPError(http.StatusForbidden, err.Error())
 	case errors.Is(err, repositories.ErrWorkspaceNotFound):
@@ -302,19 +330,17 @@ func (w *Worker) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	readers := repositories.Readers{Static: map[string]repositories.Reader{
-		"github.com":    repositories.NewGitHub(w.cfg.GitHub.APIURL),
-		"bitbucket.org": repositories.NewBitbucket(w.cfg.Bitbucket.APIURL, w.cfg.Bitbucket.WebURL),
-	}}
-	// Likewise Bitbucket's: no Authorizer or auditor.
+	// Likewise Bitbucket's and GitLab's: no Authorizer or auditor.
 	bitbucket, err := bitbucketConnections(w.cfg, db, nil, nil, w.Logger())
 	if err != nil {
 		return err
 	}
-	tokens := repositories.Tokens{Static: map[string]repositories.TokenSource{
-		"github.com":    conns,
-		"bitbucket.org": bitbucket,
-	}}
+	glConns, registry, err := gitlabConnections(w.cfg, db, pg, nil, nil)
+	if err != nil {
+		return err
+	}
+	readers := SourceReaders(w.cfg, registry)
+	tokens := SourceTokens(conns, bitbucket, glConns)
 	runner := discovery.NewRunner(discovery.NewPgStore(pg), readers, tokens, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
 	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))

@@ -69,3 +69,30 @@ func (e *Extension) bitbucketWebhookRoute(r forge.Router, hooks *discovery.Bitbu
 		return c.JSON(http.StatusAccepted, map[string]int{"analyses_started": started})
 	}, forge.WithName("bitbucket.webhook"), forge.WithSchemaExclude())
 }
+
+// gitlabWebhookRoute serves GitLab's deliveries, one URL per connection. It's
+// outside the guard for the same reason GitHub's is: GitLab has no session,
+// and the secret of the connection in the URL is what's checked. Nothing a
+// delivery carries is echoed back or logged.
+func (e *Extension) gitlabWebhookRoute(r forge.Router, hooks *discovery.GitLabWebhooks) error {
+	return r.POST("/api/v1/gitlab/webhook/:id", func(c forge.Context) error {
+		req := c.Request()
+		body, err := io.ReadAll(io.LimitReader(req.Body, maxDelivery))
+		if err != nil {
+			return forge.NewHTTPError(http.StatusBadRequest, "read the delivery")
+		}
+		started, err := hooks.Handle(req.Context(), c.Param("id"), req.Header, body)
+		switch {
+		case errors.Is(err, repositories.ErrGitLabConnectionNotFound):
+			return forge.NewHTTPError(http.StatusNotFound, "no webhook is set up for that GitLab connection")
+		case errors.Is(err, discovery.ErrBadSignature):
+			return forge.NewHTTPError(http.StatusUnauthorized, err.Error())
+		case err != nil && started == 0:
+			e.Logger().Warn("handle a GitLab webhook", forge.F("error", err.Error()))
+			return forge.NewHTTPError(http.StatusInternalServerError, "the delivery couldn't be handled")
+		case err != nil:
+			e.Logger().Warn("some projects weren't re-analyzed", forge.F("error", err.Error()))
+		}
+		return c.JSON(http.StatusAccepted, map[string]int{"analyses_started": started})
+	}, forge.WithName("gitlab.webhook"), forge.WithSchemaExclude())
+}

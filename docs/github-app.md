@@ -1,6 +1,6 @@
 # GitHub App
 
-Loomplane reads public GitHub repositories with no setup at all. To read private ones, it needs a GitHub App that your organization's admins install on their GitHub accounts. You create the App once, for the whole Loomplane instance. For Bitbucket Cloud, see [bitbucket.md](bitbucket.md).
+Loomplane reads public GitHub repositories with no setup at all. To read private ones, it needs a GitHub App that your organization's admins install on their GitHub accounts. You create the App once, for the whole Loomplane instance. For Bitbucket Cloud, see [bitbucket.md](bitbucket.md). For GitLab, see [gitlab.md](gitlab.md).
 
 ## Create the App
 

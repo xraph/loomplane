@@ -82,7 +82,7 @@ type Service struct {
 	// connection, and then nothing is renewed.
 	grants grantStore
 	// renewals queues renewals before they take a database connection.
-	renewals *renewGate
+	renewals *oauth.Gate
 
 	// GPUReader reads a server or cluster's GPUs. Nil uses the real SSH and Kubernetes readers.
 	GPUReader func(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error)
@@ -95,7 +95,7 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 		warn = func(string, error) {}
 	}
 	grants, _ := store.(grantStore) //nolint:errcheck // a store that can't lock leaves grants nil, as documented
-	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: newRenewGate(maxRenewals)}
+	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: oauth.NewGate(maxRenewals)}
 }
 
 // CreateInput connects a cloud account.

@@ -108,7 +108,12 @@ import {
   stepLabel,
   steps,
 } from "@/lib/architecture"
-import { formatDate, githubRepo, repositoriesLabel } from "@/lib/format"
+import {
+  formatDate,
+  repositoriesLabel,
+  repositoryKey,
+  startsWithHost,
+} from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 // After this long in the queue, the likeliest reason is that no worker is
@@ -379,7 +384,7 @@ export function ConnectRepository({
         <EmptyTitle>No repository yet</EmptyTitle>
         <EmptyDescription>
           {mayEdit
-            ? "Add the GitHub repository this project builds from. Public ones work as they are; private ones need the GitHub connection."
+            ? "Add the GitHub or GitLab repository this project builds from. Public ones work as they are; private ones need the GitHub or GitLab connection."
             : "Someone with the developer role or above can add the repository this project builds from."}
         </EmptyDescription>
       </EmptyHeader>
@@ -387,15 +392,17 @@ export function ConnectRepository({
         <EmptyContent>
           <form onSubmit={(e) => void submit(e)} className="w-full max-w-md">
             <InputGroup>
-              <InputGroupAddon>
-                <InputGroupText>github.com/</InputGroupText>
-              </InputGroupAddon>
+              {!startsWithHost(repo) && (
+                <InputGroupAddon>
+                  <InputGroupText>github.com/</InputGroupText>
+                </InputGroupAddon>
+              )}
               <InputGroupInput
                 aria-label="Repository"
                 value={repo}
                 onChange={(e) => {
                   const v = e.target.value
-                  setRepo(githubRepo(v) || v.trim())
+                  setRepo(repositoryKey(v) || v.trim())
                 }}
                 placeholder="acme/storefront"
                 className="font-mono text-[13px]"

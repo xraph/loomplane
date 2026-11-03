@@ -569,6 +569,10 @@ func TestRunner_failures(t *testing.T) {
 		reason     string
 	}{
 		{"permanent", repositories.ErrNotFound, 3, false, repositories.ErrNotFound.Error()},
+		{
+			"lapsed GitLab sign-in", &repositories.GitLabSignInLapsedError{Username: "alice", Host: "gitlab.example.com"},
+			3, false, "The GitLab sign-in for alice on gitlab.example.com needs signing in again",
+		},
 		{"transient, then out of attempts", errors.New("connection reset"), 2, true, "the analysis failed: connection reset"},
 	}
 	for _, tt := range tests {
@@ -916,6 +920,18 @@ func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
 	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
 	if !errors.Is(err, ErrRootsOverlap) {
 		t.Fatalf("the same Bitbucket repository in another case: %v", err)
+	}
+}
+
+func TestAddSource_mixedCaseGitLabDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "gl", "gitlab.com/acme/api", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://GitLab.com/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same GitLab project in another case: %v", err)
 	}
 }
 

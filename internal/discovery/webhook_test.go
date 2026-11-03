@@ -37,6 +37,25 @@ func TestService_startFromPushAnalyzesTheSourcesTrackedBranch(t *testing.T) {
 	}
 }
 
+func TestService_startFromGitLabPushIsRecordedAsGitLabs(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	src, err := f.store.GetSource(ctx, org, project, "mono")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := f.svc.StartFromGitLabPush(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.CreatedBy != GitLabPushActor || GitLabPushActor != "gitlab-push" || PushActor != "github-push" {
+		t.Fatalf("created by %q", a.CreatedBy)
+	}
+	if _, err := f.svc.StartFromGitLabPush(ctx, src); !errors.Is(err, ErrAlreadyActive) {
+		t.Fatalf("a second push while one runs: %v", err)
+	}
+}
+
 func sign(secret, body []byte) string {
 	m := hmac.New(sha256.New, secret)
 	m.Write(body)

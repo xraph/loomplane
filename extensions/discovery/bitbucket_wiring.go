@@ -60,7 +60,7 @@ func bitbucketConnections(cfg config.Config, db *grove.DB, authz repositories.Au
 	// when there is a consumer.
 	var api repositories.BitbucketAPI
 	if cfg.Bitbucket.Configured() {
-		api = repositories.NewBitbucketOAuth(cfg.Bitbucket)
+		api = bitbucketOAuth(cfg.Bitbucket)
 	}
 	conns := repositories.NewBitbucketConnections(repositories.NewPgStore(pgdriver.Unwrap(db)), api, secrets, authz, audit, stateKey)
 	conns.SetWarn(func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) })
@@ -91,7 +91,7 @@ func bitbucketWebhooks(cfg config.Config, pg *pgdriver.PgDB, conns *repositories
 	// An interface holding a nil *BitbucketOAuth isn't nil, so it's set only
 	// when there is a consumer.
 	if cfg.Bitbucket.Configured() {
-		w.API = repositories.NewBitbucketOAuth(cfg.Bitbucket)
+		w.API = bitbucketOAuth(cfg.Bitbucket)
 	}
 	return w, nil
 }
@@ -139,4 +139,11 @@ func (a bitbucketAuditor) RecordBitbucket(ctx context.Context, action string, p 
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
 	}
+}
+
+// bitbucketOAuth is the client for the configured Bitbucket consumer.
+func bitbucketOAuth(b config.BitbucketConfig) *repositories.BitbucketOAuth {
+	return repositories.NewBitbucketOAuth(repositories.BitbucketOAuthConfig{
+		APIURL: b.APIURL, WebURL: b.WebURL, ClientID: b.ClientID, ClientSecret: b.ClientSecret,
+	})
 }

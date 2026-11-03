@@ -5592,6 +5592,245 @@
         }
       }
     },
+    "/api/v1/gitlab": {
+      "get": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "The organization's GitLab hosts and connected accounts",
+        "operationId": "gitlab.status",
+        "responses": {
+          "200": {
+            "description": "The hosts and connections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gitlab/connections": {
+      "post": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "Connect a GitLab account, from what GitLab's redirect carried back",
+        "operationId": "gitlab.connect",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectGitLabInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabConnectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gitlab/connections/{id}": {
+      "delete": {
+        "operationId": "gitlab.disconnect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Disconnect an account, and revoke its sign-in at GitLab",
+        "tags": [
+          "GitLab"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "GitLabConnectionView"
+        }
+      }
+    },
+    "/api/v1/gitlab/connections/{id}/webhook": {
+      "post": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "Create or replace a connection's webhook secret, shown once",
+        "operationId": "gitlab.webhookSecret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGitLabWebhookInputBody"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "The secret in the two forms GitLab takes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabWebhookSecret"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gitlab/hosts": {
+      "post": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "Register a GitLab of the organization's own, with the OAuth application made on it",
+        "operationId": "gitlab.addHost",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddGitLabHostInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The registered host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabHostView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gitlab/hosts/{id}": {
+      "delete": {
+        "operationId": "gitlab.removeHost",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Remove a host the organization registered. Its accounts have to be disconnected first.",
+        "tags": [
+          "GitLab"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "GitLabHostView"
+        }
+      }
+    },
+    "/api/v1/gitlab/repositories": {
+      "get": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "The projects the organization's connected accounts can read",
+        "operationId": "gitlab.repositories",
+        "responses": {
+          "200": {
+            "description": "Projects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabRepositoryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gitlab/sign-ins": {
+      "post": {
+        "tags": [
+          "GitLab"
+        ],
+        "summary": "Start signing in to a GitLab host, and get the address to send the browser to",
+        "operationId": "gitlab.startSignIn",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGitLabSignInInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Where to sign in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitLabSignInStart"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/gpu-targets": {
       "get": {
         "tags": [
@@ -14052,6 +14291,25 @@
           }
         }
       },
+      "AddGitLabHostInputBody": {
+        "type": "object",
+        "required": [
+          "web_url",
+          "client_id",
+          "client_secret"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string"
+          },
+          "web_url": {
+            "type": "string"
+          }
+        }
+      },
       "AddSourceInputBody": {
         "type": "object",
         "required": [
@@ -18495,6 +18753,21 @@
           }
         }
       },
+      "ConnectGitLabInputBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "ConnectedBitbucketRepository": {
         "type": "object",
         "required": [
@@ -22136,6 +22409,202 @@
             "items": {
               "$ref": "#/components/schemas/GitHubInstallation"
             }
+          }
+        }
+      },
+      "GitLabConnectionView": {
+        "type": "object",
+        "required": [
+          "id",
+          "host",
+          "username",
+          "avatar_url",
+          "version",
+          "version_supported",
+          "lapsed",
+          "webhook_set",
+          "webhook_url",
+          "created_at"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "lapsed": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "version_supported": {
+            "type": "boolean"
+          },
+          "webhook_set": {
+            "type": "boolean"
+          },
+          "webhook_url": {
+            "type": "string"
+          }
+        }
+      },
+      "GitLabHostView": {
+        "type": "object",
+        "required": [
+          "id",
+          "web_url",
+          "host",
+          "instance",
+          "client_id"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "instance": {
+            "type": "boolean"
+          },
+          "web_url": {
+            "type": "string"
+          }
+        }
+      },
+      "GitLabRepository": {
+        "type": "object",
+        "required": [
+          "key",
+          "full_name",
+          "name",
+          "namespace",
+          "host",
+          "connection",
+          "private",
+          "default_branch"
+        ],
+        "properties": {
+          "connection": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GitLabRepositoryList": {
+        "type": "object",
+        "required": [
+          "repositories"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitLabRepository"
+            }
+          }
+        }
+      },
+      "GitLabSignInStart": {
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          }
+        }
+      },
+      "GitLabStatus": {
+        "type": "object",
+        "required": [
+          "hosts",
+          "connections",
+          "can_connect",
+          "organization_hosts",
+          "callback_url"
+        ],
+        "properties": {
+          "callback_url": {
+            "type": "string"
+          },
+          "can_connect": {
+            "type": "boolean"
+          },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitLabConnectionView"
+            }
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitLabHostView"
+            }
+          },
+          "organization_hosts": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GitLabWebhookSecret": {
+        "type": "object",
+        "required": [
+          "url",
+          "signing_token",
+          "secret_token"
+        ],
+        "properties": {
+          "secret_token": {
+            "type": "string"
+          },
+          "signing_token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -30607,6 +31076,14 @@
           }
         }
       },
+      "SetGitLabWebhookInputBody": {
+        "type": "object",
+        "properties": {
+          "signing_token": {
+            "type": "string"
+          }
+        }
+      },
       "Setting": {
         "type": "object",
         "required": [
@@ -31113,6 +31590,17 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "StartGitLabSignInInputBody": {
+        "type": "object",
+        "required": [
+          "host_id"
+        ],
+        "properties": {
+          "host_id": {
+            "type": "string"
           }
         }
       },

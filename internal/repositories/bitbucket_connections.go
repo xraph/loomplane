@@ -70,14 +70,6 @@ var (
 	_ TokenSource  = (*BitbucketConnections)(nil)
 )
 
-// Secrets keeps a credential per organization and connection. The
-// connections package's *VaultSecrets is the real one.
-type Secrets interface {
-	Put(ctx context.Context, orgID, connectionID string, credential []byte) error
-	Reveal(ctx context.Context, orgID, connectionID string) ([]byte, error)
-	Delete(ctx context.Context, orgID, connectionID string) error
-}
-
 // BitbucketAuditor records workspace connections. Recording must not fail
 // the change. The connection holds no token.
 type BitbucketAuditor interface {

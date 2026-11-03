@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/pkg/discovery"
 )
 
@@ -193,6 +194,9 @@ func structural(req discovery.Requirement, eco discovery.Ecosystem, repository s
 	if repository == "" {
 		return false
 	}
+	if r, err := repositories.ParseKey(repository); err == nil && r.Host != repositories.HostGitHub {
+		return structuralOnHost(req, eco, r)
+	}
 	repo := strings.ToLower(repository)
 	switch eco {
 	case discovery.Rust:
@@ -205,6 +209,26 @@ func structural(req discovery.Requirement, eco discovery.Ecosystem, repository s
 	case discovery.Go:
 		name := strings.ToLower(req.Name)
 		return name == "github.com/"+repo || strings.HasPrefix(name, "github.com/"+repo+"/")
+	}
+	return false
+}
+
+// structuralOnHost is structural for a repository on another host, whose
+// path may nest in groups. The host comes from the key, and every part
+// compares without case.
+func structuralOnHost(req discovery.Requirement, eco discovery.Ecosystem, r repositories.Repository) bool {
+	host, path := strings.ToLower(r.Host), strings.ToLower(r.FullName())
+	switch eco {
+	case discovery.Rust:
+		git := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(req.Git)), "/"), ".git")
+		for _, prefix := range []string{"https://" + host + "/", "http://" + host + "/", "ssh://git@" + host + "/", "git@" + host + ":"} {
+			if rest, ok := strings.CutPrefix(git, prefix); ok {
+				return rest == path
+			}
+		}
+	case discovery.Go:
+		name := strings.ToLower(req.Name)
+		return name == host+"/"+path || strings.HasPrefix(name, host+"/"+path+"/")
 	}
 	return false
 }

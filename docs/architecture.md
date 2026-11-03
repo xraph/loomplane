@@ -106,7 +106,7 @@ Each kind of state has one owner, and only the owner writes it.
 | Job queue, cron, workflow history and progress | Dispatch | `dispatch_*` |
 | The lifecycle of long-running services on Cloud Run and ECS | Ctrl Plane | `cp_*` |
 
-A project builds from one or more sources. A source is a GitHub repository, an optional directory inside it, a tracked branch and an alias. The alias is part of every service ID (`svc:api:go:cmd/server`), so it never changes and is never reused, even after the source is removed. An analysis reads one source at one commit and stores that repository's graph on its own.
+A project builds from one or more sources. A source is a repository, an optional directory inside it, a tracked branch and an alias. The alias is part of every service ID (`svc:api:go:cmd/server`), so it never changes and is never reused, even after the source is removed. An analysis reads one source at one commit and stores that repository's graph on its own.
 
 Nothing stores the project's graph. It's composed when something asks for it, from the newest successful analysis of each source: IDs are qualified by alias, a source's directory filters what it contributes, resources of the same kind merge, and a dependency that one repository declares on a package another provides becomes an edge between them. A plan pins a lockset, which is one analysis and commit per source, and composes from those, so it always sees the graph it was made from. A scope picks the sources a plan moves. The rest stay at the commits `loomplane_environment_sources` says are deployed, and their services are kept as they run.
 
