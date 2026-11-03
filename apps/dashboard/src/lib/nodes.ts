@@ -56,6 +56,8 @@ export function machineLabel(n: Node): string {
 
 /** trafficLabel is how traffic reaches the node. */
 export function trafficLabel(n: Node): string {
+  // Ingress defaults to direct before the node has said what it has.
+  if (n.status === "pending") return "None"
   if (n.role === "edge") return "Edge"
   switch (n.ingressMode) {
     case "direct":
@@ -133,4 +135,18 @@ export function gpuLabel(n: Node): string {
         `${g.count} × ${g.name}${g.mib > 0 ? `, ${Math.round(g.mib / 1024)} GiB` : ""}`
     )
     .join("; ")
+}
+
+/**
+ * roleNote is the plain-words line under a node's name when it has one: what
+ * an edge serves, or that a Mac is for development. Labels come after it.
+ */
+export function roleNote(n: Node): string | undefined {
+  if (n.role === "edge") {
+    return n.edgeScope === "instance"
+      ? "Edge for the instance"
+      : "Edge for this organization"
+  }
+  if (n.inventory?.os === "darwin") return "macOS, for development"
+  return undefined
 }

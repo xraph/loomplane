@@ -7,6 +7,7 @@ import {
   joinedNode,
   machineLabel,
   parseLabels,
+  roleNote,
   statusLabel,
   trafficLabel,
 } from "@/lib/nodes"
@@ -123,5 +124,29 @@ describe("joinedNode", () => {
     expect(
       joinedNode([{ ...base, id: "new", status: "revoked" }], before, "u1")
     ).toBeUndefined()
+  })
+})
+
+describe("roleNote", () => {
+  it("names an edge by its scope", () => {
+    expect(roleNote({ ...base, role: "edge", edgeScope: "org" })).toBe(
+      "Edge for this organization"
+    )
+    expect(roleNote({ ...base, role: "edge", edgeScope: "instance" })).toBe(
+      "Edge for the instance"
+    )
+  })
+  it("says a Mac is for development, after the edge", () => {
+    const mac = { ...base.inventory, os: "darwin" }
+    expect(roleNote({ ...base, inventory: mac })).toBe("macOS, for development")
+    expect(roleNote({ ...base, role: "edge", inventory: mac })).toBe(
+      "Edge for this organization"
+    )
+  })
+  it("has nothing to say about an ordinary node", () => {
+    expect(roleNote(base)).toBeUndefined()
+  })
+  it("shows no traffic for a node that has not connected", () => {
+    expect(trafficLabel({ ...base, status: "pending" })).toBe("None")
   })
 })

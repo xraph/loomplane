@@ -1,4 +1,4 @@
-import { CheckIcon, TriangleAlertIcon } from "lucide-react"
+import { CheckIcon } from "lucide-react"
 import { useRef, useState, type ReactNode } from "react"
 
 import { messageOf } from "@/client/errors"
@@ -417,11 +417,7 @@ function Connected({
       </div>
 
       {!hasPublicAddress(n) && (
-        <p className="flex gap-2 rounded-lg bg-weld-tint p-3 text-xs leading-relaxed text-weld-ink">
-          <TriangleAlertIcon
-            className="mt-0.5 size-3.5 shrink-0"
-            aria-hidden="true"
-          />
+        <p className="rounded-lg bg-brand-tint p-3 text-xs leading-relaxed text-brand-ink">
           No public address answered from outside, so this node sits behind a
           router. Once domain routing to nodes arrives, its domains will reach
           it through an edge.

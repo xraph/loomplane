@@ -3,6 +3,7 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useApiKeysList,
   useNodesGet,
   useNodesList,
   useNodesRevoke,
@@ -212,6 +213,10 @@ function Allowed({ node: n }: { node: Node }) {
 }
 
 function Identity({ node: n }: { node: Node }) {
+  const keys = useQuery(useApiKeysList)
+  const keyName =
+    keys.data?.keys.find((k) => k.id === n.joinedByKeyId)?.name ??
+    n.joinedByKeyId
   return (
     <Section title="Identity">
       <Facts>
@@ -223,8 +228,7 @@ function Identity({ node: n }: { node: Node }) {
           {formatDate(n.createdAt)}
           {n.joinedByKeyId && (
             <>
-              , with the API key{" "}
-              <span className="font-mono">{n.joinedByKeyId}</span>
+              , with the API key <span className="font-mono">{keyName}</span>
             </>
           )}
         </Fact>
@@ -307,9 +311,9 @@ function Release({ node: n }: { node: Node }) {
           <Fact label="Updates">
             Run{" "}
             <span className="font-mono">
-              sudo loomctl node update --release {n.version}
+              sudo loomctl node update --release &lt;version&gt;
             </span>{" "}
-            on the machine
+            on the machine, with the release you want.
           </Fact>
         )}
       </Facts>

@@ -34,6 +34,7 @@ import {
   endpointBadges,
   labelList,
   machineLabel,
+  roleNote,
   trafficLabel,
 } from "@/lib/nodes"
 import { useOrganization } from "@/lib/organization"
@@ -166,11 +167,14 @@ function NodeRow({ node: n, now }: { node: Node; now: number }) {
             ? `Joined ${relative(new Date(n.createdAt).getTime(), now)}`
             : revoked && n.revokedAt
               ? `Revoked ${date(new Date(n.revokedAt).getTime())}`
-              : labels.map((l) => (
-                  <span key={l} className="font-mono">
-                    {l}
-                  </span>
-                ))}
+              : [
+                  roleNote(n) && <span key="note">{roleNote(n)}</span>,
+                  ...(roleNote(n) ? [] : labels).map((l) => (
+                    <span key={l} className="font-mono">
+                      {l}
+                    </span>
+                  )),
+                ]}
         </div>
       </TableCell>
       <TableCell>

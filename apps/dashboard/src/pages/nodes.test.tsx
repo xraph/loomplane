@@ -3,6 +3,8 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
+import type { StreamConnection } from "@forge-go/client-core"
+import { LoomplaneRealtime } from "@/lib/realtime"
 import { forgeClient } from "@/client/runtime"
 import { Nodes } from "@/pages/nodes"
 import { NodePage } from "@/pages/node"
@@ -143,4 +145,85 @@ it("hides the actions from someone who can only read", async () => {
   expect(
     screen.queryByRole("button", { name: "Revoke" })
   ).not.toBeInTheDocument()
+})
+
+it("shows the edge and macOS notes, and no traffic for a node still waiting", async () => {
+  serve({
+    nodes: [
+      wireNode({ id: "e1", name: "edge-fra", role: "edge", edge_scope: "org" }),
+      wireNode({
+        id: "m1",
+        name: "studio-mac",
+        inventory: { os: "darwin", arch: "arm64", cpus: 8, memory_mib: 16384 },
+      }),
+      wireNode({ id: "p1", name: "ci-runner-7", status: "pending" }),
+    ],
+  })
+  wrap(<Nodes />)
+  await screen.findByText("edge-fra")
+  expect(screen.getByText("Edge for this organization")).toBeInTheDocument()
+  expect(screen.getByText("macOS, for development")).toBeInTheDocument()
+  const pending = screen.getByText("ci-runner-7").closest("tr")!
+  expect(within(pending).getByText("None")).toBeInTheDocument()
+  expect(within(pending).queryByText("Direct")).not.toBeInTheDocument()
+})
+
+it("names the API key a node joined with, falling back to its id", async () => {
+  serve({
+    nodes: [wireNode({ joined_by_key_id: "key_ci" })],
+    keys: [{ id: "key_ci", name: "ci-deploy", hint: "ab12", state: "active" }],
+  })
+  const { unmount } = wrap(<NodePage id="n_one" />)
+  expect(await screen.findByText("ci-deploy")).toBeInTheDocument()
+  unmount()
+  forgeClient.clear()
+  serve({ nodes: [wireNode({ joined_by_key_id: "key_gone" })], keys: [] })
+  wrap(<NodePage id="n_one" />)
+  expect(await screen.findByText("key_gone")).toBeInTheDocument()
+})
+
+it("keeps what the node page shows when a partial node.updated arrives", async () => {
+  const seenAt = new Date(2026, 10, 1, 14, 2).toISOString()
+  serve({
+    nodes: [wireNode({ status: "online", last_seen_at: seenAt })],
+  })
+  let deliver: (frame: unknown) => void = () => {}
+  const connection: StreamConnection = {
+    onMessage: (fn) => {
+      deliver = fn
+    },
+    onClose: () => {},
+    send: () => {},
+    close: () => {},
+  }
+  const live = new LoomplaneRealtime({
+    cache: forgeClient,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  live.start()
+  wrap(<NodePage id="n_one" />)
+  expect(await screen.findByText("sha256:3f9c1e04")).toBeInTheDocument()
+  // Exactly what the database trigger sends: no inventory, fingerprint or
+  // last_seen_at.
+  deliver({
+    event: "node.updated",
+    cursor: "org_one:9",
+    data: {
+      id: "n_one",
+      name: "hetzner-1",
+      status: "offline",
+      version: "v1.9.0",
+      endpoints: ["docker", "probe"],
+      ingress_mode: "direct",
+      labels: {},
+      role: "node",
+      identity_generation: 1,
+    },
+  })
+  expect(await screen.findByText("Offline since 14:02")).toBeInTheDocument()
+  expect(screen.getByText("sha256:3f9c1e04")).toBeInTheDocument()
+  expect(screen.getByText("Docker 27.3")).toBeInTheDocument()
+  expect(screen.getByText("203.0.113.24")).toBeInTheDocument()
+  live.stop()
 })
