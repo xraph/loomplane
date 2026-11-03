@@ -157,14 +157,13 @@ BEGIN
 			refuse := OLD.platform_owned;
 		END IF;
 	ELSE
-		IF TG_OP = 'INSERT' THEN
-			refuse := NEW.runtime = 'platform';
-		ELSE
-			refuse := OLD.runtime = 'platform'
-				OR EXISTS(SELECT 1 FROM loomplane_cloud_profiles WHERE org_id = OLD.org_id AND project_id = OLD.project_id AND id = OLD.cloud_id AND platform_owned);
-			IF TG_OP = 'UPDATE' THEN
-				refuse := refuse OR NEW.runtime = 'platform';
-			END IF;
+		IF TG_OP <> 'DELETE' THEN
+			refuse := NEW.runtime = 'platform'
+				OR EXISTS(SELECT 1 FROM loomplane_cloud_profiles WHERE org_id = NEW.org_id AND id = NEW.cloud_id AND platform_owned);
+		END IF;
+		IF TG_OP <> 'INSERT' THEN
+			refuse := refuse OR OLD.runtime = 'platform'
+				OR EXISTS(SELECT 1 FROM loomplane_cloud_profiles WHERE org_id = OLD.org_id AND id = OLD.cloud_id AND platform_owned);
 		END IF;
 	END IF;
 

@@ -59,7 +59,7 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 	ctx := context.Background()
 
 	const profile = `INSERT INTO loomplane_cloud_profiles (id, org_id, project_id, name, revision, platform_owned, created_at, updated_at)
-		VALUES ('cloud_plat', 'org_p', 'proj_p', 'Platform', 1, true, now(), now())`
+		VALUES ('cloud_plat', 'org_p', '', 'Platform', 1, true, now(), now())`
 	_, err := conn.Exec(ctx, profile)
 	requireSQLState(t, err, "42501")
 
@@ -70,7 +70,6 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 	// An ordinary profile and target are untouched by the guard.
 	exec(t, conn,
 		`UPDATE loomplane_cloud_profiles SET name='Renamed', revision=2 WHERE id='cloud_user'`,
-		`DELETE FROM loomplane_cloud_profiles WHERE id='cloud_user'`,
 	)
 
 	tx, err := conn.Begin(ctx)
@@ -81,12 +80,38 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 		`SET LOCAL loomplane.platform_write='on'`,
 		profile,
 		`INSERT INTO loomplane_cloud_targets (id, org_id, project_id, cloud_id, name, display_name, provider, connection_id, runtime, region, revision, created_at, updated_at)
-			VALUES ('tgt_plat', 'org_p', 'proj_p', 'cloud_plat', 'platform', 'Platform', 'platform', NULL, 'platform', 'eu', 1, now(), now())`,
+			VALUES ('tgt_plat', 'org_p', '', 'cloud_plat', 'platform', 'Platform', 'platform', NULL, 'platform', 'eu', 1, now(), now())`,
 	} {
 		if _, err = tx.Exec(ctx, s); err != nil {
 			_ = tx.Rollback(ctx)
 			t.Fatalf("%s: %v", s, err)
 		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// A managed target cannot be added to a platform profile, and a user
+	// target cannot be moved onto one, without the flag. The fixture target
+	// skips the connection's foreign key, which is not under test.
+	exec(t, conn, `SET session_replication_role = replica`,
+		`INSERT INTO loomplane_cloud_targets (id, org_id, project_id, cloud_id, name, display_name, provider, connection_id, runtime, region, revision, created_at, updated_at)
+			VALUES ('tgt_user', 'org_p', 'proj_p', 'cloud_user', 'mine', 'Mine', 'aws', 'conn_x', 'managed', 'eu', 1, now(), now())`,
+		`SET session_replication_role = origin`)
+	_, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_targets (id, org_id, project_id, cloud_id, name, display_name, provider, connection_id, runtime, region, revision, created_at, updated_at)
+		VALUES ('tgt_hang', 'org_p', 'proj_p', 'cloud_plat', 'hang', 'Hang', 'aws', 'conn_x', 'managed', 'eu', 1, now(), now())`)
+	requireSQLState(t, err, "42501")
+	_, err = conn.Exec(ctx, `UPDATE loomplane_cloud_targets SET cloud_id='cloud_plat', revision=2 WHERE id='tgt_user'`)
+	requireSQLState(t, err, "42501")
+
+	// With the flag, bumping a platform target's revision by one succeeds.
+	tx, err = conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tx.Exec(ctx, `SET LOCAL loomplane.platform_write='on'`)
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET display_name='Platform 2', revision=2 WHERE id='tgt_plat'`); err != nil {
+		t.Fatal(err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -102,7 +127,7 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_targets (id, org_id, project_id, cloud_id, name, display_name, provider, connection_id, runtime, region, revision, created_at, updated_at)
-		VALUES ('tgt_bad', 'org_p', 'proj_p', 'cloud_plat', 'bad', 'Bad', 'platform', 'conn_x', 'platform', 'eu', 1, now(), now())`)
+		VALUES ('tgt_bad', 'org_p', '', 'cloud_plat', 'bad', 'Bad', 'platform', 'conn_x', 'platform', 'eu', 1, now(), now())`)
 	requireSQLState(t, err, "23514")
 	_ = tx.Rollback(ctx)
 
@@ -116,7 +141,7 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 	_, err = conn.Exec(ctx, `DELETE FROM loomplane_cloud_profiles WHERE id='cloud_plat'`)
 	requireSQLState(t, err, "42501")
 	_, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_targets (id, org_id, project_id, cloud_id, name, display_name, provider, connection_id, runtime, region, revision, created_at, updated_at)
-		VALUES ('tgt_two', 'org_p', 'proj_p', 'cloud_plat', 'two', 'Two', 'platform', NULL, 'platform', 'eu', 1, now(), now())`)
+		VALUES ('tgt_two', 'org_p', '', 'cloud_plat', 'two', 'Two', 'platform', NULL, 'platform', 'eu', 1, now(), now())`)
 	requireSQLState(t, err, "42501")
 
 	// With the flag the update goes through, and the revision trigger still runs.
