@@ -50,6 +50,9 @@ func TestBitbucketStore_workspacesPerOrganization(t *testing.T) {
 		if c.ID == "" {
 			t.Fatal("saving a workspace gave it no ID")
 		}
+		if c.GrantGeneration != 1 {
+			t.Fatalf("a new workspace's grant generation is %d, want 1", c.GrantGeneration)
+		}
 	}
 	if one.ID == two.ID {
 		t.Fatalf("two organizations share a connection ID %q", one.ID)
@@ -75,11 +78,14 @@ func TestBitbucketStore_workspacesPerOrganization(t *testing.T) {
 	if again.ID != one.ID {
 		t.Fatalf("reconnecting changed the ID from %q to %q", one.ID, again.ID)
 	}
+	if again.GrantGeneration != 2 {
+		t.Fatalf("reconnecting left the grant generation at %d, want 2", again.GrantGeneration)
+	}
 	got, err := store.GetBitbucketWorkspace(ctx, "org_1", one.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.WorkspaceSlug != "acme-renamed" || got.WorkspaceName != "Acme Inc" || !got.CreatedAt.Equal(one.CreatedAt) || got.CreatedBy != "usr_2" || !got.UpdatedAt.Equal(again.UpdatedAt) {
+	if got.WorkspaceSlug != "acme-renamed" || got.WorkspaceName != "Acme Inc" || !got.CreatedAt.Equal(one.CreatedAt) || got.CreatedBy != "usr_2" || !got.UpdatedAt.Equal(again.UpdatedAt) || got.GrantGeneration != 2 {
 		t.Fatalf("reconnected row %+v", got)
 	}
 	if other, err := store.GetBitbucketWorkspace(ctx, "org_2", one.ID); !errors.Is(err, repositories.ErrWorkspaceNotFound) {

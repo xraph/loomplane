@@ -74,6 +74,8 @@ type fakeBBAPI struct {
 	rotate     bool
 	refuse     bool
 	refreshErr error
+	noRefresh  bool  // Exchange answers without a refresh token
+	lookupErr  error // Workspace fails with it
 	delay      time.Duration
 	issued     int
 	refreshes  int
@@ -115,6 +117,9 @@ func (f *fakeBBAPI) Exchange(_ context.Context, code string) (BitbucketGrant, er
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.noRefresh {
+		return f.issue(""), nil
+	}
 	f.refresh = fmt.Sprintf("%s%d", bbRefreshPrefix, f.issued+1)
 	return f.issue(f.refresh), nil
 }
@@ -155,8 +160,11 @@ func (f *fakeBBAPI) Workspace(_ context.Context, _, uuid string) (BitbucketWorks
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookups++
+	if f.lookupErr != nil {
+		return BitbucketWorkspace{}, f.lookupErr
+	}
 	for _, w := range f.workspaces {
-		if w.UUID == uuid {
+		if strings.EqualFold(w.UUID, uuid) {
 			return w, nil
 		}
 	}
@@ -205,7 +213,7 @@ func (s *fakeBBStore) SaveBitbucketWorkspace(_ context.Context, c *BitbucketConn
 	s.saves++
 	for _, r := range s.rows {
 		if r.OrgID == c.OrgID && r.WorkspaceUUID == c.WorkspaceUUID {
-			c.ID, c.CreatedAt = r.ID, r.CreatedAt
+			c.ID, c.CreatedAt, c.GrantGeneration = r.ID, r.CreatedAt, r.GrantGeneration+1
 			cp := *c
 			s.rows[r.ID] = &cp
 			return nil
@@ -215,6 +223,7 @@ func (s *fakeBBStore) SaveBitbucketWorkspace(_ context.Context, c *BitbucketConn
 		s.nextID++
 		c.ID = fmt.Sprintf("bbws_%d", s.nextID)
 	}
+	c.GrantGeneration = 1
 	cp := *c
 	s.rows[c.ID] = &cp
 	return nil
@@ -341,7 +350,11 @@ func (v *fakeSecrets) Reveal(_ context.Context, orgID, id string) ([]byte, error
 	return append([]byte(nil), raw...), nil
 }
 
-func (v *fakeSecrets) Delete(_ context.Context, orgID, id string) error {
+// Delete fails once the caller has given up, as a real Vault call would.
+func (v *fakeSecrets) Delete(ctx context.Context, orgID, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.vals, orgID+"/"+id)
@@ -495,6 +508,14 @@ func TestBitbucketConnect(t *testing.T) {
 		}
 		noTokens(t, "the error", err.Error())
 	})
+	t.Run("no refresh token", func(t *testing.T) {
+		f.api.set(func(a *fakeBBAPI) { a.noRefresh = true })
+		defer f.api.set(func(a *fakeBBAPI) { a.noRefresh = false })
+		_, err = f.conns.Connect(ctx, admin, BitbucketConnectInput{Code: bbGoodCode, State: f.stateFor(t, admin, "acme")})
+		if !errors.Is(err, ErrBitbucketRefused) {
+			t.Fatalf("Connect: %v, want ErrBitbucketRefused", err)
+		}
+	})
 	t.Run("a spent code", func(t *testing.T) {
 		_, err = f.conns.Connect(ctx, admin, BitbucketConnectInput{Code: "spent", State: f.stateFor(t, admin, "acme")})
 		if !errors.Is(err, ErrBitbucketRefused) {
@@ -629,7 +650,8 @@ func TestBitbucketToken_refreshesTheSlug(t *testing.T) {
 
 	f.api.set(func(a *fakeBBAPI) {
 		w := a.workspaces["acme"]
-		w.Slug, w.Name = "acme-new", "Acme Renamed"
+		// Bitbucket's answer may not match the stored UUID's case.
+		w.UUID, w.Slug, w.Name = strings.ToUpper(w.UUID), "acme-new", "Acme Renamed"
 		delete(a.workspaces, "acme")
 		a.workspaces["acme-new"] = w
 	})
@@ -640,7 +662,8 @@ func TestBitbucketToken_refreshesTheSlug(t *testing.T) {
 		t.Fatalf("Token for the old name = %q, %v", tok, err)
 	}
 	row := f.store.row(v.ID)
-	if row.WorkspaceSlug != "acme-new" || row.WorkspaceName != "Acme Renamed" || row.ID != v.ID || row.CreatedBy != admin.UserID || row.Status != BitbucketReady {
+	if row.WorkspaceSlug != "acme-new" || row.WorkspaceName != "Acme Renamed" || row.ID != v.ID || row.CreatedBy != admin.UserID ||
+		row.Status != BitbucketReady || row.WorkspaceUUID != bbAcmeUUID {
 		t.Fatalf("row = %+v", row)
 	}
 	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme-new", "api"))
@@ -960,7 +983,16 @@ func TestBitbucketDisconnect(t *testing.T) {
 	if len(called) != 0 {
 		t.Fatalf("OnDisconnect ran for a refused disconnect: %v", called)
 	}
-	if err := f.conns.Disconnect(ctx, admin, v.ID); err != nil {
+	// The caller giving up partway must not leave the refresh token behind.
+	gone, giveUp := context.WithCancel(ctx)
+	f.conns.SetOnDisconnect(func(_ context.Context, orgID, connectionID string) {
+		if f.store.row(connectionID) == nil {
+			t.Error("OnDisconnect ran after the row was deleted")
+		}
+		called = append(called, orgID+"/"+connectionID)
+		giveUp()
+	})
+	if err := f.conns.Disconnect(gone, admin, v.ID); err != nil {
 		t.Fatal(err)
 	}
 	if len(called) != 1 || called[0] != "aorg_a/"+v.ID {
@@ -992,4 +1024,88 @@ func TestBitbucketDisconnect(t *testing.T) {
 		t.Fatalf("audit = %+v", last)
 	}
 	noTokens(t, "the audit records", fmt.Sprintf("%+v", f.audit.records))
+}
+
+// A reconnect keeps the connection's ID, so a process that cached a token
+// from the old sign-in must notice the row now holds another.
+func TestBitbucketToken_reconnectRetiresOtherProcessesTokens(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	leaver := f.as(t, "aorg_a", "ausr_leaver", security.RoleAdmin)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	p1, p2 := f.newConns(), f.newConns()
+	f.conns = p2
+	v := f.connect(t, leaver, "acme")
+
+	// P1 caches T1 from the leaver's sign-in. P2's token from connecting
+	// is due by now too.
+	f.expire()
+	t1, err := p1.Token(ctx, "aorg_a", repo("acme", "api"))
+	if err != nil || t1 == "" {
+		t.Fatalf("P1 Token = %q, %v", t1, err)
+	}
+	// The leaver goes. P2 renews, finds it, and marks the workspace.
+	f.store.setMember("aorg_a", leaver.UserID, false)
+	if tok, tokErr := p2.Token(ctx, "aorg_a", repo("acme", "api")); tok != "" || tokErr != nil {
+		t.Fatalf("P2 Token after the leaver left = %q, %v", tok, tokErr)
+	}
+	if row := f.store.row(v.ID); row.Status != BitbucketReconnectNeeded {
+		t.Fatalf("status = %s", row.Status)
+	}
+	// An admin reconnects through P2. The row is ready again, same ID.
+	again := f.connect(t, admin, "acme")
+	if again.ID != v.ID {
+		t.Fatalf("reconnect changed the ID from %s to %s", v.ID, again.ID)
+	}
+	// T1 has nearly two hours left, but it's the leaver's.
+	before, _ := f.api.counts()
+	tok, err := p1.Token(ctx, "aorg_a", repo("acme", "api"))
+	if err != nil || tok == "" || tok == t1 {
+		t.Fatalf("P1 Token after the reconnect = %q, %v; T1 was %q", tok, err, t1)
+	}
+	if after, _ := f.api.counts(); after != before+1 {
+		t.Fatalf("P1 made %d refreshes, want one from the new sign-in", after-before)
+	}
+	if row := f.store.row(v.ID); row.Status != BitbucketReady || row.CreatedBy != admin.UserID {
+		t.Fatalf("row = %s by %s", row.Status, row.CreatedBy)
+	}
+}
+
+// After a renewal, a Bitbucket account that left the workspace can't read
+// in it, so the connection needs connecting again.
+func TestBitbucketToken_accountLeftTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+
+	// A lookup that merely failed changes nothing.
+	f.api.set(func(a *fakeBBAPI) { a.lookupErr = ErrRateLimited })
+	f.expire()
+	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme", "api"))
+	if err != nil || tok == "" {
+		t.Fatalf("Token when the lookup failed = %q, %v", tok, err)
+	}
+	if row := f.store.row(v.ID); row.Status != BitbucketReady {
+		t.Fatalf("a failed lookup changed the status to %s", row.Status)
+	}
+
+	f.api.set(func(a *fakeBBAPI) {
+		a.lookupErr = nil
+		delete(a.workspaces, "acme")
+	})
+	f.expire()
+	if tok, err = f.conns.Token(ctx, "aorg_a", repo("acme", "api")); tok != "" || err != nil {
+		t.Fatalf("Token after the account left = %q, %v", tok, err)
+	}
+	row := f.store.row(v.ID)
+	if row.Status != BitbucketReconnectNeeded || row.Message != bitbucketAccountLeftMessage {
+		t.Fatalf("row = %s %q", row.Status, row.Message)
+	}
+	f.conns.mu.Lock()
+	_, cached := f.conns.tokens["aorg_a/"+v.ID]
+	f.conns.mu.Unlock()
+	if cached {
+		t.Fatal("the access token is still in memory")
+	}
 }

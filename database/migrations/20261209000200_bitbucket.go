@@ -30,6 +30,10 @@ func init() {
 				Column("status", migrate.Text, migrate.NotNull(), migrate.Default("ready"), migrate.Check("status IN ('ready','reconnect_needed')")).
 				Column("message", migrate.Text, migrate.NotNull(), migrate.Default("")).
 				Column("created_by", migrate.Text, migrate.NotNull()).
+				// grant_generation goes up each time the row is saved again,
+				// such as by a reconnect, so a process holding an access token
+				// from an older sign-in can tell.
+				Column("grant_generation", migrate.BigInt, migrate.NotNull(), migrate.Default(1), migrate.Check("grant_generation > 0")).
 				Column("created_at", migrate.Timestamp, migrate.NotNull()).
 				Column("updated_at", migrate.Timestamp, migrate.NotNull()).
 				Unique("org_id", "workspace_uuid").

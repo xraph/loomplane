@@ -29,6 +29,7 @@ const (
 	bitbucketRefusedMessage       = "Bitbucket no longer accepts this workspace's sign-in. Connect the workspace again."
 	bitbucketConnectorLeftMessage = "The member who connected this workspace has left the organization. Connect the workspace again."
 	bitbucketUnreadableMessage    = "Loomplane can't read this workspace's stored sign-in. Connect the workspace again."
+	bitbucketAccountLeftMessage   = "The Bitbucket account that connected this workspace is no longer a member of it. Connect the workspace again."
 )
 
 // bitbucketRenewAhead is how close to expiry a cached access token is
@@ -143,10 +144,14 @@ type BitbucketRepositoryList struct {
 	Problems     []string                       `json:"problems"`
 }
 
-// cachedToken is an access token and when it stops working.
+// cachedToken is an access token, when it stops working, and the grant
+// generation of the row it came from. A reconnect keeps the row's ID but
+// moves the generation on, so every process can tell a token from the old
+// sign-in.
 type cachedToken struct {
-	token   string
-	expires time.Time
+	token      string
+	expires    time.Time
+	generation int64
 }
 
 // BitbucketConnections manages the Bitbucket workspaces an organization
@@ -259,6 +264,11 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 	if err != nil {
 		return nil, err
 	}
+	if grant.RefreshToken == "" {
+		// Without one the workspace would stop working in two hours, with
+		// nothing to renew it from.
+		return nil, ErrBitbucketRefused
+	}
 	// Not a member: the grant is dropped here, and nothing is kept.
 	ws, err := c.api.Membership(ctx, grant.AccessToken, st.Workspace)
 	if err != nil {
@@ -307,7 +317,7 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 			if putErr := c.putRefresh(ctx, p.OrgID, row.ID, grant.RefreshToken); putErr != nil {
 				return putErr
 			}
-			c.remember(p.OrgID, row.ID, grant)
+			c.remember(row, grant)
 			return nil
 		})
 		c.forget(p.OrgID, id)
@@ -357,7 +367,7 @@ func (c *BitbucketConnections) replaceGrant(ctx context.Context, row *BitbucketC
 	// as long as Bitbucket says.
 	c.forget(row.OrgID, id)
 	if row.ID == id {
-		c.remember(row.OrgID, row.ID, grant)
+		c.remember(row, grant)
 	}
 	return nil
 }
@@ -384,7 +394,11 @@ func (c *BitbucketConnections) Disconnect(ctx context.Context, p security.Princi
 			return delErr
 		}
 		c.forget(p.OrgID, id)
-		vaultErr = c.secrets.Delete(ctx, p.OrgID, id)
+		// The row is gone, so a caller giving up now would leave the
+		// refresh token where nothing reaches it.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bitbucketRenewTimeout)
+		defer cancel()
+		vaultErr = c.secrets.Delete(dctx, p.OrgID, id)
 		return nil
 	})
 	if err != nil {
@@ -548,7 +562,7 @@ func (c *BitbucketConnections) byUUID(ctx context.Context, orgID, uuid string) (
 // and reads the row and Vault again, so of several callers in any process
 // only one spends a refresh token, and the rest use what it stored.
 func (c *BitbucketConnections) mint(ctx context.Context, row *BitbucketConnection) (*BitbucketConnection, string, error) {
-	if tok, ok := c.cached(row.OrgID, row.ID); ok {
+	if tok, ok := c.cached(row); ok {
 		return row, tok, nil
 	}
 	leave, err := c.renewals.enter(ctx, row.OrgID+"/"+row.ID)
@@ -557,7 +571,7 @@ func (c *BitbucketConnections) mint(ctx context.Context, row *BitbucketConnectio
 	}
 	defer leave()
 	// Whoever went first has most likely renewed it already.
-	if tok, ok := c.cached(row.OrgID, row.ID); ok {
+	if tok, ok := c.cached(row); ok {
 		return row, tok, nil
 	}
 	var cur *BitbucketConnection
@@ -626,24 +640,29 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 			return "", err
 		}
 	}
-	c.followRename(rctx, cur, g.AccessToken)
-	c.remember(cur.OrgID, cur.ID, g)
+	if !c.followRename(rctx, cur, g.AccessToken) {
+		return "", c.needReconnect(ctx, cur, bitbucketAccountLeftMessage)
+	}
+	c.remember(cur, g)
 	return g.AccessToken, nil
 }
 
 // followRename asks Bitbucket for the workspace by its UUID, which never
 // changes, and saves a new slug or name if it has one. It costs one call
-// per renewal. Failing to ask doesn't fail the renewal.
-func (c *BitbucketConnections) followRename(ctx context.Context, cur *BitbucketConnection, token string) {
+// per renewal. It reports false when the account that signed in is no
+// longer a member of the workspace. Failing to ask doesn't fail the
+// renewal.
+func (c *BitbucketConnections) followRename(ctx context.Context, cur *BitbucketConnection, token string) (member bool) {
 	ws, err := c.api.Workspace(ctx, token, cur.WorkspaceUUID)
-	if err != nil {
-		if !errors.Is(err, ErrNotAMember) {
-			c.warnf("look up the Bitbucket workspace of "+cur.ID, err)
-		}
-		return
+	if errors.Is(err, ErrNotAMember) {
+		return false
 	}
-	if !bitbucketSlug.MatchString(ws.Slug) || ws.UUID != cur.WorkspaceUUID {
-		return
+	if err != nil {
+		c.warnf("look up the Bitbucket workspace of "+cur.ID, err)
+		return true
+	}
+	if !bitbucketSlug.MatchString(ws.Slug) || !strings.EqualFold(ws.UUID, cur.WorkspaceUUID) {
+		return true
 	}
 	next := *cur
 	next.WorkspaceSlug = ws.Slug
@@ -654,14 +673,17 @@ func (c *BitbucketConnections) followRename(ctx context.Context, cur *BitbucketC
 		next.AvatarURL = ws.AvatarURL
 	}
 	if next.WorkspaceSlug == cur.WorkspaceSlug && next.WorkspaceName == cur.WorkspaceName && next.AvatarURL == cur.AvatarURL {
-		return
+		return true
 	}
 	next.UpdatedAt = c.now().UTC()
+	// Saving moves the grant generation on, and the token is then cached
+	// under the new one. Other processes renew once more than they need to.
 	if err := c.store.SaveBitbucketWorkspace(ctx, &next); err != nil {
 		c.warnf("save the renamed Bitbucket workspace "+cur.ID, err)
-		return
+		return true
 	}
 	*cur = next
+	return true
 }
 
 // needReconnect marks cur reconnect_needed with why, and drops its access
@@ -687,31 +709,32 @@ func (c *BitbucketConnections) putRefresh(ctx context.Context, orgID, id, refres
 	return nil
 }
 
-// cached returns the connection's access token while it has more than a
-// minute left.
-func (c *BitbucketConnections) cached(orgID, id string) (string, bool) {
+// cached returns row's access token while it has more than a minute left
+// and came from the sign-in row holds now. Any other entry is dropped.
+func (c *BitbucketConnections) cached(row *BitbucketConnection) (string, bool) {
+	key := row.OrgID + "/" + row.ID
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	t, ok := c.tokens[orgID+"/"+id]
+	t, ok := c.tokens[key]
 	if !ok {
 		return "", false
 	}
-	if !c.now().Before(t.expires.Add(-bitbucketRenewAhead)) {
-		delete(c.tokens, orgID+"/"+id)
+	if t.generation != row.GrantGeneration || !c.now().Before(t.expires.Add(-bitbucketRenewAhead)) {
+		delete(c.tokens, key)
 		return "", false
 	}
 	return t.token, true
 }
 
-// remember keeps g's access token in memory, unless it's already too close
-// to expiry to hand out again.
-func (c *BitbucketConnections) remember(orgID, id string, g BitbucketGrant) {
+// remember keeps g's access token in memory under row's grant generation,
+// unless it's already too close to expiry to hand out again.
+func (c *BitbucketConnections) remember(row *BitbucketConnection, g BitbucketGrant) {
 	if !c.now().Before(g.Expires.Add(-bitbucketRenewAhead)) {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tokens[orgID+"/"+id] = cachedToken{token: g.AccessToken, expires: g.Expires}
+	c.tokens[row.OrgID+"/"+row.ID] = cachedToken{token: g.AccessToken, expires: g.Expires, generation: row.GrantGeneration}
 }
 
 // forget drops the connection's access token from memory.

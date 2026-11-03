@@ -56,8 +56,12 @@ type BitbucketConnection struct {
 	// CreatedBy is the Loomplane member whose sign-in is stored. Whoever
 	// reconnects takes it over, so it stays a member who can still be asked.
 	CreatedBy string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// GrantGeneration goes up each time the row is saved again, such as by a
+	// reconnect. An access token cached under an older generation came from
+	// a sign-in the row no longer holds. The store sets it.
+	GrantGeneration int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // BitbucketHook is the push webhook on one repository.
@@ -102,8 +106,9 @@ type BitbucketStore interface {
 	HookStore
 	// SaveBitbucketWorkspace connects a workspace, or refreshes it if the
 	// organization already has it, keeping its ID and CreatedAt and taking
-	// c.CreatedBy as the member whose sign-in is now stored. It sets c.ID and
-	// c.CreatedAt to what the row holds.
+	// c.CreatedBy as the member whose sign-in is now stored. A new row's
+	// GrantGeneration is 1, and each later save adds one. It sets c.ID,
+	// c.CreatedAt and c.GrantGeneration to what the row holds.
 	SaveBitbucketWorkspace(ctx context.Context, c *BitbucketConnection) error
 	ListBitbucketWorkspaces(ctx context.Context, orgID string) ([]*BitbucketConnection, error)
 	// GetBitbucketWorkspace returns ErrWorkspaceNotFound for another
@@ -127,12 +132,12 @@ type BitbucketStore interface {
 var _ BitbucketStore = (*PgStore)(nil)
 
 const workspaceColumns = `id, org_id, workspace_uuid, workspace_slug, workspace_name, avatar_url,
-	bitbucket_user_uuid, bitbucket_user_name, status, message, created_by, created_at, updated_at`
+	bitbucket_user_uuid, bitbucket_user_name, status, message, created_by, grant_generation, created_at, updated_at`
 
 func scanWorkspace(row pgx.Row) (*BitbucketConnection, error) {
 	var c BitbucketConnection
 	err := row.Scan(&c.ID, &c.OrgID, &c.WorkspaceUUID, &c.WorkspaceSlug, &c.WorkspaceName, &c.AvatarURL,
-		&c.BitbucketUserUUID, &c.BitbucketUserName, &c.Status, &c.Message, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+		&c.BitbucketUserUUID, &c.BitbucketUserName, &c.Status, &c.Message, &c.CreatedBy, &c.GrantGeneration, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -158,11 +163,12 @@ func (s *PgStore) SaveBitbucketWorkspace(ctx context.Context, c *BitbucketConnec
 			workspace_slug = EXCLUDED.workspace_slug, workspace_name = EXCLUDED.workspace_name,
 			avatar_url = EXCLUDED.avatar_url, bitbucket_user_uuid = EXCLUDED.bitbucket_user_uuid,
 			bitbucket_user_name = EXCLUDED.bitbucket_user_name, status = EXCLUDED.status,
-			message = EXCLUDED.message, created_by = EXCLUDED.created_by, updated_at = EXCLUDED.updated_at
-		RETURNING id, created_at`,
+			message = EXCLUDED.message, created_by = EXCLUDED.created_by, updated_at = EXCLUDED.updated_at,
+			grant_generation = loomplane_bitbucket_workspaces.grant_generation + 1
+		RETURNING id, created_at, grant_generation`,
 		id, c.OrgID, c.WorkspaceUUID, c.WorkspaceSlug, c.WorkspaceName, c.AvatarURL,
 		c.BitbucketUserUUID, c.BitbucketUserName, c.Status, c.Message, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
-	).Scan(&c.ID, &c.CreatedAt)
+	).Scan(&c.ID, &c.CreatedAt, &c.GrantGeneration)
 	if err != nil {
 		return fmt.Errorf("save Bitbucket workspace: %w", err)
 	}
