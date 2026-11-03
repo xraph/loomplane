@@ -49,7 +49,8 @@ type Service struct {
 	authz    Authorizer
 	enqueue  Enqueuer
 	audit    projects.Auditor
-	access   Access
+	access   Checker
+	hosts    repositories.Hosts
 	now      func() time.Time
 }
 

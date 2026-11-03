@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -21,7 +22,8 @@ type Source struct {
 	OrgID     string `json:"org_id"`
 	ProjectID string `json:"project_id"`
 	Alias     string `json:"alias"`
-	// Repository is "owner/name" on GitHub.
+	// Repository is the repository's stored key: owner/name on GitHub,
+	// host/path elsewhere.
 	Repository string `json:"repository"`
 	// Root is the directory the project builds from, "" for the whole
 	// repository.
@@ -135,12 +137,13 @@ func RootsOverlap(a, b string) bool {
 	return a == "" || b == "" || a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
-// ParseRepository reads a repository from a GitHub URL, a git@ address,
-// or plain "owner/name".
-func ParseRepository(raw string) (repositories.Repository, error) {
+// ParseRepository reads a repository from a URL or git@ address on any host
+// hosts knows, or from plain "owner/name", which is always GitHub.
+func ParseRepository(ctx context.Context, hosts repositories.Hosts, orgID, raw string) (repositories.Repository, error) {
 	s := strings.TrimSpace(raw)
-	if !strings.Contains(s, "://") && !strings.Contains(s, "@") && !strings.Contains(s, "github.com") && strings.Count(s, "/") == 1 {
+	owner, _, _ := strings.Cut(s, "/")
+	if !strings.Contains(s, "://") && !strings.Contains(s, "@") && !strings.Contains(owner, ".") && strings.Count(s, "/") == 1 {
 		s = "github.com/" + s
 	}
-	return repositories.ParseGitHubURL(s)
+	return hosts.Parse(ctx, orgID, s)
 }

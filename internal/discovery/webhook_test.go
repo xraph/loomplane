@@ -190,3 +190,44 @@ func TestSources_aBranchIsSavedWithoutRefsHeads(t *testing.T) {
 		t.Fatalf("UpdateSource: %v, %+v", err, web)
 	}
 }
+
+func TestStartTracking(t *testing.T) {
+	sources := []*Source{
+		{ID: "default", OrgID: "org_a", Alias: "a", Repository: "acme/mono"},
+		{ID: "explicit_default", OrgID: "org_a", Alias: "b", Repository: "Acme/Mono", Ref: "main"},
+		{ID: "full_name", OrgID: "org_a", Alias: "c", Repository: "acme/mono", Ref: "refs/heads/main"},
+		{ID: "other_branch", OrgID: "org_a", Alias: "d", Repository: "acme/mono", Ref: "release"},
+		{ID: "other_org", OrgID: "org_b", Alias: "e", Repository: "acme/mono"},
+		{ID: "other_repo", OrgID: "org_a", Alias: "f", Repository: "acme/site"},
+		{ID: "busy", OrgID: "org_a", Alias: "g", Repository: "acme/mono"},
+	}
+	var started []string
+	start := func(_ context.Context, src *Source) (*Analysis, error) {
+		if src.ID == "busy" {
+			return nil, fmt.Errorf("%w: %s", ErrAlreadyActive, src.Alias)
+		}
+		started = append(started, src.ID)
+		return &Analysis{}, nil
+	}
+	orgA := func(id string) bool { return id == "org_a" }
+
+	n, err := startTracking(context.Background(), sources, "acme/mono", "main", orgA, start)
+	want := []string{"default", "explicit_default", "full_name"}
+	if err != nil || n != 3 || !slices.Equal(started, want) {
+		t.Fatalf("started %d %v, %v; want %v", n, started, err, want)
+	}
+
+	started = nil
+	n, err = startTracking(context.Background(), sources, "acme/mono", "main", func(string) bool { return true }, start)
+	want = []string{"default", "explicit_default", "full_name", "other_org"}
+	if err != nil || n != 4 || !slices.Equal(started, want) {
+		t.Fatalf("with every organization allowed, started %d %v, %v; want %v", n, started, err, want)
+	}
+
+	// A host's key compares whatever its case, like a GitHub one.
+	started = nil
+	bb := []*Source{{ID: "bb", OrgID: "org_a", Alias: "a", Repository: "bitbucket.org/acme/api"}}
+	if n, err = startTracking(context.Background(), bb, "Bitbucket.org/Acme/API", "main", orgA, start); err != nil || n != 1 {
+		t.Fatalf("a mixed-case key started %d %v, %v", n, started, err)
+	}
+}

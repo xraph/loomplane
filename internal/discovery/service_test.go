@@ -905,3 +905,35 @@ func TestAnalysisReadsCheckTheProject(t *testing.T) {
 		})
 	}
 }
+
+func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "bb", "bitbucket.org/acme/api", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same Bitbucket repository in another case: %v", err)
+	}
+}
+
+func TestRunner_unparseableKeyFailsPermanently(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 3)
+	now := time.Now().UTC()
+	err := f.store.CreateAnalysis(ctx, &Analysis{
+		ID: "anl_bad", OrgID: org, ProjectID: project, Source: "bb", Status: StatusQueued,
+		Repository: "bitbucket.org/acme", CreatedBy: "ausr_seed", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.Run(ctx, org, "anl_bad"); err != nil {
+		t.Fatalf("an unparseable key was retried: %v", err)
+	}
+	got, _ := f.store.GetAnalysis(ctx, org, "anl_bad")
+	if got.Status != StatusFailed || got.Error != repositories.ErrInvalidURL.Error() {
+		t.Fatalf("analysis %+v", got)
+	}
+}

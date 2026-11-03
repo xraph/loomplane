@@ -100,7 +100,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
 		return err
 	}
-	e.svc.SetAccess(discovery.GitHubAccess{Tokens: e.github, Fetcher: repositories.NewGitHub(e.cfg.GitHub.APIURL)})
+	e.svc.SetAccess(discovery.Access{
+		Tokens:  repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": e.github}},
+		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{"github.com": repositories.NewGitHub(e.cfg.GitHub.APIURL)}},
+	})
 	// A new project's repository is attached as its first source, which
 	// only discovery knows how to do.
 	projectSvc, err := forge.InjectType[*projects.Service](c)
@@ -255,8 +258,9 @@ func (w *Worker) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	runner := discovery.NewRunner(discovery.NewPgStore(pg), repositories.NewGitHub(w.cfg.GitHub.APIURL),
-		conns, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
+	readers := repositories.Readers{Static: map[string]repositories.Reader{"github.com": repositories.NewGitHub(w.cfg.GitHub.APIURL)}}
+	tokens := repositories.Tokens{Static: map[string]repositories.TokenSource{"github.com": conns}}
+	runner := discovery.NewRunner(discovery.NewPgStore(pg), readers, tokens, w.cfg.Analysis.WorkDir, orchestration.AnalysisRetries+1)
 	runner.Telemetry = telemetry.New(fapp.Metrics())
 	engine.Register(eng, orchestration.AnalysisJob(loggedRunner{runner: runner, log: w.Logger()}))
 	return nil
