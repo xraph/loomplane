@@ -157,6 +157,12 @@ func (s *Service) verdict(ctx context.Context, r *Request, plan *planning.Plan) 
 		}
 	case planning.StatusRejected:
 		v.reason = "the plan was rejected by " + name
+		// The agent reads why, so it can tell the person it heard them.
+		// The whole reason is quoted as untrusted text when it's handed
+		// back.
+		if note := strings.TrimSpace(plan.DecisionNote); note != "" {
+			v.reason += ": " + note
+		}
 		v.st.Status, v.st.Outcome = StatusDeclined, OutcomeRejected
 		return v
 	case planning.StatusStale:
