@@ -9,6 +9,7 @@ import { type FormEvent, type ReactNode, useId, useState } from "react"
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useAiSettingsDeleteProviderKey,
+  useAiSettingsGet,
   useAiSettingsGetAgent,
   useAiSettingsPutProviderKey,
   useAiSettingsSetAgentBudget,
@@ -19,6 +20,8 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { Panel } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
 import {
+  FieldProblem,
+  SettingsCardFooter,
   SettingsCardHead,
   SettingsSection,
 } from "@/components/settings-section"
@@ -35,7 +38,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -82,8 +85,12 @@ export function fieldFor(message: string): FieldName | "general" {
   return "general"
 }
 
-/** AgentSettings is the AI agent's section of the AI settings page. */
-export function AgentSettings() {
+/**
+ * AgentSettings is the AI agent's section of the AI settings page. The
+ * agent's budget is a share of the workspace's AI budget, so it takes what's
+ * still unallocated there.
+ */
+export function AgentSettings({ unallocatedUsd }: { unallocatedUsd: string }) {
   const view = useQuery(useAiSettingsGetAgent)
   // One section from loading to loaded, so its place on the page (and in
   // a screen reader) holds while the settings arrive.
@@ -107,6 +114,7 @@ export function AgentSettings() {
         <AgentForm
           key={view.data.revision}
           view={view.data}
+          unallocatedUsd={unallocatedUsd}
           reload={() => view.refetch()}
         />
       )}
@@ -116,9 +124,11 @@ export function AgentSettings() {
 
 function AgentForm({
   view,
+  unallocatedUsd,
   reload,
 }: {
   view: AgentView
+  unallocatedUsd: string
   reload: () => Promise<AgentView>
 }) {
   const ids = {
@@ -244,10 +254,20 @@ function AgentForm({
     }
   }
 
+  // The agent's own share counts as free: raising it only takes the rest.
+  const room = Number(unallocatedUsd) + Number(view.budget.limitUsd)
+
   const saveBudget = async (e: FormEvent) => {
     e.preventDefault()
     setProblems({})
     setNotice("")
+    const asked = Number(budget.trim() || "0")
+    if (Number.isFinite(asked) && asked > room) {
+      setProblems({
+        budget: `The agent can have up to $${room.toFixed(2)} of the workspace's AI budget. Raise the workspace's budget above to give it more.`,
+      })
+      return
+    }
     try {
       await setBudget.mutateAsync({
         body: {
@@ -255,6 +275,8 @@ function AgentForm({
           revision: view.revision,
         },
       })
+      // What's left of the workspace's budget changed with it.
+      invalidate(useAiSettingsGet)
       await refresh()
     } catch (err) {
       fail(err, "The budget wasn't saved.", "budget")
@@ -295,7 +317,7 @@ function AgentForm({
             <AlertDescription>{view.problem}</AlertDescription>
           </Alert>
         )}
-        <Problem text={problems.enabled} />
+        <FieldProblem text={problems.enabled} />
       </Panel>
 
       <Panel className="gap-0 p-0">
@@ -394,7 +416,7 @@ function AgentForm({
                       className="font-mono text-xs"
                     />
                   )}
-                  <Problem text={problems.key} />
+                  <FieldProblem text={problems.key} />
                 </Field>
               )}
 
@@ -409,7 +431,7 @@ function AgentForm({
                     spellCheck={false}
                     aria-invalid={!!problems.baseUrl}
                   />
-                  <Problem text={problems.baseUrl} />
+                  <FieldProblem text={problems.baseUrl} />
                 </Field>
               )}
 
@@ -423,12 +445,12 @@ function AgentForm({
                   aria-invalid={!!problems.model}
                   className="font-mono text-xs"
                 />
-                <Problem text={problems.model} />
+                <FieldProblem text={problems.model} />
               </Field>
             </div>
           </div>
 
-          <CardFooter>
+          <SettingsCardFooter>
             {notice ? (
               <p
                 role="status"
@@ -446,7 +468,7 @@ function AgentForm({
               {(update.isPending || putKey.isPending) && <Spinner />}
               Save provider
             </Button>
-          </CardFooter>
+          </SettingsCardFooter>
         </form>
       </Panel>
 
@@ -494,10 +516,13 @@ function AgentForm({
                 aria-invalid={!!problems.budget}
                 className="max-w-[200px] tabular-nums"
               />
-              <Problem text={problems.budget} />
+              <FieldDescription>
+                {`Up to $${room.toFixed(2)} from the workspace's AI budget.`}
+              </FieldDescription>
+              <FieldProblem text={problems.budget} />
             </Field>
           </div>
-          <CardFooter>
+          <SettingsCardFooter>
             <p className="text-[12.5px] text-muted-foreground">
               The agent can&apos;t be turned on without a budget.
             </p>
@@ -505,7 +530,7 @@ function AgentForm({
               {setBudget.isPending && <Spinner />}
               Save budget
             </Button>
-          </CardFooter>
+          </SettingsCardFooter>
         </form>
       </Panel>
 
@@ -528,7 +553,7 @@ function AgentForm({
           }
         />
       </Panel>
-      <Problem text={problems.general} />
+      <FieldProblem text={problems.general} />
     </>
   )
 }
@@ -565,23 +590,6 @@ function AgentSection({
     >
       {children}
     </SettingsSection>
-  )
-}
-
-function CardFooter({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-[14px] border-t border-border bg-subtle px-4 py-2.5 md:px-5">
-      {children}
-    </div>
-  )
-}
-
-function Problem({ text }: { text?: string }) {
-  if (!text) return null
-  return (
-    <p role="alert" className="text-[12.5px] text-destructive">
-      {text}
-    </p>
   )
 }
 
