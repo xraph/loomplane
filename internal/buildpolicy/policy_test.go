@@ -1,6 +1,9 @@
 package buildpolicy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSourceBuildPolicy(t *testing.T) {
 	for _, tc := range []struct {
@@ -21,5 +24,29 @@ func TestSourceBuildPolicy(t *testing.T) {
 				t.Fatalf("allowed=%v: %v", tc.allowed, err)
 			}
 		})
+	}
+}
+
+func TestCheckPlatform(t *testing.T) {
+	good := func() PlatformEvidence {
+		return PlatformEvidence{Isolation: true, RuntimeIdentity: strings.Repeat("a", 64), HostID: "host-1", Platform: true, DeniedPorts: []int{25, 465, 587}, PerOrgVMs: 4, PerOrgVCPUs: 8, PerOrgMemoryMiB: 8192}
+	}
+	if err := CheckPlatform(good()); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*PlatformEvidence){
+		"no isolation":  func(e *PlatformEvidence) { e.Isolation = false },
+		"short id":      func(e *PlatformEvidence) { e.RuntimeIdentity = strings.Repeat("a", 63) },
+		"no host id":    func(e *PlatformEvidence) { e.HostID = "" },
+		"not platform":  func(e *PlatformEvidence) { e.Platform = false },
+		"smt on":        func(e *PlatformEvidence) { e.SMTActive = true },
+		"mail open":     func(e *PlatformEvidence) { e.DeniedPorts = []int{25, 587} },
+		"no vcpu limit": func(e *PlatformEvidence) { e.PerOrgVCPUs = 0 },
+	} {
+		e := good()
+		mutate(&e)
+		if CheckPlatform(e) == nil {
+			t.Fatal(name, "accepted")
+		}
 	}
 }
