@@ -129,15 +129,31 @@ type fakeHookConns struct {
 	conns map[string]*repositories.BitbucketConnection // by org
 	token map[string]string                            // by org
 	asked []string
+	// unconfigured plays a Loomplane with no Bitbucket consumer.
+	unconfigured bool
 }
 
 func (f *fakeHookConns) ConnectionFor(_ context.Context, orgID, workspace string) (*repositories.BitbucketConnection, string, error) {
 	f.asked = append(f.asked, orgID+"/"+workspace)
+	if f.unconfigured {
+		return nil, "", repositories.ErrBitbucketNotConfigured
+	}
 	c, ok := f.conns[orgID]
 	if !ok || !strings.EqualFold(c.WorkspaceSlug, workspace) {
 		return nil, "", repositories.ErrWorkspaceNotFound
 	}
 	return c, f.token[orgID], nil
+}
+
+func (f *fakeHookConns) Connection(_ context.Context, orgID, id string) (*repositories.BitbucketConnection, error) {
+	if f.unconfigured {
+		return nil, repositories.ErrBitbucketNotConfigured
+	}
+	c, ok := f.conns[orgID]
+	if !ok || c.ID != id {
+		return nil, repositories.ErrWorkspaceNotFound
+	}
+	return c, nil
 }
 
 type createdHook struct{ token, repo, url, secret, uuid string }
@@ -190,6 +206,7 @@ type hookFixture struct {
 	sources []*Source
 	started []string
 	def     string // the repository's default branch
+	defErr  error  // reading the default branch fails with it
 	defs    []string
 	warned  []string
 }
@@ -231,6 +248,9 @@ func newHookFixture(t *testing.T) *hookFixture {
 		},
 		DefaultBranch: func(_ context.Context, repo repositories.Repository, token string) (string, error) {
 			f.defs = append(f.defs, repo.FullName()+"@"+token)
+			if f.defErr != nil {
+				return "", f.defErr
+			}
 			return f.def, nil
 		},
 		Warn: func(msg string, err error) { f.warned = append(f.warned, msg+": "+err.Error()) },
@@ -707,6 +727,90 @@ func TestBitbucketWebhooks_aRequestCancelledBeforeTheHookIsAddedKeepsIt(t *testi
 	}
 	if got := f.hooks.all(); len(got) != 1 || got[0].Status != repositories.HookOn || got[0].BitbucketHookUUID != f.api.created[0].uuid {
 		t.Fatalf("rows %+v", got)
+	}
+}
+
+func TestBitbucketWebhooks_ensureWithoutAConsumer(t *testing.T) {
+	f := newHookFixture(t)
+	f.conns.unconfigured = true
+	got := f.w.Ensure(context.Background(), "org_a", acmeAPI)
+	if got.On || got.Reason != reasonNoConsumer || len(f.api.created) != 0 {
+		t.Fatalf("state %+v, created %v", got, f.api.created)
+	}
+	if rows := f.hooks.all(); len(rows) != 1 || rows[0].Reason != reasonNoConsumer {
+		t.Fatalf("rows %+v", rows)
+	}
+}
+
+// A hook stays on at Bitbucket when its workspace needs connecting again,
+// but nothing can act on it, so the source says it's off and how to get
+// it back.
+func TestBitbucketWebhooks_anOnHookWhoseConnectionCantActIsOff(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src := f.add("src_a", "org_a", "bitbucket.org/acme/api", "")
+	if st := f.w.State(ctx, "org_a", src); st == nil || !st.On {
+		t.Fatalf("state with a ready connection %+v", st)
+	}
+
+	f.conns.conns["org_a"].Status = repositories.BitbucketReconnectNeeded
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with a connection that needs connecting again %+v", st)
+	}
+	if st := f.w.Ensure(ctx, "org_a", acmeAPI); st.On || st.Reason != reasonResume {
+		t.Fatalf("Ensure with a connection that needs connecting again %+v", st)
+	}
+
+	delete(f.conns.conns, "org_a")
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with no connection %+v", st)
+	}
+	if rows := f.hooks.all(); len(rows) != 1 || rows[0].Status != repositories.HookOn || len(f.api.created) != 1 {
+		t.Fatalf("reading the state changed the hook: %+v, created %v", rows, f.api.created)
+	}
+}
+
+// With no sign-in that can read the repository, a default branch Bitbucket
+// won't show is no reason for it to deliver again.
+func TestBitbucketWebhooks_aDeliveryWithNoUsableTokenStartsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	f.add("src_a", "org_a", "bitbucket.org/acme/api", "")
+	hook, err := f.hooks.BitbucketHookFor(ctx, "org_a", "bitbucket.org/acme/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := pushPayload("acme/api", branchChange("branch", "trunk"))
+	deliver := func() (int, error) {
+		return f.w.Deliver(ctx, hook.HookID, "repo:push", signBitbucket(f.w.Secret(hook.HookID), body), body)
+	}
+	f.defErr = repositories.ErrNotFound
+
+	// The workspace needs connecting again, so there's no token.
+	f.conns.token["org_a"] = ""
+	if n, err := deliver(); err != nil || n != 0 || len(f.started) != 0 {
+		t.Fatalf("no token: %d, %v, started %v", n, err, f.started)
+	}
+	if len(f.warned) == 0 || !strings.Contains(f.warned[len(f.warned)-1], "default branch") {
+		t.Fatalf("warnings %q", f.warned)
+	}
+	// The workspace is gone altogether.
+	delete(f.conns.conns, "org_a")
+	if n, err := deliver(); err != nil || n != 0 {
+		t.Fatalf("no connection: %d, %v", n, err)
+	}
+
+	// A token that can't read it is still a failure Bitbucket should retry.
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	f.conns.token["org_a"] = "token-a"
+	if _, err := deliver(); err == nil {
+		t.Fatal("a failed lookup with a token was taken")
+	}
+	// A public repository needs no token.
+	f.defErr = nil
+	f.conns.token["org_a"] = ""
+	if n, err := deliver(); err != nil || n != 1 {
+		t.Fatalf("a public repository: %d, %v", n, err)
 	}
 }
 

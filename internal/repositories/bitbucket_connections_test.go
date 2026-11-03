@@ -1295,3 +1295,26 @@ func TestBitbucketToken_missingSecretMarksReconnect(t *testing.T) {
 		t.Fatalf("%d refreshes with no refresh token to spend", refreshes)
 	}
 }
+
+// Connection reads a connection as it's stored, and renews nothing.
+func TestBitbucketConnection_readsWithoutRenewing(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	f.expire()
+	got, err := f.conns.Connection(ctx, "aorg_a", v.ID)
+	if err != nil || got.ID != v.ID || got.Status != BitbucketReady {
+		t.Fatalf("Connection = %+v, %v", got, err)
+	}
+	if refreshes, _ := f.api.counts(); refreshes != 0 {
+		t.Fatalf("%d refreshes to read a connection", refreshes)
+	}
+	if _, err := f.conns.Connection(ctx, "aorg_b", v.ID); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("another organization's connection: %v", err)
+	}
+	none := NewBitbucketConnections(f.store, nil, f.secrets, f.authz, nil, f.key)
+	if _, err := none.Connection(ctx, "aorg_a", v.ID); !errors.Is(err, ErrBitbucketNotConfigured) {
+		t.Fatalf("unconfigured Connection: %v", err)
+	}
+}

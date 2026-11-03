@@ -33,13 +33,15 @@ const BitbucketPushActor = "bitbucket-push"
 
 // Why push re-analysis is off. Each is shown beside the source.
 const (
-	reasonHTTPS     = "push re-analysis needs an https public_url, so Bitbucket can reach this Loomplane"
-	reasonNoConn    = "connect the Bitbucket workspace this repository is in, then turn push re-analysis on"
-	reasonReconnect = "the Bitbucket workspace needs connecting again before Loomplane can add a webhook"
-	reasonTryAgain  = "Loomplane couldn't add the webhook on Bitbucket; try turning push re-analysis on again"
-	reasonAdding    = "Loomplane is adding the webhook"
-	reasonNotSetUp  = "push re-analysis isn't set up for this repository yet; turn it on to add a webhook"
-	reasonUnknown   = "Loomplane couldn't read whether push re-analysis is on; try again shortly"
+	reasonHTTPS      = "push re-analysis needs an https public_url, so Bitbucket can reach this Loomplane"
+	reasonNoConn     = "connect the Bitbucket workspace this repository is in, then turn push re-analysis on"
+	reasonNoConsumer = "this Loomplane has no Bitbucket OAuth consumer set up"
+	reasonResume     = "reconnect the Bitbucket workspace to turn push re-analysis back on"
+	reasonReconnect  = "the Bitbucket workspace needs connecting again before Loomplane can add a webhook"
+	reasonTryAgain   = "Loomplane couldn't add the webhook on Bitbucket; try turning push re-analysis on again"
+	reasonAdding     = "Loomplane is adding the webhook"
+	reasonNotSetUp   = "push re-analysis isn't set up for this repository yet; turn it on to add a webhook"
+	reasonUnknown    = "Loomplane couldn't read whether push re-analysis is on; try again shortly"
 )
 
 // PushState says whether a push to a source's repository re-analyzes it,
@@ -98,9 +100,11 @@ func (s *Service) SetSourceHooks(h SourceHooks) { s.hooks = h }
 type HookStore = repositories.HookStore
 
 // HookConnections finds an organization's connection to a workspace, and a
-// token to act in it with.
+// token to act in it with. Connection reads one by ID as it's stored,
+// without renewing anything.
 type HookConnections interface {
 	ConnectionFor(ctx context.Context, orgID, workspace string) (*repositories.BitbucketConnection, string, error)
+	Connection(ctx context.Context, orgID, id string) (*repositories.BitbucketConnection, error)
 }
 
 // HookAPI adds and removes webhooks on Bitbucket.
@@ -209,7 +213,7 @@ func (w *BitbucketWebhooks) Ensure(ctx context.Context, orgID string, repo repos
 	row, err := w.Hooks.BitbucketHookFor(ctx, orgID, key)
 	switch {
 	case err == nil && row.Status == repositories.HookOn:
-		return PushState{On: true}
+		return w.onState(ctx, orgID, row)
 	case errors.Is(err, repositories.ErrHookNotFound):
 		row = nil
 	case err != nil:
@@ -221,7 +225,9 @@ func (w *BitbucketWebhooks) Ensure(ctx context.Context, orgID string, repo repos
 	}
 	conn, token, err := w.Conns.ConnectionFor(ctx, orgID, repo.Owner)
 	switch {
-	case errors.Is(err, repositories.ErrWorkspaceNotFound), errors.Is(err, repositories.ErrBitbucketNotConfigured):
+	case errors.Is(err, repositories.ErrBitbucketNotConfigured):
+		return w.off(ctx, orgID, key, row, "", reasonNoConsumer)
+	case errors.Is(err, repositories.ErrWorkspaceNotFound):
 		return w.off(ctx, orgID, key, row, "", reasonNoConn)
 	case err != nil:
 		w.warn("find the Bitbucket connection for "+key, err)
@@ -352,9 +358,29 @@ func (w *BitbucketWebhooks) State(ctx context.Context, orgID string, src *Source
 		w.warn("read the Bitbucket webhook of "+repo.Key(), err)
 		return &PushState{Reason: reasonUnknown}
 	case row.Status == repositories.HookOn:
-		return &PushState{On: true}
+		st := w.onState(ctx, orgID, row)
+		return &st
 	}
 	return &PushState{Reason: row.Reason}
+}
+
+// onState is the state of a hook that's on: on while its connection can
+// still act, and off with a way back when the workspace is gone or needs
+// connecting again.
+func (w *BitbucketWebhooks) onState(ctx context.Context, orgID string, row *repositories.BitbucketHook) PushState {
+	conn, err := w.Conns.Connection(ctx, orgID, row.ConnectionID)
+	switch {
+	case errors.Is(err, repositories.ErrBitbucketNotConfigured):
+		return PushState{Reason: reasonNoConsumer}
+	case errors.Is(err, repositories.ErrWorkspaceNotFound):
+		return PushState{Reason: reasonResume}
+	case err != nil:
+		w.warn("read the Bitbucket connection of webhook "+row.HookID, err)
+		return PushState{Reason: reasonUnknown}
+	case conn.Status != repositories.BitbucketReady:
+		return PushState{Reason: reasonResume}
+	}
+	return PushState{On: true}
 }
 
 // orOff is the state, or off for unknown reasons when there's none.
@@ -529,6 +555,12 @@ func (w *BitbucketWebhooks) Deliver(ctx context.Context, hookID, event, signatur
 		return 0, err
 	}
 	def, err := w.DefaultBranch(ctx, repo, token)
+	if err != nil && token == "" {
+		// No connection can read the repository, so asking Bitbucket again
+		// won't help: the delivery is taken, and starts nothing.
+		w.warn("read the default branch of "+row.Repository+" with no usable Bitbucket sign-in", err)
+		return 0, nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("read the default branch of %s: %w", row.Repository, err)
 	}
