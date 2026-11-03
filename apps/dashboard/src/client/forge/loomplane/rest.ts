@@ -3426,6 +3426,145 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly gitlab = {
+    /**
+     * Register a GitLab of the organization's own, with the OAuth application made on it
+     */
+    addHost: async (body: types.AddGitLabHostInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabHostView> => {
+      let __path = `/api/v1/gitlab/hosts`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AddGitLabHostInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabHostView"],
+      };
+
+      return this.request<types.GitLabHostView>(config);
+    },
+
+    /**
+     * Connect a GitLab account, from what GitLab's redirect carried back
+     */
+    connect: async (body: types.ConnectGitLabInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabConnectionView> => {
+      let __path = `/api/v1/gitlab/connections`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ConnectGitLabInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabConnectionView"],
+      };
+
+      return this.request<types.GitLabConnectionView>(config);
+    },
+
+    /**
+     * Disconnect an account, and revoke its sign-in at GitLab
+     */
+    disconnect: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/gitlab/connections/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * Remove a host the organization registered. Its accounts have to be disconnected first.
+     */
+    removeHost: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/gitlab/hosts/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The projects the organization's connected accounts can read
+     */
+    repositories: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabRepositoryList> => {
+      let __path = `/api/v1/gitlab/repositories`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabRepositoryList"],
+      };
+
+      return this.request<types.GitLabRepositoryList>(config);
+    },
+
+    /**
+     * Start signing in to a GitLab host, and get the address to send the browser to
+     */
+    startSignIn: async (body: types.StartGitLabSignInInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabSignInStart> => {
+      let __path = `/api/v1/gitlab/sign-ins`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["StartGitLabSignInInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabSignInStart"],
+      };
+
+      return this.request<types.GitLabSignInStart>(config);
+    },
+
+    /**
+     * The organization's GitLab hosts and connected accounts
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabStatus> => {
+      let __path = `/api/v1/gitlab`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabStatus"],
+      };
+
+      return this.request<types.GitLabStatus>(config);
+    },
+
+    /**
+     * Create or replace a connection's webhook secret, shown once
+     */
+    webhookSecret: async (id: string, body?: types.SetGitLabWebhookInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GitLabWebhookSecret> => {
+      let __path = `/api/v1/gitlab/connections/${encodeURIComponent(String(id))}/webhook`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetGitLabWebhookInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GitLabWebhookSecret"],
+      };
+
+      return this.request<types.GitLabWebhookSecret>(config);
+    },
+
+  };
+
   public readonly gpuTargets = {
     /**
      * Where GPUs can run and what they cost per hour

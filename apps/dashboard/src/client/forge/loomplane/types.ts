@@ -82,6 +82,12 @@ export interface ActivitySummary {
   since: string;
 }
 
+export interface AddGitLabHostInputBody {
+  clientId: string;
+  clientSecret: string;
+  webUrl: string;
+}
+
 export interface AddSourceInputBody {
   alias?: string;
   ref?: string;
@@ -1333,6 +1339,11 @@ export interface ConnectGitHubInputBody {
   state: string;
 }
 
+export interface ConnectGitLabInputBody {
+  code: string;
+  state: string;
+}
+
 export interface ConnectedRepository {
   defaultBranch: string;
   fullName: string;
@@ -2341,6 +2352,61 @@ export interface GitHubStatus {
   configured: boolean;
   installUrl?: string;
   installations: GitHubInstallation[];
+}
+
+export interface GitLabConnectionView {
+  avatarUrl: string;
+  createdAt: string;
+  host: string;
+  id: string;
+  lapsed: boolean;
+  username: string;
+  version: string;
+  versionSupported: boolean;
+  webhookSet: boolean;
+  webhookUrl: string;
+}
+
+export interface GitLabHostView {
+  clientId: string;
+  createdAt?: string;
+  host: string;
+  id: string;
+  instance: boolean;
+  webUrl: string;
+}
+
+export interface GitLabRepository {
+  connection: string;
+  defaultBranch: string;
+  fullName: string;
+  host: string;
+  key: string;
+  name: string;
+  namespace: string;
+  private: boolean;
+}
+
+export interface GitLabRepositoryList {
+  repositories: GitLabRepository[];
+}
+
+export interface GitLabSignInStart {
+  authorizeUrl: string;
+}
+
+export interface GitLabStatus {
+  callbackUrl: string;
+  canConnect: boolean;
+  connections: GitLabConnectionView[];
+  hosts: GitLabHostView[];
+  organizationHosts: boolean;
+}
+
+export interface GitLabWebhookSecret {
+  secretToken: string;
+  signingToken: string;
+  url: string;
 }
 
 export interface Graph {
@@ -4748,6 +4814,10 @@ export interface SetDefaultPlacementInputBody {
   revision: number;
 }
 
+export interface SetGitLabWebhookInputBody {
+  signingToken?: string;
+}
+
 export interface SetGrantInputBody {
   projectId?: string;
   role: string;
@@ -4923,6 +4993,10 @@ export interface SpendReport {
 export interface StartAnalysisInputBody {
   ref?: string;
   sources?: string[];
+}
+
+export interface StartGitLabSignInInputBody {
+  hostId: string;
 }
 
 export interface Step {
