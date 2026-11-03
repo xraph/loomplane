@@ -82,6 +82,11 @@ type Runtime struct {
 	reg  *Registry
 	live *Live
 
+	// rootAllowlist makes root the only owner of allow.json the node trusts,
+	// and the only caller its control socket takes an allow from. The
+	// systemd unit sets it, since there the node runs as its own user.
+	rootAllowlist bool
+
 	// cfgMu makes "change the config, then save it" one step, so two
 	// changes cannot save out of order.
 	cfgMu sync.Mutex
@@ -112,10 +117,27 @@ type Runtime struct {
 	tls                             *tls.Config
 }
 
-// NewRuntime reads node.json and returns a Runtime that serves streams from
-// reg. It registers ProbeHandler on reg for the probe endpoint, replacing
-// any handler there; the caller registers the other handlers.
+// RuntimeOptions tune NewRuntimeWith.
+type RuntimeOptions struct {
+	// RootAllowlist trusts only a root-owned allow.json, and takes an allow
+	// on the control socket only from root. Set it when the node runs as a
+	// service user that must not be able to widen itself.
+	RootAllowlist bool
+}
+
+// NewRuntime is NewRuntimeWith and no options: allow.json may belong to
+// root or to the user the node runs as.
 func NewRuntime(st State, reg *Registry) (*Runtime, error) {
+	return NewRuntimeWith(st, reg, RuntimeOptions{})
+}
+
+// NewRuntimeWith reads node.json and allow.json and returns a Runtime that
+// serves streams from reg. It serves only endpoints in both: node.json is
+// what Loomplane narrowed it to, allow.json the most its owner allowed. A
+// missing or untrusted allow.json allows nothing. It registers ProbeHandler
+// on reg for the probe endpoint, replacing any handler there; the caller
+// registers the other handlers.
+func NewRuntimeWith(st State, reg *Registry, o RuntimeOptions) (*Runtime, error) {
 	// ReadConfig never creates or changes the state dir: only join does that.
 	cfg, err := st.ReadConfig()
 	if err != nil {
@@ -124,16 +146,39 @@ func NewRuntime(st State, reg *Registry) (*Runtime, error) {
 		}
 		return nil, fmt.Errorf("reading this node's config (run loomctl node join if this machine has not joined): %w", err)
 	}
-	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{}), leaveNow: make(chan struct{}, 1)}
-	r.live = NewLive(r.sanitized(cfg))
+	r := &Runtime{st: st, reg: reg, nodeVersion: buildinfo.Version, revoked: make(chan struct{}), leaveNow: make(chan struct{}, 1),
+		rootAllowlist: o.RootAllowlist}
+	r.live = NewLive(r.sanitized(cfg, r.loadCeiling(cfg.NodeID)))
 	reg.Register(nodeproto.EndpointProbe, ProbeHandler(r.detectOptions))
 	return r, nil
 }
 
+// ceilingOwner reports whether allow.json may belong to uid: root always,
+// and the node's own user unless rootAllowlist is set.
+func (r *Runtime) ceilingOwner(uid uint32) bool {
+	return uid == 0 || (!r.rootAllowlist && int64(uid) == int64(r.st.uid()))
+}
+
+// loadCeiling reads allow.json for node id. Anything wrong with it allows
+// nothing, and says how to put it right.
+func (r *Runtime) loadCeiling(id string) []nodeproto.Endpoint {
+	c, err := r.st.ReadCeiling(r.ceilingOwner)
+	switch {
+	case err != nil:
+		r.log().Error("loomplane-node: no usable allow.json, so this node serves nothing; allow what it may use with: sudo loomctl node allow <endpoint>", "error", err)
+		return []nodeproto.Endpoint{}
+	case c.NodeID != id:
+		r.log().Error("loomplane-node: allow.json is for another node, so this node serves nothing; allow what it may use with: sudo loomctl node allow <endpoint>", "allow_json_node", sanitize(c.NodeID))
+		return []nodeproto.Endpoint{}
+	}
+	return c.Endpoints
+}
+
 // sanitized drops endpoints this build cannot allow from the allowlist and
 // from PendingAllowed, as a hand-edited node.json or an older build may have
-// left them, and pending ones that are no longer in the allowlist.
-func (r *Runtime) sanitized(c Config) Config {
+// left them, endpoints the ceiling does not allow, and pending ones that are
+// no longer in the allowlist.
+func (r *Runtime) sanitized(c Config, ceiling []nodeproto.Endpoint) Config {
 	var dropped []string
 	keep := func(eps []nodeproto.Endpoint, what string) []nodeproto.Endpoint {
 		var out []nodeproto.Endpoint
@@ -148,6 +193,11 @@ func (r *Runtime) sanitized(c Config) Config {
 	}
 	c.Endpoints = nonNil(keep(c.Endpoints, "endpoints"))
 	c.PendingAllowed = keep(c.PendingAllowed, "pending_allowed")
+	if over := slices.DeleteFunc(slices.Clone(c.Endpoints), func(e nodeproto.Endpoint) bool { return slices.Contains(ceiling, e) }); len(over) > 0 {
+		r.log().Warn("loomplane-node: node.json allows more than allow.json; serving only what both allow", "dropped", over)
+	}
+	c.Endpoints = nonNil(within(c.Endpoints, ceiling))
+	c.PendingAllowed = within(c.PendingAllowed, ceiling)
 	pending := c.PendingAllowed[:0:0]
 	for _, e := range c.PendingAllowed {
 		if slices.Contains(c.Endpoints, e) {
@@ -688,8 +738,8 @@ func (r *Runtime) apply(f func(*Config)) (Config, error) {
 // with a Narrow that includes them, which ends the pending state. Until then
 // no Narrow can remove them, and every connect sends them again, so an allow
 // made while offline, or before a restart, still arrives. Only endpoints an
-// owner can allow are accepted: not control, public or unknown ones. A failed
-// save changes nothing.
+// owner can allow are accepted: not control, public or unknown ones, and
+// only those allow.json already holds. A failed save changes nothing.
 func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
 	add, err := AllowableOnly(eps)
 	if err != nil {
@@ -697,6 +747,12 @@ func (r *Runtime) Allow(eps []nodeproto.Endpoint) error {
 	}
 	if len(add) == 0 {
 		return nil
+	}
+	// Only what the owner wrote into allow.json can be allowed here. node
+	// allow writes it first, as root on a Linux service.
+	ceiling := r.loadCeiling(r.live.Load().NodeID)
+	if missing := slices.DeleteFunc(slices.Clone(add), func(e nodeproto.Endpoint) bool { return slices.Contains(ceiling, e) }); len(missing) > 0 {
+		return fmt.Errorf("allow.json does not allow %s; widen it with: sudo loomctl node allow %s", joinEndpoints(missing, ", "), joinEndpoints(missing, " "))
 	}
 	r.cfgMu.Lock()
 	prev := r.live.Load()

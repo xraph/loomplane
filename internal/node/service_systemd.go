@@ -57,13 +57,13 @@ func lookupUser(name string) (uid, gid int, err error) {
 }
 
 // renderSystemdUnit fills the unit template. The binary it runs is the copy in
-// the state dir, named like the running binary.
+// BinDir, named like the running binary.
 func renderSystemdUnit(u Unit, svcUser string) (string, error) {
 	if err := checkUnit(u, true); err != nil {
 		return "", err
 	}
 	return render("templates/loomplane-node.service", map[string]string{
-		"User": svcUser, "StateDir": u.StateDir, "Exec": filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary)),
+		"User": svcUser, "StateDir": u.StateDir, "Exec": u.exec(),
 	})
 }
 
@@ -98,12 +98,19 @@ func (m *systemdManager) Install(ctx context.Context, u Unit) error {
 	if err := os.Chmod(u.StateDir, 0o700); err != nil { //nolint:gosec // a directory needs the execute bit
 		return err
 	}
-	if err := installBinary(u.Binary, u.StateDir); err != nil {
+	// The binary is root's, outside the state dir, so the service user
+	// can't swap what systemd starts.
+	if err := installBinary(u.Binary, u.binDir(), 0o755); err != nil {
 		return err
 	}
 	// Task 8's checks insist the state files belong to the user that runs the
-	// node, so hand over everything join made, and the copied binary.
+	// node, so hand over what join made. allow.json stays root's, and only
+	// its group goes to the service, so the service can read the ceiling
+	// and never raise it.
 	if err := m.chownKnown(u, uid, gid); err != nil {
+		return err
+	}
+	if err := m.chown(filepath.Join(u.StateDir, ceilingFile), -1, gid); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	if err := os.MkdirAll(m.unitDir, 0o755); err != nil { //nolint:gosec // systemd reads the unit dir as any user
@@ -150,8 +157,6 @@ func (m *systemdManager) ensureUser(ctx context.Context, u Unit) (uid, gid int, 
 func (m *systemdManager) chownKnown(u Unit, uid, gid int) error {
 	for _, p := range []string{
 		u.StateDir,
-		filepath.Join(u.StateDir, "bin"),
-		filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary)),
 		filepath.Join(u.StateDir, identityFile),
 		filepath.Join(u.StateDir, configFile),
 	} {
@@ -173,6 +178,9 @@ func checkUnit(u Unit, strictDir bool) error {
 	}
 	if strictDir && !safePath.MatchString(u.StateDir) {
 		return fmt.Errorf("the state dir %q has characters a systemd unit cannot take; use letters, digits and . _ - / only", u.StateDir)
+	}
+	if u.BinDir != "" && (!filepath.IsAbs(u.BinDir) || !safePath.MatchString(u.BinDir)) {
+		return fmt.Errorf("the binary dir %q must be an absolute path of letters, digits and . _ - / only", u.BinDir)
 	}
 	if strings.ContainsAny(u.StateDir, "\x00\r\n") {
 		return fmt.Errorf("the state dir %q has a control character in it", u.StateDir)

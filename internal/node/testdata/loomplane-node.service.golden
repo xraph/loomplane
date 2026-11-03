@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=loomplane-node
-ExecStart=/var/lib/loomplane-node/bin/loomctl node run --state-dir /var/lib/loomplane-node
+ExecStart=/usr/local/lib/loomplane-node/loomctl node run --state-dir /var/lib/loomplane-node --root-allowlist
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=77

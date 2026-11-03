@@ -103,6 +103,26 @@ func (r *rig) join(t *testing.T, eps ...nodeproto.Endpoint) Config {
 	return *cfg
 }
 
+// allowHere is what node allow does on the machine: widen allow.json, then
+// ask the running node.
+func (r *rig) allowHere(t *testing.T, rt *Runtime, eps ...nodeproto.Endpoint) error {
+	t.Helper()
+	cfg, err := r.st.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.st.ReadCeiling(func(uint32) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.NodeID = cfg.NodeID
+	c.Endpoints = append(c.Endpoints, eps...)
+	if err = r.st.SaveCeiling(c, -1); err != nil {
+		t.Fatal(err)
+	}
+	return rt.Allow(eps)
+}
+
 func (r *rig) runtime(t *testing.T) *Runtime {
 	t.Helper()
 	rt, err := NewRuntime(r.st, r.reg)
@@ -478,6 +498,9 @@ func seedNode(t *testing.T, env *testEnv, st State, url string) {
 	if err = st.SaveConfig(Config{URL: url, NodeID: "node_1", OrgID: nodestest.Org, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}, IngressMode: nodeproto.IngressNone}); err != nil {
 		t.Fatal(err)
 	}
+	if err = st.SaveCeiling(Ceiling{NodeID: "node_1", Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}, -1); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAllowWhileConnected(t *testing.T) {
@@ -490,7 +513,7 @@ func TestAllowWhileConnected(t *testing.T) {
 	// before it arrives would be undone by it.
 	eventually(t, "the first narrow", func() bool { return rt.narrows.Load() >= 1 })
 
-	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+	if err := r.allowHere(t, rt, nodeproto.EndpointDocker); err != nil {
 		t.Fatal(err)
 	}
 	if c, err := r.st.LoadConfig(); err != nil || len(c.Endpoints) != 2 {
@@ -523,7 +546,7 @@ func TestAllowBeforeFirstNarrowSurvives(t *testing.T) {
 	rt := r.runtime(t)
 	start(t, rt)
 	// No waiting for the hub's first Narrow: it carries the old set.
-	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+	if err := r.allowHere(t, rt, nodeproto.EndpointDocker); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the hub to store docker", func() bool {
@@ -547,7 +570,7 @@ func TestAllowSurvivesRestart(t *testing.T) {
 	r := newRig(t)
 	cfg := r.join(t, nodeproto.EndpointProbe)
 	// Allowed while no connection was up, by a process that then died.
-	if err := r.runtime(t).Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+	if err := r.allowHere(t, r.runtime(t), nodeproto.EndpointDocker); err != nil {
 		t.Fatal(err)
 	}
 	if c := nodeJSON(r); fmt.Sprint(c.PendingAllowed) != "[docker]" || fmt.Sprint(c.Endpoints) != "[probe docker]" {
@@ -570,7 +593,7 @@ func TestAdminNarrowRemovesAcknowledgedEndpoint(t *testing.T) {
 	cfg := r.join(t, nodeproto.EndpointProbe)
 	rt := r.runtime(t)
 	start(t, rt)
-	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+	if err := r.allowHere(t, rt, nodeproto.EndpointDocker); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "pending to clear", func() bool {
@@ -613,7 +636,7 @@ func TestAllowAcknowledgedAfterStoreRecovers(t *testing.T) {
 	cfg := r.join(t, nodeproto.EndpointProbe)
 	r.env.Store.FailAllow(errors.New("database is down"))
 	rt := r.runtime(t)
-	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err != nil {
+	if err := r.allowHere(t, rt, nodeproto.EndpointDocker); err != nil {
 		t.Fatal(err)
 	}
 	start(t, rt)
@@ -648,6 +671,80 @@ func TestUnknownEndpointsDroppedOnLoad(t *testing.T) {
 	}
 	if !strings.Contains(r.logs.String(), "endpoints:bogus") {
 		t.Fatalf("the drop was not logged:\n%s", r.logs.String())
+	}
+}
+
+// node.json is the service's own file, so it can't widen what the node
+// serves: only allow.json, which is root's on a Linux service, can.
+func TestNodeJSONCannotWidenPastAllowJSON(t *testing.T) {
+	r := newRig(t)
+	r.join(t, nodeproto.EndpointProbe)
+	cfg := nodeJSON(r)
+	cfg.Endpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointDocker, nodeproto.EndpointKube}
+	cfg.PendingAllowed = []nodeproto.Endpoint{nodeproto.EndpointDocker, nodeproto.EndpointKube}
+	if err := r.st.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	rt := r.runtime(t)
+	c := rt.live.Load()
+	if fmt.Sprint(c.Endpoints) != "[probe]" || len(c.PendingAllowed) != 0 || c.Allows(nodeproto.EndpointDocker) {
+		t.Fatalf("loaded: %+v", c)
+	}
+	// Allow from the socket can't go past allow.json either.
+	if err := rt.Allow([]nodeproto.Endpoint{nodeproto.EndpointDocker}); err == nil || !strings.Contains(err.Error(), "allow.json") {
+		t.Fatalf("allow past the ceiling: %v", err)
+	}
+}
+
+// A missing allow.json, one that belongs to another node, or one others can
+// write allows nothing.
+func TestBadAllowJSONAllowsNothing(t *testing.T) {
+	for name, spoil := range map[string]func(t *testing.T, st State){
+		"missing": func(t *testing.T, st State) {
+			if err := os.Remove(filepath.Join(st.Dir, ceilingFile)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"another node's": func(t *testing.T, st State) {
+			if err := st.SaveCeiling(Ceiling{NodeID: "node_other", Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}, -1); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"group writable": func(t *testing.T, st State) {
+			if err := os.Chmod(filepath.Join(st.Dir, ceilingFile), 0o660); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.join(t, nodeproto.EndpointProbe)
+			spoil(t, r.st)
+			if c := r.runtime(t).live.Load(); len(c.Endpoints) != 0 || c.Allows(nodeproto.EndpointProbe) {
+				t.Fatalf("loaded: %+v", c)
+			}
+			if !strings.Contains(r.logs.String(), "serves nothing") {
+				t.Fatalf("not logged:\n%s", r.logs.String())
+			}
+		})
+	}
+}
+
+// With RootAllowlist, as the systemd unit runs it, an allow.json owned by the
+// node's own user is not trusted. Tests don't run as root, so every file
+// here is the node's own.
+func TestRootAllowlistTrustsOnlyRoot(t *testing.T) {
+	r := newRig(t)
+	r.join(t, nodeproto.EndpointProbe)
+	rt, err := NewRuntimeWith(r.st, r.reg, RuntimeOptions{RootAllowlist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() != 0 && len(rt.live.Load().Endpoints) != 0 {
+		t.Fatalf("a user-owned allow.json was trusted: %+v", rt.live.Load())
+	}
+	if !rt.ceilingOwner(0) || rt.ceilingOwner(uint32(os.Geteuid())) && os.Geteuid() != 0 { //nolint:gosec // a uid
+		t.Fatal("ceilingOwner with RootAllowlist")
 	}
 }
 

@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User={{.User}}
-ExecStart={{.Exec}} node run --state-dir {{.StateDir}}
+ExecStart={{.Exec}} node run --state-dir {{.StateDir}} --root-allowlist
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=77

@@ -99,6 +99,7 @@ const oldBinary = "OLD loomctl"
 func newUpdateRig(t *testing.T) *updateRig {
 	t.Helper()
 	u := &updateRig{cmdRig: newCmdRig(t)}
+	u.opts.systemBin = filepath.Join(u.dir, "bin")
 	u.archive = tarGz(t, map[string]string{"LICENSE": "license", "README.md": "readme", "loomctl": "NEW loomctl"})
 	u.rel = newReleaseServer(t, map[string][]byte{
 		"/v1.9.0/loomctl_1.9.0_linux_amd64.tar.gz":     u.archive,

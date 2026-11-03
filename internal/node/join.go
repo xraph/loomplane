@@ -110,6 +110,11 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 		// the socket's group, and the runtime looks for Docker here first.
 		cfg.DockerSocket = inv.Docker.Socket
 	}
+	// The ceiling first: a node.json with no allow.json beside it serves
+	// nothing, which is the safe way round if the second write fails.
+	if err = o.State.SaveCeiling(Ceiling{NodeID: res.NodeID, Endpoints: granted}, -1); err != nil {
+		return nil, fmt.Errorf("joined as node %s, but saving its allowlist in %s failed: %w; revoke that node in Loomplane and join again", res.NodeID, o.State.Dir, err)
+	}
 	if err = o.State.SaveConfig(cfg); err != nil {
 		return nil, fmt.Errorf("joined as node %s, but saving %s failed: %w; revoke that node in Loomplane and join again", res.NodeID, o.State.Dir, err)
 	}

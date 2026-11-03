@@ -17,13 +17,21 @@ import (
 // not install itself on.
 var ErrUnsupported = errors.New("installing the node as a service is not supported on this system; use --foreground")
 
+// systemBinDir is where a Linux service's copy of loomctl lives. It is
+// root's, and the unit runs with ProtectSystem=strict, so the service user
+// can't replace the binary it runs; only root's node update can.
+const systemBinDir = "/usr/local/lib/loomplane-node"
+
 // Unit describes the service to install.
 type Unit struct {
-	// Binary is the running binary. Install copies it into the state dir, so
-	// a later self-update can replace it without write access to /usr/local/bin.
+	// Binary is the running binary. Install copies it into BinDir, so node
+	// update can replace it without touching /usr/local/bin.
 	Binary string
 	// StateDir is the node's state directory.
 	StateDir string
+	// BinDir is where the service's copy of the binary goes: systemBinDir on
+	// Linux, StateDir/bin on macOS. Empty means StateDir/bin.
+	BinDir string
 	// Docker is set when Docker was found, and puts the service user in the
 	// docker group on Linux.
 	Docker bool
@@ -100,12 +108,38 @@ func (unsupportedManager) Running(context.Context) (bool, error) {
 	return false, ErrUnsupported
 }
 
-// installBinary copies the binary at src to <stateDir>/bin/<name> with mode
-// 0755, through a temp file and a rename, so a running copy is never cut short.
-func installBinary(src, stateDir string) error {
-	binDir := filepath.Join(stateDir, "bin")
-	if err := os.MkdirAll(binDir, 0o700); err != nil {
+// binDir is where u's service binary goes.
+func (u Unit) binDir() string {
+	if u.BinDir != "" {
+		return u.BinDir
+	}
+	return filepath.Join(u.StateDir, "bin")
+}
+
+// exec is the path the service runs.
+func (u Unit) exec() string { return filepath.Join(u.binDir(), filepath.Base(u.Binary)) }
+
+// installBinary copies the binary at src into binDir with mode 0755, through
+// a temp file and a rename, so a running copy is never cut short. mode is
+// binDir's mode when it is created. A binDir that already exists must be a
+// real directory owned by whoever installs and writable by no one else, so a
+// planted directory can't hand the service someone else's binary.
+func installBinary(src, binDir string, mode os.FileMode) error {
+	if err := os.MkdirAll(binDir, mode); err != nil {
 		return err
+	}
+	fi, err := os.Lstat(binDir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", binDir)
+	}
+	if owner, ok := fileOwner(fi); ok && int64(owner) != int64(os.Geteuid()) {
+		return fmt.Errorf("%s belongs to uid %d, not to the user installing the node; remove it and join again", binDir, owner)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s can be written by other users (mode %04o); remove it and join again", binDir, fi.Mode().Perm())
 	}
 	dst := filepath.Join(binDir, filepath.Base(src))
 	in, err := os.Open(src)

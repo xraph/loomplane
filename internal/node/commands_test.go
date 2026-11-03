@@ -90,7 +90,8 @@ func newCmdRig(t *testing.T) *cmdRig {
 	r.opts = Options{Version: "test", Out: r.out, Getenv: func(string) string { return "" },
 		goos: "linux", euid: func() int { return 0 }, home: t.TempDir(), svc: r.svc, detect: quietDetect(),
 		binary: func() (string, error) { return "/usr/local/bin/loomctl", nil }, chown: func(string, int, int) error { return nil },
-		in: strings.NewReader(""), isTerminal: func() bool { return false }, serviceReady: func() error { return nil }}
+		in: strings.NewReader(""), isTerminal: func() bool { return false }, serviceReady: func() error { return nil },
+		systemBin: filepath.Join(t.TempDir(), "lib")}
 	return r
 }
 
@@ -337,7 +338,7 @@ func TestJoinOnLinuxNeedsRootUnlessForeground(t *testing.T) {
 	}
 
 	var ran atomic.Bool
-	r.opts.runNode = func(_ context.Context, st State) error {
+	r.opts.runNode = func(_ context.Context, st State, _ RuntimeOptions) error {
 		if _, err := st.LoadConfig(); err != nil {
 			t.Errorf("joined config is not there when run starts: %v", err)
 		}
@@ -426,8 +427,49 @@ func TestAllowWithoutServiceWritesConfigForNextStart(t *testing.T) {
 	if !slices.Contains(chowned, "node.json") {
 		t.Fatalf("node.json was left to root: chowned %v", chowned)
 	}
+	// The ceiling is written first, by whoever ran allow, and is never
+	// handed to the service user.
+	c, err := st.ReadCeiling(func(uint32) bool { return true })
+	if err != nil || c.NodeID != "n" || !slices.Equal(c.Endpoints, want) {
+		t.Fatalf("allow.json %+v %v", c, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(r.dir, "allow.json")); fi.Mode().Perm() != 0o640 {
+		t.Fatalf("allow.json mode %v", fi.Mode())
+	}
+	if slices.Contains(chowned, "allow.json") {
+		t.Fatal("allow.json was handed to the service user")
+	}
 	if !strings.Contains(r.out.String(), "next time") {
 		t.Fatalf("output should say it applies at the next start:\n%s", r.out)
+	}
+}
+
+// allow adds to the ceiling a join wrote, and a ceiling for another node
+// counts for nothing.
+func TestAllowWidensTheCeiling(t *testing.T) {
+	r := newCmdRig(t)
+	st := State{Dir: r.dir}
+	if err := st.SaveConfig(Config{URL: "http://x", NodeID: "n", Endpoints: []nodeproto.Endpoint{"probe"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveCeiling(Ceiling{NodeID: "n", Endpoints: []nodeproto.Endpoint{"probe"}}, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run("node", "allow", "docker", "--state-dir", r.dir); err != nil {
+		t.Fatalf("allow: %v\n%s", err, r.out)
+	}
+	c, err := st.ReadCeiling(func(uint32) bool { return true })
+	if err != nil || !slices.Equal(c.Endpoints, []nodeproto.Endpoint{"probe", "docker"}) {
+		t.Fatalf("allow.json %+v %v", c, err)
+	}
+	if err = st.SaveCeiling(Ceiling{NodeID: "old", Endpoints: []nodeproto.Endpoint{"kube", "dial"}}, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.run("node", "allow", "probe", "--state-dir", r.dir); err != nil {
+		t.Fatalf("allow: %v\n%s", err, r.out)
+	}
+	if c, err = st.ReadCeiling(func(uint32) bool { return true }); err != nil || c.NodeID != "n" || !slices.Equal(c.Endpoints, []nodeproto.Endpoint{"probe"}) {
+		t.Fatalf("another node's allow.json was kept: %+v %v", c, err)
 	}
 }
 
@@ -561,7 +603,11 @@ func TestStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.SaveConfig(Config{URL: "https://lp.example.com", NodeID: "node_7", OrgID: "org_1",
-		Endpoints: []nodeproto.Endpoint{"probe", "docker"}, PendingAllowed: []nodeproto.Endpoint{"docker"}, IngressMode: "none"}); err != nil {
+		Endpoints: []nodeproto.Endpoint{"probe", "docker", "kube"}, PendingAllowed: []nodeproto.Endpoint{"docker"}, IngressMode: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	// kube is in node.json only, so it is not served.
+	if err := st.SaveCeiling(Ceiling{NodeID: "node_7", Endpoints: []nodeproto.Endpoint{"probe", "docker", "dial"}}, -1); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.running = true

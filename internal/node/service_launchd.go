@@ -29,7 +29,7 @@ func renderLaunchdPlist(u Unit) (string, error) {
 	}
 	return render("templates/com.loomplane.node.plist", map[string]string{
 		"Label":    launchdLabel,
-		"Exec":     xmlEscape(filepath.Join(u.StateDir, "bin", filepath.Base(u.Binary))),
+		"Exec":     xmlEscape(u.exec()),
 		"StateDir": xmlEscape(u.StateDir),
 		"Log":      xmlEscape(filepath.Join(u.StateDir, "node.log")),
 	})
@@ -51,7 +51,7 @@ func (m *launchdManager) Install(_ context.Context, u Unit) error {
 	if err := os.MkdirAll(u.StateDir, 0o700); err != nil {
 		return err
 	}
-	if err := installBinary(u.Binary, u.StateDir); err != nil {
+	if err := installBinary(u.Binary, u.binDir(), 0o700); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(m.plistDir, 0o755); err != nil { //nolint:gosec // ~/Library/LaunchAgents is the standard mode

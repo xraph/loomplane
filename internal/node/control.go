@@ -49,7 +49,8 @@ var errNoService = errors.New("no node service is listening on the control socke
 // serveControl listens on the control socket until ctx ends or the returned
 // stop function runs, and removes the socket then. The socket is private to
 // the service user, and each caller is checked against the node's own user
-// and root. A node that cannot listen still runs: only the local allow and
+// and root. An allow needs a caller who may write allow.json (ceilingOwner);
+// a leave may come from the node's own user too. A node that cannot listen still runs: only the local allow and
 // leave commands lose their way in, and they say so. A socket that someone
 // answers on means another node runs on this state dir, and that is an error.
 func (r *Runtime) serveControl(ctx context.Context) (stop func(), err error) {
@@ -113,7 +114,8 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 		_, _ = c.Write(append(b, '\n')) //nolint:errcheck // the client may be gone
 	}
 	reply := func(err error) { replyWith("", err) }
-	if ok, perr := peerAllowed(c); perr != nil || !ok {
+	peer, perr := peerUID(c)
+	if perr != nil || (peer != 0 && int64(peer) != int64(os.Geteuid())) {
 		reply(errors.New("this user may not use the node's control socket"))
 		return
 	}
@@ -129,6 +131,13 @@ func (r *Runtime) serveControlConn(ctx context.Context, c net.Conn) {
 	}
 	switch req.Op {
 	case "allow":
+		// Widening is for whoever may write allow.json: root, and on a node
+		// that runs as you (macOS, a foreground run) you as well. The
+		// service user can still ask to leave.
+		if !r.ceilingOwner(peer) {
+			reply(errors.New("only root may widen what this node serves: run sudo loomctl node allow"))
+			return
+		}
 		if len(req.Endpoints) == 0 {
 			reply(errors.New("allow needs endpoints"))
 			return

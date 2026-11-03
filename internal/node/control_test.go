@@ -260,3 +260,38 @@ func TestControlRefusesToStartBesideALiveNode(t *testing.T) {
 		t.Fatalf("the first node lost its socket: %v", err)
 	}
 }
+
+// As the Linux service runs it, the node takes an allow only from root, while
+// its own user can still ask it to leave. Tests run as a normal user, which
+// stands in for the service user here.
+func TestControlAllowNeedsRootUnderRootAllowlist(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the caller is root here")
+	}
+	r := newRig(t)
+	r.st = State{Dir: filepath.Join(shortDir(t), "state")}
+	cfg := r.join(t, nodeproto.EndpointProbe)
+	rt, err := NewRuntimeWith(r.st, r.reg, RuntimeOptions{RootAllowlist: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.minDelay, rt.maxDelay = 10*time.Millisecond, 50*time.Millisecond
+	rt.detectBase = quietDetect()
+	done := start(t, rt)
+	eventually(t, "the node to be online", func() bool { return r.online(cfg.NodeID) })
+	sock := filepath.Join(r.st.Dir, "control.sock")
+	if err := controlCall(t.Context(), sock, controlRequest{Op: "allow", Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}}); err == nil || !strings.Contains(err.Error(), "only root") {
+		t.Fatalf("allow from the service user: %v", err)
+	}
+	if err := controlCall(t.Context(), sock, controlRequest{Op: "leave"}); err != nil {
+		t.Fatalf("leave from the service user: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRevoked) {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run kept going after leave")
+	}
+}

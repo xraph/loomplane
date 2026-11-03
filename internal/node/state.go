@@ -295,13 +295,16 @@ func (s State) SaveConfig(c Config) error {
 	return writeAtomic(filepath.Join(s.Dir, configFile), b)
 }
 
-// DeleteConfig removes node.json and leaves the identity key. A missing file
-// is not an error.
+// DeleteConfig removes node.json and allow.json, and leaves the identity
+// key. A missing file is not an error.
 func (s State) DeleteConfig() error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	if err := os.Remove(filepath.Join(s.Dir, configFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := s.deleteCeiling(); err != nil {
 		return err
 	}
 	return syncDir(s.Dir)

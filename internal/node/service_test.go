@@ -49,7 +49,7 @@ func golden(t *testing.T, name, got string) {
 }
 
 func TestSystemdUnitRendered(t *testing.T) {
-	got, err := renderSystemdUnit(Unit{Binary: "/usr/local/bin/loomctl", StateDir: "/var/lib/loomplane-node"}, "loomplane-node")
+	got, err := renderSystemdUnit(Unit{Binary: "/usr/local/bin/loomctl", StateDir: "/var/lib/loomplane-node", BinDir: systemBinDir}, "loomplane-node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +75,7 @@ type systemdRig struct {
 	run     *fakeRunner
 	unitDir string
 	state   string
+	bin     string
 	src     string
 	chowned map[string][2]int
 	created bool
@@ -83,7 +84,7 @@ type systemdRig struct {
 func newSystemdRig(t *testing.T) *systemdRig {
 	t.Helper()
 	dir := t.TempDir()
-	r := &systemdRig{run: &fakeRunner{}, unitDir: filepath.Join(dir, "etc"), state: filepath.Join(dir, "state"), src: filepath.Join(dir, "loomctl"), chowned: map[string][2]int{}}
+	r := &systemdRig{run: &fakeRunner{}, unitDir: filepath.Join(dir, "etc"), state: filepath.Join(dir, "state"), bin: filepath.Join(dir, "lib", "loomplane-node"), src: filepath.Join(dir, "loomctl"), chowned: map[string][2]int{}}
 	if err := os.WriteFile(r.src, []byte("#!binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,10 @@ func TestSystemdInstallCreatesUserCopiesBinaryAndWritesUnit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(r.state, "other"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.m.Install(t.Context(), Unit{Binary: r.src, StateDir: r.state, Docker: true}); err != nil {
+	if err := os.WriteFile(filepath.Join(r.state, "allow.json"), []byte("{}"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.m.Install(t.Context(), Unit{Binary: r.src, StateDir: r.state, BinDir: r.bin, Docker: true}); err != nil {
 		t.Fatal(err)
 	}
 	for p := range r.chowned {
@@ -138,17 +142,31 @@ func TestSystemdInstallCreatesUserCopiesBinaryAndWritesUnit(t *testing.T) {
 	if got := r.run.got(); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("commands:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	bin := filepath.Join(r.state, "bin", "loomctl")
+	// The binary goes outside the state dir and stays the installer's, so
+	// the service user can't replace what systemd starts.
+	bin := filepath.Join(r.bin, "loomctl")
 	if b, err := os.ReadFile(bin); err != nil || string(b) != "#!binary" {
 		t.Fatalf("copied binary: %q %v", b, err)
 	}
 	if fi, _ := os.Stat(bin); fi.Mode().Perm() != 0o755 {
 		t.Fatalf("binary mode %v", fi.Mode())
 	}
-	for _, p := range []string{r.state, filepath.Join(r.state, "bin"), bin, filepath.Join(r.state, "node.json")} {
+	if fi, _ := os.Stat(r.bin); fi.Mode().Perm() != 0o755 {
+		t.Fatalf("bin dir mode %v", fi.Mode())
+	}
+	for _, p := range []string{r.state, filepath.Join(r.state, "node.json")} {
 		if r.chowned[p] != [2]int{990, 991} {
 			t.Errorf("%s was chowned to %v", p, r.chowned[p])
 		}
+	}
+	for _, p := range []string{r.bin, bin} {
+		if _, ok := r.chowned[p]; ok {
+			t.Errorf("%s was handed to the service user", p)
+		}
+	}
+	// allow.json keeps its owner and only shares its group.
+	if got := r.chowned[filepath.Join(r.state, "allow.json")]; got != [2]int{-1, 991} {
+		t.Errorf("allow.json was chowned to %v", got)
 	}
 	if fi, _ := os.Stat(r.state); fi.Mode().Perm() != 0o700 {
 		t.Fatalf("state dir mode %v", fi.Mode())
@@ -158,7 +176,7 @@ func TestSystemdInstallCreatesUserCopiesBinaryAndWritesUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
-		"ExecStart=" + bin + " node run --state-dir " + r.state,
+		"ExecStart=" + bin + " node run --state-dir " + r.state + " --root-allowlist",
 		"Restart=always", "NoNewPrivileges=yes", "ProtectSystem=strict", "ReadWritePaths=" + r.state, "User=loomplane-node",
 	} {
 		if !strings.Contains(string(unit), line+"\n") {

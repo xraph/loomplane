@@ -13,8 +13,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -59,7 +62,10 @@ type Options struct {
 	detect  DetectOptions
 	binary  func() (string, error)
 	chown   func(path string, uid, gid int) error
-	runNode func(ctx context.Context, st State) error
+	runNode func(ctx context.Context, st State, o RuntimeOptions) error
+	// systemBin is where a Linux service's binary lives, root's and out of
+	// the service user's reach. Empty means /usr/local/lib/loomplane-node.
+	systemBin string
 	// in and isTerminal drive the endpoint question of node join.
 	in         io.Reader
 	isTerminal func() bool
@@ -125,6 +131,9 @@ func Commands(opts Options) []cli.Command {
 	if o.goarch == "" {
 		o.goarch = runtime.GOARCH
 	}
+	if o.systemBin == "" {
+		o.systemBin = systemBinDir
+	}
 
 	stateFlag := cli.NewStringFlag("state-dir", "", "Where the node keeps its identity and config (default: "+DefaultStateDir(o.goos, o.home)+")", "")
 	jsonFlag := cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
@@ -145,7 +154,8 @@ func Commands(opts Options) []cli.Command {
 				cli.NewBoolFlag("foreground", "", "Run in this terminal instead of installing a service", false),
 				stateFlag))),
 		cli.WithSubcommand(cli.NewCommand("run", "Run the node in the foreground; the service and the container image use this", c.guard(c.run),
-			cli.WithFlag(stateFlag))),
+			cli.WithFlags(stateFlag,
+				cli.NewBoolFlag("root-allowlist", "", "Trust only a root-owned allow.json, and take allow only from root; the Linux service sets it", false)))),
 		cli.WithSubcommand(cli.NewCommand("status", "Show this node's config, key fingerprint, endpoints and whether it runs", c.guard(c.status),
 			cli.WithFlags(stateFlag, jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("leave", "Take this machine out of Loomplane: stop the service and remove the config", c.guard(c.leave),
@@ -251,6 +261,32 @@ func (c *cmds) handBack(dir string, names ...string) error {
 		}
 	}
 	return nil
+}
+
+// binDir is where the service's copy of loomctl lives: a root-owned system
+// directory on Linux, so only root's node update replaces it, and the state
+// dir's bin on macOS, where the node runs as you anyway.
+func (c *cmds) binDir(stateDir string) string {
+	if c.opts.goos == "linux" {
+		return c.opts.systemBin
+	}
+	return filepath.Join(stateDir, "bin")
+}
+
+// ceilingTrust is whose allow.json the commands take for dir: their own, and
+// the state dir owner's when that is a person running the node as
+// themselves, not the service user.
+func (c *cmds) ceilingTrust(dir string) func(uint32) bool {
+	me := uint32(c.opts.euid()) //nolint:gosec // a uid is never negative
+	owner := c.stateOwner(dir)
+	person := owner >= 0 && !isServiceUser(owner)
+	return func(uid uint32) bool { return uid == me || (person && int64(uid) == int64(owner)) }
+}
+
+// isServiceUser reports whether uid is the user the Linux service runs as.
+func isServiceUser(uid int) bool {
+	u, err := user.LookupId(strconv.Itoa(uid))
+	return err == nil && u.Username == serviceUser
 }
 
 func (c *cmds) needRoot(what string) error {
@@ -376,7 +412,7 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 		if berr != nil {
 			return fmt.Errorf("finding the running binary: %w", berr)
 		}
-		if uerr := checkUnit(Unit{Binary: bin, StateDir: dir}, c.opts.goos == "linux"); uerr != nil {
+		if uerr := checkUnit(Unit{Binary: bin, StateDir: dir, BinDir: c.binDir(dir)}, c.opts.goos == "linux"); uerr != nil {
 			return uerr
 		}
 	}
@@ -426,7 +462,7 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 	}
 	if foreground {
 		c.printf("Running in this terminal. Press Ctrl+C to stop.\n")
-		return c.opts.runNode(ctx.Context(), State{Dir: dir})
+		return c.opts.runNode(ctx.Context(), State{Dir: dir}, RuntimeOptions{})
 	}
 	return c.install(ctx.Context(), dir, *cfg)
 }
@@ -491,14 +527,15 @@ func checkJoinDir(dir string) error {
 }
 
 // ownStateFile names what a node puts in its state dir: the key, the keys a
-// rejoin retired, the config, the copied binary's folder, the control
+// rejoin retired, the config, allow.json, the copied binary's folder, the control
 // socket, the macOS log and the temp files an atomic write leaves behind.
 func ownStateFile(name string) bool {
 	switch name {
-	case identityFile, configFile, "bin", controlSocket, "node.log":
+	case identityFile, configFile, ceilingFile, "bin", controlSocket, "node.log":
 		return true
 	}
 	return strings.HasPrefix(name, "."+configFile+".tmp-") || strings.HasPrefix(name, "."+identityFile+".tmp-") ||
+		strings.HasPrefix(name, "."+ceilingFile+".tmp-") ||
 		strings.HasPrefix(name, retiredKeyPrefix)
 }
 
@@ -518,7 +555,7 @@ func (c *cmds) install(ctx context.Context, dir string, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("finding the running binary: %w", err)
 	}
-	unit := Unit{Binary: bin, StateDir: dir, Docker: cfg.DockerSocket != ""}
+	unit := Unit{Binary: bin, StateDir: dir, BinDir: c.binDir(dir), Docker: cfg.DockerSocket != ""}
 	if err := c.opts.svc.Install(ctx, unit); err != nil {
 		return fmt.Errorf("joined as node %s, but installing the service failed: %w; fix that and run node leave, then join again", cfg.NodeID, err)
 	}
@@ -534,15 +571,15 @@ func (c *cmds) run(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	return c.opts.runNode(ctx.Context(), State{Dir: dir})
+	return c.opts.runNode(ctx.Context(), State{Dir: dir}, RuntimeOptions{RootAllowlist: ctx.Bool("root-allowlist")})
 }
 
 // runForeground keeps the connection to Loomplane until it is told to stop,
 // revoked or refused as too old.
-func (c *cmds) runForeground(ctx context.Context, st State) error {
+func (c *cmds) runForeground(ctx context.Context, st State, o RuntimeOptions) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	rt, err := NewRuntime(st, &Registry{})
+	rt, err := NewRuntimeWith(st, &Registry{}, o)
 	if err != nil {
 		return err
 	}
@@ -559,6 +596,7 @@ type statusInfo struct {
 	OrgID          string               `json:"org_id,omitempty"`
 	Fingerprint    string               `json:"fingerprint,omitempty"`
 	Endpoints      []nodeproto.Endpoint `json:"endpoints"`
+	AllowedHere    []nodeproto.Endpoint `json:"allowed_here"`
 	PendingAllowed []nodeproto.Endpoint `json:"pending_allowed,omitempty"`
 	IngressMode    string               `json:"ingress_mode,omitempty"`
 	Edge           bool                 `json:"edge,omitempty"`
@@ -571,12 +609,18 @@ func (c *cmds) status(ctx cli.CommandContext) error {
 		return err
 	}
 	st := c.stateFor(dir)
-	info := statusInfo{StateDir: dir, Endpoints: []nodeproto.Endpoint{}}
+	info := statusInfo{StateDir: dir, Endpoints: []nodeproto.Endpoint{}, AllowedHere: []nodeproto.Endpoint{}}
 	cfg, err := st.ReadConfig()
 	switch {
 	case err == nil:
 		info.Joined, info.URL, info.NodeID, info.OrgID = true, cfg.URL, cfg.NodeID, cfg.OrgID
-		info.Endpoints, info.PendingAllowed, info.IngressMode, info.Edge = nonNil(cfg.Endpoints), cfg.PendingAllowed, cfg.IngressMode, cfg.Edge
+		info.PendingAllowed, info.IngressMode, info.Edge = cfg.PendingAllowed, cfg.IngressMode, cfg.Edge
+		// What the node serves is what both files allow.
+		if ceil, cerr := st.ReadCeiling(c.ceilingTrust(dir)); cerr == nil && ceil.NodeID == cfg.NodeID {
+			info.AllowedHere = ceil.Endpoints
+		}
+		info.Endpoints = nonNil(within(cfg.Endpoints, info.AllowedHere))
+		info.PendingAllowed = within(info.PendingAllowed, info.AllowedHere)
 		info.Fingerprint = fingerprint(st)
 	case errors.Is(err, fs.ErrNotExist):
 	case c.opts.goos == "linux" && c.opts.euid() != 0:
@@ -608,6 +652,11 @@ func (c *cmds) status(ctx cli.CommandContext) error {
 		row("Fingerprint", info.Fingerprint)
 	}
 	row("Endpoints", eps)
+	here := "none (sudo loomctl node allow <endpoint> sets it)"
+	if len(info.AllowedHere) > 0 {
+		here = joinEndpoints(info.AllowedHere, ", ")
+	}
+	row("Allowed here", here)
 	if len(info.PendingAllowed) > 0 {
 		row("Pending", joinEndpoints(info.PendingAllowed, ", ")+" (Loomplane has not confirmed these yet)")
 	}
@@ -664,6 +713,19 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
+	st := c.stateFor(dir)
+	cfg, err := st.ReadConfig()
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return errors.New("this machine has not joined a Loomplane: run node join first")
+		}
+		return err
+	}
+	// The ceiling first. It is ours alone (root's, on a Linux service), so a
+	// copy that isn't, or is another node's, counts for nothing.
+	if err = c.widenCeiling(st, dir, cfg.NodeID, eps); err != nil {
+		return err
+	}
 	sock := filepath.Join(dir, controlSocket)
 	list := joinEndpoints(eps, ", ")
 	err = controlCall(ctx.Context(), sock, controlRequest{Op: "allow", Endpoints: eps})
@@ -679,14 +741,6 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	if running, _ := c.opts.svc.Running(ctx.Context()); running { //nolint:errcheck // unknown counts as not running
 		return fmt.Errorf("the node service is running but its control socket %s does not answer; restart the service, then allow again", sock)
 	}
-	st := c.stateFor(dir)
-	cfg, err := st.ReadConfig()
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return errors.New("this machine has not joined a Loomplane: run node join first")
-		}
-		return err
-	}
 	cfg.Widen(eps)
 	if err := st.SaveConfig(cfg); err != nil {
 		return err
@@ -696,6 +750,40 @@ func (c *cmds) allow(ctx cli.CommandContext) error {
 	}
 	c.printf("Allowed %s. The node is not running, so Loomplane learns of it the next time the node starts.\n", list)
 	return nil
+}
+
+// widenCeiling adds eps to allow.json for node id. It trusts a file owned by
+// whoever runs this, and one owned by the state dir's owner when that is a
+// person running the node as themselves rather than the service user, the
+// same files the node itself trusts. It starts afresh from one it doesn't
+// trust. On a Linux service the file stays root's, readable by the service's
+// group.
+func (c *cmds) widenCeiling(st State, dir, id string, eps []nodeproto.Endpoint) error {
+	owner := c.stateOwner(dir)
+	cur, err := st.ReadCeiling(c.ceilingTrust(dir))
+	switch {
+	case err == nil && cur.NodeID == id:
+	case errors.Is(err, fs.ErrNotExist):
+		cur = Ceiling{}
+	default:
+		c.printf("allow.json was not this node's own, so it now holds only what you allow here.\n")
+		cur = Ceiling{}
+	}
+	cur.NodeID = id
+	for _, e := range eps {
+		if !slices.Contains(cur.Endpoints, e) {
+			cur.Endpoints = append(cur.Endpoints, e)
+		}
+	}
+	gid := -1
+	if owner >= 0 {
+		if fi, lerr := os.Lstat(dir); lerr == nil {
+			if g, ok := fileGroup(fi); ok {
+				gid = int(g)
+			}
+		}
+	}
+	return st.SaveCeiling(cur, gid)
 }
 
 func (c *cmds) leave(ctx cli.CommandContext) error {

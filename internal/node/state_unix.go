@@ -16,6 +16,15 @@ func fileOwner(fi os.FileInfo) (uint32, bool) {
 	return st.Uid, true
 }
 
+// fileGroup returns the gid that owns the file.
+func fileGroup(fi os.FileInfo) (uint32, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Gid, true
+}
+
 // openNoFollow opens path read-only and fails if it is a symlink.
 func openNoFollow(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)

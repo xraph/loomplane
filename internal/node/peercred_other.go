@@ -4,6 +4,7 @@ package node
 
 import "net"
 
-// peerAllowed has nothing to check elsewhere: the node refuses to run on
+// peerUID has nothing to check elsewhere: the node refuses to run on
 // systems other than Linux and macOS (Supported), and the socket is private.
-func peerAllowed(net.Conn) (bool, error) { return true, nil }
+// It answers root, as if the caller could do anything.
+func peerUID(net.Conn) (uint32, error) { return 0, nil }

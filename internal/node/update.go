@@ -25,7 +25,8 @@ import (
 const (
 	// releaseBase is where Loomplane's releases are published.
 	releaseBase = "https://github.com/xraph/loomplane/releases/download"
-	// serviceBinary is the file in <state>/bin that the service runs.
+	// serviceBinary is the file in the service's bin dir that it runs:
+	// systemBinDir on Linux, <state>/bin on macOS.
 	serviceBinary = "loomctl"
 	// maxArchive bounds the release archive, and maxSmall the checksums and
 	// signature, so a bad server cannot fill the disk or memory.
@@ -103,7 +104,7 @@ func (c *cmds) update(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	target := filepath.Join(dir, "bin", serviceBinary)
+	target := filepath.Join(c.binDir(dir), serviceBinary)
 	old, err := os.Lstat(target)
 	if err != nil {
 		return fmt.Errorf("this node does not run a copy of %s from %s: %w", serviceBinary, filepath.Dir(target), err)
