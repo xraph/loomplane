@@ -142,6 +142,15 @@ it("keeps AI settings in the workspace's Settings for members", async () => {
   )
 })
 
+it("keeps Infrastructure in Settings, not the main navigation", async () => {
+  sidebar(false)
+  expect(screen.queryByRole("link", { name: "Infrastructure" })).toBeNull()
+  await userEvent.click(screen.getByText("Settings"))
+  expect(
+    await screen.findByRole("menuitem", { name: "Infrastructure" })
+  ).toHaveAttribute("href", "/infrastructure")
+})
+
 it("leaves AI out of Settings when AI is off", async () => {
   sidebar(false)
   await userEvent.click(screen.getByText("Settings"))

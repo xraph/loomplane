@@ -1,6 +1,6 @@
 // AI settings: what the AI in every project of the workspace shares. That's
-// the workspace's agent, for admins, and the Hugging Face token gated models
-// download with. The token is write-only: once saved, only its last characters, the account it belongs
+// the workspace's monthly AI budget, the agent (for admins), and the Hugging
+// Face token gated models download with. The token is write-only: once saved, only its last characters, the account it belongs
 // to and when it was set come back.
 import { CheckIcon, LockIcon } from "lucide-react"
 import { type FormEvent, useId, useState } from "react"
@@ -14,6 +14,7 @@ import {
 import type { HuggingFaceToken } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { AgentSettings } from "@/components/agent-settings"
+import { AIBudget } from "@/components/ai-budget"
 import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { Panel } from "@/components/panel"
@@ -75,7 +76,10 @@ export function AISettings() {
             className="h-56 w-full rounded-[14px]"
           />
         )}
-        {settings.data && can("ai:manage") && <AgentSettings />}
+        {settings.data && <AIBudget settings={settings.data} />}
+        {settings.data && can("ai:manage") && (
+          <AgentSettings unallocatedUsd={settings.data.unallocatedUsd} />
+        )}
         {settings.data && (
           <HuggingFaceSection
             token={settings.data.huggingface}

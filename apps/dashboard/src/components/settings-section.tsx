@@ -68,3 +68,22 @@ export function SettingsCardHead({
     </div>
   )
 }
+
+/** A card's footer: a note on the left, its button on the right. */
+export function SettingsCardFooter({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-[14px] border-t border-border bg-subtle px-4 py-2.5 md:px-5">
+      {children}
+    </div>
+  )
+}
+
+/** What's wrong with a field, shown under it. */
+export function FieldProblem({ text }: { text?: string }) {
+  if (!text) return null
+  return (
+    <p role="alert" className="text-[12.5px] text-destructive">
+      {text}
+    </p>
+  )
+}

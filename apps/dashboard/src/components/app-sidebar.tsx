@@ -176,12 +176,6 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       isActive: path.startsWith("/clouds"),
     },
     {
-      title: "Infrastructure",
-      icon: <InfrastructureIcon />,
-      link: <Link to="/infrastructure" />,
-      isActive: path.startsWith("/infrastructure"),
-    },
-    {
       title: "Nodes",
       icon: <NodesIcon />,
       link: <Link to="/nodes" />,
@@ -246,6 +240,13 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           icon: <IntegrationsIcon />,
           link: <Link to="/integrations" />,
           isActive: at("/integrations"),
+        },
+        // What runs on the connected clouds, across every project.
+        {
+          title: "Infrastructure",
+          icon: <InfrastructureIcon />,
+          link: <Link to="/infrastructure" />,
+          isActive: at("/infrastructure"),
         },
         // The workspace's AI settings sit with its other settings, so the AI
         // group above doesn't carry a second "Settings".

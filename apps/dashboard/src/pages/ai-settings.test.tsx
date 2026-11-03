@@ -457,3 +457,70 @@ it("shows no agent settings to someone without ai:manage", async () => {
   expect(screen.queryByRole("region", { name: "AI agent" })).toBeNull()
   expect(writes).toEqual([])
 })
+
+it("sets the workspace's monthly AI budget", async () => {
+  const writes = stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+    "PUT /api/v1/ai/settings/budget": () =>
+      Response.json(
+        view({
+          monthly_budget_usd: "100.00",
+          unallocated_usd: "100.00",
+          revision: 2,
+        })
+      ),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI budget" })
+  const field = within(section).getByLabelText("Workspace budget (USD)")
+  await userEvent.type(field, "100")
+  await userEvent.click(within(section).getByRole("button", { name: "Save" }))
+
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        method: "PUT",
+        path: "/api/v1/ai/settings/budget",
+        body: { monthly_budget_usd: "100", revision: 1 },
+      },
+    ])
+  )
+})
+
+it("tells you what's left before the agent asks for more", async () => {
+  const writes = stub({
+    "GET /api/v1/ai/settings": () =>
+      Response.json(
+        view({ monthly_budget_usd: "50.00", unallocated_usd: "50.00" })
+      ),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(
+    await within(section).findByText(
+      "Up to $50.00 from the workspace's AI budget."
+    )
+  ).toBeInTheDocument()
+
+  const budget = within(section).getByLabelText("Monthly budget (USD)")
+  await userEvent.type(budget, "80")
+  await userEvent.click(
+    within(section).getByRole("button", { name: "Save budget" })
+  )
+  const alert = await within(section).findByRole("alert")
+  expect(alert).toHaveTextContent(
+    "The agent can have up to $50.00 of the workspace's AI budget. Raise the workspace's budget above to give it more."
+  )
+  expect(budget.closest("[data-slot=field]")).toContainElement(alert)
+  expect(writes).toEqual([])
+})
