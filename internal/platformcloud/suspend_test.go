@@ -595,7 +595,7 @@ func TestSuspendOfAnOrgWithNoPlatformWorkCallsNothing(t *testing.T) {
 }
 
 // slowRemove blocks RemoveVM until released, so a restore can be tried while
-// a reclaim holds the tenant lock.
+// a reclaim is removing the VM.
 type slowRemove struct {
 	*fakeControl
 	entered chan struct{}
@@ -608,7 +608,10 @@ func (s *slowRemove) RemoveVM(ctx context.Context, p Placement) error {
 	return s.fakeControl.RemoveVM(ctx, p)
 }
 
-func TestRestoreWaitsForAReclaimHoldingTheLock(t *testing.T) {
+// A restore that comes while a reclaim removes the VM doesn't wait for it,
+// and leaves the placement to the reclaim's claim; the retry then places it
+// again and starts it.
+func TestRestoreDuringAReclaimLeavesItTheClaim(t *testing.T) {
 	e, fc := suspendEnv(t)
 	e.readyHost(t, "a", bigAllotment)
 	ctx := t.Context()
@@ -620,25 +623,37 @@ func TestRestoreWaitsForAReclaimHoldingTheLock(t *testing.T) {
 	}
 	slow := &slowRemove{fakeControl: fc, entered: make(chan struct{}), release: make(chan struct{})}
 	e.svc.WithInstances(slow)
-	done := make(chan error, 2)
-	go func() { done <- e.svc.Reclaim(ctx, t0.Add(8*24*time.Hour)) }()
+	reclaimed := make(chan error, 1)
+	go func() { reclaimed <- e.svc.Reclaim(ctx, t0.Add(8*24*time.Hour)) }()
 	<-slow.entered
-	go func() { done <- e.svc.Restore(ctx, "org_a", ReasonPastDue) }()
+	restored := make(chan error, 1)
+	go func() { restored <- e.svc.Restore(ctx, "org_a", ReasonPastDue) }()
 	select {
-	case err := <-done:
-		t.Fatalf("restore finished while the reclaim held the lock: %v", err)
-	case <-time.After(500 * time.Millisecond):
-	}
-	close(slow.release)
-	for range 2 {
-		if err := <-done; err != nil {
+	case err := <-restored:
+		if err != nil {
 			t.Fatal(err)
 		}
+	case <-time.After(5 * time.Second):
+		close(slow.release)
+		t.Fatal("the restore waited for the reclaim's VM removal")
+	}
+	if web := e.byResource(t, "web"); web.State != "suspended" || len(fc.starts) != 0 {
+		t.Fatalf("the restore started a placement being reclaimed: starts = %v, web = %+v", fc.starts, web)
+	}
+	close(slow.release)
+	if err := <-reclaimed; err != nil {
+		t.Fatal(err)
 	}
 	web := e.byResource(t, "web")
-	// Reclaim ran first: the VM is gone and the restore re-placed and started it.
-	if len(fc.removes) != 1 || web.State != "running" || web.HostID == nil || !slices.Equal(fc.starts, []string{"inst_web"}) {
-		t.Fatalf("removes = %v, starts = %v, web = %+v", fc.removes, fc.starts, web)
+	if len(fc.removes) != 1 || web.State != "suspended" || !web.RestoreRunning || web.HostID != nil {
+		t.Fatalf("after the reclaim: removes = %v, web = %+v", fc.removes, web)
+	}
+	if err := e.svc.RetryRestores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	web = e.byResource(t, "web")
+	if web.State != "running" || web.HostID == nil || !slices.Equal(fc.starts, []string{"inst_web"}) {
+		t.Fatalf("after the retry: starts = %v, web = %+v", fc.starts, web)
 	}
 }
 

@@ -558,14 +558,21 @@ AND org_id IN (SELECT org_id FROM loomplane_platform_tenants WHERE cardinality(s
 	return errors.Join(errs...)
 }
 
-// reclaim removes one placement's VM under the tenant lock, the way Start
-// runs: it checks the placement is still the due suspended one, removes the VM
-// with a time limit and clears the host in the same transaction. A restore
-// that clears the last reason waits for the lock, so the VM is either removed
-// and the row stays suspended and remembered, or the restore ran first and
-// the reclaim finds nothing due. A placement is never left running without
-// its VM.
+// reclaim removes one placement's VM without holding the tenant lock while
+// it does: removing a VM issues maintenance authority, which takes the
+// organization's lock, and that lock comes before the tenant row. Under the
+// tenant lock it checks the placement is still the due suspended one and
+// claims it (starting_until), as a restore's start claims one, so no start
+// touches it while the VM goes. With the lock let go it removes the VM, with
+// a time limit. Then, under the lock again, it clears the host if the
+// placement is still suspended on that host, since the same suspension and
+// still claimed by this reclaim, and lets the claim go either way. A restore
+// that comes in between finds the placement claimed and leaves it for
+// RetryRestores, which places it again once it has no host. A placement is
+// never left running without its VM.
 func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now time.Time) error {
+	var claimed *Placement
+	var until time.Time
 	err := s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if err != nil || len(t.SuspendReasons) == 0 {
@@ -578,22 +585,66 @@ func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now ti
 		if err != nil {
 			return err
 		}
-		if p.State != stateSuspended || p.HostID == nil || p.SuspendedAt == nil || p.SuspendedAt.After(now.Add(-ReclaimAfter)) {
+		if !reclaimDue(p, now) {
 			return nil
 		}
 		// A start that has the placement claimed wins: its VM stays.
-		var starting bool
-		if err = tx.QueryRow(ctx, `SELECT coalesce(starting_until>$2,false) FROM loomplane_platform_placements WHERE id=$1`, p.ID, s.now().UTC()).Scan(&starting); err != nil || starting {
+		at := s.now().UTC()
+		claim := at.Add(reclaimClaimFor).Truncate(time.Microsecond)
+		res, err := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET starting_until=$2 WHERE id=$1 AND (starting_until IS NULL OR starting_until<$3)`, p.ID, claim, at)
+		if err != nil {
 			return err
 		}
-		if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *p) }); err != nil {
-			return fmt.Errorf("remove placement %s: %w", p.ID, err)
+		if n, nErr := res.RowsAffected(); nErr != nil || n != 1 {
+			return nErr
 		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id=NULL,updated_at=now() WHERE id=$1`, p.ID)
-		return err
+		claimed, until = p, claim
+		return nil
 	})
-	return effectsFailed(ctx, "reclaim", orgID, err)
+	if err != nil || claimed == nil {
+		return effectsFailed(ctx, "reclaim", orgID, err)
+	}
+	removeErr := callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *claimed) })
+	if removeErr != nil {
+		removeErr = fmt.Errorf("remove placement %s: %w", claimed.ID, removeErr)
+	}
+	after, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterStartTimeout)
+	defer cancel()
+	err = s.store.withTenantRow(after, orgID, func(tx driverTx) error {
+		p, readErr := scanPlacement(tx.QueryRow(after, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, claimed.ID, orgID))
+		if errors.Is(readErr, ErrNotFound) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		var mine bool
+		if readErr = tx.QueryRow(after, `SELECT coalesce(starting_until=$2,false) FROM loomplane_platform_placements WHERE id=$1`, p.ID, until).Scan(&mine); readErr != nil || !mine {
+			return readErr
+		}
+		clear := `starting_until=NULL`
+		if removeErr == nil && p.State == stateSuspended && p.HostID != nil && *p.HostID == *claimed.HostID &&
+			p.SuspendedAt != nil && claimed.SuspendedAt != nil && p.SuspendedAt.Equal(*claimed.SuspendedAt) {
+			clear += `,host_id=NULL`
+		}
+		_, execErr := tx.Exec(after, `UPDATE loomplane_platform_placements SET `+clear+`,updated_at=now() WHERE id=$1`, p.ID)
+		return execErr
+	})
+	if errors.Is(err, ErrNotEnabled) {
+		err = nil // The tenant is gone; its cleanup takes the rest.
+	}
+	return effectsFailed(ctx, "reclaim", orgID, removeErr, err)
 }
+
+// reclaimDue reports whether p is a suspended service whose VM may be taken
+// off its host at now.
+func reclaimDue(p *Placement, now time.Time) bool {
+	return p.State == stateSuspended && p.HostID != nil && p.SuspendedAt != nil && !p.SuspendedAt.After(now.Add(-ReclaimAfter))
+}
+
+// reclaimClaimFor is how long a reclaim's claim on a placement lasts: the
+// removal's own limit and a little more.
+const reclaimClaimFor = instanceCallTimeout + time.Minute
 
 // RetryRestores brings back work that should be running but isn't: a restore
 // that had no room, or one that failed or was cut short. It looks at every

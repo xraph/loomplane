@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 )
 
@@ -337,5 +338,75 @@ func TestRedeployLimitsCountTheNewSizeAndTheHostCountsBoth(t *testing.T) {
 	}
 	if got := e.placement(t, old.ID); got.State != stateRunning {
 		t.Fatalf("old = %+v", got)
+	}
+}
+
+// lockingRemove does what a real VM removal does to the locks: it issues
+// maintenance authority, which takes the organization's lock, and a
+// projection refresh or an enable may be waiting on that lock for the
+// tenant row. It runs both, on connections of their own, before it removes.
+type lockingRemove struct {
+	*fakeControl
+	svc     *Service
+	regions []Region
+	errs    []error
+	claimed bool
+}
+
+func (l *lockingRemove) RemoveVM(ctx context.Context, p Placement) error {
+	c, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var claim *time.Time
+	if err := l.svc.store.db.QueryRow(c, `SELECT starting_until FROM loomplane_platform_placements WHERE id=$1`, p.ID).Scan(&claim); err != nil {
+		l.errs = append(l.errs, err)
+	}
+	l.claimed = claim != nil
+	l.errs = append(l.errs, l.svc.refreshProjection(c, p.OrgID, l.regions))
+	if _, err := l.svc.EnableTenant(c, p.OrgID, nil); err != nil {
+		l.errs = append(l.errs, err)
+	}
+	l.errs = append(l.errs, l.svc.store.withTx(c, func(tx driverTx) error { return cloudprofiles.LockOrganization(c, tx, p.OrgID) }))
+	return l.fakeControl.RemoveVM(ctx, p)
+}
+
+func TestReclaimDoesNotHoldTheTenantRowWhileRemoving(t *testing.T) {
+	e, ctl := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	t0 := time.Now().UTC()
+	e.svc.now = func() time.Time { return t0 }
+	web := e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	regions, err := e.svc.activeRegions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lr := &lockingRemove{fakeControl: ctl, svc: e.svc, regions: regions}
+	e.svc.WithInstances(lr)
+	done := make(chan error, 1)
+	go func() { done <- e.svc.Reclaim(ctx, t0.Add(8*24*time.Hour)) }()
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the reclaim stalled")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := errors.Join(lr.errs...); joined != nil {
+		t.Fatalf("what ran during the removal: %v", joined)
+	}
+	if !lr.claimed {
+		t.Fatal("the placement was not claimed while its VM was removed")
+	}
+	got := e.placement(t, web.ID)
+	if got.State != stateSuspended || !got.RestoreRunning || got.HostID != nil || len(ctl.removes) != 1 {
+		t.Fatalf("removes = %v, web = %+v", ctl.removes, got)
+	}
+	var claim *time.Time
+	if err = e.pg.QueryRow(ctx, `SELECT starting_until FROM loomplane_platform_placements WHERE id=$1`, web.ID).Scan(&claim); err != nil || claim != nil {
+		t.Fatalf("the reclaim's claim was left: %v, %v", claim, err)
 	}
 }
