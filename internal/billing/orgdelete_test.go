@@ -171,3 +171,49 @@ func TestOrgDelete_NoAccountIsNothing(t *testing.T) {
 		t.Fatalf("invoices %d", n)
 	}
 }
+
+// An add-on turned off in October and deleted with the workspace before
+// the close: the hook bills no November add-on, and the close bills
+// October's once.
+func TestOrgDelete_AnEndedAddOnIsNotBilledForTheNewMonth(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	org := authsomeid.NewOrgID().String()
+	_ = s.MarkCardReady(ctx, org)
+	p, err := s.l.GetPlanBySlug(ctx, PlanAI, testAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aiSub, err := s.subscribe(ctx, org, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pg.Exec(ctx, `UPDATE loomplane_billing_accounts SET ai_subscription_id = $2, ai_ends_at = '2026-11-01T00:00:00Z' WHERE org_id = $1`,
+		org, aiSub); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2026-11-01T00:30:00Z")
+	if err = newOrgDeleteHook(s).OnAfterOrgDelete(ctx, mustOrgID(t, org)); err != nil {
+		t.Fatal(err)
+	}
+	cancelLikeAuthsome(t, s, org)
+	clock = at("2026-11-01T01:15:00Z")
+	if err = s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	aiLines := map[string]int{}
+	for _, inv := range invoicesFor(t, s, org) {
+		for _, li := range inv.LineItems {
+			if li.Type == invoice.LineItemBase && li.Amount == types.USD(1000) {
+				aiLines[inv.PeriodStart.UTC().Format("2006-01")]++
+			}
+		}
+	}
+	if len(aiLines) != 1 || aiLines["2026-10"] != 1 {
+		t.Fatalf("$10 lines by month %v, want October's only", aiLines)
+	}
+	if a, _ := s.Account(ctx, org); a.AISubscription != "" {
+		t.Fatalf("the ended add-on wasn't rolled over: %+v", a)
+	}
+}

@@ -7,8 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	authsome "github.com/xraph/authsome"
+	"github.com/xraph/authsome/bridge"
+	authmem "github.com/xraph/authsome/store/memory"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/warden"
+	wardenmem "github.com/xraph/warden/store/memory"
 
 	"github.com/xraph/loomplane/internal/config"
 )
@@ -39,12 +44,21 @@ func TestEditionOptions_HookOrderInvoicesBeforeTheCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugins := e.editionPlugins(db, e.edition.ledger)
-	if len(opts) != 1+len(plugins) {
-		t.Fatalf("%d options for %d plugins and the ledger", len(opts), len(plugins))
+	// An engine built from exactly those options, over memory stores,
+	// registers their plugins in the order the options carry them.
+	w, err := warden.NewEngine(warden.WithStore(wardenmem.New()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	names := make([]string, 0, len(plugins))
-	for _, p := range plugins {
+	eng, err := authsome.NewEngine(append(opts,
+		authsome.WithStore(authmem.New()), authsome.WithWarden(w),
+		authsome.WithChronicle(bridge.NewMemoryChronicle()), authsome.WithDisableMigrate())...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := eng.Plugins().Plugins()
+	names := make([]string, 0, len(registered))
+	for _, p := range registered {
 		names = append(names, p.Name())
 	}
 	hook, sub := slices.Index(names, "loomplane-billing-org-delete"), slices.Index(names, "subscription")

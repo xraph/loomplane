@@ -88,5 +88,11 @@ func (s *Service) invoiceDeleted(ctx context.Context, org string) error {
 	if pushErr != nil {
 		return fmt.Errorf("billing: %s isn't invoiced on delete, its usage didn't all reach ledger: %w", org, pushErr)
 	}
-	return s.invoiceAccount(ctx, accounts[0], nil)
+	a := accounts[0]
+	// An add-on turned off whose month has ended has no current period to
+	// pay for: its last month is the close's, billed for that month only.
+	if a.aiEndsAt != nil && !a.aiEndsAt.After(s.now().UTC()) {
+		a.aiSub = ""
+	}
+	return s.invoiceAccount(ctx, a, nil)
 }

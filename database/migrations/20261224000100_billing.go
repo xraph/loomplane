@@ -48,7 +48,8 @@ func billingGroup() *migrate.Group {
 // loomplane_billing_invoices, loomplane_billing_credits and
 // loomplane_billing_refunds record the invoices sent, the credits granted
 // and the refunds made. Unpaid invoices whose payment failed are indexed by
-// workspace, for the gate's past-due check.
+// workspace, for the gate's past-due check. voided_at marks an invoice
+// voided in ledger, which is never sent and never made again.
 //
 // loomplane_billing_closes is one row per month whose close finished, so a
 // close that stopped part way is finished by the next hourly run.
@@ -121,6 +122,7 @@ func init() {
  provider_id text NOT NULL DEFAULT '',
  payment_failed_at timestamptz NULL,
  paid_at timestamptz NULL,
+ voided_at timestamptz NULL,
  UNIQUE (subscription_id, period_start))`,
 				// The billing gate asks on every deploy and build whether a workspace
 				// has an unpaid invoice whose payment failed; this answers it.

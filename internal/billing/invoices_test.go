@@ -606,3 +606,130 @@ func TestSyncInvoices_ZeroTotalIsPaidNotSent(t *testing.T) {
 		t.Fatal("Loomplane's row isn't paid")
 	}
 }
+
+// Which credits an invoice used never depends on clocks: a credit whose
+// row says it was granted after the invoice (another replica's clock ahead)
+// still discounts it once and goes.
+func TestCloseMonth_CreditWithAClockAheadAppliesOnce(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	a, _ := s.Account(ctx, "org_1")
+	grantCredit(t, s, pg, a.CloudSubscription, "lpc_ahead", 300)
+	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_credits SET created_at = now() + interval '1 day' WHERE id = 'lpc_ahead'`)
+	clock = at("2026-11-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2026-12-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	totals := map[string]types.Money{}
+	for _, inv := range invoicesFor(t, s, "org_1") {
+		totals[inv.PeriodStart.UTC().Format("2006-01")] = inv.Total
+	}
+	if totals["2026-10"] != types.USD(200) || totals["2026-11"] != types.USD(500) {
+		t.Fatalf("totals %v: October $5 - $3, November $5", totals)
+	}
+	var deleted bool
+	_ = pg.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM loomplane_billing_credits WHERE id = 'lpc_ahead'`).Scan(&deleted)
+	if !deleted {
+		t.Fatal("the credit wasn't deleted after the invoice it discounted")
+	}
+}
+
+// A recorded invoice voided in ledger is left alone by the next close: no
+// second invoice, no error, and it is marked voided so the sync never
+// lists it.
+func TestCloseMonth_LeavesAVoidedInvoice(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, fs := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	fs.failWith(errors.New("stripe is down"))
+	clock = at("2026-11-01T01:15:00Z")
+	_ = s.CloseMonth(ctx)
+	inv := invoicesFor(t, s, "org_1")[0]
+	if err := s.l.MarkInvoiceVoided(ctx, inv.ID, "by hand"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = pg.Exec(ctx, `DELETE FROM loomplane_billing_closes`)
+	fs.failWith(nil)
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if invs := invoicesFor(t, s, "org_1"); len(invs) != 1 || invs[0].ID != inv.ID || len(fs.sent()) != 0 {
+		t.Fatalf("invoices %+v sent %v", invs, fs.sent())
+	}
+	var voided bool
+	_ = pg.QueryRow(ctx, `SELECT voided_at IS NOT NULL FROM loomplane_billing_invoices WHERE invoice_id = $1`, inv.ID.String()).Scan(&voided)
+	if !voided || !closed(t, pg, "2026-10-01") {
+		t.Fatalf("voided recorded %v, October closed %v", voided, closed(t, pg, "2026-10-01"))
+	}
+}
+
+// A finalized invoice voided before it was sent is never sent, and once
+// the sync has seen it, it is off the sync's list.
+func TestSyncInvoices_DropsAVoidedInvoice(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, fs := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	fs.failWith(errors.New("stripe is down"))
+	clock = at("2026-11-01T01:15:00Z")
+	_ = s.CloseMonth(ctx)
+	inv := invoicesFor(t, s, "org_1")[0]
+	if err := s.l.MarkInvoiceVoided(ctx, inv.ID, "by hand"); err != nil {
+		t.Fatal(err)
+	}
+	fs.failWith(nil)
+	if err := s.SyncInvoices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fs.sent()); n != 0 {
+		t.Fatalf("a voided invoice was sent %d times", n)
+	}
+	var due int
+	_ = pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_billing_invoices
+		WHERE finalized_at IS NOT NULL AND provider_id = '' AND paid_at IS NULL AND voided_at IS NULL`).Scan(&due)
+	if due != 0 {
+		t.Fatalf("%d invoices still due after the sync saw the voided one", due)
+	}
+}
+
+// A workspace held open past the next 1st still gets its month closed by
+// the catch-up, and the month after it is closed on its own.
+func TestCloseMonthIfOpen_ClosesAMonthHeldPastTheNextFirst(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_usage (id, org_id, feature, quantity, rate_micro_usd, micro_usd, occurred_at, resource_ref)
+		VALUES ('bad', 'org_1', 'compute_vcpu_hours', 1, 10000, -1, '2026-10-10T10:00:00Z', 'pl_1')`); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2026-11-01T01:15:00Z")
+	_ = s.CloseMonth(ctx)
+	clock = at("2026-12-01T01:15:00Z")
+	_ = s.CloseMonth(ctx) // November waits too: October's row is still stuck
+	if closed(t, pg, "2026-10-01") || len(invoicesFor(t, s, "org_1")) != 0 {
+		t.Fatal("October closed with its usage stuck")
+	}
+	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_usage SET micro_usd = 20000 WHERE id = 'bad'`)
+	clock = at("2026-12-01T02:00:00Z")
+	if err := s.CloseMonthIfOpen(ctx); err != nil {
+		t.Fatal(err)
+	}
+	periods := map[string]bool{}
+	for _, inv := range invoicesFor(t, s, "org_1") {
+		periods[inv.PeriodStart.UTC().Format("2006-01")] = true
+	}
+	if len(periods) != 2 || !periods["2026-10"] || !periods["2026-11"] {
+		t.Fatalf("invoiced %v, want October and November", periods)
+	}
+	if !closed(t, pg, "2026-10-01") || !closed(t, pg, "2026-11-01") {
+		t.Fatal("the catch-up left a month open")
+	}
+}
