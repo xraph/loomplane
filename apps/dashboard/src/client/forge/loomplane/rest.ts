@@ -134,6 +134,75 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentReports = {
+    /**
+     * Close a report
+     * Needs deployment:create on the report's project. If the report has a GitHub issue, Loomplane comments there and closes it.
+     */
+    close: async (id: string, body: types.CloseInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Report> => {
+      let __path = `/api/v1/agent/reports/${encodeURIComponent(String(id))}/close`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CloseInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Report"],
+      };
+
+      return this.request<types.Report>(config);
+    },
+
+    /**
+     * One report the agent opened
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Report> => {
+      let __path = `/api/v1/agent/reports/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Report"],
+      };
+
+      return this.request<types.Report>(config);
+    },
+
+    /**
+     * What the agent saw go wrong in your workspace
+     * Only the reports of projects whose deployments you may read.
+     */
+    list: async (status?: string | undefined, projectId?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReportList> => {
+      let __path = `/api/v1/agent/reports`;
+      const queryParams: Record<string, any> = {};
+      if (status !== undefined) {
+        queryParams['status'] = status;
+      }
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReportList"],
+      };
+
+      return this.request<types.ReportList>(config);
+    },
+
+  };
+
   public readonly agentRequests = {
     /**
      * Answer the agent's question
@@ -336,6 +405,25 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+  };
+
+  public readonly agentWatcher = {
+    /**
+     * Whether the agent is watching your workspace, and where its reports go on GitHub
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentwatchStatus> => {
+      let __path = `/api/v1/agent/watcher`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentwatchStatus"],
+      };
+
+      return this.request<types.AgentwatchStatus>(config);
     },
 
   };

@@ -15077,6 +15077,148 @@
           }
         }
       }
+    },
+    "/api/v1/agent/reports": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "What the agent saw go wrong in your workspace",
+        "description": "Only the reports of projects whose deployments you may read.",
+        "operationId": "agentReports.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reports, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/reports/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One report the agent opened",
+        "operationId": "agentReports.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/reports/{id}/close": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Close a report",
+        "description": "Needs deployment:create on the report's project. If the report has a GitHub issue, Loomplane comments there and closes it.",
+        "operationId": "agentReports.close",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The closed report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/watcher": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Whether the agent is watching your workspace, and where its reports go on GitHub",
+        "operationId": "agentWatcher.get",
+        "responses": {
+          "200": {
+            "description": "The watcher",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentwatchStatus"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -35484,6 +35626,346 @@
             "type": "integer"
           },
           "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentreportsEvidence": {
+        "properties": {
+          "analysis_id": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "source_alias": {
+            "type": "string"
+          },
+          "verdict_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "watch_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
+      },
+      "ReportList": {
+        "type": "object",
+        "required": [
+          "reports"
+        ],
+        "properties": {
+          "reports": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Report"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "AgentwatchStatus": {
+        "properties": {
+          "issues": {
+            "$ref": "#/components/schemas/IssuesStatus"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "paused_at": {
+            "type": "string"
+          },
+          "paused_reason": {
+            "type": "string"
+          },
+          "ticked_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "paused",
+          "issues"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentwatch.Status"
+      },
+      "IssuesStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "installations"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallationIssues"
+            }
+          }
+        }
+      },
+      "InstallationIssues": {
+        "type": "object",
+        "required": [
+          "account",
+          "account_type",
+          "accepted",
+          "manage_url"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "account": {
+            "type": "string"
+          },
+          "account_type": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "manage_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "signal",
+          "component",
+          "fingerprint",
+          "status",
+          "severity",
+          "title",
+          "facts",
+          "evidence",
+          "repository",
+          "occurrences",
+          "first_seen_at",
+          "last_seen_at",
+          "closed_by",
+          "resolution",
+          "taken_by",
+          "investigation",
+          "investigation_note",
+          "task_id",
+          "issue",
+          "revision",
+          "opened_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "closed_by": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentreportsEvidence"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "investigation": {
+            "type": "string"
+          },
+          "investigation_note": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrences": {
+            "type": "integer"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string"
+          },
+          "taken_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CloseInputBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Findings": {
+        "type": "object",
+        "required": [
+          "summary",
+          "likely_cause",
+          "suggestions",
+          "confidence",
+          "written_at"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "untrusted": {
+            "type": "boolean"
+          },
+          "value": {
             "type": "string"
           }
         }

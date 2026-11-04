@@ -391,6 +391,24 @@
           "name": "node.updated",
           "title": "node.updated event",
           "summary": "SSE event: node.updated"
+        },
+        "agent_report.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.updated",
+          "title": "agent_report.updated event",
+          "summary": "SSE event: agent_report.updated"
+        },
+        "agent_report.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.deleted",
+          "title": "agent_report.deleted event",
+          "summary": "SSE event: agent_report.deleted"
         }
       },
       "tags": [
@@ -757,6 +775,25 @@
           ],
           "message": "agent_request.deleted",
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "Report",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentReport",
+            "AgentReport[]"
+          ],
+          "message": "agent_report.updated",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "Report",
+          "intent": "evict",
+          "invalidates": [
+            "Report[]"
+          ],
+          "message": "agent_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
         }
       ]
     },
@@ -1114,6 +1151,25 @@
           ],
           "message": "build.collection",
           "type": "github.com/xraph/loomplane/internal/realtime.Collection"
+        },
+        {
+          "entityType": "Report",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentReport",
+            "AgentReport[]"
+          ],
+          "message": "agent_report.updated",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "Report",
+          "intent": "evict",
+          "invalidates": [
+            "Report[]"
+          ],
+          "message": "agent_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
         }
       ]
     },
@@ -1281,6 +1337,12 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/source.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.deleted"
         }
       ]
     },
@@ -6053,6 +6115,244 @@
             "type": "integer"
           },
           "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentreportsEvidence": {
+        "properties": {
+          "analysis_id": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "source_alias": {
+            "type": "string"
+          },
+          "verdict_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "watch_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "signal",
+          "component",
+          "fingerprint",
+          "status",
+          "severity",
+          "title",
+          "facts",
+          "evidence",
+          "repository",
+          "occurrences",
+          "first_seen_at",
+          "last_seen_at",
+          "closed_by",
+          "resolution",
+          "taken_by",
+          "investigation",
+          "investigation_note",
+          "task_id",
+          "issue",
+          "revision",
+          "opened_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "closed_by": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentreportsEvidence"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "investigation": {
+            "type": "string"
+          },
+          "investigation_note": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrences": {
+            "type": "integer"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string"
+          },
+          "taken_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Findings": {
+        "type": "object",
+        "required": [
+          "summary",
+          "likely_cause",
+          "suggestions",
+          "confidence",
+          "written_at"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "untrusted": {
+            "type": "boolean"
+          },
+          "value": {
             "type": "string"
           }
         }

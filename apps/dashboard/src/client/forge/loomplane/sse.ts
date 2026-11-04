@@ -412,6 +412,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           reject(error);
         };
 
+        this.eventSource.addEventListener('agent_report.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Report = decode(JSON.parse(event.data), "Report");
+            this.emit('agent_report.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent_report.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Report = decode(JSON.parse(event.data), "Report");
+            this.emit('agent_report.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('agent_request.deleted', (event: MessageEvent) => {
           try {
             const data: types.RequestEvent = decode(JSON.parse(event.data), "RequestEvent");
@@ -800,6 +818,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Register a handler for agent_report.deleted events.
+   * @param handler - Function to call when agent_report.deleted event is received
+   */
+  onAgentReportDeleted(handler: (data: types.Report) => void): void {
+    this.on('agent_report.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for agent_report.deleted events.
+   * @param handler - The handler to remove
+   */
+  offAgentReportDeleted(handler: (data: types.Report) => void): void {
+    this.off('agent_report.deleted', handler);
+  }
+
+  /**
+   * Register a handler for agent_report.updated events.
+   * @param handler - Function to call when agent_report.updated event is received
+   */
+  onAgentReportUpdated(handler: (data: types.Report) => void): void {
+    this.on('agent_report.updated', handler);
+  }
+
+  /**
+   * Remove a handler for agent_report.updated events.
+   * @param handler - The handler to remove
+   */
+  offAgentReportUpdated(handler: (data: types.Report) => void): void {
+    this.off('agent_report.updated', handler);
   }
 
   /**

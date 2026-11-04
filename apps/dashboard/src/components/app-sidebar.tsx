@@ -75,6 +75,7 @@ import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
 const agentPath = "/agent/requests"
+const reportsPath = "/agent/reports"
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
@@ -118,7 +119,10 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
     {
       title: "Deployments",
       icon: <DeploymentsIcon />,
-      isActive: path.startsWith("/deployments") || path.startsWith(agentPath),
+      isActive:
+        path.startsWith("/deployments") ||
+        path.startsWith(agentPath) ||
+        path.startsWith(reportsPath),
       badge: waiting > 0 && (
         <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
           {waiting}
@@ -153,6 +157,14 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
                 isActive: path.startsWith(agentPath),
                 badge: agent.pending > 0 && (
                   <span className="text-weld-ink">{agent.pending}</span>
+                ),
+              },
+              {
+                title: "Reports",
+                link: <Link to="/agent/reports" />,
+                isActive: path.startsWith(reportsPath),
+                badge: agent.reports > 0 && (
+                  <span className="text-weld-ink">{agent.reports}</span>
                 ),
               },
             ]

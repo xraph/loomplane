@@ -112,6 +112,7 @@ export const entities = {
   'RebuildList': { fields: { 'rebuilds': 'Rebuild' } },
   'Registration': { idField: 'id' },
   'RegistryList': { fields: { 'entries': 'EntrySummary' } },
+  'Report': { idField: 'id' },
   'Request': { idField: 'id' },
   'RequestEvent': { idField: 'id' },
   'Resolution': { fields: { 'variables': 'ResolvedVariable' } },

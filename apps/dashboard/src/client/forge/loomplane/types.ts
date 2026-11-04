@@ -127,6 +127,16 @@ export interface AgentView {
   updatedBy?: string;
 }
 
+export interface AgentreportsEvidence {
+  analysisId?: string;
+  bindingId?: string;
+  deploymentId?: string;
+  planId?: string;
+  sourceAlias?: string;
+  verdictIds?: string[];
+  watchId?: string;
+}
+
 export interface AgentrequestsTarget {
   cloud?: string;
   environment?: string;
@@ -141,6 +151,14 @@ export interface AgentsettingsStatus {
   enabled: boolean;
   knowledge: boolean;
   server: boolean;
+}
+
+export interface AgentwatchStatus {
+  issues: IssuesStatus;
+  paused: boolean;
+  pausedAt?: string;
+  pausedReason?: string;
+  tickedAt?: string;
 }
 
 export interface Allocation {
@@ -808,6 +826,10 @@ export interface ClientClusterResourceMetrics {
   extended: Record<string, any>;
   memoryBytes?: number;
   pods?: number;
+}
+
+export interface CloseInputBody {
+  reason?: string;
 }
 
 export interface CloudAdoption {
@@ -2308,6 +2330,13 @@ export interface FabriqloomStatus {
   version: string;
 }
 
+export interface Fact {
+  label: string;
+  path?: string;
+  untrusted?: boolean;
+  value: string;
+}
+
 export interface FailedCleanup {
   attempt: number;
   deploymentId: string;
@@ -2363,6 +2392,14 @@ export interface Finding {
   name?: string;
   path?: string;
   subject?: string;
+}
+
+export interface Findings {
+  confidence: string;
+  likelyCause: string;
+  suggestions: string[];
+  summary: string;
+  writtenAt: string;
 }
 
 export interface Fit {
@@ -2702,6 +2739,14 @@ export interface InspectInputBody {
   revision?: string;
 }
 
+export interface InstallationIssues {
+  accepted: boolean;
+  account: string;
+  accountType: string;
+  checkedAt?: string;
+  manageUrl: string;
+}
+
 export interface InstanceRouteStats {
   backendConns: number;
   maxConnections: number;
@@ -2736,6 +2781,18 @@ export interface Inventory {
   podman?: Runtime;
   ports80443?: string;
   publicAddresses?: string[];
+}
+
+export interface Issue {
+  error?: string;
+  number?: number;
+  state: string;
+  url?: string;
+}
+
+export interface IssuesStatus {
+  configured: boolean;
+  installations: InstallationIssues[];
 }
 
 export interface JoinToken {
@@ -4380,6 +4437,44 @@ export interface RemoveRouteInputBody {
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
+}
+
+export interface Report {
+  closedBy: string;
+  component: string;
+  createdAt: string;
+  environment: string;
+  environmentId: string;
+  evidence: AgentreportsEvidence;
+  facts: Fact[];
+  findings?: Findings;
+  fingerprint: string;
+  firstSeenAt: string;
+  id: string;
+  investigation: string;
+  investigationNote: string;
+  issue: Issue;
+  lastSeenAt: string;
+  occurrences: number;
+  openedBy: string;
+  orgId: string;
+  projectId: string;
+  repository: string;
+  resolution: string;
+  resolvedAt?: string;
+  revision: number;
+  severity: string;
+  signal: string;
+  status: string;
+  takenAt?: string;
+  takenBy: string;
+  taskId: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface ReportList {
+  reports: (Report | null)[];
 }
 
 export interface Request {

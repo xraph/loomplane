@@ -11,6 +11,7 @@ import {
 } from "react"
 
 import {
+  useAgentReportsList,
   useAgentRequestsList,
   useAgentStatusGet,
 } from "@/client/forge/loomplane/hooks"
@@ -74,6 +75,8 @@ export type Agent = {
   loading: boolean
   /** Requests waiting on this person's answer, for the sidebar's badge. */
   pending: number
+  /** Reports still open, for the sidebar's badge. */
+  reports: number
 }
 
 const noAgent: Agent = {
@@ -81,6 +84,7 @@ const noAgent: Agent = {
   knowledge: false,
   loading: false,
   pending: 0,
+  reports: 0,
 }
 
 const AgentContext = createContext<Agent>(noAgent)
@@ -111,6 +115,7 @@ function AgentStatus({ children }: { children: ReactNode }) {
     knowledge: enabled && !!status.data?.knowledge,
     loading: status.status === "pending" || status.status === "idle",
     pending: 0,
+    reports: 0,
   }
   if (enabled && can("agent:use"))
     return <AgentPending base={base}>{children}</AgentPending>
@@ -135,7 +140,18 @@ function AgentPending({
   const pending = (list.data?.requests ?? []).filter(
     (r) => r?.status === "pending"
   ).length
-  const value = useMemo(() => ({ ...base, pending }), [base, pending])
+  const open = useQuery(useAgentReportsList, { query: { status: "open" } })
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      open.refetch().catch(() => undefined)
+    }, requestsInterval)
+    return () => window.clearInterval(id)
+  }, [open])
+  const reports = (open.data?.reports ?? []).filter((r) => r !== null).length
+  const value = useMemo(
+    () => ({ ...base, pending, reports }),
+    [base, pending, reports]
+  )
   return <AgentContext.Provider value={value}>{children}</AgentContext.Provider>
 }
 
