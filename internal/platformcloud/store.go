@@ -73,8 +73,8 @@ func (s *PgStore) WithTenantLock(ctx context.Context, orgID string, fn func(driv
 	if status != "enabled" {
 		return ErrNotEnabled
 	}
-	if err = fn(tx); err != nil {
-		return err
+	if checkErr := fn(tx); checkErr != nil {
+		return checkErr
 	}
 	return tx.Commit()
 }
@@ -90,8 +90,8 @@ func (s *PgStore) WithPlatformWrite(ctx context.Context, fn func(driverTx) error
 	if _, err = tx.Exec(ctx, `SET LOCAL `+platformWriteSetting+` = 'on'`); err != nil {
 		return err
 	}
-	if err = fn(tx); err != nil {
-		return err
+	if checkErr := fn(tx); checkErr != nil {
+		return checkErr
 	}
 	return tx.Commit()
 }
@@ -142,12 +142,12 @@ func (s *PgStore) ListRegions(ctx context.Context) ([]Region, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := []Region{}
 	for rows.Next() {
 		var r Region
-		if err = rows.Scan(&r.ID, &r.Name, &r.DisplayName, &r.Status, &r.Revision); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&r.ID, &r.Name, &r.DisplayName, &r.Status, &r.Revision); checkErr != nil {
+			return nil, checkErr
 		}
 		out = append(out, r)
 	}
@@ -242,7 +242,7 @@ func listHosts(ctx context.Context, q querier, regionID string) ([]Host, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := []Host{}
 	for rows.Next() {
 		h, err := scanHost(rows)
@@ -398,7 +398,7 @@ func (s *PgStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := []Tenant{}
 	for rows.Next() {
 		t, err := scanTenant(rows)
@@ -444,12 +444,12 @@ AND (p.replaces='' OR NOT EXISTS(SELECT 1 FROM loomplane_platform_placements o W
 
 const placementColumns = `id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,waiting_capacity,instance_id,generation,suspended_at,replaces`
 
-func (s *PgStore) listPlacements(ctx context.Context, where string, arg string) ([]Placement, error) {
+func (s *PgStore) listPlacements(ctx context.Context, where, arg string) ([]Placement, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE `+where+` ORDER BY created_at,id`, arg)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := []Placement{}
 	for rows.Next() {
 		p, err := scanPlacement(rows)

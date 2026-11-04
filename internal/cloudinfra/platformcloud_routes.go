@@ -54,7 +54,7 @@ func (s *Service) checkPlatformCloudZone(ctx context.Context, route Route, zone 
 		return errUnverifiedPlatformDomain
 	}
 	if s.PlatformRoutes == nil {
-		return errors.New("Loomplane Cloud routes aren't available here")
+		return errors.New("Loomplane Cloud routes aren't available here") //nolint:staticcheck // Loomplane Cloud is a product name.
 	}
 	apex, err := s.PlatformRoutes.Apex(ctx)
 	if err != nil {
@@ -97,7 +97,7 @@ func scanPlatformCloudRouteBinding(row pgx.Row) (RouteBinding, error) {
 // Cloud no longer runs is platformcloud.ErrNotFound.
 func (s *Service) platformRouteHost(ctx context.Context, route *Route, remove bool) (*fc.Client, fc.Scope, error) {
 	if s.PlatformRoutes == nil {
-		return nil, fc.Scope{}, errors.New("Loomplane Cloud routes aren't available here")
+		return nil, fc.Scope{}, errors.New("Loomplane Cloud routes aren't available here") //nolint:staticcheck // Loomplane Cloud is a product name.
 	}
 	client, scope, _, err := s.PlatformRoutes.Attach(ctx, route.OrgID, route.ProjectID, route.Input.EnvironmentID, route.Binding.InstanceID, route.Input.Service)
 	if err != nil {

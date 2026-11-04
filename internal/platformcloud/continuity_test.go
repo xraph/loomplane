@@ -14,15 +14,15 @@ import (
 	fc "github.com/xraph/loomplane/internal/firecracker"
 )
 
-// redeploy places name again, as a deploy's session does, and records the
+// redeploy places web again, as a deploy's session does, and records the
 // instance the VM runs under. It returns the new placement.
-func (e *placerEnv) redeploy(t *testing.T, name string, vcpus, mem int) *Placement {
+func (e *placerEnv) redeploy(t *testing.T, vcpus, mem int) *Placement {
 	t.Helper()
-	p, err := e.svc.Reserve(t.Context(), serviceReq(name, vcpus, mem))
+	p, err := e.svc.Reserve(t.Context(), serviceReq("web", vcpus, mem))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = e.svc.setInstance(t.Context(), p.ID, "inst_"+name); err != nil {
+	if err = e.svc.setInstance(t.Context(), p.ID, "inst_web"); err != nil {
 		t.Fatal(err)
 	}
 	return e.placement(t, p.ID)
@@ -86,7 +86,7 @@ func TestEgressBilledOnceAcrossARedeployOnTheSameHost(t *testing.T) {
 		{a.ID: {vmSample(old, "vm-new", "c-new", 400)}},
 	}
 	sampleEgressSteps(t, e, usage, steps, map[int]func(){
-		1: func() { moved = e.redeploy(t, "web", 1, 512) },
+		1: func() { moved = e.redeploy(t, 1, 512) },
 		2: func() {
 			if err := e.svc.Running(t.Context(), "org_a", moved.ID, "inst_web", 4); err != nil {
 				t.Fatal(err)
@@ -122,7 +122,7 @@ func TestEgressBilledOnceAcrossAMove(t *testing.T) {
 		{b.ID: {vmSample(old, "vm-new", "c-new", 400)}},
 	}
 	sampleEgressSteps(t, e, usage, steps, map[int]func(){
-		1: func() { moved = e.redeploy(t, "web", 1, 512) },
+		1: func() { moved = e.redeploy(t, 1, 512) },
 		2: func() {
 			if err := e.svc.Running(t.Context(), "org_a", moved.ID, "inst_web", 4); err != nil {
 				t.Fatal(err)
@@ -152,7 +152,7 @@ func TestEgressBilledOnceAcrossAFailedRedeploy(t *testing.T) {
 		{a.ID: {vmSample(old, "vm-old", "c-old", 1000)}},
 	}
 	sampleEgressSteps(t, e, usage, steps, map[int]func(){
-		1: func() { moved = e.redeploy(t, "web", 1, 512) },
+		1: func() { moved = e.redeploy(t, 1, 512) },
 		2: func() {
 			if err := e.svc.Abandon(t.Context(), "org_a", moved.ID); err != nil {
 				t.Fatal(err)
@@ -182,7 +182,7 @@ func TestFailedRedeployKeepsTheOldPlacementRunningAndBilled(t *testing.T) {
 	old := e.running(t, "web")
 	sampleMinutes(t, e, 1, 5)
 	e.clock.set(meterHour.Add(5*time.Minute + 30*time.Second))
-	moved := e.redeploy(t, "web", 2, 1024)
+	moved := e.redeploy(t, 2, 1024)
 	if moved.Replaces != old.ID || e.placementState(t, old.ID) != stateRunning {
 		t.Fatalf("the redeploy = %+v, old is %s", moved, e.placementState(t, old.ID))
 	}
@@ -222,7 +222,7 @@ func TestRedeployBillsWithoutAGapOrADoubleMinute(t *testing.T) {
 	old := e.running(t, "web") // 1 vCPU, generation 3, since 10:00
 	sampleMinutes(t, e, 1, 5)
 	e.clock.set(meterHour.Add(5*time.Minute + 10*time.Second))
-	moved := e.redeploy(t, "web", 2, 1024)
+	moved := e.redeploy(t, 2, 1024)
 	// The sampler misses 10:06 and 10:07.
 	e.clock.set(meterHour.Add(7*time.Minute + 30*time.Second))
 	if err := e.svc.Running(ctx, "org_a", moved.ID, "inst_web", 4); err != nil {
@@ -308,7 +308,7 @@ func TestRedeployLimitsCountTheBiggerSizeAndTheHostCountsBoth(t *testing.T) {
 	if err = e.svc.Running(ctx, "org_a", old.ID, "inst_web", 1); err != nil {
 		t.Fatal(err)
 	}
-	resized := e.redeploy(t, "web", 4, 3072)
+	resized := e.redeploy(t, 4, 3072)
 	if hostOf(t, resized) != h.ID || resized.Replaces != old.ID {
 		t.Fatalf("resized = %+v", resized)
 	}
@@ -355,7 +355,7 @@ func TestASmallReplacementCountsTheBigServiceItWaitsOn(t *testing.T) {
 	if err = e.svc.Running(ctx, "org_a", old.ID, "inst_web", 1); err != nil {
 		t.Fatal(err)
 	}
-	small := e.redeploy(t, "web", 1, 512)
+	small := e.redeploy(t, 1, 512)
 	if small.Replaces != old.ID {
 		t.Fatalf("small = %+v", small)
 	}

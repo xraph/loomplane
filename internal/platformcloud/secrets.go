@@ -60,7 +60,7 @@ func (s *Service) SetRegistrySecret(ctx context.Context, _ /* actor */, username
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(registryCredential{Username: username, Password: password, Token: token})
+	raw, err := json.Marshal(registryCredential{Username: username, Password: password, Token: token}) //nolint:gosec // G117: This credential is serialized only for Vault storage.
 	if err != nil {
 		return err
 	}

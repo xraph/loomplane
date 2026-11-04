@@ -39,8 +39,8 @@ func (t *PlatformTarget) publish(ctx context.Context, c *fc.Client, scope fc.Sco
 	if err != nil || hostname == "" {
 		return nil, err
 	}
-	if err = route(hostname, false); err != nil {
-		return nil, err
+	if checkErr := route(hostname, false); checkErr != nil {
+		return nil, checkErr
 	}
 	return &cpprovider.Endpoint{ServiceName: labels[owned.LabelService], URL: "https://" + hostname, Port: spec.Port, Protocol: "https", Public: true}, nil
 }

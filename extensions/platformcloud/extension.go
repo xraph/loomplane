@@ -203,12 +203,12 @@ func (o orgLister) ids(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	var out []string
 	for rows.Next() {
 		var id string
-		if err = rows.Scan(&id); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&id); checkErr != nil {
+			return nil, checkErr
 		}
 		out = append(out, id)
 	}
@@ -227,12 +227,12 @@ func (o orgLister) names(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := map[string]string{}
 	for rows.Next() {
 		var id, name string
-		if err = rows.Scan(&id, &name); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&id, &name); checkErr != nil {
+			return nil, checkErr
 		}
 		out[id] = name
 	}

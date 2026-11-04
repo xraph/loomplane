@@ -131,8 +131,11 @@ func (d Database) Export(ctx context.Context, dst io.Writer) (err error) {
 
 var validIndex = regexp.MustCompile(`^[a-z0-9.][a-z0-9_.-]*$`)
 
-func protectedIndex(name string) bool {
-	return strings.HasPrefix(name, ".security") || strings.HasPrefix(name, ".opendistro_security")
+// Security Analytics 3.9 initializes this configuration without a system descriptor.
+const openSearchLogTypesConfig = ".opensearch-sap-log-types-config"
+
+func (d Database) protectedIndex(name string) bool {
+	return strings.HasPrefix(name, ".security") || strings.HasPrefix(name, ".opendistro_security") || d.Engine == "opensearch" && name == openSearchLogTypesConfig
 }
 func (d Database) command(args ...string) []string {
 	return append([]string{"sh", "-c", `config=$1; shift; sed '/^url = /d' "$config" | curl --config - "$@"`, "loomplane-search", "/usr/share/" + d.Engine + "/config/loomplane-probe.conf"}, args...)
@@ -155,7 +158,9 @@ func (d Database) userIndices(ctx context.Context) ([]string, error) {
 			if entry.System != "false" {
 				return nil, errors.New("search did not classify its user indices")
 			}
-			indices = append(indices, entry.Index)
+			if entry.Index != openSearchLogTypesConfig {
+				indices = append(indices, entry.Index)
+			}
 		}
 	} else {
 		raw, err := d.api(ctx, "GET", "/_resolve/index/*?expand_wildcards=all", nil)
@@ -216,7 +221,7 @@ func (d Database) userIndices(ctx context.Context) ([]string, error) {
 	}
 	indices = indices[:0]
 	for index := range admitted {
-		if !validIndex.MatchString(index) || protectedIndex(index) || strings.HasPrefix(index, ".ds-") {
+		if !validIndex.MatchString(index) || d.protectedIndex(index) || strings.HasPrefix(index, ".ds-") {
 			return nil, errors.New("unsupported or protected user index")
 		}
 		indices = append(indices, index)
@@ -324,7 +329,7 @@ func (d Database) Restore(ctx context.Context, payload *os.File) (err error) {
 	}
 	selections := []string{}
 	for _, index := range snapshot.Snapshots[0].Indices {
-		if protectedIndex(index) || !validIndex.MatchString(index) {
+		if d.protectedIndex(index) || !validIndex.MatchString(index) {
 			return errors.New("snapshot contains a protected or unsupported index")
 		}
 		if strings.HasPrefix(index, ".ds-") {
@@ -336,7 +341,7 @@ func (d Database) Restore(ctx context.Context, payload *os.File) (err error) {
 		selections = append(selections, index)
 	}
 	for _, stream := range snapshot.Snapshots[0].Streams {
-		if protectedIndex(stream) || !validIndex.MatchString(stream) {
+		if d.protectedIndex(stream) || !validIndex.MatchString(stream) {
 			return errors.New("snapshot contains an unsupported data stream")
 		}
 		selections = append(selections, stream)
@@ -344,6 +349,11 @@ func (d Database) Restore(ctx context.Context, payload *os.File) (err error) {
 	selector := "-_all"
 	if len(selections) > 0 {
 		selector = strings.Join(selections, ",")
+	}
+	if d.Engine == "opensearch" && len(snapshot.Snapshots[0].Streams) > 0 {
+		// Every snapshot entry is admitted above. OpenSearch's security resolver
+		// cannot resolve explicit data stream names before native restore.
+		selector = "*"
 	}
 	body := map[string]any{"indices": selector, "include_global_state": false, "include_aliases": true}
 	if d.Engine == "elasticsearch" {

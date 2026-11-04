@@ -34,7 +34,7 @@ func platformSourceBuild(target *planning.BuildTarget) bool {
 // the platform policy.
 func (b *ImageBuilder) buildOnPlatform(ctx context.Context, job *Job, state *ImageArtifact, save func() error, reg *registry.Config) (reference string, err error) {
 	if b.Platform == nil || b.FirecrackerAuthority == nil || reg == nil || job.Source == nil || job.SourceID == "" || job.Deployment == nil {
-		return "", errors.New("Loomplane Cloud builds need approved source, the platform registry and durable authority")
+		return "", errors.New("Loomplane Cloud builds need approved source, the platform registry and durable authority") //nolint:staticcheck // Preserve the product name in this existing user-facing error.
 	}
 	ctx, cancel := context.WithTimeout(ctx, 35*time.Minute)
 	defer cancel()
@@ -77,8 +77,8 @@ func (b *ImageBuilder) buildOnPlatform(ctx context.Context, job *Job, state *Ima
 	if err != nil {
 		return "", platformRedact(ctx, "build check", err)
 	}
-	if err = platformcloud.CheckBuildHost(ctx, d.OrgID, caps); err != nil {
-		return "", err
+	if checkErr := platformcloud.CheckBuildHost(ctx, d.OrgID, caps); checkErr != nil {
+		return "", checkErr
 	}
 	state.SourceID, state.Builder, state.Registry, state.Attempt, state.Architecture = job.SourceID, target.Builder, target.Registry, job.LogAttempt(), client.Details["architecture"]
 	return b.runFirecrackerBuild(ctx, job, state, save, reg, firecrackerBuildHost{client: client, scope: scope, exit: exit,
@@ -114,7 +114,7 @@ func (e *OwnedTarget) platformPull(ctx context.Context, labels map[string]string
 		return values, nil // The source build has not produced its image yet.
 	}
 	if e.platformRegistry == nil {
-		return values, errors.New("Loomplane Cloud images aren't available here")
+		return values, errors.New("Loomplane Cloud images aren't available here") //nolint:staticcheck // Preserve the product name in this existing user-facing error.
 	}
 	reg, err := e.platformRegistry(ctx, labels[owned.LabelOrg])
 	if err != nil {

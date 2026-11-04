@@ -96,8 +96,8 @@ func (ic *instances) current(ctx context.Context, iid id.ID) (*cpinstance.Instan
 		return inst, err
 	}
 	slog.WarnContext(ctx, "platform cloud: an instance was stuck starting; starting it again", "instance", iid.String(), "since", inst.UpdatedAt)
-	if err = ic.resetStuck(ctx, iid, time.Now().Add(-startTimeout)); err != nil {
-		return nil, err
+	if checkErr := ic.resetStuck(ctx, iid, time.Now().Add(-startTimeout)); checkErr != nil {
+		return nil, checkErr
 	}
 	return ic.ctrl.Get(ctx, iid)
 }
@@ -129,8 +129,8 @@ func (ic *instances) prepare(ctx context.Context, instanceID string) (*platformc
 	if err != nil {
 		return nil, id.ID{}, ctx, err
 	}
-	if err = ic.regions.PrepareRegion(region); err != nil {
-		return nil, id.ID{}, ctx, err
+	if checkErr := ic.regions.PrepareRegion(region); checkErr != nil {
+		return nil, id.ID{}, ctx, checkErr
 	}
 	iid, err := id.Parse(instanceID)
 	if err != nil {

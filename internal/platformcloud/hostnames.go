@@ -167,13 +167,13 @@ func (s *Service) hostnameOf(ctx context.Context, orgID, envID, resource string)
 	err := s.store.db.QueryRow(ctx, `SELECT org_id,environment_id,resource,project_id,hostname,host_id,address,receipt FROM loomplane_platform_hostnames
 WHERE org_id=$1 AND environment_id=$2 AND resource=$3`, orgID, envID, resource).
 		Scan(&h.OrgID, &h.EnvironmentID, &h.Resource, &h.ProjectID, &h.Name, &h.HostID, &h.Address, &receipt)
-	if err = storeError(err); err != nil {
-		return nil, err
+	if checkErr := storeError(err); checkErr != nil {
+		return nil, checkErr
 	}
 	if len(receipt) > 0 && string(receipt) != "null" {
 		h.Receipt = &provider.DNSRecord{}
-		if err = json.Unmarshal(receipt, h.Receipt); err != nil {
-			return nil, err
+		if checkErr := json.Unmarshal(receipt, h.Receipt); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	return h, nil
@@ -302,8 +302,8 @@ func (s *Service) publishHostname(ctx context.Context, p Placement, name string)
 	if expected != nil && expected.Type != kind {
 		// Providers replace a record only with one of the same type, so a
 		// move between an IPv4 and an IPv6 host deletes the old one first.
-		if err = s.dns.Delete(ctx, zone, *expected); err != nil {
-			return err
+		if checkErr := s.dns.Delete(ctx, zone, *expected); checkErr != nil {
+			return checkErr
 		}
 		if _, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_hostnames SET host_id=NULL,address='',receipt=NULL,updated_at=now()
 WHERE org_id=$1 AND environment_id=$2 AND resource=$3`, p.OrgID, p.EnvironmentID, p.Resource); err != nil {
@@ -362,8 +362,8 @@ func (s *Service) unpublish(ctx context.Context, orgID, envID, resource string) 
 		if zoneErr != nil {
 			return "", zoneErr
 		}
-		if err = s.dns.Delete(ctx, zone, *h.Receipt); err != nil {
-			return "", err
+		if checkErr := s.dns.Delete(ctx, zone, *h.Receipt); checkErr != nil {
+			return "", checkErr
 		}
 	}
 	_, err = s.store.db.Exec(ctx, `DELETE FROM loomplane_platform_hostnames WHERE org_id=$1 AND environment_id=$2 AND resource=$3`, orgID, envID, resource)

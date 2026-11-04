@@ -40,6 +40,13 @@ if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {}
 if (!Element.prototype.scrollIntoView)
   Element.prototype.scrollIntoView = () => {}
 
+// jsdom has no Web Animations API. Keep Base UI's immediate completion
+// path when its scroll areas ask for animations after mounting.
+if (!Element.prototype.getAnimations) {
+  Element.prototype.getAnimations = () => []
+  Object.assign(globalThis, { BASE_UI_ANIMATIONS_DISABLED: true })
+}
+
 // jsdom has no matchMedia; the theme provider and sidebar ask for it.
 if (!window.matchMedia) {
   window.matchMedia = (query: string) =>

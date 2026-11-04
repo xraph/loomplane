@@ -136,8 +136,8 @@ func (s *Service) Suspend(ctx context.Context, orgID string, reason SuspendReaso
 			at := s.now().UTC()
 			next.SuspendedAt = &at
 		}
-		if err = updateTenantTx(ctx, tx, &next); err != nil {
-			return err
+		if checkErr := updateTenantTx(ctx, tx, &next); checkErr != nil {
+			return checkErr
 		}
 		added, reasons, revision = true, next.SuspendReasons, next.Revision
 		return nil
@@ -178,8 +178,8 @@ func (s *Service) Restore(ctx context.Context, orgID string, reason SuspendReaso
 			next.SuspendedAt = nil
 			cleared = true
 		}
-		if err = updateTenantTx(ctx, tx, &next); err != nil {
-			return err
+		if checkErr := updateTenantTx(ctx, tx, &next); checkErr != nil {
+			return checkErr
 		}
 		revision = next.Revision
 		return nil
@@ -480,7 +480,10 @@ func WithRestore(ctx context.Context, placementID string) context.Context {
 }
 
 func restoreFrom(ctx context.Context) string {
-	id, _ := ctx.Value(restoreKey{}).(string)
+	id, ok := ctx.Value(restoreKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return id
 }
 
@@ -622,12 +625,12 @@ func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now ti
 		if readErr = tx.QueryRow(after, `SELECT coalesce(starting_until=$2,false) FROM loomplane_platform_placements WHERE id=$1`, p.ID, until).Scan(&mine); readErr != nil || !mine {
 			return readErr
 		}
-		clear := `starting_until=NULL`
+		updates := `starting_until=NULL`
 		if removeErr == nil && p.State == stateSuspended && p.HostID != nil && *p.HostID == *claimed.HostID &&
 			p.SuspendedAt != nil && claimed.SuspendedAt != nil && p.SuspendedAt.Equal(*claimed.SuspendedAt) {
-			clear += `,host_id=NULL`
+			updates += `,host_id=NULL`
 		}
-		_, execErr := tx.Exec(after, `UPDATE loomplane_platform_placements SET `+clear+`,updated_at=now() WHERE id=$1`, p.ID)
+		_, execErr := tx.Exec(after, `UPDATE loomplane_platform_placements SET `+updates+`,updated_at=now() WHERE id=$1`, p.ID)
 		return execErr
 	})
 	if errors.Is(err, ErrNotEnabled) {
@@ -674,7 +677,7 @@ func (s *Service) orgsWhere(ctx context.Context, query string) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	var orgs []string
 	for rows.Next() {
 		var org string
@@ -697,7 +700,7 @@ func queryPlacements(ctx context.Context, q querier, where string, args ...any) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := []Placement{}
 	for rows.Next() {
 		p, scanErr := scanPlacement(rows)

@@ -50,7 +50,7 @@ func (m *recordingMeter) total(feature string) float64 {
 func (m *recordingMeter) ids() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := []string{}
+	out := make([]string, 0, len(m.byID))
 	for id := range m.byID {
 		out = append(out, id)
 	}

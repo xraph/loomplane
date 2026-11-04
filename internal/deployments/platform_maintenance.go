@@ -28,15 +28,15 @@ func WithPlatformSuspend(ctx context.Context) context.Context {
 }
 
 func platformSuspendFrom(ctx context.Context) bool {
-	on, _ := ctx.Value(platformSuspendKey{}).(bool)
-	return on
+	on, ok := ctx.Value(platformSuspendKey{}).(bool)
+	return ok && on
 }
 
 type platformMaintenanceKey struct{}
 
 func platformMaintenanceFrom(ctx context.Context) bool {
-	on, _ := ctx.Value(platformMaintenanceKey{}).(bool)
-	return on
+	on, ok := ctx.Value(platformMaintenanceKey{}).(bool)
+	return ok && on
 }
 
 // maintenanceOperation names one maintenance action on one placement's VM

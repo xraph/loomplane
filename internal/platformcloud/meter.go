@@ -52,8 +52,6 @@ func (s *Service) meterOrDiscard() metering.Meter {
 
 func hourOf(t time.Time) time.Time { return t.UTC().Truncate(time.Hour) }
 
-func hourID(t time.Time) string { return hourOf(t).Format(time.RFC3339) }
-
 // lockMeterRow serializes samplers of one placement for the transaction.
 func lockMeterRow(ctx context.Context, tx driverTx, key string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key)
@@ -245,7 +243,7 @@ func (s *Service) usageOf(ctx context.Context, hostID string) ([]fc.UsageSample,
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close() //nolint:errcheck
+	defer c.Close()
 	return c.Usage(ctx)
 }
 
@@ -308,8 +306,8 @@ func (s *Service) countHostEgress(ctx context.Context, hostID string, now time.T
 			return cmp.Or(cmp.Compare(a.Scope.Org, b.Scope.Org), cmp.Compare(a.Scope.Resource, b.Scope.Resource), cmp.Compare(a.CounterID, b.CounterID))
 		})
 		for _, smp := range samples {
-			if err = s.countEgress(ctx, tx, hostID, smp, now); err != nil {
-				return err
+			if checkErr := s.countEgress(ctx, tx, hostID, smp, now); checkErr != nil {
+				return checkErr
 			}
 		}
 		return nil
@@ -336,8 +334,8 @@ ORDER BY (host_id IS NOT DISTINCT FROM $3) DESC,created_at DESC,id DESC LIMIT 1`
 		return nil
 	}
 	cur := int64(smp.Bytes)
-	if err = lockMeterRow(ctx, tx, "egress:"+p.ID); err != nil {
-		return err
+	if checkErr := lockMeterRow(ctx, tx, "egress:"+p.ID); checkErr != nil {
+		return checkErr
 	}
 	var last int64
 	if qErr := tx.QueryRow(ctx, `SELECT last_bytes FROM loomplane_platform_egress_counters WHERE org_id=$1 AND instance_id=$2 AND counter_id=$3`,

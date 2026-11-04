@@ -193,8 +193,8 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 		if sameTenant(t, &next) {
 			return nil
 		}
-		if err = updateTenantTx(ctx, tx, &next); err != nil {
-			return err
+		if checkErr := updateTenantTx(ctx, tx, &next); checkErr != nil {
+			return checkErr
 		}
 		reasons, revision = next.SuspendReasons, next.Revision
 		return nil
@@ -372,7 +372,7 @@ func projectedRegions(ctx context.Context, tx driverTx, orgID, cloudID string) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	have := map[string]bool{}
 	for rows.Next() {
 		var region string

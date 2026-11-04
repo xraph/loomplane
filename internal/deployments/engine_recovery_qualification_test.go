@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -212,9 +213,37 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 	mustQuery := func(container, user, password, sql, method, endpoint string) []byte {
 		out, e := query(container, user, password, sql, method, endpoint)
 		if e != nil {
-			t.Fatalf("native query failed: %v: %s", e, bytes.ReplaceAll(out, []byte(password), []byte("[redacted]")))
+			t.Fatalf("native %s %s query failed: %v: %s", method, endpoint, e, bytes.ReplaceAll(out, []byte(password), []byte("[redacted]")))
 		}
 		return out
+	}
+	searchTemplate := "loomplane-task5a-" + env
+	searchMetadata := "cluster.metadata.loomplane_task5a_" + env
+	searchConfigPath := "/.opensearch-sap-log-types-config"
+	var sourceConfigCreated int64
+	searchConfigCreationDate := func(raw []byte) int64 {
+		t.Helper()
+		var indices map[string]struct {
+			Settings map[string]string `json:"settings"`
+		}
+		if err := json.Unmarshal(raw, &indices); err != nil {
+			t.Fatal(err)
+		}
+		created, err := strconv.ParseInt(indices[".opensearch-sap-log-types-config"].Settings["index.creation_date"], 10, 64)
+		if err != nil || created <= 0 {
+			t.Fatal("plugin configuration creation date is invalid")
+		}
+		return created
+	}
+	searchCount := func(raw []byte) int64 {
+		t.Helper()
+		var result struct {
+			Count *int64 `json:"count"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil || result.Count == nil {
+			t.Fatal("native count response is invalid")
+		}
+		return *result.Count
 	}
 	switch selected {
 	case "falkordb":
@@ -226,8 +255,14 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 		mustQuery(sourceName, admin, sourcePassword, `{"value":"historical-2024"}`, "PUT", "/events/_doc/1?refresh=true")
 		mustQuery(sourceName, admin, sourcePassword, `{"settings":{"index.hidden":true,"number_of_replicas":0},"mappings":{"properties":{"value":{"type":"keyword"}}},"aliases":{"hidden-history":{}}}`, "PUT", "/.user-history")
 		mustQuery(sourceName, admin, sourcePassword, `{"value":"hidden-historical"}`, "PUT", "/.user-history/_doc/1?refresh=true")
-		mustQuery(sourceName, admin, sourcePassword, `{"index_patterns":["audit-history"],"data_stream":{},"template":{"settings":{"number_of_replicas":0},"mappings":{"properties":{"@timestamp":{"type":"date"},"value":{"type":"keyword"}}}}}`, "PUT", "/_index_template/audit-history")
+		mustQuery(sourceName, admin, sourcePassword, fmt.Sprintf(`{"persistent":{%q:"source-only"}}`, searchMetadata), "PUT", "/_cluster/settings")
+		mustQuery(sourceName, admin, sourcePassword, `{"index_patterns":["audit-history"],"data_stream":{},"template":{"settings":{"number_of_replicas":0},"mappings":{"properties":{"@timestamp":{"type":"date"},"value":{"type":"keyword"}}}}}`, "PUT", "/_index_template/"+searchTemplate)
 		mustQuery(sourceName, admin, sourcePassword, `{"@timestamp":"2024-01-01T00:00:00Z","value":"stream-historical"}`, "POST", "/audit-history/_doc?refresh=true")
+		if selected == "opensearch" {
+			mustQuery(sourceName, admin, sourcePassword, `{"settings":{"index.hidden":true,"number_of_replicas":0}}`, "PUT", "/.opensearch-sap-log-types-config-user")
+			mustQuery(sourceName, admin, sourcePassword, `{"value":"similar-prefix-history"}`, "PUT", "/.opensearch-sap-log-types-config-user/_doc/1?refresh=true")
+			sourceConfigCreated = searchConfigCreationDate(mustQuery(sourceName, admin, sourcePassword, "", "GET", searchConfigPath+"/_settings?flat_settings=true"))
+		}
 	}
 	driver := localdriver.New()
 	dsn := "file://" + t.TempDir()
@@ -306,7 +341,57 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 		t.Fatal("clone credential works on source")
 	}
 	if selected == "elasticsearch" || selected == "opensearch" {
-		out = mustQuery(cloneName, user, reader, "", "GET", "/events/_mapping")
+		cloneAdminQuery := func(endpoint string) []byte {
+			t.Helper()
+			scheme := "http"
+			if selected == "opensearch" {
+				scheme = "https"
+			}
+			out, err := docker("", "exec", cloneName, "sh", "-c", `sed '/^url = /d' "$1" | curl --silent --show-error --fail --config - --request GET --url "$2"`, "loomplane-qualification", "/usr/share/"+selected+"/config/loomplane-probe.conf", scheme+"://localhost:9200"+endpoint)
+			if err != nil {
+				t.Fatalf("clone admin query failed: %v", err)
+			}
+			return out
+		}
+		var settings struct {
+			Persistent map[string]json.RawMessage `json:"persistent"`
+		}
+		if err := json.Unmarshal(cloneAdminQuery("/_cluster/settings?flat_settings=true"), &settings); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := settings.Persistent[searchMetadata]; exists {
+			t.Fatal("clone restored source cluster metadata")
+		}
+		var templates struct {
+			Templates []struct {
+				Name string `json:"name"`
+			} `json:"index_templates"`
+		}
+		if err := json.Unmarshal(cloneAdminQuery("/_index_template"), &templates); err != nil {
+			t.Fatal(err)
+		}
+		for _, template := range templates.Templates {
+			if template.Name == searchTemplate {
+				t.Fatal("clone restored source template")
+			}
+		}
+		if selected == "opensearch" {
+			if searchCount(cloneAdminQuery(searchConfigPath+"/_count")) == 0 {
+				t.Fatal("clone plugin configuration was not initialized")
+			}
+			if searchConfigCreationDate(cloneAdminQuery(searchConfigPath+"/_settings?flat_settings=true")) <= sourceConfigCreated {
+				t.Fatal("clone restored source plugin configuration")
+			}
+			out = mustQuery(cloneName, user, reader, "", "GET", "/.opensearch-sap-log-types-config-user/_doc/1")
+			if !bytes.Contains(out, []byte("similar-prefix-history")) {
+				t.Fatal("similar-prefix hidden user index missing")
+			}
+		}
+		if selected == "opensearch" {
+			out = cloneAdminQuery("/events/_mapping")
+		} else {
+			out = mustQuery(cloneName, user, reader, "", "GET", "/events/_mapping")
+		}
 		if !bytes.Contains(out, []byte("keyword")) {
 			t.Fatal("mapping missing")
 		}

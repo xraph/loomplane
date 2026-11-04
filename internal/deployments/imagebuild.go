@@ -153,7 +153,7 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 		// repository in the platform registry. It never goes through the
 		// workspace's connections.
 		if b.Platform == nil {
-			return "", errors.New("Loomplane Cloud builds aren't available here")
+			return "", errors.New("Loomplane Cloud builds aren't available here") //nolint:staticcheck // Loomplane Cloud is a product name.
 		}
 		registryConfig, err = b.Platform.Registry(ctx, job.Deployment.OrgID)
 		if err != nil {

@@ -22,7 +22,6 @@ const testCert = "-----BEGIN CERTIFICATE-----\nMIIBplatformclientcert\n-----END 
 
 // fakeControl is the control plane in memory, as far as the routes go.
 type fakeControl struct {
-	mu        sync.Mutex
 	hosts     []platformcloud.Host
 	placed    []platformcloud.Placement
 	suspended []string
@@ -42,14 +41,14 @@ func newFakeControl() *fakeControl {
 func (f *fakeControl) Regions(context.Context) ([]platformcloud.Region, error) {
 	return []platformcloud.Region{{ID: "reg_1", Name: "eu-west", DisplayName: "EU West", Status: "active", Revision: 1}}, nil
 }
-func (f *fakeControl) CreateRegion(_ context.Context, name, display, status string) (*platformcloud.Region, error) {
+func (f *fakeControl) CreateRegion(_ context.Context, name, display, _ string) (*platformcloud.Region, error) {
 	return &platformcloud.Region{ID: "reg_2", Name: name, DisplayName: display, Status: "active", Revision: 1}, nil
 }
 func (f *fakeControl) UpdateRegion(_ context.Context, region string, _ platformcloud.RegionUpdate) (*platformcloud.Region, error) {
 	return &platformcloud.Region{ID: region, Name: "eu-west", Status: "closed", Revision: 2}, nil
 }
 func (f *fakeControl) Hosts(context.Context) ([]platformcloud.HostView, error) {
-	out := []platformcloud.HostView{}
+	out := make([]platformcloud.HostView, 0, len(f.hosts))
 	for _, h := range f.hosts {
 		out = append(out, platformcloud.HostView{Host: h, Placements: 1})
 	}
@@ -124,7 +123,7 @@ func (f *fakeControl) SetDNSSecret(_ context.Context, _, account, _, _ string) e
 func (f *fakeControl) SecretsSet(context.Context) (bool, bool) { return len(f.secrets) > 0, false }
 
 // Workspace is the real view's shape, filled in as fully as it can be.
-func (f *fakeControl) Workspace(_ context.Context, org string) (*platformcloud.WorkspaceView, error) {
+func (f *fakeControl) Workspace(_ context.Context, _ string) (*platformcloud.WorkspaceView, error) {
 	return &platformcloud.WorkspaceView{Enabled: true, SuspendReasons: []platformcloud.SuspendReason{platformcloud.ReasonPastDue},
 		Limits: platformcloud.Limits{VCPUs: 4, MemoryMiB: 8192, VMs: 10, ConcurrentBuilds: 1}, Use: platformcloud.Use{VCPUs: 1, MemoryMiB: 512, VMs: 1},
 		Regions:    []platformcloud.WorkspaceRegion{{Name: "eu-west", DisplayName: "EU West", Status: "active"}},
