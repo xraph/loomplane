@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudHostsCheck,
   usePlatformCloudHostsDrain,
@@ -18,6 +17,7 @@ import {
 } from "@/components/platform-cloud-host-dialogs"
 import {
   Confirm,
+  errorOf,
   evidenceMaxAgeMs,
   gibOf,
 } from "@/components/platform-cloud-parts"
@@ -33,12 +33,29 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { hostEvidenceIssues } from "@/lib/platform-cloud"
+import { hostEvidenceIssues, statusLabel } from "@/lib/platform-cloud"
 
 type Dialogue =
-  { kind: "add" } | { kind: "allotment" | "retire" | "move"; host: HostView }
+  | { kind: "add" }
+  | { kind: "allotment" | "retire" | "move" | "drain"; host: HostView }
 
 const workloads = (n: number) => `${n} ${n === 1 ? "workload" : "workloads"}`
+
+const oneWay = "The host stops taking new work. This can't be undone here."
+
+/** moveSummary puts what Move all did into one sentence per outcome. */
+function moveSummary(r: MoveAll): string {
+  const parts = [`${r.moved} moved`]
+  const skipped = r.skipped ?? []
+  const failed = r.failed ?? []
+  if (skipped.length > 0)
+    parts.push(
+      `${skipped.length} stayed for lack of room: ${skipped.join(", ")}`
+    )
+  if (failed.length > 0)
+    parts.push(`${failed.length} couldn't be moved: ${failed.join(", ")}`)
+  return parts.join(". ")
+}
 
 /** PlatformCloudHosts lists the shared hosts and their row actions. */
 export function PlatformCloudHosts() {
@@ -51,40 +68,56 @@ export function PlatformCloudHosts() {
   const invalidate = useInvalidate()
   const [open, setOpen] = useState<Dialogue | null>(null)
   const [error, setError] = useState("")
+  // busy holds an "action:host" key for each row action still running.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
+  const mark = (key: string, on: boolean) =>
+    setBusy((b) => {
+      const next = new Set(b)
+      if (on) next.add(key)
+      else next.delete(key)
+      return next
+    })
 
   const regionName = (id: string) =>
     regions.data?.regions.find((r) => r.id === id)?.displayName ?? id
 
   const run = async (
+    key: string,
     work: () => Promise<unknown>,
     done: string,
     fail: string
   ) => {
     setError("")
+    mark(key, true)
     try {
       await work()
       invalidate(usePlatformCloudHostsList)
       toast.success(done)
     } catch (err) {
-      setError(messageOf(err, fail))
+      setError(errorOf(err, fail))
+    } finally {
+      mark(key, false)
     }
   }
 
+  // Move all can take minutes: each service gets up to half an hour.
   const doMove = async (h: HostView) => {
     setError("")
+    mark(`move:${h.id}`, true)
     try {
       // The operation has no typed response codec, so the result is untyped.
       const r = (await moveAll.mutateAsync({
         path: { host: h.id },
       })) as MoveAll
-      invalidate(usePlatformCloudHostsList)
-      if (r.failed.length > 0)
-        toast.error(
-          `${r.moved} moved. ${r.failed.length} could not be moved: ${r.failed.join(", ")}`
-        )
-      else toast.success(`${r.moved} moved`)
+      const text = moveSummary(r)
+      if ((r.failed ?? []).length > 0) toast.error(text)
+      else if ((r.skipped ?? []).length > 0) toast.warning(text)
+      else toast.success(text)
     } catch (err) {
-      setError(messageOf(err, "The workloads weren't moved."))
+      setError(errorOf(err, "The workloads weren't moved."))
+    } finally {
+      invalidate(usePlatformCloudHostsList)
+      mark(`move:${h.id}`, false)
     }
   }
 
@@ -99,7 +132,7 @@ export function PlatformCloudHosts() {
       {(error || hosts.status === "error") && (
         <Alert variant="destructive">
           <AlertDescription>
-            {error || messageOf(hosts.error, "Hosts couldn't be loaded.")}
+            {error || errorOf(hosts.error, "Hosts couldn't be loaded.")}
           </AlertDescription>
         </Alert>
       )}
@@ -122,11 +155,12 @@ export function PlatformCloudHosts() {
           </TableHeader>
           <TableBody>
             {hosts.data.hosts.map((h) => {
-              const issues = hostEvidenceIssues(
-                h.evidence,
-                new Date(),
-                evidenceMaxAgeMs
-              )
+              const retired = h.status === "retired"
+              const draining = h.status === "draining"
+              const moving = busy.has(`move:${h.id}`)
+              const issues = retired
+                ? []
+                : hostEvidenceIssues(h.evidence, new Date(), evidenceMaxAgeMs)
               return (
                 <TableRow key={h.id}>
                   <TableCell>
@@ -137,7 +171,9 @@ export function PlatformCloudHosts() {
                   </TableCell>
                   <TableCell>{regionName(h.regionId)}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{h.status}</Badge>
+                    <Badge variant="outline">
+                      {statusLabel("host", h.status)}
+                    </Badge>
                     {issues.length > 0 && (
                       <ul className="mt-1 text-xs text-destructive">
                         {issues.map((i) => (
@@ -162,62 +198,80 @@ export function PlatformCloudHosts() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Check ${h.hostId}`}
-                        onClick={() =>
-                          run(
-                            () => check.mutateAsync({ path: { host: h.id } }),
-                            "Check finished",
-                            "The check failed."
-                          )
-                        }
-                      >
-                        Check
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Drain ${h.hostId}`}
-                        onClick={() =>
-                          run(
-                            () => drain.mutateAsync({ path: { host: h.id } }),
-                            "Host is draining",
-                            "The host wasn't drained."
-                          )
-                        }
-                      >
-                        Drain
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Move all from ${h.hostId}`}
-                        onClick={() => setOpen({ kind: "move", host: h })}
-                      >
-                        Move all
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Edit allotment for ${h.hostId}`}
-                        onClick={() => setOpen({ kind: "allotment", host: h })}
-                      >
-                        Edit allotment
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        aria-label={`Retire ${h.hostId}`}
-                        disabled={h.placements > 0}
-                        onClick={() => setOpen({ kind: "retire", host: h })}
-                      >
-                        Retire
-                      </Button>
-                    </div>
-                    {h.placements > 0 && (
+                    {!retired && (
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Check ${h.hostId}`}
+                          disabled={busy.has(`check:${h.id}`)}
+                          onClick={() =>
+                            run(
+                              `check:${h.id}`,
+                              () => check.mutateAsync({ path: { host: h.id } }),
+                              "Check finished",
+                              "The check failed."
+                            )
+                          }
+                        >
+                          Check
+                        </Button>
+                        {!draining && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            aria-label={`Drain ${h.hostId}`}
+                            disabled={busy.has(`drain:${h.id}`)}
+                            onClick={() => setOpen({ kind: "drain", host: h })}
+                          >
+                            Drain
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Move all from ${h.hostId}`}
+                          disabled={moving}
+                          onClick={() => setOpen({ kind: "move", host: h })}
+                        >
+                          {moving ? "Moving" : "Move all"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Edit allotment for ${h.hostId}`}
+                          onClick={() =>
+                            setOpen({ kind: "allotment", host: h })
+                          }
+                        >
+                          Edit allotment
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Retire ${h.hostId}`}
+                          disabled={
+                            !draining ||
+                            h.placements > 0 ||
+                            busy.has(`retire:${h.id}`)
+                          }
+                          onClick={() => setOpen({ kind: "retire", host: h })}
+                        >
+                          Retire
+                        </Button>
+                      </div>
+                    )}
+                    {moving && (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Moving workloads. This can take several minutes.
+                      </div>
+                    )}
+                    {!retired && !draining && (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Drain it first
+                      </div>
+                    )}
+                    {draining && h.placements > 0 && (
                       <div className="mt-1 text-xs text-muted-foreground">
                         Move or remove its {workloads(h.placements)} first
                       </div>
@@ -233,10 +287,28 @@ export function PlatformCloudHosts() {
       {open?.kind === "allotment" && (
         <AllotmentDialog host={open.host} onClose={() => setOpen(null)} />
       )}
+      {open?.kind === "drain" && (
+        <Confirm
+          title={`Drain ${open.host.hostId}?`}
+          description={oneWay}
+          action="Drain"
+          onClose={() => setOpen(null)}
+          onConfirm={() => {
+            const h = open.host
+            setOpen(null)
+            void run(
+              `drain:${h.id}`,
+              () => drain.mutateAsync({ path: { host: h.id } }),
+              "Host is draining",
+              "The host wasn't drained."
+            )
+          }}
+        />
+      )}
       {open?.kind === "move" && (
         <Confirm
           title={`Move all workloads off ${open.host.hostId}?`}
-          description="Each workload is moved to another host in the region. Some may be skipped."
+          description={`Each workload is moved to another host in the region. One stays where it is when no other host has room. ${oneWay}`}
           action="Move all"
           onClose={() => setOpen(null)}
           onConfirm={() => {
@@ -256,6 +328,7 @@ export function PlatformCloudHosts() {
             const h = open.host
             setOpen(null)
             void run(
+              `retire:${h.id}`,
               () => retire.mutateAsync({ path: { host: h.id } }),
               "Host retired",
               "The host wasn't retired."

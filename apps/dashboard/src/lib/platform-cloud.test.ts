@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   hostEvidenceIssues,
+  statusLabel,
   suspendMessage,
   usageRows,
 } from "@/lib/platform-cloud"
@@ -118,5 +119,59 @@ describe("platform cloud helpers", () => {
       "Last check is older than 10 minutes",
       "Probe could not reach the host",
     ])
+  })
+
+  it("says a never-checked host is not checked yet, and nothing else", () => {
+    const never = {
+      ...good,
+      isolation: false,
+      platform: false,
+      deniedPorts: [],
+      perOrgVms: 0,
+      checkedAt: "0001-01-01T00:00:00Z",
+      protocolVersion: "",
+    }
+    expect(hostEvidenceIssues(never, now, 10 * 60_000)).toEqual([
+      "Not checked yet",
+    ])
+    expect(
+      hostEvidenceIssues({ ...never, checkedAt: "" }, now, 10 * 60_000)
+    ).toEqual(["Not checked yet"])
+    expect(
+      hostEvidenceIssues(
+        { ...good, protocolVersion: "0", reason: "dial tcp: refused" },
+        now,
+        10 * 60_000
+      )
+    ).toEqual(["Not checked yet", "dial tcp: refused"])
+  })
+
+  it("names an unknown suspension reason without saying undefined", () => {
+    expect(suspendMessage(["quota_review"])).toBe(
+      "Loomplane Cloud work is stopped because something else needs attention. It starts again when it is resolved."
+    )
+    expect(suspendMessage(["past_due", "quota_review"])).toBe(
+      "Loomplane Cloud work is stopped because a payment is past due and something else needs attention. It starts again when both are resolved."
+    )
+    expect(suspendMessage(["platform_owner", "quota_review"])).toBe(
+      "Loomplane Cloud work is stopped because the instance owner stopped it and something else needs attention. It starts again when both are resolved."
+    )
+  })
+
+  it("labels stored statuses in plain words", () => {
+    expect(statusLabel("host", "ready")).toBe("Ready")
+    expect(statusLabel("host", "pending")).toBe("Not ready")
+    expect(statusLabel("host", "draining")).toBe("Draining")
+    expect(statusLabel("host", "retired")).toBe("Retired")
+    expect(statusLabel("region", "active")).toBe("Open")
+    expect(statusLabel("region", "closed")).toBe("Closed")
+    expect(statusLabel("tenant", "enabled")).toBe("Enabled")
+    expect(statusLabel("tenant", "disabled")).toBe("Disabled")
+    expect(statusLabel("placement", "running")).toBe("Running")
+    expect(statusLabel("placement", "reserved")).toBe("Starting")
+    expect(statusLabel("placement", "waiting_for_room")).toBe(
+      "Waiting for room"
+    )
+    expect(statusLabel("placement", "")).toBe("Unknown")
   })
 })

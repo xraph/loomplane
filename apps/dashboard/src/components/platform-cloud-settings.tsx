@@ -1,14 +1,19 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudSettingsGet,
   usePlatformCloudSettingsSet,
 } from "@/client/forge/loomplane/hooks"
 import type { SettingsView } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { NumberField, gibOf, toCount } from "@/components/platform-cloud-parts"
+import {
+  NumberField,
+  countOf,
+  errorOf,
+  gibOf,
+  mibOf,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -27,6 +32,12 @@ const attachModes = [
   { label: "Every workspace", value: "all_workspaces" },
 ]
 
+const dnsProviders = [
+  { label: "Cloudflare", value: "cloudflare" },
+  { label: "DigitalOcean", value: "digitalocean" },
+  { label: "Vercel", value: "vercel" },
+]
+
 /** PlatformCloudSettings holds attach mode, limits for new workspaces, DNS and the registry. */
 export function PlatformCloudSettings() {
   const settings = useQuery(usePlatformCloudSettingsGet)
@@ -36,7 +47,7 @@ export function PlatformCloudSettings() {
       {settings.status === "error" && (
         <Alert variant="destructive">
           <AlertDescription>
-            {messageOf(settings.error, "Settings couldn't be loaded.")}
+            {errorOf(settings.error, "Settings couldn't be loaded.")}
           </AlertDescription>
         </Alert>
       )}
@@ -52,12 +63,23 @@ function SettingsForm({ view }: { view: SettingsView }) {
   const save = useMutation(usePlatformCloudSettingsSet)
   const invalidate = useInvalidate()
   const [attach, setAttach] = useState(view.attach || "manual")
+  const [shownMem] = useState(() => String(gibOf(view.defaultLimits.memoryMib)))
   const [limits, setLimits] = useState({
     vcpus: String(view.defaultLimits.vcpus),
-    mem: String(gibOf(view.defaultLimits.memoryMib)),
+    mem: shownMem,
     vms: String(view.defaultLimits.vms),
     builds: String(view.defaultLimits.concurrentBuilds),
   })
+  const read = {
+    vcpus: countOf(limits.vcpus),
+    memoryMib: mibOf(limits.mem, {
+      shown: shownMem,
+      mib: view.defaultLimits.memoryMib,
+    }),
+    vms: countOf(limits.vms),
+    concurrentBuilds: countOf(limits.builds),
+  }
+  const valid = Object.values(read).every((n) => n !== null)
   const [apex, setApex] = useState(view.apex)
   const [provider, setProvider] = useState(view.dns.provider)
   const [zone, setZone] = useState(view.dns.zone)
@@ -73,6 +95,7 @@ function SettingsForm({ view }: { view: SettingsView }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!valid) return
     setError("")
     // Credentials are write-only: send one only when it was typed.
     const typed = (v: string) => (v.trim() ? v.trim() : undefined)
@@ -82,10 +105,10 @@ function SettingsForm({ view }: { view: SettingsView }) {
           attach,
           apex: apex.trim(),
           defaultLimits: {
-            vcpus: toCount(limits.vcpus),
-            memoryMib: toCount(limits.mem) * 1024,
-            vms: toCount(limits.vms),
-            concurrentBuilds: toCount(limits.builds),
+            vcpus: read.vcpus ?? 0,
+            memoryMib: read.memoryMib ?? 0,
+            vms: read.vms ?? 0,
+            concurrentBuilds: read.concurrentBuilds ?? 0,
           },
           dns: { provider: provider.trim(), zone: zone.trim() },
           registry: {
@@ -108,7 +131,7 @@ function SettingsForm({ view }: { view: SettingsView }) {
       invalidate(usePlatformCloudSettingsGet)
       toast.success("Settings saved")
     } catch (err) {
-      setError(messageOf(err, "The settings weren't saved."))
+      setError(errorOf(err, "The settings weren't saved."))
     }
   }
 
@@ -121,7 +144,10 @@ function SettingsForm({ view }: { view: SettingsView }) {
           value={attach}
           onValueChange={(v) => setAttach(String(v))}
         >
-          <SelectTrigger className="w-full" aria-label="Attach">
+          <SelectTrigger
+            className="w-full"
+            aria-label="Which workspaces can use it"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -166,11 +192,22 @@ function SettingsForm({ view }: { view: SettingsView }) {
       <div className="grid grid-cols-2 gap-3">
         <Field>
           <FieldLabel>DNS provider</FieldLabel>
-          <Input
-            aria-label="DNS provider"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-          />
+          <Select
+            items={dnsProviders}
+            value={provider || null}
+            onValueChange={(v) => setProvider(v ? String(v) : "")}
+          >
+            <SelectTrigger className="w-full" aria-label="DNS provider">
+              <SelectValue placeholder="Choose a provider" />
+            </SelectTrigger>
+            <SelectContent>
+              {dnsProviders.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Field>
           <FieldLabel>DNS zone</FieldLabel>
@@ -270,7 +307,7 @@ function SettingsForm({ view }: { view: SettingsView }) {
         </Alert>
       )}
       <div>
-        <Button type="submit" disabled={save.isPending}>
+        <Button type="submit" disabled={save.isPending || !valid}>
           Save settings
         </Button>
       </div>

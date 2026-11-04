@@ -1,7 +1,6 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudRegionsCreate,
   usePlatformCloudRegionsList,
@@ -9,11 +8,13 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Region } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { errorOf } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { statusLabel } from "@/lib/platform-cloud"
 
 /** PlatformCloudRegions lists the regions workspaces pick from, with add and close. */
 export function PlatformCloudRegions() {
@@ -24,6 +25,7 @@ export function PlatformCloudRegions() {
   const [name, setName] = useState("")
   const [displayName, setDisplayName] = useState("")
   const [error, setError] = useState("")
+  const [busy, setBusy] = useState<string | null>(null)
 
   const add = async (e: FormEvent) => {
     e.preventDefault()
@@ -37,21 +39,26 @@ export function PlatformCloudRegions() {
       invalidate(usePlatformCloudRegionsList)
       toast.success("Region added")
     } catch (err) {
-      setError(messageOf(err, "The region wasn't added."))
+      setError(errorOf(err, "The region wasn't added."))
     }
   }
 
-  const setStatus = async (r: Region, status: "open" | "closed") => {
+  // The server takes "active" or "closed"; the page calls active open.
+  const setStatus = async (r: Region, status: "active" | "closed") => {
     setError("")
+    setBusy(r.id)
     try {
       await update.mutateAsync({
         path: { region: r.id },
         body: { status, revision: r.revision },
       })
-      invalidate(usePlatformCloudRegionsList)
       toast.success(status === "closed" ? "Region closed" : "Region opened")
     } catch (err) {
-      setError(messageOf(err, "The region wasn't changed."))
+      setError(errorOf(err, "The region wasn't changed."))
+    } finally {
+      // A conflict means the list is stale, so reload it either way.
+      invalidate(usePlatformCloudRegionsList)
+      setBusy(null)
     }
   }
 
@@ -61,7 +68,7 @@ export function PlatformCloudRegions() {
       {(error || regions.status === "error") && (
         <Alert variant="destructive">
           <AlertDescription>
-            {error || messageOf(regions.error, "Regions couldn't be loaded.")}
+            {error || errorOf(regions.error, "Regions couldn't be loaded.")}
           </AlertDescription>
         </Alert>
       )}
@@ -77,13 +84,14 @@ export function PlatformCloudRegions() {
             <div className="font-medium">{r.displayName}</div>
             <div className="text-xs text-muted-foreground">{r.name}</div>
           </div>
-          <Badge variant="outline">{r.status}</Badge>
+          <Badge variant="outline">{statusLabel("region", r.status)}</Badge>
           {r.status === "closed" ? (
             <Button
               size="sm"
               variant="outline"
               aria-label={`Open ${r.displayName}`}
-              onClick={() => setStatus(r, "open")}
+              disabled={busy === r.id}
+              onClick={() => setStatus(r, "active")}
             >
               Open
             </Button>
@@ -92,6 +100,7 @@ export function PlatformCloudRegions() {
               size="sm"
               variant="outline"
               aria-label={`Close ${r.displayName}`}
+              disabled={busy === r.id}
               onClick={() => setStatus(r, "closed")}
             >
               Close

@@ -174,7 +174,11 @@ function fixture({
         body = unused ? { cloud_id: "c", environments: [] } : usage
       if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
         body = { syncs }
-      if (path === "/api/v1/platform-cloud") body = workspace ?? {}
+      if (path === "/api/v1/platform-cloud") {
+        if (workspace === 403)
+          return Response.json({ message: "forbidden" }, { status: 403 })
+        body = workspace ?? {}
+      }
       if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
       if (path === "/api/v1/clouds/c/pools")
         body = {
@@ -776,23 +780,41 @@ const view = {
   suspend_reasons: [] as string[],
   limits: { vcpus: 8, memory_mib: 16384, vms: 4, concurrent_builds: 2 },
   use: { vcpus: 3, memory_mib: 4096, vms: 1, concurrent_builds: 0 },
-  regions: [{ name: "eu", display_name: "Europe", status: "ready" }],
+  regions: [{ name: "eu", display_name: "Europe", status: "active" }],
+  // The server sends project and environment IDs, not names.
   placements: [
     {
-      project: "Web app",
-      environment: "production",
+      project: "web",
+      environment: "prod",
       service: "api",
       region: "eu",
       state: "running",
       waiting_capacity: false,
     },
     {
-      project: "Web app",
-      environment: "staging",
+      // A replacement starting beside the running api.
+      project: "web",
+      environment: "prod",
+      service: "api",
+      region: "eu",
+      state: "reserved",
+      waiting_capacity: false,
+    },
+    {
+      project: "web",
+      environment: "prod",
       service: "worker",
       region: "eu",
-      state: "pending",
+      state: "reserved",
       waiting_capacity: true,
+    },
+    {
+      project: "jobs",
+      environment: "nightly",
+      service: "cron",
+      region: "eu",
+      state: "running",
+      waiting_capacity: false,
     },
   ],
 }
@@ -808,6 +830,8 @@ it("platform Cloud is read only", async () => {
   await screen.findByRole("heading", { name: "Loomplane Cloud" })
   await screen.findByText("Use and limits")
   expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull()
+  expect(screen.queryByRole("tab", { name: /^Infrastructure/ })).toBeNull()
+  expect(screen.queryByRole("tab", { name: /^Capacity/ })).toBeNull()
   expect(screen.queryByRole("button", { name: "Add target" })).toBeNull()
   expect(screen.queryByText("Rename")).toBeNull()
   expect(screen.queryByText("Delete Cloud")).toBeNull()
@@ -827,7 +851,7 @@ it("shows use, regions and placements", async () => {
   )
   expect(await screen.findByText("3 of 8 vCPUs")).toBeInTheDocument()
   expect(screen.getByText("4 of 16 GiB memory")).toBeInTheDocument()
-  expect(screen.getByText("Europe")).toBeInTheDocument()
+  expect(screen.getAllByText("Europe").length).toBeGreaterThan(0)
   expect(
     within(screen.getByLabelText("Loomplane Cloud use")).getByText("worker")
   ).toBeInTheDocument()
@@ -862,4 +886,71 @@ it("says so when the workspace is disabled", async () => {
     await screen.findByText("Loomplane Cloud isn't available to this workspace")
   ).toBeInTheDocument()
   expect(screen.queryByText("Use and limits")).toBeNull()
+})
+
+it("platform Cloud offers no cluster, pool or policy writes on any tab", async () => {
+  fixture({ profile: platform, workspace: view })
+  for (const tab of ["capacity", "infrastructure"] as const) {
+    const { unmount } = render(
+      <ClientProvider client={forgeClient}>
+        <CloudDetail id="c" tab={tab} view="clusters" />
+      </ClientProvider>
+    )
+    await screen.findByRole("heading", { name: "Loomplane Cloud" })
+    await screen.findByText("Use and limits")
+    await screen.findByRole("tab", { name: /^Overview/, selected: true })
+    expect(screen.queryByRole("button", { name: "Create cluster" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add pool" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save policy" })).toBeNull()
+    expect(screen.queryByText("Create cluster")).toBeNull()
+    expect(screen.queryByText("Add pool")).toBeNull()
+    expect(screen.queryByText("Save policy")).toBeNull()
+    unmount()
+  }
+})
+
+it("names each placement's project and environment", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined)
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  const card = await screen.findByLabelText("Loomplane Cloud use")
+  const rows = (await within(card).findAllByRole("row")).slice(1)
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "apiWeb appproductionEuropeRunning",
+    "apiWeb appproductionEuropeStarting",
+    "workerWeb appproductionEuropeWaiting for room",
+    "cronJobsnightlyEuropeRunning",
+  ])
+  expect(within(card).getByText("Open")).toBeInTheDocument()
+  expect(errors.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(
+    false
+  )
+  errors.mockRestore()
+})
+
+it("shows a project only its own placements", async () => {
+  manager = false
+  fixture({ profile: platform, workspace: view })
+  show("web")
+  const card = await screen.findByLabelText("Loomplane Cloud use")
+  await within(card).findAllByText("api")
+  expect(within(card).queryByText("cron")).toBeNull()
+  expect(within(card).queryByText("Jobs")).toBeNull()
+})
+
+it("says quietly when a member can't see the Cloud's use", async () => {
+  fixture({ profile: platform, workspace: 403 })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText("You can't see this Cloud's use.")
+  ).toBeInTheDocument()
+  expect(screen.queryByText("Forbidden.")).toBeNull()
 })

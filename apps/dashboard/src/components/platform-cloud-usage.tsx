@@ -1,7 +1,8 @@
-import { messageOf } from "@/client/errors"
+import { statusOf } from "@/client/errors"
 import { useWorkspacePlatformCloudGet } from "@/client/forge/loomplane/hooks"
+import type { EnvironmentUsage, Project } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { reasonsOf } from "@/components/platform-cloud-parts"
+import { errorOf } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { suspendMessage, usageRows } from "@/lib/platform-cloud"
+import { statusLabel, suspendMessage, usageRows } from "@/lib/platform-cloud"
 
 /** RunByInstance marks a Cloud the instance owner runs. It says nothing else. */
 export function RunByInstance() {
@@ -24,15 +25,34 @@ export function RunByInstance() {
   )
 }
 
-/** PlatformCloudUsage shows a workspace its use, limits, regions and placements. */
-export function PlatformCloudUsage() {
+/**
+ * PlatformCloudUsage shows a workspace its use, limits, regions and
+ * placements. Placements name their project and environment from the lists
+ * the Cloud page already has; in a project's view only that project's show.
+ */
+export function PlatformCloudUsage({
+  project,
+  projects = [],
+  environments = [],
+}: {
+  project?: string
+  projects?: Project[]
+  environments?: EnvironmentUsage[]
+}) {
   const view = useQuery(useWorkspacePlatformCloudGet)
 
+  if (view.status === "error" && statusOf(view.error) === 403) {
+    return (
+      <p className="mb-5 text-sm text-muted-foreground">
+        You can&apos;t see this Cloud&apos;s use.
+      </p>
+    )
+  }
   if (view.status === "error") {
     return (
       <Alert variant="destructive" className="mb-5">
         <AlertDescription>
-          {messageOf(view.error, "Loomplane Cloud use couldn't be loaded.")}
+          {errorOf(view.error, "Loomplane Cloud use couldn't be loaded.")}
         </AlertDescription>
       </Alert>
     )
@@ -46,9 +66,19 @@ export function PlatformCloudUsage() {
       </p>
     )
   }
-  const message = suspendMessage(reasonsOf(data.suspendReasons ?? []))
+  const message = suspendMessage(data.suspendReasons ?? [])
   const regions = data.regions ?? []
-  const placements = data.placements ?? []
+  const placements = (data.placements ?? []).filter(
+    (p) => !project || p.project === project
+  )
+  const projectName = (id: string) =>
+    projects.find((p) => p.id === id)?.name ??
+    environments.find((e) => e.projectId === id)?.projectName ??
+    id
+  const environmentName = (id: string) =>
+    environments.find((e) => e.environmentId === id)?.environmentName ?? id
+  const regionName = (name: string) =>
+    regions.find((r) => r.name === name)?.displayName ?? name
   return (
     <section
       aria-label="Loomplane Cloud use"
@@ -78,7 +108,7 @@ export function PlatformCloudUsage() {
           regions.map((r) => (
             <div key={r.name} className="flex items-center gap-2 text-sm">
               <span>{r.displayName}</span>
-              <Badge variant="outline">{r.status}</Badge>
+              <Badge variant="outline">{statusLabel("region", r.status)}</Badge>
             </div>
           ))
         )}
@@ -101,16 +131,20 @@ export function PlatformCloudUsage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {placements.map((p) => (
+              {placements.map((p, i) => (
+                // A replacement can run beside the current placement, so
+                // the same service can appear twice.
                 <TableRow
-                  key={`${p.project}/${p.environment}/${p.service}/${p.region}`}
+                  key={`${p.project}/${p.environment}/${p.service}/${p.region}/${p.state}/${i}`}
                 >
                   <TableCell className="font-medium">{p.service}</TableCell>
-                  <TableCell>{p.project}</TableCell>
-                  <TableCell>{p.environment}</TableCell>
-                  <TableCell>{p.region}</TableCell>
+                  <TableCell>{projectName(p.project)}</TableCell>
+                  <TableCell>{environmentName(p.environment)}</TableCell>
+                  <TableCell>{regionName(p.region)}</TableCell>
                   <TableCell>
-                    {p.waitingCapacity ? "Waiting for room" : p.state}
+                    {p.waitingCapacity
+                      ? "Waiting for room"
+                      : statusLabel("placement", p.state)}
                   </TableCell>
                 </TableRow>
               ))}

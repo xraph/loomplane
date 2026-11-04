@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudTenantsList,
   usePlatformCloudTenantsRestore,
@@ -11,7 +10,7 @@ import {
 import type { TenantRow } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { LimitsDialog } from "@/components/platform-cloud-limits-dialog"
-import { reasonsOf } from "@/components/platform-cloud-parts"
+import { Confirm, errorOf } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,9 +23,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { suspendMessage, usageRows } from "@/lib/platform-cloud"
+import { statusLabel, suspendMessage, usageRows } from "@/lib/platform-cloud"
 
 const accepted = "Recorded. Running work may take a moment to stop or start."
+
+const disabledMessage =
+  "Loomplane Cloud work is stopped by the instance owner. It starts again when they enable it."
+
+/** nameOf is a workspace's name, or its ID when it has none. */
+const nameOf = (row: TenantRow) => row.orgName || row.orgId
+
+type Asking = { kind: "disable" | "suspend"; row: TenantRow }
 
 /** PlatformCloudTenants lists workspaces with use against limits and their controls. */
 export function PlatformCloudTenants() {
@@ -37,24 +44,39 @@ export function PlatformCloudTenants() {
   const invalidate = useInvalidate()
   const [editing, setEditing] = useState<TenantRow | null>(null)
   const [error, setError] = useState("")
+  const [asking, setAsking] = useState<Asking | null>(null)
+  // busy holds the workspaces with an action in flight.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
+  const mark = (org: string, on: boolean) =>
+    setBusy((b) => {
+      const next = new Set(b)
+      if (on) next.add(org)
+      else next.delete(org)
+      return next
+    })
 
   const run = async (
+    org: string,
     work: () => Promise<unknown>,
     done: string,
     fail: string
   ) => {
     setError("")
+    mark(org, true)
     try {
       await work()
       invalidate(usePlatformCloudTenantsList)
       toast.success(done)
     } catch (err) {
-      setError(messageOf(err, fail))
+      setError(errorOf(err, fail))
+    } finally {
+      mark(org, false)
     }
   }
 
   const setStatus = (row: TenantRow, status: "enabled" | "disabled") =>
     run(
+      row.orgId,
       () =>
         set.mutateAsync({
           path: { org: row.orgId },
@@ -64,7 +86,7 @@ export function PlatformCloudTenants() {
           },
         }),
       status === "enabled"
-        ? "Workspace enabled"
+        ? `Workspace enabled. ${accepted}`
         : `Workspace disabled. ${accepted}`,
       "The workspace wasn't changed."
     )
@@ -75,8 +97,7 @@ export function PlatformCloudTenants() {
       {(error || tenants.status === "error") && (
         <Alert variant="destructive">
           <AlertDescription>
-            {error ||
-              messageOf(tenants.error, "Workspaces couldn't be loaded.")}
+            {error || errorOf(tenants.error, "Workspaces couldn't be loaded.")}
           </AlertDescription>
         </Alert>
       )}
@@ -99,14 +120,22 @@ export function PlatformCloudTenants() {
           <TableBody>
             {tenants.data.tenants.map((row) => {
               const status = row.tenant?.status ?? "disabled"
-              const reasons = reasonsOf(row.tenant?.suspendReasons ?? [])
-              const message = suspendMessage(reasons)
+              const reasons = row.tenant?.suspendReasons ?? []
               const enabled = status === "enabled"
+              // A disabled workspace starts again only when it is enabled.
+              const message =
+                !enabled && reasons.length > 0
+                  ? disabledMessage
+                  : suspendMessage(reasons)
+              const name = nameOf(row)
+              const pending = busy.has(row.orgId)
               return (
                 <TableRow key={row.orgId}>
-                  <TableCell className="font-medium">{row.orgName}</TableCell>
+                  <TableCell className="font-medium">{name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{status}</Badge>
+                    <Badge variant="outline">
+                      {statusLabel("tenant", status)}
+                    </Badge>
                     {message && (
                       <div className="mt-1 text-xs text-muted-foreground">
                         {message}
@@ -128,7 +157,7 @@ export function PlatformCloudTenants() {
                       <Button
                         size="sm"
                         variant="outline"
-                        aria-label={`Edit limits for ${row.orgName}`}
+                        aria-label={`Edit limits for ${name}`}
                         onClick={() => setEditing(row)}
                       >
                         Edit limits
@@ -137,8 +166,9 @@ export function PlatformCloudTenants() {
                         <Button
                           size="sm"
                           variant="outline"
-                          aria-label={`Disable ${row.orgName}`}
-                          onClick={() => setStatus(row, "disabled")}
+                          aria-label={`Disable ${name}`}
+                          disabled={pending}
+                          onClick={() => setAsking({ kind: "disable", row })}
                         >
                           Disable
                         </Button>
@@ -146,7 +176,8 @@ export function PlatformCloudTenants() {
                         <Button
                           size="sm"
                           variant="outline"
-                          aria-label={`Enable ${row.orgName}`}
+                          aria-label={`Enable ${name}`}
+                          disabled={pending}
                           onClick={() => setStatus(row, "enabled")}
                         >
                           Enable
@@ -156,17 +187,9 @@ export function PlatformCloudTenants() {
                         <Button
                           size="sm"
                           variant="outline"
-                          aria-label={`Suspend ${row.orgName}`}
-                          onClick={() =>
-                            run(
-                              () =>
-                                suspend.mutateAsync({
-                                  path: { org: row.orgId },
-                                }),
-                              `Workspace suspended. ${accepted}`,
-                              "The workspace wasn't suspended."
-                            )
-                          }
+                          aria-label={`Suspend ${name}`}
+                          disabled={pending}
+                          onClick={() => setAsking({ kind: "suspend", row })}
                         >
                           Suspend
                         </Button>
@@ -175,9 +198,11 @@ export function PlatformCloudTenants() {
                         <Button
                           size="sm"
                           variant="outline"
-                          aria-label={`Restore ${row.orgName}`}
+                          aria-label={`Restore ${name}`}
+                          disabled={pending}
                           onClick={() =>
                             run(
+                              row.orgId,
                               () =>
                                 restore.mutateAsync({
                                   path: { org: row.orgId },
@@ -200,6 +225,37 @@ export function PlatformCloudTenants() {
       )}
       {editing && (
         <LimitsDialog row={editing} onClose={() => setEditing(null)} />
+      )}
+      {asking?.kind === "disable" && (
+        <Confirm
+          title={`Disable ${nameOf(asking.row)}?`}
+          description={`${nameOf(asking.row)} can't use Loomplane Cloud until you enable it. Its running Loomplane Cloud work stops.`}
+          action="Disable"
+          onClose={() => setAsking(null)}
+          onConfirm={() => {
+            const row = asking.row
+            setAsking(null)
+            void setStatus(row, "disabled")
+          }}
+        />
+      )}
+      {asking?.kind === "suspend" && (
+        <Confirm
+          title={`Suspend ${nameOf(asking.row)}?`}
+          description={`Running Loomplane Cloud work in ${nameOf(asking.row)} stops until you restore it.`}
+          action="Suspend"
+          onClose={() => setAsking(null)}
+          onConfirm={() => {
+            const row = asking.row
+            setAsking(null)
+            void run(
+              row.orgId,
+              () => suspend.mutateAsync({ path: { org: row.orgId } }),
+              `Workspace suspended. ${accepted}`,
+              "The workspace wasn't suspended."
+            )
+          }}
+        />
       )}
     </section>
   )

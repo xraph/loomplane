@@ -1,7 +1,6 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudHostsCreate,
   usePlatformCloudHostsList,
@@ -11,7 +10,13 @@ import {
 import type { HostView, NewHost } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CopyButton } from "@/components/keyless-setup"
-import { NumberField, gibOf, toCount } from "@/components/platform-cloud-parts"
+import {
+  NumberField,
+  countOf,
+  errorOf,
+  gibOf,
+  mibOf,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -73,12 +78,28 @@ function SizeFields({
   )
 }
 
-const bodyOf = (s: Sizes) => ({
-  vcpus: toCount(s.vcpus),
-  memoryMib: toCount(s.mem) * 1024,
-  diskMib: toCount(s.disk) * 1024,
-  vms: toCount(s.vms),
-})
+type Allotment = HostView["allotment"]
+
+/**
+ * bodyOf reads the size fields, or null while one isn't a whole number.
+ * Given what was shown and saved, memory and disk the owner didn't touch
+ * keep their stored MiB instead of the rounded GiB.
+ */
+function bodyOf(s: Sizes, shown?: Sizes, was?: Allotment): Allotment | null {
+  const vcpus = countOf(s.vcpus)
+  const vms = countOf(s.vms)
+  const memoryMib = mibOf(
+    s.mem,
+    shown && was && { shown: shown.mem, mib: was.memoryMib }
+  )
+  const diskMib = mibOf(
+    s.disk,
+    shown && was && { shown: shown.disk, mib: was.diskMib }
+  )
+  if (vcpus === null || vms === null || memoryMib === null || diskMib === null)
+    return null
+  return { vcpus, memoryMib, diskMib, vms }
+}
 
 /**
  * AddHostDialog registers a host. The create response carries the client
@@ -103,8 +124,11 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("")
   const [made, setMade] = useState<NewHost | null>(null)
 
+  const allotment = bodyOf(sizes)
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!allotment) return
     setError("")
     try {
       const res = await create.mutateAsync({
@@ -113,20 +137,28 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
           endpoint: endpoint.trim(),
           hostId: hostId.trim(),
           serverCa: serverCa.trim(),
-          allotment: bodyOf(sizes),
+          allotment,
         },
       })
       setMade(res as NewHost)
       invalidate(usePlatformCloudHostsList)
       toast.success("Host added")
     } catch (err) {
-      setError(messageOf(err, "The host wasn't added."))
+      setError(errorOf(err, "The host wasn't added."))
     }
   }
 
+  // Once the host is made, the certificate is on screen for the only time,
+  // so Escape and outside clicks don't close it: only Done does.
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+    <Dialog
+      open
+      disablePointerDismissal={!!made}
+      onOpenChange={(o) => {
+        if (!o && !made) onClose()
+      }}
+    >
+      <DialogContent showCloseButton={!made}>
         <DialogHeader>
           <DialogTitle>Add host</DialogTitle>
           <DialogDescription>
@@ -165,6 +197,10 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
                 />
               </div>
             </Field>
+            <p className="text-sm text-muted-foreground">
+              Once the host agent is up with this certificate, run Check on the
+              host.
+            </p>
             <DialogFooter>
               <Button onClick={onClose}>Done</Button>
             </DialogFooter>
@@ -241,7 +277,9 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
                   create.isPending ||
                   !regionId ||
                   !endpoint.trim() ||
-                  !hostId.trim()
+                  !hostId.trim() ||
+                  !serverCa.trim() ||
+                  !allotment
                 }
               >
                 Add host
@@ -264,22 +302,25 @@ export function AllotmentDialog({
 }) {
   const save = useMutation(usePlatformCloudHostsSetAllotment)
   const invalidate = useInvalidate()
-  const [sizes, setSizes] = useState<Sizes>({
+  const [shown] = useState<Sizes>(() => ({
     vcpus: String(host.allotment.vcpus),
     mem: String(gibOf(host.allotment.memoryMib)),
     disk: String(gibOf(host.allotment.diskMib)),
     vms: String(host.allotment.vms),
-  })
+  }))
+  const [sizes, setSizes] = useState<Sizes>(shown)
   const [error, setError] = useState("")
-  const next = bodyOf(sizes)
+  const next = bodyOf(sizes, shown, host.allotment)
   const below =
-    next.vcpus < host.use.vcpus ||
-    next.memoryMib < host.use.memoryMib ||
-    next.vms < host.use.vms ||
-    next.diskMib < host.use.diskMib
+    !!next &&
+    (next.vcpus < host.use.vcpus ||
+      next.memoryMib < host.use.memoryMib ||
+      next.vms < host.use.vms ||
+      next.diskMib < host.use.diskMib)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!next) return
     setError("")
     try {
       await save.mutateAsync({ path: { host: host.id }, body: next })
@@ -287,7 +328,7 @@ export function AllotmentDialog({
       toast.success("Allotment saved")
       onClose()
     } catch (err) {
-      setError(messageOf(err, "The allotment wasn't saved."))
+      setError(errorOf(err, "The allotment wasn't saved."))
     }
   }
 
@@ -315,7 +356,7 @@ export function AllotmentDialog({
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={save.isPending}>
+            <Button type="submit" disabled={save.isPending || !next}>
               Save
             </Button>
           </DialogFooter>

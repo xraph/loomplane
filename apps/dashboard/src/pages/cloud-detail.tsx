@@ -400,6 +400,8 @@ function CloudPage({
   const { can } = useOrganization()
   // The instance owner runs a platform Cloud, so a workspace never edits it.
   const edit = manage && !cloud.platformOwned
+  // Its servers, clusters and pools are the owner's too, so they stay hidden.
+  const infra = !project && !cloud.platformOwned
   const [place, go] = usePlace(wanted)
   const [using, setUsing] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -485,8 +487,8 @@ function CloudPage({
         count: grants?.length,
         show: !project,
       },
-      { id: "infrastructure", label: "Infrastructure", show: !project },
-      { id: "capacity", label: "Capacity", show: !project },
+      { id: "infrastructure", label: "Infrastructure", show: infra },
+      { id: "capacity", label: "Capacity", show: infra },
       {
         id: "changes",
         label: "Changes",
@@ -514,7 +516,7 @@ function CloudPage({
 
   // A cluster and a cluster operation are pages of their own, under the
   // Cloud's Infrastructure tab.
-  if (!project && (place.cluster || place.clusterOperation))
+  if (infra && (place.cluster || place.clusterOperation))
     return (
       <>
         <SiteHeader
@@ -634,7 +636,13 @@ function CloudPage({
             }}
           />
         )}
-        {cloud.platformOwned && <PlatformCloudUsage />}
+        {cloud.platformOwned && (
+          <PlatformCloudUsage
+            project={project}
+            projects={projectList}
+            environments={usage.data?.environments}
+          />
+        )}
         {failed ? (
           <QueryError
             error={targets.error ?? connections.error ?? projects.error}
@@ -714,7 +722,7 @@ function CloudPage({
                 )}
               </TabsContent>
             )}
-            {!project && (
+            {infra && (
               <TabsContent value="infrastructure">
                 <CloudInfrastructure
                   cloud={cloud}
@@ -729,7 +737,7 @@ function CloudPage({
                 />
               </TabsContent>
             )}
-            {!project && (
+            {infra && (
               <TabsContent value="capacity">
                 <Capacity
                   cloudId={cloud.id}

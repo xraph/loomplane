@@ -12,9 +12,13 @@ import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { PlatformCloudTenants } from "@/components/platform-cloud-tenants"
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+vi.mock("sonner", () => ({ toast: toasts }))
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
   forgeClient.clear()
 })
 
@@ -95,6 +99,8 @@ it("suspends through the suspend endpoint without a body", async () => {
   const user = userEvent.setup()
   renderTenants()
   await user.click(await screen.findByRole("button", { name: "Suspend Acme" }))
+  const dialog = await screen.findByRole("alertdialog")
+  await user.click(within(dialog).getByRole("button", { name: "Suspend" }))
   await waitFor(() => expect(calls).toHaveLength(1))
   expect(calls[0].path).toContain("/tenants/o1/suspend")
   expect(calls[0].body).toBeUndefined()
@@ -135,7 +141,97 @@ it("enables and disables through the set route", async () => {
   const user = userEvent.setup()
   renderTenants()
   await user.click(await screen.findByRole("button", { name: "Disable Acme" }))
+  const dialog = await screen.findByRole("alertdialog")
+  await user.click(within(dialog).getByRole("button", { name: "Disable" }))
   await waitFor(() => expect(calls).toHaveLength(1))
   expect(calls[0].method).toBe("PUT")
   expect(calls[0].body).toMatchObject({ status: "disabled" })
+})
+
+it("sends nothing to disable or suspend until you confirm", async () => {
+  const calls = stub([row()])
+  const user = userEvent.setup()
+  renderTenants()
+  for (const [button, action] of [
+    ["Disable Acme", "Disable"],
+    ["Suspend Acme", "Suspend"],
+  ] as const) {
+    await user.click(await screen.findByRole("button", { name: button }))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(within(dialog).getByText(`${action} Acme?`)).toBeTruthy()
+    expect(
+      within(dialog).getByText(/Acme/, { selector: "p, div" }).textContent
+    ).toMatch(/running Loomplane Cloud work/i)
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  }
+  expect(calls).toEqual([])
+})
+
+it("says the enable was recorded", async () => {
+  stub([
+    row({
+      tenant: {
+        org_id: "o1",
+        revision: 1,
+        status: "disabled",
+        suspend_reasons: [],
+      },
+    }),
+  ])
+  const user = userEvent.setup()
+  renderTenants()
+  await user.click(await screen.findByRole("button", { name: "Enable Acme" }))
+  await waitFor(() =>
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Workspace enabled. Recorded. Running work may take a moment to stop or start."
+    )
+  )
+})
+
+it("names a workspace by its ID when it has no name", async () => {
+  stub([row({ org_name: "" })])
+  renderTenants()
+  expect(await screen.findByText("o1")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Disable o1" })).toBeTruthy()
+})
+
+it("tells a disabled workspace it starts again when enabled", async () => {
+  stub([
+    row({
+      tenant: {
+        org_id: "o1",
+        revision: 1,
+        status: "disabled",
+        suspend_reasons: ["platform_owner"],
+      },
+    }),
+  ])
+  renderTenants()
+  expect(
+    await screen.findByText(
+      "Loomplane Cloud work is stopped by the instance owner. It starts again when they enable it."
+    )
+  ).toBeTruthy()
+  expect(screen.getByText("Disabled")).toBeTruthy()
+})
+
+it("never says undefined for a reason it doesn't know", async () => {
+  stub([
+    row({
+      tenant: {
+        org_id: "o1",
+        revision: 1,
+        status: "enabled",
+        suspend_reasons: ["quota_review"],
+      },
+    }),
+  ])
+  renderTenants()
+  expect(
+    await screen.findByText(
+      "Loomplane Cloud work is stopped because something else needs attention. It starts again when it is resolved."
+    )
+  ).toBeTruthy()
+  expect(document.body.textContent).not.toContain("undefined")
 })

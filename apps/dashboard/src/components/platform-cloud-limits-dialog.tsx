@@ -1,14 +1,19 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   usePlatformCloudTenantsList,
   usePlatformCloudTenantsSet,
 } from "@/client/forge/loomplane/hooks"
 import type { TenantRow } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation } from "@/client/hooks"
-import { NumberField, gibOf, toCount } from "@/components/platform-cloud-parts"
+import {
+  NumberField,
+  countOf,
+  errorOf,
+  gibOf,
+  mibOf,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,27 +35,42 @@ export function LimitsDialog({
 }) {
   const save = useMutation(usePlatformCloudTenantsSet)
   const invalidate = useInvalidate()
+  const [shownMem] = useState(() => String(gibOf(row.limits.memoryMib)))
   const [v, setV] = useState({
     vcpus: String(row.limits.vcpus),
-    mem: String(gibOf(row.limits.memoryMib)),
+    mem: shownMem,
     vms: String(row.limits.vms),
     builds: String(row.limits.concurrentBuilds),
   })
   const [error, setError] = useState("")
-  const limits = {
-    vcpus: toCount(v.vcpus),
-    memoryMib: toCount(v.mem) * 1024,
-    vms: toCount(v.vms),
-    concurrentBuilds: toCount(v.builds),
+  const read = {
+    vcpus: countOf(v.vcpus),
+    memoryMib: mibOf(v.mem, { shown: shownMem, mib: row.limits.memoryMib }),
+    vms: countOf(v.vms),
+    concurrentBuilds: countOf(v.builds),
   }
+  const limits =
+    read.vcpus === null ||
+    read.memoryMib === null ||
+    read.vms === null ||
+    read.concurrentBuilds === null
+      ? null
+      : {
+          vcpus: read.vcpus,
+          memoryMib: read.memoryMib,
+          vms: read.vms,
+          concurrentBuilds: read.concurrentBuilds,
+        }
   const below =
-    limits.vcpus < row.use.vcpus ||
-    limits.memoryMib < row.use.memoryMib ||
-    limits.vms < row.use.vms ||
-    limits.concurrentBuilds < row.use.concurrentBuilds
+    !!limits &&
+    (limits.vcpus < row.use.vcpus ||
+      limits.memoryMib < row.use.memoryMib ||
+      limits.vms < row.use.vms ||
+      limits.concurrentBuilds < row.use.concurrentBuilds)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!limits) return
     setError("")
     try {
       await save.mutateAsync({
@@ -61,7 +81,7 @@ export function LimitsDialog({
       toast.success("Limits saved")
       onClose()
     } catch (err) {
-      setError(messageOf(err, "The limits weren't saved."))
+      setError(errorOf(err, "The limits weren't saved."))
     }
   }
 
@@ -70,7 +90,7 @@ export function LimitsDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit limits</DialogTitle>
-          <DialogDescription>{row.orgName}</DialogDescription>
+          <DialogDescription>{row.orgName || row.orgId}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
@@ -110,7 +130,7 @@ export function LimitsDialog({
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={save.isPending}>
+            <Button type="submit" disabled={save.isPending || !limits}>
               Save
             </Button>
           </DialogFooter>
