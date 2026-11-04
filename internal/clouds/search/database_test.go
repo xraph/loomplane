@@ -166,3 +166,112 @@ func TestSnapshotAdmitsOnlyNativeShardPathMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeRestoreValidatesAllMetadataBeforeSelectingSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, engine, metadata, selector string
+		valid                            bool
+	}{
+		{"OpenSearch stream", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events",".user-history",".ds-audit-history-000001"],"data_streams":["audit-history"]}]}`, "*", true},
+		{"Elasticsearch stream", "elasticsearch", `{"snapshots":[{"state":"SUCCESS","indices":["events",".user-history",".ds-audit-history-000001"],"data_streams":["audit-history"]}]}`, "events,.user-history,audit-history", true},
+		{"OpenSearch indices", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events",".user-history"],"data_streams":[]}]}`, "events,.user-history", true},
+		{"protected index", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events",".opendistro_security"],"data_streams":["audit-history"]}]}`, "", false},
+		{"unsupported index", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events","bad+index"],"data_streams":["audit-history"]}]}`, "", false},
+		{"protected stream", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events"],"data_streams":["audit-history",".security-history"]}]}`, "", false},
+		{"unsupported stream", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events"],"data_streams":["audit-history","bad+stream"]}]}`, "", false},
+		{"plugin configuration index", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events",".opensearch-sap-log-types-config"],"data_streams":["audit-history"]}]}`, "", false},
+		{"plugin configuration stream", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":["events"],"data_streams":["audit-history",".opensearch-sap-log-types-config"]}]}`, "", false},
+		{"Elasticsearch same name", "elasticsearch", `{"snapshots":[{"state":"SUCCESS","indices":[".opensearch-sap-log-types-config"]}]}`, ".opensearch-sap-log-types-config", true},
+		{"unbound backing index", "opensearch", `{"snapshots":[{"state":"SUCCESS","indices":[".ds-audit-history-000001"]}]}`, "", false},
+		{"missing snapshot", "opensearch", `{}`, "", false},
+		{"empty snapshot list", "opensearch", `{"snapshots":[]}`, "", false},
+		{"multiple snapshots", "opensearch", `{"snapshots":[{"state":"SUCCESS"},{"state":"SUCCESS"}]}`, "", false},
+		{"wrong snapshot type", "opensearch", `{"snapshots":{}}`, "", false},
+		{"missing state", "opensearch", `{"snapshots":[{"indices":["events"]}]}`, "", false},
+		{"incomplete state", "opensearch", `{"snapshots":[{"state":"PARTIAL","indices":["events"]}]}`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := os.Create(filepath.Join(t.TempDir(), "snapshot.tar"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			archive := tar.NewWriter(file)
+			if err := archive.WriteHeader(&tar.Header{Name: "index-0", Typeflag: tar.TypeReg}); err != nil {
+				t.Fatal(err)
+			}
+			if err := archive.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var restore map[string]any
+			db := Database{Engine: tc.engine, Extract: func(context.Context, *os.File, string) error { return nil }, Run: func(_ context.Context, args []string, out io.Writer) error {
+				if args[0] == "mkdir" || args[0] == "rm" {
+					return nil
+				}
+				method := ""
+				var body []byte
+				for i, arg := range args {
+					if arg == "--request" {
+						method = args[i+1]
+					}
+					if arg == "--data-binary" {
+						body = []byte(args[i+1])
+					}
+				}
+				response := `{"acknowledged":true}`
+				switch method {
+				case "GET":
+					response = tc.metadata
+				case "POST":
+					if err := json.Unmarshal(body, &restore); err != nil {
+						t.Fatal(err)
+					}
+					response = `{"snapshot":{"shards":{"total":3,"successful":3,"failed":0}}}`
+				}
+				_, err := io.WriteString(out, response+"\n200")
+				return err
+			}}
+			if err := db.Restore(t.Context(), file); (err == nil) != tc.valid {
+				t.Fatalf("valid=%t: %v", tc.valid, err)
+			}
+			if !tc.valid {
+				if restore != nil {
+					t.Fatal("invalid metadata reached native restore")
+				}
+				return
+			}
+			if restore["indices"] != tc.selector || restore["include_global_state"] != false || restore["include_aliases"] != true {
+				t.Fatalf("unsafe restore scope: %v", restore)
+			}
+			if _, exists := restore["ignore_unavailable"]; exists {
+				t.Fatal("restore silently ignores unavailable content")
+			}
+			if tc.engine == "elasticsearch" {
+				feature, ok := restore["feature_states"].([]any)
+				if !ok || len(feature) != 1 || feature[0] != "none" {
+					t.Fatal("security feature state not excluded")
+				}
+			}
+		})
+	}
+}
+
+func TestOpenSearchExcludesOnlyReservedLogTypeConfiguration(t *testing.T) {
+	db := Database{Engine: "opensearch", Run: func(_ context.Context, args []string, out io.Writer) error {
+		response := `{"data_streams":[]}`
+		for _, arg := range args {
+			if strings.Contains(arg, "/_cat/indices") {
+				response = `[{"index":".opensearch-sap-log-types-config","system":"false"},{"index":".opensearch-sap-log-types-config-user","system":"false"},{"index":".opensearch-user-history","system":"false"},{"index":".user-history","system":"false"},{"index":"events","system":"false"}]`
+			}
+		}
+		_, err := io.WriteString(out, response+"\n200")
+		return err
+	}}
+	indices, err := db.userIndices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(indices, ",") != ".opensearch-sap-log-types-config-user,.opensearch-user-history,.user-history,events" {
+		t.Fatalf("wrong user index scope: %v", indices)
+	}
+}
