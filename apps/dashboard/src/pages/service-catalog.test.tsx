@@ -187,6 +187,7 @@ it.each(["manual", "provision"])(
         }),
       }),
       expect.any(Function),
+      expect.any(Function),
       expect.any(Function)
     )
   }

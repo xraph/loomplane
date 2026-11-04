@@ -85,7 +85,7 @@ func TestProbeShapesMatchSSH(t *testing.T) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatal(err)
 		}
-		var out []string
+		out := make([]string, 0, len(m))
 		for k := range m {
 			out = append(out, k)
 		}
