@@ -147,23 +147,54 @@ type fakePlans struct {
 	pinDiffs    []string
 	pinsErr     error
 	pinCalls    int
+	// createPlan is what Create makes, stored under its ID; nil refuses.
+	createPlan  *planning.Plan
+	createErr   error
+	createCalls []planCreate
+	// statuses steps a plan through statuses, one per Get.
+	statuses map[string][]string
+	getCalls int
 }
 
-func (f *fakePlans) Create(context.Context, security.Principal, string, planning.CreatePlanInput) (*planning.Plan, error) {
+// planCreate is one Create call.
+type planCreate struct {
+	p         security.Principal
+	projectID string
+	in        planning.CreatePlanInput
+}
+
+func (f *fakePlans) Create(_ context.Context, p security.Principal, projectID string, in planning.CreatePlanInput) (*planning.Plan, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.creates++
-	return nil, errors.New("not in this test")
+	f.createCalls = append(f.createCalls, planCreate{p, projectID, in})
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if f.createPlan == nil {
+		return nil, errors.New("not in this test")
+	}
+	stored := *f.createPlan
+	if f.byID == nil {
+		f.byID = map[string]*planning.Plan{}
+	}
+	f.byID[stored.ID] = &stored
+	c := stored
+	return &c, nil
 }
 
 func (f *fakePlans) Get(_ context.Context, _ security.Principal, id string) (*planning.Plan, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
+	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
 	if p, ok := f.byID[id]; ok {
+		if seq := f.statuses[id]; len(seq) > 0 {
+			p.Status, f.statuses[id] = seq[0], seq[1:]
+		}
 		c := *p
 		return &c, nil
 	}

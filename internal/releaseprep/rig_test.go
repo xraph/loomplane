@@ -464,6 +464,9 @@ type fakeRuns struct {
 	byRunCalls  int
 	cancels     []string // Cancel, as the person
 	cancelTasks []string // CancelTask, for an approver
+	starts      []agentruns.StartInput
+	// startFn answers Start; nil refuses.
+	startFn func(agentruns.StartInput) (*agentruns.Task, error)
 }
 
 func newFakeRuns() *fakeRuns { return &fakeRuns{byRun: map[string]*agentruns.Task{}} }
@@ -474,8 +477,21 @@ func (f *fakeRuns) add(t *agentruns.Task) {
 	f.byRun[t.RunID] = t
 }
 
-func (f *fakeRuns) Start(context.Context, agentruns.StartInput) (*agentruns.Task, error) {
-	return nil, errors.New("not in this test")
+func (f *fakeRuns) Start(_ context.Context, in agentruns.StartInput) (*agentruns.Task, error) {
+	f.mu.Lock()
+	f.starts = append(f.starts, in)
+	fn := f.startFn
+	f.mu.Unlock()
+	if fn == nil {
+		return nil, errors.New("not in this test")
+	}
+	return fn(in)
+}
+
+func (f *fakeRuns) started() []agentruns.StartInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.starts)
 }
 
 func (f *fakeRuns) ByRun(_ context.Context, orgID, runID string) (*agentruns.Task, error) {

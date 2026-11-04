@@ -133,13 +133,19 @@ type Service struct {
 	d         Deps
 	collector *Collector
 	gate      *Gate
+	// planPoll and planWait are how often and how long the prepare job
+	// reads a plan that's still planning.
+	planPoll, planWait time.Duration
 }
 
 // NewService returns a Service. Its Gate and the Service read through one
 // Collector.
 func NewService(d Deps) *Service {
 	c := &Collector{Sources: d.Sources, Now: d.Now}
-	return &Service{d: d, collector: c, gate: &Gate{Store: d.Store, Collector: c, Audit: d.Audit, Now: d.Now}}
+	return &Service{
+		d: d, collector: c, gate: &Gate{Store: d.Store, Collector: c, Audit: d.Audit, Now: d.Now},
+		planPoll: planPoll, planWait: PlanWait,
+	}
 }
 
 // SetSources replaces what the Service and its Gate read. The extension
@@ -384,19 +390,36 @@ func (s *Service) openPlan(ctx context.Context, p security.Principal, projectID 
 		return "", false, "", nil
 	}
 	plan := plans[0]
-	if plan.Kind == planning.KindPromotion && plan.FromEnvironmentID == from.ID && sameScope(plan, scope) {
-		match, _, perr := src.Plans.PinsMatchSource(ctx, p.OrgID, plan)
-		if perr != nil {
-			return "", false, "", fmt.Errorf("check production's open plan against staging: %w", perr)
-		}
-		if match {
-			return plan.ID, true, "", nil
-		}
+	reuse, err := s.reusable(ctx, p.OrgID, plan, from, scope)
+	if err != nil {
+		return "", false, "", err
+	}
+	if reuse {
+		return plan.ID, true, "", nil
 	}
 	if replace {
 		return "", false, plan.ID, nil
 	}
-	return "", false, "", fmt.Errorf("%w: plan %s, made by %s; decide it, or prepare again with replace to supersede it",
+	return "", false, "", openPlanError(plan)
+}
+
+// reusable reports whether production's open plan is the promotion a
+// preparation would make: from the same staging environment, of the same
+// scope, still matching what staging runs.
+func (s *Service) reusable(ctx context.Context, orgID string, plan *planning.Plan, from *projects.Environment, scope []string) (bool, error) {
+	if plan.Kind != planning.KindPromotion || plan.FromEnvironmentID != from.ID || !sameScope(plan, scope) {
+		return false, nil
+	}
+	match, _, err := s.sources().Plans.PinsMatchSource(ctx, orgID, plan)
+	if err != nil {
+		return false, fmt.Errorf("check production's open plan against staging: %w", err)
+	}
+	return match, nil
+}
+
+// openPlanError is ErrOpenPlan for plan, naming it and who made it.
+func openPlanError(plan *planning.Plan) error {
+	return fmt.Errorf("%w: plan %s, made by %s; decide it, or prepare again with replace to supersede it",
 		ErrOpenPlan, plan.ID, actorName(plan.CreatedBy))
 }
 
