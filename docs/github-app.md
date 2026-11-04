@@ -29,6 +29,7 @@ On GitHub, go to **Settings → Developer settings → GitHub Apps → New GitHu
 | Subscribe to events | **Push** |
 | Repository permissions: Contents | **Read-only** |
 | Repository permissions: Metadata | Read-only (GitHub requires it) |
+| Repository permissions: Issues | **Read and write** (only Loomplane's agent uses it, to open an issue per report; leave it at No access if you don't run the agent) |
 | Everything else | No access |
 | Where can this GitHub App be installed? | Any account, unless only your own organization uses this Loomplane |
 
@@ -63,6 +64,12 @@ An owner or admin opens **Integrations** in the dashboard and chooses **Install 
 - **Connecting.** GitHub's redirect carries the installation's number and a one-time code. Loomplane exchanges the code for the installer's own token and checks that their account can see that installation. Only then does it connect the installation to the organization. The number alone proves nothing, since anyone can guess one. The state in the link is signed, lasts 15 minutes, and names the organization and person who started it. The installer's token is used for that one check and dropped.
 - **Analyzing.** For each analysis, the worker mints an installation token limited to the one repository and to reading its contents. GitHub expires it within the hour. Loomplane stores no token anywhere, and uses an organization's own installations only, so one organization can never read another's code.
 - **Disconnecting** removes the installation from the organization in Loomplane. The App stays installed on GitHub until someone uninstalls it there.
+
+## Issues for agent reports
+
+Loomplane's agent opens one issue per report on the repository the report is about. For that, the App needs the Issues permission, and every account it's installed on has to accept it. If your App was created before it asked for Issues, add the permission in the App's settings on GitHub. GitHub then asks the owner of each installation to review and accept it. Existing installations keep working while they wait: until an owner of that account accepts, reports for its repositories go to Herald only, and AI settings names the installation that's waiting, with a link to its page on GitHub. You don't reconnect anything. Loomplane checks an installation's permissions again every five minutes, so the first report after an owner accepts opens an issue.
+
+The token Loomplane mints for a report can write issues on that one repository and nothing else, and GitHub expires it within the hour. If you don't run the agent, leave Issues at No access, or pass `-no-issues` to `scripts/github-app`.
 
 ## Re-analyzing on push
 

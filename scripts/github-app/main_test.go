@@ -1,10 +1,23 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestManifestAsksForIssuesUnlessTold(t *testing.T) {
+	perms := func(o options) map[string]string {
+		return appManifest(o, "http://127.0.0.1:8781/created")["default_permissions"].(map[string]string)
+	}
+	if got := perms(options{}); !maps.Equal(got, map[string]string{"contents": "read", "issues": "write", "metadata": "read"}) {
+		t.Fatalf("default permissions %v", got)
+	}
+	if got := perms(options{noIssues: true}); !maps.Equal(got, map[string]string{"contents": "read", "metadata": "read"}) {
+		t.Fatalf("-no-issues permissions %v", got)
+	}
+}
 
 func TestHasGitHubBlock(t *testing.T) {
 	for _, tt := range []struct {

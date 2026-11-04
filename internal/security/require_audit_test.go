@@ -37,6 +37,10 @@ var workspaceChecks = map[string]int{
 	"internal/repositories/connections.go:Connect":              1,
 	"internal/repositories/connections.go:Disconnect":           1,
 	"internal/repositories/connections.go:Repositories":         1,
+	// Whether the workspace's GitHub installations accepted the Issues
+	// permission, which AI settings shows; installations are the
+	// workspace's, not a project's.
+	"internal/repositories/connections.go:IssuesStatus": 1,
 	// A Bitbucket workspace is connected to the whole organization, like a
 	// GitHub installation, and so is a repository's push webhook.
 	"internal/repositories/bitbucket_connections.go:Status":       1,
@@ -210,8 +214,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 97 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8, the 6 Bitbucket ones and the 8 GitLab ones, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 98 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 6 Bitbucket ones and the 8 GitLab ones, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string
