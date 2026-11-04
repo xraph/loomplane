@@ -44,6 +44,7 @@ import (
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
+	platformcloudext "github.com/xraph/loomplane/extensions/platformcloud"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/extensions/web"
@@ -176,6 +177,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		octopusext.New(cfg, jobs.Engine),
+		platformcloudext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		nodes,

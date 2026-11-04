@@ -406,7 +406,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	// Custom domains on Loomplane Cloud services reach the platform host
 	// each one runs on.
 	routeService.PlatformRoutes = platformCloud
-	executors[platformcloud.RuntimePlatform] = &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Credentials: clouds, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
+	platformTarget := &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Credentials: clouds, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
+	executors[platformcloud.RuntimePlatform] = platformTarget
+	// The platform Cloud extension gives this same service its credentials,
+	// organization list, instance control and metering, and stops, starts
+	// and removes platform VMs through the same target.
+	if err := forge.ProvideValue(c, platformCloud); err != nil {
+		return fmt.Errorf("provide the platform Cloud service: %w", err)
+	}
+	if err := forge.ProvideValue(c, platformTarget); err != nil {
+		return fmt.Errorf("provide the platform Cloud target: %w", err)
+	}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, guard: dialGuard, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
