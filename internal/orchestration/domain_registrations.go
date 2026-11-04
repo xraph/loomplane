@@ -21,6 +21,9 @@ type RegistrationReconciler interface {
 // StartRegistration runs one approved registration. The request key keeps a
 // repeated start of the same attempt from running it twice.
 func (d *Deployments) StartRegistration(ctx context.Context, org, id string, attempt int) error {
+	if err := d.canRun(ctx, org); err != nil {
+		return err
+	}
 	engine, err := d.engine()
 	if err != nil {
 		return err

@@ -19,6 +19,9 @@ type RouteReconciler interface {
 }
 
 func (d *Deployments) StartRoute(ctx context.Context, org, id string, attempt int) error {
+	if err := d.canRun(ctx, org); err != nil {
+		return err
+	}
 	engine, err := d.engine()
 	if err != nil {
 		return err

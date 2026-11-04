@@ -13,6 +13,8 @@ import (
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/permission"
 	"github.com/xraph/warden/store/memory"
+
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 const (
@@ -133,6 +135,13 @@ func TestStatusFor(t *testing.T) {
 				t.Fatalf("StatusFor(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStatusForBlockedIsPaymentRequired(t *testing.T) {
+	err := fmt.Errorf("approve: %w", &metering.Blocked{Reason: "Add a card"})
+	if got := StatusFor(err); got != http.StatusPaymentRequired {
+		t.Fatalf("StatusFor(blocked) = %d", got)
 	}
 }
 

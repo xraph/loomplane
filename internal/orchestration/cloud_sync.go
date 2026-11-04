@@ -59,6 +59,9 @@ func (d *Deployments) syncActivity(ctx context.Context, info drt.ActivityInfo, i
 
 // StartCloudSync deduplicates delivery by operation and explicitly authorized attempt.
 func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id string, attempt int) error {
+	if err := d.canRun(ctx, org); err != nil {
+		return err
+	}
 	request := fmt.Sprintf("%s.attempt.%d", id, attempt)
 	key := durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}
 	build := DeploymentBuild

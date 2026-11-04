@@ -12,6 +12,7 @@ import (
 	drt "github.com/xraph/dispatch/durable/runtime"
 	"github.com/xraph/dispatch/engine"
 
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -191,6 +192,7 @@ var ErrNotRunning = errors.New("the plan's workflow has finished")
 // registers. Nothing runs before then: Dispatch only takes work once every
 // extension has started.
 type Deployments struct {
+	gate           metering.Gate
 	failedCleanups FailedCleanupRunner
 	cloudSync      CloudReconciler
 	infrastructure InfrastructureReconciler
@@ -205,6 +207,25 @@ type Deployments struct {
 
 // NewDeployments returns the workflow, unbound.
 func NewDeployments() *Deployments { return &Deployments{} }
+
+// BindGate sets the gate every start that runs customer work asks. Nil, and
+// before BindGate, means metering.AllowAll. Cleanups are never gated.
+func (d *Deployments) BindGate(g metering.Gate) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.gate = g
+}
+
+// canRun refuses a start the gate blocks for the organization.
+func (d *Deployments) canRun(ctx context.Context, org string) error {
+	d.mu.RLock()
+	g := d.gate
+	d.mu.RUnlock()
+	if g == nil {
+		return nil
+	}
+	return g.CanRun(ctx, org, metering.KindDeploy, false)
+}
 
 // Bind gives the workflow its planner and deployer, and the engine to
 // start runs on.

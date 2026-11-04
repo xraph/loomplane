@@ -29,6 +29,9 @@ func (d *Deployments) BindClusters(r ClusterReconciler) {
 	d.cluster = r
 }
 func (d *Deployments) StartClusterOperation(ctx context.Context, org, id string, attempt int) error {
+	if err := d.canRun(ctx, org); err != nil {
+		return err
+	}
 	eng, err := d.engine()
 	if err != nil {
 		return err

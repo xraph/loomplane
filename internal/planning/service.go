@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/platformcloud"
@@ -111,6 +112,7 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	gate                metering.Gate
 	memberPrerequisites *MemberPrerequisiteService
 	instanceRuntime     InstanceRuntimeQualifier
 	instances           InstanceVerifier
@@ -208,6 +210,9 @@ type Deps struct {
 	// its targets. Nil means this instance has no Loomplane Cloud, so a
 	// plan that names one of its targets is refused.
 	Platform platformPlacer
+	// Gate refuses an approval the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate metering.Gate
 }
 
 // NewService returns a Service.
@@ -221,7 +226,11 @@ func NewService(d Deps) *Service {
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{instanceRuntime: d.InstanceRuntime,
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Service{gate: gate, instanceRuntime: d.InstanceRuntime,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
@@ -607,6 +616,9 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	if approve {
 		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
 			return nil, checkErr
+		}
+		if gateErr := s.gate.CanRun(ctx, plan.OrgID, metering.KindDeploy, false); gateErr != nil {
+			return nil, gateErr
 		}
 	}
 	reqID, err := typeid.Generate("dec")

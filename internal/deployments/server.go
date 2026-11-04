@@ -33,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -55,6 +56,10 @@ type OwnedTarget struct {
 	ExistingResources    planning.ExistingProjectResourceResolver
 	RouteGuard           RuntimeRemovalGuard
 	FirecrackerAuthority fc.Issuer
+
+	// Gate refuses a customer build the workspace may not run yet. Nil
+	// means metering.AllowAll.
+	Gate metering.Gate
 
 	Cloud       string
 	Ctrl        CtrlPlane
@@ -496,7 +501,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, reconnect: e.reconnect}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, Gate: e.Gate, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"

@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -98,6 +99,16 @@ type ImageBuilder struct {
 	// Platform builds services that build from source on Loomplane Cloud.
 	// Nil refuses them.
 	Platform PlatformHosts
+	// Gate refuses a customer source build the workspace may not run yet.
+	// Nil means metering.AllowAll.
+	Gate metering.Gate
+}
+
+func (b *ImageBuilder) gate() metering.Gate {
+	if b.Gate == nil {
+		return metering.AllowAll
+	}
+	return b.Gate
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -193,11 +204,16 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 		}
 		return state.Reference, nil
 	}
-	if target.BuilderCloud == connections.Firecracker {
-		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
-	}
 	if platformSourceBuild(target) {
 		return b.buildOnPlatform(ctx, job, state, save, registryConfig)
+	}
+	// Platform Cloud gates its own builds when it places them. A build on
+	// the workspace's own builder is gated here, before anything connects.
+	if gateErr := b.gate().CanRun(ctx, job.Deployment.OrgID, metering.KindBuild, false); gateErr != nil {
+		return "", gateErr
+	}
+	if target.BuilderCloud == connections.Firecracker {
+		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
