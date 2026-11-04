@@ -23,6 +23,8 @@ func (s *Service) RegistryCredential(ctx context.Context, org, id string) (*Conn
 		raw, err = s.secrets.Reveal(ctx, org, id)
 	case MethodInCluster:
 		raw = kubernetes.InClusterCredential()
+	case MethodNode:
+		raw, err = nodeCredential(c)
 	default:
 		return nil, nil, ErrNotReady
 	}

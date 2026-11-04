@@ -47,7 +47,14 @@ type Settings struct {
 type Options struct {
 	Version string
 	Out     io.Writer
-	In      io.Reader
+	// Err is where loomctl says what isn't the answer: the agent's tool
+	// calls, its questions, why it failed. Nil means os.Stderr.
+	Err io.Writer
+	In  io.Reader
+	// Interrupt says the person pressed Ctrl-C: each receive is one press.
+	// Nil means os.Interrupt, through signal.Notify, while the agent
+	// streams.
+	Interrupt <-chan struct{}
 	// Getenv reads the environment.
 	Getenv func(string) string
 	// ConfigPath is the saved login. Empty means the user's config
@@ -65,6 +72,23 @@ type Options struct {
 	lookupUser func(name string) (*user.User, error)
 }
 
+// ExitError is a run that ended with a status other than 0 and nothing more
+// to say: whatever it had to say it has printed already. cmd/loomctl exits
+// with Code, and prints Err first when there is one.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("loomctl exited with status %d", e.Code)
+	}
+	return e.Err.Error()
+}
+
+func (e *ExitError) Unwrap() error { return e.Err }
+
 // App is loomctl.
 type App struct {
 	opts Options
@@ -74,6 +98,9 @@ type App struct {
 func New(opts Options) *App {
 	if opts.Out == nil {
 		opts.Out = os.Stdout
+	}
+	if opts.Err == nil {
+		opts.Err = os.Stderr
 	}
 	if opts.In == nil {
 		opts.In = os.Stdin

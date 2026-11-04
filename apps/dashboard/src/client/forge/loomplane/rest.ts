@@ -31,6 +31,178 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly agentConversations = {
+    /**
+     * A page of a conversation's turns, each with its run's events
+     * The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.
+     */
+    get: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.History> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["History"],
+      };
+
+      return this.request<types.History>(config);
+    },
+
+    /**
+     * Your conversations with the agent, the most recently updated first
+     * With everyone=true, everyone's in the workspace, which needs ai:manage. For the next page, pass the last conversation's updated_at as before.
+     */
+    list: async (projectId?: string | undefined, everyone?: boolean | undefined, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConversationList> => {
+      let __path = `/api/v1/agent/conversations`;
+      const queryParams: Record<string, any> = {};
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (everyone !== undefined) {
+        queryParams['everyone'] = everyone;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConversationList"],
+      };
+
+      return this.request<types.ConversationList>(config);
+    },
+
+    /**
+     * Add a message to your conversation
+     * Only the person who started the conversation adds to it, once the agent has finished the last message.
+     */
+    send: async (id: string, body: types.SendInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}/messages`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SendInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Sent"],
+      };
+
+      return this.request<types.Sent>(config);
+    },
+
+    /**
+     * Start a conversation with the agent
+     * The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.
+     */
+    start: async (body: types.StartInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
+      let __path = `/api/v1/agent/conversations`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["StartInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Sent"],
+      };
+
+      return this.request<types.Sent>(config);
+    },
+
+  };
+
+  public readonly agentReports = {
+    /**
+     * Close a report
+     * Needs deployment:create on the report's project. If the report has a GitHub issue, Loomplane comments there and closes it.
+     */
+    close: async (id: string, body: types.CloseInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Report> => {
+      let __path = `/api/v1/agent/reports/${encodeURIComponent(String(id))}/close`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CloseInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Report"],
+      };
+
+      return this.request<types.Report>(config);
+    },
+
+    /**
+     * One report the agent opened
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Report> => {
+      let __path = `/api/v1/agent/reports/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Report"],
+      };
+
+      return this.request<types.Report>(config);
+    },
+
+    /**
+     * What the agent saw go wrong in your workspace
+     * Only the reports of projects whose deployments you may read.
+     */
+    list: async (status?: string | undefined, projectId?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReportList> => {
+      let __path = `/api/v1/agent/reports`;
+      const queryParams: Record<string, any> = {};
+      if (status !== undefined) {
+        queryParams['status'] = status;
+      }
+      if (projectId !== undefined) {
+        queryParams['project_id'] = projectId;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReportList"],
+      };
+
+      return this.request<types.ReportList>(config);
+    },
+
+  };
+
   public readonly agentRequests = {
     /**
      * Answer the agent's question
@@ -172,6 +344,86 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.AgentsettingsStatus>(config);
+    },
+
+  };
+
+  public readonly agentTasks = {
+    /**
+     * Stop one of the agent's tasks
+     * The person who asked for it, or someone who manages the workspace's AI, may stop it.
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Task> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Task"],
+      };
+
+      return this.request<types.Task>(config);
+    },
+
+    /**
+     * One of the agent's tasks
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Task> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Task"],
+      };
+
+      return this.request<types.Task>(config);
+    },
+
+    /**
+     * Follow a task's events as they happen
+     * Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.
+     */
+    stream: async (id: string, after?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}/stream`;
+      const queryParams: Record<string, any> = {};
+      if (after !== undefined) {
+        queryParams['after'] = after;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+  };
+
+  public readonly agentWatcher = {
+    /**
+     * Whether the agent is watching your workspace, and where its reports go on GitHub
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.AgentwatchStatus> => {
+      let __path = `/api/v1/agent/watcher`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["AgentwatchStatus"],
+      };
+
+      return this.request<types.AgentwatchStatus>(config);
     },
 
   };
@@ -1406,6 +1658,25 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ClusterRetirementReview>(config);
+    },
+
+  };
+
+  public readonly cloudNodeAdoptions = {
+    /**
+     * cloudNodeAdoptions.list
+     */
+    list: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeAdoptionList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/node-adoptions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeAdoptionList"],
+      };
+
+      return this.request<types.NodeAdoptionList>(config);
     },
 
   };
@@ -4638,6 +4909,40 @@ export class RESTClient extends Client {
 
   public readonly nodes = {
     /**
+     * Review draining the Cloud server a node was adopted as: what it holds now
+     */
+    drain: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DrainReview> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/drain`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DrainReview"],
+      };
+
+      return this.request<types.DrainReview>(config);
+    },
+
+    /**
+     * Drain a node's server as reviewed, so nothing new is placed on it
+     */
+    drainApply: async (id: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/drain/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
      * One node
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
@@ -4719,6 +5024,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Node>(config);
+    },
+
+    /**
+     * What Loomplane runs on a node, and which databases have no backups
+     */
+    workloads: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeWorkloadList> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/workloads`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeWorkloadList"],
+      };
+
+      return this.request<types.NodeWorkloadList>(config);
     },
 
   };

@@ -346,6 +346,9 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	if err := s.Workflow.StartInfrastructure(ctx, o.OrgID, o.ID, o.Attempt); err != nil {
 		s.record(ctx, p, "cloud.server.enqueue_pending", o)
 	}
+	// A node adopted here, rather than by its own adoption, is settled
+	// once its server is ready.
+	s.adoptAccepted(ctx, o)
 	return o, nil
 }
 func (s *Service) RetryOperation(ctx context.Context, p security.Principal, cloud, id string) (*Operation, error) {
@@ -380,6 +383,7 @@ func (s *Service) RetryOperation(ctx context.Context, p security.Principal, clou
 	if err := s.Workflow.StartInfrastructure(ctx, out.OrgID, out.ID, out.Attempt); err != nil {
 		s.record(ctx, p, "cloud.server.enqueue_pending", out)
 	}
+	s.adoptAccepted(ctx, out)
 	return out, nil
 }
 func (s *Service) record(ctx context.Context, p security.Principal, action string, o *Operation) {

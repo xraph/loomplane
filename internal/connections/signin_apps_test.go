@@ -49,7 +49,7 @@ func (f *fakeAppStore) DeleteApp(_ context.Context, cloud string) error {
 }
 
 func (f *fakeAppStore) ListApps(context.Context) ([]*StoredApp, error) {
-	var out []*StoredApp
+	out := make([]*StoredApp, 0, len(f.apps))
 	for _, a := range f.apps {
 		out = append(out, a)
 	}

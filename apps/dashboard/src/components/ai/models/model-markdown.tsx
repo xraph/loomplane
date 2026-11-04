@@ -54,9 +54,12 @@ const components: Components = {
 export function ModelMarkdown({
   markdown,
   className,
+  components: overrides,
 }: {
   markdown: string
   className?: string
+  /** Renderers to use instead of these, such as the Assistant's links. */
+  components?: Components
 }) {
   return (
     <div
@@ -71,7 +74,11 @@ export function ModelMarkdown({
         className
       )}
     >
-      <Markdown remarkPlugins={[remarkGfm]} skipHtml components={components}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={overrides ? { ...components, ...overrides } : components}
+      >
         {markdown}
       </Markdown>
     </div>

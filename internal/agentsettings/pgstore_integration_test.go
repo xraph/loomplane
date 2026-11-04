@@ -158,3 +158,20 @@ func TestPgStoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPgStoreListsEnabledWorkspaces(t *testing.T) {
+	st, _ := scratchStores(t)
+	ctx := t.Context()
+	for _, s := range []*agentsettings.Settings{
+		{OrgID: "org_c", Enabled: true, NexusTenantID: "tenant_c"}, {OrgID: "org_a", Enabled: true, NexusTenantID: "tenant_a"},
+		{OrgID: "org_b", NexusTenantID: "tenant_b"},
+	} {
+		if err := st.Save(ctx, s, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.ListEnabled(ctx)
+	if err != nil || len(got) != 2 || got[0] != "org_a" || got[1] != "org_c" {
+		t.Fatalf("ListEnabled = %v, %v; want [org_a org_c]", got, err)
+	}
+}

@@ -16,12 +16,14 @@ import (
 	"github.com/xraph/grove/drivers/sqlitedriver"
 	"github.com/xraph/nexus"
 	"github.com/xraph/nexus/provider"
+	"github.com/xraph/nexus/providers/openai"
 	"github.com/xraph/nexus/tenant"
 	"github.com/xraph/weave"
 	weaveext "github.com/xraph/weave/extension"
 	"github.com/xraph/weave/vectorstore"
 	vectormemory "github.com/xraph/weave/vectorstore/memory"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -159,19 +161,10 @@ func TestServerKeyGoesOnlyToItsProvider(t *testing.T) {
 // Cortex's extension leaves run_concurrency at 0, no limit. The agent's
 // engine caps runs per process.
 func TestCortexRunConcurrencyIsCapped(t *testing.T) {
-	ai := New(config.Config{AI: serverAI()}, nil)
-	app := forge.New(forge.WithAppName("cortex-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
-	cx := ai.cortex
-	cx.SetDependencies(nil)
-	if err := app.RegisterExtension(cx); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if err := app.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
-	if got := cx.Engine().RunConcurrency(); got != RunsPerProcess {
+	// Cortex needs shield's segment checker to publish, so it starts with
+	// the other libraries.
+	ai := libraries(t, serverAI())
+	if got := ai.cortex.Engine().RunConcurrency(); got != RunsPerProcess {
 		t.Fatalf("run concurrency %d, want %d", got, RunsPerProcess)
 	}
 }
@@ -205,6 +198,83 @@ func TestEmbeddingsNameTheirProvider(t *testing.T) {
 	}
 	if _, e := emb.calls(); e != 1 || emb.embed[0].Provider != agentsettings.EmbeddingsProvider || emb.embed[0].Dimensions != 8 {
 		t.Fatalf("embeddings: %d, %+v", e, emb.embed)
+	}
+}
+
+// embeddingsPricedOn is what Extension.embeddingsPriced reports, for a
+// gateway built without the extension.
+func embeddingsPricedOn(gw *nexus.Gateway, k config.AIKnowledgeConfig) bool {
+	return gatewayAdapter{gw: func() *nexus.Gateway { return gw }}.Priced(context.Background(), agentsettings.EmbeddingsProvider, k.EmbeddingModel)
+}
+
+// The catalog prices OpenAI's embedding models, but under the provider
+// name "openai". The embeddings provider has its own name, so the
+// catalog row is copied over as an override.
+func TestOpenAIEmbeddingsArePricedFromTheCatalog(t *testing.T) {
+	ai := serverAI()
+	ai.Knowledge = config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingAPIKey: "ek", EmbeddingModel: "text-embedding-3-small", Dimensions: 8}
+	emb := &fakeProvider{name: agentsettings.EmbeddingsProvider}
+	gw := gateway(t, ai, emb)
+	ctx := context.Background()
+	if !gw.PriceBook().Priced(ctx, agentsettings.EmbeddingsProvider, "text-embedding-3-small") || !embeddingsPricedOn(gw, ai.Knowledge) {
+		t.Fatal("the openai embedding model isn't priced")
+	}
+	var want provider.Pricing
+	models, _ := openai.New("").Models(ctx)
+	for _, m := range models {
+		if m.ID == "text-embedding-3-small" {
+			want = m.Pricing
+		}
+	}
+	got, ok := embeddingPrice(ctx, ai.Knowledge, nil)
+	if !ok || want.EmbeddingPerMillion.IsZero() || !got.Pricing.EmbeddingPerMillion.Equal(want.EmbeddingPerMillion) {
+		t.Fatalf("override %+v (ok %v), catalog %+v", got, ok, want)
+	}
+	if got.Provider != agentsettings.EmbeddingsProvider || got.Model != "text-embedding-3-small" {
+		t.Fatalf("override is for %s/%s", got.Provider, got.Model)
+	}
+	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: tenantSlug("org_1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedder := newEmbedder(ai, func() *nexus.Gateway { return gw }, func(context.Context, string) (string, error) { return tn.ID.String(), nil })
+	if _, err = embedder.Embed(weave.WithTenant(ctx, "org_1"), []string{"hello"}); err != nil {
+		t.Fatalf("an embedding was refused: %v", err)
+	}
+	if _, e := emb.calls(); e != 1 {
+		t.Fatalf("the embeddings provider got %d calls", e)
+	}
+}
+
+func TestCompatibleEmbeddingsArePricedFromAIPrices(t *testing.T) {
+	ai := serverAI()
+	ai.Knowledge = config.AIKnowledgeConfig{EmbeddingProvider: config.AIProviderOpenAICompatible, EmbeddingBaseURL: "http://localhost:11434/v1", EmbeddingModel: "nomic-embed-text", Dimensions: 8}
+	ai.Prices = []config.AIPrice{{Provider: config.AIProviderOpenAICompatible, Model: "nomic-embed-text", InputPerMillion: "0", OutputPerMillion: "0"}}
+	gw := gateway(t, ai, &fakeProvider{name: agentsettings.EmbeddingsProvider})
+	if !embeddingsPricedOn(gw, ai.Knowledge) {
+		t.Fatal("a zero ai.prices entry left the embedding model unpriced")
+	}
+	ai.Prices[0].InputPerMillion = "0.05"
+	o, ok := embeddingPrice(context.Background(), ai.Knowledge, ai.Prices)
+	if !ok || o.Pricing.EmbeddingPerMillion.String() != "0.05" || o.Pricing.InputPerMillion.String() != "0.05" {
+		t.Fatalf("override %+v (ok %v)", o, ok)
+	}
+}
+
+func TestUnpricedEmbeddingsAreReported(t *testing.T) {
+	for _, k := range []config.AIKnowledgeConfig{
+		{EmbeddingProvider: config.AIProviderOpenAICompatible, EmbeddingBaseURL: "http://localhost:11434/v1", EmbeddingModel: "nomic-embed-text", Dimensions: 8},
+		{EmbeddingProvider: config.AIProviderOpenAI, EmbeddingModel: "text-embedding-unknown", Dimensions: 8},
+	} {
+		ai := serverAI()
+		ai.Knowledge = k
+		gw := gateway(t, ai, &fakeProvider{name: agentsettings.EmbeddingsProvider})
+		if embeddingsPricedOn(gw, k) {
+			t.Errorf("%s/%s reported as priced", k.EmbeddingProvider, k.EmbeddingModel)
+		}
+		if _, ok := embeddingPrice(context.Background(), k, nil); ok {
+			t.Errorf("%s/%s has an override", k.EmbeddingProvider, k.EmbeddingModel)
+		}
 	}
 }
 
@@ -288,23 +358,18 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	if ext.weave.IsStarted() {
 		t.Fatal("weave still reads as started")
 	}
+	// Weave's extension sets no chunker of its own, and ingest needs one.
+	if c := ext.weave.Engine().Components().Chunker; !c.Configured {
+		t.Fatalf("weave has no chunker: %+v", c)
+	}
 }
 
 // Cortex refuses a tool authorizer without a principal codec, so the two
 // go in together: the engine the extension builds starts, and one without
 // the codec doesn't.
 func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
-	ai := New(config.Config{AI: serverAI()}, nil)
-	app := forge.New(forge.WithAppName("cortex-authz-test"), forge.WithEnvPrefix("LOOMPLANE_TEST_FORGE_"))
-	cx := ai.cortex
-	cx.SetDependencies(nil)
-	if err := app.RegisterExtension(cx); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.Start(context.Background()); err != nil {
-		t.Fatalf("the extension's engine: %v", err)
-	}
-	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+	// The extension's engine starts (libraries fails the test if not).
+	ai := libraries(t, serverAI())
 
 	opts := ai.engineOptions()
 	if _, err := cortexengine.New(opts...); err != nil {
@@ -333,5 +398,65 @@ func TestEngineBuildsWithAuthorizerAndCodec(t *testing.T) {
 func TestTheSweepRunsOnTheDefaultQueue(t *testing.T) {
 	if c := sweepCron(); c.Queue != "default" || c.JobName != agentruns.JobSweep || c.Schedule != "@every 15s" {
 		t.Fatalf("cron %+v", c)
+	}
+}
+
+// Knowledge's recovery is scheduled on the default queue, as the sweep is,
+// so a server later run with AI off answers it with the AI-off handler.
+func TestKnowledgeRecoveryRunsOnTheDefaultQueue(t *testing.T) {
+	c := recoverCron()
+	if c.Queue != agentruns.SweepQueue || c.Name != agentknowledge.CronRecover || c.JobName != agentknowledge.JobRecover || c.Schedule != "@every 5m" {
+		t.Fatalf("cron %+v", c)
+	}
+}
+
+// The reports backfill runs daily on the default queue, as recovery does,
+// and so does the job itself when start queues it.
+func TestReportsBackfillRunsOnTheDefaultQueue(t *testing.T) {
+	c := reportsCron()
+	if c.Queue != agentruns.SweepQueue || c.Name != agentknowledge.CronBackfillReports || c.JobName != agentknowledge.JobBackfillReports || c.Schedule != "@every 24h" {
+		t.Fatalf("cron %+v", c)
+	}
+	def := agentknowledge.BackfillReportsJob(agentknowledge.NewService(agentknowledge.Deps{}), nil, nil)
+	if def.Name != agentknowledge.JobBackfillReports || def.Opts.Queue != agentruns.SweepQueue || def.Opts.MaxRetries != 0 {
+		t.Fatalf("job %q, options %+v", def.Name, def.Opts)
+	}
+}
+
+// tenantGateway records EnsureTenant.
+type tenantGateway struct {
+	agentsettings.Gateway
+	calls [][2]string
+}
+
+func (g *tenantGateway) EnsureTenant(_ context.Context, orgID, budget string) (string, error) {
+	g.calls = append(g.calls, [2]string{orgID, budget})
+	return "nx-" + orgID, nil
+}
+
+// The docs are billed to the system's own tenant, made once a process
+// with ai.knowledge.docs_budget_usd (the default when it's empty).
+func TestSystemTenant(t *testing.T) {
+	ctx := context.Background()
+	g := &tenantGateway{}
+	s := &SystemTenant{gateway: g, budgetUSD: "12.50"}
+	for range 2 {
+		id, err := s.ID(ctx)
+		if err != nil || id != "nx-system" {
+			t.Fatalf("ID = %q, %v", id, err)
+		}
+	}
+	if len(g.calls) != 1 || g.calls[0] != [2]string{agentknowledge.SystemOrg, "12.50"} {
+		t.Fatalf("EnsureTenant calls %v", g.calls)
+	}
+	if got := tenantSlug(agentknowledge.SystemOrg); got != "loomplane-system" {
+		t.Fatalf("slug %q", got)
+	}
+	g = &tenantGateway{}
+	if _, err := (&SystemTenant{gateway: g}).ID(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if g.calls[0][1] != config.DefaultDocsBudgetUSD {
+		t.Fatalf("budget %q, want the default", g.calls[0][1])
 	}
 }

@@ -223,7 +223,7 @@ func (h *Host) reserve(ctx context.Context, scope Scope, s Spec) (int, error) {
 			disk += v.Spec.DiskMiB
 			// The backstop leaves out the scope's own Current VM, which the
 			// replacement supersedes, so a redeploy may briefly hold one extra.
-			if r.Scope.Org == scope.Org && !(r.Scope == scope && r.Current != nil && v.ID == r.Current.ID) {
+			if r.Scope.Org == scope.Org && (r.Scope != scope || r.Current == nil || v.ID != r.Current.ID) {
 				orgVMs++
 				orgCPUs += v.Spec.VCPUs
 				orgMem += v.Spec.MemoryMiB + 128

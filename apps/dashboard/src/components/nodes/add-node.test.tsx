@@ -157,3 +157,29 @@ it("ignores a node that was already there", async () => {
   await screen.findByText(command)
   expect(screen.queryByText(/is online/)).not.toBeInTheDocument()
 })
+
+it("asks for a dedicated builder by labelling the token", async () => {
+  const calls = serve(state())
+  const user = userEvent.setup()
+  mount()
+  await user.type(await screen.findByLabelText("Labels"), "region=home")
+  await user.click(screen.getByRole("checkbox", { name: /Dedicated builder/ }))
+  await makeToken(user)
+  await screen.findByText(command)
+  const mint = calls.find((c) => c.url.endsWith("/nodes/join-tokens"))
+  expect(mint?.body).toMatchObject({
+    labels: { region: "home", build_workers: "dedicated" },
+  })
+})
+
+it("sends the Cloud the token is for", async () => {
+  const calls = serve(state())
+  const user = userEvent.setup()
+  mount()
+  await user.click(await screen.findByRole("combobox", { name: "Cloud" }))
+  await user.click(await screen.findByRole("option", { name: "Production" }))
+  await makeToken(user)
+  await screen.findByText(command)
+  const mint = calls.find((c) => c.url.endsWith("/nodes/join-tokens"))
+  expect(mint?.body).toMatchObject({ cloud_id: "cloud_one" })
+})

@@ -315,6 +315,19 @@ func (s *Store) ByNexusTenant(_ context.Context, tenantID string) (*agentsetting
 	return nil, agentsettings.ErrNotFound
 }
 
+// ListEnabled implements agentsettings.Store.
+func (s *Store) ListEnabled(context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, org := range slices.Sorted(maps.Keys(s.rows)) {
+		if s.rows[org].agent.Enabled {
+			out = append(out, org)
+		}
+	}
+	return out, nil
+}
+
 // Save implements agentsettings.Store.
 func (s *Store) Save(_ context.Context, in *agentsettings.Settings, expectRevision int64) error {
 	s.mu.Lock()

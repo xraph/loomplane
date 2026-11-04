@@ -14805,6 +14805,559 @@
           }
         }
       }
+    },
+    "/api/v1/agent/conversations": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Your conversations with the agent, the most recently updated first",
+        "description": "With everyone=true, everyone's in the workspace, which needs ai:manage. For the next page, pass the last conversation's updated_at as before.",
+        "operationId": "agentConversations.list",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "everyone",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Start a conversation with the agent",
+        "description": "The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.",
+        "operationId": "agentConversations.start",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The conversation and its first task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/conversations/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "A page of a conversation's turns, each with its run's events",
+        "description": "The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.",
+        "operationId": "agentConversations.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation's turns, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/History"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/conversations/{id}/messages": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Add a message to your conversation",
+        "description": "Only the person who started the conversation adds to it, once the agent has finished the last message.",
+        "operationId": "agentConversations.send",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The conversation and the task the message started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One of the agent's tasks",
+        "operationId": "agentTasks.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Stop one of the agent's tasks",
+        "description": "The person who asked for it, or someone who manages the workspace's AI, may stop it.",
+        "operationId": "agentTasks.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cancelled task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}/stream": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Follow a task's events as they happen",
+        "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+        "operationId": "agentTasks.stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/node-adoptions": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudNodeAdoptions.list",
+        "operationId": "cloudNodeAdoptions.list",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeAdoptionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/drain": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Review draining the Cloud server a node was adopted as: what it holds now",
+        "operationId": "nodes.drain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DrainReview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrainReview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/drain/apply": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Drain a node's server as reviewed, so nothing new is placed on it",
+        "operationId": "nodes.drainApply",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}/workloads": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "What Loomplane runs on a node, and which databases have no backups",
+        "operationId": "nodes.workloads",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NodeWorkloadList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeWorkloadList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/reports": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "What the agent saw go wrong in your workspace",
+        "description": "Only the reports of projects whose deployments you may read.",
+        "operationId": "agentReports.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reports, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/reports/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One report the agent opened",
+        "operationId": "agentReports.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/reports/{id}/close": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Close a report",
+        "description": "Needs deployment:create on the report's project. If the report has a GitHub issue, Loomplane comments there and closes it.",
+        "operationId": "agentReports.close",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The closed report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/watcher": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Whether the agent is watching your workspace, and where its reports go on GitHub",
+        "operationId": "agentWatcher.get",
+        "responses": {
+          "200": {
+            "description": "The watcher",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentwatchStatus"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -30838,6 +31391,9 @@
           "attempt": {
             "type": "integer"
           },
+          "automatic": {
+            "type": "boolean"
+          },
           "cost": {
             "$ref": "#/components/schemas/RouteCost"
           },
@@ -30886,6 +31442,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "previous_address": {
+            "type": "string"
           },
           "previous_receipt": {
             "$ref": "#/components/schemas/DNSRecord"
@@ -34485,7 +35044,10 @@
           "joined_by_key_id",
           "revoked_by",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "public_address",
+          "ingress_applied",
+          "ingress_detail"
         ],
         "properties": {
           "created_at": {
@@ -34507,6 +35069,12 @@
           },
           "identity_generation": {
             "type": "integer"
+          },
+          "ingress_applied": {
+            "type": "string"
+          },
+          "ingress_detail": {
+            "type": "string"
           },
           "ingress_mode": {
             "type": "string"
@@ -34538,6 +35106,12 @@
           },
           "protocol_version": {
             "type": "integer"
+          },
+          "public_address": {
+            "type": "string"
+          },
+          "public_address_confirmed_at": {
+            "type": "string"
           },
           "revoked_at": {
             "type": "string"
@@ -34793,6 +35367,9 @@
           "identity_generation": {
             "type": "integer"
           },
+          "name": {
+            "type": "string"
+          },
           "node_id": {
             "type": "string"
           },
@@ -34932,6 +35509,751 @@
             "type": "string"
           },
           "minted_by_key_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConversationList": {
+        "type": "object",
+        "required": [
+          "conversations"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            }
+          }
+        }
+      },
+      "StartInputBody": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Sent": {
+        "type": "object",
+        "required": [
+          "conversation",
+          "task"
+        ],
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/Conversation"
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          }
+        }
+      },
+      "History": {
+        "type": "object",
+        "required": [
+          "conversation",
+          "turns",
+          "more"
+        ],
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/Conversation"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Turn"
+            }
+          }
+        }
+      },
+      "SendInputBody": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "kind",
+          "run_id",
+          "session_id",
+          "status",
+          "requested_by",
+          "max_tokens",
+          "tokens",
+          "event_seq",
+          "error",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "release_plan_id": {
+            "type": "string"
+          },
+          "release_revision": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "title",
+          "started_by",
+          "status",
+          "last_task_id",
+          "turns",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "last_task_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "started_by": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Turn": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "message",
+          "status",
+          "error",
+          "events",
+          "event_seq",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "seq",
+          "kind",
+          "data",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeAdoption": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "node_name",
+          "org_id",
+          "cloud_id",
+          "approved_by",
+          "status",
+          "reason",
+          "server_id",
+          "operation_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "approved_by": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NodeAdoptionList": {
+        "properties": {
+          "adoptions": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NodeAdoption"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "adoptions"
+        ],
+        "type": "object",
+        "x-forge-envelope": "adoptions"
+      },
+      "NodeWorkload": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "project_id",
+          "environment",
+          "service",
+          "kind",
+          "has_backup_policy"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "has_backup_policy": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeWorkloadList": {
+        "properties": {
+          "workloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeWorkload"
+            }
+          }
+        },
+        "required": [
+          "workloads"
+        ],
+        "type": "object",
+        "x-forge-envelope": "workloads"
+      },
+      "AgentreportsEvidence": {
+        "properties": {
+          "analysis_id": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "source_alias": {
+            "type": "string"
+          },
+          "verdict_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "watch_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
+      },
+      "ReportList": {
+        "type": "object",
+        "required": [
+          "reports"
+        ],
+        "properties": {
+          "reports": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Report"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "AgentwatchStatus": {
+        "properties": {
+          "issues": {
+            "$ref": "#/components/schemas/IssuesStatus"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "paused_at": {
+            "type": "string"
+          },
+          "paused_reason": {
+            "type": "string"
+          },
+          "ticked_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "paused",
+          "issues"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentwatch.Status"
+      },
+      "IssuesStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "installations"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallationIssues"
+            }
+          }
+        }
+      },
+      "InstallationIssues": {
+        "type": "object",
+        "required": [
+          "account",
+          "account_type",
+          "accepted",
+          "manage_url"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "account": {
+            "type": "string"
+          },
+          "account_type": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "manage_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "signal",
+          "component",
+          "fingerprint",
+          "status",
+          "severity",
+          "title",
+          "facts",
+          "evidence",
+          "repository",
+          "occurrences",
+          "first_seen_at",
+          "last_seen_at",
+          "closed_by",
+          "resolution",
+          "taken_by",
+          "investigation",
+          "investigation_note",
+          "task_id",
+          "issue",
+          "revision",
+          "opened_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "closed_by": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentreportsEvidence"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "investigation": {
+            "type": "string"
+          },
+          "investigation_note": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrences": {
+            "type": "integer"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string"
+          },
+          "taken_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CloseInputBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Findings": {
+        "type": "object",
+        "required": [
+          "summary",
+          "likely_cause",
+          "suggestions",
+          "confidence",
+          "written_at"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "untrusted": {
+            "type": "boolean"
+          },
+          "value": {
             "type": "string"
           }
         }

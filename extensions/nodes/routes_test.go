@@ -118,8 +118,8 @@ func joinBody(t *testing.T, overrides map[string]any) string {
 		m[k] = v
 	}
 	if _, set := overrides["signature"]; !set {
-		token, _ := m["token"].(string) //nolint:errcheck // a test override of another type signs as ""
-		name, _ := m["name"].(string)   //nolint:errcheck // as above
+		token, _ := m["token"].(string)
+		name, _ := m["name"].(string)
 		m["signature"] = base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, token, name))
 	}
 	b, err := json.Marshal(m)
@@ -299,7 +299,7 @@ func TestJoinTokenListAndCancelRoutes(t *testing.T) {
 		if out = r.do(t, http.MethodDelete, "/api/v1/nodes/join-tokens/key_1", "", &member); out.Code != tc.status {
 			t.Errorf("cancel with %v: %d", tc.err, out.Code)
 		}
-		if out = r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", &member); tc.err != apikeys.ErrNotFound && out.Code != tc.status {
+		if out = r.do(t, http.MethodGet, "/api/v1/nodes/join-tokens", "", &member); !errors.Is(tc.err, apikeys.ErrNotFound) && out.Code != tc.status {
 			t.Errorf("list with %v: %d", tc.err, out.Code)
 		}
 	}

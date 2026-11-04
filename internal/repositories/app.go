@@ -155,6 +155,10 @@ type Installation struct {
 	ID          int64  `json:"id"`
 	Account     string `json:"account"`
 	AccountType string `json:"account_type"`
+	// Permissions are what the installation's owner has accepted, as
+	// GitHub's "permissions" object has them: "contents": "read",
+	// "issues": "write" and so on.
+	Permissions map[string]string `json:"permissions"`
 }
 
 // Installation reads one installation, as the App.
@@ -169,11 +173,15 @@ func (a *App) Installation(ctx context.Context, id int64) (Installation, error) 
 			Login string `json:"login"`
 			Type  string `json:"type"`
 		} `json:"account"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := a.call(ctx, http.MethodGet, a.apiURL+"/app/installations/"+strconv.FormatInt(id, 10), tok, nil, &body); err != nil {
 		return Installation{}, err
 	}
-	return Installation{ID: body.ID, Account: body.Account.Login, AccountType: body.Account.Type}, nil
+	if body.Permissions == nil {
+		body.Permissions = map[string]string{}
+	}
+	return Installation{ID: body.ID, Account: body.Account.Login, AccountType: body.Account.Type, Permissions: body.Permissions}, nil
 }
 
 // VerifyInstaller checks that the person who just installed the App can
@@ -224,6 +232,17 @@ func (a *App) RepositoryToken(ctx context.Context, installationID int64, repo st
 	return a.installationToken(ctx, installationID, map[string]any{
 		"repositories": []string{repo},
 		"permissions":  map[string]string{"contents": "read"},
+	})
+}
+
+// IssuesToken mints a token that can open, edit and comment on one
+// repository's issues, for an hour, and nothing else. GitHub refuses with
+// ErrNotFound if the installation can't see the repository or hasn't
+// accepted the Issues permission.
+func (a *App) IssuesToken(ctx context.Context, installationID int64, repo string) (string, error) {
+	return a.installationToken(ctx, installationID, map[string]any{
+		"repositories": []string{repo},
+		"permissions":  map[string]string{IssuesPermission: "write", "metadata": "read"},
 	})
 }
 
@@ -285,6 +304,19 @@ func (a *App) Repositories(ctx context.Context, installationID int64) ([]Install
 	return out, nil
 }
 
+// statusError is a GitHub answer that wasn't a success. It reads as what
+// call has always returned for that status (ErrNotFound for 401, 403, 404
+// and 422, ErrRateLimited, or a plain error), so errors.Is still works,
+// and the issues client reads the status itself.
+type statusError struct {
+	status int
+	codes  []string // a 422's errors[].code
+	err    error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
 // call makes one request. body is JSON, or a form when it's url.Values.
 func (a *App) call(ctx context.Context, method, u, token string, body, out any) error {
 	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -320,20 +352,41 @@ func (a *App) call(ctx context.Context, method, u, token string, body, out any) 
 		return fmt.Errorf("call GitHub: %w", err)
 	}
 	defer resp.Body.Close() // read-only body
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return ErrNotFound
-	case resp.StatusCode == http.StatusTooManyRequests,
-		resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
-		return ErrRateLimited
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden,
-		resp.StatusCode == http.StatusUnprocessableEntity:
-		return ErrNotFound
-	case resp.StatusCode >= http.StatusMultipleChoices:
-		return fmt.Errorf("GitHub answered %s", resp.Status)
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return answerError(resp)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(out); err != nil {
 		return fmt.Errorf("decode GitHub response: %w", err)
 	}
 	return nil
+}
+
+// answerError reads a GitHub answer that wasn't a success.
+func answerError(resp *http.Response) error {
+	e := &statusError{status: resp.StatusCode}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		e.err = ErrNotFound
+	case resp.StatusCode == http.StatusTooManyRequests,
+		resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
+		e.err = ErrRateLimited
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden,
+		resp.StatusCode == http.StatusUnprocessableEntity:
+		e.err = ErrNotFound
+	default:
+		e.err = fmt.Errorf("GitHub answered %s", resp.Status)
+	}
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		var body struct {
+			Errors []struct {
+				Code string `json:"code"`
+			} `json:"errors"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(&body) == nil {
+			for _, ge := range body.Errors {
+				e.codes = append(e.codes, ge.Code)
+			}
+		}
+	}
+	return e
 }

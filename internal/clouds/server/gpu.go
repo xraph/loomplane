@@ -17,14 +17,7 @@ const gpuUnreadable = "Loomplane couldn't read this server's GPUs."
 // It never installs anything. A probe failure returns GPUStatusUnknown with a short reason, not an error.
 func (c *Client) GPUs(ctx context.Context) (provider.GPUInventory, error) {
 	unknown := provider.GPUInventory{Status: provider.GPUStatusUnknown, Message: gpuUnreadable, CheckedAt: time.Now().UTC()}
-	session, err := c.ssh.NewSession()
-	if err != nil {
-		return unknown, nil
-	}
-	defer session.Close()
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stop()
-	out, err := session.Output(gpuProbeCommand)
+	out, err := c.access.GPUProbe(ctx)
 	if err != nil {
 		return unknown, nil
 	}

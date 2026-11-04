@@ -1,0 +1,116 @@
+---
+title: Talking to the agent
+description: Ask the workspace's agent questions in the Assistant, in the panel on any page, or from the terminal with loomctl agent.
+---
+
+Once the agent is on for your workspace, you can talk to it. Open **Assistant** in the sidebar, press ⌘J (Ctrl+J elsewhere) from any page, or run `loomctl agent` in a terminal. You need `agent:use`, which every member has, and the agent works with your permissions, not its own. If it isn't on yet, start with [the built-in agent](/docs/agents/built-in-agent).
+
+Ask it things like "why did the last deployment of api fail?" or "what runs in production for shop?". It reads live state with its tools and asks before anything risky.
+
+## The Assistant page
+
+Your conversations sit on the left (a menu on a phone) and the open one on the right. Type in the box and send. The answer streams in as the agent writes it, and each tool it uses shows up as a step between the words.
+
+A new conversation is about the whole workspace unless you start it with a project in the address (`/assistant?project=<id>`). The header says which: "About the whole workspace" or "In" and the project's name. The scope is fixed when the conversation starts. To change it, start a new conversation.
+
+While the agent is answering, **Stop** cancels the task. One message is answered at a time. If you send another before it finishes, the server says no with "The agent is still on your last message. Wait for it to finish, answer what it asked, or stop it." The same message comes back from the API as a 409.
+
+## The panel and ⌘J
+
+The panel is the same conversation in a slide-over, so you don't leave the page you're on. ⌘J opens it and closes it again. The command menu has it too, as **Ask the agent**.
+
+Opened from a project page, the panel is scoped to that project and says so. **Ask about the whole workspace** drops the scope before you send your first message. **New conversation** starts over, and **Open in Assistant** carries the conversation to the full page.
+
+## Steps and how risky they are
+
+Every tool the agent calls shows as a step with a label for how risky it is. There are six, one for each class on [What needs a person](/docs/agents/what-needs-a-person#the-risk-table).
+
+| Label | Class | Meaning |
+|---|---|---|
+| Read | `read` | It looked at something |
+| Change | `change` | It changed something within your permissions |
+| Deploy, not production | `deploy_nonproduction` | It approved a staging, preview or development plan |
+| Production release | `promote_production` | A production release, which a person approves |
+| Removes production data | `destroy_production` | Deleting or replacing something in production that holds data, always a person |
+| Needs a person | `secret_or_external` | A secret or an outside connection, always a person |
+
+A step that never got a result shows "No result". A turn you stopped says "Stopped."
+
+## When the agent asks you something
+
+If the agent needs an answer, a question appears in the conversation with its options, and you answer it there. The same request shows on **Deployments, Agent** with everything else the agent is waiting on, and answering in either place settles both. Plan approvals, secrets and connections still go through their own cards, with the same rules as before.
+
+## What a safety stop looks like
+
+Loomplane scans every answer before it counts as an answer. If one holds a credential, such as an API key or a token, the agent stops that answer and the conversation shows "Loomplane's safety checks stopped this answer." Tool calls in that answer don't run. Other personal data, an email address for instance, is redacted in place and the answer goes on.
+
+This assumes shield's stock output profile. If you've changed shield's profiles, the line between a stop and a redaction is yours.
+
+## Who can read and add to a conversation
+
+A conversation is private to the person who started it, with one exception.
+
+Someone with `ai:manage`, which admins have, can read everyone's conversations in the workspace, for support and for audit. The API lists them with `GET /api/v1/agent/conversations?everyone=true`. Anyone else asking for a conversation that isn't theirs is told it doesn't exist.
+
+Only the person who started a conversation can add to it. An admin can read it and stop its running task, and can't post in it. If you want to carry on from someone else's thread, start your own.
+
+A message is up to 16,000 characters.
+
+## From the terminal
+
+`loomctl` reads `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, as it does for every command. The agent acts as the person who made the key.
+
+```bash
+loomctl agent                       # a conversation at a prompt
+loomctl agent --project shop        # about one project (slug, name or ID)
+loomctl agent --conversation <id>   # pick one up again
+```
+
+At the `you>` prompt, type a message and press Enter. Text streams back, and each tool shows on stderr with its risk, such as `· list_deployments (read)`. A few slash commands:
+
+| Command | What it does |
+|---|---|
+| `/stop` | Stops the agent's task |
+| `/follow` | Watches a task again, after you left a question pending |
+| `/new` | Your next message begins a new conversation |
+| `/quit` | Leaves (so does Ctrl-D) |
+
+A question from the agent shows at an `answer>` prompt with numbered options. Type a number or your own words. An empty line leaves it pending, and you can answer later with `loomctl agent requests answer <id> <text>`. Ctrl-C stops the task.
+
+`loomctl agent conversations [--project <ref>] [--json]` lists yours.
+
+### One question, in a script
+
+`loomctl agent ask` sends one message, prints the answer on stdout and exits.
+
+```bash
+loomctl agent ask "what changed in the last deployment of shop?" --project shop
+```
+
+Anything that isn't the answer, the steps and the reasons it failed, goes to stderr, so you can capture the answer cleanly. `--json` prints every event as one JSON line instead. `--conversation <id>` adds to a conversation you started.
+
+| Exit | Means |
+|---|---|
+| 0 | The agent answered |
+| 1 | It didn't: the task failed, was stopped by a safety check, or the server refused the message (the agent is off, the workspace is out of budget, or the conversation is busy) |
+| 3 | The agent is waiting for a person, with `--no-wait` |
+| 130 | You pressed Ctrl-C and the task was stopped |
+
+Without `--no-wait`, `ask` waits with the agent, so a question it puts blocks a pipeline until someone answers. In CI you almost always want the flag:
+
+```yaml
+- name: Summarise the deployment
+  env:
+    LOOMPLANE_URL: ${{ vars.LOOMPLANE_URL }}
+    LOOMPLANE_API_KEY: ${{ secrets.LOOMPLANE_API_KEY }}
+  run: |
+    status=0
+    loomctl agent ask "why is the latest production deployment of shop slow to start?" \
+      --project shop --no-wait > summary.md || status=$?
+    if [ "$status" -eq 3 ]; then
+      echo "The agent needs a person. See: loomctl agent requests" >&2
+    fi
+    exit 0
+```
+
+The final `exit 0` is a choice: a summary is rarely worth failing a build for.

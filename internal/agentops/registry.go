@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/cortex/llm"
 	"github.com/xraph/cortex/tool"
 
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -243,6 +244,9 @@ const (
 	// DecisionRequested is a request to a person cortex suspends the run
 	// on.
 	DecisionRequested = "requested"
+	// DecisionAllowed is a call of a cortex builtin the authorizer let
+	// run: no Loomplane handler runs it to record it.
+	DecisionAllowed = "allowed"
 )
 
 // unknownTool is how the audit names a call to a tool that doesn't exist.
@@ -255,6 +259,27 @@ const unknownTool = "unknown"
 // recorded by its handler instead. A call without a Loomplane principal
 // has no workspace to record under, and isn't recorded.
 func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, risk defs.Risk, projectID, decision string) {
+	// Cortex asks before it checks the tool exists, so the name can be
+	// anything the model wrote: a tool Loomplane doesn't have is recorded
+	// as "unknown".
+	name := inv.Call.Name
+	if _, ok := r.Lookup(name); !ok {
+		name = unknownTool
+	}
+	r.recordDecision(ctx, inv, name, risk, projectID, decision)
+}
+
+// RecordBuiltinDecision is RecordDecision for a call of a cortex builtin
+// the agent may use, such as knowledge_search, which no handler records
+// whatever the decision (DecisionAllowed among them). It keeps the
+// builtin's name: the caller has checked it's one.
+func (r *Registry) RecordBuiltinDecision(ctx context.Context, inv cortex.Invocation, risk defs.Risk, decision string) {
+	r.recordDecision(ctx, inv, inv.Call.Name, risk, "", decision)
+}
+
+// recordDecision writes agent.tool.call for inv as name, under the agent
+// and the person it acts for.
+func (r *Registry) recordDecision(ctx context.Context, inv cortex.Invocation, name string, risk defs.Risk, projectID, decision string) {
 	call, err := CallFrom(inv)
 	if err != nil {
 		p, ok := inv.Principal.(security.Principal)
@@ -269,13 +294,6 @@ func (r *Registry) RecordDecision(ctx context.Context, inv cortex.Invocation, ri
 		call = Call{Principal: p, RunID: inv.RunID.String(), CallID: inv.Call.ID}
 	}
 	call.TaskID = TaskIDFrom(ctx)
-	// Cortex asks before it checks the tool exists, so the name can be
-	// anything the model wrote: a tool Loomplane doesn't have is recorded
-	// as "unknown".
-	name := inv.Call.Name
-	if _, ok := r.Lookup(name); !ok {
-		name = unknownTool
-	}
 	r.write(ctx, call, name, projectID, risk, decision)
 }
 
@@ -404,7 +422,7 @@ func (r *Registry) write(ctx context.Context, call Call, name, projectID string,
 	}
 	outcome := "failure"
 	switch kind {
-	case "success":
+	case "success", DecisionAllowed:
 		outcome = "success"
 	case "forbidden":
 		outcome = "denied"
@@ -493,6 +511,21 @@ type Deps struct {
 	// aiagent sets it to the tool authorizer's Promote, which reads the
 	// gate installed at call time. Nil never allows.
 	Promote func(ctx context.Context, call Call, plan *planning.Plan) (allowed bool, failed []string, err error)
+	// Reports are the agent's reports, for internal/agentreports/reportops.
+	// Nil until aiagent builds them; the report operations refuse then.
+	Reports *agentreports.Service
+	// InvestigationOf reads the task record of the run runID: the task and
+	// the report it investigates, when the run is a report's investigation
+	// that hasn't finished, else "" and "". update_report asks it, since
+	// the watcher starts an investigation before it stores the task on the
+	// report. aiagent adapts agentruns.Service.ByRun. Nil: no run is an
+	// investigation.
+	InvestigationOf func(ctx context.Context, orgID, runID string) (taskID, reportID string, err error)
+	// DeliverReport queues the delivery job of a report whose delivery
+	// open_report just marked queued. The watcher's jobs set it; nil
+	// leaves delivery to the watcher's next pass, and open_report doesn't
+	// mark the delivery queued then.
+	DeliverReport func(ctx context.Context, orgID, reportID string)
 }
 
 // PersonNamer names a person by their user ID, never by their email.

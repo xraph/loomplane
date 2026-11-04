@@ -25,14 +25,22 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-type SSHRuntime struct{}
+// HostRuntime inspects a server's Docker host over pinned SSH, or through
+// its node's streams when the connection is a node's. Streams may be nil,
+// and a node connection then fails to connect.
+type HostRuntime struct {
+	Streams server.NodeStreams
+}
 
-func (SSHRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]string, vacant bool) (RuntimeHealth, error) {
+// SSHRuntime is HostRuntime's old name, kept for one release.
+type SSHRuntime = HostRuntime
+
+func (r HostRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]string, vacant bool) (RuntimeHealth, error) {
 	cfg, err := server.ParseConfig(raw, settings)
 	if err != nil {
 		return RuntimeHealth{}, err
 	}
-	client, err := server.Dial(ctx, cfg)
+	client, err := server.Connect(ctx, cfg, r.Streams)
 	if err != nil {
 		return RuntimeHealth{}, err
 	}

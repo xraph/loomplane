@@ -82,7 +82,7 @@ func recoveryFixture(t *testing.T) (*server.Client, string, []byte) {
 		t.Fatal(err)
 	}
 	cfg.Details["docker_id"] = recoveryDocker(t, "exec", name, "docker", "info", "--format", "{{.ID}}")
-	c, err := server.Dial(t.Context(), cfg)
+	c, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestIngressCancelledSaveRecoveryAndRotatedCleanup(t *testing.T) {
 	if oldErr != nil {
 		t.Fatal(oldErr)
 	}
-	if oldClient, dialErr := server.Dial(t.Context(), oldConfig); dialErr == nil {
+	if oldClient, dialErr := server.Connect(t.Context(), oldConfig, nil); dialErr == nil {
 		_ = oldClient.Close()
 		t.Fatal("retired SSH key still authenticates")
 	}

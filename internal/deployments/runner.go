@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	drt "github.com/xraph/dispatch/durable/runtime"
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -25,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
@@ -860,6 +862,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		if current.Status == StatusPaused {
 			return errors.Join(ErrCapacityPaused, err)
 		}
+		// A node that is offline or refused a stream says so in its own
+		// words, which the action records in place of the raw error.
+		err = nodeFailed(err)
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -876,6 +881,76 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// maxRefusalReason bounds how much of a node's reason for refusing a
+// stream an action records.
+const maxRefusalReason = 200
+
+// nodeOfflineMessage says why an action couldn't reach its node, when err
+// is the hub's: the node is offline, it doesn't allow the endpoint a
+// stream asked for, or it refused the stream for a reason of its own.
+// Anything else is false.
+func nodeOfflineMessage(err error) (string, bool) {
+	var refused *endpointRefusedError
+	if errors.As(err, &refused) {
+		if refused.notAllowed {
+			return fmt.Sprintf("node %s doesn't allow %s; allow it on the machine with: loomctl node allow %s", refused.node, refused.endpoint, refused.endpoint), true
+		}
+		reason, _ := nodes.RefusalReason(err)
+		if len(reason) > maxRefusalReason {
+			reason = strings.ToValidUTF8(reason[:maxRefusalReason], "") + "..."
+		}
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fmt.Sprintf("node %s refused a %s stream: %s", refused.node, refused.endpoint, reason), true
+	}
+	var off nodes.ErrNodeOffline
+	if !errors.As(err, &off) {
+		return "", false
+	}
+	if off.Since.IsZero() {
+		return fmt.Sprintf("node %s is offline; its apps keep running. Run the deploy again once it reconnects", off.Name), true
+	}
+	return fmt.Sprintf("node %s is offline since %s; its apps keep running. Run the deploy again once it reconnects", off.Name, off.Since.UTC().Format("15:04 UTC")), true
+}
+
+// nodeFailed is err in nodeOfflineMessage's words, or err itself.
+func nodeFailed(err error) error {
+	if already := (*nodeFailureError)(nil); errors.As(err, &already) {
+		return err
+	}
+	message, ok := nodeOfflineMessage(err)
+	if !ok {
+		return err
+	}
+	var refused *endpointRefusedError
+	return &nodeFailureError{message: message, err: err, final: errors.As(err, &refused) && refused.notAllowed}
+}
+
+// nodeFailureError is a node's failure as the action records it. An offline
+// node is retried within the activity's attempts, since it may reconnect,
+// and so is a stream the node refused for a reason of its own, such as a
+// dial target that wasn't up yet; an endpoint the node doesn't allow is
+// final, since only someone on the machine can allow it.
+type nodeFailureError struct {
+	message string
+	err     error
+	final   bool
+}
+
+func (e *nodeFailureError) Error() string { return e.message }
+func (e *nodeFailureError) Unwrap() error { return e.err }
+
+// As makes a final failure the durable runtime's non-retryable one.
+func (e *nodeFailureError) As(target any) bool {
+	failure, ok := target.(**drt.ApplicationError)
+	if !ok || !e.final {
+		return false
+	}
+	*failure = &drt.ApplicationError{Type: "node_endpoint_refused", Message: e.message, NonRetryable: true}
+	return true
 }
 
 // stopRequested cancels a deployment whose cancel was requested, at a point

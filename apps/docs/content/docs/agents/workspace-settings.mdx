@@ -3,7 +3,7 @@ title: Workspace settings
 description: Choose the agent's provider and key, set its monthly budget, decide about knowledge, and set per-project autonomy.
 ---
 
-A workspace admin runs the agent from **Settings, AI**. You need `ai:manage` to see the agent's panel at all. Everyone else with `agent:use` can see the agent's requests, and nobody else sees the settings. Chatting with the agent comes in a later version. In this one you set it up here and answer what it asks on the requests page.
+A workspace admin runs the agent from **Settings, AI**. Anyone with `ai:read` can open that page and see the workspace's AI budget. You need `ai:manage` to change anything there, and to see the agent's panel at all. Everyone with `agent:use` can see the agent's requests and [talk to it](/docs/agents/assistant).
 
 ## Provider and key
 
@@ -26,13 +26,19 @@ The **Model** field starts from the model the agent runs on now. Type another to
 
 ## Budget
 
-Give the agent a monthly budget in USD and choose **Save budget**. It's the agent's share of the workspace's AI budget. The page shows what it has spent this month beside the limit.
+There are two budgets, and the order matters. The workspace has a monthly AI budget that everything AI shares: models, embeddings and the agent. The agent gets a share of it. Neither is set when a workspace is new, and the agent can't be turned on until both are.
 
-You need a budget before you can turn the agent on. When the month's spend reaches the limit, the agent's model calls are refused with a message that says the workspace has used its AI budget, and they stay refused until next month or until an admin raises the limit. Work that's already waiting on a person isn't lost. Setting the budget to `0` releases it, which you can only do while the agent is off.
+1. **The workspace's budget.** It's the **AI budget** section at the top of this page. You'll see the budget, how much of it is shared out, what's left and who holds each share. Type an amount into **Workspace budget (USD)** and choose **Save**. It can't go below what's already shared out. The API is `PUT /api/v1/ai/settings/budget` with `monthly_budget_usd` and the `revision` you read from `GET /api/v1/ai/settings`. A stale `revision` is refused, so read again and retry.
+
+2. **The agent's budget.** Further down, in the agent's panel, give the agent a monthly budget in USD and choose **Save budget**. It comes out of what's left of the workspace's budget, and the field tells you how much that is. Ask for more and the page stops you before saving and tells you to raise the workspace's budget first. The page shows what the agent has spent this month beside the limit. The API is `PUT /api/v1/ai/settings/agent/budget` with `monthly_budget_usd` and `revision`.
+
+3. **The switch**, below.
+
+You need both budgets before you can turn the agent on. When the month's spend reaches the limit, the agent's model calls are refused with a message that says the workspace has used its AI budget, and they stay refused until next month or until an admin raises the limit. Work that's already waiting on a person isn't lost. Setting the budget to `0` releases it, which you can only do while the agent is off.
 
 ## Knowledge
 
-The **Knowledge** switch lets the agent search documents before it answers. When the server can't support it, the switch is disabled and the reason sits beside it: no embedding model configured, or no pgvector. See [the built-in agent](/docs/agents/built-in-agent#knowledge).
+The **Knowledge** switch lets the agent search documents before it answers. When the server can't support it, the switch is disabled and the reason sits beside it. [Knowledge](/docs/agents/knowledge#when-the-switch-is-off) lists each reason and what fixes it.
 
 ## Turning it on and off
 

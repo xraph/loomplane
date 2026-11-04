@@ -51,7 +51,7 @@ func TestDialContainerPortUsesLoopbackBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := Dial(t.Context(), cfg)
+	c, err := Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

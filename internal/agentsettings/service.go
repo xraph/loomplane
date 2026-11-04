@@ -718,6 +718,12 @@ func (s *Service) Enabled(ctx context.Context, orgID string) (bool, error) {
 	return st.Enabled, nil
 }
 
+// EnabledOrgs returns the IDs of the workspaces whose agent is on,
+// sorted, for the jobs that work each of them.
+func (s *Service) EnabledOrgs(ctx context.Context) ([]string, error) {
+	return s.store.ListEnabled(ctx)
+}
+
 // NexusTenant is the workspace's nexus tenant, or ErrDisabled while the
 // agent is off.
 func (s *Service) NexusTenant(ctx context.Context, orgID string) (string, error) {

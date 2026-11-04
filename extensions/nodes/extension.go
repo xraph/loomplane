@@ -6,6 +6,7 @@ package nodes
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -17,12 +18,15 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	groveext "github.com/xraph/grove/extension"
 
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/buildinfo"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
 // Name is the extension's name, for other extensions' Dependencies.
@@ -36,6 +40,8 @@ type Extension struct {
 	hubErr error
 	svc    *nodes.Service
 	minter JoinTokenMinter
+	// drains drains the Cloud server a node was adopted as.
+	drains ServerDrains
 	// limiter counts the public node endpoints per address. It is the
 	// identity extension's, which sign-in counts on too, kept in the shared
 	// store so a caller can't spread over replicas to get more. Nil means no
@@ -75,9 +81,10 @@ func New(cfg config.Config, replica string) *Extension {
 // open streams to nodes through it.
 func (e *Extension) Hub() *nodes.Hub { return e.hub }
 
-// Dependencies implements forge.Extension.
+// Dependencies implements forge.Extension. Cloud infrastructure registers
+// first, so a node joined with a Cloud can be adopted into it.
 func (e *Extension) Dependencies() []string {
-	return []string{groveext.ExtensionName, identity.Name}
+	return []string{groveext.ExtensionName, identity.Name, cloudinfraext.Name}
 }
 
 // Register builds the service, binds the hub and mounts the routes. A hub
@@ -111,6 +118,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("nodes needs the identity extension: %w", err)
 	}
+	infra, err := forge.InjectType[*cloudinfra.Service](c)
+	if err != nil {
+		return fmt.Errorf("nodes needs cloud infrastructure: %w", err)
+	}
 	engine, err := forge.InjectType[*authsome.Engine](c)
 	if err != nil {
 		return fmt.Errorf("nodes needs the identity extension's auth engine: %w", err)
@@ -121,7 +132,18 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.svc = &nodes.Service{
 		Store: store, Tokens: keys, Authz: authz, Version: buildinfo.Version,
 		Audit: auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()},
+		// A join token scoped to a Cloud is the approval to adopt the node
+		// into it; the first connect does the adopting.
+		Adopt: infra.RecordNodeAdoption,
 	}
+	// An adopted node's address check settles its ingress through the
+	// service, which sends the mode the way an update does.
+	infra.NodeIngress = e.svc
+	// A node whose address changes is followed from the node as stored.
+	infra.NodeRecords = store
+	e.adoptOnConnect(infra)
+	e.followAddressChanges(infra)
+	e.serveNodeServers(infra, store)
 	// Bind makes the hub the service's notifier and refuses an empty
 	// audience or secret.
 	if err = e.hub.Bind(store, e.svc); err != nil {
@@ -137,6 +159,48 @@ func (e *Extension) Register(fapp forge.App) error {
 		return routeErr
 	}
 	return e.mountNodeEndpoints(fapp.Router())
+}
+
+// adoptOnConnect adopts a node waiting for its Cloud when it comes online,
+// and again whenever its inventory changes, since Docker may only start
+// answering after the first connect. The hub runs each hook off its own
+// goroutines with a deadline and recovers a panic.
+func (e *Extension) adoptOnConnect(infra *cloudinfra.Service) {
+	adopt := func(ctx context.Context, n *nodes.Node) {
+		if err := infra.AdoptOnline(ctx, n); err != nil {
+			e.Logger().Warn("Adopt a node into its Cloud; the next connect tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+		}
+	}
+	e.hub.OnOnline(adopt)
+	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, _, _ nodeproto.Inventory) { adopt(ctx, n) })
+}
+
+// followAddressChanges follows a node whose public addresses change to its
+// new address, and a node that comes back online, which may have moved
+// while away. The follow outlasts the hook's deadline, so it gets its own.
+// What a follow leaves unfinished, cloud infrastructure's reconcile picks up.
+func (e *Extension) followAddressChanges(infra *cloudinfra.Service) {
+	follow := func(ctx context.Context, n *nodes.Node, run func(context.Context, *nodes.Node) error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cloudinfra.NodeAddressFollowWait)
+		defer cancel()
+		if err := run(ctx, n); err != nil {
+			e.Logger().Warn("Follow a node to its new address; the reconcile tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
+		}
+	}
+	// Each follow checks a node's addresses at most as often as cloud
+	// infrastructure allows, so a node whose addresses flap can't have its
+	// proxy changed over and over.
+	e.hub.OnOnline(func(ctx context.Context, n *nodes.Node) { follow(ctx, n, infra.CatchUpNodeAddress) })
+	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
+		if !slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
+			follow(ctx, n, infra.FollowNodeAddress)
+		}
+	})
+	// An owner asking for direct ingress has the address checked now. The
+	// update has answered by then, so the check gets a context of its own.
+	e.svc.CheckAddress = func(n *nodes.Node) {
+		go follow(context.Background(), n, infra.CheckNodeAddress)
+	}
 }
 
 // Start runs the hub's sweep, which marks silent nodes offline.

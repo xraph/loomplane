@@ -267,7 +267,13 @@ func ValidateSnapshot(file *os.File) error {
 				return errors.New("invalid snapshot file name")
 			}
 		}
-		if parts[0] != "indices" && !strings.HasPrefix(parts[0], "index-") && parts[0] != "index.latest" && !strings.HasPrefix(parts[0], "snap-") && !strings.HasPrefix(parts[0], "meta-") {
+		if parts[0] == "snapshot_shard_paths" {
+			directory := len(parts) == 1 && h.Typeflag == tar.TypeDir
+			metadata := len(parts) == 2 && h.Typeflag == tar.TypeReg && strings.HasPrefix(parts[1], "snapshot_path_") && len(parts[1]) > len("snapshot_path_")
+			if !directory && !metadata {
+				return fmt.Errorf("unexpected snapshot shard path %q", name)
+			}
+		} else if parts[0] != "indices" && !strings.HasPrefix(parts[0], "index-") && parts[0] != "index.latest" && !strings.HasPrefix(parts[0], "snap-") && !strings.HasPrefix(parts[0], "meta-") {
 			return fmt.Errorf("unexpected snapshot file %q", name)
 		}
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {

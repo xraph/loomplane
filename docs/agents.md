@@ -4,6 +4,8 @@
 
 This is not Loomplane's built-in agent. The built-in agent runs inside Loomplane as your workspace's agent, with its own settings, budget and requests (see the docs under AI agents). `loomctl mcp` serves your own key's tools to an agent that lives outside Loomplane. Both are built from one definition of every operation.
 
+You can also talk to the built-in agent from a terminal. `loomctl agent` opens a conversation at a prompt, and `loomctl agent ask "<prompt>"` asks one thing, prints the answer and exits (`--project`, `--conversation`, `--json`, and `--no-wait` to exit with status 3 when the agent waits for a person). The same conversations are in the dashboard's Assistant and its ⌘J panel. See the docs under AI agents.
+
 ## Setting it up
 
 Make an API key under Settings, API keys. Then add loomctl to your agent's MCP configuration:

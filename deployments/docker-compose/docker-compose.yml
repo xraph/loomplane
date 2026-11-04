@@ -10,6 +10,10 @@
 #
 # Postgres's host port is 55532, so it runs beside a Postgres you already
 # have on 5432. config.local.yaml.example points at it.
+#
+# The knowledge profile adds a second Postgres, with pgvector, on 55533,
+# for the agent's knowledge tests (make up-knowledge). Loomplane never
+# needs it: without pgvector, knowledge stays off and says why.
 name: loomplane
 
 services:
@@ -23,6 +27,25 @@ services:
       - "55532:5432"
     volumes:
       - loomplane-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loomplane -d loomplane"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # Postgres with pgvector, for the knowledge tests. Same credentials as
+  # the one above, its own port and volume.
+  postgres-vector:
+    profiles: ["knowledge"]
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: loomplane
+      POSTGRES_PASSWORD: loomplane
+      POSTGRES_DB: loomplane
+    ports:
+      - "55533:5432"
+    volumes:
+      - loomplane-pgvector-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U loomplane -d loomplane"]
       interval: 2s
@@ -73,3 +96,4 @@ services:
 
 volumes:
   loomplane-pgdata:
+  loomplane-pgvector-data:

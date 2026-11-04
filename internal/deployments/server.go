@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,8 +66,12 @@ type OwnedTarget struct {
 	// serializes it within this process only.
 	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
-	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
-	Backend     func(string, string) owned.Backend
+	// NodeStreams reach joined nodes, for server connections that are a
+	// node's. Nil reaches only SSH servers.
+	NodeStreams server.NodeStreams
+	// ServerConnect replaces server.Connect, for tests. Nil is server.Connect.
+	ServerConnect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
+	Backend       func(string, string) owned.Backend
 
 	// Kinds is the catalog composed resources' components are checked
 	// against. Nil is recipes.Default().
@@ -102,6 +107,9 @@ type OwnedTarget struct {
 	// endpointDial dials from a target for an endpoint check. Nil is
 	// TargetDial.
 	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// reconnect is how long a deploy waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
@@ -155,24 +163,26 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
-		cfg, err := server.ParseConfig(raw, c.Details)
+		client, node, err := serverClientFor(ctx, c, raw, e.NodeStreams, e.ServerConnect, e.reconnect)
 		if err != nil {
 			return nil, err
 		}
-		recorded := cfg.RecordedDetails(c.Details)
-		dial := e.ServerDial
-		if dial == nil {
-			dial = server.Dial
-		}
-		client, err := dial(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
+		recorded := client.Config.RecordedDetails(c.Details)
+		client.RequestsGPUs = labels[owned.LabelGPU] != ""
 		details, missing, err := client.Check(ctx)
 		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, recorded)) {
 			_ = client.Close()
+			if unreachable := node.unreachable(); unreachable != nil {
+				return nil, unreachable
+			}
 			if err != nil {
 				return nil, err
+			}
+			if slices.Contains(missing, "docker:runtimes") {
+				return nil, errors.New("the container engine doesn't name its runtimes, so it can't run GPU work; use Docker with the NVIDIA Container Toolkit")
+			}
+			if client.Config.Node != nil {
+				return nil, errors.New("the node or its Docker identity changed; check the connection and plan again")
 			}
 			return nil, errors.New("the SSH server or Docker identity changed; check the connection and plan again")
 		}
@@ -486,7 +496,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Dial: e.ServerDial, FirecrackerAuthority: e.FirecrackerAuthority}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"
@@ -596,6 +606,12 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 			expectedRevision = labels[owned.LabelManagedRevisionBase] + "/" + applied.ReleaseID.String()
 		}
 		if err != nil {
+			// Ctrl Plane's deploy error is ErrDeploymentFailed alone, so a
+			// node that went offline mid-deploy is named by the restore
+			// below: its Apply opens a new session, which finds the node
+			// offline and returns the hub's error, typed, in backendErr.
+			// The preflight session above has already caught a node that
+			// was offline before the deploy started.
 			restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			backend, backendErr := e.registeredBackend(key)

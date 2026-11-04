@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/cortex"
 	"github.com/xraph/cortex/checkpoint"
 	"github.com/xraph/cortex/engine"
+	"github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/llm"
 	cortexsqlite "github.com/xraph/cortex/store/sqlite"
 	"github.com/xraph/cortex/suspension"
@@ -427,11 +428,32 @@ func TestARunIsBoundFromItsTaskAcrossAPause(t *testing.T) {
 	if kinds[len(kinds)-1] != EventStatus {
 		t.Errorf("the last event is %s", kinds[len(kinds)-1])
 	}
+	// Each call's outcome follows it, the paused one's from the job that
+	// resumed it.
+	results, calls := toolResults(t, evs)
+	if len(results) != 2 || results[0].CallID != "call_ask" || results[1].CallID != "call_teams" {
+		t.Fatalf("tool results %+v", results)
+	}
+	for _, res := range results {
+		if res.Outcome != OutcomeOK || res.Seq <= calls[res.CallID] {
+			t.Errorf("tool result %+v, its call at %d", res, calls[res.CallID])
+		}
+	}
 
 	// The agent config carries the guardrails.
 	bound, err := r.svc.Bind(context.Background(), r.store.task(t, task.ID))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The conversation's session exists, so cortex saved the run's
+	// memory into it.
+	sid, err := id.ParseSessionID(task.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := r.eng.Store().GetSession(bound, sid)
+	if err != nil || sess.IsDefault || sess.MessageCount == 0 {
+		t.Fatalf("session %+v, %v", sess, err)
 	}
 	cfg, err := r.eng.GetAgentByName(bound, "loomplane-chat")
 	if err != nil {

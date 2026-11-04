@@ -92,8 +92,8 @@ func (s State) SaveCeiling(c Ceiling, gid int) error {
 	// write and a reopen, and that file would get this group and mode.
 	tmp, err := writeTempWith(path, b, func(f *os.File) error {
 		if gid >= 0 {
-			if err := f.Chown(-1, gid); err != nil {
-				return fmt.Errorf("giving %s to group %d: %w", path, gid, err)
+			if ownershipErr := f.Chown(-1, gid); ownershipErr != nil {
+				return fmt.Errorf("giving %s to group %d: %w", path, gid, ownershipErr)
 			}
 		}
 		return f.Chmod(0o640)

@@ -306,7 +306,7 @@ func TestAcceptanceSharedCloudCombined(t *testing.T) {
 			t.Fatal(parseErr)
 		}
 		sshConfig.Details["docker_id"] = host.Daemon
-		remote, dialErr := server.Dial(t.Context(), sshConfig)
+		remote, dialErr := server.Connect(t.Context(), sshConfig, nil)
 		if dialErr != nil {
 			t.Fatal(dialErr)
 		}

@@ -51,6 +51,7 @@ type JoinRequest struct {
 type JoinResult struct {
 	NodeID             string               `json:"node_id"`
 	OrgID              string               `json:"org_id"`
+	Name               string               `json:"name,omitempty"`
 	IdentityGeneration int64                `json:"identity_generation"`
 	Endpoints          []nodeproto.Endpoint `json:"endpoints"`
 	CloudID            string               `json:"cloud_id,omitempty"`
@@ -132,4 +133,47 @@ func (c *Client) UpdateNode(ctx context.Context, id string, u NodeUpdate) (*Node
 		return nil, err
 	}
 	return &out, nil
+}
+
+// NodeWorkload is something Loomplane runs on a node. Kind is service,
+// job, database or component. A database whose HasBackupPolicy is false
+// has no backups, so its data goes with the machine.
+type NodeWorkload struct {
+	BindingID       string `json:"binding_id"`
+	ProjectID       string `json:"project_id"`
+	Environment     string `json:"environment"`
+	Service         string `json:"service"`
+	Kind            string `json:"kind"`
+	HasBackupPolicy bool   `json:"has_backup_policy"`
+}
+
+// DrainNode reviews draining the Cloud server a node was adopted as: what
+// it holds now. ApplyNodeDrain with the review's digest drains it.
+func (c *Client) DrainNode(ctx context.Context, id string) (*DrainReview, error) {
+	var out DrainReview
+	if err := c.do(ctx, http.MethodPost, "/api/v1/nodes/"+esc(id)+"/drain", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ApplyNodeDrain drains a node's server, as reviewed: nothing new is
+// placed on it. A review that no longer matches is refused.
+func (c *Client) ApplyNodeDrain(ctx context.Context, id, review string) (*Node, error) {
+	var out Node
+	if err := c.do(ctx, http.MethodPost, "/api/v1/nodes/"+esc(id)+"/drain/apply", InfrastructureApplyInput{Review: review}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// NodeWorkloads lists what Loomplane runs on a node.
+func (c *Client) NodeWorkloads(ctx context.Context, id string) ([]NodeWorkload, error) {
+	var out struct {
+		Workloads []NodeWorkload `json:"workloads"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/nodes/"+esc(id)+"/workloads", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Workloads, nil
 }

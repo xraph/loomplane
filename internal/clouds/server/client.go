@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,69 +10,18 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // Client forwards HTTP over the selected server's Docker Unix socket.
 type Client struct {
 	RequireFence bool
+	// RequestsGPUs says the work this client runs asks for GPUs, so Check
+	// needs the daemon to name its runtimes.
+	RequestsGPUs bool
 	Config       *Config
 	HTTP         *http.Client
-	ssh          *ssh.Client
+	access       HostAccess
 	transport    *http.Transport
-}
-
-// Dial authenticates without reading SSH config, agents or ambient keys.
-func Dial(ctx context.Context, cfg *Config) (*Client, error) {
-	if cfg == nil || cfg.Signer == nil || cfg.HostKey == nil {
-		return nil, ErrInvalid
-	}
-	conn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", cfg.Address)
-	if err != nil {
-		return nil, fmt.Errorf("reach SSH server: %w", err)
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err = conn.SetDeadline(deadline); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	algorithms := []string{cfg.HostKey.Type()}
-	if cfg.HostKey.Type() == ssh.KeyAlgoRSA {
-		algorithms = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
-	}
-	sshConfig := &ssh.ClientConfig{HostKeyAlgorithms: algorithms, User: cfg.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(cfg.Signer)}, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		if !bytes.Equal(key.Marshal(), cfg.HostKey.Marshal()) {
-			return ErrRejected
-		}
-		return nil
-	}}
-	cc, chans, requests, err := ssh.NewClientConn(conn, cfg.Address, sshConfig)
-	stop()
-	if err != nil {
-		_ = conn.Close()
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if strings.Contains(err.Error(), "unable to authenticate") || strings.Contains(err.Error(), ErrRejected.Error()) {
-			return nil, ErrRejected
-		}
-		return nil, fmt.Errorf("SSH handshake: %w", err)
-	}
-	if err = conn.SetDeadline(time.Time{}); err != nil {
-		_ = cc.Close()
-		return nil, err
-	}
-	client := ssh.NewClient(cc, chans, requests)
-	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return client.DialContext(ctx, "unix", cfg.Socket)
-	}, ResponseHeaderTimeout: 30 * time.Second, MaxIdleConnsPerHost: 4}
-	return &Client{Config: cfg, ssh: client, transport: transport, HTTP: &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Close ends the authenticated transport and all its forwarded connections.
@@ -81,26 +29,26 @@ func (c *Client) Close() error {
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
 	}
-	if c.ssh != nil {
-		return c.ssh.Close()
+	if c.access != nil {
+		return c.access.Close()
 	}
 	return nil
 }
 
-// DialContext opens a TCP connection from the server, through the SSH
-// connection Dial pinned to its host key, so what's dialed is reached from
-// the server's network. It dials only TCP: a Unix socket on the server,
-// such as Docker's, isn't for anyone else to reach.
+// DialContext opens a TCP connection from the server, through the host
+// access Connect pinned, so what's dialed is reached from the server's
+// network. It dials only TCP: a Unix socket on the server, such as
+// Docker's, isn't for anyone else to reach.
 func (c *Client) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	switch network {
 	case "tcp", "tcp4", "tcp6":
 	default:
 		return nil, fmt.Errorf("%w: the server dials only TCP, not %s", ErrInvalid, network)
 	}
-	if c.ssh == nil {
+	if c.access == nil {
 		return nil, fmt.Errorf("%w: the server isn't connected", ErrInvalid)
 	}
-	return c.ssh.DialContext(ctx, network, address)
+	return c.access.DialContext(ctx, network, address)
 }
 
 // Request addresses only the configured Docker daemon. The caller owns Body.
@@ -144,7 +92,11 @@ func (c *Client) Check(ctx context.Context) (details map[string]string, missing 
 		}
 		return details, []string{"docker:access"}, nil
 	}
-	var info struct{ ID, OSType, Architecture string }
+	// Podman's Docker-compatible API can leave out the ID and the runtimes.
+	var info struct {
+		ID, OSType, Architecture string
+		Runtimes                 map[string]json.RawMessage
+	}
 	if err := c.getJSON(ctx, "/info", &info); err != nil {
 		return details, []string{"docker:info"}, nil
 	}
@@ -173,6 +125,9 @@ func (c *Client) Check(ctx context.Context) (details map[string]string, missing 
 	}
 	if info.ID == "" || info.Architecture == "" {
 		missing = append(missing, "docker:identity")
+	}
+	if c.RequestsGPUs && len(info.Runtimes) == 0 {
+		missing = append(missing, "docker:runtimes")
 	}
 	return details, missing, nil
 }

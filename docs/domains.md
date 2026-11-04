@@ -130,7 +130,7 @@ Loomplane only creates objects in the connection's namespace, never anything clu
 - one shared Service, `lp-route-deny`, with no endpoints, for blocked paths,
 - one Secret per wildcard zone, holding its DNS challenge token under `api-token`.
 
-The ACME account has no email address, so nothing about you reaches the certificate authority. Certificates come from Let's Encrypt. Set `clouds.acme_directory` (or `LOOMPLANE_ACME_DIRECTORY`) to another HTTPS directory, such as Let's Encrypt staging, to test without touching the production rate limits.
+The ACME account has no email address, so nothing about you reaches the certificate authority. Certificates come from Let's Encrypt. Set `clouds.acme_directory` (or `LOOMPLANE_ACME_DIRECTORY`) to another HTTPS directory, such as Let's Encrypt staging, to test without touching the production rate limits. Routes on servers order from it too. If the directory's own certificate comes from a CA the proxy doesn't trust, such as a test CA, put that CA's certificates in a PEM file and set `clouds.acme_roots_file` (or `LOOMPLANE_ACME_ROOTS_FILE`) to it: Loomplane copies it to each server's proxy. Kubernetes routes don't use it.
 
 The service account in your kubeconfig needs these permissions on top of the ones workloads need. Bind them in the namespace you connect:
 

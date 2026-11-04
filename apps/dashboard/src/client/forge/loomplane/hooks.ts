@@ -10,9 +10,16 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKey, APIKeyList, ActivitySummary, AgentView, AgentsettingsStatus, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, BitbucketRepositoryList, BitbucketStatus, BitbucketWorkspaceView, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudCluster, CloudClusterOperation, CloudClusterOperationPage, CloudClusterPage, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ClusterCapacity, ClusterOptions, ClusterPage, CompromisedRevoke, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, Coverage, DeliveryList, DeployedList, DeploymentList, DeploymentsDeployment, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EdgeState, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FabriqloomStatus, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, GitLabConnectionView, GitLabHostView, GitLabRepositoryList, GitLabStatus, IdentitySession, InfrastructureStatus, JoinTokenList, KeylessSetup, LogPage, ManagedRegistryView, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, Node, NodeList, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectPermissions, ProjectView, ProjectZoneList, ProviderKey, ProviderList, ProviderResource, ProviderResourceList, ProviderResourceSync, ProviderZoneList, PublicConfig, PushConfig, PushDevice, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, ReleaseEvidence, Request, RequestList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RollbackTarget, RouteOperation, RouteSummary, RuntimeAttachmentPage, Server, ServerList, ServerOptions, ServerUsage, SetupStatus, SignInAppList, Snapshot, Soak, SourceList, SpendReport, StorageVolumeList, Sync, Target, Team, TeamList, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, Watch, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKey, APIKeyList, ActivitySummary, AgentView, AgentsettingsStatus, AgentwatchStatus, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, BitbucketRepositoryList, BitbucketStatus, BitbucketWorkspaceView, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudCluster, CloudClusterOperation, CloudClusterOperationPage, CloudClusterPage, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ClusterCapacity, ClusterOptions, ClusterPage, CompromisedRevoke, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, ConversationList, Coverage, DeliveryList, DeployedList, DeploymentList, DeploymentsDeployment, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EdgeState, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FabriqloomStatus, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, GitLabConnectionView, GitLabHostView, GitLabRepositoryList, GitLabStatus, History, IdentitySession, InfrastructureStatus, JoinTokenList, KeylessSetup, LogPage, ManagedRegistryView, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, Node, NodeAdoptionList, NodeList, NodeWorkloadList, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectPermissions, ProjectView, ProjectZoneList, ProviderKey, ProviderList, ProviderResource, ProviderResourceList, ProviderResourceSync, ProviderZoneList, PublicConfig, PushConfig, PushDevice, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, ReleaseEvidence, Report, ReportList, Request, RequestList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RollbackTarget, RouteOperation, RouteSummary, RuntimeAttachmentPage, Server, ServerList, ServerOptions, ServerUsage, SetupStatus, SignInAppList, Snapshot, Soak, SourceList, SpendReport, StorageVolumeList, Sync, Target, Task, Team, TeamList, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, Watch, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
+export const useAgentConversationsList = query<ConversationList>(ops['agentConversations.list']);
+export const useAgentConversationsStart = mutation(ops['agentConversations.start']);
+export const useAgentConversationsGet = query<History>(ops['agentConversations.get']);
+export const useAgentConversationsSend = mutation(ops['agentConversations.send']);
+export const useAgentReportsList = query<ReportList>(ops['agentReports.list']);
+export const useAgentReportsGet = query<Report>(ops['agentReports.get']);
+export const useAgentReportsClose = mutation<Report, Report>(ops['agentReports.close']);
 export const useAgentRequestsList = query<RequestList>(ops['agentRequests.list']);
 export const useAgentRequestsGet = query<Request>(ops['agentRequests.get']);
 export const useAgentRequestsAnswer = mutation<Request, Request>(ops['agentRequests.answer']);
@@ -20,6 +27,10 @@ export const useAgentRequestsComplete = mutation<Request, Request>(ops['agentReq
 export const useAgentRequestsDecline = mutation<Request, Request>(ops['agentRequests.decline']);
 export const useAgentRequestsProvideSecret = mutation<Request, Request>(ops['agentRequests.provideSecret']);
 export const useAgentStatusGet = query<AgentsettingsStatus>(ops['agentStatus.get']);
+export const useAgentTasksGet = query<Task>(ops['agentTasks.get']);
+export const useAgentTasksCancel = mutation<Task, Task>(ops['agentTasks.cancel']);
+export const useAgentTasksStream = query(ops['agentTasks.stream']);
+export const useAgentWatcherGet = query<AgentwatchStatus>(ops['agentWatcher.get']);
 export const useAiModelDeploymentsList = query<ModelDeploymentList>(ops['aiModelDeployments.list']);
 export const useAiModelsInspect = mutation<EntryDetail, EntryDetail>(ops['aiModels.inspect']);
 export const useAiModelsRegistry = query<RegistryList>(ops['aiModels.registry']);
@@ -89,6 +100,7 @@ export const useInfrastructureOperationsGet = query<Operation>(ops['infrastructu
 export const useInfrastructureOperationsApply = mutation<Operation, Operation>(ops['infrastructureOperations.apply']);
 export const useInfrastructureOperationsCancel = mutation<Operation, Operation>(ops['infrastructureOperations.cancel']);
 export const useInfrastructureOperationsRetry = mutation<Operation, Operation>(ops['infrastructureOperations.retry']);
+export const useCloudNodeAdoptionsList = query<NodeAdoptionList>(ops['cloudNodeAdoptions.list']);
 export const useCloudPlacementsAcceptMove = mutation(ops['cloudPlacements.acceptMove']);
 export const useCloudPlacementsPreviewMove = mutation(ops['cloudPlacements.previewMove']);
 export const useCloudPlacementsPreviewRecovery = mutation(ops['cloudPlacements.previewRecovery']);
@@ -205,7 +217,10 @@ export const useNodeJoinTokensCreate = mutation(ops['nodeJoinTokens.create']);
 export const useNodeJoinTokensCancel = mutation(ops['nodeJoinTokens.cancel']);
 export const useNodesGet = query<Node>(ops['nodes.get']);
 export const useNodesUpdate = mutation<Node, Node>(ops['nodes.update']);
+export const useNodesDrain = mutation(ops['nodes.drain']);
+export const useNodesDrainApply = mutation<Node, Node>(ops['nodes.drainApply']);
 export const useNodesRevoke = mutation<Node, Node>(ops['nodes.revoke']);
+export const useNodesWorkloads = query<NodeWorkloadList>(ops['nodes.workloads']);
 export const useNotificationsList = query<NotificationList>(ops['notifications.list']);
 export const useNotificationsPreferencesGet = query<Preferences>(ops['notifications.preferences.get']);
 export const useNotificationsPreferencesUpdate = mutation(ops['notifications.preferences.update']);

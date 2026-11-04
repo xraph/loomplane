@@ -21,6 +21,7 @@ import (
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
+	"github.com/xraph/grove/drivers/pgdriver"
 	nexusext "github.com/xraph/nexus/extension"
 	shieldext "github.com/xraph/shield/extension"
 	weaveext "github.com/xraph/weave/extension"
@@ -35,14 +36,19 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/agentchat"
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentops"
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // Name is the extension's name.
@@ -105,6 +111,12 @@ type Extension struct {
 	runs  *agentruns.Service
 	// requests are what the agent asks of people.
 	requests *agentrequests.Service
+	// knowledge indexes the docs and each workspace's documents; system
+	// is the nexus tenant indexing the docs is billed to.
+	knowledge *agentknowledge.Service
+	system    *SystemTenant
+	// reports are the agent's reports; past ones become knowledge.
+	reports *agentreports.Service
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -121,7 +133,7 @@ func New(cfg config.Config, jobs func() *dispatchengine.Engine) *Extension {
 		toolAuthorizer: &lateAuthorizer{},
 		hooks:          &agentruns.Hooks{},
 	}
-	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow}
+	e.authz = &agentauthz.Authorizer{Registry: e.ops, ApprovalWindow: cfg.Planning.ApprovalWindow, Knowledge: e.knowledgeOn}
 	// approve_plan asks the same question as the authorizer just before it
 	// approves, through whichever gate is installed then.
 	e.deps.Promote = e.authz.Promote
@@ -151,10 +163,25 @@ func (e *Extension) Dependencies() []string {
 // agentSettings is the agent's settings, or nil before Register.
 func (e *Extension) agentSettings() *agentsettings.Service { return e.settings.Load() }
 
+// knowledgeOn reports whether the workspace's agent has knowledge: it's
+// turned on there and this server can give it. Anything that can't be
+// read, the agent being off among them, is off: the agent works without
+// knowledge.
+func (e *Extension) knowledgeOn(ctx context.Context, orgID string) bool {
+	s := e.agentSettings()
+	if s == nil {
+		return false
+	}
+	eff, err := s.Effective(ctx, orgID)
+	return err == nil && eff.Knowledge
+}
+
 // Register resolves the agent's settings from the AI section and binds
 // nexus and the guardrail seeder to them, so a workspace can turn the
-// agent on. It provides the scope binder and the scanner, and serves the
-// agent's status and each project's autonomy.
+// agent on. It provides the scope binder, the scanner, the runs, the
+// conversations and knowledge, and serves the agent's status, each
+// project's autonomy, its requests, and the conversations and their tasks.
+// It builds and provides the agent's reports.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -204,10 +231,41 @@ func (e *Extension) Register(fapp forge.App) error {
 	if runsErr := e.registerRuns(c, settings, projectSvc); runsErr != nil {
 		return runsErr
 	}
+	chat, err := e.registerChat(c)
+	if err != nil {
+		return err
+	}
+	if knowledgeErr := e.registerKnowledge(c, settings); knowledgeErr != nil {
+		return knowledgeErr
+	}
+	if reportsErr := e.registerReports(c, projectSvc); reportsErr != nil {
+		return reportsErr
+	}
 	if routesErr := mountRoutes(fapp.Router(), guard, settings, projectSvc); routesErr != nil {
 		return routesErr
 	}
-	return mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests)
+	if routesErr := mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests); routesErr != nil {
+		return routesErr
+	}
+	return mountChatRoutes(fapp.Router(), guard, e.binder, chat, e.runs)
+}
+
+// registerChat builds people's conversations with the agent over the run
+// driver and provides them. A conversation's sends take turns on a
+// Postgres advisory lock, so replicas do too.
+func (e *Extension) registerChat(c forge.Container) (*agentchat.Service, error) {
+	authz, err := forge.InjectType[*security.Authorizer](c)
+	if err != nil {
+		return nil, fmt.Errorf("the agent's conversations need the identity extension's authorizer: %w", err)
+	}
+	pg := pgdriver.Unwrap(e.db)
+	chat := agentchat.NewService(agentchat.Deps{
+		Store: agentchat.NewPgStore(pg), Runs: e.runs, Authz: authz, TryLock: pglock.TryFor(pg),
+	})
+	if err = forge.ProvideValue(c, chat); err != nil {
+		return nil, fmt.Errorf("provide the agent's conversations: %w", err)
+	}
+	return chat, nil
 }
 
 // sweepCron schedules the run driver's sweep. It runs on the default
@@ -218,12 +276,13 @@ func sweepCron() *cron.Definition[struct{}] {
 	return &cron.Definition[struct{}]{Name: agentruns.CronSweep, JobName: agentruns.JobSweep, Schedule: sweepEvery, Queue: agentruns.SweepQueue}
 }
 
-// Start records whether this server can give the agent knowledge. The
-// library extensions have started by now, and no agent job has run.
+// Start turns knowledge on if this server can have it, and records why
+// not if it can't; knowledge never stops the agent starting. When it's on,
+// the docs are indexed by a job, recovery is scheduled, and past reports
+// become knowledge. The library extensions have started by now, and no
+// agent job has run.
 func (e *Extension) Start(ctx context.Context) error {
-	if s := e.agentSettings(); s != nil {
-		s.SetKnowledge(bootKnowledge(ctx, e.cfg.AI, e.db))
-	}
+	e.startKnowledge(ctx)
 	// Only here: with AI off this extension doesn't exist, and nothing is
 	// scheduled; a schedule left from when AI was on lands on aiext.Off.
 	if eng := e.jobs(); eng != nil {

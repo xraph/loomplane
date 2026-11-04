@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as AssistantRouteImport } from "./routes/assistant"
 import { Route as DeviceRouteImport } from "./routes/device"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
@@ -57,6 +58,8 @@ import { Route as SettingsAiRouteImport } from "./routes/settings.ai"
 import { Route as SettingsApiKeysRouteImport } from "./routes/settings.api-keys"
 import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
+import { Route as AgentReportsIndexRouteImport } from "./routes/agent.reports.index"
+import { Route as AgentReportsIdRouteImport } from "./routes/agent.reports.$id"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
@@ -82,6 +85,11 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AssistantRoute = AssistantRouteImport.update({
+  id: "/assistant",
+  path: "/assistant",
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeviceRoute = DeviceRouteImport.update({
@@ -309,6 +317,16 @@ const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
   path: "/workspaces/new",
   getParentRoute: () => rootRouteImport,
 } as any)
+const AgentReportsIndexRoute = AgentReportsIndexRouteImport.update({
+  id: "/agent/reports/",
+  path: "/agent/reports/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentReportsIdRoute = AgentReportsIdRouteImport.update({
+  id: "/agent/reports/$id",
+  path: "/agent/reports/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AiModelsIndexRoute = AiModelsIndexRouteImport.update({
   id: "/ai/models/",
   path: "/ai/models/",
@@ -376,6 +394,7 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -421,6 +440,7 @@ export interface FileRoutesByFullPath {
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -428,6 +448,7 @@ export interface FileRoutesByFullPath {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
@@ -437,6 +458,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -482,6 +504,7 @@ export interface FileRoutesByTo {
   "/projects": typeof ProjectsIndexRoute
   "/resources": typeof ResourcesIndexRoute
   "/services": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -489,6 +512,7 @@ export interface FileRoutesByTo {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/agent/reports": typeof AgentReportsIndexRoute
   "/ai/models": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
@@ -499,6 +523,7 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -544,6 +569,7 @@ export interface FileRoutesById {
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -551,6 +577,7 @@ export interface FileRoutesById {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id_/services/$service": typeof ProjectsIdServicesServiceRoute
@@ -562,6 +589,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -607,6 +635,7 @@ export interface FileRouteTypes {
     | "/projects/"
     | "/resources/"
     | "/services/"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -614,6 +643,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
@@ -623,6 +653,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -668,6 +699,7 @@ export interface FileRouteTypes {
     | "/projects"
     | "/resources"
     | "/services"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -675,6 +707,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/agent/reports"
     | "/ai/models"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
@@ -684,6 +717,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -729,6 +763,7 @@ export interface FileRouteTypes {
     | "/projects/"
     | "/resources/"
     | "/services/"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -736,6 +771,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id_/catalog/$resource"
     | "/projects/$id_/services/$service"
@@ -746,6 +782,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  AssistantRoute: typeof AssistantRoute
   DeviceRoute: typeof DeviceRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
@@ -791,6 +828,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
+  AgentReportsIdRoute: typeof AgentReportsIdRoute
   AiModelsSplatRoute: typeof AiModelsSplatRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsBitbucketCallbackRoute: typeof IntegrationsBitbucketCallbackRoute
@@ -798,6 +836,7 @@ export interface RootRouteChildren {
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsGitlabCallbackRoute: typeof IntegrationsGitlabCallbackRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
+  AgentReportsIndexRoute: typeof AgentReportsIndexRoute
   AiModelsIndexRoute: typeof AiModelsIndexRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
   ProjectsIdServicesServiceRoute: typeof ProjectsIdServicesServiceRoute
@@ -825,6 +864,13 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/assistant": {
+      id: "/assistant"
+      path: "/assistant"
+      fullPath: "/assistant"
+      preLoaderRoute: typeof AssistantRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/device": {
@@ -1142,6 +1188,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof WorkspacesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/agent/reports/": {
+      id: "/agent/reports/"
+      path: "/agent/reports"
+      fullPath: "/agent/reports/"
+      preLoaderRoute: typeof AgentReportsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/agent/reports/$id": {
+      id: "/agent/reports/$id"
+      path: "/agent/reports/$id"
+      fullPath: "/agent/reports/$id"
+      preLoaderRoute: typeof AgentReportsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/ai/models/": {
       id: "/ai/models/"
       path: "/ai/models"
@@ -1226,6 +1286,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  AssistantRoute: AssistantRoute,
   DeviceRoute: DeviceRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
@@ -1271,6 +1332,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
+  AgentReportsIdRoute: AgentReportsIdRoute,
   AiModelsSplatRoute: AiModelsSplatRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsBitbucketCallbackRoute: IntegrationsBitbucketCallbackRoute,
@@ -1278,6 +1340,7 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsGitlabCallbackRoute: IntegrationsGitlabCallbackRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
+  AgentReportsIndexRoute: AgentReportsIndexRoute,
   AiModelsIndexRoute: AiModelsIndexRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
   ProjectsIdServicesServiceRoute: ProjectsIdServicesServiceRoute,

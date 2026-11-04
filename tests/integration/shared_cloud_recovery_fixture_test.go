@@ -458,7 +458,7 @@ func (f *recoveryFixture) ingress(role string) {
 		t.Fatal(err)
 	}
 	cfg.Details["docker_id"] = f.state.Hosts[role].Daemon
-	remote, err := server.Dial(t.Context(), cfg)
+	remote, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
