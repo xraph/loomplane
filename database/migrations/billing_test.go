@@ -5,6 +5,7 @@ package migrations
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/grove/migrate"
@@ -52,6 +53,22 @@ func TestBillingMigrationCreatesTablesAndSeedsZeroRates(t *testing.T) {
 		t.Fatalf("rates %v, want %v", got, want)
 	}
 
+	// The gate's past-due check has a partial index of its own, and its
+	// query (internal/billing/accounts.go) uses it.
+	const unpaidIndex = `SELECT indexdef FROM pg_indexes WHERE indexname='loomplane_billing_invoices_unpaid_failed'`
+	if got := strs(t, conn, unpaidIndex); len(got) != 1 ||
+		!strings.Contains(got[0], "(org_id) WHERE ((paid_at IS NULL) AND (payment_failed_at IS NOT NULL))") {
+		t.Fatalf("unpaid invoice index %v", got)
+	}
+	exec(t, conn, `SET enable_seqscan = off`)
+	plan := strings.Join(strs(t, conn, `EXPLAIN SELECT EXISTS (SELECT 1 FROM loomplane_billing_invoices i
+		WHERE i.org_id = 'org_1' AND i.paid_at IS NULL AND i.payment_failed_at IS NOT NULL
+			AND i.payment_failed_at <= now() - interval '72 hours')`), "\n")
+	exec(t, conn, `RESET enable_seqscan`)
+	if !strings.Contains(plan, "loomplane_billing_invoices_unpaid_failed") {
+		t.Fatalf("the past-due check doesn't use the index:\n%s", plan)
+	}
+
 	// A second run changes nothing, and keeps a rate that was set.
 	exec(t, conn, `UPDATE loomplane_billing_rates SET micro_usd_per_unit=7 WHERE feature='egress_gb'`)
 	if err := billingMigration(t).Up(ctx, ex); err != nil {
@@ -68,6 +85,9 @@ func TestBillingMigrationCreatesTablesAndSeedsZeroRates(t *testing.T) {
 	if got := strs(t, conn, tables); len(got) != 0 {
 		t.Fatalf("down left %v", got)
 	}
+	if got := strs(t, conn, unpaidIndex); len(got) != 0 {
+		t.Fatalf("down left the unpaid invoice index: %v", got)
+	}
 	if got := strs(t, conn, `SELECT to_regclass('ledger_plans')::text`); !slices.Equal(got, []string{"ledger_plans"}) {
 		t.Fatalf("down touched ledger's tables: %v", got)
 	}
@@ -76,6 +96,9 @@ func TestBillingMigrationCreatesTablesAndSeedsZeroRates(t *testing.T) {
 	}
 	if got := strs(t, conn, tables); !slices.Equal(got, billingTables) {
 		t.Fatalf("up again made %v", got)
+	}
+	if got := strs(t, conn, unpaidIndex); len(got) != 1 {
+		t.Fatalf("up again made no unpaid invoice index: %v", got)
 	}
 }
 

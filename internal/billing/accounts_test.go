@@ -3,6 +3,9 @@
 package billing
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -235,6 +238,80 @@ func TestMarkCardReady_RecordsASubscriptionACrashLeftBehind(t *testing.T) {
 	}
 	if a, _ := s.Account(ctx, "org_1"); a.CloudSubscription != orphan {
 		t.Fatalf("recorded %q, want %q", a.CloudSubscription, orphan)
+	}
+}
+
+// A subscription with a trial is never the workspace's cloud subscription:
+// billing gives no trial, so one with a trial status or a trial end is left
+// alone and a new one is made.
+func TestMarkCardReady_NeverReusesATrialSubscription(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		status subscription.Status
+	}{
+		{"trialing", subscription.StatusTrialing},
+		{"active with a trial end", subscription.StatusActive},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			now := at("2026-11-20T00:00:00Z")
+			s, _ := newTestService(t, now)
+			ctx := t.Context()
+			p, err := s.l.GetPlanBySlug(ctx, PlanCloud, testAppID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start, end := monthStart(now), monthStart(now).AddDate(0, 0, 14)
+			trial := &subscription.Subscription{TenantID: "org_1", PlanID: p.ID, AppID: testAppID, Status: c.status,
+				CurrentPeriodStart: start, TrialStart: &start, TrialEnd: &end}
+			if err = s.l.CreateSubscription(ctx, trial); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.MarkCardReady(ctx, "org_1"); err != nil {
+				t.Fatal(err)
+			}
+			a, _ := s.Account(ctx, "org_1")
+			if a.CloudSubscription == "" || a.CloudSubscription == trial.ID.String() {
+				t.Fatalf("recorded %q, the trial subscription is %q", a.CloudSubscription, trial.ID)
+			}
+			subs, _ := s.l.Store().ListSubscriptions(ctx, "org_1", testAppID, subscription.ListOpts{})
+			if len(subs) != 2 {
+				t.Fatalf("subscriptions %d, want the trial one and a new one", len(subs))
+			}
+			for _, sub := range subs {
+				if sub.ID.String() == a.CloudSubscription && (sub.Status != subscription.StatusActive || sub.TrialEnd != nil) {
+					t.Fatalf("the new subscription is %s with trial end %v", sub.Status, sub.TrialEnd)
+				}
+			}
+		})
+	}
+}
+
+// A live subscription left from an earlier month is still recorded (it is
+// the workspace's), with a warning that its period isn't this month's.
+func TestMarkCardReady_RecordsAnOlderSubscriptionWithAWarning(t *testing.T) {
+	s, _ := newTestService(t, at("2026-11-20T00:00:00Z"))
+	ctx := t.Context()
+	p, err := s.l.GetPlanBySlug(ctx, PlanCloud, testAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &subscription.Subscription{TenantID: "org_1", PlanID: p.ID, AppID: testAppID,
+		Status: subscription.StatusActive, CurrentPeriodStart: at("2026-10-01T00:00:00Z")}
+	if err = s.l.CreateSubscription(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err = s.MarkCardReady(ctx, "org_1"); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.Account(ctx, "org_1"); a.CloudSubscription != old.ID.String() {
+		t.Fatalf("recorded %q, want %q", a.CloudSubscription, old.ID)
+	}
+	if !strings.Contains(logged.String(), "doesn't start this month") || !strings.Contains(logged.String(), old.ID.String()) {
+		t.Fatalf("no warning: %q", logged.String())
 	}
 }
 

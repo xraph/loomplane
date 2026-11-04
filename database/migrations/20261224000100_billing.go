@@ -47,7 +47,8 @@ func billingGroup() *migrate.Group {
 //
 // loomplane_billing_invoices, loomplane_billing_credits and
 // loomplane_billing_refunds record the invoices sent, the credits granted
-// and the refunds made.
+// and the refunds made. Unpaid invoices whose payment failed are indexed by
+// workspace, for the gate's past-due check.
 func init() {
 	billing.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -118,6 +119,10 @@ func init() {
  payment_failed_at timestamptz NULL,
  paid_at timestamptz NULL,
  UNIQUE (subscription_id, period_start))`,
+				// The billing gate asks on every deploy and build whether a workspace
+				// has an unpaid invoice whose payment failed; this answers it.
+				`CREATE INDEX IF NOT EXISTS loomplane_billing_invoices_unpaid_failed ON loomplane_billing_invoices (org_id)
+ WHERE paid_at IS NULL AND payment_failed_at IS NOT NULL`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_credits (
  id text PRIMARY KEY,
  org_id text NOT NULL,

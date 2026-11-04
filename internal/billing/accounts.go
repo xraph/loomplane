@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -64,10 +65,13 @@ func (s *Service) Account(ctx context.Context, orgID string) (Account, error) {
 	now := s.now().UTC()
 	a := Account{OrgID: orgID, Status: StatusPendingPayment}
 	var pastDue bool
+	// The past-due check spells out the partial index's predicate
+	// (loomplane_billing_invoices_unpaid_failed), so the planner uses it.
 	err := s.pg.QueryRow(ctx, `SELECT a.card_ready, a.stripe_customer_id, a.cloud_subscription_id, a.ai_subscription_id,
 			a.ai_ends_at, a.spending_limit_cents, a.limited_period,
 			EXISTS (SELECT 1 FROM loomplane_billing_invoices i
-				WHERE i.org_id = a.org_id AND i.payment_failed_at <= $2 AND i.paid_at IS NULL)
+				WHERE i.org_id = a.org_id AND i.paid_at IS NULL AND i.payment_failed_at IS NOT NULL
+					AND i.payment_failed_at <= $2)
 		FROM loomplane_billing_accounts a WHERE a.org_id = $1`,
 		orgID, now.Add(-pastDueAfter),
 	).Scan(&a.CardReady, &a.CustomerID, &a.CloudSubscription, &a.AISubscription,
@@ -162,11 +166,33 @@ func (s *Service) cloudSubscription(ctx context.Context, orgID string) (string, 
 		return "", fmt.Errorf("billing: list the subscriptions of %s: %w", orgID, err)
 	}
 	for _, sub := range subs {
-		if sub.PlanID == p.ID && sub.Status != subscription.StatusCanceled && sub.Status != subscription.StatusExpired {
-			return sub.ID.String(), nil
+		if !reusable(sub, p) {
+			continue
 		}
+		if start := monthStart(s.now()); !sub.CurrentPeriodStart.Equal(start) {
+			slog.WarnContext(ctx, "billing: recording a cloud subscription whose period doesn't start this month",
+				"org", orgID, "subscription", sub.ID.String(),
+				"period_start", sub.CurrentPeriodStart.UTC().Format(time.RFC3339), "month", start.Format("2006-01"))
+		}
+		return sub.ID.String(), nil
 	}
 	return s.subscribe(ctx, orgID, p)
+}
+
+// reusable says whether a subscription ledger already holds is the
+// workspace's live cloud subscription: on plan p, neither canceled nor
+// expired, and never one with a trial, since billing gives no trial.
+func reusable(sub *subscription.Subscription, p *plan.Plan) bool {
+	switch {
+	case sub.PlanID != p.ID:
+		return false
+	case sub.Status == subscription.StatusCanceled, sub.Status == subscription.StatusExpired,
+		sub.Status == subscription.StatusTrialing:
+		return false
+	case sub.TrialEnd != nil:
+		return false
+	}
+	return true
 }
 
 // subscribe puts the workspace on plan p for this calendar month. The
