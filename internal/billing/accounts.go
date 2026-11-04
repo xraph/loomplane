@@ -82,6 +82,15 @@ func (s *Service) Account(ctx context.Context, orgID string) (Account, error) {
 	if err != nil {
 		return Account{}, fmt.Errorf("billing: read the account of %s: %w", orgID, err)
 	}
+	a.derive(pastDue, now)
+	return a, nil
+}
+
+// derive works out, from an account row read at now, what Account reports
+// beyond the row: the times in UTC, whether the add-on is live, and the
+// status. pastDue says an invoice's payment failed at least 72 hours
+// before now and it is still unpaid.
+func (a *Account) derive(pastDue bool, now time.Time) {
 	if a.AIEndsAt != nil {
 		t := a.AIEndsAt.UTC()
 		a.AIEndsAt = &t
@@ -101,7 +110,6 @@ func (s *Service) Account(ctx context.Context, orgID string) (Account, error) {
 	default:
 		a.Status = StatusActive
 	}
-	return a, nil
 }
 
 // MarkCardReady records the card and, the first time only, creates the

@@ -10,10 +10,34 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/xraph/loomplane/internal/platformcloud"
 )
 
 // microUSDPerCent is how many micro-USD make a cent.
 const microUSDPerCent = 10_000
+
+// MaxRateMicroUSD is the highest rate a feature can have: $1,000.00 a
+// native unit.
+const MaxRateMicroUSD = 1_000_000_000
+
+// ErrUnknownFeature is SetRate's error for a feature billing doesn't price.
+var ErrUnknownFeature = errors.New("billing: there is no such feature to price")
+
+// units is what one native unit of each feature is, as the platform
+// owner's rates page says it.
+var units = map[string]string{
+	platformcloud.FeatureBuildMinutes:      "minute of build",
+	platformcloud.FeatureComputeVCPUHours:  "vCPU-hour",
+	platformcloud.FeatureComputeGBRAMHours: "GiB-hour of memory",
+	FeatureStorageGBMonths:                 "GB-month of storage",
+	platformcloud.FeatureEgressGB:          "GB of egress (10^9 bytes)",
+	FeatureAIUSD:                           "USD of model cost",
+}
+
+// Unit is what one native unit of feature is, for a person to read: the
+// unit its rate is per.
+func Unit(feature string) string { return units[feature] }
 
 // Rates in micro-USD per native unit, one for every feature in Features.
 // Every rate starts at 0, so nothing is charged until Rex sets one.
@@ -51,17 +75,18 @@ func (s *Service) Rates(ctx context.Context) (map[string]int64, error) {
 }
 
 // SetRate sets what one native unit of feature costs, in micro-USD, from
-// now on. Usage already recorded keeps the price it was recorded at. by
-// names who changed it.
+// now on, from 0 to MaxRateMicroUSD. Usage already recorded keeps the
+// price it was recorded at: each usage row carries its own rate. by names
+// who changed it.
 func (s *Service) SetRate(ctx context.Context, feature string, microUSD int64, by string) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
 	if !slices.Contains(Features, feature) {
-		return fmt.Errorf("billing: there is no feature %q to price", feature)
+		return fmt.Errorf("%w: %q", ErrUnknownFeature, feature)
 	}
-	if microUSD < 0 {
-		return fmt.Errorf("billing: the rate for %s can't be negative", feature)
+	if microUSD < 0 || microUSD > MaxRateMicroUSD {
+		return fmt.Errorf("billing: the rate for %s must be from 0 to %d micro-USD", feature, MaxRateMicroUSD)
 	}
 	by = strings.TrimSpace(by)
 	if by == "" {

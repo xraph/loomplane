@@ -47,9 +47,11 @@ func billingGroup() *migrate.Group {
 //
 // loomplane_billing_invoices, loomplane_billing_credits and
 // loomplane_billing_refunds record the invoices sent, the credits granted
-// and the refunds made. Unpaid invoices whose payment failed are indexed by
-// workspace, for the gate's past-due check. voided_at marks an invoice
-// voided in ledger, which is never sent and never made again.
+// and the refunds made. A refund's sent_at is set once Stripe made it; one
+// without is sent again, under its own key, when it is asked for again.
+// Unpaid invoices whose payment failed are indexed by workspace, for the
+// gate's past-due check. voided_at marks an invoice voided in ledger,
+// which is never sent and never made again.
 //
 // loomplane_billing_closes is one row per month whose close finished, so a
 // close that stopped part way is finished by the next hourly run.
@@ -146,7 +148,8 @@ func init() {
  cents bigint NULL,
  full_refund boolean NOT NULL,
  refunded_by text NOT NULL,
- created_at timestamptz NOT NULL DEFAULT now())`,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ sent_at timestamptz NULL)`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_closes (
  period date PRIMARY KEY,
  closed_at timestamptz NOT NULL)`,

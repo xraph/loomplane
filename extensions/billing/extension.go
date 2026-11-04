@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/chronicle"
 	"github.com/xraph/dispatch/engine"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
@@ -74,7 +75,9 @@ func (e *Extension) Register(fapp forge.App) error {
 }
 
 // mount serves the workspace billing routes behind identity's guard,
-// checked by identity's authorizer, and Stripe's webhook outside it.
+// checked by identity's authorizer, and Stripe's webhook outside it, then
+// the platform owner's billing admin, behind the guard and identity's
+// platform-owner check, audited in Chronicle.
 func (e *Extension) mount(router forge.Router, c forge.Container) error {
 	guard, err := forge.InjectType[identity.Guard](c)
 	if err != nil {
@@ -84,7 +87,19 @@ func (e *Extension) mount(router forge.Router, c forge.Container) error {
 	if err != nil {
 		return fmt.Errorf("billing needs identity's authorizer: %w", err)
 	}
-	return mountRoutes(router, guard, e.svc, authz)
+	isOwner, err := forge.InjectType[identity.PlatformOwner](c)
+	if err != nil {
+		return fmt.Errorf("billing needs identity's platform-owner check: %w", err)
+	}
+	audit, err := forge.InjectType[*chronicle.Chronicle](c)
+	if err != nil {
+		return fmt.Errorf("billing needs identity's audit trail: %w", err)
+	}
+	if err := mountRoutes(router, guard, e.svc, authz); err != nil {
+		return err
+	}
+	return mountPlatformRoutes(router, guard, isOwner, e.svc,
+		chronicleAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
 }
 
 // register is Register without forge's own bookkeeping: provide, then the

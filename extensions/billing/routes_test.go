@@ -191,6 +191,12 @@ func newRig(t *testing.T) *rig {
 
 func (rg *rig) do(t *testing.T, method, path, body string, who caller) *httptest.ResponseRecorder {
 	t.Helper()
+	return serve(t, rg.r, method, path, body, who)
+}
+
+// serve sends one request to r as who.
+func serve(t *testing.T, r forge.Router, method, path, body string, who caller) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -199,7 +205,7 @@ func (rg *rig) do(t *testing.T, method, path, body string, who caller) *httptest
 		req.Header.Set(k, v)
 	}
 	out := httptest.NewRecorder()
-	rg.r.ServeHTTP(out, req)
+	r.ServeHTTP(out, req)
 	return out
 }
 

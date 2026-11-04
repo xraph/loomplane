@@ -316,6 +316,11 @@ func (s *Service) invoiceSubscription(ctx context.Context, org, subID, planSlug 
 	// the credits lock, so no grant lands between this list and generation.
 	var credits []credit
 	if planSlug == PlanCloud {
+		// A coupon a failed grant left applied with no credit row would
+		// discount this invoice and every later one; it goes first.
+		if dropErr := s.dropOrphanCredits(ctx, org, sid); dropErr != nil {
+			return dropErr
+		}
 		if credits, err = s.unusedCredits(ctx, org, subID); err != nil {
 			return err
 		}
