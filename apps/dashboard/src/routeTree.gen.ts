@@ -50,6 +50,7 @@ import { Route as NotificationsSettingsRouteImport } from "./routes/notification
 import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
+import { Route as ReleaseReportsIdRouteImport } from "./routes/release-reports.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
@@ -277,6 +278,11 @@ const ProjectsIdRoute = ProjectsIdRouteImport.update({
   path: "/projects/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReleaseReportsIdRoute = ReleaseReportsIdRouteImport.update({
+  id: "/release-reports/$id",
+  path: "/release-reports/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   id: "/resources/",
   path: "/resources/",
@@ -424,6 +430,7 @@ export interface FileRoutesByFullPath {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
   "/settings/ai": typeof SettingsAiRoute
@@ -488,6 +495,7 @@ export interface FileRoutesByTo {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
   "/settings/ai": typeof SettingsAiRoute
@@ -553,6 +561,7 @@ export interface FileRoutesById {
   "/notifications/settings": typeof NotificationsSettingsRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
   "/settings/ai": typeof SettingsAiRoute
@@ -619,6 +628,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
     | "/settings/ai"
@@ -683,6 +693,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
     | "/settings/ai"
@@ -747,6 +758,7 @@ export interface FileRouteTypes {
     | "/notifications/settings"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
     | "/settings/ai"
@@ -812,6 +824,7 @@ export interface RootRouteChildren {
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
   PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  ReleaseReportsIdRoute: typeof ReleaseReportsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
   SettingsAiRoute: typeof SettingsAiRoute
@@ -1132,6 +1145,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/release-reports/$id": {
+      id: "/release-reports/$id"
+      path: "/release-reports/$id"
+      fullPath: "/release-reports/$id"
+      preLoaderRoute: typeof ReleaseReportsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/resources/": {
       id: "/resources/"
       path: "/resources"
@@ -1316,6 +1336,7 @@ const rootRouteChildren: RootRouteChildren = {
   NotificationsSettingsRoute: NotificationsSettingsRoute,
   PlatformCloudSignInRoute: PlatformCloudSignInRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  ReleaseReportsIdRoute: ReleaseReportsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
   SettingsAiRoute: SettingsAiRoute,

@@ -68,7 +68,9 @@ import { ProductIcon } from "@/components/product-icon"
 import { ProjectGeneral } from "@/components/project-general"
 import { ProjectServices } from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
+import { PrepareRelease } from "@/components/prepare-release-dialog"
 import { ProjectAutonomy } from "@/components/project-autonomy"
+import { ReleaseReportsCard } from "@/components/release-reports-card"
 import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { QueryError } from "@/components/query-error"
@@ -480,6 +482,11 @@ function Body({
                 Deploy
               </Button>
             )}
+            <PrepareRelease
+              project={project}
+              environments={environments.list}
+              may={can("deployment:create")}
+            />
             <PageMenu label="More project actions">
               {hasRepositories && mayRun && (
                 <DropdownMenuItem
@@ -592,6 +599,8 @@ function Body({
             runs={ownRuns}
             onOpen={(next, env) => openOn(next, env)}
           />
+
+          <ReleaseReportsCard projectId={project.id} />
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
             <section aria-label="Service graph" className="grid gap-2.5">
