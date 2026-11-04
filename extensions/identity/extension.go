@@ -57,6 +57,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/currentauthority"
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
@@ -94,6 +95,7 @@ type Extension struct {
 	store      *authpg.Store
 	orgs       *organization.Plugin
 	warden     *warden.Engine
+	authority  *currentauthority.Coordinator
 	authz      *security.Authorizer
 	audit      *chronicle.Chronicle
 	auditStore chronstore.Store
@@ -182,13 +184,9 @@ func (e *Extension) register(fapp forge.App) error {
 	e.pg = pgdriver.Unwrap(db)
 	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
-	wstore := wardenpg.New(db)
-	if e.warden, err = warden.NewEngine(
-		warden.WithStore(wstore),
-		warden.WithCache(warden.NewMemoryCache()),
-		warden.WithLogger(e.Logger()),
-	); err != nil {
-		return fmt.Errorf("warden: %w", err)
+	wstore, err := e.initWarden(wardenpg.New(db))
+	if err != nil {
+		return err
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
 	e.auditStore = chronpg.New(db)
@@ -395,7 +393,7 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
-	errs = append(errs, e.closeLockPool())
+	errs = append(errs, e.authority.Shutdown(ctx), e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
 }

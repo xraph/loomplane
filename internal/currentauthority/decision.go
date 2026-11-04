@@ -16,6 +16,16 @@ func (a *Attempt) Evaluate(ctx context.Context, check func(context.Context) erro
 	c := a.owner
 	c.mu.Lock()
 	err := a.validLocked(ctx)
+	if err == nil && !a.fenced {
+		err = ErrUnavailable
+		a.poison = errors.Join(a.poison, err)
+	}
+	if err == nil {
+		err = a.profile.verify()
+		if err != nil {
+			a.poison = errors.Join(a.poison, err)
+		}
+	}
 	if err == nil && (a.evaluation || a.staging || a.decision != nil || a.pending != 0 || check == nil) {
 		err = ErrDecision
 		a.poison = errors.Join(a.poison, err)
