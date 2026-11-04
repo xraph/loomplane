@@ -4,6 +4,8 @@
     "built-in-agent",
     "workspace-settings",
     "what-needs-a-person",
+    "assistant",
+    "knowledge",
     "mcp-server"
   ]
 }

@@ -271,6 +271,10 @@ export interface AttachmentPrerequisites {
   storageClass?: string;
 }
 
+export interface AuthorizeBitbucketInputBody {
+  workspace: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -336,6 +340,39 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface BitbucketAuthorization {
+  url: string;
+}
+
+export interface BitbucketConnectInputBody {
+  code: string;
+  state: string;
+}
+
+export interface BitbucketRepositoryList {
+  problems: string[];
+  repositories: ConnectedBitbucketRepository[];
+}
+
+export interface BitbucketStatus {
+  canConnect: boolean;
+  configured: boolean;
+  problems: string[];
+  workspaces: BitbucketWorkspaceView[];
+}
+
+export interface BitbucketWorkspaceView {
+  avatarUrl: string;
+  connectedBy: string;
+  createdAt: string;
+  id: string;
+  manageUrl: string;
+  message: string;
+  name: string;
+  status: string;
+  workspace: string;
 }
 
 export interface Board {
@@ -1413,6 +1450,13 @@ export interface ConnectGitLabInputBody {
   state: string;
 }
 
+export interface ConnectedBitbucketRepository {
+  defaultBranch: string;
+  fullName: string;
+  private: boolean;
+  workspace: string;
+}
+
 export interface ConnectedRepository {
   defaultBranch: string;
   fullName: string;
@@ -1476,6 +1520,23 @@ export interface ConsumerOption {
   pattern?: string;
   required?: boolean;
   title: string;
+}
+
+export interface Conversation {
+  createdAt: string;
+  id: string;
+  lastTaskId: string;
+  orgId: string;
+  projectId: string;
+  startedBy: string;
+  status: string;
+  title: string;
+  turns: number;
+  updatedAt: string;
+}
+
+export interface ConversationList {
+  conversations: Conversation[];
 }
 
 export interface Cost {
@@ -1789,6 +1850,7 @@ export interface DiscoverySource {
   id: string;
   orgId: string;
   projectId: string;
+  push?: PushState;
   ref: string;
   removedAt?: string;
   repository: string;
@@ -1997,6 +2059,10 @@ export interface Embeddings {
   provider?: string;
 }
 
+export interface EnableBitbucketWebhookInputBody {
+  repository: string;
+}
+
 export interface EndpointList {
   endpoints: (CatalogconnectEndpoint | null)[];
 }
@@ -2135,6 +2201,14 @@ export interface EnvironmentUsage {
   placements: PlacementUsage[];
   projectId: string;
   projectName: string;
+}
+
+export interface Event {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
 }
 
 export interface Evidence {
@@ -2549,6 +2623,12 @@ export interface HeldRoute {
   service: string;
 }
 
+export interface History {
+  conversation: Conversation;
+  more: boolean;
+  turns: Turn[];
+}
+
 export interface HostCard {
   attached: boolean;
   domainRouteId?: string;
@@ -2584,6 +2664,7 @@ export interface HuggingFaceTokenInputBody {
 export interface IdentitySession {
   orgId: string;
   permissions: string[];
+  sessionId?: string;
   userId: string;
 }
 
@@ -2661,6 +2742,10 @@ export interface JoinToken {
   command: string;
   expiresAt: string;
   token: string;
+}
+
+export interface JoinTokenList {
+  tokens: PendingNodeJoinToken[];
 }
 
 export interface JoinTokenRequestBody {
@@ -3290,6 +3375,7 @@ export interface NodeJoinBody {
   nodeVersion: string;
   protocolVersion: number;
   publicKey: string;
+  signature: string;
   token: string;
 }
 
@@ -3533,6 +3619,20 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PendingNodeJoinToken {
+  cloudId?: string;
+  createdAt: string;
+  edge: boolean;
+  edgeScope?: string;
+  endpoints: string[];
+  expiresAt: string;
+  hint: string;
+  id: string;
+  labels?: Record<string, any>;
+  mintedBy: string;
+  mintedByKeyId?: string;
 }
 
 export interface PinStatus {
@@ -4057,6 +4157,11 @@ export interface PushDevice {
   timeZone: string;
 }
 
+export interface PushState {
+  on: boolean;
+  reason?: string;
+}
+
 export interface QuantizationView {
   args?: string[];
   engine: string;
@@ -4087,6 +4192,19 @@ export interface Reach {
   environmentId: string;
   message?: string;
   mode: string;
+}
+
+export interface RealtimeAgentEnd {
+  error?: string;
+  status: string;
+}
+
+export interface RealtimeAgentEvent {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
 }
 
 export interface RealtimeForgeGap {
@@ -4918,6 +5036,15 @@ export interface SecretInputBody {
   value: string;
 }
 
+export interface SendInputBody {
+  message: string;
+}
+
+export interface Sent {
+  conversation: Conversation;
+  task: Task;
+}
+
 export interface Server {
   accelerator?: Accelerator;
   accountId: string;
@@ -5332,6 +5459,11 @@ export interface StartGitLabSignInInputBody {
   hostId: string;
 }
 
+export interface StartInputBody {
+  message: string;
+  projectId?: string;
+}
+
 export interface Step {
   actionId: string;
   finishedAt?: string;
@@ -5440,6 +5572,28 @@ export interface TargetChoice {
   source: string;
 }
 
+export interface Task {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  metadata: Record<string, any>;
+  orgId: string;
+  projectId: string;
+  releasePlanId?: string;
+  releaseRevision?: string;
+  requestedBy: string;
+  runId: string;
+  sessionId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
+}
+
 export interface TaskEvent {
   createdAt: string;
   environmentId: string;
@@ -5522,6 +5676,17 @@ export interface TrafficReport {
   start: string;
   step: number;
   total: number;
+}
+
+export interface Turn {
+  createdAt: string;
+  error: string;
+  eventSeq: number;
+  events: Event[];
+  finishedAt?: string;
+  message: string;
+  status: string;
+  taskId: string;
 }
 
 export interface UnreachableAccount {

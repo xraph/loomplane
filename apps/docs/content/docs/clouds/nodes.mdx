@@ -53,9 +53,17 @@ If you pass a token, mint it with `--cloud`, `--builder` or `--edge` already set
 
 Check the result with `sudo loomctl node status`. It shows the node ID, the key fingerprint, the allowed endpoints and whether the service is running.
 
+### Tokens nobody used
+
+A token you made and never ran still works until it expires, an hour at most. You'll find the open ones at the bottom of the Nodes page, under Unused join tokens, with who made each one, the API key they used if they used one, what it's for and how long it has left. Cancel one there and no machine can join with it.
+
+The API has the same two calls: `GET /api/v1/nodes/join-tokens` lists them and `DELETE /api/v1/nodes/join-tokens/{id}` cancels one. Neither ever returns the token itself. You can list and cancel tokens if you can make them, so an owner or an admin, from a session or a write key. An instance edge token takes a signed-in platform admin to cancel, the same as it takes one to make. Both calls land in the audit log, as `node.join_token.listed` and `node.join_token.cancelled`.
+
 ## The node's key and its state
 
 The node creates its own Ed25519 key when it joins and keeps it in its state directory, `/var/lib/loomplane-node` on Linux. Loomplane learns the public half. The private half stays on the machine, in a directory owned by the service user, which is why `status`, `allow` and `leave` want `sudo`.
+
+The join request is signed with the new key, over the token, the node's name and the public key. Loomplane checks that signature before it even looks at the token, and refuses the join without spending it if the signature is wrong. That's what stops someone who holds a token from joining with another machine's public key and keeping the real machine out.
 
 Every join makes a fresh key. If the state directory still holds one from an earlier node, after a `leave` or a revoke, `join` moves it aside to `identity.key.revoked-<time>` and starts over. Loomplane refuses a key it has seen before, revoked nodes included, so a key that may have been stolen can't come back as a new node.
 
@@ -206,6 +214,20 @@ sudo loomctl node update --release v1.9.0
 The update downloads the release, verifies it, and only then replaces the binary. It restarts the service and watches it for five seconds. If the service won't start on the new binary, or stops within those five seconds, the update puts the old one back and starts that. A binary that fails later than that isn't caught, so check `node status` after an update.
 
 `node verify-release` runs the same check by hand, when you've downloaded the archive, `binaries-checksums.txt` and its `.sigstore.json` bundle yourself.
+
+## Limits
+
+Loomplane counts what reaches the node endpoints, so a script gone wrong on one address, or one misbehaving node, can't flood it.
+
+| What | Limit | Setting |
+|---|---|---|
+| Joins from one address | 10 a minute | `nodes.join_rate_limit` |
+| Connect challenges from one address | 120 a minute | `nodes.challenge_rate_limit` |
+| Control messages from one connected node | 64 at once, then 2 a second | None |
+
+An address over its limit gets a `429` and can try again after a minute. The count lives in the database, so every replica shares it. Each node asks for a challenge every time it reconnects, and all the machines behind one NAT share one address, so if you run more than about a hundred nodes behind a single address, raise `nodes.challenge_rate_limit` or they'll take a few minutes to all come back after a restart. Set either one to `0` to turn it off.
+
+A connected node only sends a heartbeat every 15 seconds and a few messages when it connects, so it never gets near its limit. One that goes over is disconnected, with a warning in the Loomplane log naming the node, and nothing it sent past the limit is stored. It reconnects on its own.
 
 ## Several replicas
 

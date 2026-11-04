@@ -13,9 +13,13 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/execution"
 	"github.com/xraph/cortex/id"
+	"github.com/xraph/cortex/knowledge"
 	"github.com/xraph/cortex/run"
+	"github.com/xraph/cortex/session"
 	"github.com/xraph/dispatch/job"
 
+	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/security"
@@ -113,9 +117,10 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 	if !s.claim(runCtx, t, []string{StatusQueued}, StatusRunning) {
 		return nil
 	}
-	tools := s.tools(spec)
-	if aerr := s.ensureAgent(runCtx, eng, spec, tools); aerr != nil {
-		return aerr
+	tools := s.tools(spec, eng)
+	agentID, err := s.ensureAgent(runCtx, eng, spec, tools)
+	if err != nil {
+		return err
 	}
 	overrides := &engine.RunOverrides{
 		RunID: runID, Model: eff.Model, SystemPrompt: spec.Prompt + s.scopeNames(bound, t),
@@ -129,6 +134,14 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 		if overrides.SessionID, err = id.ParseSessionID(t.SessionID); err != nil {
 			s.fail(ctx, t, "the task's conversation can't be read")
 			return nil
+		}
+		err = s.ensureSession(runCtx, eng, t, overrides.SessionID, agentID)
+		if errors.Is(err, errOtherAgent) {
+			s.fail(ctx, t, errOtherAgent.Error())
+			return nil
+		}
+		if err != nil {
+			return err
 		}
 	}
 	err = s.drive(runCtx, t, func(ctx context.Context, events chan<- engine.StreamEvent) error {
@@ -172,7 +185,67 @@ func (s *Service) runContinue(ctx context.Context, in JobPayload) error {
 	if !s.claim(runCtx, t, nil, "") {
 		return nil
 	}
+	s.continueSession(runCtx, t)
 	return s.continueTask(runCtx, t)
+}
+
+// errOtherAgent is why a chat whose cortex session is another agent's
+// can't run in it.
+var errOtherAgent = errors.New("this conversation belongs to another agent")
+
+// ensureSession makes sure the task's conversation has its cortex
+// session, at the task's scope and for agentID, before the run starts:
+// cortex saves a run's memory only into a session that exists, and an
+// override names one without making it. A session of another agent is
+// errOtherAgent.
+func (s *Service) ensureSession(ctx context.Context, eng runner, t *Task, sessionID id.SessionID, agentID id.AgentID) error {
+	sessions := eng.Store()
+	if sessions == nil {
+		return errors.New("agentruns: cortex has no store")
+	}
+	sess, err := sessions.GetSession(ctx, sessionID)
+	if errors.Is(err, cortex.ErrSessionNotFound) {
+		sess = &session.Session{
+			ID: sessionID, AgentID: agentID, IsDefault: false, Title: t.Metadata[MetaTitle],
+			Metadata: map[string]any{"org_id": t.OrgID, "started_by": t.RequestedBy},
+		}
+		err = sessions.CreateSession(ctx, sess)
+		if !errors.Is(err, cortex.ErrAlreadyExists) {
+			return err
+		}
+		// Another job made it first.
+		sess, err = sessions.GetSession(ctx, sessionID)
+	}
+	if err != nil {
+		return err
+	}
+	if sess.AgentID != agentID {
+		return errOtherAgent
+	}
+	return nil
+}
+
+// continueSession makes the cortex session of a conversation whose start
+// job never made it (one a 3a server started), so the rest of the run's
+// memory is saved. A run that goes on without it only loses that memory,
+// so anything that stops it here is only logged.
+func (s *Service) continueSession(ctx context.Context, t *Task) {
+	eng := s.engine()
+	spec, ok := s.kind(t.Kind)
+	if eng == nil || !ok || t.SessionID == "" {
+		return
+	}
+	sessionID, err := id.ParseSessionID(t.SessionID)
+	if err != nil {
+		return
+	}
+	cfg, err := eng.GetAgentByName(ctx, spec.Agent)
+	if err == nil {
+		err = s.ensureSession(ctx, eng, t, sessionID, cfg.ID)
+	}
+	if err != nil {
+		s.warn("agentruns: couldn't make a continued conversation's session", err)
+	}
 }
 
 // continueTask continues the task's run on a context begin made. A run another
@@ -214,7 +287,7 @@ func (s *Service) settle(ctx context.Context, eng runner, t *Task, runID id.Agen
 		return
 	}
 	if status, ok := statusOf(r.State); ok {
-		if _, err = s.finish(ctx, t, status, r.TokensUsed, failure(status, r.Error, "")); err != nil {
+		if _, err = s.finish(ctx, t, status, r.TokensUsed, failure(status, r.StopReason, r.Error, "")); err != nil {
 			s.warn("agentruns: couldn't settle a finished run's task", err)
 		}
 	}
@@ -253,26 +326,47 @@ func (s *Service) refused(ctx context.Context, t *Task, err error) error {
 	return err
 }
 
-// tools is the kind's allowlist: its own, or every operation.
-func (s *Service) tools(spec KindSpec) []string {
+// tools is the kind's allowlist: its own, or every operation and the
+// builtins eng has that the agent may use.
+func (s *Service) tools(spec KindSpec, eng runner) []string {
 	if spec.Tools != nil {
 		return slices.Clone(spec.Tools)
 	}
-	if s.registry == nil {
-		return []string{}
+	var ops []agentops.Op
+	if s.registry != nil {
+		ops = s.registry.Ops()
 	}
-	ops := s.registry.Ops()
-	out := make([]string, 0, len(ops))
+	builtins := builtinTools(eng)
+	out := make([]string, 0, len(ops)+len(builtins))
 	for _, op := range ops {
 		out = append(out, op.Def.Name)
 	}
-	return out
+	return append(out, builtins...)
+}
+
+// knowing is a runner that may have a knowledge provider:
+// *engine.Engine.
+type knowing interface {
+	Knowledge() knowledge.Provider
+}
+
+// builtinTools are the cortex builtins eng has that the agent may use:
+// knowledge_search when it has a knowledge provider. A run's allowlist
+// has to name them: cortex leaves a builtin out of a run whose allowlist
+// doesn't, and refuses to prepare one that names a tool it doesn't have.
+// Whether the model sees one is still the tool authorizer's call, per
+// workspace.
+func builtinTools(eng runner) []string {
+	if k, ok := eng.(knowing); ok && k.Knowledge() != nil {
+		return []string{agentauthz.KnowledgeSearch}
+	}
+	return nil
 }
 
 // ensureAgent makes sure the kind's agent config exists at exactly the
 // task's scope, which is the only scope cortex finds it at, and matches
-// the spec.
-func (s *Service) ensureAgent(ctx context.Context, eng runner, spec KindSpec, tools []string) error {
+// the spec, and returns its ID.
+func (s *Service) ensureAgent(ctx context.Context, eng runner, spec KindSpec, tools []string) (id.AgentID, error) {
 	def := definition(spec, tools)
 	cfg, err := eng.GetAgentByName(ctx, spec.Agent)
 	switch {
@@ -282,17 +376,20 @@ func (s *Service) ensureAgent(ctx context.Context, eng runner, spec KindSpec, to
 		err = eng.CreateAgent(ctx, cfg)
 		if errors.Is(err, cortex.ErrAlreadyExists) {
 			// Another job made it first.
-			return nil
+			if cfg, err = eng.GetAgentByName(ctx, spec.Agent); err != nil {
+				return id.AgentID{}, err
+			}
+			return cfg.ID, nil
 		}
-		return err
+		return cfg.ID, err
 	case err != nil:
-		return err
+		return id.AgentID{}, err
 	}
 	if cfg.Metadata != nil && cfg.Metadata[metaDefinition] == def {
-		return nil
+		return cfg.ID, nil
 	}
 	s.describe(cfg, spec, tools, def)
-	return eng.UpdateAgent(ctx, cfg)
+	return cfg.ID, eng.UpdateAgent(ctx, cfg)
 }
 
 // metaDefinition is the agent config's metadata key for its definition.
@@ -356,11 +453,14 @@ func statusOf(state run.State) (string, bool) {
 	return "", false
 }
 
-// failure is why a run ended badly: its own error, the hook's, or what
-// stopped it.
-func failure(status, runError, hookError string) string {
+// failure is why a run ended badly: SafetyStopped when the safety checks
+// stopped it, else its own error, the hook's, or what stopped it.
+func failure(status string, stop run.StopReason, runError, hookError string) string {
 	if status != StatusFailed {
 		return ""
+	}
+	if stop == run.StopSafetyBlock {
+		return SafetyStopped
 	}
 	for _, why := range []string{runError, hookError} {
 		if why != "" {

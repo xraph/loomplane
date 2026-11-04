@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event"
 import { ClientProvider } from "@forge-go/client-react"
 import { cleanup, render, screen } from "@testing-library/react"
 import type { ReactNode } from "react"
@@ -20,8 +21,14 @@ vi.mock("@/lib/organization", () => ({
 vi.mock("@/lib/router", () => ({
   usePath: () => "/members",
   useNavigate: () => () => {},
-  Link: ({ children, to }: { children?: ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
+  Link: ({
+    children,
+    to,
+    ...rest
+  }: React.ComponentProps<"a"> & { children?: ReactNode; to: string }) => (
+    <a {...rest} href={to}>
+      {children}
+    </a>
   ),
 }))
 vi.mock("@tanstack/react-router", () => ({
@@ -70,12 +77,14 @@ function show(platformAdmin: boolean) {
 
 it("shows Cloud sign-in to a platform admin", async () => {
   show(true)
-  const link = await screen.findByRole("link", { name: "Cloud sign-in" })
+  await userEvent.click(screen.getByText("Settings"))
+  const link = await screen.findByRole("menuitem", { name: "Cloud sign-in" })
   expect(link).toHaveAttribute("href", "/platform/cloud-sign-in")
 })
 
 it("hides Cloud sign-in from everyone else", async () => {
   show(false)
-  await screen.findByRole("link", { name: "Integrations" })
-  expect(screen.queryByRole("link", { name: "Cloud sign-in" })).toBeNull()
+  await userEvent.click(screen.getByText("Settings"))
+  await screen.findByRole("menuitem", { name: "Integrations" })
+  expect(screen.queryByRole("menuitem", { name: "Cloud sign-in" })).toBeNull()
 })

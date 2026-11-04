@@ -202,6 +202,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the discovery extension: %w", err)
 	}
+	bitbucket, err := forge.InjectType[*repositories.BitbucketConnections](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the discovery extension: %w", err)
+	}
 	gitlab, err := forge.InjectType[*repositories.GitLabConnections](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the discovery extension: %w", err)
@@ -542,7 +546,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,
 		Sources: &deployments.RepositorySources{
 			Readers:   discoveryext.SourceReaders(e.cfg, gitlabHosts),
-			Tokens:    discoveryext.SourceTokens(github, gitlab),
+			Tokens:    discoveryext.SourceTokens(github, bitbucket, gitlab),
 			Artifacts: e.artifacts,
 		},
 		Providers:            catalog,

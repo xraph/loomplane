@@ -45,9 +45,22 @@ const (
 // LOOMPLANE_TEST_DATABASE_URL and returns its DSN.
 func freshDatabase(t *testing.T) string {
 	t.Helper()
-	admin := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
+	return freshDatabaseOn(t, "LOOMPLANE_TEST_DATABASE_URL", "set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
+}
+
+// freshPgvectorDatabase is freshDatabase on the Postgres with pgvector in
+// LOOMPLANE_TEST_PGVECTOR_URL (make up-knowledge). Without it the test is
+// skipped.
+func freshPgvectorDatabase(t *testing.T) string {
+	t.Helper()
+	return freshDatabaseOn(t, "LOOMPLANE_TEST_PGVECTOR_URL", "set LOOMPLANE_TEST_PGVECTOR_URL (make up-knowledge) to run the knowledge tests that need pgvector")
+}
+
+func freshDatabaseOn(t *testing.T, env, skip string) string {
+	t.Helper()
+	admin := os.Getenv(env)
 	if admin == "" {
-		t.Skip("set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
+		t.Skip(skip)
 	}
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, admin)

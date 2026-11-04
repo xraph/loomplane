@@ -7,10 +7,15 @@ import type { Project } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
 import { Repositories } from "@/components/sources"
 
-const may = vi.hoisted(() => ({ edit: true }))
+// The workspace's permissions, as the session lists them. A project's own
+// list (below) never holds repository:connect.
+const may = vi.hoisted(() => ({ edit: true, connect: true }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
-    can: (p: string) => p !== "project:update" || may.edit,
+    can: (p: string) =>
+      p === "repository:connect"
+        ? may.connect
+        : p !== "project:update" || may.edit,
   }),
 }))
 
@@ -18,11 +23,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   may.edit = true
+  may.connect = true
 })
 
 const project = { id: "p", name: "Shop" } as Project
 
-const source = {
+const source: Record<string, unknown> = {
   id: "src_1",
   alias: "shop",
   repository: "acme/shop",
@@ -30,20 +36,42 @@ const source = {
   root: "",
 }
 
-function serve() {
-  const calls: { method: string; path: string }[] = []
+function serve(
+  sources: Record<string, unknown>[] = [source],
+  enable?: { status: number; body: unknown }
+) {
+  const calls: { method: string; path: string; body?: unknown }[] = []
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost")
       const method = init?.method ?? "GET"
-      calls.push({ method, path: url.pathname })
+      calls.push({
+        method,
+        path: url.pathname,
+        ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+      })
       const json = (body: unknown) =>
         new Response(JSON.stringify(body), {
           headers: { "Content-Type": "application/json" },
         })
       if (method === "DELETE") return new Response(null, { status: 204 })
-      if (url.pathname.endsWith("/sources")) return json({ sources: [source] })
+      // What a project's page is told: workspace-only permissions such as
+      // repository:connect are not in it.
+      if (url.pathname === "/api/v1/projects/p/permissions")
+        return json({
+          permissions: [
+            "project:read",
+            ...(may.edit ? ["project:update"] : []),
+            "analysis:run",
+          ],
+        })
+      if (url.pathname === "/api/v1/bitbucket/webhooks" && enable)
+        return new Response(JSON.stringify(enable.body), {
+          status: enable.status,
+          headers: { "Content-Type": "application/json" },
+        })
+      if (url.pathname.endsWith("/sources")) return json({ sources })
       if (url.pathname.endsWith("/analyses")) return json({ analyses: [] })
       if (url.pathname.endsWith("/graph"))
         return json({
@@ -128,5 +156,86 @@ test("a viewer can open a repository but not change the list", async () => {
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("menuitem", { name: "Remove shop" })
+  ).not.toBeInTheDocument()
+})
+
+const bitbucketSource = {
+  id: "src_2",
+  alias: "api",
+  repository: "bitbucket.org/acme/api",
+  ref: "",
+  root: "",
+}
+
+test("a Bitbucket source with push re-analysis off says why and offers Turn on", async () => {
+  const calls = serve(
+    [
+      {
+        ...bitbucketSource,
+        push: {
+          on: false,
+          reason:
+            "push re-analysis needs an https public_url, so Bitbucket can reach this Loomplane",
+        },
+      },
+    ],
+    { status: 200, body: { on: true } }
+  )
+  const user = userEvent.setup()
+  expect(
+    await screen.findByText(/Push re-analysis needs an https public_url/)
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole("button", { name: "Turn on" }))
+  await vi.waitFor(() =>
+    expect(calls).toContainEqual({
+      method: "POST",
+      path: "/api/v1/bitbucket/webhooks",
+      body: { repository: "bitbucket.org/acme/api" },
+    })
+  )
+  // The list is read again, so the notice follows what the server now says.
+  await vi.waitFor(() =>
+    expect(
+      calls.filter((c) => c.method === "GET" && c.path.endsWith("/sources"))
+        .length
+    ).toBeGreaterThan(1)
+  )
+})
+
+test("shows why Turn on didn't work", async () => {
+  serve([{ ...bitbucketSource, push: { on: false, reason: "not yet" } }], {
+    status: 400,
+    body: { message: "Connect the workspace first" },
+  })
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("button", { name: "Turn on" }))
+  expect(
+    await screen.findByText(/Connect the workspace first/)
+  ).toBeInTheDocument()
+})
+
+test("a source with push re-analysis on, or none to speak of, shows no notice", async () => {
+  serve([{ ...bitbucketSource, push: { on: true } }, source])
+  await screen.findByRole("table", { name: "Repositories" })
+  expect(
+    screen.queryByRole("button", { name: "Turn on" })
+  ).not.toBeInTheDocument()
+  expect(screen.queryByText(/push re-analysis/i)).not.toBeInTheDocument()
+})
+
+test("a GitHub source never shows the notice", async () => {
+  serve([source])
+  await screen.findByRole("table", { name: "Repositories" })
+  expect(
+    screen.queryByRole("button", { name: "Turn on" })
+  ).not.toBeInTheDocument()
+})
+
+test("someone who can't connect repositories sees the reason without Turn on", async () => {
+  may.connect = false
+  serve([{ ...bitbucketSource, push: { on: false, reason: "needs https" } }])
+  expect(await screen.findByText(/Needs https/)).toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Turn on" })
   ).not.toBeInTheDocument()
 })

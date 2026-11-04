@@ -35,6 +35,15 @@ func (d *testDriver) Remove(context.Context, VM) error    { return nil }
 func (d *testDriver) Guest(context.Context, VM, string, io.Reader) (GuestStatus, error) {
 	return GuestStatus{Ready: true, State: "running"}, nil
 }
+func (d *testDriver) Usage(_ context.Context, vms []VM) ([]UsageSample, error) {
+	var out []UsageSample
+	for _, vm := range vms {
+		if d.live[vm.ID] {
+			out = append(out, UsageSample{VMID: vm.ID, CounterID: "c", Bytes: 10, Packets: 1})
+		}
+	}
+	return out, nil
+}
 func testHost(t *testing.T) (*Host, *testDriver, Request) {
 	t.Helper()
 	s, err := OpenStore(t.TempDir() + "/state")
@@ -278,5 +287,49 @@ func TestRemoveAllocationThatFailedBeforeReservation(t *testing.T) {
 	r, err := h.Mutate(t.Context(), q, "remove")
 	if err != nil || r.State != "removed" {
 		t.Fatal(r, err)
+	}
+}
+
+func TestPerOrgBackstopRefusesOneOrgFillingTheHost(t *testing.T) {
+	h, _, q := testHost(t)
+	h.Limits = Limits{VMs: 8, VCPUs: 16, MemoryMiB: 16384, DiskMiB: 65536, PerOrg: OrgLimits{VMs: 2, VCPUs: 2, MemoryMiB: 4096}}
+	apply := func(org, resource string, gen int64, digest string) error {
+		in := q
+		in.Scope.Org, in.Scope.Resource = org, resource
+		in.Authority.Generation = gen
+		in.Authority.Operation = "op-" + org + resource + digest
+		in.Spec.Service = "api"
+		in.Spec.Image = "registry.example/app@sha256:" + strings.Repeat(digest, 64)
+		_, err := h.Apply(t.Context(), in)
+		return err
+	}
+	for _, r := range []string{"r1", "r2"} {
+		if err := apply("a", r, 1, "a"); err != nil {
+			t.Fatal(r, err)
+		}
+	}
+	if err := apply("a", "r3", 1, "a"); !errors.Is(err, ErrCapacity) {
+		t.Fatal("third VM for org a accepted", err)
+	}
+	if err := apply("b", "r1", 1, "a"); err != nil {
+		t.Fatal("org b blocked by org a", err)
+	}
+	if err := apply("a", "r1", 2, "b"); err != nil {
+		t.Fatal("redeploy refused", err)
+	}
+}
+
+func TestUsageMetersPendingVMThatNeverBecomesReady(t *testing.T) {
+	h, d, q := testHost(t)
+	d.fail = true
+	if _, err := h.Apply(t.Context(), q); err == nil {
+		t.Fatal("failed guest became ready")
+	}
+	got, err := h.Usage(t.Context(), "")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("usage %+v %v", got, err)
+	}
+	if got[0].Scope != q.Scope || got[0].VMID == "" {
+		t.Fatalf("sample %+v", got[0])
 	}
 }

@@ -19,6 +19,9 @@ type Session struct {
 	UserID      string   `json:"user_id"`
 	OrgID       string   `json:"org_id"`
 	Permissions []string `json:"permissions"`
+	// SessionID is the authsome session making the request, so the account
+	// page can mark it among the user's sessions. An API key has none.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // PublicConfig is what the dashboard needs before anyone signs in. Nothing
@@ -70,6 +73,9 @@ func (e *Extension) routes(r forge.Router) error {
 		return err
 	}
 	if err := e.setupRoutes(r); err != nil {
+		return err
+	}
+	if err := e.cliRoutes(r); err != nil {
 		return err
 	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
@@ -211,6 +217,9 @@ func (e *Extension) getSession(c forge.Context) error {
 	}
 	perms := security.AllPermissions()
 	out := Session{UserID: p.UserID, OrgID: p.OrgID, Permissions: make([]string, 0, len(perms))}
+	if sid, ok := authmw.SessionIDFrom(ctx); ok {
+		out.SessionID = sid.String()
+	}
 	for _, perm := range perms {
 		allowed, err := e.authz.Allowed(ctx, p, perm)
 		if err != nil {

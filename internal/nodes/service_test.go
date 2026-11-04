@@ -425,10 +425,23 @@ func newRig(t *testing.T, scope apikeys.NodeJoinScope, manage bool) *rig {
 	return r
 }
 
+// joinKeys holds the private half of every key joinReq made, so signed can
+// sign a request after a test has changed it.
+var joinKeys sync.Map
+
 func joinReq(eps ...nodeproto.Endpoint) JoinRequest {
-	pub, _, _ := ed25519.GenerateKey(nil)
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	joinKeys.Store(string(pub), priv)
 	return JoinRequest{Token: "lpj_live_x", PublicKey: pub, Endpoints: eps, NodeVersion: "v1.8.0", ProtocolVersion: nodeproto.Version,
 		Inventory: nodeproto.Inventory{OS: "linux"}}
+}
+
+// signed is in as the machine sends it: signed with the key it carries.
+func signed(in JoinRequest) JoinRequest {
+	if priv, ok := joinKeys.Load(string(in.PublicKey)); ok {
+		in.Signature = nodeproto.SignJoin(priv.(ed25519.PrivateKey), in.Token, in.Name)
+	}
+	return in
 }
 
 var admin = security.Principal{UserID: "usr_1", OrgID: "org_1"}
@@ -436,7 +449,7 @@ var admin = security.Principal{UserID: "usr_1", OrgID: "org_1"}
 func TestJoinCreatesPendingNode(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{CloudID: "cld_1", Labels: map[string]string{"zone": "a"}}, true)
 	in := joinReq(nodeproto.EndpointDocker)
-	res, err := r.svc.Join(context.Background(), in)
+	res, err := r.svc.Join(context.Background(), signed(in))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +475,7 @@ func TestJoinNameFromRequest(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in2 := joinReq()
 	in2.Name = "web"
-	res, err := r.svc.Join(context.Background(), in2)
+	res, err := r.svc.Join(context.Background(), signed(in2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +486,7 @@ func TestJoinNameFromRequest(t *testing.T) {
 	in3.Name = "web"
 	// The name is checked before the token is spent, so the operator keeps
 	// the token and is told why.
-	_, err = r.svc.Join(context.Background(), in3)
+	_, err = r.svc.Join(context.Background(), signed(in3))
 	if !errors.Is(err, ErrNameTaken) || errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
 	}
@@ -485,7 +498,7 @@ func TestJoinNameFromHostname(t *testing.T) {
 		r := newRig(t, apikeys.NodeJoinScope{}, true)
 		in := joinReq()
 		in.Inventory.Hostname = host
-		res, err := r.svc.Join(context.Background(), in)
+		res, err := r.svc.Join(context.Background(), signed(in))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -496,7 +509,7 @@ func TestJoinNameFromHostname(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.Inventory.Hostname = "___"
-	res, _ := r.svc.Join(context.Background(), in)
+	res, _ := r.svc.Join(context.Background(), signed(in))
 	if n, _ := r.store.GetByID(context.Background(), res.NodeID); !strings.HasPrefix(n.Name, "node-") {
 		t.Fatalf("name %q", n.Name)
 	}
@@ -520,7 +533,7 @@ func TestJoinValidatesInput(t *testing.T) {
 	for i, mut := range bad {
 		in := joinReq()
 		mut(&in)
-		if _, err := r.svc.Join(context.Background(), in); !errors.Is(err, ErrInvalid) {
+		if _, err := r.svc.Join(context.Background(), signed(in)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("case %d: err %v", i, err)
 		}
 	}
@@ -531,7 +544,7 @@ func TestJoinValidatesInput(t *testing.T) {
 
 func TestJoinEdgeComesFromScope(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{Edge: true, EdgeScope: apikeys.EdgeScopeOrg}, true)
-	res, err := r.svc.Join(context.Background(), joinReq())
+	res, err := r.svc.Join(context.Background(), signed(joinReq()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +556,7 @@ func TestJoinEdgeComesFromScope(t *testing.T) {
 
 func TestJoinIntersectsScope(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}, true)
-	res, err := r.svc.Join(context.Background(), joinReq(nodeproto.EndpointDocker, nodeproto.EndpointKube))
+	res, err := r.svc.Join(context.Background(), signed(joinReq(nodeproto.EndpointDocker, nodeproto.EndpointKube)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +564,7 @@ func TestJoinIntersectsScope(t *testing.T) {
 		t.Fatalf("endpoints %v", res.Endpoints)
 	}
 	r2 := newRig(t, apikeys.NodeJoinScope{}, true)
-	res, _ = r2.svc.Join(context.Background(), joinReq(nodeproto.EndpointDocker, nodeproto.EndpointKube))
+	res, _ = r2.svc.Join(context.Background(), signed(joinReq(nodeproto.EndpointDocker, nodeproto.EndpointKube)))
 	if len(res.Endpoints) != 2 {
 		t.Fatalf("empty scope should pass the request: %v", res.Endpoints)
 	}
@@ -561,7 +574,7 @@ func TestJoinRefusesOldProtocol(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.ProtocolVersion = 0
-	if _, err := r.svc.Join(context.Background(), in); !errors.Is(err, ErrUpdateNode) {
+	if _, err := r.svc.Join(context.Background(), signed(in)); !errors.Is(err, ErrUpdateNode) {
 		t.Fatalf("err %v", err)
 	}
 	if r.tokens.calls != 0 {
@@ -595,7 +608,7 @@ func TestJoinVersionSkew(t *testing.T) {
 		r.svc.Version = c.svc
 		in := joinReq()
 		in.NodeVersion = c.node
-		_, err := r.svc.Join(context.Background(), in)
+		_, err := r.svc.Join(context.Background(), signed(in))
 		if c.ok && err != nil {
 			t.Errorf("%s vs %s: %v", c.svc, c.node, err)
 		}
@@ -612,7 +625,7 @@ func TestJoinRefusesNewerProtocol(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.ProtocolVersion = nodeproto.Version + 1
-	_, err := r.svc.Join(context.Background(), in)
+	_, err := r.svc.Join(context.Background(), signed(in))
 	if !errors.Is(err, ErrNodeNewer) || err.Error() != "this node is newer than Loomplane; update Loomplane first" || r.tokens.calls != 0 {
 		t.Fatalf("err %v calls %d", err, r.tokens.calls)
 	}
@@ -623,7 +636,7 @@ func TestJoinAdoptFailureRollsBackAndFreesName(t *testing.T) {
 	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error { return errors.New("cloud down") }
 	in := joinReq()
 	in.Name = "web"
-	_, err := r.svc.Join(context.Background(), in)
+	_, err := r.svc.Join(context.Background(), signed(in))
 	if !errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
 	}
@@ -634,15 +647,54 @@ func TestJoinAdoptFailureRollsBackAndFreesName(t *testing.T) {
 	r.svc.Adopt = nil
 	in2 := joinReq()
 	in2.Name = "web"
-	if _, err := r.svc.Join(context.Background(), in2); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(in2)); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+// A join must be signed by the key it carries, over this token and name, or
+// the token isn't even looked at. Without it, anyone holding a token could
+// claim another machine's public key, which is unique across nodes.
+func TestJoinNeedsProofOfTheKey(t *testing.T) {
+	victim := joinReq()
+	_, squatter, _ := ed25519.GenerateKey(nil)
+	cases := map[string]func() JoinRequest{
+		"unsigned": func() JoinRequest { return victim },
+		"signed by another key": func() JoinRequest {
+			in := victim
+			in.Signature = nodeproto.SignJoin(squatter, in.Token, in.Name)
+			return in
+		},
+		"signed for another token": func() JoinRequest {
+			in := signed(victim)
+			in.Token = "lpj_live_other"
+			return in
+		},
+		"signed for another name": func() JoinRequest {
+			in := signed(victim)
+			in.Name = "web"
+			return in
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, apikeys.NodeJoinScope{}, true)
+			r.tokens.peekErr = errors.New("the token was looked at")
+			_, err := r.svc.Join(context.Background(), mk())
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "signed") {
+				t.Fatalf("err %v, want ErrInvalid about the signature", err)
+			}
+			if r.tokens.calls != 0 {
+				t.Fatal("the token was spent")
+			}
+		})
 	}
 }
 
 func TestJoinTokenErrorsPassThrough(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	r.tokens.err = apikeys.ErrRejected
-	if _, err := r.svc.Join(context.Background(), joinReq()); !errors.Is(err, apikeys.ErrRejected) {
+	if _, err := r.svc.Join(context.Background(), signed(joinReq())); !errors.Is(err, apikeys.ErrRejected) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -650,7 +702,7 @@ func TestJoinTokenErrorsPassThrough(t *testing.T) {
 func TestJoinCreateFailureAsksForNewToken(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	r.store.fail = errors.New("db down")
-	_, err := r.svc.Join(context.Background(), joinReq())
+	_, err := r.svc.Join(context.Background(), signed(joinReq()))
 	if !errors.Is(err, ErrMintNewToken) || !strings.Contains(err.Error(), "mint a new join token") {
 		t.Fatalf("err %v", err)
 	}
@@ -663,7 +715,7 @@ func TestJoinAdoptHook(t *testing.T) {
 		got = c.Scope.CloudID + n.ID
 		return nil
 	}
-	res, err := r.svc.Join(context.Background(), joinReq())
+	res, err := r.svc.Join(context.Background(), signed(joinReq()))
 	if err != nil || got != "cld_1"+res.NodeID {
 		t.Fatalf("err %v got %q", err, got)
 	}
@@ -884,12 +936,12 @@ func TestJoinHostnameCollisionRetriesWithSuffix(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	first := joinReq()
 	first.Inventory.Hostname = "box"
-	if _, err := r.svc.Join(context.Background(), first); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(first)); err != nil {
 		t.Fatal(err)
 	}
 	second := joinReq()
 	second.Inventory.Hostname = "box"
-	res, err := r.svc.Join(context.Background(), second)
+	res, err := r.svc.Join(context.Background(), signed(second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -901,12 +953,12 @@ func TestJoinHostnameCollisionRetriesWithSuffix(t *testing.T) {
 	// A long hostname still gives a DNS label.
 	long := joinReq()
 	long.Inventory.Hostname = strings.Repeat("a", 80)
-	if _, err = r.svc.Join(context.Background(), long); err != nil {
+	if _, err = r.svc.Join(context.Background(), signed(long)); err != nil {
 		t.Fatal(err)
 	}
 	long2 := joinReq()
 	long2.Inventory.Hostname = strings.Repeat("a", 80)
-	res, err = r.svc.Join(context.Background(), long2)
+	res, err = r.svc.Join(context.Background(), signed(long2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -919,13 +971,13 @@ func TestJoinExplicitNameCollisionDoesNotRetry(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.Name = "web"
-	if _, err := r.svc.Join(context.Background(), in); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(in)); err != nil {
 		t.Fatal(err)
 	}
 	in2 := joinReq()
 	in2.Name = "web"
 	in2.Inventory.Hostname = "box"
-	if _, err := r.svc.Join(context.Background(), in2); !errors.Is(err, ErrNameTaken) {
+	if _, err := r.svc.Join(context.Background(), signed(in2)); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -936,7 +988,7 @@ func TestJoinRollbackSurvivesCancelAndLogsFailure(t *testing.T) {
 	defer cancel()
 	// The caller goes away while adopting; the rollback still lands.
 	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error { cancel(); return errors.New("cloud down") }
-	if _, err := r.svc.Join(ctx, joinReq()); !errors.Is(err, ErrMintNewToken) {
+	if _, err := r.svc.Join(ctx, signed(joinReq())); !errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
 	}
 	l, _ := r.store.List(context.Background(), "org_1")
@@ -953,7 +1005,7 @@ func TestJoinRollbackSurvivesCancelAndLogsFailure(t *testing.T) {
 		r2.store.mu.Unlock()
 		return errors.New("cloud down")
 	}
-	if _, err := r2.svc.Join(context.Background(), joinReq()); !errors.Is(err, ErrMintNewToken) {
+	if _, err := r2.svc.Join(context.Background(), signed(joinReq())); !errors.Is(err, ErrMintNewToken) {
 		t.Fatalf("err %v", err)
 	}
 	if !strings.Contains(buf.String(), "db down") {
@@ -1031,7 +1083,7 @@ func TestReadOnlyPrincipalCannotWrite(t *testing.T) {
 func TestJoinRefusesAKnownKeyBeforeSpending(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	first := joinReq()
-	res, err := r.svc.Join(context.Background(), first)
+	res, err := r.svc.Join(context.Background(), signed(first))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1041,7 +1093,7 @@ func TestJoinRefusesAKnownKeyBeforeSpending(t *testing.T) {
 	spent := r.tokens.calls
 	again := joinReq()
 	again.PublicKey = first.PublicKey
-	_, err = r.svc.Join(context.Background(), again)
+	_, err = r.svc.Join(context.Background(), signed(again))
 	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || jc.Spent {
 		t.Fatalf("err %v", err)
@@ -1058,12 +1110,12 @@ func TestJoinKnownKeyRaceAfterSpending(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	r.store.skipPrecheck = true
 	first := joinReq()
-	if _, err := r.svc.Join(context.Background(), first); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(first)); err != nil {
 		t.Fatal(err)
 	}
 	again := joinReq()
 	again.PublicKey = first.PublicKey
-	_, err := r.svc.Join(context.Background(), again)
+	_, err := r.svc.Join(context.Background(), signed(again))
 	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrKeyKnown) || !jc.Spent || !strings.Contains(err.Error(), "mint a new join token") {
 		t.Fatalf("err %v", err)
@@ -1074,13 +1126,13 @@ func TestJoinTakenNameRefusedBeforeSpending(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.Name = "web"
-	if _, err := r.svc.Join(context.Background(), in); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(in)); err != nil {
 		t.Fatal(err)
 	}
 	spent := r.tokens.calls
 	in2 := joinReq()
 	in2.Name = "web"
-	_, err := r.svc.Join(context.Background(), in2)
+	_, err := r.svc.Join(context.Background(), signed(in2))
 	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || jc.Spent {
 		t.Fatalf("err %v", err)
@@ -1099,13 +1151,13 @@ func TestJoinTakenNameRaceSaysSoAfterSpending(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	in := joinReq()
 	in.Name = "web"
-	if _, err := r.svc.Join(context.Background(), in); err != nil {
+	if _, err := r.svc.Join(context.Background(), signed(in)); err != nil {
 		t.Fatal(err)
 	}
 	r.store.skipPrecheck = true
 	in2 := joinReq()
 	in2.Name = "web"
-	_, err := r.svc.Join(context.Background(), in2)
+	_, err := r.svc.Join(context.Background(), signed(in2))
 	var jc *JoinConflictError
 	if !errors.As(err, &jc) || !errors.Is(err, ErrNameTaken) || !jc.Spent {
 		t.Fatalf("err %v", err)
@@ -1120,7 +1172,7 @@ func TestJoinTakenNameRaceSaysSoAfterSpending(t *testing.T) {
 func TestJoinPeekErrorsPassThroughWithoutSpending(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	r.tokens.peekErr = apikeys.ErrRejected
-	if _, err := r.svc.Join(context.Background(), joinReq()); !errors.Is(err, apikeys.ErrRejected) {
+	if _, err := r.svc.Join(context.Background(), signed(joinReq())); !errors.Is(err, apikeys.ErrRejected) {
 		t.Fatalf("err %v", err)
 	}
 	if r.tokens.calls != 0 {
@@ -1133,7 +1185,7 @@ func TestJoinBoundsWhatTheMachineReports(t *testing.T) {
 	in := joinReq()
 	in.NodeVersion = "v1.8.0-" + strings.Repeat("x", 500)
 	in.Inventory.Kernel = strings.Repeat("k", 5000)
-	res, err := r.svc.Join(context.Background(), in)
+	res, err := r.svc.Join(context.Background(), signed(in))
 	if err != nil {
 		t.Fatal(err)
 	}

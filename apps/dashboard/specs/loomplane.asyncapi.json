@@ -1116,6 +1116,42 @@
           "type": "github.com/xraph/loomplane/internal/realtime.Collection"
         }
       ]
+    },
+    "api-v1-agent-tasks-:id-stream": {
+      "address": "/api/v1/agent/tasks/:id/stream",
+      "messages": {
+        "agent.end": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEnd"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.end",
+          "title": "agent.end event",
+          "summary": "SSE event: agent.end"
+        },
+        "agent.event": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.event",
+          "title": "agent.event event",
+          "summary": "SSE event: agent.event"
+        }
+      },
+      "title": "Follow a task's events as they happen",
+      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+      "tags": [
+        {
+          "name": "Agent"
+        }
+      ],
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "bindingVersion": "latest"
+        }
+      }
     }
   },
   "operations": {
@@ -1281,6 +1317,28 @@
       "messages": [
         {
           "$ref": "#/channels/api-v1-realtime-ws/messages/send"
+        }
+      ]
+    },
+    "agentTasks.stream": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/api-v1-agent-tasks-:id-stream"
+      },
+      "title": "Receive SSE events",
+      "summary": "Receive Server-Sent Events from /api/v1/agent/tasks/:id/stream",
+      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+      "tags": [
+        {
+          "name": "Agent"
+        }
+      ],
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.end"
+        },
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.event"
         }
       ]
     }
@@ -5971,6 +6029,48 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/nodeproto.GPU"
+      },
+      "RealtimeAgentEnd": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeAgentEvent": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "seq",
+          "kind",
+          "data",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
       }
     },
     "messages": {

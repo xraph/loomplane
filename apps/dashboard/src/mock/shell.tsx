@@ -22,6 +22,11 @@ import { navigate } from "@/mock/router"
 import type { DeployRequest } from "@/mock/store"
 
 type Shell = {
+  // The mock has no agent: the real shell's panel needs the API.
+  openAssistant: (opts?: {
+    projectId?: string
+    conversationId?: string
+  }) => void
   openCommand: () => void
   openDeploy: (preset?: Partial<DeployRequest>) => void
   openNewProject: () => void
@@ -82,6 +87,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [shortcuts, setShortcuts] = useState(false)
   const pendingG = useRef(0)
 
+  const openAssistant = useCallback(() => {}, [])
   const openCommand = useCallback(() => setCommand(true), [])
   const openDeploy = useCallback(
     (preset?: Partial<DeployRequest>) => setDeploy(preset ?? {}),
@@ -132,8 +138,14 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ openCommand, openDeploy, openNewProject, openShortcuts }),
-    [openCommand, openDeploy, openNewProject, openShortcuts]
+    () => ({
+      openAssistant,
+      openCommand,
+      openDeploy,
+      openNewProject,
+      openShortcuts,
+    }),
+    [openAssistant, openCommand, openDeploy, openNewProject, openShortcuts]
   )
 
   return (

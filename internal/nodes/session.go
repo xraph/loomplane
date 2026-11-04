@@ -44,6 +44,7 @@ type session struct {
 	lastBeat atomic.Int64
 
 	// Touched only by the read loop.
+	limit       bucket
 	inventoried bool
 	nodeVersion string
 	protocol    int
@@ -51,7 +52,7 @@ type session struct {
 
 func newSession(h *Hub, n *Node, epoch int64, mux *yamux.Session, ctrl net.Conn) *session {
 	s := &session{hub: h, nodeID: n.ID, orgID: n.OrgID, epoch: epoch, mux: mux, ctrl: ctrl,
-		out: make(chan any, controlQueue), done: make(chan struct{})}
+		out: make(chan any, controlQueue), done: make(chan struct{}), limit: newBucket(h.now())}
 	s.lastBeat.Store(h.now().UnixNano())
 	return s
 }
@@ -138,11 +139,19 @@ func (s *session) writeLoop() {
 }
 
 // readLoop handles what the node sends on stream 0 until it closes. A line
-// that doesn't parse is logged and skipped; unknown types are ignored.
+// that doesn't parse is logged and skipped; unknown types are ignored. Every
+// line counts against the session's rate limit, and a node past it is closed
+// before that line is handled, so nothing it sent over the limit is stored.
 func (s *session) readLoop() {
 	sc := bufio.NewScanner(s.ctrl)
 	sc.Buffer(make([]byte, 0, 64<<10), maxControlLine)
 	for sc.Scan() {
+		if !s.limit.take(s.hub.now()) {
+			s.hub.log.Warn("nodes: a node sent control messages faster than allowed; closing its session",
+				"node", s.nodeID, "epoch", s.epoch, "burst", controlBurst, "per_second", controlPerSecond)
+			s.close()
+			return
+		}
 		msg, err := nodeproto.DecodeControl(sc.Bytes())
 		if err != nil {
 			s.hub.log.Debug("nodes: skipping a control line that doesn't parse", "node", s.nodeID, "error", err)

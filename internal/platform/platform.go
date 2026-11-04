@@ -195,6 +195,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// nothing else of the AI section.
 		exts = append(exts, aiext.NewOff(jobs.Engine))
 	}
+	// What only this edition adds, such as Loomplane Cloud's billing, comes
+	// after the sections it builds on and before the console, which depends
+	// on every extension before it.
+	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
 	exts = append(exts, console(exts))
 	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/"))
 }
@@ -207,7 +211,7 @@ func queues(cfg config.Config) []string {
 	if cfg.AI.Enabled {
 		q = append(q, aiagent.Queue)
 	}
-	return q
+	return append(q, editionQueues()...)
 }
 
 // console is the Forge dashboard's API, mounted for platform admins as the

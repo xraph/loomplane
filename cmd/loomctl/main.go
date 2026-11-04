@@ -1,6 +1,8 @@
 // Command loomctl is Loomplane's command-line client: plan, approve and
-// follow deployments from your terminal or CI, with an API key.
+// follow deployments from your terminal, signed in as you, or from CI with
+// an API key.
 //
+//	loomctl login --url https://loomplane.example.com   sign in through the browser
 //	loomctl login --url https://loomplane.example.com --key lp_live_...
 //	loomctl plan mono --env production
 //	loomctl approve <plan-id>
@@ -11,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -21,6 +24,13 @@ import (
 
 func main() {
 	if err := ctl.New(ctl.Options{Version: buildinfo.Version}).Run(os.Args[1:]); err != nil {
+		var exit *ctl.ExitError
+		if errors.As(err, &exit) {
+			if exit.Err != nil {
+				fmt.Fprintln(os.Stderr, "loomctl:", exit.Err)
+			}
+			os.Exit(exit.Code)
+		}
 		fmt.Fprintln(os.Stderr, "loomctl:", err)
 		// 77 is a node that Loomplane revoked; everything else is 1.
 		os.Exit(node.ExitCode(err))

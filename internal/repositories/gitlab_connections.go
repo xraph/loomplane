@@ -61,10 +61,11 @@ const gitlabMaxRenewals = 4
 // failing.
 var ErrSecretNotFound = errors.New("no secret is kept under that ID")
 
-// Secrets keeps credentials sealed, per organization. A connection's grant
+// Secrets keeps credentials sealed, per organization. A Bitbucket
+// workspace's grant is under its connection ID. A GitLab connection's grant
 // is under its ID, its webhook secret under "<ID>/webhook", and an
 // organization host's client secret under "host/<host ID>". Reveal of a
-// missing secret is an error that is ErrSecretNotFound.
+// missing GitLab secret is an error that is ErrSecretNotFound.
 // *connections.VaultSecrets is the real one.
 type Secrets interface {
 	Put(ctx context.Context, orgID, id string, value []byte) error

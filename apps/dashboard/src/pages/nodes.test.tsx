@@ -227,3 +227,70 @@ it("keeps what the node page shows when a partial node.updated arrives", async (
   expect(screen.getByText("203.0.113.24")).toBeInTheDocument()
   live.stop()
 })
+
+const pendingToken = (over: Record<string, unknown> = {}) => ({
+  id: "key_tok1",
+  hint: "9f2a",
+  minted_by: "u1",
+  minted_by_key_id: "key_ci",
+  endpoints: ["docker"],
+  labels: { zone: "a" },
+  edge: false,
+  created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  expires_at: new Date(Date.now() + 42 * 60_000 + 10_000).toISOString(),
+  ...over,
+})
+
+it("lists the unused join tokens to someone who can make them", async () => {
+  serve({
+    nodes: [wireNode()],
+    keys: [
+      { id: "key_ci", name: "ci-runner", access: "write", state: "active" },
+    ],
+    pending: [
+      pendingToken(),
+      pendingToken({
+        id: "key_old",
+        hint: "dead",
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ],
+  })
+  const { unmount } = wrap(<Nodes />)
+  expect(await screen.findByText("Unused join tokens")).toBeInTheDocument()
+  const row = screen.getByText("lpj_live_…9f2a").closest("tr")!
+  expect(await within(row).findByText("ci-runner")).toBeInTheDocument()
+  expect(within(row).getByText("docker")).toBeInTheDocument()
+  expect(within(row).getByText("zone=a")).toBeInTheDocument()
+  expect(within(row).getByText("43 min left")).toBeInTheDocument()
+  // An expired token is no longer open, whatever the server last said.
+  expect(screen.queryByText("lpj_live_…dead")).not.toBeInTheDocument()
+  unmount()
+
+  permission.manage = false
+  wrap(<Nodes />)
+  await screen.findByText("hetzner-1")
+  expect(screen.queryByText("Unused join tokens")).not.toBeInTheDocument()
+})
+
+it("cancels a join token after asking", async () => {
+  const calls = serve({ nodes: [], pending: [pendingToken()] })
+  const user = userEvent.setup()
+  wrap(<Nodes />)
+  await screen.findByText("lpj_live_…9f2a")
+  await user.click(screen.getByRole("button", { name: "Cancel" }))
+  const dialog = await screen.findByRole("alertdialog")
+  await user.click(within(dialog).getByRole("button", { name: "Cancel token" }))
+  await vi.waitFor(() =>
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "DELETE" &&
+          c.url.endsWith("/api/v1/nodes/join-tokens/key_tok1")
+      )
+    ).toBe(true)
+  )
+  await vi.waitFor(() =>
+    expect(screen.queryByText("lpj_live_…9f2a")).not.toBeInTheDocument()
+  )
+})

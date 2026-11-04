@@ -66,6 +66,7 @@ type Config struct {
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
+	Bitbucket     BitbucketConfig
 	GitLab        GitLabConfig
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
@@ -171,6 +172,22 @@ func (g GitHubConfig) appSettingsSet() int {
 	return n
 }
 
+// BitbucketConfig is how Loomplane reaches Bitbucket Cloud. Public
+// repositories need none of it.
+type BitbucketConfig struct {
+	// APIURL is Bitbucket Cloud's REST API: https://api.bitbucket.org/2.0.
+	APIURL string
+	// WebURL is Bitbucket itself, where repository archives are served:
+	// https://bitbucket.org.
+	WebURL string
+
+	// ClientID and ClientSecret are an OAuth consumer's key and secret,
+	// which connect an organization to its private repositories. Leave
+	// both empty to read public repositories only; set both otherwise.
+	ClientID     string
+	ClientSecret string
+}
+
 // GitLabConfig is how Loomplane reaches GitLab.
 type GitLabConfig struct {
 	// APIURL is the address Loomplane reads gitlab.com from:
@@ -200,6 +217,11 @@ type GitLabHostConfig struct {
 	// that GitLab. Set both, or neither to read public projects only.
 	ClientID     string
 	ClientSecret string
+}
+
+// Configured reports whether an OAuth consumer is set up.
+func (b BitbucketConfig) Configured() bool {
+	return b.ClientID != "" && b.ClientSecret != ""
 }
 
 // Validate reports GitLab settings Loomplane can't run with.
@@ -442,19 +464,21 @@ func Defaults() Config {
 			Concurrency:  4,
 			PollInterval: time.Second,
 		},
-		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
-		GitLab:   GitLabConfig{APIURL: "https://gitlab.com", AllowOrganizationHosts: true},
-		Analysis: AnalysisConfig{Concurrency: 2},
-		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
-		Drift:    DriftConfig{Interval: 30 * time.Minute},
-		Worker:   WorkerConfig{HTTPAddr: ":8781"},
+		GitHub:    GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
+		Bitbucket: BitbucketConfig{APIURL: "https://api.bitbucket.org/2.0", WebURL: "https://bitbucket.org"},
+		GitLab:    GitLabConfig{APIURL: "https://gitlab.com", AllowOrganizationHosts: true},
+		Analysis:  AnalysisConfig{Concurrency: 2},
+		Planning:  PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:     DriftConfig{Interval: 30 * time.Minute},
+		Worker:    WorkerConfig{HTTPAddr: ":8781"},
 		AI: AIConfig{
 			Provider:  AIProviderAnthropic,
 			Model:     DefaultAIModel,
 			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
-			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions, DocsBudgetUSD: DefaultDocsBudgetUSD},
 		},
-		Push: PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
 	}
 }
 
@@ -542,6 +566,10 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.GitHub.ClientID, "github.client_id")
 	r.str(&c.GitHub.ClientSecret, "github.client_secret")
 	r.str(&c.GitHub.WebhookSecret, "github.webhook_secret")
+	r.str(&c.Bitbucket.APIURL, "bitbucket.api_url")
+	r.str(&c.Bitbucket.WebURL, "bitbucket.web_url")
+	r.str(&c.Bitbucket.ClientID, "bitbucket.client_id")
+	r.str(&c.Bitbucket.ClientSecret, "bitbucket.client_secret")
 	r.str(&c.GitLab.APIURL, "gitlab.api_url")
 	r.str(&c.GitLab.ClientID, "gitlab.client_id")
 	r.str(&c.GitLab.ClientSecret, "gitlab.client_secret")
@@ -601,6 +629,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
 	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
 	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
+	r.str(&c.AI.Knowledge.DocsBudgetUSD, "ai.knowledge.docs_budget_usd")
 	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
@@ -622,6 +651,8 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
 	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
+	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
+	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -703,6 +734,15 @@ func (c *Config) Validate() error {
 	}
 	if n := c.GitHub.appSettingsSet(); n != 0 && n != 5 {
 		errs = append(errs, errors.New("a GitHub App needs all of github.app_id, app_slug, private_key (or private_key_file), client_id and client_secret"))
+	}
+	if u, err := url.Parse(c.Bitbucket.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.api_url must be an absolute URL, got %q", c.Bitbucket.APIURL))
+	}
+	if u, err := url.Parse(c.Bitbucket.WebURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.web_url must be an absolute URL, got %q", c.Bitbucket.WebURL))
+	}
+	if (c.Bitbucket.ClientID == "") != (c.Bitbucket.ClientSecret == "") {
+		errs = append(errs, errors.New("a Bitbucket OAuth consumer needs both bitbucket.client_id and client_secret"))
 	}
 	if c.Analysis.Concurrency < 1 {
 		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))

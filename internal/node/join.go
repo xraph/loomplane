@@ -94,6 +94,7 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	res, err := client.NodeJoin(ctx, base, client.JoinRequest{
 		Token: o.Token, Name: o.Name, Labels: o.Labels, Endpoints: eps, Inventory: inv,
 		PublicKey:   base64.StdEncoding.EncodeToString(pub),
+		Signature:   base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, o.Token, o.Name)),
 		NodeVersion: buildinfo.Version, ProtocolVersion: nodeproto.Version,
 	})
 	if err != nil {

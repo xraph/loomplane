@@ -7,6 +7,9 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useBitbucketDisconnect,
+  useBitbucketRepositories,
+  useBitbucketStatus,
   useConnectionCloudsList,
   useConnectionsList,
   useGithubDisconnect,
@@ -20,14 +23,21 @@ import {
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  BitbucketWorkspaceView,
   GitHubInstallation,
   GitLabConnectionView,
   GitLabHostView,
   GitLabSignInStart,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { BitbucketMark } from "@/components/bitbucket-mark"
+import {
+  BitbucketWorkspaceDialog,
+  useBitbucketSignIn,
+} from "@/components/bitbucket-workspace-dialog"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { statusLabels } from "@/components/cloud-connections"
+import { GitHubMark } from "@/components/github-mark"
 import { GitLabHostDialog } from "@/components/gitlab-host-dialog"
 import { GitLabMark } from "@/components/gitlab-mark"
 import { GitLabWebhook } from "@/components/gitlab-webhook"
@@ -35,6 +45,7 @@ import { IntegrationCatalog } from "@/components/integration-catalog"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
+import { RepositoryListings } from "@/components/repository-listings"
 import { StatusPill } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import {
@@ -68,7 +79,11 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs"
 import { formatDate } from "@/lib/format"
-import { cloudHealth, cloudPurposes } from "@/lib/integrations"
+import {
+  canReadBitbucket,
+  cloudHealth,
+  cloudPurposes,
+} from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -98,12 +113,17 @@ export function Integrations({
   const forms = useQuery(useConnectionCloudsList)
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const clouds = useQuery(useConnectionsList)
-  // GitLab is counted once it has answered, or failed to.
+  // GitLab and Bitbucket are counted once they have answered, or failed to.
   const connectedCount =
-    github.data && clouds.data && (gitlab.data || gitlab.status === "error")
+    github.data &&
+    clouds.data &&
+    (gitlab.data || gitlab.status === "error") &&
+    (bitbucket.data || bitbucket.status === "error")
       ? github.data.installations.length +
         (gitlab.data?.connections.length ?? 0) +
+        (bitbucket.data?.workspaces?.length ?? 0) +
         clouds.data.connections.length
       : undefined
 
@@ -156,6 +176,7 @@ export function Integrations({
               <div className="grid gap-3">
                 <GitHubPanel onStart={setStarting} />
                 <GitLabPanel />
+                <BitbucketPanel />
               </div>
               <CloudsPanel onConnect={connect} />
             </div>
@@ -178,18 +199,6 @@ export function Integrations({
         }}
       />
     </>
-  )
-}
-
-/** GitHubMark is GitHub's mark, which lucide no longer draws. */
-function GitHubMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true" className={className}>
-      <path
-        fill="currentColor"
-        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-      />
-    </svg>
   )
 }
 
@@ -227,18 +236,30 @@ function Stat({
 function ConnectedStats() {
   const github = useQuery(useGithubStatus)
   const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const clouds = useQuery(useConnectionsList)
   const installs = github.data?.installations.length ?? 0
   const gitlabs = gitlab.data?.connections.length ?? 0
+  const workspaces = bitbucket.data?.workspaces?.length ?? 0
   const accounts = clouds.data?.connections.length ?? 0
   const health = cloudHealth(clouds.data?.connections ?? [])
   const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
-  // A GitLab that can't be reached counts as none, as the tab's count does.
+  // A GitLab or Bitbucket that can't be reached counts as none, as the
+  // tab's count does.
   const loaded =
     !!github.data &&
     !!clouds.data &&
-    (!!gitlab.data || gitlab.status === "error")
-  const total = installs + gitlabs + accounts
+    (!!gitlab.data || gitlab.status === "error") &&
+    (!!bitbucket.data || bitbucket.status === "error")
+  const total = installs + gitlabs + workspaces + accounts
+  // GitHub and clouds are always named; the others only once they have one.
+  const parts = [
+    plural(installs, "GitHub account"),
+    ...(gitlabs > 0 ? [plural(gitlabs, "GitLab account")] : []),
+    ...(workspaces > 0 ? [plural(workspaces, "Bitbucket workspace")] : []),
+    plural(accounts, "cloud account"),
+  ]
+  const summary = `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
   return (
     <div className="grid gap-3 sm:grid-cols-3">
       {!loaded ? (
@@ -250,16 +271,14 @@ function ConnectedStats() {
           <Stat
             label="Connected"
             value={total}
-            note={
-              total === 0
-                ? "Nothing connected yet"
-                : gitlabs === 0
-                  ? `${plural(installs, "GitHub account")} and ${plural(accounts, "cloud account")}`
-                  : `${plural(installs, "GitHub account")}, ${plural(gitlabs, "GitLab account")} and ${plural(accounts, "cloud account")}`
-            }
+            note={total === 0 ? "Nothing connected yet" : summary}
           />
-          {installs > 0 || gitlabs > 0 ? (
-            <RepositoryStat github={installs > 0} gitlab={gitlabs > 0} />
+          {installs > 0 || gitlabs > 0 || canReadBitbucket(bitbucket.data) ? (
+            <RepositoryStat
+              github={installs > 0}
+              gitlab={gitlabs > 0}
+              bitbucket={canReadBitbucket(bitbucket.data)}
+            />
           ) : (
             <Stat
               label="Repositories"
@@ -295,96 +314,49 @@ function ConnectedStats() {
   )
 }
 
-/** What one host's list of repositories comes to. */
-type RepositoryCount = {
-  total: number
-  hidden: number
-  loading: boolean
-  failed: boolean
-}
-const noRepositories: RepositoryCount = {
-  total: 0,
-  hidden: 0,
-  loading: false,
-  failed: false,
-}
-
-function GitHubCount({
-  children,
-}: {
-  children: (count: RepositoryCount) => ReactNode
-}) {
-  const repos = useQuery(useGithubRepositories)
-  const list = repos.data?.repositories ?? []
-  return children({
-    total: list.length,
-    hidden: list.filter((r) => r.private).length,
-    loading: !repos.data && repos.status !== "error",
-    failed: repos.status === "error",
-  })
-}
-
-function GitLabCount({
-  children,
-}: {
-  children: (count: RepositoryCount) => ReactNode
-}) {
-  const repos = useQuery(useGitlabRepositories)
-  const list = repos.data?.repositories ?? []
-  return children({
-    total: list.length,
-    hidden: list.filter((r) => r.private).length,
-    loading: !repos.data && repos.status !== "error",
-    failed: repos.status === "error",
-  })
-}
-
 // RepositoryStat asks the hosts, so it's only shown once an account is in.
 function RepositoryStat({
   github,
   gitlab,
+  bitbucket,
 }: {
   github: boolean
   gitlab: boolean
+  bitbucket: boolean
 }) {
-  const show = (counts: RepositoryCount[]) => {
-    const failed = counts.find((c) => c.failed)
-    if (failed)
-      return (
-        <Stat
-          label="Repositories"
-          value="?"
-          note={
-            github && !gitlab
-              ? "GitHub didn't answer"
-              : gitlab && !github
-                ? "GitLab didn't answer"
-                : "A host didn't answer"
-          }
-        />
-      )
-    if (counts.some((c) => c.loading))
-      return <Skeleton className="h-[92px] rounded-[14px]" />
-    const total = counts.reduce((n, c) => n + c.total, 0)
-    const hidden = counts.reduce((n, c) => n + c.hidden, 0)
-    return (
-      <Stat
-        label="Repositories"
-        value={total}
-        note={
-          hidden
-            ? `Loomplane can read, ${hidden} private`
-            : "Loomplane can read"
-        }
-      />
-    )
-  }
-  const withGitLab = (a: RepositoryCount) =>
-    gitlab ? <GitLabCount>{(b) => show([a, b])}</GitLabCount> : show([a])
-  return github ? (
-    <GitHubCount>{withGitLab}</GitHubCount>
-  ) : (
-    withGitLab(noRepositories)
+  return (
+    <RepositoryListings github={github} gitlab={gitlab} bitbucket={bitbucket}>
+      {(listings) => {
+        const failed = listings.find((l) => l.error)
+        if (failed)
+          return (
+            <Stat
+              label="Repositories"
+              value="?"
+              note={
+                listings.length === 1
+                  ? `${failed.name} didn't answer`
+                  : "A host didn't answer"
+              }
+            />
+          )
+        if (listings.some((l) => l.loading))
+          return <Skeleton className="h-[92px] rounded-[14px]" />
+        const all = listings.flatMap((l) => l.repositories)
+        const hidden = all.filter((r) => r.private).length
+        return (
+          <Stat
+            label="Repositories"
+            value={all.length}
+            note={
+              hidden
+                ? `Loomplane can read, ${hidden} private`
+                : "Loomplane can read"
+            }
+          />
+        )
+      }}
+    </RepositoryListings>
   )
 }
 
@@ -1096,6 +1068,274 @@ function DisconnectGitLab({
           <AlertDialogDescription>
             Loomplane stops reading the projects this user can see. Analyses
             already done stay.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => void confirm()}
+          >
+            {remove.isPending && <Spinner />}
+            Disconnect
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+/* ------------------------------------------------------------------------ */
+/* Bitbucket                                                                  */
+
+const bitbucketGuide =
+  "https://loomplane.dev/docs/guides/bitbucket-repositories"
+
+function BitbucketPanel() {
+  const { can } = useOrganization()
+  const status = useQuery(useBitbucketStatus)
+  const { signIn } = useBitbucketSignIn()
+  const [adding, setAdding] = useState(false)
+  // The workspace whose sign-in is being asked for, so only its row spins.
+  const [reconnecting, setReconnecting] = useState<string | null>(null)
+  const data = status.data
+  const workspaces = data?.workspaces ?? []
+  const problems = data?.problems ?? []
+  // The server says whether this person may connect, and their role must too.
+  const mayConnect = !!data?.canConnect && can("repository:connect")
+  // Without a consumer there is nothing to approve, so no sign-in can start.
+  const maySignIn = mayConnect && !!data?.configured
+  const connect = (
+    <Button
+      variant="outline"
+      size={workspaces.length ? "sm" : "default"}
+      onClick={() => setAdding(true)}
+    >
+      Connect workspace
+    </Button>
+  )
+
+  return (
+    <Panel
+      title="Bitbucket"
+      media={
+        <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+          <BitbucketMark className="size-4" />
+        </span>
+      }
+      action={
+        workspaces.length > 0 && data?.configured && mayConnect && connect
+      }
+    >
+      {status.status === "error" ? (
+        <div className="p-4">
+          <QueryError
+            error={status.error}
+            fallback="The Bitbucket connection couldn't be loaded."
+            retry={status.refetch}
+          />
+        </div>
+      ) : !data ? (
+        <div className="p-4">
+          <Skeleton className="h-32 w-full" />
+        </div>
+      ) : (
+        <>
+          {problems.length > 0 && (
+            <div className="grid gap-2 border-b p-4">
+              {problems.map((p) => (
+                <Alert key={p} variant="destructive">
+                  <AlertDescription>{p}</AlertDescription>
+                </Alert>
+              ))}
+            </div>
+          )}
+          {!data.configured && (
+            <p
+              className={cn(
+                "px-4 py-4 text-[13px] leading-relaxed text-muted-foreground",
+                workspaces.length > 0 && "border-b"
+              )}
+            >
+              Only public repositories: no Bitbucket OAuth consumer is set up.
+              Ask your operator to create one to read private ones. The{" "}
+              <a
+                href={bitbucketGuide}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-brand-ink hover:underline"
+              >
+                Bitbucket guide
+              </a>{" "}
+              has the steps.
+            </p>
+          )}
+          {workspaces.length === 0 ? (
+            data.configured && (
+              <Empty variant="inline">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <BitbucketMark className="size-4" />
+                  </EmptyMedia>
+                  <EmptyTitle>No Bitbucket workspaces yet</EmptyTitle>
+                  <EmptyDescription>
+                    {mayConnect
+                      ? "Connect a workspace to let Loomplane read the private repositories you can see there."
+                      : "An admin can connect a workspace."}
+                  </EmptyDescription>
+                </EmptyHeader>
+                {mayConnect && <EmptyContent>{connect}</EmptyContent>}
+              </Empty>
+            )
+          ) : (
+            <ul className="divide-y">
+              {workspaces.map((w) => (
+                <BitbucketWorkspaceRow
+                  key={w.id}
+                  workspace={w}
+                  mayConnect={mayConnect}
+                  maySignIn={maySignIn}
+                  onReconnect={async () => {
+                    setReconnecting(w.workspace)
+                    const failure = await signIn(w.workspace)
+                    if (failure) {
+                      setReconnecting(null)
+                      toast.error(failure)
+                    }
+                  }}
+                  reconnecting={reconnecting === w.workspace}
+                  busy={reconnecting !== null}
+                />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+      <BitbucketWorkspaceDialog open={adding} onOpenChange={setAdding} />
+    </Panel>
+  )
+}
+
+function BitbucketWorkspaceRow({
+  workspace: w,
+  mayConnect,
+  maySignIn,
+  onReconnect,
+  reconnecting,
+  busy,
+}: {
+  workspace: BitbucketWorkspaceView
+  mayConnect: boolean
+  /** Whether a sign-in can start: allowed, and a consumer is set up. */
+  maySignIn: boolean
+  onReconnect: () => Promise<void>
+  /** This row's sign-in is being asked for. */
+  reconnecting: boolean
+  /** Some row's is, so no other starts meanwhile. */
+  busy: boolean
+}) {
+  const [disconnecting, setDisconnecting] = useState(false)
+  const name = w.name || w.workspace
+  const lapsed = w.status === "reconnect_needed"
+  return (
+    <li className="grid gap-2 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <AccountAvatar account={name} src={w.avatarUrl} />
+        <span className="grid min-w-0 flex-[1_1_160px] gap-0.5">
+          <span className="truncate text-[13.5px] font-medium">{name}</span>
+          <span className="text-xs text-muted-foreground">
+            <span className="font-mono">{w.workspace}</span> · Connected by{" "}
+            {w.connectedBy} on{" "}
+            <time dateTime={w.createdAt}>{formatDate(w.createdAt)}</time>
+          </span>
+        </span>
+        {lapsed ? (
+          <StatusPill tone="waiting">Reconnect needed</StatusPill>
+        ) : (
+          <StatusPill tone="live">Connected</StatusPill>
+        )}
+        {lapsed && maySignIn && (
+          <Button
+            size="sm"
+            aria-label={`Reconnect ${name}`}
+            disabled={busy}
+            onClick={() => void onReconnect()}
+          >
+            {reconnecting && <Spinner />}
+            Reconnect
+          </Button>
+        )}
+        {w.manageUrl && (
+          <a
+            href={w.manageUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Manage ${name} on Bitbucket`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Manage
+          </a>
+        )}
+        {mayConnect && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive"
+            aria-label={`Disconnect ${name}`}
+            onClick={() => setDisconnecting(true)}
+          >
+            Disconnect
+          </Button>
+        )}
+      </div>
+      {lapsed && w.message && (
+        <p className="text-xs leading-relaxed text-weld-ink">{w.message}</p>
+      )}
+      <DisconnectBitbucket
+        workspace={w}
+        open={disconnecting}
+        onOpenChange={setDisconnecting}
+      />
+    </li>
+  )
+}
+
+function DisconnectBitbucket({
+  workspace,
+  open,
+  onOpenChange,
+}: {
+  workspace: BitbucketWorkspaceView
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const remove = useMutation(useBitbucketDisconnect)
+  const invalidate = useInvalidate()
+  const name = workspace.name || workspace.workspace
+
+  const confirm = async () => {
+    try {
+      await remove.mutateAsync({ path: { id: workspace.id } })
+      toast.success(`Disconnected ${name}`)
+    } catch (err) {
+      toast.error(messageOf(err, "It wasn't disconnected."))
+    } finally {
+      onOpenChange(false)
+      invalidate(useBitbucketStatus)
+      invalidate(useBitbucketRepositories)
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Disconnect {name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Loomplane stops reading this workspace&apos;s private repositories
+            and takes its push webhooks off. Analyses already done stay. The
+            consumer stays approved on Bitbucket until you revoke it there.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

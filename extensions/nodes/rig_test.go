@@ -209,10 +209,26 @@ func (t *tokens) ConsumeNodeJoinToken(context.Context, string) (*apikeys.NodeJoi
 }
 
 type minter struct {
-	scope apikeys.NodeJoinScope
-	who   security.Principal
-	life  time.Duration
-	err   error
+	scope     apikeys.NodeJoinScope
+	who       security.Principal
+	life      time.Duration
+	err       error
+	pending   []apikeys.PendingNodeJoinToken
+	cancelled []string
+}
+
+func (m *minter) ListNodeJoinTokens(_ context.Context, p security.Principal) ([]apikeys.PendingNodeJoinToken, error) {
+	m.who = p
+	return m.pending, m.err
+}
+
+func (m *minter) CancelNodeJoinToken(_ context.Context, p security.Principal, id string) error {
+	m.who = p
+	if m.err != nil {
+		return m.err
+	}
+	m.cancelled = append(m.cancelled, id)
+	return nil
 }
 
 func (m *minter) CreateNodeJoinToken(_ context.Context, p security.Principal, scope apikeys.NodeJoinScope, life time.Duration) (*apikeys.NodeJoinToken, error) {

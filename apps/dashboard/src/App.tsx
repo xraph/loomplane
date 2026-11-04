@@ -12,12 +12,11 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
 import { AuthRedirect, FreshLoad } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
-import { ShellProvider } from "@/components/shell"
 import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
-import { AgentProvider } from "@/lib/features"
+import { WorkspaceFrame } from "@/components/workspace-frame"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
@@ -36,6 +35,7 @@ const authPaths = ["/sign-in", "/sign-up"]
 const callbackPaths = [
   "/integrations/oauth/callback",
   "/integrations/github/setup",
+  "/device",
 ]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
@@ -147,6 +147,8 @@ export function App() {
   // The invitation has a page of its own, outside any workspace. Wherever
   // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  // So has approving a loomctl sign-in, which isn't tied to a workspace.
+  if (path === "/device") return <Outlet />
   if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }
@@ -214,19 +216,16 @@ function Shell() {
     )
   }
   return (
-    <ShellProvider>
-      {/* Keyed on the organization: the agent is on or off per workspace. */}
-      <AgentProvider key={session.orgId}>
-        <SidebarProvider>
-          <AppSidebar />
-          {/* Keyed on the organization, so switching remounts every page. */}
-          <SidebarInset key={session.orgId} className="min-w-0">
-            <Outlet />
-            <AppStatusBar />
-          </SidebarInset>
-        </SidebarProvider>
-      </AgentProvider>
-    </ShellProvider>
+    <WorkspaceFrame orgId={session.orgId}>
+      <SidebarProvider>
+        <AppSidebar />
+        {/* Keyed on the organization, so switching remounts every page. */}
+        <SidebarInset key={session.orgId} className="min-w-0">
+          <Outlet />
+          <AppStatusBar />
+        </SidebarInset>
+      </SidebarProvider>
+    </WorkspaceFrame>
   )
 }
 

@@ -11,8 +11,8 @@ import (
 	"strings"
 )
 
-// ErrBadSignature is a webhook delivery GitHub didn't sign with the
-// secret Loomplane has.
+// ErrBadSignature is a webhook delivery that wasn't signed with the secret
+// Loomplane has for it.
 var ErrBadSignature = errors.New("the webhook's signature doesn't match")
 
 // Webhooks re-analyzes the sources tracking a repository's default branch

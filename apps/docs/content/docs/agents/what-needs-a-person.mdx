@@ -34,7 +34,7 @@ The agent acts as `agent:<org>`, shown as "Loomplane agent" in plans, deployment
 
 Who it acts for depends on how the work started.
 
-When a person talks to the agent, it acts on that person's behalf, and a call is allowed only if both the agent's role and that person's role allow it. If the person is a developer, the agent can't do what an admin could. If the person leaves the workspace or loses their key while the agent waits, the next step fails and the run's pending requests are cancelled. Nothing runs as them afterwards.
+When a person talks to the agent, in the [Assistant](/docs/agents/assistant) or with `loomctl agent`, it acts on that person's behalf, and a call is allowed only if both the agent's role and that person's role allow it. If the person is a developer, the agent can't do what an admin could. If the person leaves the workspace or loses their key while the agent waits, the next step fails and the run's pending requests are cancelled. Nothing runs as them afterwards.
 
 Background work, such as an investigation the agent starts because something broke, runs as the agent alone, with no person behind it. It can read and report. It can't approve a production change on anyone's authority, because nobody gave it any.
 

@@ -285,7 +285,7 @@ it("blocks a gated model without a token and links to settings for admins", asyn
   ).toBeInTheDocument()
   expect(
     within(dialog).getByRole("link", { name: "Open AI settings" })
-  ).toHaveAttribute("href", "/ai/settings")
+  ).toHaveAttribute("href", "/settings/ai")
   expect(within(dialog).getByRole("button", { name: "Plan it" })).toBeDisabled()
 })
 

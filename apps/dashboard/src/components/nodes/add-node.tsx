@@ -4,11 +4,17 @@ import { useRef, useState, type ReactNode } from "react"
 import { messageOf } from "@/client/errors"
 import {
   useNodeJoinTokensCreate,
+  useNodeJoinTokensList,
   useNodesList,
   useOrganizationCloudsList,
 } from "@/client/forge/loomplane/hooks"
 import type { JoinToken, Node } from "@/client/forge/loomplane/types"
-import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
+import {
+  useInvalidate,
+  useMutation,
+  useQuery,
+  useRefetchWhile,
+} from "@/client/hooks"
 import { CopyButton } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -78,6 +84,7 @@ function Panel({ onClose }: { onClose: () => void }) {
   const nodes = useQuery(useNodesList)
   const clouds = useQuery(useOrganizationCloudsList)
   const create = useMutation(useNodeJoinTokensCreate)
+  const invalidate = useInvalidate()
   const [cloud, setCloud] = useState(NO_CLOUD)
   const [labelsText, setLabelsText] = useState("")
   const [builder, setBuilder] = useState(false)
@@ -121,6 +128,7 @@ function Panel({ onClose }: { onClose: () => void }) {
           endpoints,
         },
       })) as JoinToken
+      invalidate(useNodeJoinTokensList)
       const cloudName = cloudList.find((c) => c.id === cloud)?.name
       setMinted({
         token,

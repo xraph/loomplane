@@ -26,7 +26,7 @@ var commitBuilders = map[string]string{
 // not in the table builds from the code Loomplane fetched, whatever host it
 // came from. "github.com" stands for the keys that name no host.
 var gitBuildHosts = map[string][]string{
-	"render":       {"github.com", "gitlab.com"},
+	"render":       {"github.com", "gitlab.com", "bitbucket.org"},
 	"digitalocean": {"github.com", "gitlab.com"},
 }
 

@@ -128,3 +128,9 @@ func (c *Client) Guest(ctx context.Context, q Request, action string, source io.
 	err := c.call(ctx, http.MethodPost, "/v1/"+action, q, &out, source)
 	return out, err
 }
+
+func (c *Client) Usage(ctx context.Context) ([]UsageSample, error) {
+	var out []UsageSample
+	err := c.call(ctx, http.MethodGet, "/v1/usage", nil, &out, nil)
+	return out, err
+}

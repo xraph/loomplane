@@ -1,7 +1,6 @@
 package ctl
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +40,14 @@ func (a *App) nodeLogin() (url, key string, err error) {
 		if serr != nil {
 			return "", "", serr
 		}
+		// Renewing the user's sign-in as root would spend their refresh
+		// token on a file root can't save back to theirs.
+		if su.RefreshToken != "" && time.Until(su.ExpiresAt) <= renewBefore {
+			return "", "", fmt.Errorf("%s's sign-in has expired: run `loomctl login` as %[1]s, then try again", a.opts.Getenv("SUDO_USER"))
+		}
 		s = su
+	} else if err := a.renew(&s); err != nil {
+		return "", "", err
 	}
 	if s.URL == "" || s.Key == "" {
 		return "", "", fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
@@ -101,13 +107,9 @@ func (a *App) ownCommands() []cli.Command {
 		a.servicesCommand(),
 		a.storageCommand(),
 		a.teamsCommand(),
-		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
-			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
-			cli.WithFlags(
-				cli.NewStringFlag("url", "", "Loomplane's address", ""),
-				cli.NewStringFlag("key", "", "An API key from Settings, API keys; - reads it from standard input", ""),
-			)),
-		cli.NewCommand("logout", "Forget the saved key", a.logout),
+		a.loginCommand(),
+		cli.NewCommand("logout", "Forget the saved login, and end a sign-in's session", a.logout),
+		a.organizationsCommand(),
 		cli.NewCommand("whoami", "Who the key acts as, and what it may do", a.whoami, cli.WithFlag(jsonFlag)),
 		cli.NewCommand("projects", "List the organization's projects", a.projects,
 			cli.WithFlag(jsonFlag),
@@ -182,47 +184,6 @@ func (a *App) ownCommands() []cli.Command {
 					cli.NewStringFlag("service", "s", "One service's graph ID; every service if empty", ""),
 					cli.NewBoolFlag("secret", "", "Keep it secret: write-only, and in the cloud's secret store", false))))),
 	}
-}
-
-func (a *App) login(ctx cli.CommandContext) error {
-	s, err := a.settings()
-	if err != nil {
-		return err
-	}
-	if v := ctx.String("url"); v != "" {
-		s.URL = strings.TrimRight(v, "/")
-	}
-	key := ctx.String("key")
-	if key == "-" {
-		line, rerr := bufio.NewReader(a.opts.In).ReadString('\n')
-		if rerr != nil && line == "" {
-			return fmt.Errorf("read the key: %w", rerr)
-		}
-		key = line
-	}
-	if key = strings.TrimSpace(key); key != "" {
-		s.Key = key
-	}
-	if s.URL == "" || s.Key == "" {
-		return errors.New("give both --url and --key; make a key under Settings, API keys")
-	}
-	who, err := client.New(s.URL, s.Key).Session(ctxOf(ctx))
-	if err != nil {
-		return fmt.Errorf("that key doesn't work at %s: %w", s.URL, err)
-	}
-	if err := a.save(s); err != nil {
-		return err
-	}
-	a.printf("Logged in to %s, in organization %s.\n", s.URL, who.OrgID)
-	return nil
-}
-
-func (a *App) logout(cli.CommandContext) error {
-	if err := os.Remove(a.opts.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	a.printf("Logged out. The key still works until you revoke it under Settings, API keys.\n")
-	return nil
 }
 
 func (a *App) whoami(ctx cli.CommandContext) error {

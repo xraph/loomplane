@@ -126,9 +126,13 @@ func (s *Service) log() *slog.Logger {
 
 // JoinRequest is what a machine sends to join.
 type JoinRequest struct {
-	Token           string
-	Name            string
-	PublicKey       []byte
+	Token     string
+	Name      string
+	PublicKey []byte
+	// Signature is the machine's signature with its new key over the token,
+	// Name as sent and PublicKey (nodeproto.SignJoin). It proves the joiner
+	// holds the key, so nobody with a token can claim another machine's.
+	Signature       []byte
 	Endpoints       []nodeproto.Endpoint
 	Labels          map[string]string
 	Inventory       nodeproto.Inventory
@@ -155,10 +159,11 @@ type Update struct {
 }
 
 // Join spends the token and creates a pending node. The checks that need no
-// token run first, so a node that must update does not burn its token. A key
-// that already belongs to a node, revoked ones included, and an explicit
-// name a live node holds are refused before the token is spent too. A join
-// racing another for the name or key is caught again after.
+// token run first, so a node that must update, or can't prove it holds its
+// key, does not burn its token. A key that already belongs to a node,
+// revoked ones included, and an explicit name a live node holds are refused
+// before the token is spent too. A join racing another for the name or key
+// is caught again after.
 func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error) {
 	if in.ProtocolVersion > nodeproto.Version {
 		return nil, ErrNodeNewer
@@ -171,6 +176,11 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	in.NodeVersion, in.Inventory = nodeproto.BoundVersion(in.NodeVersion), in.Inventory.Bounded()
 	if len(in.PublicKey) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("%w: bad public key", ErrInvalid)
+	}
+	// Before the token is looked at, let alone spent: a key the joiner can't
+	// sign with is not theirs to join with.
+	if err := nodeproto.VerifyJoin(in.PublicKey, in.Token, in.Name, in.Signature); err != nil {
+		return nil, fmt.Errorf("%w: the join isn't signed by the key it carries", ErrInvalid)
 	}
 	name := strings.TrimSpace(in.Name)
 	if name != "" && !dnsLabel.MatchString(name) {

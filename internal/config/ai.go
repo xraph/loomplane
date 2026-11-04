@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -27,6 +28,11 @@ const (
 	// MaxEmbeddingDimensions is pgvector.MaxIndexedDimensions; aiagent
 	// asserts they match.
 	MaxEmbeddingDimensions = 2000
+
+	// DefaultDocsBudgetUSD is what indexing the docs may spend, in USD.
+	DefaultDocsBudgetUSD = "5.00"
+	// maxDocsBudgetUSD is the most ai.knowledge.docs_budget_usd may be.
+	maxDocsBudgetUSD = 1000.0
 )
 
 // aiPriceDecimal is a non-negative USD amount with up to six decimals.
@@ -70,6 +76,10 @@ type AIKnowledgeConfig struct {
 	EmbeddingBaseURL  string
 	EmbeddingModel    string
 	Dimensions        int
+	// DocsBudgetUSD caps what indexing the docs may spend
+	// (ai.knowledge.docs_budget_usd): a decimal like ai.prices, above 0 and
+	// at most 1000. Empty means DefaultDocsBudgetUSD.
+	DocsBudgetUSD string
 }
 
 // Configured reports whether an embedding provider is set.
@@ -121,6 +131,11 @@ func (k AIKnowledgeConfig) validate(environment string) error {
 	default:
 		errs = append(errs, fmt.Errorf("ai.knowledge.embedding_provider must be openai or openai-compatible, got %q", k.EmbeddingProvider))
 	}
+	if k.Configured() {
+		if err := k.validateDocsBudget(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if err := checkAIBaseURL("ai.knowledge.embedding_base_url", k.EmbeddingBaseURL, environment); err != nil {
 		errs = append(errs, err)
 	}
@@ -128,6 +143,18 @@ func (k AIKnowledgeConfig) validate(environment string) error {
 		errs = append(errs, fmt.Errorf("ai.knowledge.dimensions must be between 1 and %d, got %d", MaxEmbeddingDimensions, k.Dimensions))
 	}
 	return errors.Join(errs...)
+}
+
+func (k AIKnowledgeConfig) validateDocsBudget() error {
+	v := k.DocsBudgetUSD
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if !aiPriceDecimal.MatchString(v) || err != nil || n <= 0 || n > maxDocsBudgetUSD {
+		return fmt.Errorf("ai.knowledge.docs_budget_usd must be a decimal USD amount above 0 and at most 1000, like 5.00, got %q", v)
+	}
+	return nil
 }
 
 func validateAIPrices(prices []AIPrice) error {

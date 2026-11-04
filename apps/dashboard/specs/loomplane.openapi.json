@@ -909,6 +909,173 @@
         }
       }
     },
+    "/api/v1/bitbucket": {
+      "get": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The organization's Bitbucket workspaces, and whether this Loomplane has an OAuth consumer",
+        "operationId": "bitbucket.status",
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/authorize": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The Bitbucket link that starts connecting a workspace",
+        "operationId": "bitbucket.authorize",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeBitbucketInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to approve the consumer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketAuthorization"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/repositories": {
+      "get": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "The repositories the organization's workspaces can read",
+        "operationId": "bitbucket.repositories",
+        "responses": {
+          "200": {
+            "description": "Repositories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketRepositoryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/webhooks": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "Try again to add the push webhook that re-analyzes a repository's sources",
+        "operationId": "bitbucket.webhook.enable",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableBitbucketWebhookInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Whether pushes re-analyze the repository now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/workspaces": {
+      "post": {
+        "tags": [
+          "Bitbucket"
+        ],
+        "summary": "Connect a Bitbucket workspace, from what Bitbucket's redirect carried back",
+        "operationId": "bitbucket.connect",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BitbucketConnectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connected workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BitbucketWorkspaceView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bitbucket/workspaces/{id}": {
+      "delete": {
+        "operationId": "bitbucket.disconnect",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Disconnect a workspace. The consumer stays approved on Bitbucket.",
+        "tags": [
+          "Bitbucket"
+        ],
+        "x-forge-entity": {
+          "idField": "id",
+          "type": "BitbucketWorkspace"
+        }
+      }
+    },
     "/api/v1/catalog/endpoints": {
       "get": {
         "tags": [
@@ -3063,38 +3230,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Operation"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/clouds/{cloudId}/node-adoptions": {
-      "get": {
-        "tags": [
-          "Cloud infrastructure"
-        ],
-        "summary": "cloudNodeAdoptions.list",
-        "operationId": "cloudNodeAdoptions.list",
-        "parameters": [
-          {
-            "name": "cloudId",
-            "in": "path",
-            "description": "Path parameter: cloudId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NodeAdoptionList"
                 }
               }
             }
@@ -14491,6 +14626,25 @@
       }
     },
     "/api/v1/nodes/join-tokens": {
+      "get": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "The join tokens no machine has used yet: who made them, with which key, for what, and when they expire",
+        "operationId": "nodeJoinTokens.list",
+        "responses": {
+          "200": {
+            "description": "JoinTokenList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinTokenList"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Nodes"
@@ -14518,6 +14672,31 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/join-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Cancel a join token no machine has used, so none can",
+        "operationId": "nodeJoinTokens.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
           }
         }
       }
@@ -14595,6 +14774,342 @@
         }
       }
     },
+    "/api/v1/nodes/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Stop trusting a node, at once. Its key can't connect again.",
+        "operationId": "nodes.revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Node"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/conversations": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Your conversations with the agent, the most recently updated first",
+        "description": "With everyone=true, everyone's in the workspace, which needs ai:manage. For the next page, pass the last conversation's updated_at as before.",
+        "operationId": "agentConversations.list",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "everyone",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Start a conversation with the agent",
+        "description": "The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.",
+        "operationId": "agentConversations.start",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The conversation and its first task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/conversations/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "A page of a conversation's turns, each with its run's events",
+        "description": "The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.",
+        "operationId": "agentConversations.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation's turns, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/History"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/conversations/{id}/messages": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Add a message to your conversation",
+        "description": "Only the person who started the conversation adds to it, once the agent has finished the last message.",
+        "operationId": "agentConversations.send",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The conversation and the task the message started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One of the agent's tasks",
+        "operationId": "agentTasks.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Stop one of the agent's tasks",
+        "description": "The person who asked for it, or someone who manages the workspace's AI, may stop it.",
+        "operationId": "agentTasks.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cancelled task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/tasks/{id}/stream": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Follow a task's events as they happen",
+        "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+        "operationId": "agentTasks.stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/node-adoptions": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudNodeAdoptions.list",
+        "operationId": "cloudNodeAdoptions.list",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeAdoptionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{id}/drain": {
       "post": {
         "tags": [
@@ -14656,38 +15171,6 @@
           },
           "required": true
         },
-        "responses": {
-          "200": {
-            "description": "Node",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Node"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/nodes/{id}/revoke": {
-      "post": {
-        "tags": [
-          "Nodes"
-        ],
-        "summary": "Stop trusting a node, at once. Its key can't connect again.",
-        "operationId": "nodes.revoke",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Path parameter: id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Node",
@@ -15483,6 +15966,17 @@
           }
         }
       },
+      "AuthorizeBitbucketInputBody": {
+        "type": "object",
+        "required": [
+          "workspace"
+        ],
+        "properties": {
+          "workspace": {
+            "type": "string"
+          }
+        }
+      },
       "AutoRenewInputBody": {
         "type": "object",
         "required": [
@@ -15718,6 +16212,127 @@
         ],
         "type": "object",
         "x-forge-envelope": "bindings"
+      },
+      "BitbucketAuthorization": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "BitbucketConnectInputBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "state"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "BitbucketRepositoryList": {
+        "type": "object",
+        "required": [
+          "repositories",
+          "problems"
+        ],
+        "properties": {
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedBitbucketRepository"
+            }
+          }
+        }
+      },
+      "BitbucketStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "can_connect",
+          "workspaces",
+          "problems"
+        ],
+        "properties": {
+          "can_connect": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BitbucketWorkspaceView"
+            }
+          }
+        }
+      },
+      "BitbucketWorkspaceView": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace",
+          "name",
+          "avatar_url",
+          "manage_url",
+          "connected_by",
+          "status",
+          "message",
+          "created_at"
+        ],
+        "properties": {
+          "avatar_url": {
+            "type": "string"
+          },
+          "connected_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "manage_url": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        }
       },
       "Board": {
         "type": "object",
@@ -19378,6 +19993,29 @@
           }
         }
       },
+      "ConnectedBitbucketRepository": {
+        "type": "object",
+        "required": [
+          "full_name",
+          "private",
+          "default_branch",
+          "workspace"
+        ],
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        }
+      },
       "ConnectedRepository": {
         "type": "object",
         "required": [
@@ -20575,6 +21213,9 @@
           "project_id": {
             "type": "string"
           },
+          "push": {
+            "$ref": "#/components/schemas/PushState"
+          },
           "ref": {
             "type": "string"
           },
@@ -20953,6 +21594,17 @@
             "items": {
               "$ref": "#/components/schemas/EdgeRule"
             }
+          }
+        }
+      },
+      "EnableBitbucketWebhookInputBody": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string"
           }
         }
       },
@@ -23776,6 +24428,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "session_id": {
+            "type": "string"
           },
           "user_id": {
             "type": "string"
@@ -28483,6 +29138,20 @@
             "additionalProperties": true
           },
           "time_zone": {
+            "type": "string"
+          }
+        }
+      },
+      "PushState": {
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "reason": {
             "type": "string"
           }
         }
@@ -34323,85 +34992,6 @@
           }
         }
       },
-      "NodeAdoption": {
-        "type": "object",
-        "required": [
-          "node_id",
-          "node_name",
-          "org_id",
-          "cloud_id",
-          "approved_by",
-          "status",
-          "reason",
-          "server_id",
-          "operation_id",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "approved_by": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "node_id": {
-            "type": "string"
-          },
-          "node_name": {
-            "type": "string"
-          },
-          "operation_id": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "server_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "NodeAdoptionList": {
-        "properties": {
-          "adoptions": {
-            "type": "array",
-            "items": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/NodeAdoption"
-                },
-                {
-                  "type": "object",
-                  "nullable": true,
-                  "enum": [
-                    null
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "required": [
-          "adoptions"
-        ],
-        "type": "object",
-        "x-forge-envelope": "adoptions"
-      },
       "Inventory": {
         "type": "object",
         "required": [
@@ -34517,6 +35107,7 @@
         "required": [
           "token",
           "public_key",
+          "signature",
           "inventory",
           "node_version",
           "protocol_version"
@@ -34603,6 +35194,9 @@
             "type": "integer"
           },
           "public_key": {
+            "type": "string"
+          },
+          "signature": {
             "type": "string"
           },
           "token": {
@@ -34709,6 +35303,432 @@
             "type": "string"
           }
         }
+      },
+      "JoinTokenList": {
+        "type": "object",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingNodeJoinToken"
+            }
+          }
+        }
+      },
+      "PendingNodeJoinToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "hint",
+          "minted_by",
+          "endpoints",
+          "edge",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edge": {
+            "type": "boolean"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "minted_by": {
+            "type": "string"
+          },
+          "minted_by_key_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConversationList": {
+        "type": "object",
+        "required": [
+          "conversations"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            }
+          }
+        }
+      },
+      "StartInputBody": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Sent": {
+        "type": "object",
+        "required": [
+          "conversation",
+          "task"
+        ],
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/Conversation"
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          }
+        }
+      },
+      "History": {
+        "type": "object",
+        "required": [
+          "conversation",
+          "turns",
+          "more"
+        ],
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/Conversation"
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Turn"
+            }
+          }
+        }
+      },
+      "SendInputBody": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "kind",
+          "run_id",
+          "session_id",
+          "status",
+          "requested_by",
+          "max_tokens",
+          "tokens",
+          "event_seq",
+          "error",
+          "metadata",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "release_plan_id": {
+            "type": "string"
+          },
+          "release_revision": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "title",
+          "started_by",
+          "status",
+          "last_task_id",
+          "turns",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "last_task_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "started_by": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Turn": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "message",
+          "status",
+          "error",
+          "events",
+          "event_seq",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "seq",
+          "kind",
+          "data",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "NodeAdoption": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "node_name",
+          "org_id",
+          "cloud_id",
+          "approved_by",
+          "status",
+          "reason",
+          "server_id",
+          "operation_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "approved_by": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NodeAdoptionList": {
+        "properties": {
+          "adoptions": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NodeAdoption"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "adoptions"
+        ],
+        "type": "object",
+        "x-forge-envelope": "adoptions"
       },
       "NodeWorkload": {
         "type": "object",

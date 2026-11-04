@@ -19,6 +19,14 @@ const gitlab = vi.hoisted(() => ({
   repositories: [] as unknown[],
 }))
 
+// And a Bitbucket's: whether it has a consumer, its workspaces and their
+// repositories.
+const bitbucket = vi.hoisted(() => ({
+  configured: true,
+  workspaces: [] as unknown[],
+  repositories: [] as unknown[],
+}))
+
 vi.mock("@/client/hooks", async () => {
   const hooks = await import("@/client/forge/loomplane/hooks")
   return {
@@ -36,6 +44,22 @@ vi.mock("@/client/hooks", async () => {
             hosts: [],
             connections: gitlab.connections,
           },
+        }
+      if (op === hooks.useBitbucketStatus)
+        return {
+          status: "success",
+          data: {
+            configured: bitbucket.configured,
+            canConnect: true,
+            problems: [],
+            workspaces: bitbucket.workspaces,
+          },
+        }
+      if (op === hooks.useBitbucketRepositories)
+        return {
+          status: "success",
+          data: { repositories: bitbucket.repositories, problems: [] },
+          refetch: vi.fn(),
         }
       if (op === hooks.useGitlabRepositories)
         return {
@@ -90,6 +114,30 @@ const project = (
   defaultBranch: "main",
 })
 
+const workspace = (
+  id: string,
+  slug: string,
+  name = slug,
+  status = "ready"
+) => ({
+  id,
+  workspace: slug,
+  name,
+  avatarUrl: "",
+  manageUrl: "",
+  connectedBy: "rex",
+  status,
+  message: "",
+  createdAt: "2026-11-02T00:00:00Z",
+})
+
+const bbRepository = (fullName: string, connection: string, priv = false) => ({
+  fullName,
+  workspace: connection,
+  private: priv,
+  defaultBranch: "main",
+})
+
 function Field({
   exclude,
   initial = "",
@@ -118,6 +166,9 @@ beforeEach(() => {
   github.refetch.mockReset().mockResolvedValue(undefined)
   gitlab.connections = []
   gitlab.repositories = []
+  bitbucket.configured = true
+  bitbucket.workspaces = []
+  bitbucket.repositories = []
 })
 
 describe("RepositoryPicker", () => {
@@ -138,6 +189,18 @@ describe("RepositoryPicker", () => {
     expect(screen.getByLabelText("Chosen")).toHaveTextContent(
       "gitlab.com/grp/sub/api"
     )
+  })
+
+  it("takes a pasted Bitbucket URL as a lowercased host/path", async () => {
+    render(<Field />)
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Repository" }),
+      "https://rex@bitbucket.org/Acme/API/src/main/x.md"
+    )
+    expect(screen.getByLabelText("Chosen")).toHaveTextContent(
+      "bitbucket.org/acme/api"
+    )
+    expect(screen.queryByText("github.com/")).not.toBeInTheDocument()
   })
 
   it("shows the github.com/ addon for an empty or bare value only", () => {
@@ -199,6 +262,85 @@ describe("RepositoryPicker", () => {
       const added = await screen.findByRole("option", { name: /tool/ })
       expect(added).toHaveAttribute("aria-disabled", "true")
       expect(added).toHaveTextContent("Added")
+    })
+  })
+
+  describe("with a Bitbucket workspace connected", () => {
+    beforeEach(() => {
+      bitbucket.workspaces = [workspace("w1", "acme", "Acme Inc")]
+      bitbucket.repositories = [
+        bbRepository("acme/api", "w1", true),
+        bbRepository("acme/web", "w1"),
+      ]
+    })
+
+    it("lists its repositories under the workspace, marked as Bitbucket", async () => {
+      render(<Field />)
+      await userEvent.click(
+        screen.getByRole("combobox", { name: "Repository" })
+      )
+      const list = await screen.findByRole("listbox")
+      const [group] = within(list).getAllByRole("group")
+      expect(within(group).getByText("Acme Inc")).toBeInTheDocument()
+      expect(within(group).getByLabelText("bitbucket.org")).toBeInTheDocument()
+      expect(within(list).getAllByRole("option")).toHaveLength(2)
+    })
+
+    it("picks a repository by its bitbucket.org key", async () => {
+      render(<Field />)
+      await userEvent.type(
+        screen.getByRole("combobox", { name: "Repository" }),
+        "api"
+      )
+      await userEvent.keyboard("{ArrowDown}{Enter}")
+      expect(screen.getByLabelText("Chosen")).toHaveTextContent(
+        "bitbucket.org/acme/api"
+      )
+    })
+
+    it("won't pick one the form already has, whatever its case", async () => {
+      render(<Field exclude={["bitbucket.org/Acme/API"]} />)
+      await userEvent.click(
+        screen.getByRole("combobox", { name: "Repository" })
+      )
+      const added = await screen.findByRole("option", { name: /api/ })
+      expect(added).toHaveAttribute("aria-disabled", "true")
+      expect(added).toHaveTextContent("Added")
+    })
+
+    it("tells a GitHub acme from a Bitbucket acme by the host mark", async () => {
+      github.installations = [account("1", "acme")]
+      github.repositories = [repository("acme/site", "1")]
+      render(<Field />)
+      await userEvent.click(
+        screen.getByRole("combobox", { name: "Repository" })
+      )
+      const list = await screen.findByRole("listbox")
+      const groups = within(list).getAllByRole("group")
+      expect(groups).toHaveLength(2)
+      const hosts = groups.map((g) =>
+        within(g).queryByLabelText("github.com")
+          ? "github.com"
+          : "bitbucket.org"
+      )
+      expect(hosts.sort()).toEqual(["bitbucket.org", "github.com"])
+    })
+
+    it("is a plain field when the consumer is not set up", () => {
+      bitbucket.configured = false
+      render(<Field />)
+      expect(
+        screen.getByRole("textbox", { name: "Repository" })
+      ).toBeInTheDocument()
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
+    })
+
+    it("is a plain field when no workspace is ready", () => {
+      bitbucket.workspaces = [
+        workspace("w1", "acme", "Acme Inc", "reconnect_needed"),
+      ]
+      render(<Field />)
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
     })
   })
 

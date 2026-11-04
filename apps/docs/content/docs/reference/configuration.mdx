@@ -56,6 +56,17 @@ Set the five App settings together, or none. Loomplane refuses to start with som
 | `LOOMPLANE_GITHUB_CLIENT_SECRET` | Unset | The App's OAuth client secret |
 | `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Unset | The secret GitHub signs deliveries with. Empty turns webhooks off |
 
+## Bitbucket
+
+Public Bitbucket Cloud repositories need none of this. To read private ones, set the client ID and secret together, or neither. Loomplane refuses to start with only one of them set.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_BITBUCKET_API_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud's REST API |
+| `LOOMPLANE_BITBUCKET_WEB_URL` | `https://bitbucket.org` | Where repository archives are served |
+| `LOOMPLANE_BITBUCKET_CLIENT_ID` | Unset | The OAuth consumer's key |
+| `LOOMPLANE_BITBUCKET_CLIENT_SECRET` | Unset | The OAuth consumer's secret |
+
 ## GitLab
 
 Public projects on gitlab.com need none of this. Set the client ID and client secret together, or neither. Loomplane refuses to start with only one. See [GitLab repositories](/docs/guides/gitlab-repositories).
@@ -102,6 +113,8 @@ Machines that join an organization hold one connection to a replica. When you ru
 | `LOOMPLANE_NODES_ADVERTISE_URL` (`nodes.advertise_url`) | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. It must be an absolute http or https URL with no user, query or fragment, or startup stops. Set each replica's own address. Use `https`, or a private network with the setting below. With several replicas on one database and no advertise URL, each replica only reaches the nodes connected to it, and logs a warning when it meets one it can't |
 | `LOOMPLANE_NODES_HOP_INSECURE` (`nodes.hop_insecure`) | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
 | `LOOMPLANE_NODES_HOP_CA_FILE` (`nodes.hop_ca_file`) | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+| `LOOMPLANE_NODES_JOIN_RATE_LIMIT` (`nodes.join_rate_limit`) | `10` | How many joins one address may send a minute. Past it the address gets a 429 until the minute is up. `0` turns the limit off |
+| `LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT` (`nodes.challenge_rate_limit`) | `120` | How many connect challenges one address may ask for a minute. Every node reconnects after a restart, and nodes behind one NAT share this budget, so raise it if you run more than about a hundred machines behind one address. `0` turns it off |
 
 ## Cloud sign-in
 
@@ -166,10 +179,15 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `LOOMPLANE_AI_EMBEDDING_BASE_URL` | empty | The embedding endpoint (`ai.knowledge.embedding_base_url`). Required for `openai-compatible` |
 | `LOOMPLANE_AI_EMBEDDING_MODEL` | empty | The embedding model (`ai.knowledge.embedding_model`). Required once a provider is set. Pick one whose native size is at most 2000 dimensions, such as `text-embedding-3-small` |
 | `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | The vector size (`ai.knowledge.dimensions`), from 1 to 2000. It must match the embedding model, and every workspace shares it, because the vector column has one fixed size. `text-embedding-3-small` at 1536 is the default |
+| `LOOMPLANE_AI_DOCS_BUDGET_USD` | `5.00` | The most indexing the docs may spend, in USD (`ai.knowledge.docs_budget_usd`). A decimal above 0 and at most 1000. Checked only when an embedding provider is set |
+
+Knowledge also needs pgvector in Postgres, and the embedding model needs a price: an OpenAI model nexus lists, or an `ai.prices` entry for an `openai-compatible` one. Without either, nothing else changes. Knowledge stays off and the settings page says why. [Knowledge](/docs/agents/knowledge) has each reason and its fix. The docs are indexed once per release, billed to a `loomplane-system` tenant and capped by `LOOMPLANE_AI_DOCS_BUDGET_USD`.
 
 With `ai.enabled` on, Loomplane checks these at startup and names the key that's wrong. With it off, none of them are checked, so a stray variable can't stop a server that doesn't run the agent.
 
 `ai.prices` has no variable. Set it in `config.local.yaml` as a list of `{provider, model, input_per_million, output_per_million}`, in decimal USD such as `"3"` or `"0.80"`. The agent uses server prices only: nexus's own catalog, plus the models you list here. A price a workspace sets on its own provider key doesn't apply to the agent, so a model nexus doesn't know needs an entry here. Each provider and model pair can appear once.
+
+Embeddings are priced the same way. For `openai`, Loomplane uses nexus's own price for the embedding model, so `text-embedding-3-small` needs no entry. For `openai-compatible`, the embedding model needs an `ai.prices` entry with provider `openai-compatible` and the model name, and its `input_per_million` is the embedding price. Without one, the server refuses every embedding. Set both amounts to `"0"` for a local model that costs nothing.
 
 ## Process and container
 

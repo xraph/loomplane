@@ -34,6 +34,9 @@ type Source struct {
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	RemovedAt *time.Time `json:"removed_at,omitempty"`
+	// Push says whether a push re-analyzes the source. Only a Bitbucket
+	// source's listing has it.
+	Push *PushState `json:"push,omitempty"`
 }
 
 // normalize puts the times a store returns into UTC, so a source compares

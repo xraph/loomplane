@@ -1,0 +1,104 @@
+---
+title: Knowledge
+description: Let the agent search Loomplane's documentation and your workspace's own documents before it answers, and fix it when the settings page says it can't.
+---
+
+Knowledge is how the agent looks things up before it answers. It searches two places: Loomplane's own documentation, and the documents your workspace keeps. It's optional. The agent works without it, it just answers from the live state of your projects and what the model already knows.
+
+It only ever searches. It doesn't write documents, it can't see another workspace's, and the search is a read, so it never needs a person's approval. If a search fails, the agent gets a short fixed message and carries on, and the real error goes to the server's log.
+
+## What the server needs
+
+Two things: the pgvector extension in Loomplane's Postgres, and one embedding model.
+
+For the embedding model, set `ai.knowledge` on the server. These are also environment variables, listed with the rest in [Configuration](/docs/reference/configuration#ai).
+
+```yaml
+ai:
+  enabled: true
+  knowledge:
+    embedding_provider: openai         # openai or openai-compatible
+    embedding_model: text-embedding-3-small
+    embedding_api_key: ""
+    dimensions: 1536                   # 1 to 2000
+    docs_budget_usd: "5.00"            # 0 to 1000
+```
+
+An `openai-compatible` provider also needs `embedding_base_url`. Anthropic has no embeddings API, so it can't be the provider. Leave `embedding_provider` empty and knowledge stays off, with nothing else changing.
+
+**pgvector.** Use a Postgres image that ships it, such as `pgvector/pgvector:pg17`, or run `CREATE EXTENSION vector` on a managed Postgres that offers it. Loomplane checks for it at start and only then creates its vector table. Nothing changes without it, and Loomplane starts either way. For the Compose stack and the chart, see [Production on Docker](/docs/operations/production-on-docker#knowledge-needs-pgvector) and [Production on Kubernetes](/docs/operations/production-on-kubernetes#knowledge-needs-pgvector). To try it on your laptop from a source checkout, `make up-knowledge` starts a Postgres with pgvector.
+
+### Dimensions
+
+`dimensions` is the size of every vector, and it has to match your embedding model. The cap is 2000, so pick a model whose native size is at most that. `text-embedding-3-small` at 1536 is the default. Every workspace shares the one size, because the column in the database has a single fixed width.
+
+Once there are vectors, editing the config won't change it. Loomplane sees the table was made for another size and turns knowledge off, and the settings page tells you both sizes. The quick way back is to put the old `embedding_model` and `dimensions` back and restart. Knowledge comes on again with everything it had indexed.
+
+### Changing the size
+
+If you really do want a new size, you reset knowledge by hand. Dropping the vector table on its own won't do it: Loomplane has recorded that it made the table, so it won't make it again, and the documents it indexed still look current, so it won't embed them again either. The reset below clears the table, the record and the documents.
+
+1. Stop every Loomplane server that uses the database.
+2. Set the new `embedding_model` and `dimensions` under `ai.knowledge`.
+3. Run this against Loomplane's database, as the role Loomplane connects with:
+
+   ```sql
+   BEGIN;
+   DROP TABLE weave_vectors;
+   DELETE FROM grove_migrations WHERE "group" = 'weave_pgvector';
+   DELETE FROM weave_collections WHERE name IN ('loomplane-docs', 'workspace');
+   COMMIT;
+   ```
+
+4. Start Loomplane.
+
+The first statement drops the vectors. The second deletes the record of the migration that made the table, so the next start makes it again at the new size. The third deletes the docs collection and every workspace's collection, and their documents and chunks go with them. When Loomplane starts, it makes the table, turns knowledge back on and indexes the docs again, which costs one full pass of embeddings billed to `loomplane-system`.
+
+The documents your workspaces had indexed are deleted too. Take a [backup](/docs/operations/backing-up-loomplane) first if you might want them back.
+
+## When the switch is off
+
+On **Settings, AI** the **Knowledge** switch is disabled when the server can't support it, with the reason next to it. Each reason has a fix.
+
+| The page says | Do this |
+|---|---|
+| No embedding model is set on this server | Set `ai.knowledge` as above and restart |
+| `ai.knowledge.embedding_model` has no price, so every embedding would be refused | Use an OpenAI model nexus lists, or add the model to `ai.prices` (see below) |
+| Loomplane couldn't check its database for pgvector | The database refused the check. Read the error after the colon, fix the connection or the permission, and restart |
+| Knowledge needs the pgvector extension in Loomplane's Postgres | Use a pgvector image or run `CREATE EXTENSION vector`, then restart |
+| The knowledge table was made for a different embedding size | Put back the embedding model and the `dimensions` it names, and restart. To move to the new size, follow [Changing the size](#changing-the-size) |
+| Setting up the knowledge table failed | Read the error after the colon. It names what the database said |
+| The embedding model returned vectors of a different size | Your model's real size isn't what `dimensions` says. Fix `dimensions` to match |
+
+The last one turns knowledge off while the server is running, not at start, the first time an embedding comes back at the wrong size.
+
+### Pricing the embedding model
+
+Every embedding is billed through nexus like any model call, and the agent only runs on models Loomplane can price. An OpenAI model nexus knows about is priced already. For an OpenAI-compatible endpoint, add an entry to `ai.prices` with the provider `openai-compatible`:
+
+```yaml
+ai:
+  prices:
+    - provider: openai-compatible
+      model: my-embedder
+      input_per_million: "0.02"
+      output_per_million: "0"
+```
+
+## The documentation
+
+Loomplane's docs and the manifest's JSON schema are built into the binary. When the server starts with knowledge available, it indexes them once for the release. A page that hasn't changed isn't embedded again, so restarting the same release costs nothing, and a new release re-embeds only the pages that moved. Pages the release no longer has are removed.
+
+Every workspace can search this collection and none can change it. Its embeddings are billed to a system tenant of their own, `loomplane-system`, never to a workspace, and capped by `ai.knowledge.docs_budget_usd` (5.00 USD unless you say otherwise). A release's docs embed in a few minutes.
+
+If a run dies partway, a check every five minutes fails any page that went quiet for fifteen minutes and indexes the docs again.
+
+## Your workspace's documents
+
+Each workspace gets a collection of its own, made the first time it's needed, for its own documents, such as reports and runbooks. Only that workspace's agent can search it. Embeddings for them are billed to the workspace's AI budget, so they count against the same limit as the agent's other model calls.
+
+## Turning it on for a workspace
+
+The server makes knowledge possible. A workspace admin (`ai:manage`) decides whether this workspace uses it, with the **Knowledge** switch on **Settings, AI**. It's the same call as every other agent setting, `PATCH /api/v1/ai/settings/agent` with `"knowledge": true`. With the server unable to support it, the switch stays off and shows why.
+
+Turning it off stops the agent searching your workspace's documents and the docs.

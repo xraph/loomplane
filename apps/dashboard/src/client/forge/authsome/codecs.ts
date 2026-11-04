@@ -19,6 +19,7 @@ export const CODECS: Record<string, Codec> = {
   "CreateInvitationRequest": {"kind": "object", "fields": {"email": {"ts": "email"}, "role": {"ts": "role"}}, "required": ["email"]},
   "CreateOrgRequest": {"kind": "object", "fields": {"app_id": {"ts": "appId"}, "logo": {"ts": "logo"}, "name": {"ts": "name"}, "slug": {"ts": "slug"}}, "required": ["name", "slug"]},
   "DeclineInvitationRequest": {"kind": "object", "fields": {"token": {"ts": "token"}}, "required": ["token"]},
+  "DeviceCompleteResponse": {"kind": "object", "fields": {"status": {"ts": "status"}}, "required": ["status"]},
   "Invitation": {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "email": {"ts": "email"}, "expires_at": {"ts": "expiresAt"}, "id": {"ts": "id"}, "inviter_id": {"ts": "inviterId"}, "org_id": {"ts": "orgId"}, "role": {"ts": "role"}, "status": {"ts": "status"}}, "required": ["created_at", "email", "expires_at", "id", "inviter_id", "org_id", "role", "status"]},
   "InvitationListResponse": {"kind": "object", "fields": {"invitations": {"ts": "invitations", "codec": () => CODECS["InvitationListResponse.invitations"]}, "next_cursor": {"ts": "nextCursor"}}, "required": ["invitations"]},
   "InvitationListResponse.invitations": {"kind": "array", "items": () => CODECS["Invitation"]},

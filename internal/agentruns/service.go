@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/run"
+	"github.com/xraph/cortex/store"
 	"github.com/xraph/cortex/suspension"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"go.jetify.com/typeid/v2"
@@ -106,6 +107,9 @@ type Deps struct {
 	Wake  realtime.WakeSource
 	Now   func() time.Time
 	Warn  func(msg string, err error)
+	// Debug, when set, logs what the service drops on purpose, such as a
+	// tool outcome for a run another replica is writing.
+	Debug func(msg string, keyvals ...any)
 }
 
 // runner is what the service asks of cortex. *engine.Engine is the real
@@ -118,6 +122,9 @@ type runner interface {
 	CreateAgent(ctx context.Context, config *cortexagent.Config) error
 	UpdateAgent(ctx context.Context, config *cortexagent.Config) error
 	GetRun(ctx context.Context, runID id.AgentRunID) (*run.Run, error)
+	// Store is cortex's store: the start job reads and makes a chat's
+	// session through it.
+	Store() store.Store
 }
 
 // settingsReader is what the service reads of the agent's settings.
@@ -154,6 +161,7 @@ type Service struct {
 	wake     realtime.WakeSource
 	now      func() time.Time
 	warnFn   func(msg string, err error)
+	debugFn  func(msg string, keyvals ...any)
 	poll     time.Duration
 
 	mu      sync.RWMutex
@@ -161,6 +169,9 @@ type Service struct {
 	handler SuspensionHandler
 	// running is the runs this process's jobs are driving, by task.
 	running map[string]*localRun
+	// writers is the event writers of the runs this process is pumping,
+	// by run ID, for the tool hooks.
+	writers map[string]*eventWriter
 
 	// beforeClaim and beforeDrive, when set, run at those points of a
 	// job: tests use them to land a cancel there.
@@ -171,8 +182,8 @@ type Service struct {
 func NewService(d Deps) *Service {
 	s := &Service{
 		store: d.Store, jobs: d.Jobs, binder: d.Binder, registry: d.Registry, codec: d.Codec, wake: d.Wake,
-		now: d.Now, warnFn: d.Warn, poll: watchPoll,
-		kinds: map[Kind]KindSpec{}, running: map[string]*localRun{},
+		now: d.Now, warnFn: d.Warn, debugFn: d.Debug, poll: watchPoll,
+		kinds: map[Kind]KindSpec{}, running: map[string]*localRun{}, writers: map[string]*eventWriter{},
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -225,6 +236,12 @@ func (s *Service) suspensionHandler() SuspensionHandler {
 func (s *Service) warn(msg string, err error) {
 	if s.warnFn != nil && err != nil {
 		s.warnFn(msg, err)
+	}
+}
+
+func (s *Service) debug(msg string, keyvals ...any) {
+	if s.debugFn != nil {
+		s.debugFn(msg, keyvals...)
 	}
 }
 
@@ -596,7 +613,16 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	s.stopLocal(t.ID)
 	if eng := s.engine(); eng != nil {
 		if runID, perr := id.ParseAgentRunID(t.RunID); perr == nil {
-			cerr := eng.CancelRun(s.runContext(ctx, t), runID)
+			rctx := s.runContext(ctx, t)
+			cerr := eng.CancelRun(rctx, runID)
+			// The run stopLocal just stopped writes its own end, and when
+			// that lands between CancelRun's read and its write, the write
+			// conflicts. Read it again: by then the run has ended, which
+			// is ErrInvalidState, or it's still running and this write
+			// goes in.
+			for try := 1; try < cancelTries && errors.Is(cerr, cortex.ErrRunConflict); try++ {
+				cerr = eng.CancelRun(rctx, runID)
+			}
 			if cerr != nil && !errors.Is(cerr, cortex.ErrRunNotFound) && !errors.Is(cerr, cortex.ErrInvalidState) && !errors.Is(cerr, cortex.ErrNotSuspended) {
 				return moved, cerr
 			}
@@ -604,6 +630,10 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	}
 	return moved, nil
 }
+
+// cancelTries is how many times cancel asks cortex to end a run whose
+// record another writer keeps changing.
+const cancelTries = 3
 
 // runContext is ctx bound to the task when it can be, and otherwise ctx
 // with the task's cortex scope alone, which is all cancelling a run needs:
@@ -913,15 +943,18 @@ func reason(why string) string {
 			return known.Error()
 		}
 	}
-	why = strings.TrimSpace(why)
-	if len(why) <= maxErrorBytes {
-		return why
+	return cut(strings.TrimSpace(why), maxErrorBytes)
+}
+
+// cut is s cut to at most n bytes, on a rune boundary.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	cut := maxErrorBytes
-	for cut > 0 && !utf8RuneStart(why[cut]) {
-		cut--
+	for n > 0 && !utf8RuneStart(s[n]) {
+		n--
 	}
-	return why[:cut]
+	return s[:n]
 }
 
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }

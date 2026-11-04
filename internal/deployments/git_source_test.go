@@ -15,6 +15,7 @@ func TestRenderSpec_gitLabRepoURL(t *testing.T) {
 	job := &Job{Deployment: &Deployment{ProjectID: "project_1", Environment: "production"}, Action: planning.Action{Name: "api", Service: cfg}}
 	for key, want := range map[string]string{
 		"gitlab.com/grp/sub/api": "https://gitlab.com/grp/sub/api",
+		"bitbucket.org/acme/api": "https://bitbucket.org/acme/api",
 		"acme/api":               "https://github.com/acme/api",
 	} {
 		spec, err := renderSpec(job, cfg, renderRepoURL(key))

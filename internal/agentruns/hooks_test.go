@@ -174,3 +174,31 @@ func TestRecordRequestLogsTheRequest(t *testing.T) {
 		t.Fatal("logged a request on another workspace's task")
 	}
 }
+
+func TestSafetyStopFailsTheTask(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	mustMove(t, w, task, StatusRunning)
+	w.engine.setRun(task.RunID, &run.Run{
+		State: run.StateIncomplete, StopReason: run.StopSafetyBlock, TokensUsed: 7,
+		Error: "cortex: publication blocked: the output guard found an AWS key",
+	})
+	sum := run.TerminalSummary{State: run.StateIncomplete, StopReason: run.StopSafetyBlock}
+	if err := h.OnRunTerminated(runCtx(task), id.Nil, mustRunID(t, task.RunID), sum); err != nil {
+		t.Fatal(err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusFailed || got.Error != SafetyStopped || got.Tokens != 7 {
+		t.Fatalf("task %+v", got)
+	}
+
+	// A run cortex settles without its hook reaching us reads the same.
+	other := w.adaChat(t)
+	mustMove(t, w, other, StatusRunning)
+	w.engine.setRun(other.RunID, &run.Run{State: run.StateIncomplete, StopReason: run.StopSafetyBlock, Error: "cortex: blocked"})
+	w.svc.settle(t.Context(), w.engine, other, mustRunID(t, other.RunID))
+	if got = w.store.task(t, other.ID); got.Status != StatusFailed || got.Error != SafetyStopped {
+		t.Fatalf("settled task %+v", got)
+	}
+}

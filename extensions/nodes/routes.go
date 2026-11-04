@@ -26,9 +26,18 @@ const (
 	mintHint = "mint a new join token and try again"
 )
 
-// JoinTokenMinter makes node join tokens. The API key service does.
+// JoinTokenMinter makes, lists and cancels node join tokens. The API key
+// service does.
 type JoinTokenMinter interface {
 	CreateNodeJoinToken(ctx context.Context, p security.Principal, scope apikeys.NodeJoinScope, lifetime time.Duration) (*apikeys.NodeJoinToken, error)
+	ListNodeJoinTokens(ctx context.Context, p security.Principal) ([]apikeys.PendingNodeJoinToken, error)
+	CancelNodeJoinToken(ctx context.Context, p security.Principal, tokenID string) error
+}
+
+// JoinTokenList is the org's join tokens no machine has used yet. The
+// secrets are never in it.
+type JoinTokenList struct {
+	Tokens []apikeys.PendingNodeJoinToken `json:"tokens"`
 }
 
 // NodeList is the org's nodes.
@@ -74,7 +83,11 @@ type NodeJoin struct {
 	Token string `json:"token"`
 	Name  string `json:"name,omitempty"`
 	// PublicKey is the node's Ed25519 public key, base64.
-	PublicKey       string               `json:"public_key"`
+	PublicKey string `json:"public_key"`
+	// Signature is the node's Ed25519 signature, base64, over
+	// "loomplane-node-join-v1\n" and the JSON {"token","name","public_key"},
+	// with name exactly as sent. It proves the machine holds the key.
+	Signature       string               `json:"signature"`
 	Endpoints       []nodeproto.Endpoint `json:"endpoints,omitempty"`
 	Labels          map[string]string    `json:"labels,omitempty"`
 	Inventory       nodeproto.Inventory  `json:"inventory"`
@@ -110,6 +123,20 @@ func (e *Extension) routes(r forge.Router, guard ...forge.Middleware) error {
 		forge.WithSummary("Make a single-use token for one machine to join, and the command that uses it"),
 		forge.WithRequestSchema(JoinTokenRequest{}),
 		forge.WithResponseSchema(http.StatusCreated, "JoinToken", JoinToken{}),
+	); err != nil {
+		return err
+	}
+	if err := g.GET("/join-tokens", e.listJoinTokens,
+		forge.WithName("nodeJoinTokens.list"),
+		forge.WithSummary("The join tokens no machine has used yet: who made them, with which key, for what, and when they expire"),
+		forge.WithResponseSchema(http.StatusOK, "JoinTokenList", JoinTokenList{}),
+	); err != nil {
+		return err
+	}
+	if err := g.DELETE("/join-tokens/:id", e.cancelJoinToken,
+		forge.WithName("nodeJoinTokens.cancel"),
+		forge.WithSummary("Cancel a join token no machine has used, so none can"),
+		forge.WithNoContentResponse(),
 	); err != nil {
 		return err
 	}
@@ -232,6 +259,32 @@ func (e *Extension) createJoinToken(c forge.Context) error {
 	return c.JSON(http.StatusCreated, JoinToken{Token: tok.Secret, ExpiresAt: tok.ExpiresAt, Command: e.installCommand(tok.Secret, in.Endpoints)})
 }
 
+func (e *Extension) listJoinTokens(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	out, err := e.minter.ListNodeJoinTokens(c.Request().Context(), p)
+	if err != nil {
+		return e.fail(c, err)
+	}
+	if out == nil {
+		out = []apikeys.PendingNodeJoinToken{}
+	}
+	return c.JSON(http.StatusOK, JoinTokenList{Tokens: out})
+}
+
+func (e *Extension) cancelJoinToken(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err = e.minter.CancelNodeJoinToken(c.Request().Context(), p, c.Param("id")); err != nil {
+		return e.fail(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // installCommand is the line an operator runs on the machine. The token goes
 // in LOOMPLANE_JOIN_TOKEN, so no other user on the machine can read it from
 // a process's arguments. The pipe leaves node join no terminal to ask on, so
@@ -256,6 +309,11 @@ func (e *Extension) installCommand(token string, allow []nodeproto.Endpoint) str
 const joinTokenEnv = "LOOMPLANE_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
 
 func (e *Extension) join(c forge.Context) error {
+	// Counted before the body is read: the join is the one route anyone can
+	// call, and each one can cost a token lookup.
+	if e.limited(c.Response(), c.Request(), limitJoin, e.cfg.Nodes.JoinRateLimit) {
+		return nil
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Response(), c.Request().Body, maxJoinBody))
 	var tooBig *http.MaxBytesError
 	switch {
@@ -272,8 +330,12 @@ func (e *Extension) join(c forge.Context) error {
 	if err != nil {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, "public_key must be base64")
 	}
+	sig, err := base64.StdEncoding.DecodeString(in.Signature)
+	if err != nil {
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, "signature must be base64")
+	}
 	res, err := e.svc.Join(c.Request().Context(), nodes.JoinRequest{
-		Token: in.Token, Name: in.Name, PublicKey: key, Endpoints: in.Endpoints, Labels: in.Labels,
+		Token: in.Token, Name: in.Name, PublicKey: key, Signature: sig, Endpoints: in.Endpoints, Labels: in.Labels,
 		Inventory: in.Inventory, NodeVersion: in.NodeVersion, ProtocolVersion: in.ProtocolVersion,
 	})
 	if err != nil {
@@ -306,6 +368,8 @@ func (e *Extension) fail(c forge.Context, err error) error {
 		return forge.NewHTTPError(http.StatusUpgradeRequired, err.Error())
 	case errors.Is(err, nodes.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
+	case errors.Is(err, apikeys.ErrNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, "no unused join token has that id; it may have been used, cancelled or expired")
 	case errors.Is(err, nodes.ErrNameTaken):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, nodes.ErrInvalid), errors.Is(err, nodes.ErrWidenRemotely), errors.Is(err, apikeys.ErrInvalid):
