@@ -79,6 +79,10 @@ These need the agent on. On a server with `ai.enabled` off they print "This Loom
 | `agent requests provide ID` | Sets the secret the agent asked for. The value comes from standard input, hidden on a terminal, and a value given as an argument is refused. It's never printed |
 | `agent requests done ID` | Says you connected GitHub or a cloud account |
 | `agent requests decline ID [--reason TEXT]` | Turns a request down. The agent sees the reason |
+| `agent reports [--all \| --status resolved\|closed] [--project REF] [--json]` | Lists what the watcher found: ID, severity, project, environment, title, how often and how long ago it was seen, and its GitHub issue. You get the open reports unless you pass `--all` or a `--status` |
+| `agent reports show ID [--json]` | Shows one report: its facts, what the agent's investigation found (summary, likely cause, suggestions and how sure it is) and the issue link |
+| `agent reports close ID [--reason TEXT]` | Closes a report. The reason is kept with it |
+| `agent watcher [--json]` | Says whether the watcher is watching or paused, and why if it's paused. It also lists each GitHub installation and whether it has accepted the Issues permission, so you can see why an issue hasn't been opened |
 
 `agent ask` exits 0 when the agent finishes, 1 when it fails, is stopped, or refuses the message (a 409: it's still on your last one, it's off for your workspace, or the budget is spent), 3 when `--no-wait` met a request, and 130 after Ctrl-C. A run Loomplane's safety checks stopped prints "Loomplane's safety checks stopped this answer." and exits 1.
 

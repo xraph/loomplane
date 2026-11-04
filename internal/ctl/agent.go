@@ -37,7 +37,7 @@ func (a *App) agentCommand() cli.Command {
 }
 
 func (a *App) agentSubcommands() []cli.Command {
-	return []cli.Command{a.agentAskCommand(), a.agentConversationsCommand(), a.agentRequestsCommand()}
+	return []cli.Command{a.agentAskCommand(), a.agentConversationsCommand(), a.agentRequestsCommand(), a.agentReportsCommand(), a.agentWatcherCommand()}
 }
 
 func (a *App) agentRequestsCommand() cli.Command {
@@ -76,6 +76,9 @@ func agentError(err error) error {
 	msg := strings.ToLower(e.Message)
 	if strings.Contains(msg, "agent request") {
 		return sentence("There's no agent request with that ID.")
+	}
+	if strings.Contains(msg, "agent report") {
+		return sentence("There's no agent report with that ID.")
 	}
 	if strings.Contains(msg, "conversation not found") || strings.Contains(msg, "agent task not found") {
 		return err
