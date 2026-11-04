@@ -79,7 +79,7 @@ type Extension struct {
 	cfg  config.Config
 	jobs func() *dispatchengine.Engine
 
-	nexus  *nexusExtension
+	nexus  *nexusext.Extension
 	shield *shieldext.Extension
 	weave  *knowledgeExtension
 	cortex *cortexext.Extension
