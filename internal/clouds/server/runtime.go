@@ -458,7 +458,13 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 		if labels[nativecache.LabelEngine] != "" {
 			protocol = "redis"
 		}
-		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
+		url := protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value))
+		if host == "" {
+			// A node without a confirmed address has no advertise_host, so
+			// the port has no public URL yet.
+			url = ""
+		}
+		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: url, Port: value, Protocol: protocol, Public: public})
 	}
 	return out
 }
