@@ -1310,6 +1310,12 @@ func TestGoneSecretsAreOnlyNotFound(t *testing.T) {
 	for err, want := range map[error]bool{
 		projects.ErrNotFound: true, missing: true, errors.Join(missing, missing): true,
 		errors.Join(missing, errors.New("vault is down")): false, errors.New("vault is down"): false,
+		// A join wrapped once more, or deeper, fails closed the same way.
+		fmt.Errorf("read the secrets: %w", errors.Join(missing, errors.New("vault is down"))):                            false,
+		fmt.Errorf("a: %w", fmt.Errorf("b: %w", errors.Join(missing, fmt.Errorf("c: %w", errors.New("vault is down"))))): false,
+		fmt.Errorf("read the secrets: %w", errors.Join(missing, fmt.Errorf("reveal KEY: %w", projects.ErrNotFound))):     true,
+		fmt.Errorf("read the secrets: %w", errors.Join()):                                                                false,
+		nil: false,
 	} {
 		if gone(err) != want {
 			t.Fatalf("gone(%v) = %v", err, !want)

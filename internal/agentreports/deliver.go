@@ -572,15 +572,26 @@ func (s *Service) sender(ctx context.Context, r *Report) (*sender, error) {
 }
 
 // gone is whether err says only that something no longer exists: the
-// project, or a secret's variable. Every part of a joined error must.
+// project, or a secret's variable. Every error at the end of every chain
+// must, through wrappers and joins at any depth, so a join wrapped in
+// one more error still fails closed when any part of it is something else.
 func gone(err error) bool {
+	if err == nil {
+		return false
+	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, e := range joined.Unwrap() {
-			if !gone(e) {
+		parts := joined.Unwrap()
+		for _, part := range parts {
+			if !gone(part) {
 				return false
 			}
 		}
-		return len(joined.Unwrap()) > 0
+		return len(parts) > 0
+	}
+	if wrapper, ok := err.(interface{ Unwrap() error }); ok {
+		if inner := wrapper.Unwrap(); inner != nil {
+			return gone(inner)
+		}
 	}
 	return errors.Is(err, projects.ErrNotFound) || errors.Is(err, environments.ErrNotFound)
 }
