@@ -328,7 +328,9 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 			}
 		}
 		if action == "stop" {
-			if p == nil {
+			if p == nil || platformSuspendFrom(ctx) {
+				// A suspension's stop leaves the placement for the
+				// suspension to record, so a restore starts it again.
 				return nil
 			}
 			// Someone stopped it, so a restore leaves it stopped.

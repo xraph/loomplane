@@ -894,3 +894,25 @@ func TestRegistryOnlyCredentials(t *testing.T) {
 		t.Fatal("no credential source answered")
 	}
 }
+
+// A suspension's stop goes through the same lifecycle as a user's but leaves
+// the placement for the suspension to record, so a restore starts it again.
+func TestSuspendStopKeepsThePlacementForTheRestore(t *testing.T) {
+	f := newPlatformFixture(t)
+	f.deploy(t)
+	f.instances.value.State = cpprovider.StateStopping
+	backend, err := f.target.backend("fra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = backend.SetRunning(WithPlatformSuspend(t.Context()), f.iid, f.instances.value.Labels, false); err != nil {
+		t.Fatal(err)
+	}
+	p := f.platform.live("org_a", "env_1", "web")
+	if p == nil || p.State != "running" {
+		t.Fatalf("placement %+v, want it left for the suspension", p)
+	}
+	if records := f.hosts["host_a"].records(t); len(records) != 1 || records[0].State != "stopped" {
+		t.Fatalf("host keeps %+v", records)
+	}
+}
