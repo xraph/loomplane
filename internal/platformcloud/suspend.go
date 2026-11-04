@@ -457,37 +457,34 @@ AND org_id IN (SELECT org_id FROM loomplane_platform_tenants WHERE cardinality(s
 	return errors.Join(errs...)
 }
 
-// reclaim removes one placement's VM: it checks the placement is due under the
-// tenant lock, removes the VM with the lock let go, and then clears the host
-// if the placement is still the suspended one it checked.
+// reclaim removes one placement's VM under the tenant lock, the way Start
+// runs: it checks the placement is still the due suspended one, removes the VM
+// with a time limit and clears the host in the same transaction. A restore
+// that clears the last reason waits for the lock, so the VM is either removed
+// and the row stays suspended and remembered, or the restore ran first and
+// the reclaim finds nothing due. A placement is never left running without
+// its VM.
 func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now time.Time) error {
-	var due *Placement
 	err := s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if err != nil || len(t.SuspendReasons) == 0 {
 			return err
 		}
-		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2`, placementID, orgID))
+		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, placementID, orgID))
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if p.State == stateSuspended && p.HostID != nil && p.SuspendedAt != nil && now.Sub(*p.SuspendedAt) >= ReclaimAfter {
-			due = p
+		if p.State != stateSuspended || p.HostID == nil || p.SuspendedAt == nil || p.SuspendedAt.After(now.Add(-ReclaimAfter)) {
+			return nil
 		}
-		return nil
-	})
-	if err != nil || due == nil {
-		return effectsFailed(ctx, "reclaim", orgID, err)
-	}
-	if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *due) }); err != nil {
-		return effectsFailed(ctx, "reclaim", orgID, fmt.Errorf("remove placement %s: %w", due.ID, err))
-	}
-	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
-		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id=NULL,updated_at=now() WHERE id=$1 AND state=$2 AND host_id=$3`, due.ID, stateSuspended, *due.HostID)
-		return execErr
+		if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *p) }); err != nil {
+			return fmt.Errorf("remove placement %s: %w", p.ID, err)
+		}
+		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id=NULL,updated_at=now() WHERE id=$1`, p.ID)
+		return err
 	})
 	return effectsFailed(ctx, "reclaim", orgID, err)
 }

@@ -198,8 +198,12 @@ WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID, instance, 
 	if err != nil {
 		return storeError(err)
 	}
-	if n, nErr := res.RowsAffected(); nErr != nil || n != 1 {
-		return errors.Join(nErr, ErrNotFound)
+	if n, nErr := res.RowsAffected(); nErr != nil {
+		return nErr
+	} else if n != 1 {
+		// The suspension released the placement, a deploy that never ran
+		// before it: nothing tracks this VM, so stop it by the instance given.
+		slog.WarnContext(ctx, "platform cloud: a deploy finished after its placement was released by a suspension", "org", orgID, "placement", placementID)
 	}
 	if s.instances != nil && instance != "" {
 		if stopErr := callInstances(ctx, func(c context.Context) error { return s.instances.Stop(c, instance) }); stopErr != nil {

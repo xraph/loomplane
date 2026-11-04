@@ -581,3 +581,73 @@ func TestSuspendOfAnOrgWithNoPlatformWorkCallsNothing(t *testing.T) {
 		t.Fatalf("calls = %+v", fc)
 	}
 }
+
+// slowRemove blocks RemoveVM until released, so a restore can be tried while
+// a reclaim holds the tenant lock.
+type slowRemove struct {
+	*fakeControl
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *slowRemove) RemoveVM(ctx context.Context, p Placement) error {
+	close(s.entered)
+	<-s.release
+	return s.fakeControl.RemoveVM(ctx, p)
+}
+
+func TestRestoreWaitsForAReclaimHoldingTheLock(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	t0 := time.Now().UTC()
+	e.svc.now = func() time.Time { return t0 }
+	e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	slow := &slowRemove{fakeControl: fc, entered: make(chan struct{}), release: make(chan struct{})}
+	e.svc.WithInstances(slow)
+	done := make(chan error, 2)
+	go func() { done <- e.svc.Reclaim(ctx, t0.Add(8*24*time.Hour)) }()
+	<-slow.entered
+	go func() { done <- e.svc.Restore(ctx, "org_a", ReasonPastDue) }()
+	select {
+	case err := <-done:
+		t.Fatalf("restore finished while the reclaim held the lock: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(slow.release)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	web := e.byResource(t, "web")
+	// Reclaim ran first: the VM is gone and the restore re-placed and started it.
+	if len(fc.removes) != 1 || web.State != "running" || web.HostID == nil || !slices.Equal(fc.starts, []string{"inst_web"}) {
+		t.Fatalf("removes = %v, starts = %v, web = %+v", fc.removes, fc.starts, web)
+	}
+}
+
+func TestLateDeployOfAReleasedPlacementIsStopped(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	p, err := e.svc.Reserve(ctx, serviceReq("web", 1, 512))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if e.placement(t, p.ID).State != "released" {
+		t.Fatal("the reserved row should be released")
+	}
+	if err = e.svc.Running(ctx, "org_a", p.ID, "inst_late", 1); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("Running = %v, want ErrSuspended", err)
+	}
+	if !slices.Equal(fc.stops, []string{"inst_late"}) {
+		t.Fatalf("stops = %v", fc.stops)
+	}
+}
