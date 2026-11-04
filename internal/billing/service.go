@@ -3,6 +3,7 @@
 package billing
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/ledger"
 
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/platformcloud"
 )
 
@@ -24,6 +26,8 @@ type Service struct {
 	suspender platformcloud.Suspender
 	cfg       Config
 	gate      *gate
+	// notify queues one notice; New sets it to enqueue (notify.go).
+	notify func(context.Context, notifications.Notice) error
 }
 
 // Deps is what New builds a Service from.
@@ -56,6 +60,7 @@ func New(d Deps) *Service {
 	// The gate reads the clock through s.now, so a test that swaps the
 	// clock moves the cache's clock too.
 	s.gate = &gate{account: s.Account, now: func() time.Time { return s.now() }}
+	s.notify = s.enqueue
 	return s
 }
 
