@@ -37,8 +37,9 @@ type firecrackerBackend struct {
 	// there. The caller closes the client.
 	session firecrackerSession
 	// place opens the host to apply the instance on and returns what to do
-	// once the host has applied it. Nil applies through session.
-	place func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, func(context.Context, fc.Record) error, error)
+	// once the host has applied it, which may give the instance a public
+	// endpoint. Nil applies through session.
+	place func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error)
 	// effect stops or removes the instance, running act against each
 	// host and scope it may run under. Nil acts once, through session.
 	effect func(ctx context.Context, iid id.ID, labels map[string]string, action string, act func(*fc.Client, fc.Scope) error) error
@@ -51,6 +52,10 @@ type firecrackerBackend struct {
 }
 
 type firecrackerSession func(ctx context.Context, iid id.ID, labels map[string]string) (*fc.Client, fc.Scope, error)
+
+// firecrackerApplied runs once the host has applied an instance. A non-nil
+// endpoint is where the instance is reached publicly.
+type firecrackerApplied func(ctx context.Context, r fc.Record) (*cpprovider.Endpoint, error)
 
 // orgFirecracker is the backend for an organization's Firecracker
 // connection: every session opens that connection's host, after the
@@ -100,7 +105,9 @@ func firecrackerSpec(sp cpprovider.ServiceSpec, labels map[string]string) (fc.Sp
 	}
 	q := fc.Spec{Kind: "app", Service: labels[owned.LabelService], Image: sp.Image, VCPUs: max(1, (sp.Resources.CPUMillis+999)/1000), MemoryMiB: max(128, sp.Resources.MemoryMB), DiskMiB: 4096, Command: sp.Command, Args: sp.Args, HealthPath: labels[owned.LabelHealth]}
 	if len(sp.Ports) == 1 {
-		if sp.Ports[0].Protocol != "" && sp.Ports[0].Protocol != "tcp" {
+		// A service's port is "http" (spec) and a component's "tcp"; the
+		// VM serves either over TCP.
+		if p := sp.Ports[0].Protocol; p != "" && p != "tcp" && p != "http" {
 			return q, fc.ErrInvalid
 		}
 		q.Port = sp.Ports[0].Container
@@ -144,9 +151,9 @@ func (b *firecrackerBackend) apply(ctx context.Context, iid id.ID, sp cpprovider
 	}
 	place := b.place
 	if place == nil {
-		place = func(ctx context.Context, iid id.ID, labels map[string]string, _ fc.Spec) (*fc.Client, fc.Scope, func(context.Context, fc.Record) error, error) {
+		place = func(ctx context.Context, iid id.ID, labels map[string]string, _ fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error) {
 			client, scope, sessionErr := b.session(ctx, iid, labels)
-			return client, scope, func(context.Context, fc.Record) error { return nil }, sessionErr
+			return client, scope, func(context.Context, fc.Record) (*cpprovider.Endpoint, error) { return nil, nil }, sessionErr
 		}
 	}
 	client, scope, applied, err := place(ctx, iid, labels, spec)
@@ -194,10 +201,15 @@ func (b *firecrackerBackend) apply(ctx context.Context, iid id.ID, sp cpprovider
 	if r.Scope != q.Scope || r.Generation != q.Authority.Generation || r.Current == nil {
 		return nil, fc.ErrConflict
 	}
-	if appliedErr := applied(ctx, r); appliedErr != nil {
+	public, appliedErr := applied(ctx, r)
+	if appliedErr != nil {
 		return nil, appliedErr
 	}
-	return &cpprovider.ProvisionResult{ProviderRef: r.Scope.Key(), ServiceRefs: map[string]string{sp.Name: r.Current.ID}, Endpoints: b.endpoints(client, sp.Name, spec)}, nil
+	endpoints := b.endpoints(client, sp.Name, spec)
+	if public != nil {
+		endpoints = append([]cpprovider.Endpoint{*public}, endpoints...)
+	}
+	return &cpprovider.ProvisionResult{ProviderRef: r.Scope.Key(), ServiceRefs: map[string]string{sp.Name: r.Current.ID}, Endpoints: endpoints}, nil
 }
 
 func (b *firecrackerBackend) endpoints(client *fc.Client, name string, s fc.Spec) []cpprovider.Endpoint {

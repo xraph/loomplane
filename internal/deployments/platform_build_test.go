@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/internal/clouds/registry"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -194,5 +196,56 @@ func TestPlatformBuildReleasedOnExit(t *testing.T) {
 		if f.hosts["host_a"].driver.removed == 0 {
 			t.Fatalf("fail=%v: the build VM was left on its host", fail)
 		}
+	}
+}
+
+// routeOf is the host's route for hostname.
+func (h *platformHost) routeOf(t *testing.T, hostname string) (fc.RouteRecord, bool) {
+	t.Helper()
+	r, err := h.host.Store.Route(t.Context(), hostname)
+	if errors.Is(err, fc.ErrMissing) {
+		return r, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, true
+}
+
+// A public service is reached through its generated hostname on the host's
+// ingress, never through a port the VM publishes, and a service that goes
+// private stops answering on the name.
+func TestPlatformServicePublishedOnItsGeneratedHostname(t *testing.T) {
+	f := newPlatformFixture(t)
+	f.platform.apex = "apps.test"
+	job := f.job(t)
+	job.Action.Service.Public, job.Action.Service.Port = true, 8080
+	if _, err := f.target.Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	host := f.hosts["host_a"]
+	const name = "web-abcdefghijkl.apps.test"
+	r, ok := host.routeOf(t, name)
+	want := fc.Scope{Org: "org_a", Connection: fc.PlatformConnection, Project: "prj_1", Environment: "env_1", Resource: f.iid.String()}
+	if !ok || r.Scope != want || r.Route.Port != 8080 || r.Route.Remove {
+		t.Fatalf("route %+v (found %v)", r, ok)
+	}
+	if records := host.records(t); len(records) != 1 || records[0].Current == nil || records[0].Current.Spec.PublishedPort != 0 || records[0].Current.Spec.Port != 8080 {
+		t.Fatalf("host keeps %+v", records)
+	}
+	if len(f.platform.published) == 0 || f.platform.published[len(f.platform.published)-1] != "host_a" {
+		t.Fatalf("published %v", f.platform.published)
+	}
+
+	job = f.job(t)
+	job.Action.Service.Public, job.Action.Service.Port = false, 8080
+	if _, err := f.target.Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok = host.routeOf(t, name); !ok || !r.Route.Remove {
+		t.Fatalf("a private service still has %+v", r)
+	}
+	if f.platform.hostnames["web"] != "" {
+		t.Fatal("a private service kept its hostname")
 	}
 }

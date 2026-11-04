@@ -260,6 +260,9 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	if checkErr := checkPlatformCloudZone(Route{OrgID: p.OrgID, Binding: binding}, zone); checkErr != nil {
+		return nil, checkErr
+	}
 	switch backend := binding.BackendName(); {
 	case backend == RouteBackendPlatform:
 		// The platform routes the app itself, with or without a Cloud.

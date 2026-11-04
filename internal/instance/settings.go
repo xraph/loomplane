@@ -158,13 +158,23 @@ type RegistrySettings struct {
 	AuthEndpoint string `json:"auth_endpoint"`
 }
 
+// PlatformDNSSettings says where the platform Cloud publishes the hostnames
+// it generates under its apex: a DNS provider ("cloudflare", "digitalocean"
+// or "vercel") and the zone there that holds the apex. The provider
+// credential lives in Vault.
+type PlatformDNSSettings struct {
+	Provider string `json:"provider"`
+	Zone     string `json:"zone"`
+}
+
 // PlatformCloudSettings configures the platform-owned Cloud.
 type PlatformCloudSettings struct {
 	// Attach is "manual" or "all_workspaces".
-	Attach        string           `json:"attach"`
-	DefaultLimits PlatformLimits   `json:"default_limits"`
-	Apex          string           `json:"apex"`
-	Registry      RegistrySettings `json:"registry"`
+	Attach        string              `json:"attach"`
+	DefaultLimits PlatformLimits      `json:"default_limits"`
+	Apex          string              `json:"apex"`
+	Registry      RegistrySettings    `json:"registry"`
+	DNS           PlatformDNSSettings `json:"dns"`
 }
 
 func defaultPlatformCloud() PlatformCloudSettings {

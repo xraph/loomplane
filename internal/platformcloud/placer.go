@@ -456,16 +456,19 @@ func (s *Service) candidates(ctx context.Context, q querier, req Request, region
 }
 
 // Release gives a placement's room back. Releasing one already released
-// changes nothing.
+// changes nothing. A service nothing else runs any more loses its generated
+// hostname.
 func (s *Service) Release(ctx context.Context, placementID string) error {
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1 AND state<>$2`, placementID, stateReleased)
+	p, err := scanPlacement(s.store.db.QueryRow(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1 AND state<>$2
+RETURNING `+placementColumns, placementID, stateReleased))
+	if errors.Is(err, ErrNotFound) {
+		return placementExists(ctx, s.store.db, placementID)
+	}
 	if err != nil {
-		return storeError(err)
+		return err
 	}
-	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
-		return nErr
-	}
-	return placementExists(ctx, s.store.db, placementID)
+	s.serviceGone(ctx, p)
+	return nil
 }
 
 // SetState records where a placement's workload is: reserved, running,

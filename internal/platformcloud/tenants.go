@@ -48,6 +48,7 @@ type Service struct {
 	settings SettingsReader
 	orgs     OrgLister
 	secrets  Secrets
+	dns      DNSWriter
 	gate     metering.Gate
 	now      func() time.Time
 }

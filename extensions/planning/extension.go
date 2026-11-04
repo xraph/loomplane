@@ -402,7 +402,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	// hosts, through no connection of the organization's. It refuses an
 	// organization it isn't enabled for, which is every organization on an
 	// instance with no platform hosts.
-	platformCloud := platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil)
+	platformCloud := platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil).WithDNS(cloudinfra.PlatformDNS{Adapters: routeService.Adapters})
+	// Custom domains on Loomplane Cloud services reach the platform host
+	// each one runs on.
+	routeService.PlatformRoutes = platformCloud
 	executors[platformcloud.RuntimePlatform] = &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Credentials: clouds, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget

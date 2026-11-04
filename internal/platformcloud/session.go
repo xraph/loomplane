@@ -204,19 +204,19 @@ func (s *Service) setLive(ctx context.Context, orgID, placementID, set string, a
 
 // Removed records that the organization's placement's VM is gone from its
 // host: the placement is released, if it wasn't, and no longer names an
-// instance, so nothing tries to remove it again.
+// instance, so nothing tries to remove it again. A service nothing else runs
+// any more loses its generated hostname.
 func (s *Service) Removed(ctx context.Context, orgID, placementID string) error {
 	if err := checkTenant(ctx, orgID); err != nil {
 		return err
 	}
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$3,instance_id='',updated_at=now() WHERE id=$1 AND org_id=$2`, placementID, orgID, stateReleased)
+	p, err := scanPlacement(s.store.db.QueryRow(ctx, `UPDATE loomplane_platform_placements SET state=$3,instance_id='',updated_at=now() WHERE id=$1 AND org_id=$2
+RETURNING `+placementColumns, placementID, orgID, stateReleased))
 	if err != nil {
-		return storeError(err)
+		return err
 	}
-	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
-		return nErr
-	}
-	return ErrNotFound
+	s.serviceGone(ctx, p)
+	return nil
 }
 
 func (s *Service) setInstance(ctx context.Context, placementID, instance string) error {

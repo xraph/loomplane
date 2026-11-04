@@ -14,6 +14,7 @@ import (
 	"github.com/xraph/ctrlplane"
 	cpauth "github.com/xraph/ctrlplane/auth"
 	"github.com/xraph/ctrlplane/id"
+	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -53,6 +54,13 @@ type PlatformHosts interface {
 	Registry(ctx context.Context, orgID string) (*registry.Config, error)
 	// RecordBuild meters a build VM that ran from started to ended.
 	RecordBuild(ctx context.Context, p platformcloud.Placement, started, ended time.Time) error
+	// Publish points the running service placement's generated hostname
+	// at its host and returns the name, or "" when the platform names no
+	// services.
+	Publish(ctx context.Context, orgID, placementID string) (string, error)
+	// Unpublish deletes the service's generated hostname, returning the
+	// name it had, if any.
+	Unpublish(ctx context.Context, orgID, envID, resource string) (string, error)
 }
 
 var _ PlatformHosts = (*platformcloud.Service)(nil)
@@ -280,7 +288,7 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 		}
 		return c, scope, err
 	}
-	b.place = func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, func(context.Context, fc.Record) error, error) {
+	b.place = func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error) {
 		org, project, env, name, err := platformScope(ctx, labels)
 		if err != nil {
 			return nil, fc.Scope{}, nil, err
@@ -291,12 +299,12 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 		if err != nil {
 			return nil, fc.Scope{}, nil, err
 		}
-		applied := func(ctx context.Context, r fc.Record) error {
+		applied := func(ctx context.Context, r fc.Record) (*cpprovider.Endpoint, error) {
 			if runErr := t.Platform.Running(ctx, p.OrgID, p.ID, iid.String(), r.Generation); runErr != nil {
-				return runErr
+				return nil, runErr
 			}
 			t.sweep(ctx, b, labels, p)
-			return nil
+			return t.publish(ctx, c, scope, p, labels, spec, r)
 		}
 		return c, scope, applied, nil
 	}

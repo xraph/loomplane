@@ -158,6 +158,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		return err
 	}
 	if op.Kind != "remove" && op.Kind != "release" {
+		if checkErr := checkPlatformCloudZone(*route, zone); checkErr != nil {
+			return checkErr
+		}
 		if !slices.Contains(zone.ProjectIDs, route.ProjectID) {
 			return ErrNotFound
 		}

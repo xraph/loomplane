@@ -209,6 +209,11 @@ type fakePlatform struct {
 	registry *platformRegistry
 	// builds are the build VMs metered, by placement.
 	builds []string
+	// apex, when set, is where Publish names services.
+	apex string
+	// published are the hosts each Publish pointed a name at.
+	published []string
+	hostnames map[string]string
 }
 
 func (f *fakePlatform) client(hostID string) (*fc.Client, error) {
@@ -348,6 +353,36 @@ func (f *fakePlatform) RecordBuild(_ context.Context, p platformcloud.Placement,
 	}
 	f.builds = append(f.builds, p.ID)
 	return nil
+}
+
+func (f *fakePlatform) Publish(_ context.Context, orgID, placementID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.find(orgID, placementID)
+	if p == nil || p.State != "running" {
+		return "", platformcloud.ErrNotFound
+	}
+	if f.apex == "" {
+		return "", nil
+	}
+	if f.hostnames == nil {
+		f.hostnames = map[string]string{}
+	}
+	name := f.hostnames[p.Resource]
+	if name == "" {
+		name = p.Resource + "-abcdefghijkl." + f.apex
+		f.hostnames[p.Resource] = name
+	}
+	f.published = append(f.published, *p.HostID)
+	return name, nil
+}
+
+func (f *fakePlatform) Unpublish(_ context.Context, _, _, resource string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name := f.hostnames[resource]
+	delete(f.hostnames, resource)
+	return name, nil
 }
 
 // countingIssuer authorizes every operation at the next generation. A build

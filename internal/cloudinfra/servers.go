@@ -198,6 +198,9 @@ type Deps struct {
 	// ACMEDirectory is where Kubernetes routes order certificates. Empty
 	// means Let's Encrypt's production directory.
 	ACMEDirectory string
+	// PlatformRoutes opens the Loomplane Cloud hosts platform services run
+	// on. Nil refuses routes to them.
+	PlatformRoutes PlatformRouteHosts
 }
 
 type Service struct {

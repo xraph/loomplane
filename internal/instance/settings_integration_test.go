@@ -156,6 +156,7 @@ func TestSettings_platformCloudRoundTrip(t *testing.T) {
 		DefaultLimits: PlatformLimits{VCPUs: 8, MemoryMiB: 16384, VMs: 20, ConcurrentBuilds: 3},
 		Apex:          "apps.example.com",
 		Registry:      RegistrySettings{Endpoint: "registry.example.com", Repository: "loomplane", AuthEndpoint: "https://auth.example.com/token"},
+		DNS:           PlatformDNSSettings{Provider: "cloudflare", Zone: "example.com"},
 	}
 	if err = s.SetPlatformCloud(ctx, want); err != nil {
 		t.Fatal(err)
