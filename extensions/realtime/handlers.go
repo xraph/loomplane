@@ -61,7 +61,7 @@ func permission(event string) security.Permission {
 		return security.NodeRead
 	case "cloud_capacity", "cloud_cluster":
 		return security.OrganizationCloudManage
-	case "agent_report":
+	case "agent_report", "release_report":
 		return security.DeploymentRead
 	case "agent_request":
 		return security.AgentUse

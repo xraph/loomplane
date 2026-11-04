@@ -243,6 +243,28 @@ func TestAgentReportEventsNeedDeploymentRead(t *testing.T) {
 	}
 }
 
+// A release report event is about promoting a project's deployments, so it
+// reaches those who can read them in that project and nobody else.
+func TestReleaseReportEventsNeedDeploymentRead(t *testing.T) {
+	for _, event := range []string{"release_report.updated", "release_report.deleted"} {
+		if got := permission(event); got != security.DeploymentRead {
+			t.Fatalf("%s needs %s, want %s", event, got, security.DeploymentRead)
+		}
+	}
+	input := []store.Event{{OrgID: "org_a", ProjectID: "proj_a", Type: "release_report.updated", EntityID: "rrep_1"}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("deployment:read holder: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{denied: security.DeploymentRead}
+	got, err = e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("a person without deployment:read saw a release report: %+v %v", got, err)
+	}
+}
+
 // A task event shows who ran a chat, its status and its tokens, so it
 // reaches only those who manage the workspace's AI; a person follows their
 // own task through the agent's Watch. A request event reaches the person it
