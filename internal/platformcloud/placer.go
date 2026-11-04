@@ -308,8 +308,10 @@ func (s *Service) defaultLimits(ctx context.Context) (Limits, error) {
 	return cfg.DefaultLimits, nil
 }
 
+// limitsOf is what applies to t: its own limits, or defaults. A nil tenant
+// has the defaults.
 func limitsOf(t *Tenant, defaults Limits) Limits {
-	if t.Limits != nil {
+	if t != nil && t.Limits != nil {
 		return *t.Limits
 	}
 	return defaults

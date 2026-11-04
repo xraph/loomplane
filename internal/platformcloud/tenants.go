@@ -54,7 +54,9 @@ type Service struct {
 	meter     metering.Meter
 	usage     func(ctx context.Context, hostID string) ([]fc.UsageSample, error)
 	instances InstanceControl
-	now       func() time.Time
+	// inspect reads a VM on a host; nil asks the host. Tests set it.
+	inspect func(ctx context.Context, hostID string, scope fc.Scope) (fc.Record, error)
+	now     func() time.Time
 	// usageTimeout bounds one host's usage read; zero means defaultUsageTimeout.
 	usageTimeout time.Duration
 }
