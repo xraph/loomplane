@@ -1253,6 +1253,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if plan.Status != StatusReady {
 		return plan.Status, nil
 	}
+	// Fleet decisions require the operation's typed authority and transaction.
+	// A generic Dispatch decision cannot approve or reject managed work.
+	if plan.Kind == KindInstance || plan.ManagedInstanceID != "" {
+		return "", security.ErrForbidden
+	}
 	// Loomplane automation decides only the rollbacks it started.
 	if systemDecision(d) && !automaticRollback(plan) {
 		return "", security.ErrForbidden
