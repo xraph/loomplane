@@ -468,8 +468,11 @@ func (s *Service) Observe(ctx context.Context, sig Signal) (*Observation, error)
 	return obs, nil
 }
 
+// validSignal checks sig, trimming its title and cutting one over
+// maxTitleRunes short with an ellipsis: a detector builds titles from
+// names, and a long name shouldn't cost the incident its report.
 func validSignal(sig *Signal) error {
-	sig.Title = strings.TrimSpace(sig.Title)
+	sig.Title = cutRunes(strings.TrimSpace(sig.Title), maxTitleRunes)
 	switch {
 	case sig.OrgID == "" || sig.ProjectID == "":
 		return invalid("a signal names its workspace and project")
@@ -479,8 +482,8 @@ func validSignal(sig *Signal) error {
 		return invalid("unknown signal %q", sig.Kind)
 	case !slices.Contains(severities, sig.Severity):
 		return invalid("unknown severity %q", sig.Severity)
-	case sig.Title == "" || utf8.RuneCountInString(sig.Title) > maxTitleRunes:
-		return invalid("the title is 1 to %d characters", maxTitleRunes)
+	case sig.Title == "":
+		return invalid("a signal has a title")
 	}
 	return nil
 }

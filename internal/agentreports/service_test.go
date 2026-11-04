@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xraph/shield/scan"
 
@@ -377,7 +378,6 @@ func TestObserveRefusesAnIncompleteSignal(t *testing.T) {
 		"no project":   func(s *Signal) { s.ProjectID = "" },
 		"no component": func(s *Signal) { s.Component = "" },
 		"no title":     func(s *Signal) { s.Title = " " },
-		"long title":   func(s *Signal) { s.Title = strings.Repeat("x", 201) },
 		"bad kind":     func(s *Signal) { s.Kind = "bored" },
 		"bad severity": func(s *Signal) { s.Severity = "urgent" },
 	} {
@@ -386,6 +386,27 @@ func TestObserveRefusesAnIncompleteSignal(t *testing.T) {
 		if _, err := h.svc.Observe(context.Background(), sig); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
 		}
+	}
+}
+
+// A title over 200 characters is cut on a character boundary with an
+// ellipsis, so the incident still gets its report.
+func TestObserveCutsALongTitle(t *testing.T) {
+	h := newMemHarness(t)
+	sig := h.signal(SignalDeploymentFailed, "service:api", "dep_1#0")
+	sig.Title = "  " + strings.Repeat("é", 150) + strings.Repeat("ö", 100) + "  "
+	obs, err := h.svc.Observe(context.Background(), sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Repeat("é", 150) + strings.Repeat("ö", 49) + "…"
+	if got := obs.Report.Title; got != want || !utf8.ValidString(got) || utf8.RuneCountInString(got) != 200 {
+		t.Fatalf("title %q (%d runes)", got, utf8.RuneCountInString(got))
+	}
+	sig = h.signal(SignalDeploymentFailed, "service:web", "dep_2#0")
+	sig.Title = strings.Repeat("x", 200)
+	if obs, err = h.svc.Observe(context.Background(), sig); err != nil || obs.Report.Title != sig.Title {
+		t.Fatalf("a title of exactly 200: %v, %v", obs, err)
 	}
 }
 
