@@ -94,7 +94,10 @@ const platformBase = "/api/v1/platform/cloud"
 type platformUserKey struct{}
 
 func platformUserID(c forge.Context) string {
-	id, _ := c.Request().Context().Value(platformUserKey{}).(string)
+	id, ok := c.Request().Context().Value(platformUserKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return id
 }
 

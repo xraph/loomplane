@@ -153,7 +153,6 @@ func TestPlatformCloudMigrationAllowsPlatformTargetsOnlyWithFlag(t *testing.T) {
 	_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name='Platform 2', revision=5 WHERE id='cloud_plat'`)
 	requireSQLState(t, err, "23514")
 	_ = tx.Rollback(ctx)
-
 }
 
 func TestPlatformCloudMigrationDown(t *testing.T) {

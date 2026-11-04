@@ -61,7 +61,7 @@ func scratchStore(t *testing.T) (*PgStore, *pgdriver.PgDB) {
 	return NewPgStore(pg), pg
 }
 
-func seedHost(t *testing.T, s *PgStore) (*Region, *Host) {
+func seedHost(t *testing.T, s *PgStore) *Host {
 	t.Helper()
 	ctx := t.Context()
 	r := &Region{ID: "reg_1", Name: "eu-west", DisplayName: "EU West", Status: "active"}
@@ -72,7 +72,7 @@ func seedHost(t *testing.T, s *PgStore) (*Region, *Host) {
 	if err := s.CreateHost(ctx, h); err != nil {
 		t.Fatal(err)
 	}
-	return r, h
+	return h
 }
 
 func TestStoreRegionCRUDAndRevisionConflict(t *testing.T) {
@@ -112,7 +112,7 @@ func TestStoreRegionCRUDAndRevisionConflict(t *testing.T) {
 func TestStoreHostCRUDAndRevisionConflict(t *testing.T) {
 	s, _ := scratchStore(t)
 	ctx := t.Context()
-	_, h := seedHost(t, s)
+	h := seedHost(t, s)
 	if h.Revision != 1 {
 		t.Fatalf("revision = %d, want 1", h.Revision)
 	}
@@ -299,12 +299,12 @@ func TestStoreWithPlatformWrite(t *testing.T) {
 	}
 	var wrote bool
 	err = s.WithPlatformWrite(ctx, func(tx driverTx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,platform_owned,revision,created_at,updated_at) VALUES('p1','org1','','Platform',true,1,now(),now())`); err != nil {
-			return err
+		if _, writeErr := tx.Exec(ctx, `INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,platform_owned,revision,created_at,updated_at) VALUES('p1','org1','','Platform',true,1,now(),now())`); writeErr != nil {
+			return writeErr
 		}
 		var on string
-		if err := tx.QueryRow(ctx, `SELECT current_setting('`+platformWriteSetting+`', true)`).Scan(&on); err != nil {
-			return err
+		if writeErr := tx.QueryRow(ctx, `SELECT current_setting('`+platformWriteSetting+`', true)`).Scan(&on); writeErr != nil {
+			return writeErr
 		}
 		wrote = on == "on"
 		return nil

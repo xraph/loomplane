@@ -158,7 +158,7 @@ func (s *Service) preview(ctx context.Context, req Request) (*Ref, error) {
 	if err != nil {
 		return nil, err
 	}
-	hosts, err := s.candidates(ctx, s.store.db, req, region, live.current, live.replaced(ctx, req))
+	hosts, err := s.candidates(ctx, s.store.db, req, region, live.current, live.replaced(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +470,7 @@ func (l livePair) held() (vcpus, memoryMiB int) {
 // replaced is what a Preview leaves out of the host loads, as Reserve
 // would: the waiting replacement, and the current placement unless it is a
 // running service that stays until the new one runs.
-func (l livePair) replaced(ctx context.Context, req Request) []string {
+func (l livePair) replaced(ctx context.Context) []string {
 	var out []string
 	if l.pending != nil {
 		out = append(out, l.pending.ID)
@@ -511,7 +511,10 @@ func WithKeepHost(ctx context.Context, hostID string) context.Context {
 func KeptHost(ctx context.Context) string { return keepHostFrom(ctx) }
 
 func keepHostFrom(ctx context.Context) string {
-	id, _ := ctx.Value(keepHostKey{}).(string)
+	id, ok := ctx.Value(keepHostKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return id
 }
 
@@ -529,7 +532,7 @@ func withVMGone(ctx context.Context, placementID string) context.Context {
 // vmAway reports whether c's VM is off its host while c stays live: the
 // host a move put the service back on, or a repair's.
 func vmAway(ctx context.Context, c *Placement) bool {
-	if id, _ := ctx.Value(vmGoneKey{}).(string); id != "" && id == c.ID {
+	if id, ok := ctx.Value(vmGoneKey{}).(string); ok && id != "" && id == c.ID {
 		return true
 	}
 	return c.HostID != nil && *c.HostID == keepHostFrom(ctx)

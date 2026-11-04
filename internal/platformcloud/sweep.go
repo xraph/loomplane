@@ -133,8 +133,8 @@ func (s *Service) sweepLeftover(ctx context.Context, l Placement) error {
 		if s.instances == nil {
 			return errors.New("no instance control")
 		}
-		if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, l) }); err != nil {
-			return err
+		if checkErr := callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, l) }); checkErr != nil {
+			return checkErr
 		}
 	}
 	return s.Removed(ctx, l.OrgID, l.ID)
@@ -175,7 +175,7 @@ AND l.resource=loomplane_platform_placements.resource AND l.state='released' AND
 	if err != nil {
 		return err
 	}
-	redeploy, _ := s.instances.(Redeployer)
+	redeploy, canRedeploy := s.instances.(Redeployer)
 	var errs []error
 	for _, p := range live {
 		c, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -190,7 +190,7 @@ AND l.resource=loomplane_platform_placements.resource AND l.state='released' AND
 			continue
 		}
 		slog.WarnContext(ctx, "platform cloud placement has no VM on its host", "org", p.OrgID, "placement", p.ID, "state", p.State)
-		if redeploy == nil {
+		if !canRedeploy || redeploy == nil {
 			continue
 		}
 		if repairErr := callStart(withVMGone(ctx, p.ID), func(c context.Context) error { return redeploy.Redeploy(c, p.InstanceID) }); repairErr != nil {
@@ -223,8 +223,8 @@ ORDER BY h.org_id,h.environment_id,h.resource LIMIT `+fmt.Sprint(sweepBatch), s.
 		orphans = append(orphans, k)
 	}
 	rows.Close()
-	if err = rows.Err(); err != nil {
-		return err
+	if checkErr := rows.Err(); checkErr != nil {
+		return checkErr
 	}
 	var errs []error
 	for _, k := range orphans {
@@ -334,13 +334,13 @@ func (s *Service) cleanupBlocks(ctx context.Context) (map[string]CleanupBlock, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close() //nolint:errcheck
+	defer rows.Close()
 	out := map[string]CleanupBlock{}
 	for rows.Next() {
 		var org string
 		var b CleanupBlock
-		if err = rows.Scan(&org, &b.Until, &b.Reason); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&org, &b.Until, &b.Reason); checkErr != nil {
+			return nil, checkErr
 		}
 		out[org] = b
 	}
@@ -359,8 +359,8 @@ func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
 	for _, l := range left {
 		errs = append(errs, s.sweepLeftover(ctx, l))
 	}
-	if err = errors.Join(errs...); err != nil {
-		return err
+	if checkErr := errors.Join(errs...); checkErr != nil {
+		return checkErr
 	}
 	rows, err := s.store.db.Query(ctx, `SELECT environment_id,resource FROM loomplane_platform_hostnames WHERE org_id=$1`, orgID)
 	if err != nil {
@@ -376,8 +376,8 @@ func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
 		names = append(names, [2]string{env, resource})
 	}
 	rows.Close()
-	if err = rows.Err(); err != nil {
-		return err
+	if checkErr := rows.Err(); checkErr != nil {
+		return checkErr
 	}
 	for _, n := range names {
 		if _, unErr := s.unpublish(ctx, orgID, n[0], n[1]); unErr != nil {

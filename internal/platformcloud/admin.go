@@ -93,8 +93,8 @@ func (s *Service) UpdateRegion(ctx context.Context, region string, in RegionUpda
 		}
 		r.Status = *in.Status
 	}
-	if err = s.store.UpdateRegion(ctx, &r); err != nil {
-		return nil, err
+	if checkErr := s.store.UpdateRegion(ctx, &r); checkErr != nil {
+		return nil, checkErr
 	}
 	return &r, nil
 }

@@ -223,8 +223,8 @@ func (s *Service) CheckHost(ctx context.Context, _ /* actor */, hostID string) (
 	default:
 		h.Status = hostPending
 	}
-	if err = s.store.UpdateHost(ctx, h); err != nil {
-		return nil, err
+	if checkErr := s.store.UpdateHost(ctx, h); checkErr != nil {
+		return nil, checkErr
 	}
 	return h, nil
 }
@@ -264,8 +264,8 @@ func (s *Service) DrainHost(ctx context.Context, _ /* actor */, hostID string) (
 		return nil, fmt.Errorf("%w: the host is retired", ErrConflict)
 	}
 	h.Status = hostDraining
-	if err = s.store.UpdateHost(ctx, h); err != nil {
-		return nil, err
+	if checkErr := s.store.UpdateHost(ctx, h); checkErr != nil {
+		return nil, checkErr
 	}
 	return h, nil
 }
@@ -323,8 +323,8 @@ func (s *Service) SetAllotment(ctx context.Context, _ /* actor */, hostID string
 		h.Status = hostPending
 		h.Evidence.CheckedAt = time.Time{}
 	}
-	if err = s.store.UpdateHost(ctx, h); err != nil {
-		return nil, err
+	if checkErr := s.store.UpdateHost(ctx, h); checkErr != nil {
+		return nil, checkErr
 	}
 	return h, nil
 }
