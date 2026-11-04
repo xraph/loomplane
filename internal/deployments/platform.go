@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/xraph/ctrlplane"
@@ -39,9 +40,9 @@ type PlatformHosts interface {
 	// Leftovers are the released placements of service name whose VM may
 	// still be on their host.
 	Leftovers(ctx context.Context, orgID, envID, name string) ([]platformcloud.Placement, error)
-	Running(ctx context.Context, placementID, instance string, generation int64) error
-	Stopped(ctx context.Context, placementID string) error
-	Removed(ctx context.Context, placementID string) error
+	Running(ctx context.Context, orgID, placementID, instance string, generation int64) error
+	Stopped(ctx context.Context, orgID, placementID string) error
+	Removed(ctx context.Context, orgID, placementID string) error
 }
 
 var _ PlatformHosts = (*platformcloud.Service)(nil)
@@ -58,11 +59,15 @@ var _ PlatformHosts = (*platformcloud.Service)(nil)
 // service runs a digest-pinned image, and is reached on its private
 // address until its generated hostname is published.
 type PlatformTarget struct {
-	Ctrl       CtrlPlane
-	Platform   PlatformHosts
-	Authority  fc.Issuer
-	Secrets    ResourceSecrets
-	RouteGuard RuntimeRemovalGuard
+	Ctrl     CtrlPlane
+	Platform PlatformHosts
+	// Credentials reads the organization's connections. Loomplane Cloud
+	// reads only registry connections through it, to pull a workspace's
+	// own image with its own credential, passed to the host per request.
+	Credentials Credentials
+	Authority   fc.Issuer
+	Secrets     ResourceSecrets
+	RouteGuard  RuntimeRemovalGuard
 	// Bindings lists what runs in an environment.
 	Bindings func(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
 
@@ -83,7 +88,7 @@ func (t *PlatformTarget) region(region string) (*OwnedTarget, error) {
 	if e := t.regions[region]; e != nil {
 		return e, nil
 	}
-	e := &OwnedTarget{Cloud: platformProvider, Ctrl: t.Ctrl, Secrets: t.Secrets, RouteGuard: t.RouteGuard, FirecrackerAuthority: t.Authority, Bindings: t.Bindings,
+	e := &OwnedTarget{Cloud: platformProvider, Ctrl: t.Ctrl, Credentials: registryOnly{t.Credentials}, Secrets: t.Secrets, RouteGuard: t.RouteGuard, FirecrackerAuthority: t.Authority, Bindings: t.Bindings,
 		providerKey: platformProvider + "." + region}
 	e.Backend = func(string, string) owned.Backend { return t.newBackend(e, region) }
 	if t.regions == nil {
@@ -135,10 +140,8 @@ func (t *PlatformTarget) Apply(ctx context.Context, job *Job) (*Outcome, error) 
 		return nil, fmt.Errorf("%s isn't a reviewed Loomplane Cloud placement; plan again", a.Name)
 	case len(a.Routes) > 0:
 		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud doesn't run routed releases yet, so %s wasn't deployed.", a.Name))
-	case cfg.BuildTarget == nil || cfg.BuildTarget.Image == "":
-		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud runs digest-pinned images only for now. Give %s an image.", a.Name))
-	case cfg.BuildTarget.Registry != "":
-		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud doesn't pull through a workspace registry connection. Give %s a public image.", a.Name))
+	case cfg.BuildTarget == nil || !pinnedImage(cfg.BuildTarget.Image):
+		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud runs digest-pinned images only for now. Give %s an image pinned with @sha256.", a.Name))
 	}
 	e, err := t.region(a.Region)
 	if err != nil {
@@ -149,6 +152,9 @@ func (t *PlatformTarget) Apply(ctx context.Context, job *Job) (*Outcome, error) 
 	run.Action.Service = &cfg
 	run.Action.ConnectionID = fc.PlatformConnection
 	run.Connection, run.Credential = platformConnection(job.Deployment.OrgID), nil
+	// A workspace's own image pulls through its registry connection; that
+	// is the only connection a platform deployment reads.
+	run.BuildCredentials = registryOnly{job.BuildCredentials}
 	return e.Apply(ctx, &run)
 }
 
@@ -202,6 +208,30 @@ func (t *PlatformTarget) Observe(ctx context.Context, _ *connections.Connection,
 	return e.Observe(ctx, platformConnection(b.OrgID), nil, &bound)
 }
 
+// pinnedImage reports whether image names its content by a sha256 digest.
+func pinnedImage(image string) bool {
+	name, digest, ok := strings.Cut(image, "@")
+	return ok && name != "" && imageDigest.MatchString(digest)
+}
+
+// registryOnly reads an organization's registry connections and nothing
+// else: any other connection, or one of another organization, is refused.
+type registryOnly struct{ inner Credentials }
+
+func (r registryOnly) Credential(ctx context.Context, orgID, connectionID string) (*connections.Connection, []byte, error) {
+	if r.inner == nil {
+		return nil, nil, ErrNoCredential
+	}
+	c, raw, err := r.inner.Credential(ctx, orgID, connectionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if c == nil || c.Cloud != connections.Registry || c.OrgID != orgID || c.ID != connectionID {
+		return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
+	}
+	return c, raw, nil
+}
+
 func (t *PlatformTarget) Locate(b *planning.Binding) string {
 	return "the Loomplane Cloud workload " + b.ExternalID
 }
@@ -249,7 +279,7 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 			return nil, fc.Scope{}, nil, err
 		}
 		applied := func(ctx context.Context, r fc.Record) error {
-			if runErr := t.Platform.Running(ctx, p.ID, iid.String(), r.Generation); runErr != nil {
+			if runErr := t.Platform.Running(ctx, p.OrgID, p.ID, iid.String(), r.Generation); runErr != nil {
 				return runErr
 			}
 			t.sweep(ctx, b, labels, p)
@@ -281,10 +311,10 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 				return nil
 			}
 			// Someone stopped it, so a restore leaves it stopped.
-			return t.Platform.Stopped(ctx, p.ID)
+			return t.Platform.Stopped(ctx, p.OrgID, p.ID)
 		}
 		if p != nil {
-			if removedErr := t.Platform.Removed(ctx, p.ID); removedErr != nil {
+			if removedErr := t.Platform.Removed(ctx, p.OrgID, p.ID); removedErr != nil {
 				return removedErr
 			}
 		}
@@ -318,7 +348,7 @@ func (t *PlatformTarget) removeLeftover(ctx context.Context, p *platformcloud.Pl
 			return err
 		}
 	}
-	return t.Platform.Removed(ctx, p.ID)
+	return t.Platform.Removed(ctx, p.OrgID, p.ID)
 }
 
 // sweep removes, once a service is up on its placement live, the VMs it
@@ -340,7 +370,7 @@ func (t *PlatformTarget) sweep(ctx context.Context, b *firecrackerBackend, label
 		}
 		var leftErr error
 		if l.HostID != nil && live.HostID != nil && *l.HostID == *live.HostID && l.InstanceID == live.InstanceID {
-			leftErr = t.Platform.Removed(ctx, l.ID)
+			leftErr = t.Platform.Removed(ctx, l.OrgID, l.ID)
 		} else {
 			leftErr = t.removeLeftover(ctx, l, func(c *fc.Client, scope fc.Scope) error { return b.mutateOn(ctx, c, scope, labels, "remove") })
 		}

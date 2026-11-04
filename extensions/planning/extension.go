@@ -403,7 +403,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// organization it isn't enabled for, which is every organization on an
 	// instance with no platform hosts.
 	platformCloud := platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil)
-	executors[platformcloud.RuntimePlatform] = &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
+	executors[platformcloud.RuntimePlatform] = &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Credentials: clouds, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, guard: dialGuard, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}

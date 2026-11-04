@@ -78,7 +78,7 @@ func TestSessionReservesAndOpensThePlacedHost(t *testing.T) {
 		t.Fatalf("attach from another project: %v", err)
 	}
 
-	if err = e.svc.Running(ctx, p.ID, "inst_web", 7); err != nil {
+	if err = e.svc.Running(ctx, "org_a", p.ID, "inst_web", 7); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPlacement(t, e, p.ID); got.State != "running" || got.Generation != 7 || got.InstanceID != "inst_web" {
@@ -113,13 +113,13 @@ func TestSessionAgainLeavesTheOldRowForTheSweep(t *testing.T) {
 		t.Fatalf("open: %v %+v", err, scope)
 	}
 	oc.Close()
-	if err = e.svc.Removed(ctx, first.ID); err != nil {
+	if err = e.svc.Removed(ctx, "org_a", first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if left, err = e.svc.Leftovers(ctx, "org_a", "env_1", "web"); err != nil || len(left) != 0 {
 		t.Fatalf("leftovers after removal %v %+v", err, left)
 	}
-	if err = e.svc.Removed(ctx, second.ID); err != nil {
+	if err = e.svc.Removed(ctx, "org_a", second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPlacement(t, e, second.ID); got.State != "released" || got.InstanceID != "" || got.HostID == nil {
@@ -138,7 +138,7 @@ func TestStoppedIsNotRestored(t *testing.T) {
 	if _, err = e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET state='running',restore_running=true WHERE id=$1`, p.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = e.svc.Stopped(ctx, p.ID); err != nil {
+	if err = e.svc.Stopped(ctx, "org_a", p.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPlacement(t, e, p.ID); got.State != "stopped" || got.RestoreRunning {
@@ -173,5 +173,34 @@ func TestSessionRefusesAnotherTenant(t *testing.T) {
 	}
 	if _, err := e.svc.Leftovers(ctx, "org_a", "env_1", "web"); err == nil {
 		t.Fatal("leftovers for another tenant")
+	}
+}
+
+// The setters only touch the organization's own placement.
+func TestPlacementSettersAreOrgScoped(t *testing.T) {
+	e, _ := readyHost(t)
+	ctx := t.Context()
+	c, _, p, err := e.svc.Session(ctx, "org_a", "prj_1", "env_1", "inst_web", webRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if err = e.svc.Running(ctx, "org_b", p.ID, "inst_web", 3); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("running for another org: %v", err)
+	}
+	if err = e.svc.Stopped(ctx, "org_b", p.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stopped for another org: %v", err)
+	}
+	if err = e.svc.Removed(ctx, "org_b", p.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed for another org: %v", err)
+	}
+	if got := readPlacement(t, e, p.ID); got.State != "reserved" || got.InstanceID != "inst_web" {
+		t.Fatalf("another org changed %+v", got)
+	}
+	if err = e.svc.Removed(ctx, "org_a", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Running(ctx, "org_a", p.ID, "inst_web", 3); !errors.Is(err, ErrConflict) {
+		t.Fatalf("running a released placement: %v", err)
 	}
 }

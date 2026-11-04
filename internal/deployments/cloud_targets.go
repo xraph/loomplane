@@ -43,7 +43,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	// A Loomplane Cloud pin names no connection, so it has no account
 	// identity to verify; its target and room are checked below.
 	platform := pin.Platform != nil
-	if platform && (pin.Default || pin.ConnectionID != "" || a.ConnectionID != "" || pin.PoolID != "" || pin.Platform.Region != pin.Region) {
+	if platform && (a.Provider != platformProvider || pin.Provider != platformProvider || pin.Default || pin.ConnectionID != "" || a.ConnectionID != "" || pin.PoolID != "" || pin.Platform.Region != pin.Region) {
 		return stale("is not a Loomplane Cloud placement")
 	}
 	if pin.AccountIdentity == "" && !platform || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {

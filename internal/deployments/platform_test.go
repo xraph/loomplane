@@ -38,11 +38,12 @@ import (
 
 // platformDriver runs nothing: every VM it is asked for is up and ready.
 type platformDriver struct {
-	mu      sync.Mutex
-	hostID  string
-	started int
-	stopped int
-	removed int
+	mu       sync.Mutex
+	hostID   string
+	registry [][]byte // what each configured VM was given to pull with
+	started  int
+	stopped  int
+	removed  int
 }
 
 func (d *platformDriver) Check(context.Context) (fc.Capabilities, error) {
@@ -55,7 +56,10 @@ func (d *platformDriver) Start(context.Context, fc.VM, fc.Spec) error {
 	return nil
 }
 func (d *platformDriver) Inspect(context.Context, fc.VM) (bool, error) { return true, nil }
-func (d *platformDriver) Configure(context.Context, fc.VM, fc.Request) (fc.GuestStatus, error) {
+func (d *platformDriver) Configure(_ context.Context, _ fc.VM, q fc.Request) (fc.GuestStatus, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.registry = append(d.registry, q.Values.RegistryConfig)
 	return fc.GuestStatus{Ready: true}, nil
 }
 func (d *platformDriver) Stop(context.Context, fc.VM) error {
@@ -234,35 +238,35 @@ func (f *fakePlatform) Leftovers(_ context.Context, orgID, envID, name string) (
 	return out, nil
 }
 
-func (f *fakePlatform) find(id string) *platformcloud.Placement {
+func (f *fakePlatform) find(orgID, id string) *platformcloud.Placement {
 	for _, p := range f.placements {
-		if p.ID == id {
+		if p.ID == id && p.OrgID == orgID {
 			return p
 		}
 	}
 	return nil
 }
 
-func (f *fakePlatform) Running(_ context.Context, placementID, instance string, generation int64) error {
+func (f *fakePlatform) Running(_ context.Context, orgID, placementID, instance string, generation int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.find(placementID)
+	p := f.find(orgID, placementID)
 	p.State, p.InstanceID, p.Generation, p.RestoreRunning = "running", instance, generation, false
 	return nil
 }
 
-func (f *fakePlatform) Stopped(_ context.Context, placementID string) error {
+func (f *fakePlatform) Stopped(_ context.Context, orgID, placementID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.find(placementID)
+	p := f.find(orgID, placementID)
 	p.State, p.RestoreRunning = "stopped", false
 	return nil
 }
 
-func (f *fakePlatform) Removed(_ context.Context, placementID string) error {
+func (f *fakePlatform) Removed(_ context.Context, orgID, placementID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.find(placementID)
+	p := f.find(orgID, placementID)
 	p.State, p.InstanceID = "released", ""
 	return nil
 }
@@ -414,11 +418,58 @@ func TestPlatformDeployUsesPlatformScope(t *testing.T) {
 	}
 }
 
+// workspaceRegistry is web's own registry connection, and the image it
+// pulls from there.
+var workspaceRegistry = &connections.Connection{ID: "conn_registry", OrgID: "org_a", Cloud: connections.Registry, Status: connections.StatusReady,
+	Details: map[string]string{"endpoint": "https://registry.example.com", "repository": "team", "pull": "ready"}}
+
+const workspaceImage = "registry.example.com/team/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+// registryJob deploys web from the workspace's registry. Reading any
+// connection but that registry fails the test; reads counts the reads.
+func (f *platformFixture) registryJob(t *testing.T, conns map[string]*connections.Connection, reads *int) *Job {
+	t.Helper()
+	job := f.job(t)
+	read := buildCredentialFunc(func(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
+		*reads++
+		c := conns[id]
+		if c == nil {
+			t.Errorf("a platform deployment read connection %s of %s", id, org)
+			return nil, nil, connections.ErrNotFound
+		}
+		return c, []byte(`{"token":"workspace-pull-token"}`), nil
+	})
+	job.BuildCredentials = read
+	f.target.Credentials = read
+	f.target.regions = nil
+	f.target.Ctrl.Providers = cpprovider.NewRegistry()
+	settings := planning.ReviewedConnectionSettings(connections.Registry, workspaceRegistry.Details)
+	job.Action.Service.BuildTarget = &planning.BuildTarget{BuilderCloud: "platform", Builder: "platform", Image: workspaceImage, Registry: "conn_registry", RegistrySettings: settings}
+	f.instances.value.Services[0].Image = workspaceImage
+	return job
+}
+
+// A platform deployment reads no connection of the organization's but the
+// registry its image is pulled from, and refuses anything else named as one.
 func TestPlatformDeployNeverTouchesOrgConnections(t *testing.T) {
 	f := newPlatformFixture(t)
 	f.deploy(t) // the job's credentials fail the test if read
 	backend, err := f.target.backend("fra")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = backend.Status(t.Context(), f.iid, f.instances.value.Labels); err != nil {
+		t.Fatal(err)
+	}
+	// With a workspace registry, that registry is the only connection read.
+	reads := 0
+	if _, err = f.target.Apply(t.Context(), f.registryJob(t, map[string]*connections.Connection{"conn_registry": workspaceRegistry}, &reads)); err != nil {
+		t.Fatal(err)
+	}
+	if reads == 0 {
+		t.Fatal("the workspace registry was never read")
+	}
+	if backend, err = f.target.backend("fra"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = backend.Status(t.Context(), f.iid, f.instances.value.Labels); err != nil {
@@ -434,6 +485,55 @@ func TestPlatformDeployNeverTouchesOrgConnections(t *testing.T) {
 	labels := maps2(f.instances.value.Labels, owned.LabelConnection, "conn_org")
 	if _, err = backend.Status(t.Context(), f.iid, labels); err == nil {
 		t.Fatal("status through an organization's connection label")
+	}
+}
+
+// A workspace's own image pulls with its own registry credential, handed to
+// the host with the request.
+func TestPlatformDeployPullsFromWorkspaceRegistry(t *testing.T) {
+	f := newPlatformFixture(t)
+	reads := 0
+	if _, err := f.target.Apply(t.Context(), f.registryJob(t, map[string]*connections.Connection{"conn_registry": workspaceRegistry}, &reads)); err != nil {
+		t.Fatal(err)
+	}
+	d := f.hosts["host_a"].driver
+	if len(d.registry) != 1 || !strings.Contains(string(d.registry[0]), "registry.example.com") || !strings.Contains(string(d.registry[0]), "workspace-pull-token") {
+		t.Fatalf("host was given %q", d.registry)
+	}
+	if records := f.hosts["host_a"].records(t); len(records) != 1 || records[0].Current == nil || records[0].Current.Spec.Image != workspaceImage {
+		t.Fatalf("host keeps %+v", records)
+	}
+}
+
+// A connection that isn't a registry, or is another organization's, is never
+// used as one.
+func TestPlatformDeployRefusesNonRegistryConnection(t *testing.T) {
+	for name, c := range map[string]*connections.Connection{
+		"other cloud": {ID: "conn_registry", OrgID: "org_a", Cloud: connections.Vercel, Status: connections.StatusReady, Details: workspaceRegistry.Details},
+		"other org":   {ID: "conn_registry", OrgID: "org_b", Cloud: connections.Registry, Status: connections.StatusReady, Details: workspaceRegistry.Details},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPlatformFixture(t)
+			reads := 0
+			if _, err := f.target.Apply(t.Context(), f.registryJob(t, map[string]*connections.Connection{"conn_registry": c}, &reads)); err == nil {
+				t.Fatal("deployed through a connection that isn't the workspace's registry")
+			}
+			if len(f.hosts["host_a"].records(t)) != 0 {
+				t.Fatal("the host ran something")
+			}
+		})
+	}
+}
+
+// Loomplane Cloud runs only images named by a sha256 digest.
+func TestPlatformDeployNeedsDigestPinnedImage(t *testing.T) {
+	for _, image := range []string{"", "docker.io/team/web:latest", "docker.io/team/web@sha256:short", "@sha256:" + strings.Repeat("a", 64)} {
+		f := newPlatformFixture(t)
+		job := f.job(t)
+		job.Action.Service.BuildTarget.Image = image
+		if _, err := f.target.Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
+			t.Fatalf("%q: %v", image, err)
+		}
 	}
 }
 
@@ -633,5 +733,28 @@ func TestRunnerRevalidatesPlatformTarget(t *testing.T) {
 				t.Fatal("stale placement reached the executor")
 			}
 		})
+	}
+}
+
+func TestRegistryOnlyCredentials(t *testing.T) {
+	conns := map[string]*connections.Connection{
+		"conn_registry": workspaceRegistry,
+		"conn_vercel":   {ID: "conn_vercel", OrgID: "org_a", Cloud: connections.Vercel},
+		"conn_foreign":  {ID: "conn_foreign", OrgID: "org_b", Cloud: connections.Registry},
+		"conn_renamed":  {ID: "conn_other", OrgID: "org_a", Cloud: connections.Registry},
+	}
+	r := registryOnly{buildCredentialFunc(func(_ context.Context, _, id string) (*connections.Connection, []byte, error) {
+		return conns[id], []byte("secret"), nil
+	})}
+	if c, raw, err := r.Credential(t.Context(), "org_a", "conn_registry"); err != nil || c != workspaceRegistry || string(raw) != "secret" {
+		t.Fatalf("registry read: %v", err)
+	}
+	for _, id := range []string{"conn_vercel", "conn_foreign", "conn_renamed", "conn_missing"} {
+		if c, raw, err := r.Credential(t.Context(), "org_a", id); err == nil || c != nil || raw != nil {
+			t.Fatalf("%s was read through the registry-only credentials", id)
+		}
+	}
+	if _, _, err := (registryOnly{}).Credential(t.Context(), "org_a", "conn_registry"); err == nil {
+		t.Fatal("no credential source answered")
 	}
 }

@@ -3,6 +3,7 @@ package platformcloud
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -166,30 +167,49 @@ ORDER BY created_at,id`, orgID, envID, name)
 	return out, sessionError(ctx, "leftovers", orgID, "", rows.Err())
 }
 
-// Running records that the placement's VM is up as instance at generation.
-func (s *Service) Running(ctx context.Context, placementID, instance string, generation int64) error {
-	if err := s.SetState(ctx, placementID, stateRunning); err != nil {
-		return err
-	}
-	_, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET instance_id=$2,generation=$3,restore_running=false,updated_at=now() WHERE id=$1`, placementID, instance, generation)
-	return storeError(err)
+// Running records that the organization's placement has its VM up as
+// instance at generation.
+func (s *Service) Running(ctx context.Context, orgID, placementID, instance string, generation int64) error {
+	return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false`, instance, generation)
 }
 
-// Stopped records that someone stopped the placement's VM. A user stop is
-// never restarted by a restore, so restore_running is cleared.
-func (s *Service) Stopped(ctx context.Context, placementID string) error {
-	if err := s.SetState(ctx, placementID, stateStopped); err != nil {
-		return err
-	}
-	_, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET restore_running=false,updated_at=now() WHERE id=$1`, placementID)
-	return storeError(err)
+// Stopped records that someone stopped the organization's placement's VM.
+// A user stop is never restarted by a restore, so restore_running is
+// cleared.
+func (s *Service) Stopped(ctx context.Context, orgID, placementID string) error {
+	return s.setLive(ctx, orgID, placementID, `state='stopped',suspended_at=NULL,restore_running=false`)
 }
 
-// Removed records that the placement's VM is gone from its host: the
-// placement is released, if it wasn't, and no longer names an instance, so
-// nothing tries to remove it again.
-func (s *Service) Removed(ctx context.Context, placementID string) error {
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,instance_id='',updated_at=now() WHERE id=$1`, placementID, stateReleased)
+// setLive updates a placement of the organization that isn't released. A
+// released one is ErrConflict; one that isn't the organization's is
+// ErrNotFound.
+func (s *Service) setLive(ctx context.Context, orgID, placementID, set string, args ...any) error {
+	if err := checkTenant(ctx, orgID); err != nil {
+		return err
+	}
+	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET `+set+`,updated_at=now() WHERE id=$1 AND org_id=$2 AND state<>'released'`,
+		append([]any{placementID, orgID}, args...)...)
+	if err != nil {
+		return storeError(err)
+	}
+	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
+		return nErr
+	}
+	var one int
+	if existsErr := storeError(s.store.db.QueryRow(ctx, `SELECT 1 FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2`, placementID, orgID).Scan(&one)); existsErr != nil {
+		return existsErr
+	}
+	return fmt.Errorf("%w: the placement is released", ErrConflict)
+}
+
+// Removed records that the organization's placement's VM is gone from its
+// host: the placement is released, if it wasn't, and no longer names an
+// instance, so nothing tries to remove it again.
+func (s *Service) Removed(ctx context.Context, orgID, placementID string) error {
+	if err := checkTenant(ctx, orgID); err != nil {
+		return err
+	}
+	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$3,instance_id='',updated_at=now() WHERE id=$1 AND org_id=$2`, placementID, orgID, stateReleased)
 	if err != nil {
 		return storeError(err)
 	}
