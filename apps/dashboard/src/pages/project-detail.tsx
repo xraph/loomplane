@@ -466,20 +466,33 @@ function Body({
         ))}
         actions={
           <>
-            {can("deployment:create") && isReady(project.status) && (
+            {project.deploymentMode === "fleet" && (
               <Button
+                variant="outline"
                 nativeButton={false}
                 render={
-                  <Link
-                    to="/deployments/new"
-                    search={{ project: project.id, environment: undefined }}
-                  />
+                  <Link to="/projects/$id/fleet" params={{ id: project.id }} />
                 }
               >
-                <RocketIcon />
-                Deploy
+                Instance fleet
               </Button>
             )}
+            {project.deploymentMode !== "fleet" &&
+              can("deployment:create") &&
+              isReady(project.status) && (
+                <Button
+                  nativeButton={false}
+                  render={
+                    <Link
+                      to="/deployments/new"
+                      search={{ project: project.id, environment: undefined }}
+                    />
+                  }
+                >
+                  <RocketIcon />
+                  Deploy
+                </Button>
+              )}
             <PageMenu label="More project actions">
               {hasRepositories && mayRun && (
                 <DropdownMenuItem
