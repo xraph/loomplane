@@ -221,6 +221,28 @@ func TestNotificationEventsWithoutAUserReachNobody(t *testing.T) {
 	}
 }
 
+// A report event is about a project's deployments, so it reaches those who
+// can read them in that project and nobody else.
+func TestAgentReportEventsNeedDeploymentRead(t *testing.T) {
+	for _, event := range []string{"agent_report.updated", "agent_report.deleted"} {
+		if got := permission(event); got != security.DeploymentRead {
+			t.Fatalf("%s needs %s, want %s", event, got, security.DeploymentRead)
+		}
+	}
+	input := []store.Event{{OrgID: "org_a", ProjectID: "proj_a", Type: "agent_report.updated", EntityID: "arep_1"}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("deployment:read holder: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{denied: security.DeploymentRead}
+	got, err = e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("a person without deployment:read saw a report: %+v %v", got, err)
+	}
+}
+
 // A task event shows who ran a chat, its status and its tokens, so it
 // reaches only those who manage the workspace's AI; a person follows their
 // own task through the agent's Watch. A request event reaches the person it
