@@ -43,7 +43,10 @@ func (e *Extension) platformGate() forge.Middleware {
 }
 
 func platformUserID(c forge.Context) string {
-	id, _ := c.Request().Context().Value(platformUserKey{}).(string)
+	id, ok := c.Request().Context().Value(platformUserKey{}).(string)
+	if !ok {
+		return ""
+	}
 	return id
 }
 

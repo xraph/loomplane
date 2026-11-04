@@ -75,7 +75,7 @@ type CloudList struct {
 	Clouds []CloudForm `json:"clouds"`
 }
 
-func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
+func (e *Extension) clouds(ctx context.Context, _ security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
 		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true,
 			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}},

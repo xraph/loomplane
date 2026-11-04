@@ -178,7 +178,6 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	if replaced.ID != conn.ID || replaced.Method != connections.MethodOAuth {
 		t.Fatalf("replaced %+v", replaced)
 	}
-
 }
 
 // fakeMemberDigitalOcean is a DigitalOcean that honors one app and signs anyone
