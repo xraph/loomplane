@@ -983,3 +983,46 @@ func TestCancelByTheRequesterNeedsAgentUse(t *testing.T) {
 		t.Fatalf("workspace-wide: %v", err)
 	}
 }
+
+// CancelTask cancels a task for a caller that holds no person, such as
+// release preparation when someone who may approve the release stops a
+// preparation another person asked for: the task is cancelled and its run
+// ends in cortex. Another workspace's task reads as not found and is left
+// alone, and a finished task can't be cancelled again.
+func TestCancelTaskNeedsNoPerson(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
+	mustMove(t, w, task, StatusRunning)
+	theirs := w.start(t, StartInput{OrgID: orgB, OnBehalfOf: personPtr(orgB, bob)})
+
+	if err := w.svc.CancelTask(ctx, orgB, task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another workspace's ID: %v, want ErrNotFound", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status != StatusRunning {
+		t.Fatalf("a cancel from another workspace moved the task to %s", got.Status)
+	}
+	if err := w.svc.CancelTask(ctx, orgA, "atask_nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown task: %v, want ErrNotFound", err)
+	}
+	if err := w.svc.CancelTask(ctx, "", task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no workspace: %v, want ErrNotFound", err)
+	}
+
+	if err := w.svc.CancelTask(ctx, orgA, task.ID); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusCancelled || got.FinishedAt == nil {
+		t.Fatalf("the task after: %+v", got)
+	}
+	if _, _, cancels, _, _ := w.engine.calls(); !slices.Equal(cancels, []string{task.RunID}) {
+		t.Fatalf("cancelled runs %v, want %s", cancels, task.RunID)
+	}
+	if err := w.svc.CancelTask(ctx, orgA, task.ID); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("a finished task: %v, want ErrNotCancelable", err)
+	}
+	if got := w.store.task(t, theirs.ID); got.Status != StatusQueued {
+		t.Fatalf("the other workspace's task is %s", got.Status)
+	}
+}

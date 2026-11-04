@@ -595,6 +595,32 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, taskID strin
 	return nil
 }
 
+// CancelTask cancels one open task of the workspace for a caller that
+// holds no person. It checks no permission: the caller has decided who may
+// stop the task, as release preparation does for someone who may approve
+// production but didn't ask for the release. Another workspace's task, or
+// none, is ErrNotFound; a finished one ErrNotCancelable.
+func (s *Service) CancelTask(ctx context.Context, orgID, taskID string) error {
+	if orgID == "" || taskID == "" {
+		return ErrNotFound
+	}
+	t, err := s.store.Get(ctx, orgID, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(t.Status) {
+		return ErrNotCancelable
+	}
+	moved, err := s.cancel(ctx, t)
+	if err != nil {
+		return err
+	}
+	if !moved {
+		return ErrNotCancelable
+	}
+	return nil
+}
+
 // CancelAll cancels every open task of the workspace: the agent turned
 // off. It's agentsettings.Canceller.
 func (s *Service) CancelAll(ctx context.Context, orgID string) error {
