@@ -673,19 +673,21 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (
 			s.warn("releaseprep: couldn't cancel release report "+r.ID+"'s task", cerr)
 		}
 	}
-	s.audit(ctx, "release.cancel", "info", p, r.ProjectID, map[string]any{"report_id": r.ID, "task_id": r.TaskID, "requester": requester})
+	s.audit(ctx, "release.cancel", "info", p, r.ProjectID, map[string]any{"report_id": r.ID, "task_id": r.TaskID, "requester": p.UserID == r.RequestedBy})
 	return s.Get(ctx, p, id)
 }
 
 // mayCancel checks p may cancel r: deployment:approve on the project, or
-// being its requester with agent:use there. requester says which applied.
+// being its requester with agent:use there. requester is true only when
+// the second applied: an approver, requester or not, has the run stopped
+// the way an approver stops it, which needs nothing else of them.
 func (s *Service) mayCancel(ctx context.Context, p security.Principal, r *ReleaseReport) (requester bool, err error) {
 	if rerr := s.require(ctx, p, security.DeploymentRead, r.ProjectID); rerr != nil {
 		return false, rerr
 	}
 	err = s.require(ctx, p, security.DeploymentApprove, r.ProjectID)
 	if err == nil {
-		return p.UserID == r.RequestedBy, nil
+		return false, nil
 	}
 	if !errors.Is(err, security.ErrForbidden) || p.UserID != r.RequestedBy {
 		return false, err

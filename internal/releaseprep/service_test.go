@@ -363,7 +363,9 @@ func TestCancelLeavesThePlan(t *testing.T) {
 	if got.Status != StatusCancelled || got.State != StateCancelled || !strings.Contains(got.StateReason, "usr_dev") {
 		t.Fatalf("report %s/%s %q", got.Status, got.State, got.StateReason)
 	}
-	if !slices.Equal(r.runs.cancels, []string{"usr_dev atask_1"}) || len(r.runs.cancelTasks) != 0 {
+	// The requester can approve too, so the run is stopped the way an
+	// approver stops it, needing nothing else of them.
+	if !slices.Equal(r.runs.cancelTasks, []string{"org_a atask_1"}) || len(r.runs.cancels) != 0 {
 		t.Fatalf("cancels %v, cancel tasks %v", r.runs.cancels, r.runs.cancelTasks)
 	}
 	if r.planStore.plans["plan_a"].Status != planning.StatusReady {
@@ -375,6 +377,23 @@ func TestCancelLeavesThePlan(t *testing.T) {
 	// A cancelled report can't be cancelled again.
 	if _, err = r.svc.Cancel(context.Background(), dev, rep.ID); !errors.Is(err, ErrNotCancelable) {
 		t.Fatalf("again: %v, want ErrNotCancelable", err)
+	}
+}
+
+// A requester who can approve but no longer holds agent:use still stops
+// the run: approve is what let them cancel, so the run is cancelled the way
+// an approver cancels it, not through 3a's requester path that needs
+// agent:use.
+func TestCancelByAnApprovingRequesterStopsTheRun(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusRunning, DecisionNone)
+	r.w.authz.refuse = map[string]bool{"usr_dev " + security.AgentUse.Name(): true}
+	got, err := r.svc.Cancel(context.Background(), dev, rep.ID)
+	if err != nil || got.Status != StatusCancelled {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if !slices.Equal(r.runs.cancelTasks, []string{"org_a atask_1"}) || len(r.runs.cancels) != 0 {
+		t.Fatalf("cancels %v, cancel tasks %v: the run was left going", r.runs.cancels, r.runs.cancelTasks)
 	}
 }
 
