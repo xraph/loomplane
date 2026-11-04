@@ -136,6 +136,11 @@ func (w *world) collect(diffs []SourceDiff) *ReadinessEvidence {
 
 type fakePlans struct {
 	mu          sync.Mutex
+	open        []*planning.Plan // what List answers, newest first
+	byID        map[string]*planning.Plan
+	getErr      error
+	creates     int
+	reads       int // List and Get calls: reads as a principal
 	deployed    map[string][]*planning.DeployedRepository
 	deployedErr error
 	pinsMatch   bool
@@ -145,15 +150,39 @@ type fakePlans struct {
 }
 
 func (f *fakePlans) Create(context.Context, security.Principal, string, planning.CreatePlanInput) (*planning.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.creates++
 	return nil, errors.New("not in this test")
 }
 
-func (f *fakePlans) Get(context.Context, security.Principal, string) (*planning.Plan, error) {
-	return nil, errors.New("not in this test")
+func (f *fakePlans) Get(_ context.Context, _ security.Principal, id string) (*planning.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if p, ok := f.byID[id]; ok {
+		c := *p
+		return &c, nil
+	}
+	return nil, planning.ErrNotFound
 }
 
-func (f *fakePlans) List(context.Context, security.Principal, string, string, page.Cursor, int) ([]*planning.Plan, page.Cursor, error) {
-	return nil, page.Cursor{}, errors.New("not in this test")
+func (f *fakePlans) List(_ context.Context, _ security.Principal, _, _ string, _ page.Cursor, limit int) ([]*planning.Plan, page.Cursor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	out := []*planning.Plan{}
+	for _, p := range f.open {
+		if len(out) == limit {
+			break
+		}
+		c := *p
+		out = append(out, &c)
+	}
+	return out, page.Cursor{}, nil
 }
 
 func (f *fakePlans) Deployed(_ context.Context, _ security.Principal, _, environment string) ([]*planning.DeployedRepository, error) {
@@ -250,6 +279,7 @@ type fakeProjects struct {
 	w       *world
 	err     error
 	envsErr error
+	envs    []*projects.Environment // nil: the world's staging and production
 }
 
 func (f *fakeProjects) Get(context.Context, security.Principal, string) (*projects.Project, error) {
@@ -263,25 +293,35 @@ func (f *fakeProjects) Environments(context.Context, security.Principal, string)
 	if f.envsErr != nil {
 		return nil, f.envsErr
 	}
+	if f.envs != nil {
+		return f.envs, nil
+	}
 	return []*projects.Environment{f.w.staging, f.w.production}, nil
 }
 
 type fakeBudgets struct {
+	mu    sync.Mutex
 	state agentsettings.BudgetState
 	err   error
+	off   bool // the workspace turned its agent off
 }
 
 func (f *fakeBudgets) Budget(context.Context, string) (agentsettings.BudgetState, error) {
 	return f.state, f.err
 }
 
-func (f *fakeBudgets) Enabled(context.Context, string) (bool, error) { return true, nil }
+func (f *fakeBudgets) Enabled(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.off, nil
+}
 
 // fakeAuthz holds deployment:approve for the users in approvers, and
 // records every check.
 type fakeAuthz struct {
 	mu     sync.Mutex
 	deny   map[string]bool // user IDs refused
+	refuse map[string]bool // "<user> <resource:action>" refused
 	err    error
 	checks []authzCheck
 }
@@ -299,7 +339,7 @@ func (f *fakeAuthz) Require(_ context.Context, p security.Principal, perm securi
 	if f.err != nil {
 		return f.err
 	}
-	if f.deny[p.UserID] {
+	if f.deny[p.UserID] || f.refuse[p.UserID+" "+perm.Name()] {
 		return security.ErrForbidden
 	}
 	return nil
