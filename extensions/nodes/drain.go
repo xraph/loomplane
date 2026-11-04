@@ -37,24 +37,34 @@ func (NodeWorkloadList) ForgeEnvelope() forge.EnvelopeDef {
 func (e *Extension) serveNodeServers(infra *cloudinfra.Service, placed nodes.WorkloadReader) {
 	e.drains = infra
 	e.svc.Placed = placed
-	adoptions, ok := infra.Store.(nodeAdoptionReader)
+	servers, ok := infra.Store.(serverReader)
 	if !ok || infra.NodeConnections == nil {
-		e.Logger().Warn("Cloud infrastructure keeps no node adoptions here, so nodes have no servers to drain")
+		e.Logger().Warn("Cloud infrastructure can't list servers by connection here, so nodes have no servers to drain")
 		return
 	}
-	e.svc.Servers = nodeServers{adoptions: adoptions, servers: infra.Store, conns: infra.NodeConnections}
+	// The adoption is only a hint; a store that keeps none still finds the
+	// server through the node's connections.
+	found := nodeServers{servers: servers, conns: infra.NodeConnections}
+	if adoptions, keeps := infra.Store.(nodeAdoptionReader); keeps {
+		found.adoptions = adoptions
+	}
+	e.svc.Servers = found
 }
 
 type nodeAdoptionReader interface {
 	GetNodeAdoption(ctx context.Context, orgID, nodeID string) (*cloudinfra.NodeAdoption, error)
 }
 
+// serverReader lists an organization's servers that run on a connection.
+// *cloudinfra.PgStore is one.
 type serverReader interface {
-	GetServer(ctx context.Context, org, cloud, id string) (*cloudinfra.Server, error)
+	RuntimeServers(ctx context.Context, org string) ([]*cloudinfra.Server, error)
 }
 
-// nodeServers finds a node's Cloud server through its adoption, and checks
-// that the server still reaches the node through one of its connections.
+// nodeServers finds a node's Cloud server: the one that runs on one of the
+// node's connections. A node adopted by review, by hand or by its join
+// token is found the same way. The adoption, when there is one, only says
+// which to prefer if several do.
 type nodeServers struct {
 	adoptions nodeAdoptionReader
 	servers   serverReader
@@ -62,34 +72,50 @@ type nodeServers struct {
 }
 
 func (s nodeServers) Server(ctx context.Context, orgID, nodeID string) (*nodes.NodeServer, error) {
-	a, err := s.adoptions.GetNodeAdoption(ctx, orgID, nodeID)
-	if errors.Is(err, cloudinfra.ErrNotFound) {
-		return nil, nodes.ErrNoServer
-	}
-	if err != nil {
-		return nil, err
-	}
-	if a.CloudID == "" || a.ServerID == "" {
-		return nil, nodes.ErrNoServer
-	}
-	srv, err := s.servers.GetServer(ctx, orgID, a.CloudID, a.ServerID)
-	if errors.Is(err, cloudinfra.ErrNotFound) {
-		return nil, nodes.ErrNoServer
-	}
-	if err != nil {
-		return nil, err
-	}
-	if srv.Status == "deleted" || srv.Status == "disconnected" {
-		return nil, nodes.ErrNoServer
-	}
 	ids, err := s.Connections(ctx, orgID, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(ids, srv.ConnectionID) {
+	if len(ids) == 0 {
 		return nil, nodes.ErrNoServer
 	}
-	return &nodes.NodeServer{CloudID: a.CloudID, ServerID: a.ServerID, Draining: srv.Draining}, nil
+	all, err := s.servers.RuntimeServers(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	var on []*cloudinfra.Server
+	for _, v := range all {
+		if v.OrgID != orgID || v.Status == "deleted" || v.Status == "disconnected" {
+			continue
+		}
+		if slices.Contains(ids, v.RuntimeConnectionID) || slices.Contains(ids, v.ConnectionID) {
+			on = append(on, v)
+		}
+	}
+	if len(on) == 0 {
+		return nil, nodes.ErrNoServer
+	}
+	hint := ""
+	if s.adoptions != nil {
+		a, aerr := s.adoptions.GetNodeAdoption(ctx, orgID, nodeID)
+		if aerr != nil && !errors.Is(aerr, cloudinfra.ErrNotFound) {
+			return nil, aerr
+		}
+		if aerr == nil {
+			hint = a.ServerID
+		}
+	}
+	srv := on[0]
+	for _, v := range on {
+		if v.ID == hint {
+			srv = v
+			break
+		}
+		if v.Status == "ready" && srv.Status != "ready" {
+			srv = v
+		}
+	}
+	return &nodes.NodeServer{CloudID: srv.CloudID, ServerID: srv.ID, Draining: srv.Draining}, nil
 }
 
 func (s nodeServers) Connections(ctx context.Context, orgID, nodeID string) ([]string, error) {

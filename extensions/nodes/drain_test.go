@@ -203,14 +203,17 @@ func (f fakeAdoptions) GetNodeAdoption(context.Context, string, string) (*cloudi
 	return &c, nil
 }
 
-type fakeServerStore struct{ srv *cloudinfra.Server }
+type fakeServerStore []*cloudinfra.Server
 
-func (f fakeServerStore) GetServer(_ context.Context, org, cloud, id string) (*cloudinfra.Server, error) {
-	if f.srv == nil || f.srv.OrgID != org || f.srv.CloudID != cloud || f.srv.ID != id {
-		return nil, cloudinfra.ErrNotFound
+func (f fakeServerStore) RuntimeServers(_ context.Context, org string) ([]*cloudinfra.Server, error) {
+	out := []*cloudinfra.Server{}
+	for _, v := range f {
+		if v.OrgID == org {
+			c := *v
+			out = append(out, &c)
+		}
 	}
-	c := *f.srv
-	return &c, nil
+	return out, nil
 }
 
 type fakeConns []*connections.Connection
@@ -219,33 +222,54 @@ func (f fakeConns) NodeConnections(context.Context, string, string) ([]*connecti
 	return f, nil
 }
 
-func TestNodeServersResolvesThroughTheAdoption(t *testing.T) {
-	srv := &cloudinfra.Server{ID: "srv_1", OrgID: "org_1", CloudID: "cld_1", ConnectionID: "con_1", Status: "ready", Draining: true}
+func TestNodeServersResolvesThroughTheNodesConnections(t *testing.T) {
+	srv := &cloudinfra.Server{ID: "srv_1", OrgID: "org_1", CloudID: "cld_1", ConnectionID: "con_1", RuntimeConnectionID: "con_1", Status: "ready", Draining: true}
 	s := nodeServers{
 		adoptions: fakeAdoptions{a: &cloudinfra.NodeAdoption{NodeID: "node_1", OrgID: "org_1", CloudID: "cld_1", ServerID: "srv_1", Status: cloudinfra.NodeAdoptionApplied}},
-		servers:   fakeServerStore{srv: srv},
+		servers:   fakeServerStore{srv},
 		conns:     fakeConns{{ID: "con_1"}},
 	}
 	got, err := s.Server(t.Context(), "org_1", "node_1")
 	if err != nil || got.CloudID != "cld_1" || got.ServerID != "srv_1" || !got.Draining {
 		t.Fatalf("server %+v %v", got, err)
 	}
-	for name, change := range map[string]func(*nodeServers){
-		"no adoption":             func(s *nodeServers) { s.adoptions = fakeAdoptions{} },
-		"adoption without server": func(s *nodeServers) { s.adoptions = fakeAdoptions{a: &cloudinfra.NodeAdoption{CloudID: "cld_1"}} },
-		"server gone":             func(s *nodeServers) { s.servers = fakeServerStore{} },
-		"server deleted":          func(s *nodeServers) { d := *srv; d.Status = "deleted"; s.servers = fakeServerStore{srv: &d} },
-		"another connection":      func(s *nodeServers) { s.conns = fakeConns{{ID: "con_2"}} },
-		"no connection any more":  func(s *nodeServers) { s.conns = fakeConns(nil) },
+	// A node adopted by review or by hand has a row that names no server,
+	// or a preview's server that never was, or no row at all: its server
+	// is found through its connections all the same.
+	for name, adoptions := range map[string]nodeAdoptionReader{
+		"no adoption":            fakeAdoptions{},
+		"review without server":  fakeAdoptions{a: &cloudinfra.NodeAdoption{CloudID: "cld_1", Status: cloudinfra.NodeAdoptionReview}},
+		"a stale preview's":      fakeAdoptions{a: &cloudinfra.NodeAdoption{CloudID: "cld_1", ServerID: "srv_preview", Status: cloudinfra.NodeAdoptionReview}},
+		"no adoption store here": nil,
 	} {
 		c := s
-		change(&c)
-		if _, serr := c.Server(t.Context(), "org_1", "node_1"); !errors.Is(serr, nodes.ErrNoServer) {
+		c.adoptions = adoptions
+		if got, err = c.Server(t.Context(), "org_1", "node_1"); err != nil || got.ServerID != "srv_1" || got.CloudID != "cld_1" {
+			t.Errorf("%s: %+v %v", name, got, err)
+		}
+	}
+	// The adoption says which server, when several run on the node.
+	other := &cloudinfra.Server{ID: "srv_0", OrgID: "org_1", CloudID: "cld_2", RuntimeConnectionID: "con_1", Status: "ready"}
+	c := s
+	c.servers = fakeServerStore{other, srv}
+	if got, err = c.Server(t.Context(), "org_1", "node_1"); err != nil || got.ServerID != "srv_1" {
+		t.Fatalf("with two servers: %+v %v", got, err)
+	}
+	for name, change := range map[string]func(*nodeServers){
+		"server gone":            func(s *nodeServers) { s.servers = fakeServerStore{} },
+		"server deleted":         func(s *nodeServers) { d := *srv; d.Status = "deleted"; s.servers = fakeServerStore{&d} },
+		"another org's server":   func(s *nodeServers) { d := *srv; d.OrgID = "org_2"; s.servers = fakeServerStore{&d} },
+		"another connection":     func(s *nodeServers) { s.conns = fakeConns{{ID: "con_2"}} },
+		"no connection any more": func(s *nodeServers) { s.conns = fakeConns(nil) },
+	} {
+		changed := s
+		change(&changed)
+		if _, serr := changed.Server(t.Context(), "org_1", "node_1"); !errors.Is(serr, nodes.ErrNoServer) {
 			t.Errorf("%s: %v", name, serr)
 		}
 	}
 	boom := errors.New("database gone")
-	c := s
+	c = s
 	c.adoptions = fakeAdoptions{err: boom}
 	if _, serr := c.Server(t.Context(), "org_1", "node_1"); !errors.Is(serr, boom) {
 		t.Fatalf("store failure: %v", serr)
