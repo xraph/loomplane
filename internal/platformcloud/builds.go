@@ -3,7 +3,6 @@ package platformcloud
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
 	fc "github.com/xraph/loomplane/internal/firecracker"
@@ -29,11 +28,5 @@ func CheckBuildHost(ctx context.Context, orgID string, caps fc.Capabilities) err
 		slog.ErrorContext(ctx, "platform build host refused", "org", orgID, "error", err)
 		return errBuildHostPolicy
 	}
-	return nil
-}
-
-// RecordBuild meters a build VM that ran from started to ended. Metering
-// comes later; until then it records nothing.
-func (s *Service) RecordBuild(_ context.Context, _ Placement, _, _ time.Time) error {
 	return nil
 }

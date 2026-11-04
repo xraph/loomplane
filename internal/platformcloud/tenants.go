@@ -12,6 +12,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/metering"
 )
@@ -50,6 +51,8 @@ type Service struct {
 	secrets   Secrets
 	dns       DNSWriter
 	gate      metering.Gate
+	meter     metering.Meter
+	usage     func(ctx context.Context, hostID string) ([]fc.UsageSample, error)
 	instances InstanceControl
 	now       func() time.Time
 }

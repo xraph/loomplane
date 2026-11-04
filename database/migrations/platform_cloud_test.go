@@ -212,3 +212,19 @@ func TestPlatformPlacementOnePerResource(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPlatformCloudMeterTablesUpAndDown(t *testing.T) {
+	conn, ex := platformCloudScratch(t)
+	up(t, ex, "platform_cloud", "platform_cloud_routes", "platform_cloud_meter")
+	up(t, ex, "platform_cloud_meter") // idempotent
+	exec(t, conn,
+		`INSERT INTO loomplane_platform_meter_compute (placement_id,generation,hour,org_id,vcpus,memory_mib,minutes,last_minute) VALUES ('p',1,now(),'o',1,512,3,now())`,
+		`INSERT INTO loomplane_platform_meter_egress (placement_id,hour,org_id,bytes) VALUES ('p',now(),'o',10)`)
+	down(t, ex, "platform_cloud_meter")
+	for _, table := range []string{"loomplane_platform_meter_compute", "loomplane_platform_meter_egress"} {
+		if got := strs(t, conn, `SELECT COALESCE(to_regclass('`+table+`')::text, '')`); len(got) != 1 || got[0] != "" {
+			t.Fatalf("table %s survived down: %q", table, got)
+		}
+	}
+	up(t, ex, "platform_cloud_meter")
+}
