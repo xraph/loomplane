@@ -19,7 +19,6 @@ import {
 import {
   Confirm,
   evidenceMaxAgeMs,
-  evidenceOf,
   gibOf,
 } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -71,18 +70,23 @@ export function PlatformCloudHosts() {
     }
   }
 
-  const doMove = (h: HostView) =>
-    run(
-      async () => {
-        const r = (await moveAll.mutateAsync({
-          path: { host: h.id },
-        })) as MoveAll
-        if (r.failed.length > 0)
-          toast.error(`${r.failed.length} could not be moved`)
-      },
-      "Moves started",
-      "The workloads weren't moved."
-    )
+  const doMove = async (h: HostView) => {
+    setError("")
+    try {
+      // The operation has no typed response codec, so the result is untyped.
+      const r = (await moveAll.mutateAsync({
+        path: { host: h.id },
+      })) as MoveAll
+      invalidate(usePlatformCloudHostsList)
+      if (r.failed.length > 0)
+        toast.error(
+          `${r.moved} moved. ${r.failed.length} could not be moved: ${r.failed.join(", ")}`
+        )
+      else toast.success(`${r.moved} moved`)
+    } catch (err) {
+      setError(messageOf(err, "The workloads weren't moved."))
+    }
+  }
 
   return (
     <section className="flex flex-col gap-2">
@@ -119,7 +123,7 @@ export function PlatformCloudHosts() {
           <TableBody>
             {hosts.data.hosts.map((h) => {
               const issues = hostEvidenceIssues(
-                evidenceOf(h.evidence),
+                h.evidence,
                 new Date(),
                 evidenceMaxAgeMs
               )

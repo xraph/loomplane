@@ -8,17 +8,24 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { SettingsView } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import {
-  NumberField,
-  gibOf,
-  selectClass,
-  toCount,
-} from "@/components/platform-cloud-parts"
+import { NumberField, gibOf, toCount } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+
+const attachModes = [
+  { label: "Only workspaces I enable", value: "manual" },
+  { label: "Every workspace", value: "all_workspaces" },
+]
 
 /** PlatformCloudSettings holds attach mode, limits for new workspaces, DNS and the registry. */
 export function PlatformCloudSettings() {
@@ -109,15 +116,22 @@ function SettingsForm({ view }: { view: SettingsView }) {
     <form onSubmit={submit} className="flex max-w-xl flex-col gap-4">
       <Field>
         <FieldLabel>Which workspaces can use it</FieldLabel>
-        <select
-          aria-label="Attach"
-          className={selectClass}
+        <Select
+          items={attachModes}
           value={attach}
-          onChange={(e) => setAttach(e.target.value)}
+          onValueChange={(v) => setAttach(String(v))}
         >
-          <option value="manual">Only workspaces I enable</option>
-          <option value="all_workspaces">Every workspace</option>
-        </select>
+          <SelectTrigger className="w-full" aria-label="Attach">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {attachModes.map((m) => (
+              <SelectItem key={m.value} value={m.value}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <NumberField

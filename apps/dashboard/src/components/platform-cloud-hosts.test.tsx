@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
+import { dehydrate } from "@forge-go/client-core"
 import { forgeClient } from "@/client/runtime"
 import { PlatformCloudHosts } from "@/components/platform-cloud-hosts"
 
@@ -113,7 +114,8 @@ it("shows the client certificate once", async () => {
   await screen.findByText("host-one")
   await user.click(screen.getByRole("button", { name: "Add host" }))
   const dialog = await screen.findByRole("dialog")
-  await within(dialog).findByRole("option", { name: "Europe" })
+  await user.click(within(dialog).getByRole("combobox", { name: "Region" }))
+  await user.click(await screen.findByRole("option", { name: "Europe" }))
   await user.type(
     within(dialog).getByLabelText("Endpoint"),
     "h2.example.com:8443"
@@ -128,6 +130,13 @@ it("shows the client certificate once", async () => {
   expect(
     within(dialog).getByRole("button", { name: "Copy fingerprint" })
   ).toBeTruthy()
+
+  const cached = JSON.stringify(
+    dehydrate(forgeClient, { principal: undefined })
+  )
+  expect(cached).not.toContain("SECRETCERT")
+  expect(cached).not.toContain("SECRETFP")
+  expect(cached).toContain("host-one")
 
   await user.click(within(dialog).getByRole("button", { name: "Done" }))
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
@@ -176,4 +185,47 @@ it("uses the singular for one workload", async () => {
   expect(
     await screen.findByText("Move or remove its 1 workload first")
   ).toBeTruthy()
+})
+
+it("says to add a region first when there are none", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input instanceof Request ? input.url : input)
+      return path.includes("cloud/regions")
+        ? Response.json({ regions: [] })
+        : Response.json({ hosts: [] })
+    })
+  )
+  const user = userEvent.setup()
+  renderHosts()
+  await user.click(await screen.findByRole("button", { name: "Add host" }))
+  const dialog = await screen.findByRole("dialog")
+  expect(await within(dialog).findByText("Add a region first")).toBeTruthy()
+  await user.type(within(dialog).getByLabelText("Endpoint"), "e:1")
+  await user.type(within(dialog).getByLabelText("Host ID"), "h")
+  expect(
+    (
+      within(dialog).getByRole("button", {
+        name: "Add host",
+      }) as HTMLButtonElement
+    ).disabled
+  ).toBe(true)
+})
+
+it("warns when an allotment drops below use", async () => {
+  stub([host()])
+  const user = userEvent.setup()
+  renderHosts()
+  await user.click(
+    await screen.findByRole("button", { name: "Edit allotment for host-one" })
+  )
+  const dialog = await screen.findByRole("dialog")
+  const note =
+    "Running work keeps running. New work is refused until use is under the limit."
+  expect(within(dialog).queryByText(note)).toBeNull()
+  const v = within(dialog).getByLabelText("vCPUs")
+  await user.clear(v)
+  await user.type(v, "0")
+  expect(within(dialog).getByText(note)).toBeTruthy()
 })

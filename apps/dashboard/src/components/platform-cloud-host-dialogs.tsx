@@ -11,12 +11,7 @@ import {
 import type { HostView, NewHost } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CopyButton } from "@/components/keyless-setup"
-import {
-  NumberField,
-  gibOf,
-  selectClass,
-  toCount,
-} from "@/components/platform-cloud-parts"
+import { NumberField, gibOf, toCount } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,8 +22,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 
 type Sizes = { vcpus: string; mem: string; disk: string; vms: string }
@@ -82,6 +89,7 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
   const regions = useQuery(usePlatformCloudRegionsList)
   const create = useMutation(usePlatformCloudHostsCreate)
   const invalidate = useInvalidate()
+  const regionList = regions.data?.regions ?? []
   const [regionId, setRegionId] = useState("")
   const [endpoint, setEndpoint] = useState("")
   const [hostId, setHostId] = useState("")
@@ -101,7 +109,7 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
     try {
       const res = await create.mutateAsync({
         body: {
-          regionId: regionId || regions.data?.regions[0]?.id || "",
+          regionId,
           endpoint: endpoint.trim(),
           hostId: hostId.trim(),
           serverCa: serverCa.trim(),
@@ -166,18 +174,28 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
             <FieldGroup>
               <Field>
                 <FieldLabel>Region</FieldLabel>
-                <select
-                  aria-label="Region"
-                  className={selectClass}
-                  value={regionId || regions.data?.regions[0]?.id || ""}
-                  onChange={(e) => setRegionId(e.target.value)}
+                <Select
+                  items={regionList.map((r) => ({
+                    label: r.displayName,
+                    value: r.id,
+                  }))}
+                  value={regionId || null}
+                  onValueChange={(v) => setRegionId(String(v))}
                 >
-                  {(regions.data?.regions ?? []).map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.displayName}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-full" aria-label="Region">
+                    <SelectValue placeholder="Choose a region" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {regionList.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {regions.data && regionList.length === 0 && (
+                  <FieldDescription>Add a region first</FieldDescription>
+                )}
               </Field>
               <Field>
                 <FieldLabel>Endpoint</FieldLabel>
@@ -220,7 +238,10 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
               <Button
                 type="submit"
                 disabled={
-                  create.isPending || !endpoint.trim() || !hostId.trim()
+                  create.isPending ||
+                  !regionId ||
+                  !endpoint.trim() ||
+                  !hostId.trim()
                 }
               >
                 Add host

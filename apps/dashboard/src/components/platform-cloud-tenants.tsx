@@ -11,7 +11,7 @@ import {
 import type { TenantRow } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { LimitsDialog } from "@/components/platform-cloud-limits-dialog"
-import { amountsOf, reasonsOf } from "@/components/platform-cloud-parts"
+import { reasonsOf } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -114,16 +114,14 @@ export function PlatformCloudTenants() {
                     )}
                   </TableCell>
                   <TableCell className="text-sm">
-                    {usageRows(amountsOf(row.limits), amountsOf(row.use)).map(
-                      (u) => (
-                        <div
-                          key={u.label}
-                          className={u.over ? "text-destructive" : undefined}
-                        >
-                          {u.text}
-                        </div>
-                      )
-                    )}
+                    {usageRows(row.limits, row.use).map((u) => (
+                      <div
+                        key={u.label}
+                        className={u.over ? "text-destructive" : undefined}
+                      >
+                        {u.text}
+                      </div>
+                    ))}
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">

@@ -1,14 +1,6 @@
 import type { ReactNode } from "react"
 
-import type {
-  PlatformLimits,
-  PlatformcloudEvidence,
-} from "@/client/forge/loomplane/types"
-import {
-  type PlatformCloudAmounts,
-  type PlatformHostEvidence,
-  type SuspendReason,
-} from "@/lib/platform-cloud"
+import type { SuspendReason } from "@/lib/platform-cloud"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,30 +18,6 @@ import { Input } from "@/components/ui/input"
 export const evidenceMaxAgeMs = 10 * 60_000
 
 export const gibOf = (mib: number) => Math.round(mib / 1024)
-
-/** amountsOf maps generated limits or use to the helper's wire-shaped amounts. */
-export function amountsOf(a: PlatformLimits): PlatformCloudAmounts {
-  return {
-    vcpus: a.vcpus,
-    memory_mib: a.memoryMib,
-    vms: a.vms,
-    concurrent_builds: a.concurrentBuilds,
-  }
-}
-
-export function evidenceOf(e: PlatformcloudEvidence): PlatformHostEvidence {
-  return {
-    isolation: e.isolation,
-    platform: e.platform,
-    smt_active: e.smtActive,
-    denied_ports: e.deniedPorts,
-    per_org_vms: e.perOrgVms,
-    per_org_vcpus: e.perOrgVcpus,
-    per_org_memory_mib: e.perOrgMemoryMib,
-    checked_at: e.checkedAt,
-    reason: e.reason,
-  }
-}
 
 export const reasonsOf = (r: string[]) => r as SuspendReason[]
 
@@ -80,9 +48,6 @@ export function NumberField({
     </Field>
   )
 }
-
-export const selectClass =
-  "h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
 
 export function Confirm({
   title,
