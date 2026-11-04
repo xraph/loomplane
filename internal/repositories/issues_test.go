@@ -227,6 +227,27 @@ func TestAccessOnlyOnGitHub(t *testing.T) {
 	}
 }
 
+// A repository key Loomplane can't read gets a reason, never an error,
+// and Issues says there's no installation, so delivery doesn't retry it
+// forever.
+func TestAccessToAnUnreadableKey(t *testing.T) {
+	ctx := context.Background()
+	f := newIssuesFixture(t, withIssues)
+	for _, key := range []string{"acme", "acme/", "acme/api/../../etc", "github.com/"} {
+		if _, perr := repositories.ParseKey(key); perr == nil {
+			t.Fatalf("ParseKey(%q) reads it", key)
+		}
+		acc, err := f.conns.Access(ctx, issuesOrg, key)
+		want := "Loomplane couldn't read the repository " + key + ", so reports go to Herald only"
+		if err != nil || acc.Accepted || acc.Reason != want {
+			t.Fatalf("Access(%q) = %+v, %v", key, acc, err)
+		}
+		if _, err := f.conns.Issues(ctx, issuesOrg, key); !errors.Is(err, repositories.ErrNoInstallation) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Issues(%q): %v", key, err)
+		}
+	}
+}
+
 func TestAccessBeforeAcceptance(t *testing.T) {
 	ctx := context.Background()
 	f := newIssuesFixture(t, withoutIssues)

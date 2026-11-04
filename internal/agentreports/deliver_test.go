@@ -382,6 +382,7 @@ var deliverCases = []deliverCase{
 	{name: "BodyUpdatesNeverReopenAnIssueAPersonClosed", run: bodyUpdatesNeverReopenAnIssueAPersonClosed},
 	{name: "PermissionNotAcceptedSendsHeraldOnly", run: permissionNotAcceptedSendsHeraldOnly, opts: deliverOptions{perms: issuesNotAccepted}},
 	{name: "NoRepositoryIsHeraldOnly", run: noRepositoryIsHeraldOnly},
+	{name: "AnUnreadableRepositoryIsHeraldOnly", run: anUnreadableRepositoryIsHeraldOnly},
 	{name: "SecretsNeverReachTheIssueOrNotice", run: secretsNeverReachTheIssueOrNotice},
 	{name: "OutboundBlockSendsTheFallback", run: outboundBlockSendsTheFallback, opts: deliverOptions{engine: blockEngine{}}},
 	{name: "NoticeIsNotResentWhenGitHubFails", run: noticeIsNotResentWhenGitHubFails},
@@ -434,6 +435,9 @@ func TestPermissionNotAcceptedSendsHeraldOnly(t *testing.T) {
 	runMem(t, "PermissionNotAcceptedSendsHeraldOnly")
 }
 func TestNoRepositoryIsHeraldOnly(t *testing.T) { runMem(t, "NoRepositoryIsHeraldOnly") }
+func TestAnUnreadableRepositoryIsHeraldOnly(t *testing.T) {
+	runMem(t, "AnUnreadableRepositoryIsHeraldOnly")
+}
 func TestSecretsNeverReachTheIssueOrNotice(t *testing.T) {
 	runMem(t, "SecretsNeverReachTheIssueOrNotice")
 }
@@ -680,6 +684,28 @@ func noRepositoryIsHeraldOnly(t *testing.T, e *deliverEnv) {
 	}
 	if got := e.lookup(t, r.ID); got.Issue.State != IssueNoRepository || got.Issue.Error != "Loomplane couldn't tell which repository this belongs to" {
 		t.Fatalf("report issue %+v", got.Issue)
+	}
+}
+
+// A repository key Loomplane can't read ends the issue step with no
+// repository, once, instead of failing the delivery every time.
+func anUnreadableRepositoryIsHeraldOnly(t *testing.T, e *deliverEnv) {
+	sig := e.signal(SignalDeploymentFailed, "service:api", "dep_1#0")
+	sig.Repository = "acme"
+	r := e.observe(t, sig).Report
+	e.deliver(t, r.ID)
+	if n := len(e.notices(t)); n != len(everyone) {
+		t.Fatalf("%d notices", n)
+	}
+	if reqs := e.gh.Requests(); len(reqs) != 0 {
+		t.Fatalf("GitHub was called: %v", reqs)
+	}
+	got := e.lookup(t, r.ID)
+	if got.Issue.State != IssueNoRepository || got.Issue.Error != "Loomplane couldn't read the repository acme, so reports go to Herald only" {
+		t.Fatalf("report issue %+v", got.Issue)
+	}
+	if pending, err := e.svc.Pending(context.Background(), e.org); err != nil || len(pending) != 0 {
+		t.Fatalf("still pending: %d, %v", len(pending), err)
 	}
 }
 

@@ -319,7 +319,10 @@ func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAcces
 	}
 	repo, err := ParseKey(key)
 	if err != nil {
-		return acc, Repository{}, fmt.Errorf("repository %q: %w", key, err)
+		// Asking again won't make the key readable, so the report is
+		// delivered without an issue rather than retried.
+		acc.Reason = "Loomplane couldn't read the repository " + key + ", so reports go to Herald only"
+		return acc, Repository{}, nil
 	}
 	if !repo.onGitHub() {
 		acc.Reason = "Loomplane opens issues on GitHub repositories only, so reports for " + key + " go to Herald only"
