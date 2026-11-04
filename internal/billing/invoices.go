@@ -135,9 +135,9 @@ func (s *Service) closeMonth(ctx context.Context, now time.Time, month subscript
 	var errs, open []error
 
 	// 1. The month's usage into ledger: AI on the server's key priced from
-	// nexus's records first, so it is in the push. A pricing run that
-	// fails fails the close, but doesn't hold the month open: a claim it
-	// left is priced by the next run, as late usage.
+	// nexus's records first, so it is in the push. A claim a failed run
+	// left open holds its workspace below (unpushed), so its AI is never
+	// left off the month's invoice.
 	if err := s.PriceAIClaims(ctx); err != nil {
 		slog.ErrorContext(ctx, "billing: the month close's AI pricing didn't finish", "month", periodKey(month.Start), "error", err)
 		errs = append(errs, err)
@@ -206,10 +206,16 @@ func (s *Service) closeMonth(ctx context.Context, now time.Time, month subscript
 }
 
 // unpushed lists the workspaces with usage from before end that isn't in
-// ledger yet: rows not batched, or batched and not sent.
+// ledger yet: rows not batched, or batched and not sent, and AI claims not
+// yet priced from nexus's records. A claim made up to aiRecordLead after
+// end can be for a request nexus stamped before it, so it holds the month
+// too. Such a workspace waits, and the hourly catch-up tries again until
+// its claims are priced or closed by the 24 hour rule.
 func (s *Service) unpushed(ctx context.Context, end time.Time) (map[string]bool, error) {
 	rows, err := s.pg.Query(ctx, `SELECT org_id FROM loomplane_billing_usage WHERE push_id IS NULL AND occurred_at < $1
-		UNION SELECT org_id FROM loomplane_billing_pushes WHERE sent_at IS NULL AND period < $2`, end, end)
+		UNION SELECT org_id FROM loomplane_billing_pushes WHERE sent_at IS NULL AND period < $2
+		UNION SELECT org_id FROM loomplane_billing_ai_claims WHERE settled_at IS NULL AND claimed_at < $3`,
+		end, end, end.Add(aiRecordLead))
 	if err != nil {
 		return nil, fmt.Errorf("billing: list the usage not in ledger: %w", err)
 	}

@@ -28,8 +28,9 @@ const aiClaimWait = 24 * time.Hour
 
 // aiRecordLead is how long before its claim nexus's record of a request can
 // be stamped: nexus stamps the record when the request starts, and the
-// claim is made later, when the call reaches the server's key.
-const aiRecordLead = time.Minute
+// claim is made later, when the call reaches the server's key. Ten minutes
+// covers a request that waits behind guards, retries and fallbacks first.
+const aiRecordLead = 10 * time.Minute
 
 // nexusPage is how many usage records one read of nexus asks for, its most.
 const nexusPage = 500
@@ -80,9 +81,10 @@ func (s *Service) priceAIClaims(ctx context.Context) error {
 	}
 	var (
 		errs []error
-		// unread are the tenants whose records couldn't be read: their
-		// claims are never closed unbilled on a failed read.
-		unread []string
+		// unread are the tenants whose records couldn't be read, and
+		// unrecorded the claims whose record was found and failed to
+		// record: neither is closed unbilled on this run.
+		unread, unrecorded []string
 	)
 	for _, t := range tenants {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -90,7 +92,8 @@ func (s *Service) priceAIClaims(ctx context.Context) error {
 			unread = append(unread, t.tenant)
 			continue
 		}
-		read, priceErr := s.priceTenant(ctx, t, now)
+		read, failed, priceErr := s.priceTenant(ctx, t, now)
+		unrecorded = append(unrecorded, failed...)
 		if priceErr != nil {
 			slog.ErrorContext(ctx, "billing: pricing AI on the server's key failed for a nexus tenant; the next run tries again",
 				"tenant", t.tenant, "error", priceErr)
@@ -100,7 +103,7 @@ func (s *Service) priceAIClaims(ctx context.Context) error {
 			unread = append(unread, t.tenant)
 		}
 	}
-	errs = append(errs, s.closeStaleClaims(ctx, now, unread))
+	errs = append(errs, s.closeStaleClaims(ctx, now, unread, unrecorded))
 	return errors.Join(errs...)
 }
 
@@ -151,41 +154,63 @@ func (s *Service) openClaims(ctx context.Context, tenant string) (map[string]ope
 }
 
 // priceTenant prices the tenant's open claims from nexus's records. read
-// says every page of records was read; a claim that failed to record stays
-// open for the next run.
-func (s *Service) priceTenant(ctx context.Context, t openTenant, now time.Time) (read bool, err error) {
+// says every page of records was read; failed are the requests whose
+// record was found and failed to record, which stay open for the next run.
+// A request is billed once: a second record for it in the same run is
+// logged and not billed.
+func (s *Service) priceTenant(ctx context.Context, t openTenant, now time.Time) (read bool, failed []string, err error) {
 	claims, err := s.openClaims(ctx, t.tenant)
 	if err != nil {
-		return false, fmt.Errorf("read the open claims: %w", err)
+		return false, nil, fmt.Errorf("read the open claims: %w", err)
 	}
 	if len(claims) == 0 {
-		return true, nil // settled by now
+		return true, nil, nil // settled by now
 	}
 	// No end time: a record stamped at this instant, or by a replica whose
 	// clock runs ahead, is priced now rather than on the next run.
 	opts := &usage.QueryOptions{TenantID: t.tenant, StartTime: t.oldest.Add(-aiRecordLead), Limit: nexusPage}
-	store := nexuspg.New(s.db).Usage()
-	var errs []error
+	store := s.nexusUsageStore()
+	var (
+		errs   []error
+		priced = map[string]string{} // request id -> the usage id it billed
+	)
 	for {
 		page, qErr := store.Query(ctx, opts)
 		if qErr != nil {
-			return false, errors.Join(append(errs, fmt.Errorf("read nexus's usage records: %w", qErr))...)
+			return false, failed, errors.Join(append(errs, fmt.Errorf("read nexus's usage records: %w", qErr))...)
 		}
 		for _, rec := range page.Items {
 			requestID := rec.RequestID.String()
 			c, ok := claims[requestID]
 			if !ok {
+				if first, dup := priced[requestID]; dup {
+					slog.WarnContext(ctx, "billing: nexus has a second usage record for an AI request on the server's key; it is billed once",
+						"request", requestID, "billed", first, "record", rec.ID.String())
+				}
 				continue // the workspace's own key, or an embedding: never billed
 			}
 			if recErr := s.priceRecord(ctx, requestID, c, rec, now); recErr != nil {
 				errs = append(errs, fmt.Errorf("price request %s: %w", requestID, recErr))
+				failed = append(failed, requestID)
+				continue
 			}
+			delete(claims, requestID)
+			priced[requestID] = aiUsagePrefix + rec.ID.String()
 		}
 		if page.NextCursor == "" {
-			return true, errors.Join(errs...)
+			return true, failed, errors.Join(errs...)
 		}
 		opts.Cursor = page.NextCursor
 	}
+}
+
+// nexusUsageStore is where nexus's usage records are read: nexus's
+// Postgres store on Loomplane's database, unless a test set another.
+func (s *Service) nexusUsageStore() usage.Store {
+	if s.nexusUsage != nil {
+		return s.nexusUsage
+	}
+	return nexuspg.New(s.db).Usage()
 }
 
 // priceRecord bills one claimed request at nexus's cost and settles its
@@ -218,15 +243,23 @@ func (s *Service) priceRecord(ctx context.Context, requestID string, c openClaim
 }
 
 // closeStaleClaims settles, unbilled, every claim still open a day after it
-// was made, except those of the tenants whose records couldn't be read
-// this run, and logs each one.
-func (s *Service) closeStaleClaims(ctx context.Context, now time.Time, unread []string) error {
+// was made, and logs each one. It leaves the claims of the tenants whose
+// records couldn't be read this run, and those whose record was found and
+// failed to record (logged here too, so a claim that keeps failing is seen).
+func (s *Service) closeStaleClaims(ctx context.Context, now time.Time, unread, unrecorded []string) error {
 	if unread == nil {
 		unread = []string{}
 	}
+	if unrecorded == nil {
+		unrecorded = []string{}
+	}
+	for _, requestID := range unrecorded {
+		slog.ErrorContext(ctx, "billing: an AI request on the server's key has a nexus record that failed to bill; its claim stays open",
+			"request", requestID)
+	}
 	rows, err := s.pg.Query(ctx, `UPDATE loomplane_billing_ai_claims SET settled_at = $1
-		WHERE settled_at IS NULL AND claimed_at <= $2 AND NOT (nexus_tenant = ANY($3))
-		RETURNING request_id, org_id, nexus_tenant, claimed_at`, now, now.Add(-aiClaimWait), unread)
+		WHERE settled_at IS NULL AND claimed_at <= $2 AND NOT (nexus_tenant = ANY($3)) AND NOT (request_id = ANY($4))
+		RETURNING request_id, org_id, nexus_tenant, claimed_at`, now, now.Add(-aiClaimWait), unread, unrecorded)
 	if err != nil {
 		return fmt.Errorf("billing: close the AI claims nexus never recorded: %w", err)
 	}

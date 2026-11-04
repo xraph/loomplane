@@ -4,6 +4,8 @@ package billing
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -57,7 +59,12 @@ func nexusRequestID(t *testing.T) string {
 // does.
 func claimAI(t *testing.T, s *Service, tenant, request string, when time.Time) {
 	t.Helper()
-	if err := s.Record(t.Context(), metering.Event{ID: "ai-request:" + request, OrgID: "org_1", Feature: agentsettings.FeatureAIPlatformRequests,
+	claimAIFor(t, s, "org_1", tenant, request, when)
+}
+
+func claimAIFor(t *testing.T, s *Service, org, tenant, request string, when time.Time) {
+	t.Helper()
+	if err := s.Record(t.Context(), metering.Event{ID: "ai-request:" + request, OrgID: org, Feature: agentsettings.FeatureAIPlatformRequests,
 		ResourceRef: tenant + ":" + request, Quantity: 1, OccurredAt: when, PlatformOwned: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -277,5 +284,148 @@ func TestCloseMonth_PricesAIBeforeThePush(t *testing.T) {
 	// $10 base + $15 of AI - $10 credit.
 	if len(oct) != 1 || oct[0].Total.Amount != 1500 {
 		t.Fatalf("October's ai invoices %+v", oct)
+	}
+}
+
+// failingNexus is nexus's usage store with the reads of one tenant failing
+// while down is set.
+type failingNexus struct {
+	usage.Store
+	tenant string
+	down   bool
+}
+
+func (f *failingNexus) Query(ctx context.Context, opts *usage.QueryOptions) (*usage.QueryResult, error) {
+	if f.down && opts.TenantID == f.tenant {
+		return nil, errors.New("nexus is unreachable")
+	}
+	return f.Store.Query(ctx, opts)
+}
+
+// A nexus read that fails at the close holds that workspace's month open,
+// so its AI isn't left off the invoice; every other workspace closes, and
+// the next hourly run, once nexus answers, bills the AI on the month.
+func TestCloseMonth_HoldsAWorkspaceUntilItsAIIsPriced(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	tenants := map[string]string{}
+	for _, org := range []string{"org_1", "org_2"} {
+		_ = s.MarkCardReady(ctx, org)
+		if _, err := s.SetAI(ctx, org, true); err != nil {
+			t.Fatal(err)
+		}
+		tenants[org] = nexusTenantID(t, s)
+		req := nexusRequestID(t)
+		claimAIFor(t, s, org, tenants[org], req, at("2026-10-31T23:59:30Z"))
+		nexusRecord(t, s, tenants[org], req, "15.00", at("2026-10-31T23:59:29Z"))
+	}
+	nexus := &failingNexus{Store: nexuspg.New(s.db).Usage(), tenant: tenants["org_2"], down: true}
+	s.nexusUsage = nexus
+	clock = at("2026-11-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err == nil {
+		t.Fatal("the close hid a failed nexus read")
+	}
+	aiTotal := func(org string) (n int, total int64) {
+		a, _ := s.Account(ctx, org)
+		for _, inv := range invoicesFor(t, s, org) {
+			if inv.SubscriptionID.String() == a.AISubscription && inv.PeriodStart.Equal(at("2026-10-01T00:00:00Z")) {
+				n++
+				total = inv.Total.Amount
+			}
+		}
+		return n, total
+	}
+	if n, total := aiTotal("org_1"); n != 1 || total != 1500 {
+		t.Fatalf("org_1's October ai invoices %d, total %d, want one of $15", n, total)
+	}
+	if n := len(invoicesFor(t, s, "org_2")); n != 0 {
+		t.Fatalf("org_2 invoiced %d times without its AI", n)
+	}
+	if closed(t, pg, "2026-10-01") {
+		t.Fatal("October was recorded closed with org_2's AI unpriced")
+	}
+
+	nexus.down = false
+	clock = at("2026-11-01T02:15:00Z")
+	if err := s.CloseMonthIfOpen(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, total := aiTotal("org_2"); n != 1 || total != 1500 {
+		t.Fatalf("org_2's October ai invoices %d, total %d, want one of $15", n, total)
+	}
+	if n, _ := aiTotal("org_1"); n != 1 {
+		t.Fatalf("org_1 invoiced again: %d", n)
+	}
+	if !closed(t, pg, "2026-10-01") {
+		t.Fatal("October still open once every workspace was invoiced")
+	}
+}
+
+// Two records for one request in one run bill once, and the second is
+// logged.
+func TestPriceAI_SecondRecordForARequestBillsOnce(t *testing.T) {
+	clock := at("2026-11-10T12:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	tenant, req := nexusTenantID(t, s), nexusRequestID(t)
+	claimAI(t, s, tenant, req, clock)
+	nexusRecord(t, s, tenant, req, "0.40", clock.Add(-time.Second))
+	nexusRecord(t, s, tenant, req, "0.40", clock.Add(-time.Second))
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err := s.PriceAIClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rows, micro int64
+	_ = pg.QueryRow(ctx, `SELECT count(*), coalesce(sum(micro_usd),0) FROM loomplane_billing_usage WHERE feature='ai_usd'`).Scan(&rows, &micro)
+	if rows != 1 || micro != 400_000 {
+		t.Fatalf("rows %d micro %d, want one of $0.40", rows, micro)
+	}
+	if !strings.Contains(logged.String(), "second usage record") || !strings.Contains(logged.String(), req) {
+		t.Fatalf("logged %q", logged.String())
+	}
+}
+
+// A day-old claim whose record was found and failed to bill stays open,
+// logged as such, rather than closing unbilled.
+func TestPriceAI_ARecordThatFailsToBillStaysOpen(t *testing.T) {
+	clock := at("2026-11-10T12:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	tenant, req, stale := nexusTenantID(t, s), nexusRequestID(t), nexusRequestID(t)
+	claimAI(t, s, tenant, req, clock.Add(-25*time.Hour))
+	claimAI(t, s, tenant, stale, clock.Add(-25*time.Hour))
+	// More than one event may cost, so Record refuses it.
+	nexusRecord(t, s, tenant, req, "2000000000", clock.Add(-25*time.Hour-time.Second))
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if err := s.PriceAIClaims(ctx); err == nil {
+		t.Fatal("a record that failed to bill was hidden")
+	}
+	open := map[string]bool{}
+	for _, r := range []string{req, stale} {
+		var isOpen bool
+		_ = pg.QueryRow(ctx, `SELECT settled_at IS NULL FROM loomplane_billing_ai_claims WHERE request_id=$1`, r).Scan(&isOpen)
+		open[r] = isOpen
+	}
+	if !open[req] || open[stale] {
+		t.Fatalf("open %v: the failed one should stay, the one with no record close", open)
+	}
+	out := logged.String()
+	if !strings.Contains(out, "failed to bill") || !strings.Contains(out, req) {
+		t.Fatalf("logged %q", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "no nexus usage record after a day") && strings.Contains(line, req) {
+			t.Fatalf("the failed claim was closed as unrecorded: %q", line)
+		}
 	}
 }

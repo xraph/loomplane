@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/ledger"
+	"github.com/xraph/nexus/usage"
 
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/platformcloud"
@@ -31,6 +32,9 @@ type Service struct {
 	// hostedInvoiceURL reads a Stripe invoice's hosted page; New sets it
 	// to stripeInvoiceURL (links.go).
 	hostedInvoiceURL func(ctx context.Context, stripeInvoiceID string) (string, error)
+	// nexusUsage is where the AI meter reads nexus's usage records; nil is
+	// nexus's Postgres store on db (ai_meter.go).
+	nexusUsage usage.Store
 }
 
 // Deps is what New builds a Service from.
