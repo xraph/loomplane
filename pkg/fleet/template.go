@@ -52,7 +52,12 @@ type SecretSchema struct {
 	Required bool     `json:"required,omitempty" yaml:"required,omitempty"`
 	Services []string `json:"services" yaml:"services"`
 }
-type Profile struct {
+type Profile = FleetProfile
+
+// FleetProfile has a distinct API schema name.
+//
+//nolint:revive // Keep the API schema name distinct; Go callers retain the short alias.
+type FleetProfile struct {
 	Isolation string                    `json:"isolation" yaml:"isolation"`
 	Services  map[string]ServiceProfile `json:"services" yaml:"services"`
 }

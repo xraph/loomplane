@@ -37,6 +37,7 @@ import (
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
@@ -65,6 +66,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/fleets"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/issuer"
@@ -152,7 +154,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 // plan is made from.
 func (e *Extension) Dependencies() []string {
 	return []string{
-		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
+		fleetext.Name, identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
 		cloudinfraext.Name, connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
 	}
 }
@@ -174,6 +176,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	authz, err := forge.InjectType[*security.Authorizer](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the identity extension: %w", err)
+	}
+	instances, err := forge.InjectType[*fleets.Service](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the fleet service: %w", err)
 	}
 	approvalAdmitter, err := forge.InjectType[approvaladmission.Admitter](c)
 	if err != nil {
@@ -355,6 +361,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Reader:    inventoryClients,
 		Endpoints: e.endpoints, Authorizer: authz, Organizations: providerResourceOrganizations(pg), Usage: providerResourceUsage(pg, clouds),
 	})
+	if provideErr := forge.ProvideValue(c, e.providerResources); provideErr != nil {
+		return provideErr
+	}
 	e.resourceRefresh = newProviderResourceRefresh(e.providerResources, clouds, inventoryClients.Supports, func(err error) { log.Warn("refresh provider resource inventory", forge.F("error", err.Error())) })
 	clouds.Checked = e.resourceRefresh.checked
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
@@ -505,6 +514,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	e.plans = planning.NewService(planning.Deps{
+		Instances:        instances,
 		ApprovalAdmitter: approvalAdmitter, ApprovalVerifier: approvalVerifier, ApprovalAppID: e.cfg.Identity.AppID,
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
@@ -651,6 +661,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Telemetry: metrics,
 	})
+	if provideErr := forge.ProvideValue(c, readings); provideErr != nil {
+		return provideErr
+	}
 	if err := e.usageRoutes(fapp.Router(), guard, readings); err != nil {
 		return err
 	}

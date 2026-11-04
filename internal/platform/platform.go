@@ -39,6 +39,7 @@ import (
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	federationext "github.com/xraph/loomplane/extensions/federation"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	nodesext "github.com/xraph/loomplane/extensions/nodes"
@@ -172,6 +173,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
+		fleetext.New(cfg),
 		connectionsext.New(cfg, plugs, nodes.Hub()),
 		cloudinfraext.New(cfg, deployments, nodes.Hub()),
 		federationext.New(cfg, ctrl.CtrlPlane),

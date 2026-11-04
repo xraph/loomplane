@@ -1,0 +1,6 @@
+import type { Codec } from '../codec-runtime';
+import { codec_CloudLocation_cidrs } from './CloudLocation.cidrs';
+import { codec_CloudLocation_failure_domains } from './CloudLocation.failure_domains';
+import { codec_CloudLocation_network_refs } from './CloudLocation.network_refs';
+
+export const codec_CloudLocation: Codec = {"kind": "object", "fields": {"account_id": {"ts": "accountId"}, "checked_at": {"ts": "checkedAt"}, "cidrs": {"ts": "cidrs", "codec": () => codec_CloudLocation_cidrs}, "cloud_id": {"ts": "cloudId"}, "connection_id": {"ts": "connectionId"}, "evidence_ref": {"ts": "evidenceRef"}, "evidence_revision": {"ts": "evidenceRevision"}, "evidence_source": {"ts": "evidenceSource"}, "failure_domains": {"ts": "failureDomains", "codec": () => codec_CloudLocation_failure_domains}, "id": {"ts": "id"}, "name": {"ts": "name"}, "network_refs": {"ts": "networkRefs", "codec": () => codec_CloudLocation_network_refs}, "org_id": {"ts": "orgId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}, "revision": {"ts": "revision"}, "verified_by": {"ts": "verifiedBy"}}, "required": ["checked_at", "cloud_id", "evidence_revision", "failure_domains", "id", "name", "org_id", "provider", "region", "revision"]};
