@@ -109,7 +109,7 @@ END $$`
 const platformCloudRouteOperationUses = `CREATE OR REPLACE FUNCTION loomplane_route_operation_uses() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
 	DELETE FROM loomplane_connection_uses WHERE kind='route_operation' AND owner_id=NEW.id;
-	IF NEW.status NOT IN ('preview','succeeded','cancelled') AND NEW.body->'route'->'binding'->>'connection_id'<>'platform' THEN
+	IF NEW.status NOT IN ('preview','succeeded','cancelled') AND NEW.body->'route'->'binding'->>'connection_id' IS DISTINCT FROM 'platform' THEN
 		INSERT INTO loomplane_connection_uses(org_id,connection_id,kind,owner_id) VALUES(NEW.org_id,NEW.body->'route'->'binding'->>'connection_id','route_operation',NEW.id) ON CONFLICT DO NOTHING;
 	END IF;
 

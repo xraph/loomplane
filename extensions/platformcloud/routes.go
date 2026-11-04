@@ -604,7 +604,8 @@ func (r *routes) moveAll(c forge.Context) error {
 	if len(out.Failed) > 0 || len(out.Skipped) > 0 {
 		outcome = outcomeFailure
 	}
-	r.audit.Record(ctx, "platform_cloud.host.move_all", actor, "platform_cloud_host", h.ID, outcome,
+	// The moves ran whatever the request did; so does their record.
+	r.audit.Record(context.WithoutCancel(ctx), "platform_cloud.host.move_all", actor, "platform_cloud_host", h.ID, outcome,
 		map[string]string{"moved": strconv.Itoa(out.Moved), "skipped": strconv.Itoa(len(out.Skipped)), "failed": strconv.Itoa(len(out.Failed))})
 	return c.JSON(http.StatusOK, out)
 }

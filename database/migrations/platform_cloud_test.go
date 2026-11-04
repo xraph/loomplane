@@ -235,6 +235,27 @@ func TestPlatformCloudMeterTablesUpAndDown(t *testing.T) {
 	up(t, ex, "platform_cloud_meter")
 }
 
+// A route operation whose binding names no connection still fails on the
+// connection use it can't record, as it did before Loomplane Cloud routes:
+// only the platform connection is skipped.
+func TestPlatformCloudRouteUsesStillRefuseAMissingConnection(t *testing.T) {
+	conn, ex := platformCloudScratch(t)
+	up(t, ex, "platform_cloud", "platform_cloud_routes")
+	ctx := context.Background()
+	insert := func(id, body string) error {
+		_, err := conn.Exec(ctx, `INSERT INTO loomplane_route_operations (id, org_id, project_id, route_id, server_id, cloud_id, status, revision, body, principal)
+			VALUES ($1, 'org', 'proj', $1, 'srv', 'cloud', 'running', 1, $2, '{}')`, id, body)
+		return err
+	}
+	requireSQLState(t, insert("rop_none", `{"route":{"binding":{}}}`), "23502")
+	if err := insert("rop_platform", `{"route":{"binding":{"connection_id":"platform"}}}`); err != nil {
+		t.Fatalf("a platform route operation: %v", err)
+	}
+	if got := strs(t, conn, `SELECT owner_id FROM loomplane_connection_uses WHERE kind='route_operation'`); len(got) != 0 {
+		t.Fatalf("connection uses = %q, want none", got)
+	}
+}
+
 // A resource has one current live placement and at most one live
 // replacement, and the continuity migration goes down and up again.
 func TestPlatformPlacementReplacementAndEgressCounters(t *testing.T) {
