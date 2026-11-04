@@ -12,7 +12,7 @@ import (
 //
 // A report is the realtime release_report event through a trigger of its
 // own. The event carries the report without its evidence and its concerns,
-// which hold commit, diff and model text, and without the notice
+// which hold commit, diff and model text, and without the notice and sweep
 // bookkeeping; a change to only those emits nothing. Clients refetch the
 // report for the rest.
 func init() {
@@ -21,15 +21,16 @@ func init() {
 			err := db.NewCreateTable("loomplane_release_reports").IfNotExists().
 				Column("id", migrate.Text, migrate.PrimaryKey()).
 				Column("org_id", migrate.Text, migrate.NotNull()).
-				Column("project_id", migrate.Text, migrate.NotNull()).
+				Column("project_id", migrate.Text, migrate.NotNull(), migrate.Check("project_id <> ''")).
 				Column("from_environment_id", migrate.Text, migrate.NotNull(), migrate.Default("")).
 				Column("from_environment", migrate.Text, migrate.NotNull(), migrate.Default("")).
-				Column("to_environment_id", migrate.Text, migrate.NotNull()).
+				Column("to_environment_id", migrate.Text, migrate.NotNull(), migrate.Check("to_environment_id <> ''")).
 				Column("to_environment", migrate.Text, migrate.NotNull(), migrate.Default("")).
 				Column("scope", migrate.JSON, migrate.NotNull(), migrate.Default("[]")).
 				Column("status", migrate.Text, migrate.NotNull(),
 					migrate.Check("status IN ('planning','reviewing','done','failed','cancelled')")).
-				Column("state", migrate.Text, migrate.NotNull()).
+				Column("state", migrate.Text, migrate.NotNull(),
+					migrate.Check("state IN ('planning','reviewing','promoting','promoted','waiting_for_person','approved','rejected','stale','expired','superseded','blocked','stopped','failed','cancelled')")).
 				Column("state_reason", migrate.Text, migrate.NotNull(), migrate.Default("")).
 				// Every preparation is a person's request.
 				Column("requested_by", migrate.Text, migrate.NotNull(), migrate.Check("requested_by <> ''")).
@@ -42,11 +43,15 @@ func init() {
 				Column("evidence", migrate.JSON).
 				Column("gates", migrate.JSON, migrate.NotNull(), migrate.Default("[]")).
 				Column("preview", migrate.Boolean, migrate.NotNull(), migrate.Default(false)).
-				Column("decision", migrate.Text, migrate.NotNull(), migrate.Default("")).
+				Column("decision", migrate.Text, migrate.NotNull(), migrate.Default(""),
+					migrate.Check("decision IN ('','promote','ask')")).
 				Column("evaluated_at", migrate.Timestamp).
 				Column("concerns", migrate.JSON, migrate.NotNull(), migrate.Default("[]")).
 				Column("error", migrate.Text, migrate.NotNull(), migrate.Default("")).
 				Column("notified_state", migrate.Text, migrate.NotNull(), migrate.Default("")).
+				// When the settle sweep last read the report, so it reaches
+				// every unsettled report in turn.
+				Column("swept_at", migrate.Timestamp).
 				Column("created_at", migrate.Timestamp, migrate.NotNull()).
 				Column("updated_at", migrate.Timestamp, migrate.NotNull()).
 				Column("finished_at", migrate.Timestamp).
@@ -80,19 +85,18 @@ func init() {
 			if err != nil {
 				return err
 			}
-			// The settle sweep reads every workspace's unfinished reports.
-			err = db.NewCreateIndex("loomplane_release_reports_unsettled").IfNotExists().
-				On("loomplane_release_reports").
-				Columns("updated_at").
-				Where("status IN ('planning','reviewing') OR state IN ('planning','reviewing','promoting','waiting_for_person')").
-				Exec(ctx)
+			// The settle sweep reads every workspace's unfinished reports,
+			// least recently swept first.
+			_, err = db.Exec(ctx, `CREATE INDEX IF NOT EXISTS loomplane_release_reports_unsettled
+ON loomplane_release_reports (swept_at NULLS FIRST, updated_at, id)
+WHERE status IN ('planning','reviewing') OR state IN ('planning','reviewing','promoting','waiting_for_person')`)
 			if err != nil {
-				return err
+				return fmt.Errorf("create index loomplane_release_reports_unsettled: %w", err)
 			}
 
 			// The event is a projection of the report's columns, so a change
-			// to evidence, concerns or notified_state compares equal and
-			// emits nothing.
+			// to evidence, concerns, notified_state or swept_at compares
+			// equal and emits nothing.
 			_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_release_report_event_trigger() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
 	payload JSONB;

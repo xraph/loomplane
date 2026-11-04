@@ -51,6 +51,10 @@ func TestReleaseReportsTableAndTrigger(t *testing.T) {
 	for _, sql := range []string{
 		report("rrep_x", "env_x", "thinking"),
 		strings.Replace(report("rrep_x", "env_x", "planning"), "'usr_ada'", "''", 1),
+		strings.Replace(report("rrep_x", "env_x", "planning"), "'proj'", "''", 1),
+		strings.Replace(report("rrep_x", "env_x", "planning"), "'env_x'", "''", 1),
+		strings.Replace(report("rrep_x", "env_x", "planning"), ",'planning','usr_ada'", ",'pondering','usr_ada'", 1),
+		`UPDATE loomplane_release_reports SET decision='maybe' WHERE id='rrep_2'`,
 	} {
 		if _, err := conn.Exec(ctx, sql); err == nil {
 			t.Fatalf("constraint accepted %s", sql)
@@ -66,10 +70,10 @@ func TestReleaseReportsTableAndTrigger(t *testing.T) {
 	if before != 3 {
 		t.Fatalf("events: %v", events())
 	}
-	if got := strs(t, conn, `SELECT count(*)::text FROM loomplane_events WHERE type LIKE 'release_report.%' AND (data ? 'evidence' OR data ? 'concerns' OR data ? 'notified_state')`); got[0] != "0" {
+	if got := strs(t, conn, `SELECT count(*)::text FROM loomplane_events WHERE type LIKE 'release_report.%' AND (data ? 'evidence' OR data ? 'concerns' OR data ? 'notified_state' OR data ? 'swept_at')`); got[0] != "0" {
 		t.Fatalf("events with private keys: %v", got)
 	}
-	exec(t, conn, `UPDATE loomplane_release_reports SET evidence='{"diffs":[]}', concerns='[{"text":"x"}]', notified_state='promoted' WHERE id='rrep_2'`)
+	exec(t, conn, `UPDATE loomplane_release_reports SET evidence='{"diffs":[]}', concerns='[{"text":"x"}]', notified_state='promoted', swept_at=now() WHERE id='rrep_2'`)
 	if got := events(); len(got) != before {
 		t.Fatalf("private columns emitted: %v", got)
 	}

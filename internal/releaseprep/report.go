@@ -156,9 +156,14 @@ type Concern struct {
 	At    time.Time `json:"at"`
 }
 
-// ReadinessEvidence is what the preparation read before the review. Task 4
-// collects it; anything it couldn't read is named in Unavailable, and fails
-// the gate that needs it.
+// ReadinessEvidence is what the preparation read before the review.
+// Anything it couldn't read is named in Unavailable, and fails the gate that
+// needs it.
+//
+// Placeholder: ReadinessEvidence, ChangedService, CanarySummary and
+// OpenReport carry only the fields the store's tests need. Task 4 replaces
+// them with its own field list (keeping BackupSchedule and
+// CanarySummary.ActionIDs) and doesn't build on these names.
 type ReadinessEvidence struct {
 	Diffs          []SourceDiff      `json:"diffs"`
 	Services       []ChangedService  `json:"services"`
@@ -195,4 +200,7 @@ var (
 	ErrNotFound        = errors.New("release report not found")
 	ErrInProgress      = errors.New("a release is already being prepared for this environment")
 	ErrTooManyConcerns = errors.New("this report already has as many concerns as it can hold")
+	// ErrMovedOn: the report is there, but no longer in the status or
+	// state the change applies to, so nothing was written.
+	ErrMovedOn = errors.New("the release report has moved on; nothing was changed")
 )

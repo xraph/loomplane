@@ -153,7 +153,7 @@ func TestOneActivePreparationPerEnvironment(t *testing.T) {
 	// Another environment isn't blocked.
 	mustCreate(t, s, newReport("org_a", "proj_a", "env_other"))
 
-	if err := s.Settle(ctx, "org_a", first.ID, StatusDone, StatePromoted, "", "", t0.Add(time.Hour)); err != nil {
+	if err := s.Settle(ctx, "org_a", first.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Active(ctx, "org_a", "env_prod"); !errors.Is(err, ErrNotFound) {
@@ -207,7 +207,7 @@ func TestSetPlanAndSetTaskOnlyOnce(t *testing.T) {
 
 	// A cancelled preparation never gains a task or a plan.
 	c := mustCreate(t, s, newReport("org_a", "proj_a", "env_other"))
-	if err := s.Settle(ctx, "org_a", c.ID, StatusCancelled, StateCancelled, "cancelled by usr_ada", "", t0); err != nil {
+	if err := s.Settle(ctx, "org_a", c.ID, StatePlanning, StatusCancelled, StateCancelled, "cancelled by usr_ada", "", t0); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := s.SetPlan(ctx, "org_a", c.ID, "plan_3", false); ok || err != nil {
@@ -227,6 +227,9 @@ func TestRecordEvaluation(t *testing.T) {
 	r := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
 	if err := s.SetEvidence(ctx, "org_a", r.ID, "rev_1", &ReadinessEvidence{BackupSchedule: true}, []GateCheck{{Number: 1, Name: "a", Detail: "d"}}); err != nil {
 		t.Fatal(err)
+	}
+	if ok, err := s.SetTask(ctx, "org_a", r.ID, "atask_1", "run_1"); !ok || err != nil {
+		t.Fatalf("set task: %v %v", ok, err)
 	}
 	at := t0.Add(5 * time.Minute)
 	gates := []GateCheck{{Number: 1, Name: "a", Passed: true, Detail: "ok"}, {Number: 2, Name: "b", Passed: true, Detail: "ok"}}
@@ -301,7 +304,7 @@ func TestForPlanReturnsTheNewest(t *testing.T) {
 	if _, err := s.SetPlan(ctx, "org_a", older.ID, "plan_1", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Settle(ctx, "org_a", older.ID, StatusDone, StateStopped, "", "", t0); err != nil {
+	if err := s.Settle(ctx, "org_a", older.ID, StatePlanning, StatusDone, StateStopped, "", "", t0); err != nil {
 		t.Fatal(err)
 	}
 	newer := newReport("org_a", "proj_a", "env_prod")
@@ -356,12 +359,12 @@ func TestUnsettledSpansOrganizations(t *testing.T) {
 	}
 	// Done, but a person still has to decide: unsettled.
 	waiting := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod_w"))
-	if err := s.Settle(ctx, "org_a", waiting.ID, StatusDone, StateWaiting, "gate 4 failed", "", t0); err != nil {
+	if err := s.Settle(ctx, "org_a", waiting.ID, StatePlanning, StatusDone, StateWaiting, "gate 4 failed", "", t0); err != nil {
 		t.Fatal(err)
 	}
 	// Done and terminal: settled.
 	done := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod_d"))
-	if err := s.Settle(ctx, "org_a", done.ID, StatusDone, StateApproved, "", "", t0); err != nil {
+	if err := s.Settle(ctx, "org_a", done.ID, StatePlanning, StatusDone, StateApproved, "", "", t0); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Unsettled(ctx, 10)
@@ -391,12 +394,12 @@ func TestMarkNotifiedOncePerState(t *testing.T) {
 		state string
 		want  bool
 	}{{StatePromoted, true}, {StatePromoted, false}, {StateStale, true}, {StateStale, false}} {
-		got, err := s.MarkNotified(ctx, "org_a", r.ID, step.state)
+		got, err := s.MarkNotified(ctx, "org_a", r.ID, step.state, nil)
 		if err != nil || got != step.want {
 			t.Fatalf("step %d (%s): %v %v", i, step.state, got, err)
 		}
 	}
-	if _, err := s.MarkNotified(ctx, "org_a", "rrep_missing", StatePromoted); !errors.Is(err, ErrNotFound) {
+	if _, err := s.MarkNotified(ctx, "org_a", "rrep_missing", StatePromoted, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing report: %v", err)
 	}
 }
@@ -441,10 +444,10 @@ func TestReportsStayInTheirOrganization(t *testing.T) {
 	if err := s.AddConcern(ctx, "org_b", a.ID, Concern{Kind: ConcernRisk, Text: "x"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("org b added a concern: %v", err)
 	}
-	if err := s.Settle(ctx, "org_b", a.ID, StatusCancelled, StateCancelled, "", "", t0); !errors.Is(err, ErrNotFound) {
+	if err := s.Settle(ctx, "org_b", a.ID, StatePlanning, StatusCancelled, StateCancelled, "", "", t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("org b settled: %v", err)
 	}
-	if ok, err := s.MarkNotified(ctx, "org_b", a.ID, StatePromoted); ok || !errors.Is(err, ErrNotFound) {
+	if ok, err := s.MarkNotified(ctx, "org_b", a.ID, StatePromoted, nil); ok || !errors.Is(err, ErrNotFound) {
 		t.Fatalf("org b marked notified: %v %v", ok, err)
 	}
 
@@ -452,7 +455,7 @@ func TestReportsStayInTheirOrganization(t *testing.T) {
 	if got.PlanID != "plan_a" || got.TaskID != "" || got.Evidence != nil || got.Status != StatusPlanning || len(got.Concerns) != 0 || got.Decision != "" {
 		t.Fatalf("org b changed org a's report: %+v", got)
 	}
-	if ok, err := s.MarkNotified(ctx, "org_a", a.ID, StatePromoted); !ok || err != nil {
+	if ok, err := s.MarkNotified(ctx, "org_a", a.ID, StatePromoted, nil); !ok || err != nil {
 		t.Fatalf("org a's own notice was spent by org b: %v %v", ok, err)
 	}
 }
@@ -545,7 +548,7 @@ func TestReleaseReportEventsAreEmitted(t *testing.T) {
 	}
 
 	// Notice bookkeeping alone emits nothing.
-	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted); !ok || err != nil {
+	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, nil); !ok || err != nil {
 		t.Fatalf("mark notified: %v %v", ok, err)
 	}
 	if n := len(events()); n != 1 {
@@ -566,7 +569,7 @@ func TestReleaseReportEventsAreEmitted(t *testing.T) {
 	if len(got) != 2 || strings.Contains(string(got[1].Data), "secret") {
 		t.Fatalf("a concern's event: %+v", got)
 	}
-	if err := s.Settle(ctx, "org_a", r.ID, StatusFailed, StateFailed, "", "could not plan", t0); err != nil {
+	if err := s.Settle(ctx, "org_a", r.ID, StatePlanning, StatusFailed, StateFailed, "", "could not plan", t0); err != nil {
 		t.Fatal(err)
 	}
 	got = events()
@@ -637,5 +640,238 @@ func TestConcurrentWritersKeepTheLimits(t *testing.T) {
 	}
 	if ok != 2 || full != writers-2 {
 		t.Fatalf("%d preparations started, %d refused", ok, full)
+	}
+}
+
+// Fix round 1, I1: a state change applies only to the state it was read
+// in, and a settled report never moves again.
+func TestSettleIsCompareAndSet(t *testing.T) {
+	s, _ := openPg(t)
+	ctx := context.Background()
+
+	// A cancel lands, then the job's late write against the state it read.
+	r := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
+	if err := s.Settle(ctx, "org_a", r.ID, StatePlanning, StatusCancelled, StateCancelled, "cancelled", "", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Settle(ctx, "org_a", r.ID, StatePlanning, StatusFailed, StateFailed, "", "the job failed", t0); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("late job settle: %v", err)
+	}
+	if err := s.SetEvidence(ctx, "org_a", r.ID, "rev_1", &ReadinessEvidence{}, nil); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("late evidence: %v", err)
+	}
+	if err := s.RecordEvaluation(ctx, "org_a", r.ID, nil, DecisionPromote, nil, t0); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("late evaluation: %v", err)
+	}
+	if got := mustGet(t, s, r.ID); got.Status != StatusCancelled || got.State != StateCancelled || got.Error != "" || got.Evidence != nil || got.Decision != "" {
+		t.Fatalf("the cancel was overwritten: %+v", got)
+	}
+
+	// A cancel and a settle race on a reviewing report: exactly one wins.
+	for i := range 10 {
+		rr := mustCreate(t, s, newReport("org_a", "proj_a", fmt.Sprintf("env_race_%d", i)))
+		if ok, err := s.SetTask(ctx, "org_a", rr.ID, "atask", "run"); !ok || err != nil {
+			t.Fatalf("set task: %v %v", ok, err)
+		}
+		errs := make(chan error, 2)
+		go func() {
+			errs <- s.Settle(ctx, "org_a", rr.ID, StateReviewing, StatusCancelled, StateCancelled, "", "", t0)
+		}()
+		go func() { errs <- s.Settle(ctx, "org_a", rr.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0) }()
+		var won, lost int
+		for range 2 {
+			switch err := <-errs; {
+			case err == nil:
+				won++
+			case errors.Is(err, ErrMovedOn):
+				lost++
+			default:
+				t.Fatal(err)
+			}
+		}
+		if won != 1 || lost != 1 {
+			t.Fatalf("race %d: %d won, %d lost", i, won, lost)
+		}
+	}
+
+	// A finished report can't be reopened or take back its environment.
+	f := mustCreate(t, s, newReport("org_a", "proj_a", "env_done"))
+	if err := s.Settle(ctx, "org_a", f.ID, StatePlanning, StatusDone, StatePromoted, "", "", t0); err != nil {
+		t.Fatal(err)
+	}
+	next := mustCreate(t, s, newReport("org_a", "proj_a", "env_done"))
+	for _, status := range []string{StatusPlanning, StatusReviewing} {
+		if err := s.Settle(ctx, "org_a", f.ID, StatePromoted, status, StatePlanning, "", "", t0); err == nil {
+			t.Fatalf("settled a report back to %s", status)
+		}
+	}
+	if err := s.Settle(ctx, "org_a", f.ID, StatePromoted, StatusCancelled, StateCancelled, "", "", t0); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("a finished report moved again: %v", err)
+	}
+	if ok, err := s.SetTask(ctx, "org_a", f.ID, "atask_2", "run_2"); ok || err != nil {
+		t.Fatalf("a finished report took a task: %v %v", ok, err)
+	}
+	if active, err := s.Active(ctx, "org_a", "env_done"); err != nil || active.ID != next.ID {
+		t.Fatalf("active slot: %+v %v", active, err)
+	}
+	if got := mustGet(t, s, f.ID); got.Status != StatusDone || got.State != StatePromoted {
+		t.Fatalf("finished report changed: %+v", got)
+	}
+
+	// Waiting for a person is not final: it settles once, from that state.
+	w := mustCreate(t, s, newReport("org_a", "proj_a", "env_wait"))
+	if err := s.Settle(ctx, "org_a", w.ID, StatePlanning, StatusDone, StateWaiting, "", "", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Settle(ctx, "org_a", w.ID, StateWaiting, StatusDone, StateApproved, "", "", t0); err != nil {
+		t.Fatalf("waiting to approved: %v", err)
+	}
+	if err := s.Settle(ctx, "org_a", w.ID, StateWaiting, StatusDone, StateRejected, "", "", t0); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("approved, then rejected: %v", err)
+	}
+
+	// An evaluation is recorded only while the review runs.
+	e := mustCreate(t, s, newReport("org_a", "proj_a", "env_eval"))
+	if err := s.RecordEvaluation(ctx, "org_a", e.ID, nil, DecisionPromote, nil, t0); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("evaluation while planning: %v", err)
+	}
+	if err := s.Settle(ctx, "org_a", "rrep_missing", StatePlanning, StatusFailed, StateFailed, "", "", t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("settle a missing report: %v", err)
+	}
+}
+
+// Fix round 1, I2: the notice is enqueued in the mark's transaction, so a
+// failed enqueue leaves the report unmarked and the next sweep retries.
+func TestMarkNotifiedRollsBackWhenTheNoticeFails(t *testing.T) {
+	s, pg := openPg(t)
+	ctx := context.Background()
+	if _, err := pg.Exec(ctx, `CREATE TABLE notice_probe (report_id TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	probes := func() int {
+		var n int
+		if err := pg.QueryRow(ctx, `SELECT count(*) FROM notice_probe`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	r := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
+	refuse := errors.New("enqueue failed")
+	failing := func(ctx context.Context, tx NoticeTx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO notice_probe VALUES ($1)`, r.ID); err != nil {
+			return err
+		}
+		return refuse
+	}
+	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, failing); ok || !errors.Is(err, refuse) {
+		t.Fatalf("failing send: %v %v", ok, err)
+	}
+	if n := probes(); n != 0 {
+		t.Fatalf("the failed notice was kept: %d", n)
+	}
+	sends := 0
+	working := func(ctx context.Context, tx NoticeTx) error {
+		sends++
+		_, err := tx.Exec(ctx, `INSERT INTO notice_probe VALUES ($1)`, r.ID)
+		return err
+	}
+	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, working); !ok || err != nil {
+		t.Fatalf("retry: %v %v", ok, err)
+	}
+	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, working); ok || err != nil {
+		t.Fatalf("second notice: %v %v", ok, err)
+	}
+	if sends != 1 || probes() != 1 {
+		t.Fatalf("%d sends, %d notices", sends, probes())
+	}
+}
+
+// Fix round 1, I3: reports that stay unsettled don't starve a newer one.
+func TestUnsettledSweepsFairly(t *testing.T) {
+	s, pg := openPg(t)
+	ctx := context.Background()
+	for i := range 150 {
+		w := newReport("org_a", "proj_a", fmt.Sprintf("env_wait_%d", i))
+		w.Status, w.State = StatusDone, StateWaiting
+		mustCreate(t, s, w)
+	}
+	newer := newReport("org_b", "proj_b", "env_new")
+	newer.CreatedAt, newer.UpdatedAt = t0.Add(time.Hour), t0.Add(time.Hour)
+	mustCreate(t, s, newer)
+	var events int
+	count := func() int {
+		if err := pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_events WHERE type LIKE 'release_report.%'`).Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+	before := count()
+
+	reached := 0
+	for sweep := 1; sweep <= 2 && reached == 0; sweep++ {
+		got, err := s.Unsettled(ctx, 100)
+		if err != nil || len(got) != 100 {
+			t.Fatalf("sweep %d: %d %v", sweep, len(got), err)
+		}
+		for _, r := range got {
+			if r.ID == newer.ID {
+				reached = sweep
+			}
+		}
+	}
+	if reached == 0 {
+		t.Fatal("two sweeps of 100 never reached the newer report")
+	}
+	if n := count(); n != before {
+		t.Fatalf("sweeping emitted %d events", n-before)
+	}
+}
+
+// Fix round 1, M6: Unsettled and Terminal agree on every state.
+func TestUnsettledMatchesTerminal(t *testing.T) {
+	s, _ := openPg(t)
+	ctx := context.Background()
+	states := []string{StatePlanning, StateReviewing, StatePromoting, StatePromoted, StateWaiting, StateApproved,
+		StateRejected, StateStale, StateExpired, StateSuperseded, StateBlocked, StateStopped, StateFailed, StateCancelled}
+	byID := map[string]string{}
+	for _, state := range states {
+		r := newReport("org_a", "proj_a", "env_"+state)
+		r.Status, r.State = StatusDone, state
+		byID[mustCreate(t, s, r).ID] = state
+	}
+	got, err := s.Unsettled(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		seen[byID[r.ID]] = true
+	}
+	for _, state := range states {
+		if seen[state] != !Terminal(state) {
+			t.Errorf("state %s: unsettled %v, Terminal %v", state, seen[state], Terminal(state))
+		}
+	}
+}
+
+// Fix round 1, M3 and M7.
+func TestStoreKeepsTimesAndIDsHonest(t *testing.T) {
+	s, _ := openPg(t)
+	ctx := context.Background()
+	first := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
+	again := newReport("org_a", "proj_a", "env_prod")
+	if err := s.Create(ctx, again); !errors.Is(err, ErrInProgress) || again.ID != "" {
+		t.Fatalf("refused create kept id %q: %v", again.ID, err)
+	}
+	if ok, err := s.SetTask(ctx, "org_a", first.ID, "atask", "run"); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	before := mustGet(t, s, first.ID).UpdatedAt
+	if err := s.RecordEvaluation(ctx, "org_a", first.ID, nil, DecisionAsk, nil, t0.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGet(t, s, first.ID)
+	if got.UpdatedAt.Before(before) || !got.EvaluatedAt.Equal(t0.Add(-time.Hour)) {
+		t.Fatalf("updated_at %v went back from %v (evaluated %v)", got.UpdatedAt, before, got.EvaluatedAt)
 	}
 }

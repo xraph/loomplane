@@ -115,13 +115,23 @@ func (s *PgStore) Create(ctx context.Context, r *ReleaseReport) error {
 	if err := validNew(r); err != nil {
 		return err
 	}
-	if r.ID == "" {
+	generated := r.ID == ""
+	if generated {
 		id, err := typeid.Generate("rrep")
 		if err != nil {
 			return fmt.Errorf("generate release report id: %w", err)
 		}
 		r.ID = id.String()
 	}
+	err := s.insert(ctx, r)
+	if err != nil && generated {
+		// A report that wasn't stored has no ID to point anyone at.
+		r.ID = ""
+	}
+	return err
+}
+
+func (s *PgStore) insert(ctx context.Context, r *ReleaseReport) error {
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
@@ -258,14 +268,20 @@ func (s *PgStore) ForPlan(ctx context.Context, orgID, planID string) (*ReleaseRe
 }
 
 // Unsettled implements Store. It is the one read across organizations: the
-// settle sweep reads every workspace's unfinished reports.
+// settle sweep reads every workspace's unfinished reports. It claims the
+// least recently swept and stamps swept_at, so reports that stay unsettled
+// for a long time can't starve newer ones, and two sweepers at once skip
+// each other's rows. swept_at isn't in the event, so a sweep emits nothing.
 func (s *PgStore) Unsettled(ctx context.Context, limit int) ([]*ReleaseReport, error) {
 	if limit <= 0 {
 		limit = defaultListLimit
 	}
-	return s.many(ctx, `SELECT `+reportColumns+` FROM loomplane_release_reports
-		WHERE `+unsettled+`
-		ORDER BY updated_at, id LIMIT $1`, limit)
+	return s.many(ctx, `UPDATE loomplane_release_reports SET swept_at = $2
+		WHERE id IN (SELECT id FROM loomplane_release_reports
+			WHERE `+unsettled+`
+			ORDER BY swept_at NULLS FIRST, updated_at, id LIMIT $1
+			FOR UPDATE SKIP LOCKED)
+		RETURNING `+reportColumns, limit, stored(time.Now()))
 }
 
 // changed runs an update of one report and tells "changed nothing because
@@ -295,11 +311,12 @@ func (s *PgStore) exists(ctx context.Context, orgID, id string) error {
 	return err
 }
 
-// mustChange is changed for updates whose only condition is the report.
+// mustChange is changed for updates that must apply: when the report is
+// there but its condition no longer holds, it has moved on.
 func (s *PgStore) mustChange(ctx context.Context, orgID, id, q string, args ...any) error {
 	ok, err := s.changed(ctx, orgID, id, q, args...)
 	if err == nil && !ok {
-		return ErrNotFound
+		return ErrMovedOn
 	}
 	return err
 }
@@ -327,7 +344,7 @@ func (s *PgStore) SetEvidence(ctx context.Context, orgID, id, planRevision strin
 	}
 	return s.mustChange(ctx, orgID, id, `UPDATE loomplane_release_reports
 		SET plan_revision = $3, evidence = $4, gates = $5, preview = true, updated_at = $6
-		WHERE org_id = $1 AND id = $2`,
+		WHERE org_id = $1 AND id = $2 AND status = 'planning'`,
 		orgID, id, planRevision, evidence, g, stored(time.Now()))
 }
 
@@ -357,12 +374,11 @@ func (s *PgStore) RecordEvaluation(ctx context.Context, orgID, id string, gates 
 	if err != nil {
 		return err
 	}
-	at = stored(at)
 	return s.mustChange(ctx, orgID, id, `UPDATE loomplane_release_reports
 		SET gates = $3, decision = $4, evidence = COALESCE($5::jsonb, evidence), preview = false,
-			evaluated_at = $6, updated_at = $6
-		WHERE org_id = $1 AND id = $2`,
-		orgID, id, g, decision, evidence, at)
+			evaluated_at = $6, updated_at = $7
+		WHERE org_id = $1 AND id = $2 AND status = 'reviewing'`,
+		orgID, id, g, decision, evidence, stored(at), stored(time.Now()))
 }
 
 // AddConcern implements Store. The append and the cap are one statement,
@@ -398,28 +414,61 @@ func (s *PgStore) AddConcern(ctx context.Context, orgID, id string, c Concern) e
 	return nil
 }
 
-// Settle implements Store. A done, failed or cancelled report keeps the
-// first time it finished.
-func (s *PgStore) Settle(ctx context.Context, orgID, id, status, state, reason, errText string, at time.Time) error {
-	if !knownStatus(status) || !knownState(state) {
-		return fmt.Errorf("unknown release report status %q or state %q", status, state)
+// Settle implements Store. It writes only while the report is still in the
+// state the caller read and isn't settled, so a late writer can't undo a
+// cancel and a finished report never moves again. It keeps the first time
+// the report finished.
+func (s *PgStore) Settle(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time) error {
+	if status != StatusDone && status != StatusFailed && status != StatusCancelled {
+		return fmt.Errorf("a release report settles as done, failed or cancelled, not %q", status)
+	}
+	if !knownState(state) {
+		return fmt.Errorf("unknown release report state %q", state)
 	}
 	at = stored(at)
 	return s.mustChange(ctx, orgID, id, `UPDATE loomplane_release_reports
-		SET status = $3, state = $4, state_reason = $5, error = $6, updated_at = $7,
-			finished_at = CASE WHEN $3 IN ('done', 'failed', 'cancelled') THEN COALESCE(finished_at, $7) ELSE finished_at END
-		WHERE org_id = $1 AND id = $2`,
-		orgID, id, status, state, reason, errText, at)
+		SET status = $4, state = $5, state_reason = $6, error = $7, updated_at = $8, finished_at = COALESCE(finished_at, $8)
+		WHERE org_id = $1 AND id = $2 AND state = $3 AND `+unsettled,
+		orgID, id, from, status, state, reason, errText, at)
 }
 
-// MarkNotified implements Store. It leaves updated_at alone, and the event
-// trigger ignores notified_state, so marking emits nothing.
-func (s *PgStore) MarkNotified(ctx context.Context, orgID, id, state string) (bool, error) {
-	return s.changed(ctx, orgID, id, `UPDATE loomplane_release_reports
+// MarkNotified implements Store. The mark and send share a transaction,
+// and the mark's row lock keeps two sweepers from both sending. It leaves
+// updated_at alone, and the event trigger ignores notified_state, so
+// marking emits nothing.
+func (s *PgStore) MarkNotified(ctx context.Context, orgID, id, state string, send func(ctx context.Context, tx NoticeTx) error) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer rollback(tx)
+	res, err := tx.Exec(ctx, `UPDATE loomplane_release_reports
 		SET notified_state = $3
 		WHERE org_id = $1 AND id = $2 AND notified_state <> $3`,
 		orgID, id, state)
+	if err != nil {
+		return false, fmt.Errorf("mark release report notified: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		rollback(tx)
+		return false, s.exists(ctx, orgID, id)
+	}
+	if send != nil {
+		if err := send(ctx, tx); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("mark release report notified: %w", err)
+	}
+	return true, nil
 }
+
+func rollback(tx driver.Tx) { _ = tx.Rollback() } //nolint:errcheck // a committed or rolled back transaction cannot roll back
 
 // evidenceParam is ev as a JSONB parameter, or SQL NULL for no evidence.
 func evidenceParam(ev *ReadinessEvidence) (any, error) {
