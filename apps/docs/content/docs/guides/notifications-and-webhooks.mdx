@@ -78,7 +78,7 @@ When the [built-in agent](/docs/agents/built-in-agent) is on, it sends three kin
 | Webhook type | When | Who gets it |
 |---|---|---|
 | `agent.request.created` | The agent needs a decision from someone | The people it asks. See [What needs a person](/docs/agents/what-needs-a-person#who-is-asked) |
-| `agent.report.created` | The agent opened a report, or one came back or happened again | Owners and admins, the members of the project's responsible team, and the person who started the deployment it's about |
+| `agent.report.created` | The agent opened a report, or one came back or happened again | The members of the project's responsible team (owners and admins when it has none), and the person who started the deployment it's about |
 | `agent.budget.created` | The agent stopped investigating because the month's AI budget is spent, and again when it starts | Owners and admins |
 
 A report notice reaches a person only while they have `deployment:read` on the report's project, and a budget notice only while they have `ai:manage`. The project's team counts only when the project names one. When it doesn't, owners and admins already have it. Repeats of one report send at most one notice an hour. [Watching and reports](/docs/agents/watching-and-reports#notices) has the whole story.

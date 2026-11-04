@@ -177,16 +177,14 @@ func (s *Service) deliverNotice(ctx context.Context, out *sender, d *Delivery, o
 	return nil, nil
 }
 
-// recipients are who hears about a report: the workspace's owners and
-// admins, the members of the project's responsible team, and the person
-// who started the deployment it's about, each once.
+// recipients are who hears about a report: the project's responsible team,
+// or the workspace's owners and admins when the project has none (or the
+// report has no project), and the person who started the deployment it's
+// about, each once. teams.Resolve makes that choice, as it does for the
+// agent's requests.
 func (s *Service) recipients(ctx context.Context, r *Report) ([]string, error) {
 	if s.d.DB == nil {
 		return nil, errors.New("agentreports: no database to read recipients from")
-	}
-	admins, err := notifications.Admins(ctx, s.d.DB, r.OrgID)
-	if err != nil {
-		return nil, err
 	}
 	var out []string
 	add := func(users ...string) {
@@ -196,15 +194,18 @@ func (s *Service) recipients(ctx context.Context, r *Report) ([]string, error) {
 			}
 		}
 	}
-	add(admins...)
-	if s.d.Teams != nil && r.ProjectID != "" {
+	if s.d.Teams != nil {
 		route, err := s.d.Teams.Resolve(ctx, s.d.DB, r.OrgID, r.ProjectID, "", "")
 		if err != nil {
 			return nil, err
 		}
-		if route.Source == "project" {
-			add(route.Members...)
+		add(route.Members...)
+	} else {
+		admins, err := notifications.Admins(ctx, s.d.DB, r.OrgID)
+		if err != nil {
+			return nil, err
 		}
+		add(admins...)
 	}
 	if s.d.Starters != nil && r.Evidence.DeploymentID != "" {
 		by, err := s.d.Starters.StartedBy(ctx, r.OrgID, r.Evidence.DeploymentID)

@@ -351,9 +351,9 @@ func (e *deliverEnv) opened(t *testing.T) *Report {
 	return e.observe(t, e.signal(SignalDeploymentFailed, "service:api", "dep_1#0")).Report
 }
 
-// everyone hears about projA's reports: the admins, the API team and the
-// person who started dep_1.
-var everyone = []string{userAdmin, userOwner, userStarter, userTeam}
+// everyone hears about projA's reports: its API team (which has an admin
+// in it) and the person who started dep_1. The owner, on no team, doesn't.
+var everyone = []string{userAdmin, userStarter, userTeam}
 
 func noticeUsers(notices []sentNotice, subject string) []string {
 	var users []string
@@ -1307,15 +1307,17 @@ func TestObserversScanOnlyTheIssueText(t *testing.T) {
 	}
 }
 
-func TestRecipientsAreAdminsTheTeamAndTheStarter(t *testing.T) {
+// A project's responsible team hears about its reports instead of the
+// admins; the admins hear only when the project has no team to send to.
+func TestRecipientsAreTheTeamOrElseTheAdminsAndTheStarter(t *testing.T) {
 	e := newMemEnv(t, deliverOptions{engine: passEngine{}})
 	ctx := context.Background()
 	for dep, want := range map[string][]string{
-		"dep_1":     {userAdmin, userOwner, userTeam, userStarter},
-		"dep_agent": {userAdmin, userOwner, userTeam},
-		"dep_auto":  {userAdmin, userOwner, userTeam},
-		"dep_gone":  {userAdmin, userOwner, userTeam},
-		"":          {userAdmin, userOwner, userTeam},
+		"dep_1":     {userTeam, userAdmin, userStarter},
+		"dep_agent": {userTeam, userAdmin},
+		"dep_auto":  {userTeam, userAdmin},
+		"dep_gone":  {userTeam, userAdmin},
+		"":          {userTeam, userAdmin},
 	} {
 		got, err := e.svc.recipients(ctx, &Report{OrgID: e.org, ProjectID: projA, Evidence: Evidence{DeploymentID: dep}})
 		if err != nil || !slices.Equal(got, want) {

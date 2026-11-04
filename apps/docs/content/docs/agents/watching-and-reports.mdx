@@ -97,9 +97,11 @@ Closing doesn't stop the problem coming back. If it does within 24 hours, the re
 
 Each report's notice goes through Loomplane's notifications: the inbox, email and your workspace's signed webhooks. It goes to:
 
-- the workspace's owners and admins
-- the members of the project's [responsible team](/docs/concepts/teams), when the project names one
+- the members of the project's [responsible team](/docs/concepts/teams), when the project names a team that has people in it
+- the workspace's owners and admins otherwise: when the project has no team, its team is empty, or the report isn't about one project
 - the person who started the deployment the report is about, when that was a person and not the agent or Loomplane's own automation
+
+Owners and admins who aren't on the team don't get a notice for that project's reports, but they can still read every report on the **Reports** page.
 
 Each person needs `deployment:read` on the project when the notice is delivered, or they don't get it. Email follows your `agent_email` preference, separate from deployment mail. See [Notifications and webhooks](/docs/guides/notifications-and-webhooks#the-agents-notices).
 
