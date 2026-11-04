@@ -726,7 +726,7 @@ func TestJoinAdoptRefusedJoinsWithoutCloud(t *testing.T) {
 	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error {
 		return fmt.Errorf("refused: %w", ErrAdoptionRefused)
 	}
-	res, err := r.svc.Join(context.Background(), joinReq())
+	res, err := r.svc.Join(context.Background(), signed(joinReq()))
 	if err != nil {
 		t.Fatalf("err %v", err)
 	}
