@@ -22,6 +22,28 @@ import (
 // planning.
 const planPoll = 2 * time.Second
 
+// planPollFor is how long one run of the prepare job reads a plan that's
+// still planning, and planRequeue how long it waits before the next run.
+// A job never holds a worker longer than that: it queues itself again,
+// counting its waits in the payload, so PlanWait bounds the whole wait.
+const (
+	planPollFor = 45 * time.Second
+	planRequeue = 15 * time.Second
+)
+
+// maxWaits is how many times the prepare job queues itself again for a
+// plan that's still planning: PlanWait in all.
+func (s *Service) maxWaits() int {
+	n := int(s.planWait / (s.planPollFor + s.planRequeue))
+	return max(n, 1)
+}
+
+// ownRoute reports whether a preparation was asked for on a route the
+// person called themselves: the dashboard or loomctl. Only those may
+// carry the person's request to release. Via is set by the code that
+// calls Prepare, never from what a request or the model sends.
+func ownRoute(via string) bool { return via == ViaDashboard || via == ViaCLI }
+
 // metaReleaseReport is the review task's metadata key naming its report.
 // It's the only metadata the job sets: the plan and the person are the
 // task's typed fields.
@@ -48,6 +70,10 @@ const (
 	reasonNoRequester    = "the release preparation names no person who asked for it"
 	reasonNotThisRelease = "the plan isn't the one this release preparation was for"
 )
+
+// reasonPlanningTooSlow ends a preparation whose plan didn't plan in
+// PlanWait.
+var reasonPlanningTooSlow = "the plan was still planning after " + formatDuration(PlanWait) + "; prepare the release again"
 
 // requesterLeft is the reason for a requester who may no longer do what a
 // preparation needs. It names them by user ID.
@@ -101,7 +127,7 @@ func (s *Service) RunJob(ctx context.Context, in JobPayload) error {
 	if r.Status != StatusPlanning {
 		return nil
 	}
-	j := &prepare{s: s, r: r, supersedes: in.Supersedes, sw: newSweep()}
+	j := &prepare{s: s, r: r, payload: in, supersedes: in.Supersedes, sw: newSweep()}
 	err = j.run(ctx)
 	if errors.Is(err, errSettled) {
 		return nil
@@ -111,8 +137,9 @@ func (s *Service) RunJob(ctx context.Context, in JobPayload) error {
 
 // prepare is one run of the prepare job.
 type prepare struct {
-	s *Service
-	r *ReleaseReport
+	s       *Service
+	r       *ReleaseReport
+	payload JobPayload
 	// supersedes is the open plan the person agreed to replace.
 	supersedes string
 	requester  security.Principal
@@ -192,6 +219,21 @@ func refused(err error) bool {
 	return errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrNotMember) || errors.Is(err, security.ErrUnauthenticated)
 }
 
+// refusal settles a read the agent was refused. Turning the agent off
+// takes its roles away, so its reads are refused from then on: that's the
+// agent off, and the report stops with the plan left for a person. Only
+// while the agent is on is a refusal the requester's.
+func (j *prepare) refusal(ctx context.Context) error {
+	on, err := j.s.sources().Budgets.Enabled(ctx, j.r.OrgID)
+	if err != nil {
+		return err
+	}
+	if !on {
+		return j.agentOff(ctx, agentsettings.ErrDisabled)
+	}
+	return j.settle(ctx, StatusFailed, StateFailed, requesterLeft(j.r.RequestedBy))
+}
+
 // stoppedBy is the agentsettings sentence err is, or nil.
 func stoppedBy(err error) error {
 	for _, c := range causes {
@@ -211,7 +253,7 @@ func (j *prepare) environments(ctx context.Context) error {
 	case errors.Is(err, projects.ErrNotFound):
 		return j.settle(ctx, StatusFailed, StateFailed, reasonNoProject)
 	case refused(err):
-		return j.settle(ctx, StatusFailed, StateFailed, requesterLeft(r.RequestedBy))
+		return j.refusal(ctx)
 	case err != nil:
 		return err
 	}
@@ -240,7 +282,7 @@ func (j *prepare) makePlan(ctx context.Context) error {
 	open, _, err := src.Plans.List(ctx, j.agent, r.ProjectID, j.to.Name, page.Cursor{}, 1)
 	switch {
 	case refused(err):
-		return j.settle(ctx, StatusFailed, StateFailed, requesterLeft(r.RequestedBy))
+		return j.refusal(ctx)
 	case err != nil:
 		return err
 	}
@@ -252,8 +294,15 @@ func (j *prepare) makePlan(ctx context.Context) error {
 			return rerr
 		case reuse:
 			plan = open[0]
-		case j.supersedes == "" || open[0].ID != j.supersedes:
-			return j.settle(ctx, StatusFailed, StateFailed, openPlanError(open[0]).Error())
+		case j.supersedes != "" && open[0].ID == j.supersedes:
+		default:
+			left, lerr := s.leftover(ctx, r.OrgID, open[0])
+			if lerr != nil {
+				return lerr
+			}
+			if !left {
+				return j.settle(ctx, StatusFailed, StateFailed, openPlanError(open[0]).Error())
+			}
 		}
 	}
 	reused := plan != nil
@@ -263,7 +312,7 @@ func (j *prepare) makePlan(ctx context.Context) error {
 		})
 		switch {
 		case refused(err):
-			return j.settle(ctx, StatusFailed, StateFailed, requesterLeft(r.RequestedBy))
+			return j.refusal(ctx)
 		case errors.Is(err, planning.ErrInvalid), errors.Is(err, planning.ErrNoManifest), errors.Is(err, projects.ErrNotFound),
 			errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, projects.ErrFleetManaged):
 			return j.settle(ctx, StatusFailed, StateFailed, cantPlan(j.from.Name, j.to.Name))
@@ -292,20 +341,29 @@ func (j *prepare) makePlan(ctx context.Context) error {
 	return nil
 }
 
-// waitPlan reads the report's plan until it leaves planning. Past
-// planWait it gives up with an error, so Dispatch retries the job, which
-// waits for the same plan.
+// waitPlan reads the report's plan until it leaves planning, for at most
+// planPollFor. A plan still planning then has the job queue itself again
+// for planRequeue later and end, so no worker is held while planning
+// runs; past maxWaits the preparation ends. Each read checks the report
+// first, so a cancel ends the wait.
 func (j *prepare) waitPlan(ctx context.Context) (*planning.Plan, error) {
 	s, r := j.s, j.r
-	deadline := time.Now().Add(s.planWait)
+	deadline := time.Now().Add(s.planPollFor)
 	for {
+		now, err := s.d.Store.Get(ctx, r.OrgID, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		if now.Status != StatusPlanning {
+			return nil, errSettled
+		}
 		plan, err := s.sources().Plans.Get(ctx, j.agent, r.PlanID)
 		switch {
 		case errors.Is(err, planning.ErrNotFound):
 			// A reused plan can go before the job reads it.
 			return nil, j.settle(ctx, StatusFailed, StateFailed, reasonNoPlan)
 		case refused(err):
-			return nil, j.settle(ctx, StatusFailed, StateFailed, requesterLeft(r.RequestedBy))
+			return nil, j.refusal(ctx)
 		case err != nil:
 			return nil, err
 		}
@@ -316,7 +374,7 @@ func (j *prepare) waitPlan(ctx context.Context) (*planning.Plan, error) {
 			return plan, nil
 		}
 		if !time.Now().Before(deadline) {
-			return nil, fmt.Errorf("releaseprep: plan %s is still planning after %s", plan.ID, s.planWait)
+			return nil, j.requeue(ctx)
 		}
 		timer := time.NewTimer(s.planPoll)
 		select {
@@ -326,6 +384,21 @@ func (j *prepare) waitPlan(ctx context.Context) (*planning.Plan, error) {
 		case <-timer.C:
 		}
 	}
+}
+
+// requeue queues the prepare job again for later, one wait more, and ends
+// this run; past maxWaits it ends the preparation instead.
+func (j *prepare) requeue(ctx context.Context) error {
+	s := j.s
+	if j.payload.Waits >= s.maxWaits() {
+		return j.settle(ctx, StatusFailed, StateFailed, reasonPlanningTooSlow)
+	}
+	next := j.payload
+	next.Waits++
+	if err := s.enqueue(ctx, next, job.WithRunAt(s.now().Add(s.planRequeue))); err != nil {
+		return err
+	}
+	return errSettled
 }
 
 // notReady stores the evidence of a plan the agent can't approve
@@ -399,9 +472,15 @@ func (j *prepare) review(ctx context.Context, plan *planning.Plan) (moved bool, 
 		}
 		return false, err
 	}
-	canApprove, err := j.mayApprove(ctx)
-	if err != nil {
-		return false, err
+	// The run carries the person's request to release only when they
+	// asked on their own route, for a plan this preparation made for them
+	// (or one they made), and may approve production now. Otherwise the
+	// agent reviews and a person approves.
+	canApprove := false
+	if requestable(r, plan) {
+		if canApprove, err = j.mayApprove(ctx); err != nil {
+			return false, err
+		}
 	}
 	requester := j.requester
 	in := agentruns.StartInput{
@@ -413,6 +492,12 @@ func (j *prepare) review(ctx context.Context, plan *planning.Plan) (moved bool, 
 		in.ReleasePlanID, in.ReleaseRevision = r.PlanID, r.PlanRevision
 	}
 	task, err := s.d.Runs.Start(ctx, in)
+	if refused(err) && in.ReleasePlanID != "" {
+		// They lost deployment:approve since mayApprove: review without
+		// their request.
+		in.ReleasePlanID, in.ReleaseRevision = "", ""
+		task, err = s.d.Runs.Start(ctx, in)
+	}
 	if err != nil {
 		switch cause := stoppedBy(err); {
 		case cause != nil:
@@ -420,11 +505,29 @@ func (j *prepare) review(ctx context.Context, plan *planning.Plan) (moved bool, 
 		case errors.Is(err, agentruns.ErrInvalid):
 			return true, err
 		case refused(err):
+			on, eerr := s.sources().Budgets.Enabled(ctx, r.OrgID)
+			if eerr != nil {
+				return false, eerr
+			}
+			if !on {
+				return false, j.agentOff(ctx, agentsettings.ErrDisabled)
+			}
 			return false, j.settle(ctx, StatusDone, StateStopped, requesterCantUseAgent(r.RequestedBy))
 		}
 		return false, err
 	}
 	return false, j.record(ctx, task)
+}
+
+// requestable reports whether a review of r may carry its requester's
+// request to release plan: asked for on their own route (never from
+// chat, where the model chose to start it), and plan made for this
+// preparation or by the requester, never another's open plan it reused.
+func requestable(r *ReleaseReport, plan *planning.Plan) bool {
+	if r == nil || plan == nil || !ownRoute(r.Via) {
+		return false
+	}
+	return !r.ReusedPlan || plan.CreatedBy == r.RequestedBy
 }
 
 // mayApprove reports whether the requester holds deployment:approve on the

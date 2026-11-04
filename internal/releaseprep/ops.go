@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
 	defs "github.com/xraph/loomplane/pkg/agentops"
@@ -124,12 +125,12 @@ func RegisterOps(r *agentops.Registry, d *agentops.Deps, svc func() *Service) {
 		if err != nil {
 			return nil, err
 		}
+		if serr := s.inScope(ctx, call, id); serr != nil {
+			return nil, serr
+		}
 		rep, err := s.Get(ctx, call.Principal, id)
 		if err != nil {
 			return nil, err
-		}
-		if serr := call.InScope(ctx, rep.ProjectID, rep.ToEnvironmentID); serr != nil {
-			return nil, serr
 		}
 		return quoteReport(ctx, d.Safety, rep)
 	})
@@ -165,6 +166,20 @@ func prepareRelease(ctx context.Context, s *Service, d *agentops.Deps, call agen
 	if err != nil {
 		return PrepareReleaseOutput{}, err
 	}
+	// A run about one environment may prepare only a release to it.
+	if call.Scope.EnvironmentID != "" {
+		envs, eerr := d.Projects.Environments(ctx, call.Principal, project.ID)
+		if eerr != nil {
+			return PrepareReleaseOutput{}, eerr
+		}
+		to, perr := pick(envs, in.To, projects.KindProduction, ErrNoProduction)
+		if perr != nil {
+			return PrepareReleaseOutput{}, perr
+		}
+		if serr := call.InScope(ctx, project.ID, to.ID); serr != nil {
+			return PrepareReleaseOutput{}, serr
+		}
+	}
 	// Prepare checks the person; the agent must be allowed to deploy here
 	// too, as it will be when the job plans.
 	if aerr := d.Authz.Require(ctx, call.Principal, security.DeploymentCreate, project.ID); aerr != nil {
@@ -187,14 +202,13 @@ func noteConcern(ctx context.Context, s *Service, call agentops.Call, in NoteRel
 	if err != nil {
 		return NoteReleaseConcernOutput{}, err
 	}
-	rep, err := s.readable(ctx, call.Principal, id)
-	if err != nil {
-		return NoteReleaseConcernOutput{}, err
-	}
-	if serr := call.InScope(ctx, rep.ProjectID, rep.ToEnvironmentID); serr != nil {
+	if serr := s.inScope(ctx, call, id); serr != nil {
 		return NoteReleaseConcernOutput{}, serr
 	}
-	rep, err = s.Note(ctx, call.Principal, call.TaskID, id, Concern{Kind: strings.TrimSpace(in.Kind), Text: in.Text})
+	if _, rerr := s.readable(ctx, call.Principal, id); rerr != nil {
+		return NoteReleaseConcernOutput{}, rerr
+	}
+	rep, err := s.Note(ctx, call.Principal, call.TaskID, id, Concern{Kind: strings.TrimSpace(in.Kind), Text: in.Text})
 	if err != nil {
 		return NoteReleaseConcernOutput{}, err
 	}
@@ -203,6 +217,17 @@ func noteConcern(ctx context.Context, s *Service, call agentops.Call, in NoteRel
 		note = "Noted: Loomplane will ask a person before this release goes out."
 	}
 	return NoteReleaseConcernOutput{ReportID: rep.ID, Kind: strings.TrimSpace(in.Kind), Concerns: len(rep.Concerns), Note: note}, nil
+}
+
+// inScope checks report id is the calling agent's organization's, and in
+// the run's project and environment. It reads no permission: a report
+// outside the run is not found, whatever the person may read.
+func (s *Service) inScope(ctx context.Context, call agentops.Call, id string) error {
+	r, err := s.d.Store.Get(ctx, call.Principal.OrgID, id)
+	if err != nil {
+		return err
+	}
+	return call.InScope(ctx, r.ProjectID, r.ToEnvironmentID)
 }
 
 // readable is report id of p's organization, once p may read the

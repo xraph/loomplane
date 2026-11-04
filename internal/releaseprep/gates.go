@@ -198,6 +198,18 @@ func autonomy(in CheckInput) []string {
 	case !in.RequesterCanApprove:
 		why = append(why, "the person who asked can't approve production releases in this project, so someone who can approves it")
 	}
+	// Only a person's own request may promote: one they made on the
+	// dashboard or loomctl, for a plan made for it or by them.
+	if r := in.Report; r != nil {
+		switch {
+		case r.Via == ViaChat:
+			why = append(why, "it was asked for in chat, where the agent chose to start it, so a person approves it")
+		case !ownRoute(r.Via):
+			why = append(why, "it wasn't asked for from the dashboard or loomctl, so a person approves it")
+		case in.Plan != nil && !requestable(r, in.Plan):
+			why = append(why, "it reuses a plan "+actorName(in.Plan.CreatedBy)+" made, so a person approves it")
+		}
+	}
 	return why
 }
 

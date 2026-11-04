@@ -71,36 +71,41 @@ const (
 // migration paths and patches, open report titles, what the model wrote).
 // They are stored as data and never travel in a realtime event.
 type ReleaseReport struct {
-	ID                string             `json:"id" forge:"id"` // typeid "rrep"
-	OrgID             string             `json:"org_id"`
-	ProjectID         string             `json:"project_id"`
-	FromEnvironmentID string             `json:"from_environment_id"`
-	FromEnvironment   string             `json:"from_environment"`
-	ToEnvironmentID   string             `json:"to_environment_id"`
-	ToEnvironment     string             `json:"to_environment"`
-	Scope             []string           `json:"scope"`
-	Status            string             `json:"status"`
-	State             string             `json:"state"`
-	StateReason       string             `json:"state_reason"`
-	RequestedBy       string             `json:"requested_by"` // a person's user ID, never empty
-	Via               string             `json:"via"`
-	PlanID            string             `json:"plan_id"`
-	PlanRevision      string             `json:"plan_revision"`
-	ReusedPlan        bool               `json:"reused_plan"`
-	TaskID            string             `json:"task_id"`
-	RunID             string             `json:"run_id"`
-	Evidence          *ReadinessEvidence `json:"evidence"`
-	Gates             []GateCheck        `json:"gates"`   // the latest evaluation, or the job's preview
-	Preview           bool               `json:"preview"` // Gates came from the job, not from approve_plan
-	Decision          string             `json:"decision"`
-	EvaluatedAt       *time.Time         `json:"evaluated_at"`
-	Concerns          []Concern          `json:"concerns"`
-	RequestID         string             `json:"request_id"` // read time: the approve_plan request for the plan, if any
-	DecidedBy         string             `json:"decided_by"` // read time: the plan's
-	Error             string             `json:"error"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
-	FinishedAt        *time.Time         `json:"finished_at"`
+	ID                string   `json:"id" forge:"id"` // typeid "rrep"
+	OrgID             string   `json:"org_id"`
+	ProjectID         string   `json:"project_id"`
+	FromEnvironmentID string   `json:"from_environment_id"`
+	FromEnvironment   string   `json:"from_environment"`
+	ToEnvironmentID   string   `json:"to_environment_id"`
+	ToEnvironment     string   `json:"to_environment"`
+	Scope             []string `json:"scope"`
+	Status            string   `json:"status"`
+	State             string   `json:"state"`
+	StateReason       string   `json:"state_reason"`
+	RequestedBy       string   `json:"requested_by"` // a person's user ID, never empty
+	// Via is how the preparation was asked for. Only Loomplane sets it:
+	// the code calling Prepare passes it for its own route (PrepareInput
+	// has no such field), and it never changes. Only ViaDashboard and
+	// ViaCLI may carry the person's request to release; ViaChat never
+	// does, since there the model chose to start it.
+	Via          string             `json:"via"`
+	PlanID       string             `json:"plan_id"`
+	PlanRevision string             `json:"plan_revision"`
+	ReusedPlan   bool               `json:"reused_plan"`
+	TaskID       string             `json:"task_id"`
+	RunID        string             `json:"run_id"`
+	Evidence     *ReadinessEvidence `json:"evidence"`
+	Gates        []GateCheck        `json:"gates"`   // the latest evaluation, or the job's preview
+	Preview      bool               `json:"preview"` // Gates came from the job, not from approve_plan
+	Decision     string             `json:"decision"`
+	EvaluatedAt  *time.Time         `json:"evaluated_at"`
+	Concerns     []Concern          `json:"concerns"`
+	RequestID    string             `json:"request_id"` // read time: the approve_plan request for the plan, if any
+	DecidedBy    string             `json:"decided_by"` // read time: the plan's
+	Error        string             `json:"error"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+	FinishedAt   *time.Time         `json:"finished_at"`
 }
 
 // ReleaseReportEvent is the realtime release_report event: exactly what the

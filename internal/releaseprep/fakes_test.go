@@ -154,6 +154,8 @@ type fakePlans struct {
 	// statuses steps a plan through statuses, one per Get.
 	statuses map[string][]string
 	getCalls int
+	// onGet, when set, answers the nth Get (from 1) with its error.
+	onGet func(n int) error
 }
 
 // planCreate is one Create call.
@@ -185,9 +187,18 @@ func (f *fakePlans) Create(_ context.Context, p security.Principal, projectID st
 
 func (f *fakePlans) Get(_ context.Context, _ security.Principal, id string) (*planning.Plan, error) {
 	f.mu.Lock()
+	f.getCalls++
+	n, hook := f.getCalls, f.onGet
+	f.mu.Unlock()
+	// The hook may read plans itself, so it runs unlocked.
+	if hook != nil {
+		if err := hook(n); err != nil {
+			return nil, err
+		}
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
-	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}

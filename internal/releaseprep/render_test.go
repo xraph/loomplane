@@ -69,8 +69,9 @@ func TestRenderInputNamesPlanAndRevision(t *testing.T) {
 		}
 		last = i
 	}
-	sections := []string{"Plan", "Gate preview", "Changed services", "Sources", "Artifacts", "Problems and warnings",
-		"Staging soak", "Production canaries", "Production watch coverage", "Open reports on staging", "Budget", "Unavailable evidence"}
+	// What decides a release comes first, so a cut to fit never drops it.
+	sections := []string{"Plan", "Gate preview", "Unavailable evidence", "Budget", "Changed services", "Problems and warnings",
+		"Staging soak", "Production canaries", "Production watch coverage", "Open reports on staging", "Artifacts", "Sources"}
 	last = -1
 	for _, s := range sections {
 		i := strings.Index(out, "\n## "+s)
@@ -159,6 +160,11 @@ func TestRenderInputIsBounded(t *testing.T) {
 	}
 	if strings.Count(out, "<untrusted_content") != strings.Count(out, "</untrusted_content>") {
 		t.Fatal("a quoted block was cut open")
+	}
+	for _, kept := range []string{"## Gate preview", "## Unavailable evidence", "## Budget", "## Changed services"} {
+		if !strings.Contains(out, kept) {
+			t.Errorf("the cut dropped %q", kept)
+		}
 	}
 }
 

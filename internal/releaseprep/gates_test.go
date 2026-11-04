@@ -31,7 +31,7 @@ func green() CheckInput {
 	report := &ReleaseReport{
 		ID: "rrep_1", OrgID: "org_a", ProjectID: "proj_a", FromEnvironmentID: "env_stg", FromEnvironment: "staging",
 		ToEnvironmentID: "env_prd", ToEnvironment: "production", Status: StatusReviewing, State: StateReviewing,
-		RequestedBy: "usr_dev", PlanID: "plan_a", PlanRevision: "rev_1", TaskID: "atask_1", RunID: "run_1",
+		RequestedBy: "usr_dev", Via: ViaDashboard, PlanID: "plan_a", PlanRevision: "rev_1", TaskID: "atask_1", RunID: "run_1",
 		Evidence: &ReadinessEvidence{CollectedAt: collectedAt},
 	}
 	finished := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
@@ -112,6 +112,11 @@ func TestEachGateFailsAlone(t *testing.T) {
 			in.RequesterCanApprove, in.RequesterError = false, "their permissions couldn't be read"
 		}, "couldn't read"},
 		{"no project", 1, func(in *CheckInput) { in.Project = nil }, "couldn't read the project"},
+		{"asked for in chat", 1, func(in *CheckInput) { in.Report.Via = ViaChat }, "asked for in chat"},
+		{"asked for on no known route", 1, func(in *CheckInput) { in.Report.Via = "" }, "wasn't asked for from the dashboard or loomctl"},
+		{"reuses another person's plan", 1, func(in *CheckInput) {
+			in.Report.ReusedPlan, in.Plan.CreatedBy = true, "usr_lee"
+		}, "reuses a plan usr_lee made"},
 		{"plan kind release", 2, func(in *CheckInput) { in.Plan.Kind = planning.KindRelease }, "not a promotion"},
 		{"from kind preview", 2, func(in *CheckInput) { in.From.Kind = projects.KindPreview }, "isn't a staging environment"},
 		{"to kind staging", 2, func(in *CheckInput) { in.To.Kind = projects.KindStaging }, "isn't a production environment"},

@@ -25,12 +25,12 @@ const (
 // JobQueue is the queue the jobs and the cron run on.
 const JobQueue = agentruns.SweepQueue
 
-// The prepare job's bounds: a few tries, each long enough to wait
-// PlanWait for the plan and then read the evidence. planningBackstop
-// stops a report whose job never got that far.
+// The prepare job's bounds: a few tries, each long enough to poll the
+// plan for planPollFor and then read the evidence. planningBackstop stops
+// a report whose job never got that far.
 const (
 	prepareRetries = 3
-	prepareTimeout = 30 * time.Minute
+	prepareTimeout = 10 * time.Minute
 )
 
 // JobPayload names a report. Its job reads everything else from the
@@ -46,6 +46,9 @@ type JobPayload struct {
 	// with ErrOpenPlan's reason. A small window remains between that read
 	// and planning's supersede.
 	Supersedes string `json:"supersedes,omitempty"`
+	// Waits counts the times the job queued itself again for a plan still
+	// planning; past maxWaits the preparation ends.
+	Waits int `json:"waits,omitempty"`
 }
 
 // JobOptions are how JobPrepare is queued.

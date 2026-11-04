@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	dispatchengine "github.com/xraph/dispatch/engine"
+	"github.com/xraph/dispatch/job"
 
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
@@ -136,6 +137,8 @@ type Service struct {
 	// planPoll and planWait are how often and how long the prepare job
 	// reads a plan that's still planning.
 	planPoll, planWait time.Duration
+	// planPollFor and planRequeue bound one run of the job's wait.
+	planPollFor, planRequeue time.Duration
 }
 
 // NewService returns a Service. Its Gate and the Service read through one
@@ -144,7 +147,7 @@ func NewService(d Deps) *Service {
 	c := &Collector{Sources: d.Sources, Now: d.Now}
 	return &Service{
 		d: d, collector: c, gate: &Gate{Store: d.Store, Collector: c, Audit: d.Audit, Now: d.Now},
-		planPoll: planPoll, planWait: PlanWait,
+		planPoll: planPoll, planWait: PlanWait, planPollFor: planPollFor, planRequeue: planRequeue,
 	}
 }
 
@@ -397,10 +400,32 @@ func (s *Service) openPlan(ctx context.Context, p security.Principal, projectID 
 	if reuse {
 		return plan.ID, true, "", nil
 	}
-	if replace {
+	left, err := s.leftover(ctx, p.OrgID, plan)
+	if err != nil {
+		return "", false, "", err
+	}
+	if replace || left {
 		return "", false, plan.ID, nil
 	}
 	return "", false, "", openPlanError(plan)
+}
+
+// leftover reports whether an open plan is the agent's own, left by a
+// release preparation that has ended: made by the agent, and named by a
+// report that's settled. The next preparation supersedes it. A plan the
+// agent made in someone's chat, or anyone else's, is never a leftover.
+func (s *Service) leftover(ctx context.Context, orgID string, plan *planning.Plan) (bool, error) {
+	if plan.CreatedBy != security.AgentSubject(orgID) {
+		return false, nil
+	}
+	r, err := s.d.Store.ForPlan(ctx, orgID, plan.ID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return r.Status != StatusPlanning && r.Status != StatusReviewing, nil
 }
 
 // reusable reports whether production's open plan is the promotion a
@@ -439,8 +464,8 @@ func sameScope(plan *planning.Plan, scope []string) bool {
 	return slices.Equal(in, scope)
 }
 
-// enqueue queues the prepare job.
-func (s *Service) enqueue(ctx context.Context, payload JobPayload) error {
+// enqueue queues the prepare job; opts add to JobOptions.
+func (s *Service) enqueue(ctx context.Context, payload JobPayload, opts ...job.Option) error {
 	var eng *dispatchengine.Engine
 	if s.d.Jobs != nil {
 		eng = s.d.Jobs()
@@ -448,7 +473,7 @@ func (s *Service) enqueue(ctx context.Context, payload JobPayload) error {
 	if eng == nil {
 		return errors.New("releaseprep: the job engine isn't ready")
 	}
-	_, err := dispatchengine.Enqueue(ctx, eng, JobPrepare, payload, JobOptions()...)
+	_, err := dispatchengine.Enqueue(ctx, eng, JobPrepare, payload, append(JobOptions(), opts...)...)
 	return err
 }
 

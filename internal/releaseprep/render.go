@@ -146,16 +146,18 @@ func (w *renderer) parts(r *ReleaseReport) []part {
 		w.text("\n## Evidence\nLoomplane holds no evidence for this release, so every gate that needs it fails.\n")
 		return w.out
 	}
+	// What decides the release first, the long diffs last: a cut to fit
+	// drops from the end.
+	w.unavailable(ev)
+	w.budget(ev)
 	w.services(ev)
-	w.sources(ev)
-	w.artifacts(ev)
 	w.findings(ev)
 	w.soak(ev, r.FromEnvironment)
 	w.canaries(ev)
 	w.coverage(ev, r.ToEnvironment)
 	w.reports(ev, r.FromEnvironment)
-	w.budget(ev)
-	w.unavailable(ev)
+	w.artifacts(ev)
+	w.sources(ev)
 	return w.out
 }
 

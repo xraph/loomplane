@@ -31,7 +31,7 @@ func newPgJobRig(t *testing.T) *pgRig {
 		Teams: r.teams, PlanStore: r.planStore, Places: r.places, Audit: r.audit,
 		Now: func() time.Time { return rigNow },
 	})
-	r.svc.planPoll, r.svc.planWait = time.Millisecond, 2*time.Second
+	r.svc.planPoll, r.svc.planPollFor = time.Millisecond, time.Second
 	return &pgRig{rig: r, pg: pg}
 }
 

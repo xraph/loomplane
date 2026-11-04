@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 func newJobRig(t *testing.T) *rig {
 	t.Helper()
 	r := newRig(t)
-	r.svc.planPoll, r.svc.planWait = time.Millisecond, 2*time.Second
+	r.svc.planPoll, r.svc.planPollFor, r.svc.planRequeue = time.Millisecond, time.Second, 30*time.Second
 	made := *r.w.plan
 	made.Status = planning.StatusPlanning
 	r.w.plans.createPlan = &made
@@ -154,20 +155,218 @@ func TestJobWaitsForPlanning(t *testing.T) {
 	}
 }
 
-func TestJobGivesUpWaitingSoDispatchRetries(t *testing.T) {
+// A plan still planning doesn't hold a worker: the job polls briefly,
+// queues itself again for later, and returns.
+func TestJobRequeuesASlowPlanInsteadOfBlocking(t *testing.T) {
 	r := newJobRig(t)
-	r.svc.planWait = 20 * time.Millisecond
+	r.svc.planPollFor = 20 * time.Millisecond
 	r.w.plans.statuses["plan_a"] = slices.Repeat([]string{planning.StatusPlanning}, 100000)
 	rep, payload := r.prepared(t, dev)
-	if err := r.svc.RunJob(context.Background(), payload); err == nil {
-		t.Fatal("a plan still planning past the wait should be retried")
+	began := time.Now()
+	if err := r.svc.RunJob(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(began); took > time.Second {
+		t.Fatalf("the job held its worker for %s", took)
 	}
 	got := r.store.stored(t, rep.ID)
-	if got.Status != StatusPlanning || got.PlanID != "plan_a" {
-		t.Fatalf("report %s plan %q", got.Status, got.PlanID)
+	if got.Status != StatusPlanning || got.PlanID != "plan_a" || len(r.runs.started()) != 0 {
+		t.Fatalf("report %s plan %q, %d starts", got.Status, got.PlanID, len(r.runs.started()))
 	}
-	if len(r.runs.started()) != 0 {
-		t.Fatal("the agent started on a plan still planning")
+	jobs := r.pendingJobs(t)
+	if len(jobs) != 2 {
+		t.Fatalf("%d prepare jobs pending", len(jobs))
+	}
+	next := jobs[0]
+	if payloadOf(t, next).Waits == 0 {
+		next = jobs[1]
+	}
+	if p := payloadOf(t, next); p.Waits != 1 || p.ReportID != rep.ID || p.OrgID != "org_a" {
+		t.Fatalf("queued again with %+v", p)
+	}
+	if !next.RunAt.Equal(rigNow.Add(r.svc.planRequeue)) {
+		t.Fatalf("queued to run at %s", next.RunAt)
+	}
+}
+
+// The waits are counted in the payload, so a plan that never plans ends
+// the preparation within PlanWait, well before the planning backstop.
+func TestJobBoundsTheWaitForPlanning(t *testing.T) {
+	r := newJobRig(t)
+	r.svc.planPollFor = time.Millisecond
+	r.w.plans.statuses["plan_a"] = slices.Repeat([]string{planning.StatusPlanning}, 100000)
+	rep, payload := r.prepared(t, dev)
+	limit := r.svc.maxWaits()
+	if limit < 1 || time.Duration(limit)*(r.svc.planPollFor+r.svc.planRequeue) > PlanWait+time.Minute || PlanWait >= planningBackstop {
+		t.Fatalf("%d waits", limit)
+	}
+	payload.Waits = limit
+	if err := r.svc.RunJob(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	got := r.store.stored(t, rep.ID)
+	if got.Status != StatusFailed || got.StateReason != reasonPlanningTooSlow || len(r.pendingJobs(t)) != 1 {
+		t.Fatalf("report %s %q, %d jobs", got.Status, got.StateReason, len(r.pendingJobs(t)))
+	}
+}
+
+// A cancel while the plan plans ends the wait at the next read.
+func TestJobStopsWaitingWhenTheReportIsCancelled(t *testing.T) {
+	r := newJobRig(t)
+	r.w.plans.statuses["plan_a"] = slices.Repeat([]string{planning.StatusPlanning}, 100000)
+	rep, payload := r.prepared(t, dev)
+	r.w.plans.onGet = func(n int) error {
+		if n == 2 {
+			if _, err := r.svc.Cancel(context.Background(), dev, rep.ID); err != nil {
+				t.Errorf("cancel: %v", err)
+			}
+		}
+		return nil
+	}
+	if err := r.svc.RunJob(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.store.stored(t, rep.ID); got.Status != StatusCancelled || len(r.pendingJobs(t)) != 1 || r.w.plans.getCalls > 3 {
+		t.Fatalf("report %s, %d jobs, %d reads", got.Status, len(r.pendingJobs(t)), r.w.plans.getCalls)
+	}
+}
+
+// Review Focus 5 mid-job: turning the agent off removes its roles, so the
+// next read as the agent is refused. That's the agent off, not the
+// requester leaving: the report stops and the plan waits for a person.
+func TestJobStopsWhenTheAgentIsTurnedOffMidJob(t *testing.T) {
+	r := newJobRig(t)
+	r.w.plans.statuses["plan_a"] = []string{planning.StatusPlanning, planning.StatusPlanning}
+	rep, payload := r.prepared(t, dev)
+	r.w.plans.onGet = func(n int) error {
+		if n == 2 {
+			r.w.budgets.mu.Lock()
+			r.w.budgets.off = true
+			r.w.budgets.mu.Unlock()
+			return fmt.Errorf("%w (deployment:read)", security.ErrForbidden)
+		}
+		return nil
+	}
+	if err := r.svc.RunJob(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	got := r.store.stored(t, rep.ID)
+	if got.Status != StatusDone || got.State != StateStopped || got.StateReason != reviewStopped(agentsettings.ErrDisabled) {
+		t.Fatalf("report %s/%s %q", got.Status, got.State, got.StateReason)
+	}
+	if strings.Contains(got.StateReason, "usr_dev") {
+		t.Fatal("the reason blames the requester")
+	}
+	if p := r.w.plans.byID["plan_a"]; p.DecidedBy != "" || len(r.runs.started()) != 0 {
+		t.Fatalf("plan decided by %q, %d starts", p.DecidedBy, len(r.runs.started()))
+	}
+}
+
+// A release prepared from chat never carries the person's request: the
+// model chose to start it, so the agent reviews and a person approves.
+func TestJobStartsChatReleasesWithoutReleaseFields(t *testing.T) {
+	r := newJobRig(t)
+	rep, err := r.svc.Prepare(context.Background(), ada, "proj_a", PrepareInput{Scope: []string{"api"}}, ViaChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.svc.RunJob(context.Background(), payloadOf(t, r.pendingJobs(t)[0])); err != nil {
+		t.Fatal(err)
+	}
+	starts := r.runs.started()
+	if len(starts) != 1 || starts[0].ReleasePlanID != "" || starts[0].ReleaseRevision != "" || starts[0].OnBehalfOf.UserID != "usr_ada" {
+		t.Fatalf("starts %+v", starts)
+	}
+	if got := r.store.stored(t, rep.ID); got.Via != ViaChat || got.Status != StatusReviewing {
+		t.Fatalf("report via %s, %s", got.Via, got.Status)
+	}
+}
+
+// Reusing an open promotion someone else made never makes it the
+// requester's request: a person approves it.
+func TestJobStartsWithoutReleaseFieldsWhenItReusesAnotherPersonsPlan(t *testing.T) {
+	for creator, want := range map[string]bool{"usr_lee": false, "agent:org_a": false, "usr_ada": true} {
+		t.Run(creator, func(t *testing.T) {
+			r := newJobRig(t)
+			open := r.openPlan(planning.KindPromotion, "staging", creator)
+			r.w.plans.byID = map[string]*planning.Plan{"plan_open": open}
+			if _, err := r.svc.Prepare(context.Background(), ada, "proj_a", PrepareInput{Scope: []string{"api"}}, ViaDashboard); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.svc.RunJob(context.Background(), payloadOf(t, r.pendingJobs(t)[0])); err != nil {
+				t.Fatal(err)
+			}
+			starts := r.runs.started()
+			if len(starts) != 1 || (starts[0].ReleasePlanID == "plan_open") != want {
+				t.Fatalf("starts %+v", starts)
+			}
+		})
+	}
+}
+
+// deployment:approve goes between the job's check and Start: Start
+// refuses the release fields, and the job starts the review without them.
+func TestJobStartsWithoutReleaseFieldsWhenApproveGoesMeanwhile(t *testing.T) {
+	r := newJobRig(t)
+	start := r.runs.startFn
+	r.runs.startFn = func(in agentruns.StartInput) (*agentruns.Task, error) {
+		if in.ReleasePlanID != "" {
+			return nil, fmt.Errorf("%w (deployment:approve)", security.ErrForbidden)
+		}
+		return start(in)
+	}
+	rep, payload := r.prepared(t, dev)
+	if err := r.svc.RunJob(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	starts := r.runs.started()
+	if len(starts) != 2 || starts[1].ReleasePlanID != "" || r.store.stored(t, rep.ID).Status != StatusReviewing {
+		t.Fatalf("starts %+v", starts)
+	}
+}
+
+// A plan the agent made for a preparation that ended is the agent's own
+// leftover: the next preparation supersedes it. A plan the agent made in a
+// person's chat isn't, and is refused as anyone else's.
+func TestJobSupersedesTheAgentsOwnLeftoverPlan(t *testing.T) {
+	ctx := context.Background()
+	for name, leftover := range map[string]bool{"a cancelled preparation's": true, "a chat's": false} {
+		t.Run(name, func(t *testing.T) {
+			r := newJobRig(t)
+			r.openPlan(planning.KindRelease, "", "agent:org_a")
+			if leftover {
+				old := &ReleaseReport{
+					OrgID: "org_a", ProjectID: "proj_a", FromEnvironmentID: "env_stg", ToEnvironmentID: "env_prd",
+					Status: StatusPlanning, State: StatePlanning, RequestedBy: "usr_lee", Via: ViaDashboard, PlanID: "plan_open",
+				}
+				if err := r.store.Create(ctx, old); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.store.Settle(ctx, "org_a", old.ID, StatePlanning, StatusCancelled, StateCancelled, "cancelled", "", rigNow); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rep, err := r.svc.Prepare(ctx, dev, "proj_a", PrepareInput{Scope: []string{"api"}}, ViaDashboard)
+			if !leftover {
+				if !errors.Is(err, ErrOpenPlan) {
+					t.Fatalf("prepare over a chat's plan: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := payloadOf(t, r.pendingJobs(t)[0])
+			if payload.Supersedes != "plan_open" {
+				t.Fatalf("payload %+v", payload)
+			}
+			if err = r.svc.RunJob(ctx, payload); err != nil {
+				t.Fatal(err)
+			}
+			if r.w.plans.creates != 1 || r.store.stored(t, rep.ID).PlanID != "plan_a" {
+				t.Fatalf("%d creates", r.w.plans.creates)
+			}
+		})
 	}
 }
 
@@ -510,7 +709,19 @@ func TestJobsRunOnTheDefaultQueue(t *testing.T) {
 	if settle.Name != JobSettle || settle.Opts.Queue != agentruns.SweepQueue || settle.Opts.MaxRetries != 0 {
 		t.Fatalf("settle job %s on %q, %d retries", settle.Name, settle.Opts.Queue, settle.Opts.MaxRetries)
 	}
-	if prepareTimeout <= PlanWait {
-		t.Fatalf("the job's %s timeout ends before its %s wait for the plan", prepareTimeout, PlanWait)
+	if prepareTimeout <= planPollFor || planPollFor > time.Minute || PlanWait >= planningBackstop {
+		t.Fatalf("timeout %s, poll for %s, wait %s", prepareTimeout, planPollFor, PlanWait)
+	}
+}
+
+// How a preparation was asked for is Loomplane's to record: nothing a
+// person or the model sends names it.
+func TestNothingSentSetsHowAReleaseWasAskedFor(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeFor[PrepareInput](), reflect.TypeFor[PrepareReleaseInput](), reflect.TypeFor[JobPayload]()} {
+		for f := range typ.Fields() {
+			if strings.Contains(strings.ToLower(f.Name+f.Tag.Get("json")), "via") {
+				t.Errorf("%s.%s names how the release was asked for", typ.Name(), f.Name)
+			}
+		}
 	}
 }
