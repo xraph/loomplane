@@ -109,3 +109,33 @@ func TestEmbeddingsAreNeverGatedOrClaimed(t *testing.T) {
 		t.Fatalf("embeddings: %v gate %v events %v", err, g.kinds, m.events)
 	}
 }
+
+func TestCheckBudgetNeverConsultsTheGate(t *testing.T) {
+	h, _ := on(t, "", "")
+	g := &gateSpy{err: &metering.Blocked{Reason: "no"}}
+	h.svc.WithMetering(g, &meterSpy{})
+	if err := h.svc.CheckBudget(context.Background(), org); err != nil {
+		t.Fatalf("CheckBudget with the gate refusing: %v", err)
+	}
+	if len(g.kinds) != 0 {
+		t.Fatalf("CheckBudget consulted the gate: %v", g.kinds)
+	}
+}
+
+func TestGateFailureRefusesTheCall(t *testing.T) {
+	h, ctx := on(t, "", "")
+	h.svc.WithMetering(&gateSpy{err: errors.New("db down")}, &meterSpy{})
+	refused(t, mustErr(h.svc.Credentials().ResolveCredential(callCtx(ctx, "req_1"), "anthropic")))
+}
+
+func TestServerKeyIsHeldUntilTheGateIsChosen(t *testing.T) {
+	if !metering.RefuseUnset {
+		t.Skip("the public build lets everything run until a gate is set")
+	}
+	h, ctx := on(t, "", "")
+	svc := agentsettings.NewService(h.deps)
+	_, err := svc.Credentials().ResolveCredential(callCtx(ctx, "req_1"), "anthropic")
+	if !errors.Is(err, metering.ErrBlocked) {
+		t.Fatalf("before the gate is chosen: %v", err)
+	}
+}

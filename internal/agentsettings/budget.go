@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-
-	"github.com/xraph/loomplane/internal/metering"
 )
 
 // allocation is the agent's monthly budget: its allocation of the
@@ -60,6 +58,21 @@ func (s *Service) budget(ctx context.Context, orgID string) (BudgetState, *Setti
 	return BudgetState{LimitUSD: limit, SpentUSD: spent, Exhausted: sp.Cmp(l) >= 0}, st, nil
 }
 
+// CheckBudget refuses with ErrBudgetExhausted once the agent has spent its
+// month's budget, and never consults the metering gate. Knowledge's
+// embeddings use it: they run on the server's embedding key, which stays
+// free.
+func (s *Service) CheckBudget(ctx context.Context, orgID string) error {
+	b, _, err := s.budget(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	if b.Exhausted {
+		return ErrBudgetExhausted
+	}
+	return nil
+}
+
 // RequireBudget refuses with ErrBudgetExhausted once the agent has spent
 // its month's budget, and, for a workspace on the server's key, with
 // metering.ErrBlocked while the edition's gate won't let the platform's
@@ -73,7 +86,7 @@ func (s *Service) RequireBudget(ctx context.Context, orgID string) error {
 		return ErrBudgetExhausted
 	}
 	if st.ProviderKey == "" {
-		if err := s.metering.CanRun(ctx, orgID, metering.KindAIPlatform, false); err != nil {
+		if err := s.canUseServerKey(ctx, orgID); err != nil {
 			return err
 		}
 	}

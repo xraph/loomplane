@@ -9,6 +9,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -119,6 +120,10 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, agentsettings.ErrDisabled), errors.Is(err, agentsettings.ErrBudgetExhausted):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
+	}
+	var blocked *metering.Blocked
+	if errors.As(err, &blocked) {
+		return forge.NewHTTPError(http.StatusPaymentRequired, blocked.Reason)
 	}
 	if status := security.StatusFor(err); status != http.StatusInternalServerError {
 		return forge.NewHTTPError(status, err.Error())

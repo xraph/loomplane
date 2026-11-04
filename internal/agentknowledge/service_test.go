@@ -120,7 +120,7 @@ func (s *spyEngine) count() int {
 	return s.calls
 }
 
-// fakeSettings answers Effective and RequireBudget as told and records the
+// fakeSettings answers Effective and CheckBudget as told and records the
 // knowledge status it is given.
 type fakeSettings struct {
 	mu        sync.Mutex
@@ -139,7 +139,7 @@ func (f *fakeSettings) Effective(_ context.Context, orgID string) (*agentsetting
 	return &agentsettings.Effective{OrgID: orgID, Enabled: true, Knowledge: !ok || on}, nil
 }
 
-func (f *fakeSettings) RequireBudget(_ context.Context, orgID string) error {
+func (f *fakeSettings) CheckBudget(_ context.Context, orgID string) error {
 	if err, ok := f.budgets[orgID]; ok {
 		return err
 	}

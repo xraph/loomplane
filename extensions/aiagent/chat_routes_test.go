@@ -446,3 +446,16 @@ func TestRouteErrorStatuses(t *testing.T) {
 		t.Fatal("an unknown error mapped to not found")
 	}
 }
+
+func TestABlockedSendAnswersTheReasonAlone(t *testing.T) {
+	r, chat, _ := chatRig(t, true)
+	const why = "Turn on the AI add-on in Settings > Billing, or add your own model key."
+	chat.err = fmt.Errorf("start the turn: %w", &metering.Blocked{Reason: why})
+	out := serve(t, r, http.MethodPost, "/api/v1/agent/conversations/ses_1/messages", `{"message":"more"}`, asAda())
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil || out.Code != http.StatusPaymentRequired || body.Error != why {
+		t.Fatalf("%d %s, want 402 with only the reason", out.Code, out.Body.String())
+	}
+}

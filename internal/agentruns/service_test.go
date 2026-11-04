@@ -88,6 +88,20 @@ func TestStartRefusesAtBudget(t *testing.T) {
 	}
 }
 
+func TestAGateRefusalAtStartFailsTheTaskOnceWithItsReason(t *testing.T) {
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	const why = "Turn on the AI add-on in Settings > Billing, or add your own model key."
+	w.settings.blocked = map[string]string{orgA: why}
+	if err := w.runStart(t, task); err != nil {
+		t.Fatalf("a gate refusal was retried: %v", err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusFailed || got.Error != why {
+		t.Fatalf("task %s %q, want failed with the reason", got.Status, got.Error)
+	}
+}
+
 func TestStartNeedsAgentUse(t *testing.T) {
 	w := newWorld(t)
 	for _, p := range []*security.Principal{personPtr(orgA, "usr_stranger"), personPtr(orgA, bob)} {

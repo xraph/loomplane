@@ -55,8 +55,11 @@ func (c *Credentials) ResolveCredential(ctx context.Context, providerName string
 		// The server's key is the platform's: the edition's gate says
 		// whether this workspace may use it, and the call is claimed so
 		// billing can price it later.
-		if err = s.metering.CanRun(ctx, st.OrgID, metering.KindAIPlatform, false); err != nil {
-			return provider.Credential{}, err
+		if err = s.canUseServerKey(ctx, st.OrgID); err != nil {
+			if errors.Is(err, metering.ErrBlocked) {
+				return provider.Credential{}, err
+			}
+			return provider.Credential{}, refusal("check whether the workspace may use the server's key", err)
 		}
 		requestID := pipeline.RequestID(ctx)
 		if requestID == "" {

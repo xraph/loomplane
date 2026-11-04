@@ -121,7 +121,7 @@ var _ Engine = (*weaveengine.Engine)(nil)
 // *agentsettings.Service is the real one.
 type Settings interface {
 	Effective(ctx context.Context, orgID string) (*agentsettings.Effective, error)
-	RequireBudget(ctx context.Context, orgID string) error
+	CheckBudget(ctx context.Context, orgID string) error
 	SetKnowledge(st agentsettings.KnowledgeStatus)
 }
 
@@ -212,7 +212,7 @@ func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome
 	if err != nil || !on {
 		return OutcomeSkipped, err
 	}
-	if budgetErr := s.d.Settings.RequireBudget(ctx, orgID); budgetErr != nil {
+	if budgetErr := s.d.Settings.CheckBudget(ctx, orgID); budgetErr != nil {
 		return "", budgetErr
 	}
 	ctx, err = s.bind(ctx, orgID)

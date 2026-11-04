@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
@@ -283,6 +284,7 @@ type fakeBudget struct {
 	mu        sync.Mutex
 	enabled   map[string]bool
 	exhausted bool
+	blocked   bool
 }
 
 func (b *fakeBudget) EnabledOrgs(context.Context) ([]string, error) {
@@ -309,6 +311,9 @@ func (b *fakeBudget) RequireBudget(context.Context, string) error {
 	defer b.mu.Unlock()
 	if b.exhausted {
 		return agentsettings.ErrBudgetExhausted
+	}
+	if b.blocked {
+		return &metering.Blocked{Reason: "Turn on the AI add-on"}
 	}
 	return nil
 }
@@ -694,6 +699,26 @@ func TestBudgetExhaustedPausesAndNotifiesOnce(t *testing.T) {
 		if rep.Investigation != agentreports.InvestigationSkipped || rep.InvestigationNote != noteBudget {
 			t.Errorf("%s: investigation %s %q", rep.Component, rep.Investigation, rep.InvestigationNote)
 		}
+	}
+}
+
+func TestBlockedByTheGatePausesWithItsOwnNotice(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.budget.mu.Lock()
+	r.budget.blocked = true
+	r.budget.mu.Unlock()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	if st := r.state(); !st.Paused || st.PausedReason != PauseBilling {
+		t.Fatalf("state %+v, want paused for billing", st)
+	}
+	if rep := r.only(); rep.InvestigationNote != noteBilling {
+		t.Fatalf("note %q", rep.InvestigationNote)
+	}
+	sent := r.notices.sent()
+	if len(sent) != len(admins) || sent[0].Title != pausedBillingTitle || sent[0].Body != pausedBillingBody {
+		t.Fatalf("notices %+v", sent)
 	}
 }
 
