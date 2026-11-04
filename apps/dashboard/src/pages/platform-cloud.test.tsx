@@ -1,6 +1,8 @@
+import { ClientProvider } from "@forge-go/client-react"
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
+import { forgeClient } from "@/client/runtime"
 import { setInstance } from "@/lib/instance"
 import { PlatformCloud } from "@/pages/platform-cloud"
 
@@ -11,6 +13,8 @@ vi.mock("@/components/route-feedback", () => ({
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
+  forgeClient.clear()
   setInstance({
     setupPending: false,
     waitlist: false,
@@ -25,7 +29,15 @@ it("shows the page to a platform admin", () => {
     setupTokenRequired: false,
     platformAdmin: true,
   })
-  render(<PlatformCloud />)
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ hosts: [], regions: [], tenants: [] }))
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <PlatformCloud />
+    </ClientProvider>
+  )
   expect(screen.getByRole("heading", { name: "Platform Cloud" })).toBeTruthy()
   const names = screen
     .getAllByRole("heading", { level: 2 })
