@@ -123,4 +123,9 @@ type Report struct {
 	OpenedBy          string     `json:"opened_by"` // "" for detectors; the person for a manual report
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+
+	// What the watcher and the agent's tools read, which people never see.
+	RunID                  string     `json:"-"` // the investigation's run
+	InvestigationStartedAt *time.Time `json:"-"` // when it was queued or started running
+	OpenedByTask           string     `json:"-"` // the chat task that opened a manual report
 }
