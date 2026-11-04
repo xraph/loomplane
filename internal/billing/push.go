@@ -38,14 +38,23 @@ func (s *Service) PushUsage(ctx context.Context) (touched []string, err error) {
 	if rErr := s.ready(); rErr != nil {
 		return nil, rErr
 	}
-	_, err = pglock.Try(ctx, s.pg, pushLock, func(ctx context.Context) error {
+	return s.push(ctx, "", false)
+}
+
+// push is PushUsage for one workspace (org) or every one (""). With wait
+// it waits for a push running elsewhere to finish and then pushes, for the
+// month close and a workspace's deletion, which need the usage in ledger
+// before they invoice; without it, it returns at once.
+func (s *Service) push(ctx context.Context, org string, wait bool) (touched []string, err error) {
+	run := func(ctx context.Context) error {
 		orgs := map[string]bool{}
-		batched, bErr := s.batchUsage(ctx)
+		batched, bErr := s.batchUsage(ctx, org)
 		for _, o := range batched {
 			orgs[o] = true
 		}
-		// A failed batch rolls back whole; pushes batched earlier still go.
-		sent, sErr := s.sendPushes(ctx)
+		// A group that failed to batch leaves its rows for the next push;
+		// pushes batched before still go.
+		sent, sErr := s.sendPushes(ctx, org)
 		for _, o := range sent {
 			orgs[o] = true
 		}
@@ -54,7 +63,12 @@ func (s *Service) PushUsage(ctx context.Context) (touched []string, err error) {
 		}
 		slices.Sort(touched)
 		return errors.Join(bErr, sErr)
-	})
+	}
+	if wait {
+		err = pglock.Do(ctx, s.pg, pushLock, run)
+	} else {
+		_, err = pglock.Try(ctx, s.pg, pushLock, run)
+	}
 	return touched, err
 }
 
@@ -64,17 +78,14 @@ type usageGroup struct {
 	period       time.Time // 00:00 UTC on the 1st
 }
 
-// batchUsage turns every group of unpushed usage into a push row, in one
-// transaction, and returns the workspaces it batched.
-func (s *Service) batchUsage(ctx context.Context) ([]string, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("billing: begin the usage batch: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op after commit
-
-	rows, err := tx.Query(ctx, `SELECT DISTINCT org_id, feature, date_trunc('month', occurred_at AT TIME ZONE 'UTC')::date
-		FROM loomplane_billing_usage WHERE push_id IS NULL ORDER BY 1, 2, 3`)
+// batchUsage turns every group of unpushed usage, of one workspace (org)
+// or of every one (""), into a push row, and returns the workspaces it
+// batched. Each group has a transaction of its own, so a group that fails
+// is logged and left for the next push while every other workspace's usage
+// goes on; the errors come back together.
+func (s *Service) batchUsage(ctx context.Context, org string) ([]string, error) {
+	rows, err := s.pg.Query(ctx, `SELECT DISTINCT org_id, feature, date_trunc('month', occurred_at AT TIME ZONE 'UTC')::date
+		FROM loomplane_billing_usage WHERE push_id IS NULL AND ($1 = '' OR org_id = $1) ORDER BY 1, 2, 3`, org)
 	if err != nil {
 		return nil, fmt.Errorf("billing: list the usage to push: %w", err)
 	}
@@ -94,20 +105,38 @@ func (s *Service) batchUsage(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("billing: list the usage to push: %w", err)
 	}
 
-	var orgs []string
+	var (
+		orgs []string
+		errs []error
+	)
 	for _, g := range groups {
-		made, gErr := s.batchGroup(ctx, tx, g)
+		made, gErr := s.batchOne(ctx, g)
 		if gErr != nil {
-			return nil, fmt.Errorf("billing: batch %s usage of %s for %s: %w", g.feature, g.org, g.period.Format("2006-01"), gErr)
+			gErr = fmt.Errorf("billing: batch %s usage of %s for %s: %w", g.feature, g.org, g.period.Format("2006-01"), gErr)
+			slog.ErrorContext(ctx, "billing: a usage group didn't batch; it waits for the next push",
+				"org", g.org, "feature", g.feature, "month", g.period.Format("2006-01"), "error", gErr)
+			errs = append(errs, gErr)
+			continue
 		}
 		if made && !slices.Contains(orgs, g.org) {
 			orgs = append(orgs, g.org)
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("billing: commit the usage batch: %w", err)
+	return orgs, errors.Join(errs...)
+}
+
+// batchOne batches one group in a transaction of its own.
+func (s *Service) batchOne(ctx context.Context, g usageGroup) (bool, error) {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
 	}
-	return orgs, nil
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op after commit
+	made, err := s.batchGroup(ctx, tx, g)
+	if err != nil {
+		return false, err
+	}
+	return made, tx.Commit()
 }
 
 // batchGroup makes one push of a group's unpushed rows, adding the
@@ -204,13 +233,14 @@ type push struct {
 	cents            int64
 }
 
-// sendPushes hands every unsent push to ledger and marks it sent, and
-// returns the workspaces it sent for. A crash between the two leaves the
-// push unsent; the retry sends the same idempotency key, which ledger
-// drops. One push failing doesn't hold the others back.
-func (s *Service) sendPushes(ctx context.Context) ([]string, error) {
+// sendPushes hands every unsent push, of one workspace (org) or of every
+// one (""), to ledger and marks it sent, and returns the workspaces it sent
+// for. A crash between the two leaves the push unsent; the retry sends the
+// same idempotency key, which ledger drops. One push failing doesn't hold
+// the others back.
+func (s *Service) sendPushes(ctx context.Context, org string) ([]string, error) {
 	rows, err := s.pg.Query(ctx, `SELECT id, org_id, feature, period, cents, at FROM loomplane_billing_pushes
-		WHERE sent_at IS NULL ORDER BY created_at, id`)
+		WHERE sent_at IS NULL AND ($1 = '' OR org_id = $1) ORDER BY created_at, id`, org)
 	if err != nil {
 		return nil, fmt.Errorf("billing: list the pushes to send: %w", err)
 	}

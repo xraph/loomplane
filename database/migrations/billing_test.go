@@ -15,6 +15,7 @@ var billingTables = []string{
 	"loomplane_billing_accounts",
 	"loomplane_billing_ai_claims",
 	"loomplane_billing_carry",
+	"loomplane_billing_closes",
 	"loomplane_billing_credits",
 	"loomplane_billing_invoices",
 	"loomplane_billing_pushes",

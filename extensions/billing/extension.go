@@ -6,7 +6,9 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xraph/dispatch/engine"
 	"github.com/xraph/forge"
@@ -35,6 +37,7 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg    config.Config
 	jobs   func() *engine.Engine
+	engine *engine.Engine
 	ledger *ledger.Ledger
 	svc    *billing.Service
 }
@@ -56,13 +59,36 @@ func (e *Extension) Dependencies() []string {
 	return []string{identity.Name, notifications.Name, planningext.Name, platformcloudext.Name}
 }
 
-// Register builds billing's service and provides its gate and meter, which
-// the deploy, build, platform Cloud and AI seams pick up when they start.
+// Register builds billing's service, provides its gate and meter, which
+// the deploy, build, platform Cloud and AI seams pick up when they start,
+// and registers billing's jobs.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
-	return e.provide(fapp.Container())
+	return e.register(fapp.Container())
+}
+
+// register is Register without forge's own bookkeeping: provide, then the
+// jobs. The engine comes from the dispatch extension itself, as the AI
+// extension's does: resolving it from the container starts it before the
+// database is migrated.
+func (e *Extension) register(c forge.Container) error {
+	if err := e.provide(c); err != nil {
+		return err
+	}
+	if e.jobs != nil {
+		e.engine = e.jobs()
+	}
+	if e.engine == nil {
+		return errors.New("billing needs the dispatch extension's engine")
+	}
+	l := e.ledger
+	registerJobs(e.engine, e.svc, func(ctx context.Context, now time.Time) error {
+		_, err := l.Advance(ctx, now)
+		return err
+	}, time.Now)
+	return nil
 }
 
 // provide is the part of Register that builds the service from what
@@ -103,11 +129,18 @@ func (e *Extension) provide(c forge.Container) error {
 	return nil
 }
 
-// Start seeds the plans in ledger. The cloud API doesn't start without
-// them: no workspace could subscribe.
+// Start seeds the plans in ledger, then schedules billing's crons, which
+// run on the cron leader only. The cloud API doesn't start without the
+// plans: no workspace could subscribe.
 func (e *Extension) Start(ctx context.Context) error {
 	if err := billing.SeedCatalog(ctx, e.ledger, e.cfg.Identity.AppID); err != nil {
 		return fmt.Errorf("billing: seed the plans: %w", err)
+	}
+	if e.engine == nil {
+		return errors.New("billing: the jobs aren't registered; Register runs before Start")
+	}
+	if err := scheduleJobs(ctx, e.engine); err != nil {
+		return fmt.Errorf("billing: %w", err)
 	}
 	e.MarkStarted()
 	return nil

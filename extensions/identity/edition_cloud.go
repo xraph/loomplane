@@ -7,6 +7,7 @@ import (
 	"os"
 
 	authsome "github.com/xraph/authsome"
+	"github.com/xraph/authsome/plugin"
 	"github.com/xraph/authsome/plugins/subscription"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
@@ -37,16 +38,25 @@ func (e *Extension) editionOptions(db *grove.DB) ([]authsome.Option, error) {
 		return nil, err
 	}
 	e.edition = editionState{ledger: l, payments: p, billing: cfg}
-	return []authsome.Option{
-		authsome.WithLedgerEngine(l),
+	opts := []authsome.Option{authsome.WithLedgerEngine(l)}
+	for _, pl := range e.editionPlugins(db, l) {
+		opts = append(opts, authsome.WithPlugin(pl))
+	}
+	return opts, nil
+}
+
+// editionPlugins are the authsome plugins this edition registers, in the
+// order authsome runs their hooks.
+func (e *Extension) editionPlugins(db *grove.DB, l *ledger.Ledger) []plugin.Plugin {
+	return []plugin.Plugin{
 		// Before the subscription plugin: authsome runs AfterOrgDelete hooks
-		// in registration order, and overage is invoiced before the plugin
-		// cancels. For now the hook does nothing; its place is what's fixed.
-		authsome.WithPlugin(billing.NewOrgDeleteHook(db, l, e.cfg.Identity.AppID)),
+		// in registration order, and a deleted workspace's overage is
+		// invoiced before the plugin cancels its subscriptions.
+		billing.NewOrgDeleteHook(db, l, e.cfg.Identity.AppID),
 		// Billing creates every subscription itself, with no trial, and
 		// serves its own routes.
-		authsome.WithPlugin(subscription.New(subscription.Config{DisableRoutes: true, DisableAutoSubscribe: true, TrialDays: 0})),
-	}, nil
+		subscription.New(subscription.Config{DisableRoutes: true, DisableAutoSubscribe: true, TrialDays: 0}),
+	}
 }
 
 // editionProvide puts the ledger, its Stripe provider and billing's config

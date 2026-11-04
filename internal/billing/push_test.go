@@ -264,3 +264,42 @@ func TestPushUsage_WaitsWhileAnotherReplicaPushes(t *testing.T) {
 
 // metermatch is every ledger event of one feature.
 func metermatch(feature string) meter.QueryOpts { return meter.QueryOpts{FeatureKey: feature} }
+
+// One workspace's group that can't be batched is logged and left for the
+// next push; every other workspace's usage still reaches ledger.
+func TestPushUsage_OneBadGroupDoesntBlockAnotherWorkspace(t *testing.T) {
+	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
+	ctx := t.Context()
+	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	// org_a sorts first, so its group is tried before org_b's.
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_usage (id, org_id, feature, quantity, rate_micro_usd, micro_usd, occurred_at, resource_ref)
+		VALUES ('bad', 'org_a', 'compute_vcpu_hours', 1, 10000, -1, '2026-11-09T10:00:00Z', 'pl_a')`); err != nil {
+		t.Fatal(err)
+	}
+	b := compute("good", 3, at("2026-11-09T10:00:00Z"))
+	b.OrgID = "org_b"
+	_ = s.Record(ctx, b)
+	touched, err := s.PushUsage(ctx)
+	if err == nil {
+		t.Fatal("the bad group's error was dropped")
+	}
+	if len(touched) != 1 || touched[0] != "org_b" {
+		t.Fatalf("touched %v, want org_b", touched)
+	}
+	if got := ledgerCents(t, s, "org_b", platformcloud.FeatureComputeVCPUHours, at("2026-11-01T00:00:00Z"), at("2026-12-01T00:00:00Z")); got != 3 {
+		t.Fatalf("org_b has %d cents, want 3", got)
+	}
+	var waiting int
+	_ = pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_billing_usage WHERE id = 'bad' AND push_id IS NULL`).Scan(&waiting)
+	if waiting != 1 {
+		t.Fatal("the bad row was marked pushed")
+	}
+	// Put right, it goes on the next push.
+	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_usage SET micro_usd = 20000 WHERE id = 'bad'`)
+	if _, err = s.PushUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledgerCents(t, s, "org_a", platformcloud.FeatureComputeVCPUHours, at("2026-11-01T00:00:00Z"), at("2026-12-01T00:00:00Z")); got != 2 {
+		t.Fatalf("org_a has %d cents, want 2", got)
+	}
+}

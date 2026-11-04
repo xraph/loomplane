@@ -120,8 +120,9 @@ func TestRegisterProvidesTheGateAndMeter(t *testing.T) {
 // card, and lets it run once the card is saved.
 func TestRegisterProvidesTheGateThatNeedsACard(t *testing.T) {
 	c := testContainer(t)
-	e := New(config.Config{Identity: config.IdentityConfig{AppID: testAppID}}, func() *engine.Engine { return nil })
-	if err := e.provide(c); err != nil {
+	eng, _ := testEngine(t)
+	e := New(config.Config{Identity: config.IdentityConfig{AppID: testAppID}}, func() *engine.Engine { return eng })
+	if err := e.register(c); err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
@@ -145,8 +146,9 @@ func TestRegisterProvidesTheGateThatNeedsACard(t *testing.T) {
 
 func TestStartSeedsTheCatalog(t *testing.T) {
 	c := testContainer(t)
-	e := New(config.Config{Identity: config.IdentityConfig{AppID: testAppID}}, func() *engine.Engine { return nil })
-	if err := e.provide(c); err != nil {
+	eng, _ := testEngine(t)
+	e := New(config.Config{Identity: config.IdentityConfig{AppID: testAppID}}, func() *engine.Engine { return eng })
+	if err := e.register(c); err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
@@ -163,8 +165,9 @@ func TestStartSeedsTheCatalog(t *testing.T) {
 
 func TestStartFailsWhenTheCatalogCantBeSeeded(t *testing.T) {
 	c := testContainer(t)
-	e := New(config.Config{}, func() *engine.Engine { return nil }) // no app id
-	if err := e.provide(c); err != nil {
+	eng, _ := testEngine(t)
+	e := New(config.Config{}, func() *engine.Engine { return eng }) // no app id
+	if err := e.register(c); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Start(t.Context()); err == nil {

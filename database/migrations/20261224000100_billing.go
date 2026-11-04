@@ -49,6 +49,9 @@ func billingGroup() *migrate.Group {
 // loomplane_billing_refunds record the invoices sent, the credits granted
 // and the refunds made. Unpaid invoices whose payment failed are indexed by
 // workspace, for the gate's past-due check.
+//
+// loomplane_billing_closes is one row per month whose close finished, so a
+// close that stopped part way is finished by the next hourly run.
 func init() {
 	billing.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -142,6 +145,9 @@ func init() {
  full_refund boolean NOT NULL,
  refunded_by text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now())`,
+				`CREATE TABLE IF NOT EXISTS loomplane_billing_closes (
+ period date PRIMARY KEY,
+ closed_at timestamptz NOT NULL)`,
 			} {
 				if _, err := db.Exec(ctx, stmt); err != nil {
 					return err
@@ -151,6 +157,7 @@ func init() {
 		},
 		func(ctx context.Context, db *migrate.DB) error {
 			for _, table := range []string{
+				"loomplane_billing_closes",
 				"loomplane_billing_refunds",
 				"loomplane_billing_credits",
 				"loomplane_billing_invoices",
