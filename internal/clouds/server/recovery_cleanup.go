@@ -61,6 +61,9 @@ func (r *Runtime) PurgeRecovery(ctx context.Context, iid id.ID, labels map[strin
 			if ownerErr := guard.owner(ctx); ownerErr != nil {
 				return ownerErr
 			}
+			if checkErr := guard.noStage(ctx); checkErr != nil {
+				return checkErr
+			}
 			if identityErr := guard.sameVolume(ctx); identityErr != nil {
 				return identityErr
 			}

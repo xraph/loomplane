@@ -72,6 +72,9 @@ func (r *Runtime) engineSession(ctx context.Context, iid id.ID, labels map[strin
 			}
 		}
 	}
+	if err == nil && duckRecovery(labels) {
+		err = r.recoveryServing(ctx, c, info.ID, iid, labels)
+	}
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -169,7 +172,9 @@ func (r *Runtime) restoreEngine(ctx context.Context, iid id.ID, labels map[strin
 			return extractEngineDirectory(ctx, c, ContainerName(iid), dir, payload)
 		}}).Restore(ctx, payload)
 	case "duckdb":
-		return r.stoppedEngine(ctx, c, iid, labels, "restore", labels[LabelRecovery], func(ctx context.Context, sourceID string) error { return uploadEngineFile(ctx, c, sourceID, payload) })
+		return r.stoppedEngineGuard(ctx, c, iid, labels, "restore", labels[LabelRecovery], func(ctx context.Context, sourceID string, guard *duckMutation) error {
+			return guard.importRecovery(ctx, sourceID, payload)
+		})
 	}
 	return errors.New("unsupported native engine")
 }
@@ -196,7 +201,11 @@ func (r *Runtime) restartEngine(ctx context.Context, c *Client, iid id.ID, label
 }
 
 // stoppedEngine retains the lifecycle reservation until exact-source recovery.
-func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, labels map[string]string, action, operation string, work func(context.Context, string) error) (err error) {
+func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, labels map[string]string, action, operation string, work func(context.Context, string) error) error {
+	return r.stoppedEngineGuard(ctx, c, iid, labels, action, operation, func(ctx context.Context, sourceID string, _ *duckMutation) error { return work(ctx, sourceID) })
+}
+
+func (r *Runtime) stoppedEngineGuard(ctx context.Context, c *Client, iid id.ID, labels map[string]string, action, operation string, work func(context.Context, string, *duckMutation) error) (err error) {
 	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: action, Operation: operation})
 	if err != nil {
 		return err
@@ -209,7 +218,11 @@ func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, label
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 		defer cancel()
-		for _, check := range []func(context.Context) error{guard.owner, guard.sameSource, guard.sameVolume, guard.noPrevious} {
+		if guard.stageUnknown || guard.stage != nil {
+			err = errors.Join(err, mutationPending(guard.name))
+			return
+		}
+		for _, check := range []func(context.Context) error{guard.owner, guard.sameSource, guard.sameVolume, guard.noPrevious, guard.noStage} {
 			if checkErr := check(cleanup); checkErr != nil {
 				err = errors.Join(err, checkErr, mutationPending(guard.name))
 				return
@@ -231,6 +244,12 @@ func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, label
 		if checkErr := guard.owner(cleanup); checkErr != nil {
 			err = errors.Join(err, checkErr, mutationPending(guard.name))
 			return
+		}
+		if duckRecovery(labels) {
+			if checkErr := r.recoveryServing(cleanup, c, sourceID, iid, labels); checkErr != nil {
+				err = errors.Join(err, checkErr, mutationPending(guard.name))
+				return
+			}
 		}
 		startErr := dockerSetRunning(cleanup, c, sourceID, true)
 		if startErr == nil {
@@ -277,7 +296,7 @@ func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, label
 	if current.ID != sourceID || current.State.Running || current.State.ExitCode != 0 {
 		return ErrOwned
 	}
-	return work(ctx, sourceID)
+	return work(ctx, sourceID, guard)
 }
 
 func noDuckWAL(ctx context.Context, c *Client, containerID string) error {

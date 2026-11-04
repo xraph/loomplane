@@ -30,11 +30,7 @@ import (
 
 type mutationContainer struct {
 	containerInfo
-	Name       string
-	HostConfig struct {
-		NetworkMode    string
-		ReadonlyRootfs bool
-	}
+	Name string
 }
 
 type mutationFixture struct {
@@ -58,6 +54,7 @@ func newMutationFixture(t *testing.T, private bool) *mutationFixture {
 	f := &mutationFixture{iid: id.New(id.PrefixInstance), containers: map[string]*mutationContainer{}, volumes: map[string]instanceClassVolume{}, walStatus: http.StatusNotFound}
 	f.labels = map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelConnection: "target", owned.LabelService: "analytics", owned.LabelArchitecture: "arm64", owned.LabelRevision: "deployment", owned.LabelRuntime: "runtime", owned.LabelImage: "local/duckdb@sha256:" + strings.Repeat("a", 64), enginebackup.LabelEngine: "duckdb", enginebackup.LabelRevision: "2", owned.LabelPublic: "false"}
 	if private {
+		f.labels[enginebackup.LabelRevision] = "3"
 		f.labels[LabelRecovery] = "restore-operation"
 		original, err := engineIdentity(id.New(id.PrefixInstance), f.labels)
 		if err != nil {
@@ -73,11 +70,17 @@ func newMutationFixture(t *testing.T, private bool) *mutationFixture {
 	labels[owned.LabelInstance] = f.iid.String()
 	source := &mutationContainer{Name: "/" + ContainerName(f.iid)}
 	source.ID = "source"
+	source.Image = "sha256:" + strings.Repeat("b", 64)
 	source.Config.Image = f.labels[owned.LabelImage]
 	source.Config.Labels = labels
 	source.State.Running = true
 	source.State.Status = "running"
-	source.Mounts = append(source.Mounts, struct{ Type, Name, Destination string }{"volume", VolumeName(f.iid, "data"), "/data"})
+	source.Mounts = append(source.Mounts, containerMount{Type: "volume", Name: VolumeName(f.iid, "data"), Destination: "/data", RW: boolPointer(true)})
+	if private {
+		source.Config.Entrypoint = []string{"/loomplane-duckdb"}
+		source.Config.Cmd = []string{"serve-readonly"}
+		source.Mounts[0].RW = boolPointer(false)
+	}
 	f.containers[ContainerName(f.iid)] = source
 	anchor, err := classLabels(f.iid, f.labels, "duckdb")
 	if err != nil {
@@ -159,6 +162,16 @@ func (f *mutationFixture) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"Id":"network"}`)
 	case strings.HasPrefix(p, "/networks/"):
 		http.NotFound(w, r)
+	case p == "/containers/json":
+		items := []map[string]any{}
+		for _, c := range f.containers {
+			mounts := c.Mounts
+			if mounts == nil {
+				mounts = []containerMount{}
+			}
+			items = append(items, map[string]any{"Id": c.ID, "Labels": c.Config.Labels, "Mounts": mounts})
+		}
+		_ = json.NewEncoder(w).Encode(items)
 	case p == "/containers/create":
 		name := r.URL.Query().Get("name")
 		if f.containers[name] != nil {
@@ -166,9 +179,10 @@ func (f *mutationFixture) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			Image      string
-			Labels     map[string]string
-			HostConfig struct {
+			Image           string
+			Entrypoint, Cmd []string
+			Labels          map[string]string
+			HostConfig      struct {
 				NetworkMode    string
 				ReadonlyRootfs bool
 				Mounts         []volumeMount
@@ -180,6 +194,8 @@ func (f *mutationFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		c := &mutationContainer{Name: "/" + name}
 		c.Config.Image = body.Image
+		c.Config.Entrypoint, c.Config.Cmd = body.Entrypoint, body.Cmd
+		c.Image = "sha256:" + strings.Repeat("b", 64)
 		c.Config.Labels = body.Labels
 		c.HostConfig.NetworkMode = body.HostConfig.NetworkMode
 		c.HostConfig.ReadonlyRootfs = body.HostConfig.ReadonlyRootfs
@@ -192,7 +208,7 @@ func (f *mutationFixture) serve(w http.ResponseWriter, r *http.Request) {
 			c.ID = "candidate"
 			c.State.Status = "created"
 			for _, mount := range body.HostConfig.Mounts {
-				c.Mounts = append(c.Mounts, struct{ Type, Name, Destination string }{mount.Type, mount.Source, mount.Target})
+				c.Mounts = append(c.Mounts, containerMount{Type: mount.Type, Name: mount.Source, Destination: mount.Target, RW: boolPointer(!mount.ReadOnly)})
 			}
 		}
 		f.containers[name] = c
@@ -919,6 +935,10 @@ func TestDuckApplyRemoveAndPurgeKeepPermanentClass(t *testing.T) {
 		clear(f.containers)
 		clear(f.volumes)
 		spec := cpprovider.ServiceSpec{Name: "main", Image: f.labels[owned.LabelImage], Volumes: []cpprovider.VolumeSpec{{Name: "data", Type: "persistent", MountPath: "/data"}}}
+		if private {
+			installDuckStageFixture(t, f)
+			spec.Command, spec.Args = []string{"/loomplane-duckdb"}, []string{"serve-readonly"}
+		}
 		if _, err := f.runtime.Apply(t.Context(), f.iid, spec, f.labels); err != nil {
 			t.Fatal(err)
 		}

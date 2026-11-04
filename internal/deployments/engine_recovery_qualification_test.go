@@ -5,6 +5,7 @@ package deployments
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -82,7 +83,13 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	client := &server.Client{Config: &server.Config{Details: map[string]string{"docker_id": "task5-qualification"}}, HTTP: &http.Client{Transport: transport}}
 	backend := &server.Runtime{Session: func(context.Context, map[string]string) (*server.Client, error) { return client, nil }, Values: target.values, Wait: 3 * time.Minute}
-	target.Backend = func(string, string) owned.Backend { return backend }
+	watch := &duckReadonlyQualificationBackend{DatabaseBackend: backend}
+	target.Backend = func(string, string) owned.Backend {
+		if selected == "duckdb" {
+			return watch
+		}
+		return backend
+	}
 	cfg := &planning.ResourceConfig{Kind: selected, Version: comp.Version, Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": architecture}, Component: &planning.ComponentConfig{Kind: selected, Resource: "source", Revision: comp.Revision, Component: comp.Components[0], Protection: recipes.ProtectionNative}}
 	binding := &planning.Binding{OrgID: "org", ProjectID: "proj", EnvironmentID: env, Name: "source", Provider: "server", ConnectionID: "conn", Subject: planning.ResourceSubject}
 	desc, err := recovery.Describe(cfg, registry)
@@ -124,12 +131,53 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 		cmd.Stdin = strings.NewReader(input)
 		return cmd.CombinedOutput()
 	}
+	if selected == "duckdb" {
+		var preImportID string
+		var preImportToken [sha256.Size]byte
+		watch.beforeRestore = func(ctx context.Context, iid id.ID, labels map[string]string) error {
+			classInstances = append(classInstances, iid)
+			serving, snapshotErr := duckQualificationServing(ctx, client, iid, labels)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			values, valuesErr := target.values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server"}), owned.InstanceLabels(labels, iid))
+			if valuesErr != nil {
+				return valuesErr
+			}
+			reader := values.Env["LOOMPLANE_APP_PASSWORD"]
+			if reader == "" || preImportID != "" {
+				return fmt.Errorf("recovery bootstrap identity not established once")
+			}
+			preImportID, preImportToken = serving.ID, sha256.Sum256([]byte(reader))
+			return nil
+		}
+		watch.afterRestore = func(ctx context.Context, iid id.ID, labels map[string]string) error {
+			serving, snapshotErr := duckQualificationServing(ctx, client, iid, labels)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			values, valuesErr := target.values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server"}), owned.InstanceLabels(labels, iid))
+			if valuesErr != nil {
+				return valuesErr
+			}
+			if preImportID == "" || serving.ID != preImportID || sha256.Sum256([]byte(values.Env["LOOMPLANE_APP_PASSWORD"])) != preImportToken {
+				return fmt.Errorf("recovery import replaced its serving container or token")
+			}
+			return nil
+		}
+	}
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(infrastructure.WithPrincipal(context.Background(), principal), time.Minute)
 		defer stop()
 		defer func() {
 			fallback, cancelFallback := context.WithTimeout(infrastructure.WithPrincipal(context.Background(), principal), time.Minute)
 			defer cancelFallback()
+			if selected == "duckdb" {
+				if checkErr := watch.allowFallback(fallback, client); checkErr != nil {
+					t.Error(checkErr)
+					return
+				}
+			}
 			for _, kind := range []string{"container", "volume"} {
 				args := []string{kind, "ls", "-q", "--filter", "label=" + owned.LabelEnvironment + "=" + env}
 				if kind == "container" {
@@ -618,6 +666,9 @@ func TestQualifyNativeEngineRecovery(t *testing.T) {
 		}
 		if bytes.Equal(sourceValues.Files[ca], values.Files[ca]) {
 			t.Fatal("clone reused source CA")
+		}
+		if selected == "duckdb" {
+			qualifyDuckReadonlyBoundary(ctx, t, client, socket, cloneID, clone.Labels, reader, sourceValues.Files[ca])
 		}
 	}
 	t.Logf("actual native dispatch, isolated readonly clone, historical content and credential separation passed for %s/%s (%d bytes)", selected, architecture, object.Size)

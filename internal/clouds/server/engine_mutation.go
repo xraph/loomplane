@@ -267,6 +267,8 @@ type duckMutation struct {
 	labels                     map[string]string
 	name, containerID, encoded string
 	record                     duckMutationRecord
+	stage                      *duckRecoveryStage
+	stageUnknown, stageHold    bool
 }
 
 func mutationPending(name string) error {
@@ -358,6 +360,26 @@ func (r *Runtime) acquireDuckMutation(ctx context.Context, c *Client, iid id.ID,
 		if mountErr := duckDataMount(source, iid); mountErr != nil {
 			return nil, mountErr
 		}
+	}
+	if duckRecovery(labels) && (intent.Action == "apply" || intent.Action == "restore" || (intent.Action == "set-running" && intent.Running != nil && *intent.Running)) {
+		if checkErr := validateDuckRecoveryContract(iid, labels); checkErr != nil {
+			return nil, checkErr
+		}
+		if source != nil {
+			if intent.Action == "apply" && !source.State.Running {
+				return nil, errDuckRecoveryStoppedApply
+			}
+			if checkErr := validateDuckRecoveryServingMount(iid, source, labels); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+	}
+	servingID := ""
+	if source != nil {
+		servingID = source.ID
+	}
+	if checkErr := duckStageCensus(ctx, c, iid, servingID, "", false); checkErr != nil {
+		return nil, checkErr
 	}
 	record := duckMutationRecord{Version: 1, Owner: rand.Text(), Action: intent.Action, Operation: intent.Operation, Org: labels[owned.LabelOrg], Project: labels[owned.LabelProject], Environment: labels[owned.LabelEnvironment], Connection: labels[owned.LabelConnection], Instance: iid.String(), Resource: labels[owned.LabelService], DesiredImage: intent.Image, DesiredRevision: intent.Revision, DesiredRunning: intent.Running, Recovery: labels[LabelRecovery], Volume: VolumeName(iid, "data")}
 	image := labels[owned.LabelImage]
@@ -527,7 +549,7 @@ func (g *duckMutation) finish(ctx context.Context, operationErr error) error {
 	if g == nil {
 		return nil
 	}
-	if operationErr != nil {
+	if operationErr != nil || g.stageUnknown || g.stage != nil {
 		return mutationPending(g.name)
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -545,6 +567,9 @@ func (g *duckMutation) finish(ctx context.Context, operationErr error) error {
 }
 
 func (g *duckMutation) terminal(ctx context.Context) error {
+	if err := g.noStage(ctx); err != nil {
+		return err
+	}
 	if err := g.noPrevious(ctx); err != nil {
 		return err
 	}
@@ -628,6 +653,9 @@ func (g *duckMutation) terminal(ctx context.Context) error {
 }
 
 func (g *duckMutation) release(ctx context.Context) error {
+	if err := g.noStage(ctx); err != nil {
+		return err
+	}
 	if err := g.owner(ctx); err != nil {
 		return err
 	}
@@ -644,6 +672,9 @@ func (g *duckMutation) waitAuthenticated(ctx context.Context, containerID string
 
 // discardRestore removes only the exact private destination of a failed import.
 func (g *duckMutation) discardRestore(ctx context.Context) error {
+	if err := g.noStage(ctx); err != nil {
+		return err
+	}
 	if g.record.Action != "restore" || g.record.Recovery == "" || g.labels[owned.LabelPublic] != "false" || g.record.SourceID == "" || g.record.VolumeCreated == "" {
 		return ErrOwned
 	}

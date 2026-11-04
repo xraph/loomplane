@@ -102,7 +102,13 @@ DuckDB recovery is available only for explicitly configured Docker images. Its s
 
 A checkpoint briefly stops the database. Loomplane requires a clean exit and confirms that `/data/analytics.db.wal` is absent before copying `analytics.db`. If either check fails, the backup fails and cleanup attempts to resume the exact source container. The reservation stays held when restart or native authentication fails, so you can investigate without another deployment changing the database underneath you.
 
-Recovery copies get fresh credentials and CA material. Their database opens in native read-only mode. A failed import can discard its own checked private destination; it cannot remove the original service's data. Native archives have a 10 GiB payload limit, and Loomplane verifies their checksum and recorded source, recipe, image and architecture before import.
+Recovery copies get fresh credentials and CA material. The serving container mounts `/data` read-only and opens DuckDB in native read-only mode. A temporary helper initializes a new empty volume or imports the verified checkpoint while the copy is stopped. It uses the serving image's exact local ID, has no credentials or network, and must be removed before that same copy can start. Loomplane checks for other volume attachments before serving or releasing the reservation.
+
+The recovery listener also disables external file access and locks its configuration before it starts. Its empty temporary-directory setting prevents disk spilling, so a query that exceeds available memory can fail. These controls don't make arbitrary SQL a sandbox.
+
+Native archives have a 10 GiB payload limit, and Loomplane verifies their checksum and recorded source, recipe, image and architecture before import. A completed failed import can discard its checked private destination. An archive error after upload may have begun has an unknown outcome: Loomplane keeps the reservation, stopped copy and any helper evidence for host reconciliation. It won't restart, discard or retry writes over that copy.
+
+Recovery needs the reviewed revision 3 image. Revision 2 copies remain stoppable and removable, but can't start or pass recovery verification under this contract. Recreate the service with the qualified runtime before requesting a new recovery copy. Revision 2 archives don't silently migrate to a different image or recipe revision.
 
 ### Upgrade and retain instance classification
 
@@ -130,6 +136,12 @@ Record its full Docker ID and exact labels. Require `loomplane.duckdb-mutation=1
 
 Check the class anchor too. Require its exact name, local driver, empty options and matching dedicated scope and class labels. If either previous-container name or the old checkpoint reservation exists, keep the reservation. Do not delete an uncertain previous incarnation as part of this procedure.
 
+Check `<runtime-name>-readonly-stage` and list **all** containers attached to the recorded data volume, including stopped or renamed containers. A staging helper has only `loomplane.duckdb-readonly-stage` and `loomplane.duckdb-readonly-stage.record` labels. Compare its exact Docker ID, original reservation ID and owner record, clone ID, local image ID, volume creation time, ownership labels, fixed command and single `/data` mount with the saved operation. The helper must have no credentials, ports or network, a read-only root filesystem and restart policy `no`. Its temporary `/data` mount is writable; that attachment must not survive reconciliation.
+
+If create, start, upload, wait or delete lost its response, keep the reservation until you have established that the earlier daemon operation has finished. Cancellation or an absent helper alone does not prove completion. Keep the copy stopped. Once the exact helper is quiescent and its identity is established, remove only that helper ID and repeat the full attachment census. Investigate an unknown attachment rather than deleting it. A serving recovery copy must be the sole remaining attachment, with `/data` inspected as `RW=false`, before you start it or clear its reservation. Cleanup of a stopped legacy copy can retain its own old writable mount until that exact copy is removed.
+
+Removing only the reservation while a helper or another writable attachment remains is unsafe. Do not clear it to bypass these checks.
+
 For a backup, inspect the recorded `SourceID` and the current runtime name. Both must identify the same container, with `SourceImage`, `SourceRevision`, the recorded local `SourceDockerImage` ID and every recorded `SourceLabels` value unchanged. Verify the `/data` mount, and require the recorded `Volume`, `VolumeCreated` and org/project/environment/connection/instance/data-role labels to match its local data volume.
 
 Settle the stop using that exact source ID, then start it and run the native authenticated check:
@@ -152,7 +164,7 @@ Before releasing other actions, check their physical terminal state:
 | `remove` | The source ID and all current/previous names are absent. Retain the recorded data volume with its original identity. If the source still exists, verify its recorded identity before stopping and removing that exact container without `-v`. |
 | `restore` or `purge` | Discard only the recorded private copy. Verify its recovery operation, private labels, source ID and data-volume identity before stopping and removing that exact destination without `-v`. Remove only the recorded volume with `docker volume rm EXACT_VOLUME_NAME`, then confirm the source ID, current/previous names and volume are absent. Never delete a replacement volume or the original service's volume. |
 
-An abandoned first Apply has no recorded source. You may clear its reservation only after checking that no current or previous container remains and reconciling any created storage against the saved deployment. An old source renamed outside the known previous names still needs investigation. Keep the reservation until you can account for it.
+An abandoned first Apply has no recorded source. Its staging descriptor separately pins the new candidate and volume; don't rewrite the reservation's original absence record. You may clear its reservation only after checking that no current, previous or staging container remains and reconciling any created storage and all volume attachments against the saved deployment. An old source renamed outside the known previous names still needs investigation. Keep the reservation until you can account for it.
 
 After the terminal checks pass, reinspect the exact reservation ID. Require its original name, owner record, labels and stopped state, then remove only that ID:
 

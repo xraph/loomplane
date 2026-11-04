@@ -33,6 +33,8 @@ import (
 var ErrOwned = errors.New("the matching Docker resource is not owned by this service")
 var ErrMissing = errors.New("the Docker resource is absent")
 
+var errDuckRecoveryStoppedApply = errors.New("this recovery copy is stopped; use Start to resume the same container")
+
 type Session func(context.Context, map[string]string) (*Client, error)
 
 type Runtime struct {
@@ -68,14 +70,28 @@ func NetworkName(org, environment string) string {
 	return fmt.Sprintf("lp-env-%x", sum[:12])
 }
 
+type containerMount struct {
+	Type, Name, Destination string
+	RW                      *bool
+}
+
 type containerInfo struct {
+	Name       string
+	HostConfig struct {
+		NetworkMode                string
+		ReadonlyRootfs, Privileged bool
+		CapAdd, Binds, VolumesFrom []string
+		Mounts                     []volumeMount
+		RestartPolicy              struct{ Name string }
+	}
 	ID     string `json:"Id"`
 	Image  string
-	Mounts []struct{ Type, Name, Destination string }
+	Mounts []containerMount
 	Config struct {
-		Labels map[string]string
-		Env    []string
-		Image  string
+		Labels          map[string]string
+		Env             []string
+		Image           string
+		Entrypoint, Cmd []string
 	}
 	State struct {
 		Running  bool
@@ -154,11 +170,38 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if labels[LabelRecovery] != "" && labels[owned.LabelPublic] == "true" {
 		return nil, errors.New("recovery instances cannot publish ports")
 	}
+	if duckRecovery(labels) {
+		if checkErr := validateDuckRecoverySpec(iid, spec, labels); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
+	if duckRecovery(labels) {
+		current, inspectErr := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+		if inspectErr != nil && !errors.Is(inspectErr, ErrMissing) {
+			return nil, inspectErr
+		}
+		if current != nil {
+			if current.Config.Image != spec.Image || current.Config.Labels[owned.LabelRevision] != labels[owned.LabelRevision] {
+				return nil, errors.New("recovery copies cannot be replaced; recreate the copy with its reviewed runtime")
+			}
+			if checkErr := validateDuckRecoveryServingMount(iid, current, labels); checkErr != nil {
+				return nil, checkErr
+			}
+			if !current.State.Running {
+				return nil, errDuckRecoveryStoppedApply
+			}
+		}
+		for _, suffix := range []string{"-previous", "-previous-stopped"} {
+			if _, inspectErr := r.inspect(ctx, c, ContainerName(iid)+suffix, iid, labels); !errors.Is(inspectErr, ErrMissing) {
+				return nil, errors.Join(inspectErr, errors.New("recovery replacement requires reconciliation; recreate the copy after cleanup"))
+			}
+		}
+	}
 	values := owned.RuntimeValues{}
 	imagePrepared := false
 	prepareImage := func(ctx context.Context) error {
@@ -211,6 +254,11 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	for _, existing := range []*containerInfo{old, previous, stopped} {
 		if existing != nil {
+			if duckRecovery(labels) {
+				if checkErr := validateDuckRecoveryServingMount(iid, existing, labels); checkErr != nil {
+					return nil, checkErr
+				}
+			}
 			if checkErr := checkVolumeLayout(existing, iid, spec.Volumes); checkErr != nil {
 				return nil, checkErr
 			}
@@ -264,7 +312,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		backup = stoppedBackup
 	}
 	defer func() {
-		if err == nil || committed {
+		if err == nil || committed || (guard != nil && guard.stageHold) {
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
@@ -425,6 +473,19 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
 		return nil, checkErr
 	}
+	if duckRecovery(labels) {
+		if guard == nil {
+			return nil, ErrOwned
+		}
+		if guard.record.SourceID == "" && guard.record.VolumeCreated == "" {
+			if checkErr := guard.initializeRecovery(ctx, result.ID); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+		if checkErr := r.recoveryServing(ctx, c, result.ID, iid, labels); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := dockerSetRunning(ctx, c, result.ID, true); checkErr != nil {
 		return nil, checkErr
 	}
@@ -510,6 +571,11 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 			return err
 		}
 		if info.State.Running {
+			if duckRecovery(labels) {
+				if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+					return checkErr
+				}
+			}
 			switch {
 			case labels[owned.LabelHealthChecker] != "":
 				if probeErr := catalogReady(ctx, c, name, labels); probeErr == nil {
@@ -658,6 +724,11 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 	if err != nil {
 		return nil, err
 	}
+	if info.State.Running && duckRecovery(labels) {
+		if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+			return &cpprovider.InstanceStatus{State: cpprovider.StateStarting, Ready: false, Metadata: map[string]string{"exists": "true", "revision": info.Config.Image}}, nil
+		}
+	}
 	state, ready := cpprovider.StateStopped, false
 	if info.State.Running {
 		state, ready = cpprovider.StateRunning, true
@@ -743,6 +814,11 @@ func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]s
 	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
 	if err != nil {
 		return err
+	}
+	if running && duckRecovery(labels) {
+		if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+			return checkErr
+		}
 	}
 	return dockerSetRunning(ctx, c, info.ID, running)
 }
