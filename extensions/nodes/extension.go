@@ -175,14 +175,20 @@ func (e *Extension) followAddressChanges(infra *cloudinfra.Service) {
 			e.Logger().Warn("Follow a node to its new address; the reconcile tries again", forge.F("node", n.ID), forge.F("error", err.Error()))
 		}
 	}
-	// Coming back is no news by itself, so its address check is limited
-	// like a reconcile's.
+	// Each follow checks a node's addresses at most as often as cloud
+	// infrastructure allows, so a node whose addresses flap can't have its
+	// proxy changed over and over.
 	e.hub.OnOnline(func(ctx context.Context, n *nodes.Node) { follow(ctx, n, infra.CatchUpNodeAddress) })
 	e.hub.OnInventory(func(ctx context.Context, n *nodes.Node, old, cur nodeproto.Inventory) {
 		if !slices.Equal(old.PublicAddresses, cur.PublicAddresses) {
 			follow(ctx, n, infra.FollowNodeAddress)
 		}
 	})
+	// An owner asking for direct ingress has the address checked now. The
+	// update has answered by then, so the check gets a context of its own.
+	e.svc.CheckAddress = func(n *nodes.Node) {
+		go follow(context.Background(), n, infra.CheckNodeAddress)
+	}
 }
 
 // Start runs the hub's sweep, which marks silent nodes offline.

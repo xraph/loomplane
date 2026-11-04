@@ -826,6 +826,33 @@ func TestUpdateIngressNotifies(t *testing.T) {
 	}
 }
 
+// Asking for direct ingress has the node's address checked: a mode that
+// changes, or one without a confirmed address. Other updates don't.
+func TestUpdateDirectChecksTheAddress(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	var checked []string
+	r.svc.CheckAddress = func(n *Node) { checked = append(checked, n.ID+":"+n.IngressMode) }
+	direct, none, name := nodeproto.IngressDirect, nodeproto.IngressNone, "web-2"
+	for _, u := range []Update{{Name: &name}, {IngressMode: &none}, {IngressMode: &direct}, {IngressMode: &direct}} {
+		if _, err := r.svc.Update(context.Background(), admin, id, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Direct twice, since no check confirmed an address in between.
+	if want := []string{id + ":direct", id + ":direct"}; !slices.Equal(checked, want) {
+		t.Fatalf("checked %v, want %v", checked, want)
+	}
+	// Once one is confirmed, asking for direct again checks nothing.
+	if err := r.svc.SetIngress(context.Background(), id, nodeproto.IngressDirect, "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	checked = nil
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{IngressMode: &direct}); err != nil || len(checked) != 0 {
+		t.Fatalf("checked a confirmed node again: %v %v", checked, err)
+	}
+}
+
 func TestUpdateNothingChangedIsNotAudited(t *testing.T) {
 	r := newRig(t, apikeys.NodeJoinScope{}, true)
 	id := seed(r, nodeproto.EndpointDocker)

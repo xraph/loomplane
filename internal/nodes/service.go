@@ -99,6 +99,11 @@ type Service struct {
 	// to drain.
 	Servers NodeServers
 	Placed  WorkloadReader
+	// CheckAddress checks the public address of a node whose owner just
+	// asked for direct ingress, and settles its mode on what it finds.
+	// Phase 2 fills it. Update doesn't wait for it, so it runs the check
+	// on its own. It may be nil.
+	CheckAddress func(n *Node)
 	// Log receives failures nobody else sees. Nil means slog.Default().
 	Log *slog.Logger
 	// clock is what time it is. Nil means time.Now. Tests set it.
@@ -469,6 +474,11 @@ func (s *Service) Update(ctx context.Context, p security.Principal, id string, u
 	}
 	if narrowed || ingress || n.Name != old.Name || !maps.Equal(n.Labels, old.Labels) {
 		s.record(ctx, "node.updated", p, *n, nil)
+	}
+	// Direct ingress needs an address that answers. One asked for anew, or
+	// one without a confirmed address, has it checked.
+	if s.CheckAddress != nil && n.IngressMode == nodeproto.IngressDirect && set.IngressMode != nil && (ingress || n.PublicAddressConfirmedAt == nil) {
+		s.CheckAddress(n)
 	}
 	s.ingressDetail(n)
 	s.drainingStatus(ctx, n)
