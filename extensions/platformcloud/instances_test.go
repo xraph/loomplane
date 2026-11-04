@@ -5,7 +5,9 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/id"
 	cpinstance "github.com/xraph/ctrlplane/instance"
 	cpprovider "github.com/xraph/ctrlplane/provider"
@@ -43,15 +45,20 @@ func (noRegions) PrepareRegion(string) error { return nil }
 type fakeLifecycle struct {
 	mu         sync.Mutex
 	state      cpprovider.InstanceState
+	updated    time.Time
 	stops      int
 	starts     []string
 	failStarts int
+	// onStart runs at the start of each Start, before it fails or works.
+	onStart func(ctx context.Context)
+	// liveStarts records whether each start's context was still live.
+	liveStarts []bool
 }
 
 func (f *fakeLifecycle) Get(context.Context, id.ID) (*cpinstance.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return &cpinstance.Instance{State: f.state}, nil
+	return &cpinstance.Instance{Entity: ctrlplane.Entity{UpdatedAt: f.updated}, State: f.state}, nil
 }
 func (f *fakeLifecycle) Stop(context.Context, id.ID) error {
 	f.mu.Lock()
@@ -61,8 +68,12 @@ func (f *fakeLifecycle) Stop(context.Context, id.ID) error {
 	return nil
 }
 func (f *fakeLifecycle) Start(ctx context.Context, _ id.ID) error {
+	if f.onStart != nil {
+		f.onStart(ctx)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.liveStarts = append(f.liveStarts, ctx.Err() == nil)
 	f.starts = append(f.starts, platformcloud.KeptHost(ctx))
 	if f.failStarts > 0 {
 		f.failStarts--
@@ -74,14 +85,23 @@ func (f *fakeLifecycle) Start(ctx context.Context, _ id.ID) error {
 }
 
 func newTestInstances(room bool) (*instances, *fakeLifecycle) {
-	lc := &fakeLifecycle{state: cpprovider.StateRunning}
-	return &instances{svc: &fakePlacements{room: room}, regions: noRegions{}, ctrl: lc}, lc
+	lc := &fakeLifecycle{state: cpprovider.StateRunning, updated: time.Now()}
+	ic := &instances{svc: &fakePlacements{room: room}, regions: noRegions{}, ctrl: lc}
+	ic.resetStuck = func(context.Context, id.ID, time.Time) error {
+		lc.mu.Lock()
+		defer lc.mu.Unlock()
+		if lc.state == cpprovider.StateStarting {
+			lc.state, lc.updated = cpprovider.StateFailed, time.Now()
+		}
+		return nil
+	}
+	return ic, lc
 }
 
 // With no room on another host a move stops nothing.
-func TestRedeployWithNoRoomStopsNothing(t *testing.T) {
+func TestMoveWithNoRoomStopsNothing(t *testing.T) {
 	ic, lc := newTestInstances(false)
-	if err := ic.Redeploy(t.Context(), testIID.String()); !errors.Is(err, platformcloud.ErrNoCapacity) {
+	if err := ic.Move(t.Context(), testIID.String()); !errors.Is(err, platformcloud.ErrNoCapacity) {
 		t.Fatalf("redeploy = %v, want no capacity", err)
 	}
 	if lc.stops != 0 || len(lc.starts) != 0 || lc.state != cpprovider.StateRunning {
@@ -91,9 +111,9 @@ func TestRedeployWithNoRoomStopsNothing(t *testing.T) {
 
 // A move waits for its start, and one whose new host fails is started
 // again on the host it came from.
-func TestRedeployPutsAFailedMoveBack(t *testing.T) {
+func TestMovePutsAFailedMoveBack(t *testing.T) {
 	ic, lc := newTestInstances(true)
-	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+	if err := ic.Move(t.Context(), testIID.String()); err != nil {
 		t.Fatal(err)
 	}
 	if lc.stops != 1 || len(lc.starts) != 1 || lc.starts[0] != "" || lc.state != cpprovider.StateRunning {
@@ -102,7 +122,7 @@ func TestRedeployPutsAFailedMoveBack(t *testing.T) {
 
 	ic, lc = newTestInstances(true)
 	lc.failStarts = 1
-	err := ic.Redeploy(t.Context(), testIID.String())
+	err := ic.Move(t.Context(), testIID.String())
 	if !errors.Is(err, errMoveFailed) {
 		t.Fatalf("redeploy = %v, want the move reported failed", err)
 	}
@@ -121,5 +141,56 @@ func TestStartWaitsAndReportsFailure(t *testing.T) {
 	}
 	if err := ic.Start(t.Context(), testIID.String()); err != nil || lc.state != cpprovider.StateRunning {
 		t.Fatalf("start = %v, state %s", err, lc.state)
+	}
+}
+
+// A repair redeploys whatever the room elsewhere: the reservation may keep
+// the host it is on, the only one in its region.
+func TestRedeployRepairsWithNoRoomElsewhere(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if lc.stops != 1 || len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("stops %d, starts %v, state %s", lc.stops, lc.starts, lc.state)
+	}
+}
+
+// A request that goes away mid-move doesn't strand the service: the start
+// and the start back where it was run on contexts of their own.
+func TestMoveSurvivesACancelledRequest(t *testing.T) {
+	ic, lc := newTestInstances(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	lc.failStarts = 1
+	lc.onStart = func(context.Context) { cancel() }
+	if err := ic.Move(ctx, testIID.String()); !errors.Is(err, errMoveFailed) {
+		t.Fatalf("move = %v", err)
+	}
+	if len(lc.starts) != 2 || lc.starts[1] != "host_a" || lc.state != cpprovider.StateRunning {
+		t.Fatalf("starts %v, state %s, want it started back on host_a", lc.starts, lc.state)
+	}
+	for i, live := range lc.liveStarts {
+		if !live {
+			t.Fatalf("start %d ran on a cancelled context", i)
+		}
+	}
+}
+
+// An instance stuck starting past the start limit, as a start whose own
+// failure write died leaves it, is started again by a repair.
+func TestRepairRestartsAnInstanceStuckStarting(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	lc.state, lc.updated = cpprovider.StateStarting, time.Now().Add(-2*startTimeout)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("starts %v, state %s", lc.starts, lc.state)
+	}
+	// One that has only just begun starting is left to finish.
+	ic, lc = newTestInstances(false)
+	lc.state = cpprovider.StateStarting
+	if err := ic.Redeploy(t.Context(), testIID.String()); err == nil || len(lc.starts) != 0 {
+		t.Fatalf("a fresh start was restarted: %v, %v", err, lc.starts)
 	}
 }

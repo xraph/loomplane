@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	fc "github.com/xraph/loomplane/internal/firecracker"
 )
 
@@ -222,6 +224,10 @@ func (s *Service) WithOrgExists(exists OrgExists) *Service {
 	return s
 }
 
+// errCleanupBlocked is a deleted organization's projection that something
+// still references, such as one of its environments still assigned to it.
+var errCleanupBlocked = errors.New("platformcloud: the projection is still referenced")
+
 // cleanupBackoff is how long a tenant whose cleanup a reference blocked
 // waits before the next try.
 const cleanupBackoff = time.Hour
@@ -273,7 +279,7 @@ func (s *Service) CleanupGoneTenants(ctx context.Context) error {
 			continue
 		}
 		cleanErr := s.cleanupTenant(ctx, t.OrgID)
-		if errors.Is(cleanErr, ErrConflict) {
+		if errors.Is(cleanErr, errCleanupBlocked) {
 			until := s.now().Add(cleanupBackoff).UTC()
 			if _, markErr := s.store.db.Exec(ctx, `UPDATE loomplane_platform_tenants SET cleanup_blocked_until=$2,cleanup_error=$3 WHERE org_id=$1`,
 				t.OrgID, until, "the organization's Loomplane Cloud is still assigned to one of its environments"); markErr != nil {
@@ -353,6 +359,10 @@ func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
 	}
 	err = s.store.WithPlatformWrite(ctx, func(tx driverTx) error {
 		if _, execErr := tx.Exec(ctx, `DELETE FROM loomplane_cloud_profiles WHERE org_id=$1 AND platform_owned`, orgID); execErr != nil {
+			var pg *pgconn.PgError
+			if errors.As(execErr, &pg) && pg.Code == "23503" {
+				return fmt.Errorf("%w: %s", errCleanupBlocked, pg.Message)
+			}
 			return fmt.Errorf("delete the projection: %w", storeError(execErr))
 		}
 		_, execErr := tx.Exec(ctx, `DELETE FROM loomplane_platform_tenants WHERE org_id=$1`, orgID)

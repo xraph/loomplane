@@ -50,9 +50,10 @@ type settingsStore interface {
 	SetPlatformCloud(ctx context.Context, v instance.PlatformCloudSettings) error
 }
 
-// redeployer puts a service on a host again through the normal deploy path.
-type redeployer interface {
-	Redeploy(ctx context.Context, instanceID string) error
+// mover moves a running service off its draining host through the normal
+// deploy path.
+type mover interface {
+	Move(ctx context.Context, instanceID string) error
 }
 
 // auditor records what the platform owner changed, once the change is
@@ -79,7 +80,7 @@ type authorizer interface {
 type routes struct {
 	svc        control
 	settings   settingsStore
-	mover      redeployer
+	mover      mover
 	audit      auditor
 	authz      authorizer
 	isPlatform identity.PlatformUser
@@ -556,7 +557,7 @@ func (r *routes) retireHost(c forge.Context) error {
 }
 
 // moveAllTimeout bounds one service's redeploy in a move.
-const moveAllTimeout = 10 * time.Minute
+const moveAllTimeout = 30 * time.Minute
 
 // moveAll drains the host, then moves its services off it one at a time,
 // each through the normal deploy path, waiting for each to finish. A service
@@ -584,8 +585,10 @@ func (r *routes) moveAll(c forge.Context) error {
 			out.Skipped = append(out.Skipped, p.Resource)
 			continue
 		}
-		one, cancel := context.WithTimeout(ctx, moveAllTimeout)
-		moveErr := r.mover.Redeploy(one, p.InstanceID)
+		// A move that has stopped the service must finish whatever the
+		// request does, so it runs on a context of its own.
+		one, cancel := context.WithTimeout(context.WithoutCancel(ctx), moveAllTimeout)
+		moveErr := r.mover.Move(one, p.InstanceID)
 		cancel()
 		switch {
 		case moveErr == nil:

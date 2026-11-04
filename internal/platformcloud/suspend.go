@@ -387,65 +387,93 @@ func (s *Service) markWaiting(ctx context.Context, p Placement) {
 }
 
 // startPlacement starts one remembered placement, if the organization is
-// enabled and not suspended and the placement still waits for it. It claims
-// the placement first, with a lock no other start can take while this one
-// runs, so two restores start it once. The start itself runs with the
-// tenant lock let go: starting a VM re-applies the service, which reserves
-// under that lock. Only once the start has succeeded is the placement marked
-// running, after a fresh look under the lock, so a start that fails leaves
-// it suspended and remembered, billed for nothing, for the next restore.
+// enabled and not suspended and the placement still waits for it. Under the
+// tenant lock it claims the placement for this start (starting_until), so
+// two restores start it once and a reclaim leaves it alone; the claim runs
+// out by itself if this process dies. The start runs with the lock let go:
+// starting a VM re-applies the service, which reserves under that lock. It
+// carries a restore mark, so the reservation keeps the placement suspended
+// and remembered until the deploy reports it running. Only once the start
+// has succeeded is the placement marked running, after a fresh look under
+// the lock. Either way the claim is let go, with a context of its own, so a
+// cancelled caller can't leave it behind. A start that fails leaves the
+// placement suspended and remembered, billed for nothing, for the next
+// restore.
 func (s *Service) startPlacement(ctx context.Context, orgID, placementID string) error {
-	claim, err := s.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollback(claim)
-	var claimed bool
-	if err = claim.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, startClaimKey(placementID)).Scan(&claimed); err != nil {
-		return err
-	}
-	if !claimed {
-		return nil // Another start has it.
-	}
-	var instance string
-	waiting := false
-	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+	var claimed *Placement
+	err := s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		p, readErr := s.waitingStart(ctx, tx, orgID, placementID)
 		if readErr != nil || p == nil {
 			return readErr
 		}
-		waiting, instance = true, p.InstanceID
+		now := s.now().UTC()
+		res, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET starting_until=$2 WHERE id=$1 AND (starting_until IS NULL OR starting_until<$3)`,
+			p.ID, now.Add(startClaimFor), now)
+		if execErr != nil {
+			return execErr
+		}
+		if n, nErr := res.RowsAffected(); nErr != nil || n != 1 {
+			return nErr // Another start has it.
+		}
+		claimed = p
 		return nil
 	})
-	if err != nil || !waiting {
+	if err != nil || claimed == nil {
 		return err
 	}
-	if instance != "" {
+	var startErr error
+	if claimed.InstanceID != "" {
 		if s.instances == nil {
-			return errors.New("no instance control")
-		}
-		if err = callStart(ctx, func(c context.Context) error { return s.instances.Start(c, instance) }); err != nil {
-			return err
+			startErr = errors.New("no instance control")
+		} else {
+			startErr = callStart(WithRestore(ctx, claimed.ID), func(c context.Context) error { return s.instances.Start(c, claimed.InstanceID) })
 		}
 	}
-	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
-		p, readErr := s.waitingStart(ctx, tx, orgID, placementID)
-		if readErr != nil || p == nil || p.InstanceID != instance {
-			// A suspension came back, or the start already moved it on:
-			// the deploy path records what runs.
+	after, cancel := context.WithTimeout(context.WithoutCancel(ctx), afterStartTimeout)
+	defer cancel()
+	err = s.store.withTenantRow(after, orgID, func(tx driverTx) error {
+		// The claim is on this row, and on the row a restore reservation
+		// put the service in.
+		if _, execErr := tx.Exec(after, `UPDATE loomplane_platform_placements SET starting_until=NULL
+WHERE org_id=$1 AND (id=$2 OR (environment_id=$3 AND resource=$4 AND state<>'released'))`, orgID, claimed.ID, claimed.EnvironmentID, claimed.Resource); execErr != nil {
+			return execErr
+		}
+		if startErr != nil {
+			return nil
+		}
+		p, readErr := s.waitingStart(after, tx, orgID, claimed.ID)
+		if readErr != nil || p == nil || p.InstanceID != claimed.InstanceID {
+			// A suspension came back, or the start moved the service to
+			// a new row: the deploy path records what runs.
 			return readErr
 		}
-		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,running_since=$3,updated_at=now() WHERE id=$1`, p.ID, stateRunning, s.now().UTC())
+		_, execErr := tx.Exec(after, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,running_since=$3,updated_at=now() WHERE id=$1`, p.ID, stateRunning, s.now().UTC())
 		return execErr
 	})
-	if err != nil {
-		return err
-	}
-	return claim.Commit()
+	return errors.Join(startErr, err)
 }
 
-// startClaimKey names the lock a start of the placement holds.
-func startClaimKey(placementID string) string { return "platform-start/" + placementID }
+// startClaimFor is how long a start's claim on a placement lasts: the
+// start's own limit and a little more.
+const startClaimFor = startCallTimeout + time.Minute
+
+// afterStartTimeout bounds what a start writes once it has ended.
+const afterStartTimeout = 30 * time.Second
+
+type restoreKey struct{}
+
+// WithRestore marks ctx as the start of the remembered placement
+// placementID. A reservation made under it, for the same service, keeps the
+// service suspended and remembered as running, so a deploy that fails after
+// it leaves the restore waiting; Running turns it running.
+func WithRestore(ctx context.Context, placementID string) context.Context {
+	return context.WithValue(ctx, restoreKey{}, placementID)
+}
+
+func restoreFrom(ctx context.Context) string {
+	id, _ := ctx.Value(restoreKey{}).(string)
+	return id
+}
 
 // waitingStart reads the placement under the tenant lock tx holds, FOR
 // UPDATE, and returns it if it may be started now: the organization is
@@ -545,8 +573,8 @@ func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now ti
 			return nil
 		}
 		// A start that has the placement claimed wins: its VM stays.
-		var free bool
-		if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, startClaimKey(p.ID)).Scan(&free); err != nil || !free {
+		var starting bool
+		if err = tx.QueryRow(ctx, `SELECT coalesce(starting_until>$2,false) FROM loomplane_platform_placements WHERE id=$1`, p.ID, s.now().UTC()).Scan(&starting); err != nil || starting {
 			return err
 		}
 		if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *p) }); err != nil {

@@ -203,7 +203,19 @@ func (s *Service) reserve(ctx context.Context, req Request) (*Placement, error) 
 		if lockErr != nil {
 			return lockErr
 		}
-		p, placeErr := s.reserveTx(ctx, tx, t, req, defaults, nil)
+		// A restore's start reserves for the placement it remembers: the
+		// service stays suspended and remembered until it runs.
+		var restore *Placement
+		if id := restoreFrom(ctx); id != "" {
+			old, oldErr := livePlacement(ctx, tx, req)
+			if oldErr != nil {
+				return oldErr
+			}
+			if old != nil && old.ID == id && old.State == stateSuspended && old.RestoreRunning {
+				restore = old
+			}
+		}
+		p, placeErr := s.reserveTx(ctx, tx, t, req, defaults, restore)
 		out = p
 		return placeErr
 	})
@@ -279,6 +291,12 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now())`,
 				p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource, p.Kind, p.RegionID, h.ID, p.VCPUs, p.MemoryMiB, p.DiskMiB, p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt)
 			if err != nil {
 				return nil, storeError(err)
+			}
+			if restore != nil {
+				// A start's claim on the remembered row holds for the new one.
+				if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET starting_until=(SELECT starting_until FROM loomplane_platform_placements WHERE id=$2) WHERE id=$1`, p.ID, restore.ID); err != nil {
+					return nil, err
+				}
 			}
 			return p, nil
 		}

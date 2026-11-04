@@ -169,7 +169,7 @@ type memMover struct {
 	full  bool
 }
 
-func (m *memMover) Redeploy(_ context.Context, id string) error {
+func (m *memMover) Move(_ context.Context, id string) error {
 	if m.full {
 		return platformcloud.ErrNoCapacity
 	}

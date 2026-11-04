@@ -21,6 +21,9 @@ type fakeControl struct {
 	removes []string
 	cancels int
 	failing map[string]bool
+	// onStart, when set, is what a start does: a real one reserves and
+	// applies through the deploy path.
+	onStart func(ctx context.Context, id string) error
 }
 
 func (f *fakeControl) Stop(_ context.Context, id string) error {
@@ -33,7 +36,15 @@ func (f *fakeControl) Stop(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeControl) Start(_ context.Context, id string) error {
+func (f *fakeControl) Start(ctx context.Context, id string) error {
+	f.mu.Lock()
+	on := f.onStart
+	f.mu.Unlock()
+	if on != nil {
+		if err := on(ctx, id); err != nil {
+			return err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failing["start:"+id] {
@@ -698,5 +709,78 @@ func TestFailedStartLeavesTheRestoreWaitingAndUnbilled(t *testing.T) {
 	}
 	if !slices.Equal(fc.starts, []string{"inst_web"}) {
 		t.Fatalf("starts = %v", fc.starts)
+	}
+}
+
+// A start reserves through the deploy path before it applies. One whose
+// apply fails after that reservation still leaves the service suspended and
+// remembered, so the next restore starts it.
+func TestStartThatFailsAfterReservingStaysRemembered(t *testing.T) {
+	e, fc := suspendEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	fc.onStart = func(ctx context.Context, _ string) error {
+		if _, err := e.svc.Reserve(ctx, serviceReq("web", 1, 512)); err != nil {
+			return err
+		}
+		return errors.New("image pull failed")
+	}
+	if err := e.svc.Restore(ctx, "org_a", ReasonPastDue); err == nil {
+		t.Fatal("a failed apply was reported as started")
+	}
+	web := e.byResource(t, "web")
+	if web.State != stateSuspended || !web.RestoreRunning || web.InstanceID != "inst_web" {
+		t.Fatalf("after a failed apply = %+v, want suspended and remembered", web)
+	}
+	var claimed bool
+	if err := e.pg.QueryRow(ctx, `SELECT starting_until IS NOT NULL FROM loomplane_platform_placements WHERE id=$1`, web.ID).Scan(&claimed); err != nil || claimed {
+		t.Fatalf("the start's claim was left behind: %v %v", claimed, err)
+	}
+
+	fc.onStart = func(ctx context.Context, id string) error {
+		p, err := e.svc.Reserve(ctx, serviceReq("web", 1, 512))
+		if err != nil {
+			return err
+		}
+		return e.svc.Running(ctx, "org_a", p.ID, id, 5)
+	}
+	if err := e.svc.RetryRestores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if web = e.byResource(t, "web"); web.State != stateRunning || web.RestoreRunning {
+		t.Fatalf("after the retry = %+v", web)
+	}
+}
+
+// A placement a start has claimed is left alone by a reclaim.
+func TestReclaimSkipsAPlacementBeingStarted(t *testing.T) {
+	e, fc := suspendEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	web := e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET suspended_at=now()-interval '8 days',starting_until=now()+interval '1 hour' WHERE id=$1`, web.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Reclaim(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.removes) != 0 {
+		t.Fatalf("a claimed placement was reclaimed: %v", fc.removes)
+	}
+	if _, err := e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET starting_until=now()-interval '1 minute' WHERE id=$1`, web.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Reclaim(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.removes) != 1 {
+		t.Fatalf("a lapsed claim still blocked the reclaim: %v", fc.removes)
 	}
 }

@@ -122,7 +122,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	secrets := connections.NewVaultAppSecretsFor(
 		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.PlatformCloudVaultAppID)), connections.PlatformCloudVaultAppID)
 	orgs := orgLister{pg: pg, appID: e.cfg.Identity.AppID}
-	e.instances = newInstances(svc, target)
+	e.instances = newInstances(svc, target, pg)
 	e.svc = svc.WithSecrets(secrets).WithOrgs(orgs.ids).WithOrgExists(orgs.exists).WithInstances(e.instances)
 
 	for _, j := range jobs(svc) {
