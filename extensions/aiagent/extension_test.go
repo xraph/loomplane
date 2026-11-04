@@ -410,6 +410,19 @@ func TestKnowledgeRecoveryRunsOnTheDefaultQueue(t *testing.T) {
 	}
 }
 
+// The reports backfill runs daily on the default queue, as recovery does,
+// and so does the job itself when start queues it.
+func TestReportsBackfillRunsOnTheDefaultQueue(t *testing.T) {
+	c := reportsCron()
+	if c.Queue != agentruns.SweepQueue || c.Name != agentknowledge.CronBackfillReports || c.JobName != agentknowledge.JobBackfillReports || c.Schedule != "@every 24h" {
+		t.Fatalf("cron %+v", c)
+	}
+	def := agentknowledge.BackfillReportsJob(agentknowledge.NewService(agentknowledge.Deps{}), nil, nil)
+	if def.Name != agentknowledge.JobBackfillReports || def.Opts.Queue != agentruns.SweepQueue || def.Opts.MaxRetries != 0 {
+		t.Fatalf("job %q, options %+v", def.Name, def.Opts)
+	}
+}
+
 // tenantGateway records EnsureTenant.
 type tenantGateway struct {
 	agentsettings.Gateway

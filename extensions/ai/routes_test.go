@@ -286,7 +286,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	}
 	for _, name := range []string{
 		aiext.JobReconcileModels, aiext.JobAccrueModels, agentruns.JobSweep, agentknowledge.JobRecover,
-		agentwatch.JobTick, agentwatch.JobOrg, agentwatch.JobDeliver,
+		agentknowledge.JobBackfillReports, agentwatch.JobTick, agentwatch.JobOrg, agentwatch.JobDeliver,
 	} {
 		run, ok := eng.Registry().Get(name)
 		if !ok {
@@ -299,7 +299,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 			}
 		}
 	}
-	if names := eng.Registry().Names(); len(names) != 7 {
+	if names := eng.Registry().Names(); len(names) != 8 {
 		t.Errorf("AI off registers %v", names)
 	}
 	crons, err := eng.CronStore().ListCrons(ctx)

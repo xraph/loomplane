@@ -34,8 +34,9 @@ type reportSources struct {
 }
 
 // registerReports builds the agent's reports, provides them, and gives
-// them to the report operations. It runs after registerKnowledge: the
-// knowledge observer goes on them there.
+// them to the report operations. It runs after registerKnowledge, so the
+// backfill of past reports into knowledge is registered here; the
+// knowledge observer goes on them at start, once knowledge is available.
 func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Service) error {
 	src, err := e.reportSources(c, projectSvc)
 	if err != nil {
@@ -45,6 +46,8 @@ func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Serv
 	if err = forge.ProvideValue(c, reports); err != nil {
 		return fmt.Errorf("provide the agent's reports: %w", err)
 	}
+	e.reports = reports
+	e.registerReportKnowledge(reports)
 	e.deps.Reports = reports
 	e.deps.DeliverReport = e.deliverReport()
 	e.deps.InvestigationOf = investigationOf(func() runsByRun {

@@ -76,7 +76,14 @@ type Document struct {
 	URL       string
 	ProjectID string
 	Metadata  map[string]string
+	// Untrusted marks a document whose facts came from outside Loomplane
+	// or from the model, such as an agent report. It is stored as
+	// metadata "trust": "untrusted".
+	Untrusted bool
 }
+
+// TrustUntrusted is the "trust" metadata of an Untrusted document.
+const TrustUntrusted = "untrusted"
 
 // Outcome is what Ingest did with a document.
 type Outcome string
@@ -216,9 +223,12 @@ func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome
 	if err != nil {
 		return "", err
 	}
-	md := make(map[string]string, len(d.Metadata)+4)
+	md := make(map[string]string, len(d.Metadata)+5)
 	maps.Copy(md, d.Metadata)
 	md["kind"], md["title"], md["url"], md["project_id"] = d.Kind, d.Title, d.URL, d.ProjectID
+	if d.Untrusted {
+		md["trust"] = TrustUntrusted
+	}
 	return s.ingest(ctx, eng, &weaveengine.IngestInput{
 		CollectionID: col.ID, SourceKey: d.SourceKey, Title: d.Title, Source: d.URL,
 		Content: d.Content, Metadata: md,

@@ -23,6 +23,7 @@ import (
 	"github.com/xraph/weave/vectorstore/pgvector"
 
 	"github.com/xraph/loomplane/internal/agentknowledge"
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -132,10 +133,53 @@ func recoverCron() *cron.Definition[struct{}] {
 	}
 }
 
+// registerReportKnowledge registers the job that backfills each
+// workspace's past reports into its knowledge, over the workspaces whose
+// agent is on. Like recovery it's registered whenever AI is on, so a
+// schedule left from a boot with knowledge is answered; without knowledge
+// it does nothing.
+func (e *Extension) registerReportKnowledge(reports *agentreports.Service) {
+	settings := e.agentSettings()
+	if e.knowledge == nil || e.jobs == nil || settings == nil {
+		return
+	}
+	if eng := e.jobs(); eng != nil {
+		dispatchengine.Register(eng, agentknowledge.BackfillReportsJob(e.knowledge, reports, settings.EnabledOrgs))
+	}
+}
+
+// reportsCron schedules the reports backfill daily on the default queue,
+// as recovery is, so a server later run with AI off answers it with the
+// AI-off handler.
+func reportsCron() *cron.Definition[struct{}] {
+	return &cron.Definition[struct{}]{
+		Name: agentknowledge.CronBackfillReports, JobName: agentknowledge.JobBackfillReports,
+		Schedule: agentknowledge.BackfillReportsEvery, Queue: agentruns.SweepQueue,
+	}
+}
+
+// startReportKnowledge, once knowledge is available, has every report
+// change kept in its workspace's knowledge, queues one backfill and
+// schedules the daily one. Without knowledge the reports render nothing
+// for it. A job that can't be queued or scheduled is logged.
+func (e *Extension) startReportKnowledge(ctx context.Context, eng *dispatchengine.Engine, warn func(string, error)) {
+	if e.reports == nil {
+		return
+	}
+	e.reports.AddObserver(agentknowledge.ReportObserver{Knowledge: e.knowledge})
+	if _, err := dispatchengine.Enqueue(ctx, eng, agentknowledge.JobBackfillReports, struct{}{}, agentknowledge.ReportsJobOptions()...); err != nil {
+		warn("aiagent: couldn't queue the backfill of past reports into knowledge", err)
+	}
+	if err := dispatchengine.RegisterCron(ctx, eng, reportsCron()); err != nil {
+		warn("aiagent: couldn't schedule the backfill of past reports into knowledge", err)
+	}
+}
+
 // startKnowledge boots knowledge and hands the service its status. When
-// knowledge is available it queues the docs job on the agent's queue and
-// schedules recovery. Knowledge never stops the agent starting: a job
-// that can't be queued is logged, and the next start tries again.
+// knowledge is available it queues the docs job on the agent's queue,
+// schedules recovery, and turns past reports into knowledge. Knowledge
+// never stops the agent starting: a job that can't be queued is logged,
+// and the next start tries again.
 func (e *Extension) startKnowledge(ctx context.Context) {
 	if e.knowledge == nil {
 		return
@@ -158,6 +202,7 @@ func (e *Extension) startKnowledge(ctx context.Context) {
 	if err := dispatchengine.RegisterCron(ctx, eng, recoverCron()); err != nil {
 		warn("aiagent: couldn't schedule knowledge's recovery", err)
 	}
+	e.startReportKnowledge(ctx, eng, warn)
 }
 
 // errSearchNotReady is what the model reads when a knowledge search

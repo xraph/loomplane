@@ -82,6 +82,11 @@ func RegisterOffJobs(eng *engine.Engine) {
 	engine.Register(eng, job.NewDefinition(agentknowledge.JobRecover, func(context.Context, struct{}) error {
 		return nil
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// The backfill of past reports into knowledge, scheduled while AI and
+	// knowledge were on.
+	engine.Register(eng, job.NewDefinition(agentknowledge.JobBackfillReports, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
 	// The watcher's tick, scheduled while AI was on.
 	engine.Register(eng, job.NewDefinition(agentwatch.JobTick, func(context.Context, struct{}) error {
 		return nil

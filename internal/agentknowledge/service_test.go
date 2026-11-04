@@ -127,6 +127,7 @@ type fakeSettings struct {
 	knowledge map[string]bool // per workspace; missing is on
 	effErr    error
 	budgetErr error
+	budgets   map[string]error // per workspace; missing is budgetErr
 	statuses  []agentsettings.KnowledgeStatus
 }
 
@@ -138,7 +139,12 @@ func (f *fakeSettings) Effective(_ context.Context, orgID string) (*agentsetting
 	return &agentsettings.Effective{OrgID: orgID, Enabled: true, Knowledge: !ok || on}, nil
 }
 
-func (f *fakeSettings) RequireBudget(context.Context, string) error { return f.budgetErr }
+func (f *fakeSettings) RequireBudget(_ context.Context, orgID string) error {
+	if err, ok := f.budgets[orgID]; ok {
+		return err
+	}
+	return f.budgetErr
+}
 
 func (f *fakeSettings) SetKnowledge(st agentsettings.KnowledgeStatus) {
 	f.mu.Lock()

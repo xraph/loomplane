@@ -39,6 +39,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentchat"
 	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentops"
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsafety"
@@ -114,6 +115,8 @@ type Extension struct {
 	// is the nexus tenant indexing the docs is billed to.
 	knowledge *agentknowledge.Service
 	system    *SystemTenant
+	// reports are the agent's reports; past ones become knowledge.
+	reports *agentreports.Service
 }
 
 // New returns the extension and builds the libraries' extensions, which
@@ -275,8 +278,9 @@ func sweepCron() *cron.Definition[struct{}] {
 
 // Start turns knowledge on if this server can have it, and records why
 // not if it can't; knowledge never stops the agent starting. When it's on,
-// the docs are indexed by a job and recovery is scheduled. The library
-// extensions have started by now, and no agent job has run.
+// the docs are indexed by a job, recovery is scheduled, and past reports
+// become knowledge. The library extensions have started by now, and no
+// agent job has run.
 func (e *Extension) Start(ctx context.Context) error {
 	e.startKnowledge(ctx)
 	// Only here: with AI off this extension doesn't exist, and nothing is
