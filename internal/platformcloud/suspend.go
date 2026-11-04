@@ -386,39 +386,103 @@ func (s *Service) markWaiting(ctx context.Context, p Placement) {
 		"Loomplane Cloud can't start your work again yet. It starts as soon as it can.")
 }
 
-// startPlacement starts one remembered placement under the tenant lock, if
-// the organization is enabled and not suspended and the placement still waits
-// for it. The start has a time limit.
+// startPlacement starts one remembered placement, if the organization is
+// enabled and not suspended and the placement still waits for it. It claims
+// the placement first, with a lock no other start can take while this one
+// runs, so two restores start it once. The start itself runs with the
+// tenant lock let go: starting a VM re-applies the service, which reserves
+// under that lock. Only once the start has succeeded is the placement marked
+// running, after a fresh look under the lock, so a start that fails leaves
+// it suspended and remembered, billed for nothing, for the next restore.
 func (s *Service) startPlacement(ctx context.Context, orgID, placementID string) error {
-	return s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
-		t, err := lockTenantTx(ctx, tx, orgID)
-		if err != nil {
-			return err
-		}
-		if t.Status != tenantEnabled {
-			return ErrNotEnabled
-		}
-		if len(t.SuspendReasons) > 0 {
-			return nil
-		}
-		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, placementID, orgID))
-		if errors.Is(err, ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if p.State != stateSuspended || !p.RestoreRunning || p.HostID == nil {
-			return nil
-		}
-		if p.InstanceID != "" {
-			if err = callInstances(ctx, func(c context.Context) error { return s.instances.Start(c, p.InstanceID) }); err != nil {
-				return err
-			}
-		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,running_since=$3,updated_at=now() WHERE id=$1`, p.ID, stateRunning, s.now().UTC())
+	claim, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
+	}
+	defer rollback(claim)
+	var claimed bool
+	if err = claim.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, startClaimKey(placementID)).Scan(&claimed); err != nil {
+		return err
+	}
+	if !claimed {
+		return nil // Another start has it.
+	}
+	var instance string
+	waiting := false
+	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+		p, readErr := s.waitingStart(ctx, tx, orgID, placementID)
+		if readErr != nil || p == nil {
+			return readErr
+		}
+		waiting, instance = true, p.InstanceID
+		return nil
 	})
+	if err != nil || !waiting {
+		return err
+	}
+	if instance != "" {
+		if s.instances == nil {
+			return errors.New("no instance control")
+		}
+		if err = callStart(ctx, func(c context.Context) error { return s.instances.Start(c, instance) }); err != nil {
+			return err
+		}
+	}
+	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+		p, readErr := s.waitingStart(ctx, tx, orgID, placementID)
+		if readErr != nil || p == nil || p.InstanceID != instance {
+			// A suspension came back, or the start already moved it on:
+			// the deploy path records what runs.
+			return readErr
+		}
+		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,running_since=$3,updated_at=now() WHERE id=$1`, p.ID, stateRunning, s.now().UTC())
+		return execErr
+	})
+	if err != nil {
+		return err
+	}
+	return claim.Commit()
+}
+
+// startClaimKey names the lock a start of the placement holds.
+func startClaimKey(placementID string) string { return "platform-start/" + placementID }
+
+// waitingStart reads the placement under the tenant lock tx holds, FOR
+// UPDATE, and returns it if it may be started now: the organization is
+// enabled with no suspend reason and the placement is suspended, remembered
+// as running and on a host. ErrNotEnabled is a tenant that isn't enabled.
+func (s *Service) waitingStart(ctx context.Context, tx driverTx, orgID, placementID string) (*Placement, error) {
+	t, err := lockTenantTx(ctx, tx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != tenantEnabled {
+		return nil, ErrNotEnabled
+	}
+	if len(t.SuspendReasons) > 0 {
+		return nil, nil
+	}
+	p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, placementID, orgID))
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if p.State != stateSuspended || !p.RestoreRunning || p.HostID == nil {
+		return nil, nil
+	}
+	return p, nil
+}
+
+// startCallTimeout bounds a start, which re-applies the service and may pull
+// its image. No lock is held while it runs.
+const startCallTimeout = 15 * time.Minute
+
+func callStart(ctx context.Context, fn func(context.Context) error) error {
+	c, cancel := context.WithTimeout(ctx, startCallTimeout)
+	defer cancel()
+	return fn(c)
 }
 
 // Reclaim first stops again whatever a suspended organization still has
@@ -479,6 +543,11 @@ func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now ti
 		}
 		if p.State != stateSuspended || p.HostID == nil || p.SuspendedAt == nil || p.SuspendedAt.After(now.Add(-ReclaimAfter)) {
 			return nil
+		}
+		// A start that has the placement claimed wins: its VM stays.
+		var free bool
+		if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))`, startClaimKey(p.ID)).Scan(&free); err != nil || !free {
+			return err
 		}
 		if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *p) }); err != nil {
 			return fmt.Errorf("remove placement %s: %w", p.ID, err)

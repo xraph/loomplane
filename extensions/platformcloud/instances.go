@@ -5,11 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
-	"time"
 
 	"github.com/xraph/ctrlplane"
 	"github.com/xraph/ctrlplane/id"
+	cpinstance "github.com/xraph/ctrlplane/instance"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/deployments"
@@ -19,49 +18,54 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// startTimeout bounds a start in the background: one service's apply,
-// image pull included.
-const startTimeout = 15 * time.Minute
+// placements is what the instance control reads of the control plane.
+// *platformcloud.Service is one.
+type placements interface {
+	deployments.PlatformHosts
+	PlacementOfInstance(ctx context.Context, instanceID string) (*platformcloud.Placement, error)
+	RegionName(ctx context.Context, regionID string) (string, error)
+	ActiveBuilds(ctx context.Context, orgID string) ([]platformcloud.Placement, error)
+	HasRoomElsewhere(ctx context.Context, p platformcloud.Placement) (bool, error)
+}
+
+// lifecycle is the part of Ctrl Plane's instance service the instance
+// control drives.
+type lifecycle interface {
+	Get(ctx context.Context, instanceID id.ID) (*cpinstance.Instance, error)
+	Start(ctx context.Context, instanceID id.ID) error
+	Stop(ctx context.Context, instanceID id.ID) error
+}
+
+// regions registers a region's Ctrl Plane provider.
+type regions interface {
+	PrepareRegion(region string) error
+}
 
 // instances is platformcloud.InstanceControl over Ctrl Plane and the
 // platform hosts. A service's VM stops and starts through its Ctrl Plane
 // instance, as Loomplane automation in its organization, so Ctrl Plane keeps
 // the instance's state; a suspension's stop is marked so the placement is
-// left for the suspension to record. Starts run in the background: a start
-// re-applies the service, which reserves under the tenant lock that the
-// caller of Start holds. A VM's removal, and a stop Ctrl Plane can't do from
-// the instance's state, go straight to the host under Loomplane Cloud's
-// maintenance authority.
+// left for the suspension to record. Every call waits for its effect: the
+// control plane calls Start with no lock held, so the start's own
+// reservation is free to take the tenant lock. A VM's removal, and a stop
+// Ctrl Plane can't do from the instance's state, go straight to the host
+// under Loomplane Cloud's maintenance authority, bound to the placement and
+// its host.
 type instances struct {
-	svc       *platformcloud.Service
-	target    *deployments.PlatformTarget
-	ctrl      deployments.CtrlPlane
+	svc       placements
+	regions   regions
+	ctrl      lifecycle
 	authority fc.Issuer
-
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
 }
 
 var (
 	_ platformcloud.InstanceControl = (*instances)(nil)
 	_ platformcloud.Redeployer      = (*instances)(nil)
+	_ placements                    = (*platformcloud.Service)(nil)
 )
 
 func newInstances(svc *platformcloud.Service, target *deployments.PlatformTarget) *instances {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &instances{svc: svc, target: target, ctrl: target.Ctrl, authority: target.Authority, ctx: ctx, cancel: cancel}
-}
-
-// close cuts the background starts short and waits for them.
-func (ic *instances) close(ctx context.Context) {
-	ic.cancel()
-	done := make(chan struct{})
-	go func() { ic.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
+	return &instances{svc: svc, regions: target, ctrl: target.Ctrl.Instances, authority: target.Authority}
 }
 
 // prepare finds instanceID's placement, makes sure its region's provider is
@@ -76,7 +80,7 @@ func (ic *instances) prepare(ctx context.Context, instanceID string) (*platformc
 	if err != nil {
 		return nil, id.ID{}, ctx, err
 	}
-	if err = ic.target.PrepareRegion(region); err != nil {
+	if err = ic.regions.PrepareRegion(region); err != nil {
 		return nil, id.ID{}, ctx, err
 	}
 	iid, err := id.Parse(instanceID)
@@ -91,7 +95,7 @@ func (ic *instances) Stop(ctx context.Context, instanceID string) error {
 	if err != nil {
 		return err
 	}
-	inst, err := ic.ctrl.Instances.Get(ctx, iid)
+	inst, err := ic.ctrl.Get(ctx, iid)
 	switch {
 	case errors.Is(err, ctrlplane.ErrNotFound):
 		return deployments.PlatformVMAction(ctx, ic.svc, ic.authority, *p, "stop")
@@ -102,47 +106,31 @@ func (ic *instances) Stop(ctx context.Context, instanceID string) error {
 	case cpprovider.StateStopped, cpprovider.StateDestroyed:
 		return nil
 	case cpprovider.StateRunning:
-		return ic.ctrl.Instances.Stop(deployments.WithPlatformSuspend(ctx), iid)
+		return ic.ctrl.Stop(deployments.WithPlatformSuspend(ctx), iid)
 	}
 	// Starting, stopping, failed: Ctrl Plane can't stop it from here, so
 	// the host is told directly.
 	return deployments.PlatformVMAction(ctx, ic.svc, ic.authority, *p, "stop")
 }
 
-// Start starts the instance in the background and returns once that is on
-// its way. A failed start leaves the instance failed and the placement for
-// RepairMissingVMs.
+// Start starts the instance and returns once it runs, or with why it
+// doesn't.
 func (ic *instances) Start(ctx context.Context, instanceID string) error {
 	_, iid, ctx, err := ic.prepare(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	inst, err := ic.ctrl.Instances.Get(ctx, iid)
+	inst, err := ic.ctrl.Get(ctx, iid)
 	if err != nil {
 		return err
 	}
 	switch inst.State {
-	case cpprovider.StateRunning, cpprovider.StateStarting:
+	case cpprovider.StateRunning:
 		return nil
 	case cpprovider.StateStopped, cpprovider.StateFailed:
-		ic.background(ctx, instanceID, iid)
-		return nil
+		return ic.ctrl.Start(ctx, iid)
 	}
 	return fmt.Errorf("the instance is %s and can't be started", inst.State)
-}
-
-func (ic *instances) background(ctx context.Context, instanceID string, iid id.ID) {
-	claims := context.WithoutCancel(ctx)
-	ic.wg.Add(1)
-	go func() {
-		defer ic.wg.Done()
-		run, cancel := context.WithTimeout(ic.ctx, startTimeout)
-		defer cancel()
-		run = mergeValues(run, claims)
-		if err := ic.ctrl.Instances.Start(run, iid); err != nil {
-			slog.ErrorContext(run, "platform cloud could not start an instance", "instance", instanceID, "error", err)
-		}
-	}()
 }
 
 func (ic *instances) RemoveVM(ctx context.Context, p platformcloud.Placement) error {
@@ -168,54 +156,69 @@ func (ic *instances) CancelBuilds(ctx context.Context, orgID string) error {
 	return errors.Join(errs...)
 }
 
+// errMoveFailed is a redeploy whose new host didn't take the service. The
+// service was started again where it was.
+var errMoveFailed = errors.New("the service could not be started on another host; it runs where it was")
+
 // Redeploy puts the instance on a host again through the normal deploy
-// path: a running instance is stopped, as a suspension stops it so the
-// placement stays live, and started in the background, which reserves again
-// and applies. A move off a draining host and a VM a host lost both come
-// back this way.
+// path, and returns once that has finished. A service that runs and has
+// nowhere else to go is left running and the answer is
+// platformcloud.ErrNoCapacity. Otherwise it is stopped, as a suspension
+// stops it so the placement stays live, and started, which reserves again,
+// off a draining host, and applies. If that start fails, the service is
+// started again on the host it was on, even a draining one, and the answer
+// says the move failed. A VM a host lost comes back the same way.
 func (ic *instances) Redeploy(ctx context.Context, instanceID string) error {
-	_, iid, ctx, err := ic.prepare(ctx, instanceID)
+	p, iid, ctx, err := ic.prepare(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	inst, err := ic.ctrl.Instances.Get(ctx, iid)
+	inst, err := ic.ctrl.Get(ctx, iid)
 	if err != nil {
 		return err
+	}
+	from := ""
+	if p.HostID != nil {
+		from = *p.HostID
 	}
 	if inst.State == cpprovider.StateRunning {
+		room, roomErr := ic.svc.HasRoomElsewhere(ctx, *p)
+		if roomErr != nil {
+			return roomErr
+		}
+		if !room {
+			return platformcloud.ErrNoCapacity
+		}
 		// A VM that is gone fails the stop, which leaves the instance
 		// failed and startable.
-		if stopErr := ic.ctrl.Instances.Stop(deployments.WithPlatformSuspend(ctx), iid); stopErr != nil {
+		if stopErr := ic.ctrl.Stop(deployments.WithPlatformSuspend(ctx), iid); stopErr != nil {
 			slog.WarnContext(ctx, "platform cloud redeploy: the stop failed; starting anyway", "instance", instanceID, "error", stopErr)
 		}
-		if inst, err = ic.ctrl.Instances.Get(ctx, iid); err != nil {
+		if inst, err = ic.ctrl.Get(ctx, iid); err != nil {
 			return err
 		}
 	}
 	switch inst.State {
 	case cpprovider.StateStopped, cpprovider.StateFailed:
-		ic.background(ctx, instanceID, iid)
-		return nil
-	case cpprovider.StateStarting:
+	default:
+		return fmt.Errorf("the instance is %s and can't be redeployed", inst.State)
+	}
+	startErr := ic.ctrl.Start(ctx, iid)
+	if startErr == nil {
 		return nil
 	}
-	return fmt.Errorf("the instance is %s and can't be redeployed", inst.State)
-}
-
-// valuesOf is a context with the deadline and cancellation of one and the
-// values of another.
-type valuesOf struct {
-	context.Context
-	values context.Context
-}
-
-func (v valuesOf) Value(key any) any {
-	if out := v.values.Value(key); out != nil {
-		return out
+	slog.WarnContext(ctx, "platform cloud redeploy: the start failed; starting it where it was", "instance", instanceID, "error", startErr)
+	if from == "" {
+		return startErr
 	}
-	return v.Context.Value(key)
-}
-
-func mergeValues(run, values context.Context) context.Context {
-	return valuesOf{Context: run, values: values}
+	if inst, err = ic.ctrl.Get(ctx, iid); err != nil {
+		return errors.Join(startErr, err)
+	}
+	if inst.State != cpprovider.StateStopped && inst.State != cpprovider.StateFailed {
+		return errors.Join(errMoveFailed, startErr)
+	}
+	if backErr := ic.ctrl.Start(platformcloud.WithKeepHost(ctx, from), iid); backErr != nil {
+		return errors.Join(startErr, fmt.Errorf("start it where it was: %w", backErr))
+	}
+	return errors.Join(errMoveFailed, startErr)
 }

@@ -262,7 +262,7 @@ func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region 
 	if err != nil {
 		return nil, err
 	}
-	if s.eligible(h, req) {
+	if s.eligibleFor(ctx, h, req) {
 		all, org, loadErr := hostLoad(ctx, tx, h.ID, req.OrgID, "")
 		if loadErr != nil {
 			return nil, loadErr
@@ -388,6 +388,34 @@ WHERE org_id=$1 AND environment_id=$2 AND resource=$3 AND state<>'released'`, re
 	return p, err
 }
 
+type keepHostKey struct{}
+
+// WithKeepHost marks ctx as putting a service back on the host it was moved
+// off: that host leads the candidates and may take the service although it
+// is draining, as long as its evidence is fresh. A move whose new host
+// failed uses it to start the service where it was.
+func WithKeepHost(ctx context.Context, hostID string) context.Context {
+	return context.WithValue(ctx, keepHostKey{}, hostID)
+}
+
+// KeptHost is the host WithKeepHost put on ctx, or "".
+func KeptHost(ctx context.Context) string { return keepHostFrom(ctx) }
+
+func keepHostFrom(ctx context.Context) string {
+	id, _ := ctx.Value(keepHostKey{}).(string)
+	return id
+}
+
+// eligibleFor is eligible, letting the host WithKeepHost names take the
+// request while it drains.
+func (s *Service) eligibleFor(ctx context.Context, h *Host, req Request) bool {
+	if s.eligible(h, req) {
+		return true
+	}
+	return h.ID == keepHostFrom(ctx) && h.Status == hostDraining && h.Fresh(s.now()) &&
+		(req.Architecture == "" || h.Evidence.Architecture == req.Architecture)
+}
+
 // eligible reports whether the host takes new placements of the request's
 // architecture at all.
 func (s *Service) eligible(h *Host, req Request) bool {
@@ -435,6 +463,9 @@ func (s *Service) candidates(ctx context.Context, q querier, req Request, region
 			keep = *old.HostID
 		}
 	}
+	if back := keepHostFrom(ctx); back != "" {
+		keep = back
+	}
 	type ranked struct {
 		host    Host
 		orgVMs  int
@@ -443,7 +474,7 @@ func (s *Service) candidates(ctx context.Context, q querier, req Request, region
 	var out []ranked
 	for i := range hosts {
 		h := &hosts[i]
-		if !s.eligible(h, req) {
+		if !s.eligibleFor(ctx, h, req) {
 			continue
 		}
 		all, org, loadErr := hostLoad(ctx, q, h.ID, req.OrgID, exclude)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,10 +49,13 @@ type Service struct {
 	store     *PgStore
 	settings  SettingsReader
 	orgs      OrgLister
+	orgExists OrgExists
 	secrets   Secrets
 	dns       DNSWriter
-	gate      metering.Gate
-	meter     metering.Meter
+	// gate and meter are set once the edition's billing has started, while
+	// deploy workers may already read them.
+	gate      atomic.Pointer[metering.Gate]
+	meter     atomic.Pointer[metering.Meter]
 	usage     func(ctx context.Context, hostID string) ([]fc.UsageSample, error)
 	instances InstanceControl
 	// inspect reads a VM on a host; nil asks the host. Tests set it.
@@ -64,15 +68,19 @@ type Service struct {
 // WithGate sets what decides whether an organization may start platform
 // work and returns the service. Nil lets everything run.
 func (s *Service) WithGate(g metering.Gate) *Service {
-	s.gate = g
+	if g == nil {
+		s.gate.Store(nil)
+	} else {
+		s.gate.Store(&g)
+	}
 	return s
 }
 
 func (s *Service) canRun() metering.Gate {
-	if s.gate == nil {
-		return metering.AllowAll
+	if g := s.gate.Load(); g != nil {
+		return *g
 	}
-	return s.gate
+	return metering.AllowAll
 }
 
 // NewService returns the control plane over store. orgs lists every

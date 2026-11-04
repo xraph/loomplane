@@ -35,15 +35,19 @@ const emitDelay = 2 * time.Minute
 // WithMeter sets where usage is recorded and returns the service. Nil drops
 // it.
 func (s *Service) WithMeter(m metering.Meter) *Service {
-	s.meter = m
+	if m == nil {
+		s.meter.Store(nil)
+	} else {
+		s.meter.Store(&m)
+	}
 	return s
 }
 
 func (s *Service) meterOrDiscard() metering.Meter {
-	if s.meter == nil {
-		return metering.Discard
+	if m := s.meter.Load(); m != nil {
+		return *m
 	}
-	return s.meter
+	return metering.Discard
 }
 
 func hourOf(t time.Time) time.Time { return t.UTC().Truncate(time.Hour) }

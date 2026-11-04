@@ -137,6 +137,19 @@ func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, err
 	return sec.Value, nil
 }
 
+// Exists reports whether a secret is stored under key, without decrypting
+// it.
+func (v *VaultAppSecrets) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := v.svc.GetMeta(ctx, key, v.appID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read app secret: %w", err)
+	}
+	return true, nil
+}
+
 // Delete implements AppSecrets. One that's already gone is not an error.
 func (v *VaultAppSecrets) Delete(ctx context.Context, cloud string) error {
 	err := v.svc.Delete(ctx, cloud, v.appID)

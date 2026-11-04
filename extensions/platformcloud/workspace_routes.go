@@ -17,15 +17,15 @@ import (
 // evidence.
 type WorkspacePlatformCloud = platformcloud.WorkspaceView
 
-// mountWorkspace serves a workspace's own view. It needs the permission the
-// organization's Clouds page needs.
+// mountWorkspace serves a workspace's own view. It needs the Clouds read
+// permission.
 func (r *routes) mountWorkspace(router forge.Router, guard identity.Guard) error {
 	g := router.Group("/api/v1/platform-cloud", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Platform Cloud"))
 	return g.GET("", r.workspace,
 		forge.WithName("workspacePlatformCloud.get"),
 		forge.WithSummary("Your workspace's Loomplane Cloud: whether it's enabled, why it's suspended, limits, use, regions and placements"),
 		forge.WithResponseSchema(http.StatusOK, "Loomplane Cloud for this workspace", WorkspacePlatformCloud{}),
-		forge.WithResponseSchema(http.StatusForbidden, "Needs the organization's Clouds permission", nil),
+		forge.WithResponseSchema(http.StatusForbidden, "Needs the Clouds read permission", nil),
 	)
 }
 
@@ -35,7 +35,7 @@ func (r *routes) workspace(c forge.Context) error {
 	if !ok {
 		return forge.NewHTTPError(http.StatusUnauthorized, security.ErrUnauthenticated.Error())
 	}
-	if err := r.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
+	if err := r.authz.Require(ctx, p, security.CloudAccountRead, p.OrgID); err != nil {
 		return forge.NewHTTPError(security.StatusFor(err), err.Error())
 	}
 	v, err := r.svc.Workspace(ctx, p.OrgID)

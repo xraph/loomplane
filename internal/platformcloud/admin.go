@@ -141,6 +141,9 @@ type TenantView struct {
 	// Limits is what applies: the tenant's own, or the instance defaults.
 	Limits Limits `json:"limits"`
 	Use    Use    `json:"use"`
+	// CleanupBlocked is set for a deleted organization's tenant whose
+	// cleanup is waiting on something still referencing it.
+	CleanupBlocked *CleanupBlock `json:"cleanup_blocked,omitempty"`
 }
 
 // Tenants lists every tenant and, when the service can list organizations,
@@ -175,9 +178,16 @@ func (s *Service) Tenants(ctx context.Context) ([]TenantView, error) {
 	}
 	slices.Sort(orgs)
 	orgs = slices.Compact(orgs)
+	blocked, err := s.cleanupBlocks(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]TenantView, 0, len(orgs))
 	for _, org := range orgs {
 		v := TenantView{OrgID: org, Tenant: byOrg[org], Limits: limitsOf(byOrg[org], defaults)}
+		if b, ok := blocked[org]; ok {
+			v.CleanupBlocked = &b
+		}
 		if v.Tenant != nil {
 			if v.Use, err = s.store.TenantUse(ctx, org); err != nil {
 				return nil, err
@@ -245,9 +255,24 @@ func (s *Service) SecretsSet(ctx context.Context) (registry, dns bool) {
 	if err != nil {
 		return false, false
 	}
-	_, regErr := vault.Reveal(ctx, registrySecret)
-	_, dnsErr := vault.Reveal(ctx, dnsSecret)
-	return regErr == nil, dnsErr == nil
+	return secretStored(ctx, vault, registrySecret), secretStored(ctx, vault, dnsSecret)
+}
+
+// SecretChecker is a Secrets that can tell whether a key is stored without
+// decrypting it. The Vault-backed store is one.
+type SecretChecker interface {
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+// secretStored reports whether key is stored, without reading the value
+// when the store can say so.
+func secretStored(ctx context.Context, vault Secrets, key string) bool {
+	if c, ok := vault.(SecretChecker); ok {
+		on, err := c.Exists(ctx, key)
+		return err == nil && on
+	}
+	_, err := vault.Reveal(ctx, key)
+	return err == nil
 }
 
 // PlacementOfInstance is the placement that runs instanceID: the live one,
@@ -265,6 +290,33 @@ func (s *Service) RegionName(ctx context.Context, regionID string) (string, erro
 	var name string
 	err := s.store.db.QueryRow(ctx, `SELECT name FROM loomplane_platform_regions WHERE id=$1`, regionID).Scan(&name)
 	return name, storeError(err)
+}
+
+// HasRoomElsewhere reports whether another host in the placement's region
+// could take it now, as a move off its host would need. It reserves nothing,
+// so a move can still find the room gone; it is the check that keeps a move
+// from stopping a service with nowhere to go.
+func (s *Service) HasRoomElsewhere(ctx context.Context, p Placement) (bool, error) {
+	region, err := s.RegionName(ctx, p.RegionID)
+	if err != nil {
+		return false, err
+	}
+	r, err := regionByName(ctx, s.store.db, region)
+	if err != nil {
+		return false, err
+	}
+	req := Request{OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, Resource: p.Resource, Region: region, Kind: p.Kind,
+		VCPUs: p.VCPUs, MemoryMiB: p.MemoryMiB, DiskMiB: p.DiskMiB}
+	if p.HostID != nil {
+		if h, hostErr := s.store.GetHost(ctx, *p.HostID); hostErr == nil {
+			req.Architecture = h.Evidence.Architecture
+		}
+	}
+	hosts, err := s.candidates(ctx, s.store.db, req, r, &p)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(hosts, func(h Host) bool { return p.HostID == nil || h.ID != *p.HostID }), nil
 }
 
 // ActiveBuilds lists the organization's build placements that are reserved

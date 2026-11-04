@@ -35,7 +35,7 @@ func newFakeControl() *fakeControl {
 		tenants: map[string]*platformcloud.Tenant{"org_2": {OrgID: "org_2", Status: "enabled", SuspendReasons: []platformcloud.SuspendReason{}}},
 		hosts: []platformcloud.Host{{ID: "host_1", RegionID: "reg_1", Endpoint: "https://10.0.0.5:9443", HostID: "hw-1", Status: "ready",
 			Evidence: platformcloud.Evidence{Reason: "reached https://10.0.0.5:9443"}}},
-		placed: []platformcloud.Placement{{ID: "pl_1", OrgID: "org_2", Kind: "service", State: "running", InstanceID: "inst_1"}},
+		placed: []platformcloud.Placement{{ID: "pl_1", OrgID: "org_2", Resource: "web", Kind: "service", State: "running", InstanceID: "inst_1"}},
 	}
 }
 
@@ -143,17 +143,17 @@ func (m *memSettings) SetPlatformCloud(_ context.Context, v instance.PlatformClo
 	return nil
 }
 
-type auditEvent struct{ action, user, resource, id string }
+type auditEvent struct{ action, user, resource, id, outcome string }
 
 type memAudit struct {
 	mu     sync.Mutex
 	events []auditEvent
 }
 
-func (a *memAudit) Record(_ context.Context, action, userID, resource, id string, _ map[string]string) {
+func (a *memAudit) Record(_ context.Context, action, userID, resource, id, outcome string, _ map[string]string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.events = append(a.events, auditEvent{action, userID, resource, id})
+	a.events = append(a.events, auditEvent{action, userID, resource, id, outcome})
 }
 
 func (a *memAudit) take() []auditEvent {
@@ -164,18 +164,28 @@ func (a *memAudit) take() []auditEvent {
 	return out
 }
 
-type memMover struct{ moved []string }
+type memMover struct {
+	moved []string
+	full  bool
+}
 
 func (m *memMover) Redeploy(_ context.Context, id string) error {
+	if m.full {
+		return platformcloud.ErrNoCapacity
+	}
 	m.moved = append(m.moved, id)
 	return nil
 }
 
-// cloudsAuthz lets only the workspace owner through.
+// cloudsAuthz gives the workspace owner every Clouds permission and a
+// reader only Clouds read.
 type cloudsAuthz struct{}
 
 func (cloudsAuthz) Require(_ context.Context, p security.Principal, perm security.Permission, _ string) error {
-	if p.UserID == "ws_owner" && perm == security.OrganizationCloudManage {
+	switch {
+	case p.UserID == "ws_owner" && (perm == security.OrganizationCloudManage || perm == security.CloudAccountRead):
+		return nil
+	case p.UserID == "ws_reader" && perm == security.CloudAccountRead:
 		return nil
 	}
 	return security.ErrForbidden
@@ -223,8 +233,7 @@ func newRig(t *testing.T) *rig {
 	rg := &rig{r: forge.NewRouter(), svc: newFakeControl(), audit: &memAudit{}, mover: &memMover{}}
 	routes := &routes{svc: rg.svc, settings: &memSettings{v: instance.PlatformCloudSettings{Attach: "manual"}}, mover: rg.mover, audit: rg.audit,
 		authz: cloudsAuthz{}, isPlatform: testPlatformUser,
-		orgNames:   func(context.Context) (map[string]string, error) { return map[string]string{"org_2": "Acme"}, nil },
-		background: func(fn func(context.Context)) { fn(context.Background()) }}
+		orgNames: func(context.Context) (map[string]string, error) { return map[string]string{"org_2": "Acme"}, nil }}
 	if err := routes.mount(rg.r, testGuard); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +409,11 @@ func TestWorkspaceRouteHasNoHostFields(t *testing.T) {
 	if strings.Contains(out.Body.String(), "10.0.0.5") {
 		t.Fatalf("the workspace view names a host address: %s", out.Body.String())
 	}
-	// Without the Clouds permission there is nothing to see.
+	// Clouds read is enough.
+	if out = rg.do(t, http.MethodGet, "/api/v1/platform-cloud", "", caller{"X-User": "ws_reader"}); out.Code != http.StatusOK {
+		t.Fatalf("a member with Clouds read: %d %s", out.Code, out.Body.String())
+	}
+	// Without it there is nothing to see.
 	if out = rg.do(t, http.MethodGet, "/api/v1/platform-cloud", "", caller{"X-User": "ws_viewer"}); out.Code != http.StatusForbidden {
 		t.Fatalf("a member without the Clouds permission: %d", out.Code)
 	}
@@ -471,8 +484,13 @@ func TestPlatformWritesAreAudited(t *testing.T) {
 			t.Errorf("%s %s answers with a credential: %s", c.method, c.path, out.Body.String())
 		}
 		events := rg.audit.take()
-		if len(events) != 1 || events[0].action != want[c.path] || events[0].user != "platform_owner" {
-			t.Errorf("%s %s audited %+v, want one %s by the platform owner", c.method, c.path, events, want[c.path])
+		outcome := "success"
+		if strings.HasSuffix(c.path, "/restore") {
+			// org_2 was never suspended by the platform owner.
+			outcome = "no_change"
+		}
+		if len(events) != 1 || events[0].action != want[c.path] || events[0].user != "platform_owner" || events[0].outcome != outcome {
+			t.Errorf("%s %s audited %+v, want one %s by the platform owner, %s", c.method, c.path, events, want[c.path], outcome)
 		}
 	}
 	if !slices.Equal(rg.mover.moved, []string{"inst_1"}) {
@@ -550,5 +568,26 @@ func TestOpenAPIContract(t *testing.T) {
 				t.Errorf("%s has %s", name, banned)
 			}
 		}
+	}
+}
+
+// With no room on another host, move-all moves nothing and says the
+// service was skipped; the host stays draining.
+func TestMoveAllSkipsWhatHasNowhereToGo(t *testing.T) {
+	rg := newRig(t)
+	rg.mover.full = true
+	out := rg.do(t, http.MethodPost, platformBase+"/hosts/host_1/move-all", "", platformOwner)
+	if out.Code != http.StatusOK {
+		t.Fatalf("move-all: %d %s", out.Code, out.Body.String())
+	}
+	var got MoveAll
+	if err := json.Unmarshal(out.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Moved != 0 || len(got.Skipped) != 1 || len(got.Failed) != 0 || got.Host.Status != "draining" {
+		t.Fatalf("move-all = %+v", got)
+	}
+	if events := rg.audit.take(); len(events) != 1 || events[0].outcome != "failure" {
+		t.Fatalf("audited %+v", events)
 	}
 }

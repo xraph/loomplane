@@ -14,8 +14,6 @@ package platformcloud
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/dispatch/cron"
@@ -50,8 +48,6 @@ type Extension struct {
 	container forge.Container
 	svc       *platformcloud.Service
 	instances *instances
-	// moves are the move-all redeploys still running.
-	moves sync.WaitGroup
 }
 
 // New returns the extension. engineOf returns the dispatch extension's
@@ -127,27 +123,17 @@ func (e *Extension) Register(fapp forge.App) error {
 		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.PlatformCloudVaultAppID)), connections.PlatformCloudVaultAppID)
 	orgs := orgLister{pg: pg, appID: e.cfg.Identity.AppID}
 	e.instances = newInstances(svc, target)
-	e.svc = svc.WithSecrets(secrets).WithOrgs(orgs.ids).WithInstances(e.instances)
+	e.svc = svc.WithSecrets(secrets).WithOrgs(orgs.ids).WithOrgExists(orgs.exists).WithInstances(e.instances)
 
 	for _, j := range jobs(svc) {
 		j.register(e.engineOf())
 	}
 	r := &routes{
 		svc: svc, settings: instance.New(pg), mover: e.instances, authz: authz, isPlatform: platformUser,
-		audit:      chronicleAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()},
-		orgNames:   orgs.names,
-		background: e.runMove,
+		audit:    chronicleAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()},
+		orgNames: orgs.names,
 	}
 	return r.mount(fapp.Router(), guard)
-}
-
-// runMove runs a move-all's redeploys after the request has its answer.
-func (e *Extension) runMove(fn func(context.Context)) {
-	e.moves.Add(1)
-	go func() {
-		defer e.moves.Done()
-		fn(e.instances.ctx)
-	}()
 }
 
 // Start gives the service the metering gate and meter, the one place they
@@ -180,22 +166,9 @@ func (e *Extension) Start(ctx context.Context) error {
 	return nil
 }
 
-// stopWait bounds how long Stop waits for background starts and moves.
-const stopWait = 30 * time.Second
-
-// Stop cuts background starts and moves short and waits for them.
-func (e *Extension) Stop(ctx context.Context) error {
-	if e.instances != nil {
-		wait, cancel := context.WithTimeout(ctx, stopWait)
-		defer cancel()
-		e.instances.close(wait)
-		done := make(chan struct{})
-		go func() { e.moves.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-wait.Done():
-		}
-	}
+// Stop implements forge.Extension. Nothing runs in the background: every
+// start and move waits for its effect.
+func (e *Extension) Stop(context.Context) error {
 	e.MarkStopped()
 	return nil
 }
@@ -242,6 +215,13 @@ func (o orgLister) ids(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// exists reports whether the organization is still one of the app's.
+func (o orgLister) exists(ctx context.Context, orgID string) (bool, error) {
+	var on bool
+	err := o.pg.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM authsome_organizations WHERE id=$1 AND app_id=$2)`, orgID, o.appID).Scan(&on)
+	return on, err
+}
+
 func (o orgLister) names(ctx context.Context) (map[string]string, error) {
 	rows, err := o.pg.Query(ctx, `SELECT id,name FROM authsome_organizations WHERE app_id=$1`, o.appID)
 	if err != nil {
@@ -268,9 +248,9 @@ type chronicleAuditor struct {
 	log       forge.Logger
 }
 
-func (a chronicleAuditor) Record(ctx context.Context, action, userID, resource, resourceID string, meta map[string]string) {
+func (a chronicleAuditor) Record(ctx context.Context, action, userID, resource, resourceID, outcome string, meta map[string]string) {
 	b := a.chronicle.Warning(ctx, action, resource, resourceID).
-		Category("platform_cloud").AppID(a.appID).UserID(userID).Outcome("success")
+		Category("platform_cloud").AppID(a.appID).UserID(userID).Outcome(outcome)
 	for k, v := range meta {
 		b = b.Meta(k, v)
 	}

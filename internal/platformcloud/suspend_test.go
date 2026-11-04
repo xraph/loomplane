@@ -36,6 +36,9 @@ func (f *fakeControl) Stop(_ context.Context, id string) error {
 func (f *fakeControl) Start(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failing["start:"+id] {
+		return errors.New("start failed")
+	}
 	f.starts = append(f.starts, id)
 	return nil
 }
@@ -649,5 +652,51 @@ func TestLateDeployOfAReleasedPlacementIsStopped(t *testing.T) {
 	}
 	if !slices.Equal(fc.stops, []string{"inst_late"}) {
 		t.Fatalf("stops = %v", fc.stops)
+	}
+}
+
+// A start that fails leaves the placement suspended and remembered, so it is
+// neither shown nor billed as running, and the next restore tries again.
+func TestFailedStartLeavesTheRestoreWaitingAndUnbilled(t *testing.T) {
+	e, fc := suspendEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	web := e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	fc.mu.Lock()
+	fc.failing["start:inst_web"] = true
+	fc.mu.Unlock()
+	if err := e.svc.Restore(ctx, "org_a", ReasonPastDue); err == nil {
+		t.Fatal("a failed start was reported as done")
+	}
+	got := e.placement(t, web.ID)
+	if got.State != stateSuspended || !got.RestoreRunning {
+		t.Fatalf("after a failed start = %+v, want suspended and remembered", got)
+	}
+	e.svc.WithMeter(newRecordingMeter())
+	if err := e.svc.SampleCompute(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var minutes int
+	if err := e.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_platform_meter_compute WHERE placement_id=$1`, web.ID).Scan(&minutes); err != nil {
+		t.Fatal(err)
+	}
+	if minutes != 0 {
+		t.Fatalf("a placement whose start failed was metered: %d rows", minutes)
+	}
+
+	fc.mu.Lock()
+	delete(fc.failing, "start:inst_web")
+	fc.mu.Unlock()
+	if err := e.svc.RetryRestores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got = e.placement(t, web.ID); got.State != stateRunning || got.RestoreRunning {
+		t.Fatalf("after the retry = %+v", got)
+	}
+	if !slices.Equal(fc.starts, []string{"inst_web"}) {
+		t.Fatalf("starts = %v", fc.starts)
 	}
 }

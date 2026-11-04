@@ -168,7 +168,7 @@ AND l.resource=loomplane_platform_placements.resource AND l.state='released' AND
 		if redeploy == nil {
 			continue
 		}
-		if repairErr := callInstances(ctx, func(c context.Context) error { return redeploy.Redeploy(c, p.InstanceID) }); repairErr != nil {
+		if repairErr := callStart(ctx, func(c context.Context) error { return redeploy.Redeploy(c, p.InstanceID) }); repairErr != nil {
 			slog.ErrorContext(ctx, "platform cloud could not redeploy a placement that lost its VM", "org", p.OrgID, "placement", p.ID, "error", repairErr)
 			errs = append(errs, fmt.Errorf("redeploy placement %s: %w", p.ID, repairErr))
 		}
@@ -211,15 +211,34 @@ ORDER BY h.org_id,h.environment_id,h.resource LIMIT `+fmt.Sprint(sweepBatch), s.
 	return errors.Join(errs...)
 }
 
+// OrgExists reports whether an organization still exists on the instance.
+type OrgExists func(ctx context.Context, orgID string) (bool, error)
+
+// WithOrgExists sets how the cleanup checks, right before it cleans up a
+// tenant, that the tenant's organization is really gone, and returns the
+// service. Without it no tenant is cleaned up.
+func (s *Service) WithOrgExists(exists OrgExists) *Service {
+	s.orgExists = exists
+	return s
+}
+
+// cleanupBackoff is how long a tenant whose cleanup a reference blocked
+// waits before the next try.
+const cleanupBackoff = time.Hour
+
 // CleanupGoneTenants takes everything of a tenant whose organization no
 // longer exists off the platform: its placements are released and their VMs
 // removed, its hostnames deleted, then its projection and the tenant itself.
 // Its images stay in the platform registry, which has no way to delete a
-// repository prefix, and that is logged for the platform owner. A tenant
-// whose cleanup fails part way is tried again next run. An organization list
-// that comes back empty is not believed: an instance always has one.
+// repository prefix, and that is logged for the platform owner once the
+// tenant is gone. Each organization is checked again on its own right before
+// its cleanup, and an organization list that comes back empty is not
+// believed: an instance always has one. A tenant whose projection is still
+// referenced (an environment of the deleted organization still assigned to
+// it) is marked blocked, with the reason, and left alone for an hour; any
+// other failure is tried again next run.
 func (s *Service) CleanupGoneTenants(ctx context.Context) error {
-	if s.orgs == nil {
+	if s.orgs == nil || s.orgExists == nil {
 		return nil
 	}
 	orgs, err := s.orgs(ctx)
@@ -233,17 +252,66 @@ func (s *Service) CleanupGoneTenants(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	blocked, err := s.cleanupBlocks(ctx)
+	if err != nil {
+		return err
+	}
 	var errs []error
 	for _, t := range tenants {
 		if slices.Contains(orgs, t.OrgID) {
 			continue
 		}
-		if cleanErr := s.cleanupTenant(ctx, t.OrgID); cleanErr != nil {
+		if b, ok := blocked[t.OrgID]; ok && b.Until.After(s.now()) {
+			continue
+		}
+		exists, existsErr := s.orgExists(ctx, t.OrgID)
+		if existsErr != nil {
+			errs = append(errs, existsErr)
+			continue
+		}
+		if exists {
+			continue
+		}
+		cleanErr := s.cleanupTenant(ctx, t.OrgID)
+		if errors.Is(cleanErr, ErrConflict) {
+			until := s.now().Add(cleanupBackoff).UTC()
+			if _, markErr := s.store.db.Exec(ctx, `UPDATE loomplane_platform_tenants SET cleanup_blocked_until=$2,cleanup_error=$3 WHERE org_id=$1`,
+				t.OrgID, until, "the organization's Loomplane Cloud is still assigned to one of its environments"); markErr != nil {
+				errs = append(errs, markErr)
+			}
+		}
+		if cleanErr != nil {
 			slog.WarnContext(ctx, "platform cloud could not clean up after a deleted organization", "org", t.OrgID, "error", cleanErr)
 			errs = append(errs, fmt.Errorf("clean up %s: %w", t.OrgID, cleanErr))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// CleanupBlock says a deleted organization's tenant can't be cleaned up yet,
+// until when the cleanup waits, and why.
+type CleanupBlock struct {
+	Until  time.Time `json:"until"`
+	Reason string    `json:"reason"`
+}
+
+// cleanupBlocks is every tenant whose cleanup is marked blocked.
+func (s *Service) cleanupBlocks(ctx context.Context) (map[string]CleanupBlock, error) {
+	rows, err := s.store.db.Query(ctx, `SELECT org_id,cleanup_blocked_until,cleanup_error FROM loomplane_platform_tenants WHERE cleanup_blocked_until IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string]CleanupBlock{}
+	for rows.Next() {
+		var org string
+		var b CleanupBlock
+		if err = rows.Scan(&org, &b.Until, &b.Reason); err != nil {
+			return nil, err
+		}
+		out[org] = b
+	}
+	return out, rows.Err()
 }
 
 func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
@@ -283,15 +351,19 @@ func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
 			return unErr
 		}
 	}
-	if cfg, cfgErr := s.settings.PlatformCloud(ctx); cfgErr == nil && cfg.Registry.Endpoint != "" && strings.Trim(cfg.Registry.Repository, "/") != "" {
-		slog.WarnContext(ctx, "platform cloud: a deleted organization's images stay in the platform registry; delete its repository by hand",
-			"org", orgID, "repository", strings.TrimRight(cfg.Registry.Repository, "/")+"/ws-"+orgID)
-	}
-	return s.store.WithPlatformWrite(ctx, func(tx driverTx) error {
+	err = s.store.WithPlatformWrite(ctx, func(tx driverTx) error {
 		if _, execErr := tx.Exec(ctx, `DELETE FROM loomplane_cloud_profiles WHERE org_id=$1 AND platform_owned`, orgID); execErr != nil {
 			return fmt.Errorf("delete the projection: %w", storeError(execErr))
 		}
 		_, execErr := tx.Exec(ctx, `DELETE FROM loomplane_platform_tenants WHERE org_id=$1`, orgID)
 		return storeError(execErr)
 	})
+	if err != nil {
+		return err
+	}
+	if cfg, cfgErr := s.settings.PlatformCloud(ctx); cfgErr == nil && cfg.Registry.Endpoint != "" && strings.Trim(cfg.Registry.Repository, "/") != "" {
+		slog.WarnContext(ctx, "platform cloud: a deleted organization's images stay in the platform registry; delete its repository by hand",
+			"org", orgID, "repository", strings.TrimRight(cfg.Registry.Repository, "/")+"/ws-"+orgID)
+	}
+	return nil
 }

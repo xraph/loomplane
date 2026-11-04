@@ -55,10 +55,19 @@ type redeployer interface {
 	Redeploy(ctx context.Context, instanceID string) error
 }
 
-// auditor records what the platform owner changed.
+// auditor records what the platform owner changed, once the change is
+// made, with how it went: success, pending (recorded, its effects still
+// being carried out by the jobs), no_change, or failure.
 type auditor interface {
-	Record(ctx context.Context, action, userID, resource, resourceID string, meta map[string]string)
+	Record(ctx context.Context, action, userID, resource, resourceID, outcome string, meta map[string]string)
 }
+
+const (
+	outcomeSuccess  = "success"
+	outcomePending  = "pending"
+	outcomeNoChange = "no_change"
+	outcomeFailure  = "failure"
+)
 
 // authorizer checks a workspace member's permission.
 type authorizer interface {
@@ -76,8 +85,6 @@ type routes struct {
 	isPlatform identity.PlatformUser
 	// orgNames maps organization IDs to their names.
 	orgNames func(ctx context.Context) (map[string]string, error)
-	// background runs work a request starts but doesn't wait for.
-	background func(func(context.Context))
 }
 
 const platformBase = "/api/v1/platform/cloud"
@@ -188,11 +195,15 @@ type NewHost struct {
 	ClientFingerprint string             `json:"client_fingerprint"`
 }
 
-// MoveAll is a host that is draining and how many of its services are
-// being redeployed elsewhere.
+// MoveAll is a host that is draining and what became of its services:
+// how many moved to another host, which were skipped because no other host
+// had room (they run where they were), and which failed to start elsewhere
+// (started again where they were).
 type MoveAll struct {
-	Host   platformcloud.Host `json:"host"`
-	Moving int                `json:"moving"`
+	Host    platformcloud.Host `json:"host"`
+	Moved   int                `json:"moved"`
+	Skipped []string           `json:"skipped"`
+	Failed  []string           `json:"failed"`
 }
 
 // TenantRow is one organization's standing with the platform Cloud.
@@ -278,8 +289,8 @@ func (r *routes) mount(router forge.Router, guard identity.Guard) error {
 		}},
 		{http.MethodPost, "/hosts/:host/move-all", r.moveAll, []forge.RouteOption{
 			forge.WithName("platformCloudHosts.moveAll"),
-			forge.WithSummary("Drain a host and redeploy each of its services elsewhere"),
-			forge.WithResponseSchema(http.StatusAccepted, "The host and how many services are moving", MoveAll{}),
+			forge.WithSummary("Drain a host and move its services to other hosts one at a time. A service with nowhere to go stays where it is"),
+			forge.WithResponseSchema(http.StatusOK, "The host and what moved, was skipped for capacity or failed", MoveAll{}),
 		}},
 		{http.MethodPost, "/hosts/:host/retire", r.retireHost, []forge.RouteOption{
 			forge.WithName("platformCloudHosts.retire"),
@@ -415,30 +426,35 @@ func (r *routes) setSettings(c forge.Context) error {
 	}
 	actor := platformUserID(c)
 	meta := map[string]string{"attach": cfg.Attach, "apex": cfg.Apex, "dns_provider": cfg.DNS.Provider, "registry": cfg.Registry.Endpoint,
-		"registry_credential": changed(registrySecret), "dns_credential": changed(dnsSecret)}
-	r.audit.Record(ctx, "platform_cloud.settings.update", actor, "platform_cloud_settings", "platform_cloud", meta)
+		"registry_credential": "kept", "dns_credential": "kept"}
+	var secretErr error
 	if registrySecret {
-		if err := r.svc.SetRegistrySecret(ctx, actor, in.RegistryUsername, in.RegistryPassword, ""); err != nil {
-			return fail(ctx, err)
+		if secretErr = r.svc.SetRegistrySecret(ctx, actor, in.RegistryUsername, in.RegistryPassword, ""); secretErr != nil {
+			meta["registry_credential"] = "refused"
+		} else {
+			meta["registry_credential"] = "replaced"
 		}
 	}
-	if dnsSecret {
-		if err := r.svc.SetDNSSecret(ctx, actor, in.DNSAccountID, in.DNSTeamID, in.DNSToken); err != nil {
-			return fail(ctx, err)
+	if dnsSecret && secretErr == nil {
+		if secretErr = r.svc.SetDNSSecret(ctx, actor, in.DNSAccountID, in.DNSTeamID, in.DNSToken); secretErr != nil {
+			meta["dns_credential"] = "refused"
+		} else {
+			meta["dns_credential"] = "replaced"
 		}
+	}
+	outcome := outcomeSuccess
+	if secretErr != nil {
+		outcome = outcomeFailure
+	}
+	r.audit.Record(ctx, "platform_cloud.settings.update", actor, "platform_cloud_settings", "platform_cloud", outcome, meta)
+	if secretErr != nil {
+		return fail(ctx, secretErr)
 	}
 	v, err := r.settingsView(ctx)
 	if err != nil {
 		return fail(ctx, err)
 	}
 	return c.JSON(http.StatusOK, v)
-}
-
-func changed(on bool) string {
-	if on {
-		return "replaced"
-	}
-	return "kept"
 }
 
 func (r *routes) listRegions(c forge.Context) error {
@@ -460,7 +476,7 @@ func (r *routes) createRegion(c forge.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.region.create", platformUserID(c), "platform_cloud_region", region.ID,
+	r.audit.Record(ctx, "platform_cloud.region.create", platformUserID(c), "platform_cloud_region", region.ID, outcomeSuccess,
 		map[string]string{"name": region.Name, "status": region.Status})
 	return c.JSON(http.StatusCreated, region)
 }
@@ -475,7 +491,7 @@ func (r *routes) updateRegion(c forge.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.region.update", platformUserID(c), "platform_cloud_region", region.ID,
+	r.audit.Record(ctx, "platform_cloud.region.update", platformUserID(c), "platform_cloud_region", region.ID, outcomeSuccess,
 		map[string]string{"name": region.Name, "status": region.Status})
 	return c.JSON(http.StatusOK, region)
 }
@@ -500,7 +516,7 @@ func (r *routes) createHost(c forge.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.host.create", actor, "platform_cloud_host", nh.Host.ID,
+	r.audit.Record(ctx, "platform_cloud.host.create", actor, "platform_cloud_host", nh.Host.ID, outcomeSuccess,
 		map[string]string{"region": nh.Host.RegionID, "host_id": nh.Host.HostID, "client_fingerprint": nh.ClientFingerprint})
 	return c.JSON(http.StatusCreated, NewHost{Host: nh.Host, ClientCertificate: nh.ClientCertificate, ClientFingerprint: nh.ClientFingerprint})
 }
@@ -512,7 +528,7 @@ func (r *routes) hostAction(c forge.Context, verb string, act func(ctx context.C
 	if err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.host."+verb, actor, "platform_cloud_host", h.ID, map[string]string{"status": h.Status})
+	r.audit.Record(ctx, "platform_cloud.host."+verb, actor, "platform_cloud_host", h.ID, outcomeSuccess, map[string]string{"status": h.Status})
 	return c.JSON(http.StatusOK, h)
 }
 
@@ -535,17 +551,19 @@ func (r *routes) retireHost(c forge.Context) error {
 	if err := r.svc.RetireHost(ctx, actor, hostID); err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.host.retire", actor, "platform_cloud_host", hostID, nil)
+	r.audit.Record(ctx, "platform_cloud.host.retire", actor, "platform_cloud_host", hostID, outcomeSuccess, nil)
 	return c.NoContent(http.StatusNoContent)
 }
 
 // moveAllTimeout bounds one service's redeploy in a move.
-const moveAllTimeout = 5 * time.Minute
+const moveAllTimeout = 10 * time.Minute
 
-// moveAll drains the host, then redeploys each service on it through the
-// normal deploy path, which places it on another host. The redeploys run
-// after the answer; one that fails is logged and the service stays where
-// it is, still running.
+// moveAll drains the host, then moves its services off it one at a time,
+// each through the normal deploy path, waiting for each to finish. A service
+// with no room on another host is left running where it is and counted as
+// skipped; one whose new host fails is started again where it was and
+// counted as failed. The answer says how many moved, were skipped and
+// failed. Run it again once there is room: the host stays draining.
 func (r *routes) moveAll(c forge.Context) error {
 	ctx := c.Request().Context()
 	actor, hostID := platformUserID(c), c.Param("host")
@@ -557,25 +575,35 @@ func (r *routes) moveAll(c forge.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	var moving []platformcloud.Placement
+	out := MoveAll{Host: *h, Skipped: []string{}, Failed: []string{}}
 	for _, p := range placements {
-		if p.Kind == "service" && p.InstanceID != "" && (p.State == "running" || p.State == "reserved") {
-			moving = append(moving, p)
+		if p.Kind != "service" || p.InstanceID == "" || p.State != "running" {
+			continue
+		}
+		if r.mover == nil {
+			out.Skipped = append(out.Skipped, p.Resource)
+			continue
+		}
+		one, cancel := context.WithTimeout(ctx, moveAllTimeout)
+		moveErr := r.mover.Redeploy(one, p.InstanceID)
+		cancel()
+		switch {
+		case moveErr == nil:
+			out.Moved++
+		case errors.Is(moveErr, platformcloud.ErrNoCapacity):
+			out.Skipped = append(out.Skipped, p.Resource)
+		default:
+			slog.ErrorContext(ctx, "platform cloud move: a service could not be moved", "host", hostID, "placement", p.ID, "error", moveErr)
+			out.Failed = append(out.Failed, p.Resource)
 		}
 	}
-	r.audit.Record(ctx, "platform_cloud.host.move_all", actor, "platform_cloud_host", h.ID, map[string]string{"moving": strconv.Itoa(len(moving))})
-	if r.mover != nil && len(moving) > 0 {
-		r.background(func(bg context.Context) {
-			for _, p := range moving {
-				one, cancel := context.WithTimeout(bg, moveAllTimeout)
-				if moveErr := r.mover.Redeploy(one, p.InstanceID); moveErr != nil {
-					slog.ErrorContext(one, "platform cloud move: a service could not be redeployed", "host", hostID, "placement", p.ID, "error", moveErr)
-				}
-				cancel()
-			}
-		})
+	outcome := outcomeSuccess
+	if len(out.Failed) > 0 || len(out.Skipped) > 0 {
+		outcome = outcomeFailure
 	}
-	return c.JSON(http.StatusAccepted, MoveAll{Host: *h, Moving: len(moving)})
+	r.audit.Record(ctx, "platform_cloud.host.move_all", actor, "platform_cloud_host", h.ID, outcome,
+		map[string]string{"moved": strconv.Itoa(out.Moved), "skipped": strconv.Itoa(len(out.Skipped)), "failed": strconv.Itoa(len(out.Failed))})
+	return c.JSON(http.StatusOK, out)
 }
 
 func (r *routes) listTenants(c forge.Context) error {
@@ -612,7 +640,11 @@ func (r *routes) setTenant(c forge.Context) error {
 	if in.Limits != nil {
 		meta["limits"] = "replaced"
 	}
-	r.audit.Record(ctx, "platform_cloud.tenant.update", platformUserID(c), "platform_cloud_tenant", org, meta)
+	outcome := outcomeSuccess
+	if err != nil {
+		outcome = outcomePending
+	}
+	r.audit.Record(ctx, "platform_cloud.tenant.update", platformUserID(c), "platform_cloud_tenant", org, outcome, meta)
 	if platformcloud.EffectsPending(err) {
 		// Recorded, but the work didn't all stop yet; the jobs finish it.
 		return c.JSON(http.StatusAccepted, t)
@@ -630,12 +662,20 @@ func (r *routes) suspendTenant(c forge.Context) error {
 	if errors.Is(err, platformcloud.ErrNotEnabled) {
 		return forge.NewHTTPError(http.StatusConflict, "the organization isn't a platform Cloud tenant")
 	}
+	meta := map[string]string{"org": org, "reason": string(platformcloud.ReasonPlatformOwner)}
+	outcome := outcomeSuccess
+	switch {
+	case platformcloud.EffectsPending(err):
+		outcome = outcomePending
+	case err != nil:
+		outcome = outcomeFailure
+		meta["error"] = err.Error()
+	}
+	r.audit.Record(ctx, "platform_cloud.tenant.suspend", platformUserID(c), "platform_cloud_tenant", org, outcome, meta)
 	t, readErr := r.svc.Tenant(ctx, org)
 	if readErr != nil {
 		return fail(ctx, errors.Join(err, readErr))
 	}
-	r.audit.Record(ctx, "platform_cloud.tenant.suspend", platformUserID(c), "platform_cloud_tenant", org,
-		map[string]string{"org": org, "reason": string(platformcloud.ReasonPlatformOwner)})
 	if platformcloud.EffectsPending(err) {
 		// The reason is recorded; what still runs is stopped by the jobs.
 		return c.JSON(http.StatusAccepted, t)
@@ -663,10 +703,16 @@ func (r *routes) restoreTenant(c forge.Context) error {
 	if t.Status != "enabled" {
 		return forge.NewHTTPError(http.StatusConflict, "the tenant is disabled; enable it to restore its work")
 	}
+	outcome := outcomeNoChange
+	if slices.Contains(t.SuspendReasons, platformcloud.ReasonPlatformOwner) {
+		outcome = outcomeSuccess
+	}
 	if t, err = r.svc.EnableTenant(ctx, org, nil); err != nil {
+		r.audit.Record(ctx, "platform_cloud.tenant.restore", platformUserID(c), "platform_cloud_tenant", org, outcomeFailure,
+			map[string]string{"org": org, "error": err.Error()})
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.tenant.restore", platformUserID(c), "platform_cloud_tenant", org,
+	r.audit.Record(ctx, "platform_cloud.tenant.restore", platformUserID(c), "platform_cloud_tenant", org, outcome,
 		map[string]string{"org": org, "reason": string(platformcloud.ReasonPlatformOwner)})
 	return c.JSON(http.StatusOK, t)
 }
