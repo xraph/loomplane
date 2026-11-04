@@ -19,6 +19,8 @@ loomctl status my-project
 
 The `DRIFT` column reads "in sync" or says what changed. The dashboard shows the same on each environment, and the `drift_findings_total` metric counts bindings found missing or changed, labelled by provider and state.
 
+When the [built-in agent](/docs/agents/built-in-agent) is on, drift on a production environment also opens an agent report, one per drifted service or resource. The agent investigates it, and the project's people hear about it. The report resolves by itself once the binding matches what Loomplane deployed again. Drift on other environments doesn't open a report. See [Watching and reports](/docs/agents/watching-and-reports).
+
 ## Putting it back
 
 The next plan notices what's missing or changed, and proposes the actions to fix it. You review and approve that plan like any other. A cross-cloud link with a tunnel down also shows as drift, and the next plan brings back what's missing.

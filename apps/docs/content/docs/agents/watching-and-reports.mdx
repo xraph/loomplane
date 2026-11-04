@@ -1,0 +1,152 @@
+---
+title: Watching and reports
+description: What the agent's watcher looks for, how one problem becomes one report, who hears about it, and when Loomplane opens a GitHub issue.
+---
+
+While the agent is on, it watches your workspace. When a deployment fails, a canary rolls back, a production service drifts or its error rate jumps, Loomplane opens a report, the agent investigates it, and you and the people who answer for the project hear about it. If the project's code lives on GitHub, the report also gets an issue on that repository.
+
+You don't turn anything else on. The watcher starts when a workspace admin switches the agent on in **Settings, AI** and stops when it's switched off.
+
+## What the watcher looks at
+
+Every 30 seconds Loomplane queues a pass for each workspace whose agent is on. A pass reads up to 500 of the workspace's events since the last one, checks the production services that are due a check, rechecks the open reports, starts investigations and sends what's ready.
+
+| What happened | Where | Severity |
+|---|---|---|
+| A deployment failed | Production | High |
+| A deployment failed | Staging | Medium |
+| A canary rolled back | Any environment that runs one | High |
+| A canary couldn't be rolled back, so traffic may still be split | Any | Critical |
+| A release watch rolled a release back | Any | High |
+| A release breached its thresholds and its rollback is waiting for a person | Any | High |
+| A release breached its thresholds and its rollback failed | Any | Critical |
+| A service or resource drifted: changed or deleted outside Loomplane | Production | Medium |
+| A service's error rate jumped | Production | High |
+| A source's analysis failed three times in a row | The project | Low |
+
+A failed deployment on a preview or development environment doesn't open a report. Whoever started it already gets the deployment's own notice. Drift anywhere but production is someone's experiment, so it doesn't open one either. A canary that rolled back opens its canary report and not a second one for the failed deployment.
+
+Analyses pinned to one commit, the kind a promotion runs, don't count toward the three in a row.
+
+### Error rates
+
+Every 5 minutes the watcher checks production bindings, up to 50 per pass, the ones checked longest ago first. For each service it compares the last 10 minutes of errors with the hour before. The window ends 3 minutes before now, so the cloud has reported all of it.
+
+It only does this where your cloud reports errors: Cloud Run, ECS Fargate, Azure Container Apps and Render (the 5xx column in [Where canaries run](/docs/concepts/canary-releases#where-canaries-run)). It judges against the error thresholds of the plan that last deployed the service, or the defaults: an error rate above 1%, or more than 0.5 percentage points above the hour before. Latency isn't judged, because a whole service's latency moves with its traffic. With fewer than the threshold's minimum requests in the window (200 by default) there's nothing to go on, and the check passes over it.
+
+While a canary ramps or a [release watch](/docs/concepts/promotion-and-rollback#watch-a-release-after-it-deploys) judges an environment, the sweep leaves that environment alone. They report what they find themselves.
+
+The same sweep reads each binding's drift, as the [drift check](/docs/concepts/drift) last recorded it, so a drift event the watcher missed still opens a report.
+
+## What costs tokens
+
+Nothing the watcher does calls a model until a report needs investigating. Reading events, the sweep, the rechecks and delivery are all Loomplane's own code, so a workspace where nothing goes wrong costs you no tokens at all.
+
+An investigation is one agent run. It starts with up to 150,000 tokens and 25 steps, and what it spends comes out of the agent's monthly budget, like any other run. See [Workspace settings](/docs/agents/workspace-settings#budget).
+
+## Investigations
+
+Each new report gets one investigation, newest reports first. The agent runs as itself with nobody behind it, and it can only read: deployments and their logs, plans, metrics, drift, canary and release watch verdicts, variables (never secret values), repositories and other reports. The one thing it writes is its findings on the report it's investigating: a summary, the likely cause, up to five things to try, and how sure it is (low, medium or high). It can't deploy, change anything or ask anyone a question. See [What needs a person](/docs/agents/what-needs-a-person#the-agents-identity).
+
+Error output, verdict reasons and drift messages come from outside Loomplane, so they reach the model quoted as untrusted text, after shield has scanned them.
+
+Three limits apply:
+
+- At most three run at once in a workspace. A report that arrives while three are running is marked "Three investigations were already running." and isn't investigated later.
+- An investigation that hasn't finished an hour after it started is marked failed, with "The investigation didn't finish within an hour."
+- Reports the agent opened in a chat, because a person asked it to, aren't investigated. The chat that opened one can write its findings itself.
+
+### When the budget runs out
+
+When the agent's budget for the month is spent, the watcher stops investigating. It keeps opening reports from what it sees and sends them as usual, and you'll see a line on each saying the agent didn't investigate it. Owners and admins with `ai:manage` get one notice, "The agent stopped investigating: this workspace has used its AI budget for the month", linking to **Settings, AI**.
+
+Once the budget has room again, because a new month started or an admin raised it, they get "The agent is investigating again" and new reports are investigated. Reports skipped while it was paused stay skipped.
+
+## One report per problem
+
+Loomplane keeps one report per problem. Two signals are the same problem when they share a project, an environment, a kind (from the table above) and a component. The component is the service or resource, such as `service:api` or a binding's name, the source for an analysis, or `deployment` for a deployment that failed before any step. So the same failing step on staging and on production is two reports, and the same step failing again in production before anything fixes it is one.
+
+### Repeats
+
+A deployment that fails again, a retry included, counts as a repeat on the open report. So does another canary or release watch rollback, or another failed analysis. The report's count goes up, and its facts become the latest ones.
+
+You hear about repeats at most once an hour. The notice starts with "Again:" and says how many times it has happened since it was first seen. The GitHub issue gets a "This happened again" comment on the same hourly limit, and its body always carries the current count.
+
+Drift and error rates don't count repeats. While the service is still drifted or failing, it's the same problem still there, and only the time it was last seen moves.
+
+### Resolving and reopening
+
+A report resolves on its own when the problem goes away:
+
+- A later deployment that runs the same component in that environment succeeds. That clears a failed deployment and a canary that couldn't roll back. A deployment that isn't a rollback also clears canary and release watch rollbacks. A rollback's success restores the release before, so it leaves the report that says why the newer one went back.
+- The binding matches what Loomplane deployed again, for drift.
+- The error rate is back within its thresholds for two checks in a row.
+- A later analysis of the source succeeds.
+
+Every 10 minutes the watcher also rechecks each open report against current state, and resolves one whose problem no longer holds, or whose deployment, binding or analysis is gone. Reports opened in a chat never resolve on their own. Only a person closes them.
+
+When the same problem comes back within 24 hours of a report resolving or being closed, Loomplane reopens that report and keeps counting on it. The notice starts with "Back again:", the issue reopens with a comment, and the agent investigates it afresh. After 24 hours it's a new report.
+
+### Closing a report yourself
+
+You can close an open report with an optional reason, up to 500 characters. That needs `deployment:create` on the report's project. If the report has a GitHub issue, Loomplane comments there with who closed it and why, then closes the issue as not planned. A report that resolves on its own closes its issue as completed.
+
+Closing doesn't stop the problem coming back. If it does within 24 hours, the report reopens.
+
+## Notices
+
+Each report's notice goes through Loomplane's notifications: the inbox, email and your workspace's signed webhooks. It goes to:
+
+- the workspace's owners and admins
+- the members of the project's [responsible team](/docs/concepts/teams), when the project names one
+- the person who started the deployment the report is about, when that was a person and not the agent or Loomplane's own automation
+
+Each person needs `deployment:read` on the project when the notice is delivered, or they don't get it. Email follows your `agent_email` preference, separate from deployment mail. See [Notifications and webhooks](/docs/guides/notifications-and-webhooks#the-agents-notices).
+
+The title is the project, the environment and what happened: `shop · production: Deployment to production failed at api`. The body is the agent's summary when it has one, and otherwise the facts.
+
+### When notices and issues go out
+
+A new report waits for its investigation, so the first thing you read already says what the agent found. It goes out as soon as the investigation finishes, or 10 minutes after it started, whichever comes first. A report that isn't investigated goes out on the next pass. If findings arrive after the notice went, the issue gets them as a comment and nobody's paged twice.
+
+While the workspace's agent is off, nothing is delivered. Reports that were waiting go out once the agent is back on.
+
+Before anything leaves Loomplane, every title, body and comment has the project's known secret values and any password in a URL redacted, then goes through shield's outbound scan. A text the scan blocks is replaced with a fixed one, such as "Open it in Loomplane to read it." When Loomplane can't read the project's secrets to redact them, it doesn't send anything. It retries the delivery, so if your secrets store is down you get the report late, once the secrets can be read again, and never with that step skipped.
+
+## GitHub issues
+
+Loomplane opens one issue per report on the repository the report is about, through your workspace's GitHub App installation. It picks the repository from the service's source. For a deployment that failed before any step, it's the one repository the deployment moved. A project with a single source always uses that one. When it can't tell, or the installation can't reach the repository, the report goes to notifications only and says why.
+
+Issues are opened on GitHub repositories only. Reports about code on GitLab or Bitbucket go to notifications only.
+
+Every issue carries the `loomplane` label, which Loomplane creates if the repository doesn't have it. The body says how severe it is, where and how often it was seen, what happened, what Loomplane already did and what the agent thinks, with a link back to the report. Error output sits in a code block it can't break out of. Every `@` that could page someone is broken with an invisible character, so a commit message or error can't mention a person or a team. As the report changes, Loomplane edits the issue to match. If someone deletes the issue while the report is open, the next delivery opens a new one.
+
+Loomplane never reads anything people write on the issue. Comments there stay on GitHub, and the agent doesn't see them.
+
+### The Issues permission
+
+The App needs the Issues permission (read and write), and an owner of each account it's installed on has to accept it on GitHub. [Private repositories](/docs/guides/private-repositories#issues-for-agent-reports) has the setup.
+
+Until an installation accepts, its reports show "waiting for permission" and go to notifications only. The **Watcher** card on **Settings, AI** lists each installation as Accepted, or says it hasn't accepted the Issues permission yet, with a **Review on GitHub** link. `loomctl agent watcher` prints the same. Once an owner accepts, open reports for that installation's repositories get their issues. Loomplane trusts what it last read of an installation's permissions for 5 minutes, so the first report after an owner accepts can still go to notifications only for up to 5 minutes.
+
+## Where you read them
+
+In the dashboard, **Deployments, Reports** lists the open reports, with a count beside it. Filter by status (open, resolved, closed or all) and by project. A report's page has its facts, what Loomplane already did, what the agent thinks, where it went (the issue, or why there's none) and the records it's about. **Close** is there when you can close it. When the watcher has stopped for the budget, a banner says so.
+
+You see a report when you have `agent:use` and `deployment:read` on its project. A team's grant on a project counts there.
+
+From the command line:
+
+```bash
+loomctl agent reports                       # open reports
+loomctl agent reports --all --project shop  # every report of one project
+loomctl agent reports show arep_01jd...     # facts, findings, issue link
+loomctl agent reports close arep_01jd... --reason "Fixed in the config"
+loomctl agent watcher                       # watching or paused, and the Issues permission
+```
+
+[loomctl](/docs/reference/loomctl#the-built-in-agent) lists every flag. Over the API it's `GET /api/v1/agent/reports`, `GET /api/v1/agent/reports/{id}`, `POST /api/v1/agent/reports/{id}/close` and `GET /api/v1/agent/watcher`, described in [HTTP API](/docs/reference/http-api#agent-reports). Each report change also arrives on the realtime stream as an `agent_report.updated` event.
+
+## Gaps
+
+When a workspace's watcher hasn't run for more than an hour (the agent was off, say, or the server was down), it doesn't replay what happened meanwhile. It starts from the newest event and rechecks every open report against current state. A deployment that failed while nobody watched doesn't open a report after the fact, even if it's still broken. It opens one the next time it fails. Drift and error rates don't wait like that: the next sweep finds them.
