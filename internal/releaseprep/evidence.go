@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,10 +38,6 @@ var evidenceKeys = []string{KeyDiff, KeyPins, KeySoak, KeyStagingRelease, KeyPro
 // runs a commit behind production's, or diverged from it, for a source the
 // plan moves.
 const WarningProductionMovesBack = "production-moves-back"
-
-// RecentCanaryRuns is how many of production's newest canary runs the
-// evidence reads.
-const RecentCanaryRuns = 10
 
 // ReadinessEvidence is what a release preparation read about a promotion,
 // in Loomplane code, before any model saw it. Anything it couldn't read is
@@ -78,8 +75,9 @@ type ReadinessEvidence struct {
 	StagingRelease    *releasewatch.ReleaseEvidence `json:"staging_release"`
 	ProductionRelease *releasewatch.ReleaseEvidence `json:"production_release"`
 	Coverage          *releasewatch.Coverage        `json:"coverage"`
-	// Canaries are production's canary runs, newest first, at most
-	// RecentCanaryRuns. Nil means they weren't read.
+	// Canaries are the newest production canary run of each changed
+	// service, each run once (ChangedService.LastCanary names it). Nil
+	// means they weren't read.
 	Canaries []CanarySummary `json:"canaries"`
 	// OpenReports are the agent reports open on staging. Nil means they
 	// weren't read.
@@ -98,9 +96,12 @@ type ChangedService struct {
 	Op       string `json:"op"`
 	// Canary says the plan's release ramps it as a canary.
 	Canary bool `json:"canary"`
+	// LastCanary is the deployment of the newest production canary that
+	// ramped it, in Canaries; "" when none ever did.
+	LastCanary string `json:"last_canary"`
 }
 
-// CanarySummary is one of production's recent canary runs.
+// CanarySummary is a production canary run.
 type CanarySummary struct {
 	DeploymentID string `json:"deployment_id"`
 	PlanID       string `json:"plan_id"`
@@ -364,33 +365,47 @@ func (c *Collector) watches(ctx context.Context, in CollectInput, ev *ReadinessE
 	}
 }
 
-// canaries reads production's recent canary runs, skipping deployments
-// that ran none.
+// canaries reads each changed service's newest production canary on its
+// own, so no number of canaries of other services hides a failed one. Any
+// read that fails makes all of them unavailable.
 func (c *Collector) canaries(ctx context.Context, in CollectInput, ev *ReadinessEvidence) {
 	if c.Sources.Canaries == nil {
 		unavailable(ev, KeyCanaries, errNotWired)
 		return
 	}
-	runs, err := c.Sources.Canaries.RecentCanaries(ctx, in.Principal, in.Plan.ProjectID, in.To.ID, RecentCanaryRuns)
-	if err != nil {
-		unavailable(ev, KeyCanaries, err)
-		return
-	}
-	ev.Canaries = []CanarySummary{}
-	for _, r := range runs {
-		if r.Canary == nil {
+	runs := []CanarySummary{}
+	var why []string
+	for i, s := range ev.ChangedServices {
+		r, err := c.Sources.Canaries.LastCanary(ctx, in.Principal, in.Plan.ProjectID, in.To.ID, s.ActionID)
+		switch {
+		case err != nil:
+			why = append(why, s.Name+": "+err.Error())
+			continue
+		case r == nil || r.Canary == nil:
 			continue
 		}
-		s := CanarySummary{
+		ev.ChangedServices[i].LastCanary = r.DeploymentID
+		if slices.ContainsFunc(runs, func(x CanarySummary) bool { return x.DeploymentID == r.DeploymentID }) {
+			continue
+		}
+		sum := CanarySummary{
 			DeploymentID: r.DeploymentID, PlanID: r.PlanID, Status: r.Canary.Status, Reason: r.Canary.Reason,
 			Services: []string{}, ActionIDs: []string{}, FinishedAt: r.FinishedAt,
 		}
 		for _, svc := range r.Canary.Services {
-			s.Services = append(s.Services, svc.Name)
-			s.ActionIDs = append(s.ActionIDs, svc.ActionID)
+			sum.Services = append(sum.Services, svc.Name)
+			sum.ActionIDs = append(sum.ActionIDs, svc.ActionID)
 		}
-		ev.Canaries = append(ev.Canaries, s)
+		runs = append(runs, sum)
 	}
+	if len(why) > 0 {
+		for i := range ev.ChangedServices {
+			ev.ChangedServices[i].LastCanary = ""
+		}
+		ev.Unavailable[KeyCanaries] = strings.Join(why, "; ")
+		return
+	}
+	ev.Canaries = runs
 }
 
 // reports reads the agent reports open on staging.

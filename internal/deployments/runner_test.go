@@ -244,6 +244,16 @@ func (m *memStore) RecentCanaries(_ context.Context, org, project, environment s
 	return out[:min(limit, len(out))], nil
 }
 
+func (m *memStore) LastCanary(_ context.Context, org, project, environment, actionID string) (*Deployment, error) {
+	all, _ := m.RecentCanaries(context.Background(), org, project, environment, len(m.d)+1)
+	for _, d := range all {
+		if slices.ContainsFunc(d.Canary.Services, func(s CanaryService) bool { return s.ActionID == actionID }) {
+			return d, nil
+		}
+	}
+	return nil, nil
+}
+
 // holdsCanary is a running or paused deployment whose canary still holds
 // its environment.
 func holdsCanary(d *Deployment) bool {

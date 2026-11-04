@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/agentauthz"
+	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/releasewatch"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -21,8 +23,11 @@ import (
 type gateStore struct {
 	Store // nil: any other method panics
 
-	mu          sync.Mutex
-	byPlan      map[string]*ReleaseReport
+	mu     sync.Mutex
+	byPlan map[string]*ReleaseReport
+	// others are more reports, such as another organization's for a plan
+	// ID that's also in byPlan.
+	others      []*ReleaseReport
 	err         error
 	recordErr   error
 	evaluations []evaluation
@@ -39,12 +44,17 @@ func (s *gateStore) ForPlan(_ context.Context, orgID, planID string) (*ReleaseRe
 	if s.err != nil {
 		return nil, s.err
 	}
-	r, ok := s.byPlan[planID]
-	if !ok || r.OrgID != orgID {
-		return nil, ErrNotFound
+	all := append([]*ReleaseReport{}, s.others...)
+	for _, r := range s.byPlan {
+		all = append(all, r)
 	}
-	c := *r
-	return &c, nil
+	for _, r := range all {
+		if r.OrgID == orgID && r.PlanID == planID {
+			c := *r
+			return &c, nil
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func (s *gateStore) RecordEvaluation(_ context.Context, orgID, id string, gates []GateCheck, decision string, ev *ReadinessEvidence, _ time.Time) error {
@@ -236,6 +246,35 @@ func TestEvaluateRereadsEvidenceInsteadOfTheReport(t *testing.T) {
 			t.Fatalf("decision %+v", d)
 		}
 	})
+	t.Run("canaries", func(t *testing.T) {
+		f := newGate(t)
+		f.w.canaries.runs = append(f.w.canaries.runs, deployments.CanaryRun{
+			DeploymentID: "dep_p2", StartedAt: collectedAt.Add(-time.Minute),
+			Canary: &deployments.Canary{Status: deployments.CanaryRolledBack, Services: []deployments.CanaryService{{ActionID: "service:api", Name: "api"}}},
+		})
+		d := f.evaluate(t, f.request())
+		if d.Allowed || !failedGate(d, GateSafetyNet) || !strings.Contains(strings.Join(d.Failed, "\n"), "api's last canary rolled back") {
+			t.Fatalf("decision %+v", d)
+		}
+	})
+	t.Run("open reports", func(t *testing.T) {
+		f := newGate(t)
+		f.w.reports.open = []OpenReport{{ID: "arep_7", Title: "Errors up", Severity: "high"}}
+		if d := f.evaluate(t, f.request()); d.Allowed || !failedGate(d, GateNothingOpen) {
+			t.Fatalf("decision %+v", d)
+		}
+	})
+	t.Run("production moved ahead of staging", func(t *testing.T) {
+		f := newGate(t)
+		// Production deployed a newer api since the report: the stored diff
+		// names other commits, so the gate compares again.
+		f.w.plans.deployed["production"][0].CommitSHA = shaC
+		f.w.diffs.answer = &repositories.Comparison{Status: DirectionBehind, BehindBy: 2}
+		d := f.evaluate(t, f.request())
+		if d.Allowed || !failedGate(d, GateCleanPlan) || len(f.w.diffs.calls) != 1 {
+			t.Fatalf("decision %+v, compares %+v", d, f.w.diffs.calls)
+		}
+	})
 	t.Run("a new problem on the plan", func(t *testing.T) {
 		f := newGate(t)
 		f.w.plan.Status = "blocked"
@@ -382,13 +421,23 @@ func TestEvaluateFailsClosedWhenReadsFail(t *testing.T) {
 	if d := f.evaluate(t, req); d.Allowed || len(d.Failed) == 0 {
 		t.Fatalf("decision %+v", d)
 	}
+	if len(f.audit.events) != 1 || f.audit.events[0].Attributes["allowed"] != false {
+		t.Fatalf("a nil plan's evaluation must be audited: %+v", f.audit.events)
+	}
 
-	// A stored report without evidence (the job hadn't stored it) gets its
-	// diffs computed now.
+	// A canary read that fails fails gate 5.
+	f = newGate(t)
+	f.w.canaries.err = errors.New("deployments store down")
+	if d := f.evaluate(t, f.request()); d.Allowed || !failedGate(d, GateSafetyNet) {
+		t.Fatalf("decision %+v", d)
+	}
+
+	// A stored report without evidence: the agent reviewed nothing, so a
+	// fresh read can't pass it.
 	f = newGate(t)
 	f.store.byPlan[f.w.plan.ID].Evidence = nil
-	if d := f.evaluate(t, f.request()); !d.Allowed || len(f.w.diffs.calls) != 1 {
-		t.Fatalf("decision %+v, compares %+v", d, f.w.diffs.calls)
+	if d := f.evaluate(t, f.request()); d.Allowed || !failedGate(d, GateFromStaging) {
+		t.Fatalf("decision %+v", d)
 	}
 }
 
@@ -402,6 +451,88 @@ func TestEvaluateNamesTheAgentsConcerns(t *testing.T) {
 	if f.store.evaluations[0].decision != DecisionAsk || f.audit.events[0].Attributes["concerns"] != 1 {
 		t.Fatalf("recorded %+v, audit %+v", f.store.evaluations, f.audit.events)
 	}
+}
+
+// Review Focus 3 across organizations: a report is found only in the
+// principal's own organization, and only for its own project's plan.
+func TestEvaluateStaysInItsOrganization(t *testing.T) {
+	// Org B has a report for a plan with the same ID as org A's plan. Org
+	// A's run, with no report of its own, asks.
+	f := newGate(t)
+	theirs := f.w.reportFor()
+	theirs.OrgID, theirs.ProjectID, theirs.ID = "org_b", "proj_b", "rrep_b"
+	delete(f.store.byPlan, f.w.plan.ID)
+	f.store.others = []*ReleaseReport{theirs}
+	d := f.evaluate(t, f.request())
+	if d.Allowed || !reflect.DeepEqual(d.Failed, []string{noReport}) || len(f.store.evaluations) != 0 {
+		t.Fatalf("org A with org B's report: %+v, recorded %+v", d, f.store.evaluations)
+	}
+
+	// Org B's run, with org B's report for that plan ID, can't approve org
+	// A's plan: the plan's project isn't the report's.
+	req := f.request()
+	req.Principal = security.AgentPrincipal("org_b", &security.Principal{OrgID: "org_b", UserID: "usr_dev"})
+	d = f.evaluate(t, req)
+	if d.Allowed || !failedGate(d, GateFromStaging) || !strings.Contains(strings.Join(d.Failed, "\n"), "not the plan this release preparation built") {
+		t.Fatalf("org B on org A's plan: %+v", d)
+	}
+
+	// And org A's report never authorizes org B.
+	f = newGate(t)
+	req = f.request()
+	req.Principal = security.AgentPrincipal("org_b", &security.Principal{OrgID: "org_b", UserID: "usr_dev"})
+	if d := f.evaluate(t, req); d.Allowed || !reflect.DeepEqual(d.Failed, []string{noReport}) {
+		t.Fatalf("org B with org A's report: %+v", d)
+	}
+}
+
+// The real path never previews: a run without a task, on a report that
+// has none yet, asks.
+func TestEvaluateNeverPreviews(t *testing.T) {
+	f := newGate(t)
+	f.store.byPlan[f.w.plan.ID].TaskID = ""
+	req := f.request()
+	req.TaskID = ""
+	d := f.evaluate(t, req)
+	if d.Allowed || !failedGate(d, GateFromStaging) || len(f.store.evaluations) != 0 {
+		t.Fatalf("decision %+v, recorded %+v", d, f.store.evaluations)
+	}
+	if len(f.audit.events) != 1 {
+		t.Fatalf("audited %d", len(f.audit.events))
+	}
+}
+
+// Outside text in what the sources answer never reaches what the gate
+// records (gates travel in realtime events) or the lines 3a shows.
+func TestEvaluateRecordsOnlyLoomplanesWords(t *testing.T) {
+	f := newGate(t)
+	bad := strings.Join(outsideText, " ")
+	f.w.watches.soak.Healthy, f.w.watches.soak.Reasons = false, []string{bad}
+	f.w.watches.soak.Services = []releasewatch.SoakService{{Name: "api", Verdict: "fail", Reason: bad}}
+	for _, r := range f.w.watches.evidence {
+		r.Unverified, r.Reason = true, bad
+	}
+	f.w.watches.coverage.Unverified = true
+	f.w.watches.coverage.Services = []releasewatch.ServiceCoverage{{Name: "worker", Provider: "cloud-run", Reason: bad}}
+	f.w.canaries.runs[0].Canary.Status, f.w.canaries.runs[0].Canary.Reason = deployments.CanaryRolledBack, bad
+	f.w.reports.open = []OpenReport{{ID: "arep_1", Title: bad, Severity: bad}}
+	f.w.plans.deployed["production"][0].CommitSHA = shaC
+	f.w.diffs.err = errors.New(bad)
+	f.w.budgets.err = errors.New(bad)
+
+	d := f.evaluate(t, f.request())
+	if d.Allowed {
+		t.Fatal("allowed")
+	}
+	assertNoOutsideText(t, "Failed", d.Failed)
+	if len(f.store.evaluations) != 1 {
+		t.Fatalf("recorded %d", len(f.store.evaluations))
+	}
+	details := make([]string, 0, 2*len(f.store.evaluations[0].gates))
+	for _, g := range f.store.evaluations[0].gates {
+		details = append(details, g.Detail, g.Name)
+	}
+	assertNoOutsideText(t, "a recorded gate", details)
 }
 
 var _ agentauthz.PromotionGate = (*Gate)(nil)

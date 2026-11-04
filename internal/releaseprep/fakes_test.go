@@ -3,6 +3,7 @@ package releaseprep
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +95,7 @@ func greenWorld() *world {
 			},
 		},
 		canaries: &fakeCanaries{runs: []deployments.CanaryRun{{
-			DeploymentID: "dep_p1", PlanID: "plan_0", Environment: "production", Status: "succeeded", FinishedAt: &finished,
+			DeploymentID: "dep_p1", PlanID: "plan_0", Environment: "production", Status: "succeeded", StartedAt: finished.Add(-time.Hour), FinishedAt: &finished,
 			Canary: &deployments.Canary{Status: deployments.CanaryPromoted, Services: []deployments.CanaryService{{ActionID: "service:api", Name: "api", Provider: "cloud-run"}}},
 		}}},
 		projects: &fakeProjects{},
@@ -211,19 +212,38 @@ func (f *fakeWatches) Evidence(_ context.Context, _ security.Principal, _, envir
 	return f.evidence[environment], nil
 }
 
+// fakeCanaries is production's canary runs, in any order. LastCanary
+// finds a service's newest, as the store does.
 type fakeCanaries struct {
-	runs []deployments.CanaryRun
-	err  error
-	env  string
-	n    int
+	mu    sync.Mutex
+	runs  []deployments.CanaryRun
+	err   error
+	env   string
+	asked []string
 }
 
-func (f *fakeCanaries) RecentCanaries(_ context.Context, _ security.Principal, _, environmentID string, limit int) ([]deployments.CanaryRun, error) {
-	f.env, f.n = environmentID, limit
+func (f *fakeCanaries) LastCanary(_ context.Context, _ security.Principal, _, environmentID, actionID string) (*deployments.CanaryRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.env = environmentID
+	f.asked = append(f.asked, actionID)
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.runs, nil
+	var last *deployments.CanaryRun
+	for i, r := range f.runs {
+		if r.Canary == nil || !slices.ContainsFunc(r.Canary.Services, func(s deployments.CanaryService) bool { return s.ActionID == actionID }) {
+			continue
+		}
+		if last == nil || r.StartedAt.After(last.StartedAt) {
+			last = &f.runs[i]
+		}
+	}
+	if last == nil {
+		return nil, nil
+	}
+	c := *last
+	return &c, nil
 }
 
 type fakeProjects struct {
@@ -328,4 +348,13 @@ type fake3c struct {
 func (f *fake3c) Open(_ context.Context, orgID, projectID, environmentID string) ([]*agentreports.Report, error) {
 	f.calls = append(f.calls, [3]string{orgID, projectID, environmentID})
 	return f.reports, f.err
+}
+
+// NoReports has no reports, so none are open. It's a test helper only:
+// wired in Loomplane it would pass gate 6 forever.
+type NoReports struct{}
+
+// Open returns no reports.
+func (NoReports) Open(context.Context, string, string, string) ([]OpenReport, error) {
+	return []OpenReport{}, nil
 }

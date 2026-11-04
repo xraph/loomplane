@@ -3,6 +3,7 @@ package releaseprep
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 )
 
@@ -57,8 +59,11 @@ func TestCollectComparesProductionToStagingPins(t *testing.T) {
 	if !reflect.DeepEqual(w.reports.calls, [][3]string{{"org_a", "proj_a", "env_stg"}}) {
 		t.Fatalf("open reports read with %v", w.reports.calls)
 	}
-	if w.canaries.env != "env_prd" || w.canaries.n != RecentCanaryRuns {
-		t.Fatalf("canaries read for %q, %d", w.canaries.env, w.canaries.n)
+	if w.canaries.env != "env_prd" || !slices.Equal(w.canaries.asked, []string{"service:api"}) {
+		t.Fatalf("canaries read for %q, %v", w.canaries.env, w.canaries.asked)
+	}
+	if ev.ChangedServices[0].LastCanary != "dep_p1" || len(ev.Canaries) != 1 || ev.Canaries[0].DeploymentID != "dep_p1" {
+		t.Fatalf("last canary %+v, canaries %+v", ev.ChangedServices, ev.Canaries)
 	}
 }
 
@@ -257,7 +262,7 @@ func TestCollectClassifiesActions(t *testing.T) {
 		t.Fatalf("data updates %v, want %v", ev.DataUpdates, want)
 	}
 	want := []ChangedService{
-		{ActionID: "service:api", Name: "api", Provider: "cloud-run", Op: "replace", Canary: false},
+		{ActionID: "service:api", Name: "api", Provider: "cloud-run", Op: "replace", Canary: false, LastCanary: "dep_p1"},
 		{ActionID: "service:jobs", Name: "jobs", Provider: "render", Op: "create", Canary: false},
 	}
 	if !reflect.DeepEqual(ev.ChangedServices, want) {
@@ -275,23 +280,53 @@ func TestCollectClassifiesActions(t *testing.T) {
 	}
 }
 
+// Each changed service's newest production canary is read on its own,
+// however many canaries of other services ran since.
 func TestCollectSummarizesCanaries(t *testing.T) {
 	w := greenWorld()
-	done := collectedAt.Add(-time.Hour)
-	w.canaries.runs = []deployments.CanaryRun{
-		{DeploymentID: "dep_3", PlanID: "plan_3", Status: "failed", FinishedAt: &done, Canary: &deployments.Canary{
+	w.plan.Actions = append(w.plan.Actions,
+		planning.Action{ID: "service:web", Op: planning.Update, Subject: planning.ServiceSubject, Name: "web", Provider: "cloud-run", Service: &planning.ServiceConfig{}},
+		planning.Action{ID: "service:jobs", Op: planning.Update, Subject: planning.ServiceSubject, Name: "jobs", Provider: "cloud-run", Service: &planning.ServiceConfig{}},
+	)
+	base := collectedAt.Add(-48 * time.Hour)
+	done := base.Add(time.Hour)
+	w.canaries.runs = []deployments.CanaryRun{{
+		DeploymentID: "dep_3", PlanID: "plan_3", Status: "failed", StartedAt: base, FinishedAt: &done, Canary: &deployments.Canary{
 			Status: deployments.CanaryRolledBack, Reason: "errors rose",
 			Services: []deployments.CanaryService{{ActionID: "service:api", Name: "api"}, {ActionID: "service:web", Name: "web"}},
-		}},
-		{DeploymentID: "dep_2", PlanID: "plan_2", Status: "succeeded"}, // ran no canary
+		},
+	}}
+	for i := range 12 {
+		w.canaries.runs = append(w.canaries.runs, deployments.CanaryRun{
+			DeploymentID: fmt.Sprintf("dep_web_%d", i), Status: "succeeded", StartedAt: base.Add(time.Duration(i+2) * time.Hour),
+			Canary: &deployments.Canary{Status: deployments.CanaryPromoted, Services: []deployments.CanaryService{{ActionID: "service:web", Name: "web"}}},
+		})
 	}
 	ev := w.collect(nil)
-	want := []CanarySummary{{
+
+	last := map[string]string{}
+	for _, s := range ev.ChangedServices {
+		last[s.Name] = s.LastCanary
+	}
+	if want := map[string]string{"api": "dep_3", "web": "dep_web_11", "jobs": ""}; !reflect.DeepEqual(last, want) {
+		t.Fatalf("last canaries %v, want %v", last, want)
+	}
+	if len(ev.Canaries) != 2 {
+		t.Fatalf("canaries %+v", ev.Canaries)
+	}
+	want := CanarySummary{
 		DeploymentID: "dep_3", PlanID: "plan_3", Status: deployments.CanaryRolledBack, Reason: "errors rose",
 		Services: []string{"api", "web"}, ActionIDs: []string{"service:api", "service:web"}, FinishedAt: &done,
-	}}
-	if !reflect.DeepEqual(ev.Canaries, want) {
-		t.Fatalf("canaries %+v, want %+v", ev.Canaries, want)
+	}
+	if !reflect.DeepEqual(ev.Canaries[0], want) || ev.Canaries[1].DeploymentID != "dep_web_11" {
+		t.Fatalf("canaries %+v", ev.Canaries)
+	}
+	// And the gate reads api's rollback, twelve web canaries later.
+	in := green()
+	in.Evidence = ev
+	in.Evidence.Coverage = &releasewatch.Coverage{Environment: "production", Duration: 15 * time.Minute, Services: []releasewatch.ServiceCoverage{}}
+	if c := Checks(in)[GateSafetyNet-1]; c.Passed || !strings.Contains(c.Detail, "api's last canary rolled back") {
+		t.Fatalf("gate 5 %+v", c)
 	}
 }
 

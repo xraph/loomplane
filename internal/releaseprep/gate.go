@@ -60,7 +60,9 @@ func (g *Gate) now() time.Time {
 // as not allowed.
 func (g *Gate) Evaluate(ctx context.Context, req agentauthz.PromotionRequest) (agentauthz.GateDecision, error) {
 	if req.Plan == nil {
-		return agentauthz.GateDecision{Failed: []string{noReport}}, nil
+		d := agentauthz.GateDecision{Failed: []string{noReport}}
+		g.audit(ctx, req, nil, d, []int{GateFromStaging})
+		return d, nil
 	}
 	orgID := req.Principal.OrgID
 	report, err := g.Store.ForPlan(ctx, orgID, req.Plan.ID)

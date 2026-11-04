@@ -36,9 +36,11 @@ type Watches interface {
 	Evidence(ctx context.Context, p security.Principal, projectID, environment string) (*releasewatch.ReleaseEvidence, error)
 }
 
-// Canaries is *deployments.Service.
+// Canaries is *deployments.Service. LastCanary is the newest canary run
+// of an environment that ramped actionID, however many canaries of other
+// services ran since; nil when none did.
 type Canaries interface {
-	RecentCanaries(ctx context.Context, p security.Principal, projectID, environmentID string, limit int) ([]deployments.CanaryRun, error)
+	LastCanary(ctx context.Context, p security.Principal, projectID, environmentID, actionID string) (*deployments.CanaryRun, error)
 }
 
 // Projects is *projects.Service.
@@ -74,15 +76,6 @@ type OpenReport struct {
 // OpenReports reads the agent reports open on one environment.
 type OpenReports interface {
 	Open(ctx context.Context, orgID, projectID, environmentID string) ([]OpenReport, error)
-}
-
-// NoReports has no reports, so none are open. It's for tests: Loomplane
-// wires WatcherReports.
-type NoReports struct{}
-
-// Open returns no reports.
-func (NoReports) Open(context.Context, string, string, string) ([]OpenReport, error) {
-	return []OpenReport{}, nil
 }
 
 // WatcherReports reads 3c's open agent reports.

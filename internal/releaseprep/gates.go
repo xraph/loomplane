@@ -66,12 +66,7 @@ type CheckInput struct {
 	// own words: it's quoted in gate 1's detail.
 	RequesterError string
 	Report         *ReleaseReport
-	// Preview is the job's preview of the gates, before any run asks:
-	// it skips the checks of the run (its task, the person it acts for,
-	// the report still reviewing). Everything else checks a run, and an
-	// empty TaskID or Requester there never matches.
-	Preview bool
-	// TaskID is the run asking.
+	// TaskID is the run asking. An empty one never matches.
 	TaskID string
 	// Requester is the person the asking run acts for; "" when it acts
 	// for nobody.
@@ -79,8 +74,13 @@ type CheckInput struct {
 	Plan      *planning.Plan
 	From, To  *projects.Environment
 	Evidence  *ReadinessEvidence
-	// Now is when the gates are checked.
+	// Now is when the gates are checked. No gate reads a clock: every
+	// duration comes from the evidence, measured when it was read.
 	Now time.Time
+
+	// preview skips the checks of the run asking. Only PreviewChecks sets
+	// it.
+	preview bool
 }
 
 // Checks computes the seven gates from Loomplane's records and the
@@ -90,6 +90,21 @@ type CheckInput struct {
 // details travel in realtime events; outside text in the evidence is never
 // quoted.
 func Checks(in CheckInput) []GateCheck {
+	in.preview = false
+	return checks(in)
+}
+
+// PreviewChecks is the job's preview of the gates, before any run asks.
+// It skips the checks of the run: its task, the person it acts for, the
+// report reviewing and holding the evidence the agent reviews. Nothing
+// else previews, so an evaluation can never skip them; the gate calls
+// Checks.
+func PreviewChecks(in CheckInput) []GateCheck {
+	in.preview = true
+	return checks(in)
+}
+
+func checks(in CheckInput) []GateCheck {
 	gates := []func(CheckInput) []string{autonomy, fromStaging, cleanPlan, soak, safetyNet, nothingOpen, budget}
 	passed := []func(CheckInput) string{autonomyOK, fromStagingOK, cleanPlanOK, soakOK, safetyNetOK, nothingOpenOK, budgetOK}
 	out := make([]GateCheck, 0, len(gates))
@@ -226,7 +241,7 @@ func fromStaging(in CheckInput) []string {
 	case in.To.Kind != projects.KindProduction:
 		why = append(why, fmt.Sprintf("%s isn't a production environment", in.To.Name))
 	}
-	if !in.Preview {
+	if !in.preview {
 		// The task is recorded just after the run starts, so a call made
 		// before that lands fails here and asks: fail closed, nothing more.
 		switch {
@@ -237,6 +252,9 @@ func fromStaging(in CheckInput) []string {
 		}
 		if in.Requester == "" || in.Requester != r.RequestedBy {
 			why = append(why, "this release preparation was asked for by someone else")
+		}
+		if r.Evidence == nil {
+			why = append(why, "this release preparation holds no evidence the agent reviewed")
 		}
 	}
 	switch ev := in.Evidence; {
@@ -255,7 +273,7 @@ func fromStaging(in CheckInput) []string {
 }
 
 func fromStagingOK(in CheckInput) string {
-	if in.Preview {
+	if in.preview {
 		return fmt.Sprintf("it promotes exactly what %s runs to %s", in.From.Name, in.To.Name)
 	}
 	return fmt.Sprintf("it promotes exactly what %s runs to %s, in this release preparation's own run", in.From.Name, in.To.Name)
@@ -340,6 +358,8 @@ func soak(in CheckInput) []string {
 	switch s := ev.Soak; {
 	case s == nil || missing(ev, KeySoak):
 		why = append(why, unread("the staging soak"))
+	case !s.Running && !movesARepository(in.Plan):
+		why = append(why, "the plan moves no repository, so there's nothing to soak")
 	case !s.Running:
 		why = append(why, env+" doesn't run every commit the plan pins")
 	default:
@@ -365,10 +385,32 @@ func soak(in CheckInput) []string {
 	switch r := ev.StagingRelease; {
 	case r == nil || missing(ev, KeyStagingRelease):
 		why = append(why, unread(env+"'s current release"))
+	case r.Verdict == string(releasehealth.Fail):
+		why = append(why, env+"'s current release failed its post-deploy watch")
 	case r.Unverified:
-		why = append(why, env+"'s current release is unverified: "+r.Reason)
+		why = append(why, env+"'s current release is unverified: "+unverifiedRelease(r, env))
 	}
 	return why
+}
+
+// movesARepository reports whether the plan moves at least one source.
+func movesARepository(plan *planning.Plan) bool {
+	return plan == nil || slices.ContainsFunc(plan.Sources, func(s planning.PlanSource) bool { return s.InScope })
+}
+
+// unverifiedRelease says why a release is unverified from what Loomplane
+// knows of it. It never quotes the watch's reason, which can hold a health
+// reader's error.
+func unverifiedRelease(r *releasewatch.ReleaseEvidence, env string) string {
+	switch {
+	case r.DeploymentID == "":
+		return env + " has no release yet"
+	case !r.Watched:
+		return "it wasn't watched"
+	case !r.Settled:
+		return "its post-deploy watch hasn't finished"
+	}
+	return "its post-deploy watch couldn't judge it"
 }
 
 // soakVerdicts are the services that failed, and those Loomplane couldn't
@@ -391,12 +433,28 @@ func soakOK(in CheckInput) string {
 		formatDuration(in.Evidence.Soak.Duration), formatDuration(minSoak(in.Project)))
 }
 
-// unresolved are the canary statuses that stay unresolved until a newer
-// canary of the same service promotes.
-var unresolved = map[string]string{
-	deployments.CanaryRolledBack:    "rolled back",
-	deployments.CanaryRevertFailed:  "couldn't move traffic back",
-	deployments.CanaryPromoteFailed: "failed to promote",
+// canaryWords say how a service's last canary ended when it didn't
+// promote. Every status but promoted is unresolved: a failure until a
+// newer canary of the service promotes, and one still moving resolves
+// nothing.
+var canaryWords = map[string]string{
+	deployments.CanaryRolledBack:    "rolled back, and no later canary of it promoted",
+	deployments.CanaryRevertFailed:  "couldn't move traffic back, and no later canary of it promoted",
+	deployments.CanaryPromoteFailed: "failed to promote, and no later canary of it promoted",
+	deployments.CanaryPending:       "hasn't finished",
+	deployments.CanaryRamping:       "hasn't finished",
+	deployments.CanaryPromoting:     "hasn't finished",
+	deployments.CanaryReverting:     "hasn't finished",
+}
+
+// judgeable reports whether Loomplane has a canary or a watch reader for a
+// provider: it's in the support matrix and not in AlwaysAsk. An empty or
+// unknown provider isn't.
+func judgeable(provider string) bool {
+	if provider == "" || slices.Contains(AlwaysAsk, provider) {
+		return false
+	}
+	return slices.ContainsFunc(releasehealth.Matrix(), func(s releasehealth.Support) bool { return s.Provider == provider })
 }
 
 // Gate 5: something guards every changed service once it's live (a
@@ -415,8 +473,21 @@ func safetyNet(in CheckInput) []string {
 		cov = nil
 	}
 	for _, s := range ev.ChangedServices {
-		if slices.Contains(AlwaysAsk, s.Provider) {
-			why = append(why, fmt.Sprintf("%s runs on %s, which has no canary or watch Loomplane can judge, so a person releases it", s.Name, providerNames[s.Provider]))
+		provider := s.Provider
+		if cov != nil {
+			// The environment's own record of the service counts too.
+			for _, row := range cov.Services {
+				if row.Name == s.Name && slices.Contains(AlwaysAsk, row.Provider) {
+					provider = row.Provider
+				}
+			}
+		}
+		switch {
+		case slices.Contains(AlwaysAsk, provider):
+			why = append(why, fmt.Sprintf("%s runs on %s, which has no canary or watch Loomplane can judge, so a person releases it", s.Name, providerNames[provider]))
+			continue
+		case !judgeable(provider):
+			why = append(why, s.Name+" runs on a provider Loomplane can't judge, so a person releases it")
 			continue
 		}
 		if cov != nil && !guarded(s, cov.Duration, cov.Services) {
@@ -432,16 +503,16 @@ func safetyNet(in CheckInput) []string {
 	switch r := ev.ProductionRelease; {
 	case r == nil || missing(ev, KeyProductionRelease):
 		why = append(why, unread("production's last release"))
+	case r.Verdict == string(releasehealth.Fail):
+		why = append(why, "the last production release failed its post-deploy watch")
 	case r.Unverified:
-		why = append(why, "the last production release is unverified: "+r.Reason)
+		why = append(why, "the last production release is unverified: "+unverifiedRelease(r, envOr(in.To, "production")))
 	}
 	if ev.Canaries == nil || missing(ev, KeyCanaries) {
-		why = append(why, unread("production's recent canaries"))
+		why = append(why, unread("production's canaries"))
 	} else {
 		for _, s := range ev.ChangedServices {
-			if status := lastCanary(ev.Canaries, s.ActionID); status != "" {
-				why = append(why, fmt.Sprintf("%s's last canary %s, and no later canary of it promoted", s.Name, unresolved[status]))
-			}
+			why = append(why, lastCanary(ev.Canaries, s)...)
 		}
 	}
 	return why
@@ -457,22 +528,24 @@ func guarded(s ChangedService, watch time.Duration, services []releasewatch.Serv
 	return watch > 0 && slices.ContainsFunc(services, func(c releasewatch.ServiceCoverage) bool { return c.Name == s.Name && c.Watchable })
 }
 
-// lastCanary is the unresolved status of the newest canary that ramped
-// actionID, or "". runs are newest first. A promoted run resolves every
-// older one; a run still in progress resolves nothing.
-func lastCanary(runs []CanarySummary, actionID string) string {
-	for _, r := range runs {
-		if !slices.Contains(r.ActionIDs, actionID) {
-			continue
-		}
-		if r.Status == deployments.CanaryPromoted {
-			return ""
-		}
-		if _, bad := unresolved[r.Status]; bad {
-			return r.Status
-		}
+// lastCanary says why a service's newest canary leaves it unresolved, or
+// nothing when it promoted or no canary ever ramped it.
+func lastCanary(runs []CanarySummary, s ChangedService) []string {
+	if s.LastCanary == "" {
+		return nil
 	}
-	return ""
+	i := slices.IndexFunc(runs, func(r CanarySummary) bool { return r.DeploymentID == s.LastCanary })
+	switch {
+	case i < 0 || !slices.Contains(runs[i].ActionIDs, s.ActionID):
+		return []string{unread(s.Name + "'s last canary")}
+	case runs[i].Status == deployments.CanaryPromoted:
+		return nil
+	}
+	words, ok := canaryWords[runs[i].Status]
+	if !ok {
+		words = "ended in a state Loomplane doesn't know"
+	}
+	return []string{fmt.Sprintf("%s's last canary %s", s.Name, words)}
 }
 
 func safetyNetOK(in CheckInput) string {
@@ -510,7 +583,7 @@ func nothingOpen(in CheckInput) []string {
 		ids := make([]string, 0, n)
 		for _, r := range ev.OpenReports {
 			id := r.ID
-			if r.Severity != "" {
+			if slices.Contains(severities, r.Severity) {
 				id += " (" + r.Severity + ")"
 			}
 			ids = append(ids, id)
@@ -570,14 +643,20 @@ func budgetOK(in CheckInput) string {
 	return fmt.Sprintf("$%s left of $%s keeps the $%s reserve for the post-deploy watch", money(left), money(limit), money(reserve))
 }
 
+// severities are 3c's, the only ones a detail names.
+var severities = []string{"critical", "high", "medium", "low"}
+
 // money is an amount with two decimals.
 func money(r *big.Rat) string { return r.FloatString(2) }
 
 // stagingName is the name of the environment a promotion comes from, or
 // "staging" when it couldn't be read.
-func stagingName(e *projects.Environment) string {
+func stagingName(e *projects.Environment) string { return envOr(e, "staging") }
+
+// envOr is an environment's name, or fallback when it couldn't be read.
+func envOr(e *projects.Environment, fallback string) string {
 	if e == nil {
-		return "staging"
+		return fallback
 	}
 	return e.Name
 }
