@@ -10,6 +10,7 @@ import (
 	weaveext "github.com/xraph/weave/extension"
 	"github.com/xraph/weave/vectorstore/pgvector"
 
+	"github.com/xraph/loomplane/extensions/agentwatch"
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/aiagent"
 	"github.com/xraph/loomplane/internal/config"
@@ -93,6 +94,26 @@ func TestExtensionsWithAI(t *testing.T) {
 			if !slices.Contains(deps, aiext.Name) {
 				t.Errorf("the agent doesn't wait for the AI section: %v", deps)
 			}
+		}
+	}
+}
+
+// The watcher exists only with AI on, and comes after the agent, which
+// provides the reports, runs and binder it works through.
+func TestWatchExtensionOnlyWithAI(t *testing.T) {
+	if got := names(config.Defaults()); slices.Contains(got, agentwatch.Name) {
+		t.Fatalf("AI is off and the watcher is registered: %v", got)
+	}
+	cfg := config.Defaults()
+	cfg.AI.Enabled = true
+	got := names(cfg)
+	watch, agent := slices.Index(got, agentwatch.Name), slices.Index(got, aiagent.Name)
+	if watch < 0 || agent < 0 || watch < agent {
+		t.Fatalf("AI is on: the watcher at %d, the agent at %d: %v", watch, agent, got)
+	}
+	for _, ext := range Extensions(cfg) {
+		if ext.Name() == agentwatch.Name && !slices.Contains(ext.Dependencies(), aiagent.Name) {
+			t.Fatalf("the watcher doesn't wait for the agent: %v", ext.Dependencies())
 		}
 	}
 }

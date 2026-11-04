@@ -487,3 +487,106 @@ func TestCortexUsesLoomplaneAdapters(t *testing.T) {
 		}
 	}
 }
+
+// With AI off nothing watches a workspace: no report route, no tick in
+// Dispatch, and a failed production deployment leaves no watcher row.
+func TestAgentOff_noWatcher(t *testing.T) {
+	google := newFakeGoogle(t)
+	cloud := newFakeCloud(google.srv.URL)
+	cloud.failBuilds = true
+	google.deploy = cloud
+	const vercelToken = "vcl_0123456789abcdef"
+	vc := newFakeVercelDeploys(t, vercelToken)
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Orchestration.PollInterval = 100 * time.Millisecond
+	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Clouds.GoogleEndpoint = google.srv.URL
+	cfg.Clouds.VercelEndpoint = vc.srv.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
+	var org struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": "Acme", "slug": "acme"}, &org)
+	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/me/switch-org", map[string]string{"org_id": org.ID}, nil)
+	for _, path := range []string{"/api/v1/agent/reports", "/api/v1/agent/reports/arep_1", "/api/v1/agent/watcher"} {
+		c.must(http.StatusNotFound, http.MethodGet, path, nil, nil)
+	}
+	c.must(http.StatusNotFound, http.MethodPost, "/api/v1/agent/reports/arep_1/close", map[string]string{"reason": "x"}, nil)
+
+	var proj struct {
+		ID string `json:"id"`
+	}
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "Mono", "repository_url": "https://github.com/acme/mono"}, &proj)
+	base := "/api/v1/projects/" + proj.ID
+	analyze(t, cfg, c, proj.ID)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "gcp", "name": "Prod", "credential": serviceAccountKey(t, google.srv.URL+"/token")}, nil)
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections",
+		map[string]string{"cloud": "vercel", "name": "Web", "credential": vercelToken}, nil)
+	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": webAndAPIManifest}, nil)
+	var plan planBody
+	c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if d := approveAndWait(t, c, plan); d.Status != "failed" {
+		t.Fatalf("the deployment %s, want failed", d.Status)
+	}
+
+	if n := dbValue[int64](t, cfg.Database.URL, `SELECT count(*) FROM dispatch_cron_entries WHERE name = 'loomplane.agent.watch'`); n != 0 {
+		t.Errorf("AI off, and Dispatch has %d watcher ticks scheduled", n)
+	}
+	if n := dbValue[int64](t, cfg.Database.URL, `SELECT count(*) FROM loomplane_agent_watchers`); n != 0 {
+		t.Errorf("AI off, and %d workspaces have a watcher row", n)
+	}
+	if n := dbValue[int64](t, cfg.Database.URL, `SELECT count(*) FROM loomplane_agent_reports`); n != 0 {
+		t.Errorf("AI off, and %d reports were opened", n)
+	}
+}
+
+// With AI on the report routes answer once the workspace turns the agent
+// on, and the tick is scheduled. The fixture has no GitHub App, so the
+// watcher says issues aren't configured.
+func TestAgentOn_reportRoutes(t *testing.T) {
+	fake := agenttest.Anthropic(t)
+	a := startAgentOrg(t, fake.AIConfig())
+	defer a.r.stop()
+
+	// Off in the workspace: the binder answers before any report is read.
+	a.owner.must(http.StatusConflict, http.MethodGet, "/api/v1/agent/reports", nil, nil)
+
+	a.budget("10")
+	a.enable(nil)
+	var list struct {
+		Reports []json.RawMessage `json:"reports"`
+	}
+	a.owner.must(http.StatusOK, http.MethodGet, "/api/v1/agent/reports", nil, &list)
+	if list.Reports == nil || len(list.Reports) != 0 {
+		t.Fatalf("reports %+v", list)
+	}
+	a.owner.must(http.StatusNotFound, http.MethodGet, "/api/v1/agent/reports/arep_nope", nil, nil)
+	a.owner.must(http.StatusUnprocessableEntity, http.MethodGet, "/api/v1/agent/reports?status=bogus", nil, nil)
+
+	var st struct {
+		Paused bool `json:"paused"`
+		Issues *struct {
+			Configured    bool              `json:"configured"`
+			Installations []json.RawMessage `json:"installations"`
+		} `json:"issues"`
+	}
+	a.owner.must(http.StatusOK, http.MethodGet, "/api/v1/agent/watcher", nil, &st)
+	if st.Paused || st.Issues == nil || st.Issues.Configured || st.Issues.Installations == nil {
+		t.Fatalf("watcher %+v", st)
+	}
+	if n := dbValue[int64](t, a.cfg.Database.URL, `SELECT count(*) FROM dispatch_cron_entries WHERE name = 'loomplane.agent.watch' AND queue = 'default'`); n != 1 {
+		t.Errorf("AI on, and Dispatch has %d watcher ticks on the default queue", n)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Fatalf("reading reports called the model %d times", n)
+	}
+}

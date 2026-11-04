@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentwatch"
 )
 
 // OffName is the name of the extension the platform registers when AI is
@@ -79,6 +80,18 @@ func RegisterOffJobs(eng *engine.Engine) {
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
 	// Knowledge's recovery, scheduled while AI and knowledge were on.
 	engine.Register(eng, job.NewDefinition(agentknowledge.JobRecover, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// The watcher's tick, scheduled while AI was on.
+	engine.Register(eng, job.NewDefinition(agentwatch.JobTick, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// A pass or a delivery the watcher queued just before AI went off: they
+	// run on the default queue too, and do nothing.
+	engine.Register(eng, job.NewDefinition(agentwatch.JobOrg, func(context.Context, agentwatch.OrgPayload) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	engine.Register(eng, job.NewDefinition(agentwatch.JobDeliver, func(context.Context, agentwatch.DeliverPayload) error {
 		return nil
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
 }

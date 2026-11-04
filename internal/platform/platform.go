@@ -30,6 +30,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/extensions/agentwatch"
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/aiagent"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
@@ -188,7 +189,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// section, which provides the agent's settings.
 		agent := aiagent.New(cfg, jobs.Engine)
 		exts = append(exts, agent.LibraryExtensions()...)
-		exts = append(exts, agent)
+		// The watcher comes after the agent, whose reports, runs and binder
+		// it works through.
+		exts = append(exts, agent, agentwatch.New(cfg, jobs.Engine))
 	} else {
 		// What AI scheduled while it was on stays in the database and keeps
 		// firing; this gives those jobs handlers that do nothing, and adds

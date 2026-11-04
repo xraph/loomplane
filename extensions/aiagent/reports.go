@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentrequests"
 	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentwatch"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/projects"
@@ -45,6 +46,7 @@ func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Serv
 		return fmt.Errorf("provide the agent's reports: %w", err)
 	}
 	e.deps.Reports = reports
+	e.deps.DeliverReport = e.deliverReport()
 	e.deps.InvestigationOf = investigationOf(func() runsByRun {
 		if e.runs == nil {
 			return nil
@@ -52,6 +54,25 @@ func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Serv
 		return e.runs
 	})
 	return nil
+}
+
+// deliverReport is the report operations' DeliverReport: it queues the
+// watcher's delivery job, which the watch extension handles, on the
+// default queue, where the AI-off extension answers one left behind. It's
+// nil without a job engine, so open_report leaves the delivery to the
+// watcher's next pass. A delivery that can't be queued is logged; the
+// watcher queues it again once its requeue time passes.
+func (e *Extension) deliverReport() func(ctx context.Context, orgID, reportID string) {
+	if e.jobs == nil {
+		return nil
+	}
+	jobs := agentwatch.DispatchEnqueuer{Engine: e.jobs, Queue: agentruns.SweepQueue}
+	log := e.Logger()
+	return func(ctx context.Context, orgID, reportID string) {
+		if err := jobs.Deliver(ctx, orgID, reportID); err != nil && log != nil {
+			log.Warn("agentwatch: queue the delivery of report "+reportID, forge.F("error", err.Error()))
+		}
+	}
 }
 
 // reportSources finds what reports are built over in the container. Every
