@@ -534,7 +534,7 @@ func (s *Service) issueTexts(ctx context.Context, out *sender, r *Report, n name
 	if title, ok = out.text(ctx, cutRunes(clean.Title, MaxNoticeTitle)); !ok || title == "" {
 		title = fallbackTitle(n)
 	}
-	body, ok = out.text(ctx, issueBody(clean, n, true))
+	body, ok = out.textWith(ctx, issueBody(clean, n, true), issueLinks(clean, n))
 	if !ok || !strings.HasPrefix(body, Marker(r.ID)+"\n") || len(body) > MaxIssueBody {
 		body = Marker(r.ID) + "\n\nLoomplane opened a report for this repository. Read it in Loomplane: " + n.Link
 	}
@@ -620,6 +620,64 @@ func (o *sender) text(ctx context.Context, text string) (string, bool) {
 	}
 	return sent, true
 }
+
+// textWith is text as it may leave, with links, Loomplane's own, kept out
+// of the outbound scan: its entropy check takes a link with a port and an
+// ID in it, such as http://localhost:8780/agent/reports/arep_..., for a
+// secret and redacts it. A link is Loomplane's public URL and IDs it made,
+// never anything read from outside, so it can't carry one. Text that
+// already holds a placeholder is scanned whole.
+func (o *sender) textWith(ctx context.Context, text string, links []string) (string, bool) {
+	text = o.scrub(text)
+	if text == "" {
+		return "", true
+	}
+	held, restore := holdLinks(text, links)
+	sent, err := o.scanner.Outbound(ctx, held)
+	if err != nil {
+		return "", false
+	}
+	return restore.Replace(sent), true
+}
+
+// linkHold starts the placeholder a held link takes during the scan.
+const linkHold = "loomplane-link-"
+
+// holdLinks swaps each link in text for a placeholder, longest first, and
+// returns the replacer that puts them back.
+func holdLinks(text string, links []string) (string, *strings.Replacer) {
+	if strings.Contains(text, linkHold) {
+		return text, strings.NewReplacer()
+	}
+	links = slices.Clone(links)
+	slices.SortFunc(links, func(a, b string) int { return len(b) - len(a) })
+	links = slices.Compact(links)
+	var hold, restore []string
+	for i, l := range links {
+		if l == "" || !strings.Contains(text, l) {
+			continue
+		}
+		ph := linkHold + strconv.Itoa(i) + "-held"
+		hold, restore = append(hold, l, ph), append(restore, ph, l)
+	}
+	return strings.NewReplacer(hold...).Replace(text), strings.NewReplacer(restore...)
+}
+
+// issueLinks are the links r's issue body has to Loomplane: the report's
+// own, and each fact's whose path Loomplane made of its own IDs.
+func issueLinks(r *Report, n names) []string {
+	links := []string{n.Link}
+	for _, f := range r.Facts {
+		if !f.Untrusted && ownPath.MatchString(f.Path) {
+			links = append(links, baseOf(n.Link)+f.Path)
+		}
+	}
+	return links
+}
+
+// ownPath is a dashboard path as detectors make them: a route and IDs,
+// with at most a plain query.
+var ownPath = regexp.MustCompile(`^/[A-Za-z0-9_/-]+(\?[A-Za-z0-9_=&-]+)?$`)
 
 // clean is a copy of r with every text in it scrubbed, so what the
 // renderer cuts to fit is what is sent.

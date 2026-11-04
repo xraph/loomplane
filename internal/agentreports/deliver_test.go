@@ -23,6 +23,7 @@ import (
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/repositories/githubtest"
 	"github.com/xraph/loomplane/internal/security"
@@ -1313,5 +1314,41 @@ func TestGoneSecretsAreOnlyNotFound(t *testing.T) {
 		if gone(err) != want {
 			t.Fatalf("gone(%v) = %v", err, !want)
 		}
+	}
+}
+
+// A public URL with a port, as a server on its default address has, and
+// IDs as the stores make them: the issue's links to Loomplane survive the
+// outbound scan, which reads such a link as a secret, while an untrusted
+// fact shaped like one is still scanned.
+func TestLinksToLoomplaneSurviveTheScan(t *testing.T) {
+	ctx, err := (&agentscope.Binder{Tenants: tenantsOn{}}).Bind(context.Background(), security.AgentPrincipal("org_a", nil), agentscope.Scope{OrgID: "org_a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &sender{scanner: &agentsafety.Scanner{Engine: agenttest.Shield(t, "org_a")}, redact: realtime.NewRedactor(nil)}
+	const (
+		base    = "http://localhost:8780"
+		id      = "arep_01m6jas8yyee2tbh724bczwdx1"
+		plan    = "/deployments/plan_01m6jas4d0ehb8z6y2gp02yn8k?tab=changes"
+		planned = base + plan
+		smuggle = base + "/agent/reports/arep_01m6jas8yyee2tbh724bczwdy9"
+	)
+	r := &Report{ID: id, Title: "Deployment to production failed", Severity: SeverityHigh, Environment: "production", Occurrences: 1,
+		Facts: []Fact{{Label: "Plan", Value: "plan_01m6jas4d0ehb8z6y2gp02yn8k", Path: plan}, {Label: "Error", Value: "see " + smuggle, Untrusted: true}}}
+	n := names{Project: "Shop", Link: base + "/agent/reports/" + id}
+	_, body := (&Service{}).issueTexts(ctx, out, r, n)
+	if !strings.HasPrefix(body, Marker(id)+"\n") || !strings.Contains(body, "[Open this report in Loomplane]("+n.Link+")") ||
+		!strings.Contains(body, "([open in Loomplane]("+planned+"))") {
+		t.Fatalf("body %s", body)
+	}
+	if strings.Contains(body, smuggle) || strings.Contains(body, linkHold) {
+		t.Fatalf("the untrusted link wasn't scanned, or a placeholder was left: %s", body)
+	}
+
+	// Text that already holds a placeholder is scanned whole.
+	text := "Read " + linkHold + "0-held at " + n.Link
+	if got, ok := out.textWith(ctx, text, []string{n.Link}); !ok || strings.Contains(got, n.Link) {
+		t.Fatalf("textWith(%q) = %q, %v", text, got, ok)
 	}
 }
