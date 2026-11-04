@@ -3,7 +3,9 @@
 package billing
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -27,6 +29,22 @@ func (c Config) String() string {
 
 // GoString is String, for %#v.
 func (c Config) GoString() string { return c.String() }
+
+// LogValue keeps the secrets out of slog, whatever the handler.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("StripeSecretKey", redacted(c.StripeSecretKey)),
+		slog.String("StripeWebhookSecret", redacted(c.StripeWebhookSecret)),
+		slog.String("PublicURL", c.PublicURL),
+	)
+}
+
+// MarshalJSON keeps the secrets out of JSON.
+func (c Config) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct{ StripeSecretKey, StripeWebhookSecret, PublicURL string }{
+		redacted(c.StripeSecretKey), redacted(c.StripeWebhookSecret), c.PublicURL,
+	})
+}
 
 func redacted(secret string) string {
 	if secret == "" {

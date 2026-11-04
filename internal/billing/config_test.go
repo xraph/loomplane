@@ -3,7 +3,10 @@
 package billing
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -66,6 +69,33 @@ func TestConfig_FormattingNeverCarriesASecret(t *testing.T) {
 		}
 		if !strings.Contains(out, "https://cloud.example") {
 			t.Errorf("%s drops the public URL: %s", verb, out)
+		}
+	}
+}
+
+func TestConfig_JSONAndSlogNeverCarryASecret(t *testing.T) {
+	cfg := Config{StripeSecretKey: "sk_live_secret", StripeWebhookSecret: "whsec_secret", PublicURL: "https://cloud.example"}
+	asJSON, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := json.Marshal(map[string]any{"billing": cfg, "ptr": &cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("config", "billing", cfg, "ptr", &cfg)
+	var text bytes.Buffer
+	slog.New(slog.NewTextHandler(&text, nil)).Info("config", "billing", cfg)
+	for name, out := range map[string]string{
+		"json.Marshal": string(asJSON), "json.Marshal nested": string(nested),
+		"slog JSON": logged.String(), "slog text": text.String(),
+	} {
+		if strings.Contains(out, "sk_live_secret") || strings.Contains(out, "whsec_secret") {
+			t.Errorf("%s writes a secret: %s", name, out)
+		}
+		if !strings.Contains(out, "https://cloud.example") {
+			t.Errorf("%s drops the public URL: %s", name, out)
 		}
 	}
 }

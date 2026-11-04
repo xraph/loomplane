@@ -20,7 +20,10 @@ const currency = "usd"
 // NewLedger builds ledger over Loomplane's database with the Stripe
 // provider. It neither migrates (the central pass does) nor starts a
 // lifecycle worker (billing's cron calls Advance). Never Stop it: the
-// postgres store's Close closes db.
+// postgres store's Close closes db. Once it is in DI, forge's container
+// calls its Start, which is harmless here: WithoutMigrate skips the
+// migration, a zero interval starts no lifecycle worker, and the meter
+// flush worker it starts idles because billing never meters through it.
 func NewLedger(db *grove.DB, cfg Config) (*ledger.Ledger, *stripe.Provider, error) {
 	if db == nil {
 		return nil, nil, errors.New("billing: ledger needs Loomplane's database")
