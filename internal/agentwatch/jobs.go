@@ -35,7 +35,7 @@ const (
 const (
 	orgJobTimeout     = 2 * time.Minute
 	deliverJobTimeout = 90 * time.Second
-	deliverJobRetries = 3
+	deliverJobRetries = 8
 )
 
 // OrgPayload names the workspace a pass watches.
@@ -53,15 +53,21 @@ func TickJob(w *Watcher) *job.Definition[struct{}] {
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0))
 }
 
-// OrgJob is one workspace's pass, on the agent's queue. It isn't retried:
-// the next tick queues another.
+// OrgJob is one workspace's pass. It isn't retried: the next tick queues
+// another. Like DeliverJob it runs on agentruns.SweepQueue, not the
+// agent's queue: neither calls a model, and model runs busy on the
+// agent's queue must never hold the watcher back past OffForLong.
 func OrgJob(w *Watcher) *job.Definition[OrgPayload] {
 	return job.NewDefinition(JobOrg, func(ctx context.Context, in OrgPayload) error {
 		return w.RunOrg(ctx, in.OrgID)
-	}, job.WithQueue(agentruns.Queue), job.WithMaxRetries(0), job.WithTimeout(orgJobTimeout))
+	}, orgOptions()...)
 }
 
-// DeliverJob delivers one report, on the agent's queue. Each attempt
+func orgOptions() []job.Option {
+	return []job.Option{job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0), job.WithTimeout(orgJobTimeout)}
+}
+
+// DeliverJob delivers one report, on agentruns.SweepQueue. Each attempt
 // holds the delivery under its own owner, replica and a random suffix,
 // so a retry or another job on the same worker never passes for the
 // attempt before it.
@@ -76,7 +82,7 @@ func DeliverJob(r *agentreports.Service, replica string) *job.Definition[Deliver
 }
 
 func deliverOptions() []job.Option {
-	return []job.Option{job.WithQueue(agentruns.Queue), job.WithMaxRetries(deliverJobRetries), job.WithTimeout(deliverJobTimeout)}
+	return []job.Option{job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(deliverJobRetries), job.WithTimeout(deliverJobTimeout)}
 }
 
 // attemptOwner is one delivery attempt's owner.
@@ -94,7 +100,7 @@ func attemptOwner(replica string) (string, error) {
 // DispatchEnqueuer queues the watcher's jobs through Dispatch.
 type DispatchEnqueuer struct {
 	Engine func() *dispatchengine.Engine
-	// Queue is the agent's queue; "" is agentruns.Queue.
+	// Queue is where the jobs go; "" is agentruns.SweepQueue.
 	Queue string
 }
 
@@ -113,7 +119,7 @@ func (e DispatchEnqueuer) engine() (*dispatchengine.Engine, error) {
 
 func (e DispatchEnqueuer) queue() string {
 	if e.Queue == "" {
-		return agentruns.Queue
+		return agentruns.SweepQueue
 	}
 	return e.Queue
 }
@@ -124,8 +130,8 @@ func (e DispatchEnqueuer) WatchOrg(ctx context.Context, orgID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = dispatchengine.Enqueue(ctx, eng, JobOrg, OrgPayload{OrgID: orgID},
-		job.WithQueue(e.queue()), job.WithMaxRetries(0), job.WithTimeout(orgJobTimeout))
+	opts := append(orgOptions(), job.WithQueue(e.queue()))
+	_, err = dispatchengine.Enqueue(ctx, eng, JobOrg, OrgPayload{OrgID: orgID}, opts...)
 	return err
 }
 

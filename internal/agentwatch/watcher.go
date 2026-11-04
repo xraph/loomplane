@@ -31,8 +31,12 @@ const (
 	RecheckEvery = 10 * time.Minute
 	// OffForLong is how long a watcher goes without a tick before it
 	// starts again at the high water mark instead of replaying.
-	OffForLong                  = time.Hour
-	InvestigationGrace          = 10 * time.Minute
+	OffForLong         = time.Hour
+	InvestigationGrace = 10 * time.Minute
+	// InvestigationCeiling is how long an investigation may stay queued
+	// or running before the watcher gives up on it, so a run that never
+	// ends doesn't hold one of the MaxConcurrentInvestigations for good.
+	InvestigationCeiling        = time.Hour
 	MaxConcurrentInvestigations = 3
 	PauseBudget                 = "budget"
 	// runTimeout bounds one workspace's pass, well under LeaseTTL, so the
@@ -44,9 +48,9 @@ const (
 
 // What people read about investigations and the budget.
 const (
-	noteBudget = "The agent didn't investigate this: the workspace's AI budget for the month is used up."
-	noteCapped = "Three investigations were already running."
-	noteStale  = "The investigation never started."
+	noteBudget     = "The agent didn't investigate this: the workspace's AI budget for the month is used up."
+	noteCapped     = "Three investigations were already running."
+	noteUnfinished = "The investigation didn't finish within an hour."
 
 	pausedTitle  = "The agent stopped investigating: this workspace has used its AI budget for the month"
 	pausedBody   = "Loomplane still opens reports from what it sees and sends them as usual. The agent won't investigate them until the budget has room. An admin can raise it in AI settings."
@@ -161,14 +165,6 @@ func (w *Watcher) Tick(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// DeliverReport queues a report's delivery job, for agentops.Deps'
-// DeliverReport: open_report has marked the delivery queued already.
-func (w *Watcher) DeliverReport(ctx context.Context, orgID, reportID string) {
-	if err := w.Jobs.Deliver(ctx, orgID, reportID); err != nil {
-		w.warn("agentwatch: queue the delivery of report "+reportID, err)
-	}
 }
 
 // RunOrg is one pass over a workspace, the per-workspace job's body. It
@@ -320,10 +316,10 @@ func (p *pass) events() error {
 	}
 	if !found {
 		// Pruned past the cursor, or the cursor is ahead of the log.
-		return p.jump()
-	}
-	if len(evs) == 0 {
-		return nil
+		if jerr := p.jump(); jerr != nil {
+			return jerr
+		}
+		return p.ticked()
 	}
 	var failed error
 	for _, ev := range evs {
@@ -337,10 +333,24 @@ func (p *pass) events() error {
 		}
 		p.st.EventCursor = max(p.st.EventCursor, seq)
 	}
-	if err := p.save(); err != nil {
-		return err
+	if failed != nil {
+		// The tick isn't recorded: a page that never applies leaves the
+		// watcher to jump past it once it's OffForLong.
+		if err := p.save(); err != nil {
+			return err
+		}
+		return failed
 	}
-	return failed
+	return p.ticked()
+}
+
+// ticked records the pass's tick with the cursor, once the events are
+// read, so a later step that keeps failing doesn't make the next pass
+// look like one after a long pause and jump past events.
+func (p *pass) ticked() error {
+	now := p.now
+	p.st.TickedAt = &now
+	return p.save()
 }
 
 // event applies one event's signals and clearances. A detector error is
@@ -541,8 +551,20 @@ func (p *pass) start(r *agentreports.Report) (started bool, err error) {
 	case err != nil:
 		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: "The investigation couldn't start: " + err.Error()})
 	}
-	return true, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationRunning, TaskID: task.ID, RunID: task.RunID})
+	// The run is live now. Losing its run ID here would leave follow()
+	// nothing to follow it by, so the move is tried again before giving
+	// up; even then the run's findings still land on the queued report.
+	running := agentreports.Investigation{Status: agentreports.InvestigationRunning, TaskID: task.ID, RunID: task.RunID}
+	for attempt := 1; ; attempt++ {
+		err = p.move(r, queued, running)
+		if err == nil || attempt == moveAttempts {
+			return true, err
+		}
+	}
 }
+
+// moveAttempts is how many times start records a live run on its report.
+const moveAttempts = 3
 
 // projectName is the project's name for the investigation's input, or ""
 // when it can't be read.
@@ -567,16 +589,20 @@ func (p *pass) follow() error {
 	}
 	running := []string{agentreports.InvestigationRunning}
 	for _, r := range list {
-		if r.Investigation == agentreports.InvestigationQueued {
-			// Claimed by a pass that stopped before the run started.
-			if r.RunID == "" && r.InvestigationStartedAt != nil && p.now.Sub(*r.InvestigationStartedAt) > InvestigationGrace {
-				if err := p.move(r, []string{agentreports.InvestigationQueued}, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteStale}); err != nil {
+		if r.RunID == "" {
+			// Queued by a pass that stopped before it started the run, or
+			// before it recorded the run it started: nothing to follow it
+			// by, so it waits out the ceiling. A run that did start may
+			// have written its findings meanwhile.
+			if p.overdue(r) {
+				inv := agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteUnfinished}
+				if wrote(r) {
+					inv = agentreports.Investigation{Status: agentreports.InvestigationDone}
+				}
+				if err := p.move(r, []string{r.Investigation}, inv); err != nil {
 					return err
 				}
 			}
-			continue
-		}
-		if r.RunID == "" {
 			continue
 		}
 		task, err := p.w.Runs.ByRun(p.ctx, p.org, r.RunID)
@@ -591,6 +617,13 @@ func (p *pass) follow() error {
 			continue
 		}
 		switch task.Status {
+		case agentruns.StatusQueued, agentruns.StatusRunning, agentruns.StatusWaiting:
+			// Still going. One that outlives the ceiling frees its slot.
+			if p.overdue(r) {
+				if err := p.move(r, running, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteUnfinished}); err != nil {
+					return err
+				}
+			}
 		case agentruns.StatusCompleted:
 			if err := p.move(r, running, agentreports.Investigation{Status: agentreports.InvestigationDone}); err != nil {
 				return err
@@ -616,10 +649,23 @@ func (p *pass) follow() error {
 	return nil
 }
 
+// overdue reports whether a report's investigation has been queued or
+// running for longer than InvestigationCeiling.
+func (p *pass) overdue(r *agentreports.Report) bool {
+	return r.InvestigationStartedAt != nil && p.now.Sub(*r.InvestigationStartedAt) > InvestigationCeiling
+}
+
+// wrote reports whether the report's findings came from the investigation
+// in hand, written after it was queued.
+func wrote(r *agentreports.Report) bool {
+	return r.Findings != nil && r.InvestigationStartedAt != nil && !r.Findings.WrittenAt.Before(*r.InvestigationStartedAt)
+}
+
 // deliver queues the delivery of each report whose notice or issue is
 // behind, once its investigation finished or had InvestigationGrace to.
-// A report waiting on an installation goes again only once the
-// installation accepted Issues.
+// A report behind only on an issue that waits for its installation goes
+// again once the installation accepted Issues; one with a notice to send
+// goes now.
 func (p *pass) deliver() error {
 	pending, err := p.w.Reports.Pending(p.ctx, p.org)
 	if err != nil {
@@ -630,7 +676,11 @@ func (p *pass) deliver() error {
 		if !p.ready(r) {
 			continue
 		}
-		if r.Status == agentreports.StatusOpen && r.Issue.State == agentreports.IssueWaiting && !p.accepted(r.Repository, accepted) {
+		// A report behind only on an issue that waits for its
+		// installation goes again once the installation accepted Issues.
+		// One with a notice to send, such as a repeat, goes now.
+		if !r.NoticeBehind && r.Status == agentreports.StatusOpen && r.Issue.State == agentreports.IssueWaiting &&
+			!p.accepted(r.Repository, accepted) {
 			continue
 		}
 		queued, err := p.w.Reports.QueueDelivery(p.ctx, p.org, r.ID, p.now)
@@ -682,8 +732,13 @@ func (p *pass) pause() error {
 	}
 	now := p.now
 	p.st.Paused, p.st.PausedReason, p.st.PausedAt = true, PauseBudget, &now
+	if err := p.notifyAt("watcher-paused", p.st.PausedAt, pausedTitle, pausedBody); err != nil {
+		return err
+	}
+	// Recorded once the pause is saved, so the audit never says paused
+	// when the state doesn't.
 	p.audit("agent.watcher.pause")
-	return p.notify("watcher-paused", pausedTitle, pausedBody)
+	return nil
 }
 
 // resume starts investigating again once the budget has room.
@@ -696,15 +751,13 @@ func (p *pass) resume() error {
 		p.w.warn("agentwatch: read the AI budget of "+p.org, err)
 		return nil
 	}
-	subject := "watcher-resumed"
 	pausedAt := p.st.PausedAt
 	p.st.Paused, p.st.PausedReason, p.st.PausedAt = false, "", nil
+	if err := p.notifyAt("watcher-resumed", pausedAt, resumedTitle, resumedBody); err != nil {
+		return err
+	}
 	p.audit("agent.watcher.resume")
-	return p.notifyAt(subject, pausedAt, resumedTitle, resumedBody)
-}
-
-func (p *pass) notify(subject, title, body string) error {
-	return p.notifyAt(subject, p.st.PausedAt, title, body)
+	return nil
 }
 
 // notifyAt saves the state with one budget notice to the owners and

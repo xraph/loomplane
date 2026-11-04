@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/dispatch/job"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/shield/scan"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
@@ -40,6 +42,7 @@ type rig struct {
 	world   *fakeWorld
 	reports *agentreports.Service
 	rstore  *agentreports.MemStore
+	flaky   *flakyReports
 	budget  *fakeBudget
 	runs    *fakeRuns
 	jobs    *recordingJobs
@@ -59,7 +62,8 @@ func newRig(t *testing.T) *rig {
 		issues: &fakeIssues{accepted: map[string]bool{}}, shield: &quotingShield{},
 	}
 	r.store = &memWatchStore{rows: map[string]*memWatch{}, now: r.clock, notices: r.notices}
-	r.reports = agentreports.NewService(agentreports.Deps{Store: r.rstore, Now: r.clock})
+	r.flaky = &flakyReports{MemStore: r.rstore}
+	r.reports = agentreports.NewService(agentreports.Deps{Store: r.flaky, Now: r.clock})
 	warn := func(msg string, err error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -480,6 +484,7 @@ func (r *stringRows) Err() error                 { return nil }
 type noticeLog struct {
 	mu   sync.Mutex
 	rows []sentNotice
+	fail bool
 }
 
 type sentNotice struct {
@@ -496,6 +501,9 @@ func (l *noticeLog) Exec(_ context.Context, query string, args ...any) (driver.R
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.fail {
+		return nil, errors.New("the outbox is down")
+	}
 	for _, user := range args[6].([]string) {
 		l.rows = append(l.rows, sentNotice{Kind: args[3].(string), Subject: args[4].(string), User: user,
 			Title: p.Title, Body: p.Body, Path: p.Path, Need: p.Need})
@@ -624,11 +632,23 @@ func TestGapOrLongPauseJumpsToHighWater(t *testing.T) {
 	t.Run("a long pause", func(t *testing.T) {
 		r := newRig(t)
 		r.run()
-		r.advance(2 * time.Hour)
-		r.fail("dep_1", "service:api", t0.Add(2*time.Hour))
+		r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
 		r.run()
-		if st := r.state(); st.EventCursor != 1 {
+		rep := r.only()
+		// While the watcher was off, a deployment fixed it and another
+		// failed.
+		fixed := succeededDeployment("dep_2", "plan_1")
+		r.world.deployments[fixed.ID] = fixed
+		r.world.recent = []*deployments.Deployment{fixed, r.world.deployments["dep_1"]}
+		r.advance(2 * time.Hour)
+		r.events.add(t, "deployment.updated", fixed)
+		r.fail("dep_3", "service:web", t0.Add(2*time.Hour))
+		r.run()
+		if st := r.state(); st.EventCursor != 3 {
 			t.Fatalf("cursor %d, want the high water mark", st.EventCursor)
+		}
+		if got := r.lookup(rep.ID); got.Status != agentreports.StatusResolved || got.Resolution != "deployment_failed no longer holds" {
+			t.Fatalf("the open report wasn't rechecked: %s %q", got.Status, got.Resolution)
 		}
 		if n := len(r.open()); n != 0 {
 			t.Fatalf("what happened while off was replayed: %d reports", n)
@@ -737,14 +757,32 @@ func TestRunOutOfBudgetMidRunPauses(t *testing.T) {
 	r.runs.set("arun_1", agentruns.StatusFailed, "The workspace's AI budget for the month is used up.")
 	r.budget.exhaust(true)
 	r.advance(time.Minute)
-	// A new failure in the same pass pauses first; the failed run then
-	// finds the watcher paused already.
-	r.fail("dep_2", "service:web", t0.Add(62*time.Minute))
+	// No new report: only the failed run can pause the watcher.
 	r.run()
 	rep = r.lookup(rep.ID)
 	if rep.Investigation != agentreports.InvestigationFailed || rep.InvestigationNote != "The workspace's AI budget for the month is used up." {
 		t.Fatalf("investigation %s %q", rep.Investigation, rep.InvestigationNote)
 	}
+	if !r.state().Paused {
+		t.Fatal("the watcher didn't pause")
+	}
+	if got := len(r.notices.sent()); got != len(admins) {
+		t.Fatalf("%d notices, want one pause notice per admin", got)
+	}
+}
+
+func TestPausingTwiceInAPassNotifiesOnce(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	r.runs.set("arun_1", agentruns.StatusFailed, "The workspace's AI budget for the month is used up.")
+	r.budget.exhaust(true)
+	r.advance(time.Minute)
+	// A new failure pauses first; the failed run then finds the watcher
+	// paused already.
+	r.fail("dep_2", "service:web", t0.Add(62*time.Minute))
+	r.run()
 	if !r.state().Paused {
 		t.Fatal("the watcher didn't pause")
 	}
@@ -945,5 +983,249 @@ func TestDeliveryJobsEndBeforeTheirLease(t *testing.T) {
 	b, _ := attemptOwner("worker_1")
 	if a == b || !strings.HasPrefix(a, "worker_1:") {
 		t.Fatalf("attempt owners %q and %q", a, b)
+	}
+}
+
+// flakyReports is the report MemStore with reads and moves that can be
+// made to fail.
+type flakyReports struct {
+	*agentreports.MemStore
+	mu          sync.Mutex
+	failPending bool
+	failRunning int // how many moves to running fail
+}
+
+func (f *flakyReports) set(pending bool, running int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failPending, f.failRunning = pending, running
+}
+
+func (f *flakyReports) Pending(ctx context.Context, orgID string) ([]*agentreports.Report, error) {
+	f.mu.Lock()
+	fail := f.failPending
+	f.mu.Unlock()
+	if fail {
+		return nil, errors.New("the reports store is down")
+	}
+	return f.MemStore.Pending(ctx, orgID)
+}
+
+func (f *flakyReports) SetInvestigation(ctx context.Context, orgID, id string, from []string, inv agentreports.Investigation, at time.Time) (bool, error) {
+	f.mu.Lock()
+	fail := f.failRunning > 0 && inv.Status == agentreports.InvestigationRunning
+	if fail {
+		f.failRunning--
+	}
+	f.mu.Unlock()
+	if fail {
+		return false, errors.New("the reports store is down")
+	}
+	return f.MemStore.SetInvestigation(ctx, orgID, id, from, inv, at)
+}
+
+func TestARepeatStillDeliversWhileItsIssueWaits(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	rep := r.only()
+	r.runs.set("arun_1", agentruns.StatusCompleted, "")
+	r.advance(time.Minute)
+	r.run()
+	waiting(t, r.rstore, rep.ID, r.clock())
+	for range 3 {
+		r.advance(25 * time.Minute)
+		r.run()
+	}
+	if got := r.jobs.deliveries(); len(got) != 1 {
+		t.Fatalf("deliveries %v: the waiting issue went again before its installation accepted", got)
+	}
+	// The failure comes back over an hour after the last notice: a repeat
+	// with a notice to send, while the installation still hasn't accepted.
+	r.fail("dep_2", "service:api", r.clock())
+	r.run()
+	if got := r.jobs.deliveries(); len(got) != 2 || got[1] != org+"/"+rep.ID {
+		t.Fatalf("deliveries %v, want the repeat's notice delivered", got)
+	}
+	if r.lookup(rep.ID).Occurrences != 2 {
+		t.Fatal("the failure wasn't counted as a repeat")
+	}
+}
+
+func TestALaterStepFailingDoesNotDropEvents(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.flaky.set(true, 0)
+	// Two hours of passes whose delivery step fails every time.
+	for range 4 {
+		r.advance(30 * time.Minute)
+		if err := r.w.RunOrg(t.Context(), org); err == nil {
+			t.Fatal("a pass with a failing delivery step succeeded")
+		}
+	}
+	r.fail("dep_1", "service:api", r.clock())
+	r.advance(30 * time.Second)
+	if err := r.w.RunOrg(t.Context(), org); err == nil {
+		t.Fatal("a pass with a failing delivery step succeeded")
+	}
+	if n := len(r.open()); n != 1 {
+		t.Fatalf("%d reports: the pass jumped past an event the watcher could read", n)
+	}
+	if st := r.state(); st.EventCursor != 1 || st.TickedAt == nil || !st.TickedAt.Equal(r.clock()) {
+		t.Fatalf("state %+v, want the tick recorded with the cursor", st)
+	}
+}
+
+func TestAnInvestigationThatNeverEndsFreesItsSlot(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	for i, c := range []string{"service:a", "service:b", "service:c"} {
+		r.fail("dep_"+c, c, t0.Add(time.Duration(5+i)*time.Minute))
+	}
+	r.run()
+	// One of them waits on a person it can never ask, and never ends.
+	r.runs.set("arun_2", agentruns.StatusWaiting, "")
+	for range 2 {
+		r.advance(30 * time.Minute)
+		r.run()
+	}
+	r.advance(time.Minute)
+	r.run()
+	var unfinished int
+	for _, rep := range r.open() {
+		if rep.Investigation == agentreports.InvestigationFailed {
+			if rep.InvestigationNote != "The investigation didn't finish within an hour." {
+				t.Errorf("note %q", rep.InvestigationNote)
+			}
+			unfinished++
+		}
+	}
+	if unfinished != 3 {
+		t.Fatalf("%d investigations failed at the ceiling, want 3", unfinished)
+	}
+	// The slots are free again: a new report is investigated.
+	r.fail("dep_new", "service:d", r.clock())
+	r.run()
+	if n := len(r.runs.starts()); n != 4 {
+		t.Fatalf("%d investigations, want a fourth once the slots freed", n)
+	}
+}
+
+func TestALiveRunWhoseMoveFailedKeepsItsFindings(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.flaky.set(false, moveAttempts)
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	if err := r.w.RunOrg(t.Context(), org); err == nil {
+		t.Fatal("the pass hid that it couldn't record the run")
+	}
+	r.flaky.set(false, 0)
+	rep := r.only()
+	if rep.Investigation != agentreports.InvestigationQueued || rep.RunID != "" || len(r.runs.starts()) != 1 {
+		t.Fatalf("investigation %s, run %q, %d starts", rep.Investigation, rep.RunID, len(r.runs.starts()))
+	}
+	// Within the hour the watcher leaves it alone; the run writes its
+	// findings, its task record naming the report.
+	r.advance(20 * time.Minute)
+	r.run()
+	if got := r.lookup(rep.ID); got.Investigation != agentreports.InvestigationQueued {
+		t.Fatalf("a live run's report went %s within the hour", got.Investigation)
+	}
+	if _, err := r.reports.WriteFindings(t.Context(), org, rep.ID, agentreports.Writer{TaskID: "atask_1", Investigates: rep.ID},
+		agentreports.FindingsInput{Summary: "The api's start script is missing.", Confidence: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		r.advance(25 * time.Minute)
+		r.run()
+	}
+	if got := r.lookup(rep.ID); got.Investigation != agentreports.InvestigationDone {
+		t.Fatalf("investigation %s %q, want done with its findings", got.Investigation, got.InvestigationNote)
+	}
+	if n := len(r.runs.starts()); n != 1 {
+		t.Fatalf("%d starts, want the one run", n)
+	}
+}
+
+func TestWatcherJobsRunOnTheSweepQueue(t *testing.T) {
+	w := &Watcher{}
+	for name, opts := range map[string]job.Options{
+		JobTick: TickJob(w).Opts, JobOrg: OrgJob(w).Opts, JobDeliver: DeliverJob(nil, "worker_1").Opts,
+	} {
+		if opts.Queue != agentruns.SweepQueue {
+			t.Errorf("%s runs on %q, want %q", name, opts.Queue, agentruns.SweepQueue)
+		}
+	}
+	if got := DeliverJob(nil, "w").Opts.MaxRetries; got != 8 {
+		t.Errorf("the delivery job retries %d times, want 8", got)
+	}
+	if DeliverJob(nil, "w").Opts.Timeout >= agentreports.DeliveryLease {
+		t.Error("the delivery job outlives its lease")
+	}
+	if (DispatchEnqueuer{}).queue() != agentruns.SweepQueue {
+		t.Error("the enqueuer's default queue isn't the sweep queue")
+	}
+}
+
+// auditLog records audited actions.
+type auditLog struct {
+	mu      sync.Mutex
+	actions []string
+}
+
+func (a *auditLog) Record(_ context.Context, e projects.AuditEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.actions = append(a.actions, e.Action)
+}
+
+func (a *auditLog) recorded() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.actions)
+}
+
+func TestAPauseIsAuditedOnlyOnceSaved(t *testing.T) {
+	r := newRig(t)
+	audit := &auditLog{}
+	r.w.Audit = audit
+	r.run()
+	r.budget.exhaust(true)
+	r.notices.mu.Lock()
+	r.notices.fail = true
+	r.notices.mu.Unlock()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	if err := r.w.RunOrg(t.Context(), org); err == nil {
+		t.Fatal("the pause saved without its notice")
+	}
+	if r.state().Paused || len(audit.recorded()) != 0 {
+		t.Fatalf("paused %v, audit %v: nothing was saved, so nothing is audited", r.state().Paused, audit.recorded())
+	}
+	r.notices.mu.Lock()
+	r.notices.fail = false
+	r.notices.mu.Unlock()
+	r.advance(time.Minute)
+	r.fail("dep_2", "service:web", t0.Add(62*time.Minute))
+	r.run()
+	if !r.state().Paused || !slices.Equal(audit.recorded(), []string{"agent.watcher.pause"}) {
+		t.Fatalf("paused %v, audit %v", r.state().Paused, audit.recorded())
+	}
+	r.budget.exhaust(false)
+	r.advance(time.Minute)
+	r.run()
+	if got := audit.recorded(); !slices.Equal(got, []string{"agent.watcher.pause", "agent.watcher.resume"}) {
+		t.Fatalf("audit %v", got)
+	}
+}
+
+func TestALiveRunIsRecordedDespiteAFailedMove(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.flaky.set(false, moveAttempts-1)
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	if rep := r.only(); rep.Investigation != agentreports.InvestigationRunning || rep.RunID != "arun_1" {
+		t.Fatalf("investigation %s, run %q, want the run recorded", rep.Investigation, rep.RunID)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -291,6 +292,7 @@ var serviceCases = []serviceCase{
 	{"DocumentsNeverSplitABatch", documentsNeverSplitABatch},
 	{"AReplayedOccurrenceNeverReopens", aReplayedOccurrenceNeverReopens},
 	{"AnOlderClearanceLeavesANewerOccurrenceOpen", anOlderClearanceLeavesANewerOccurrenceOpen},
+	{"PendingSaysWhetherTheNoticeIsBehind", pendingSaysWhetherTheNoticeIsBehind},
 }
 
 func TestFingerprintIsStable(t *testing.T) {
@@ -303,6 +305,9 @@ func TestFingerprintIsStable(t *testing.T) {
 }
 
 func TestFirstSignalOpensAReport(t *testing.T) { firstSignalOpensAReport(t, newMemHarness(t)) }
+func TestPendingSaysWhetherTheNoticeIsBehind(t *testing.T) {
+	pendingSaysWhetherTheNoticeIsBehind(t, newMemHarness(t))
+}
 func TestAnOlderClearanceLeavesANewerOccurrenceOpen(t *testing.T) {
 	anOlderClearanceLeavesANewerOccurrenceOpen(t, newMemHarness(t))
 }
@@ -1202,5 +1207,38 @@ func anOlderClearanceLeavesANewerOccurrenceOpen(t *testing.T, h *harness) {
 	same := Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "dep_3 succeeded", At: sig.At}
 	if n := len(h.clear(t, same)); n != 1 {
 		t.Fatalf("a clearance at the occurrence resolved %d reports, want 1", n)
+	}
+}
+
+// Pending says which reports still have a notice to send, so the watcher
+// can tell a report waiting only on its issue from one that came back.
+func pendingSaysWhetherTheNoticeIsBehind(t *testing.T, h *harness) {
+	ctx := context.Background()
+	r := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_1#0")).Report
+	behind := func() bool {
+		t.Helper()
+		list, err := h.svc.Pending(ctx, h.org)
+		if err != nil || len(list) != 1 || list[0].ID != r.ID {
+			t.Fatalf("pending %v, %v", list, err)
+		}
+		return list[0].NoticeBehind
+	}
+	if !behind() {
+		t.Fatal("a new report's notice isn't behind")
+	}
+	d, err := h.store.ClaimDelivery(ctx, h.org, r.ID, "job", DeliveryLease)
+	if err != nil || d == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err = h.store.SaveNotice(ctx, h.org, r.ID, "job", d.Report.Revision, d.PendingNotice,
+		func(context.Context, notifications.Execer, int) error { return nil }, base); err != nil {
+		t.Fatal(err)
+	}
+	// The issue is still behind; the notice no longer is.
+	if behind() {
+		t.Fatal("the notice is behind after it was sent")
+	}
+	if err = h.store.ReleaseDelivery(ctx, h.org, r.ID, "job", true); err != nil {
+		t.Fatal(err)
 	}
 }

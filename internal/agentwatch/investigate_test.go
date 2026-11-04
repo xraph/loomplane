@@ -44,7 +44,7 @@ func TestInvestigationSpecOnlyReads(t *testing.T) {
 		slices.Contains(spec.Tools, "knowledge_search") {
 		t.Errorf("tools %v", spec.Tools)
 	}
-	if strings.Contains(spec.Prompt, "—") {
+	if strings.Contains(spec.Prompt, "\u2014") {
 		t.Error("the prompt has an em dash")
 	}
 }

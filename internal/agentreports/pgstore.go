@@ -43,6 +43,7 @@ func scanRecord(row driver.Row) (*record, error) {
 		&r.LastNoticeAt, &comments, &r.NotifiedRevision, &r.IssueRevision, &r.NoticeSeq, &r.IssueCommentAt); err != nil {
 		return nil, err
 	}
+	r.NoticeBehind = r.Revision > r.NotifiedRevision
 	r.Facts, r.OccurrenceKeys, r.IssueComments = []Fact{}, []string{}, []string{}
 	for _, part := range []struct {
 		raw []byte

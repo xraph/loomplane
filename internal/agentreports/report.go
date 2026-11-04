@@ -128,4 +128,8 @@ type Report struct {
 	RunID                  string     `json:"-"` // the investigation's run
 	InvestigationStartedAt *time.Time `json:"-"` // when it was queued or started running
 	OpenedByTask           string     `json:"-"` // the chat task that opened a manual report
+	// NoticeBehind is whether delivery hasn't run the notice step for the
+	// report's revision yet, so a repeat or a reopen still has a notice to
+	// send, whatever its issue waits on.
+	NoticeBehind bool `json:"-"`
 }

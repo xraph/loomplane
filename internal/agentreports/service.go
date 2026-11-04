@@ -167,7 +167,7 @@ type Store interface {
 
 	// Pending returns the reports whose notice or issue is behind their
 	// revision, and the open ones waiting for an installation to accept
-	// Issues, oldest first.
+	// Issues, oldest first. Each says whether its notice is behind.
 	Pending(ctx context.Context, orgID string) ([]*Report, error)
 	// QueueDelivery marks a report's delivery queued at now, when it
 	// isn't, or was queued over DeliveryRequeue before now, and reports

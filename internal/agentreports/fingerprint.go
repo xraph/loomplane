@@ -187,7 +187,11 @@ func (r *record) investigate(inv Investigation, at time.Time) {
 }
 
 // report is a copy of the Report a caller may keep.
-func (r *record) report() *Report { return &r.clone().Report }
+func (r *record) report() *Report {
+	c := r.clone()
+	c.NoticeBehind = c.Revision > c.NotifiedRevision
+	return &c.Report
+}
 
 func (r *record) clone() *record {
 	c := *r
