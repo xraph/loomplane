@@ -52,6 +52,7 @@ import { useLiveState } from "@/lib/realtime-state"
 import { Link } from "@/lib/router"
 import { useNow, usePeople } from "@/lib/use-runs"
 
+import { NodeAdoptions } from "./node-adoptions"
 import {
   accountName,
   movingSync,
@@ -302,6 +303,13 @@ function ChangeList({
           />
         )}
       </CloudSectionHead>
+      {org && (
+        <NodeAdoptions
+          cloud={scope.cloud}
+          connections={connections}
+          onChanged={reload}
+        />
+      )}
       {failed ? (
         <QueryError
           error={syncs.error ?? operations?.error ?? clusters?.error}

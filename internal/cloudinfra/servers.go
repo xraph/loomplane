@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -189,9 +190,24 @@ type Deps struct {
 	Adapters                *Adapters
 	Workflow                Workflow
 	Runtime                 Runtime
-	Audit                   projects.Auditor
-	EnrollmentURL           string
-	AllowLocalEnrollment    bool
+	// NodeStreams reach joined nodes, for routes on a node's Docker. Nil
+	// reaches only SSH servers.
+	NodeStreams server.NodeStreams
+	// Nodes connects what runs on a joined node, and NodeConnections finds
+	// what it already connected, for adopting a node into its Cloud. Nil
+	// leaves joined nodes waiting.
+	Nodes           *nodes.Adopter
+	NodeConnections NodeConnectionSource
+	// NodeIngress and NodeAddresses record what a node's address check
+	// found. Nil leaves an adopted node's address unchecked.
+	NodeIngress   NodeIngress
+	NodeAddresses NodeAddressWriter
+	// NodeRecords reads a node as stored, for following a changed
+	// address. Nil follows the node the hook passed.
+	NodeRecords          NodeReader
+	Audit                projects.Auditor
+	EnrollmentURL        string
+	AllowLocalEnrollment bool
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
@@ -219,15 +235,33 @@ type Service struct {
 	ingressNeedsUpgrade func(ctx context.Context, route Route) (bool, error)
 	// writeDNSToken puts a challenge token on a server. Tests replace it.
 	writeDNSToken func(ctx context.Context, c *server.Client, org, serverID, zoneID string, token []byte) error
+	// serveNodeNonce serves an address check's nonce through a server's
+	// proxy while check runs, and fetchNodeNonce fetches it from outside.
+	// serverReadyPoll is how often an adoption looks for its server to be
+	// ready. Tests replace them.
+	serveNodeNonce  func(ctx context.Context, t nodeNonceTarget, nonce string, check func(context.Context) error) error
+	fetchNodeNonce  func(ctx context.Context, url string) ([]byte, error)
+	serverReadyPoll time.Duration
+	// routeAddressProbe reaches an address operation's server and checks
+	// the route there. Tests replace it. nodeFollows is this process's
+	// record of address checks and reconcile passes.
+	routeAddressProbe func(ctx context.Context, op *RouteOperation, state *IngressState) (func(context.Context, Route) RouteVerification, func(), error)
+	nodeFollows       *nodeFollowState
+	// background runs work that outlasts its caller, such as settling a
+	// node adopted by hand once its server is ready. Tests run it inline.
+	background func(func())
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
-		d.Runtime = SSHRuntime{}
+		d.Runtime = HostRuntime{}
 	}
 	s := &Service{Deps: d, now: time.Now, started: time.Now().UTC(), expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
+	s.serveNodeNonce, s.fetchNodeNonce, s.serverReadyPoll = s.serveNodeNonceThroughIngress, fetchNodeNonce, 2*time.Second
+	s.routeAddressProbe, s.nodeFollows = s.probeRouteAddress, &nodeFollowState{checked: map[string][]addressCheck{}}
+	s.background = func(f func()) { go f() }
 	return s
 }
 

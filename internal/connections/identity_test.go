@@ -24,6 +24,14 @@ func (s *identityStore) GetConnection(_ context.Context, org, id string) (*Conne
 	c.Details = maps.Clone(c.Details)
 	return &c, nil
 }
+func (s *identityStore) ListConnections(_ context.Context, org string) ([]*Connection, error) {
+	if org != s.row.OrgID {
+		return nil, nil
+	}
+	c := s.row
+	c.Details = maps.Clone(c.Details)
+	return []*Connection{&c}, nil
+}
 func (s *identityStore) UpdateConnection(_ context.Context, c *Connection) error {
 	s.row = *c
 	s.writes++

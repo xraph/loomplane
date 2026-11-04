@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,10 +27,14 @@ import (
 
 	"github.com/xraph/forge"
 
+	infraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	nodesext "github.com/xraph/loomplane/extensions/nodes"
 	"github.com/xraph/loomplane/internal/buildinfo"
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/nodes"
+	apiclient "github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
@@ -548,3 +554,455 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 		}
 	})
 }
+
+// e2eControlPlane is one run of the control plane the node test stops and
+// starts again on the same address.
+type e2eControlPlane struct {
+	run     *running
+	hub     *nodes.Hub
+	base    string
+	stopped bool
+}
+
+func (c *e2eControlPlane) stop() {
+	if !c.stopped {
+		c.stopped = true
+		c.run.stop()
+	}
+}
+
+// bootE2EControlPlane starts Loomplane on l. Route checks resolve names
+// through resolver, the zone's own nameserver, as they would in public DNS.
+func bootE2EControlPlane(t *testing.T, cfg config.Config, l net.Listener, resolver cloudinfra.DomainResolver) *e2eControlPlane {
+	t.Helper()
+	r := start(t, cfg, func(srv *httptest.Server) {
+		_ = srv.Listener.Close()
+		srv.Listener = l
+	})
+	cp := &e2eControlPlane{run: r, base: "http://127.0.0.1:" + strconv.Itoa(l.Addr().(*net.TCPAddr).Port)} //nolint:forcetypeassert // a tcp listener
+	t.Cleanup(cp.stop)
+	app := r.app.(forge.App) //nolint:forcetypeassert // start returns a forge.App
+	// The service exists once the app has started. Nothing has asked it
+	// to check a route yet, so it reads the resolver only from here on.
+	svc, err := forge.InjectType[*cloudinfra.Service](app.Container())
+	if err != nil {
+		t.Fatalf("the cloud infrastructure service is not in the container: %v", err)
+	}
+	svc.Resolver = resolver
+	hub, err := forge.InjectType[*nodes.Hub](app.Container())
+	if err != nil {
+		t.Fatalf("the nodes hub is not in the container: %v", err)
+	}
+	cp.hub = hub
+	return cp
+}
+
+// e2eStep runs one step of the node test as a subtest and logs how long it
+// took. A failed step ends the test.
+func e2eStep(t *testing.T, name string, step func(t *testing.T)) {
+	t.Helper()
+	begin := time.Now()
+	if !t.Run(name, step) {
+		t.FailNow()
+	}
+	t.Logf("step %q passed in %s", name, time.Since(begin).Round(time.Second))
+}
+
+// waitE2E polls cond every two seconds until it holds or limit passes, and
+// reports why it last didn't.
+func waitE2E(t *testing.T, limit time.Duration, what string, cond func() (bool, string)) time.Duration {
+	t.Helper()
+	begin := time.Now()
+	last := ""
+	for time.Since(begin) < limit {
+		ok, why := cond()
+		if ok {
+			return time.Since(begin)
+		}
+		if why != last {
+			t.Logf("waiting for %s: %s", what, why)
+			last = why
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("%s did not happen within %s; last: %s", what, limit, last)
+	return 0
+}
+
+// waitE2EDeployment waits for a plan's deployment to settle.
+func waitE2EDeployment(t *testing.T, c *client, plan planBody) deploymentBody {
+	t.Helper()
+	var d deploymentBody
+	waitE2E(t, 20*time.Minute, "the deployment", func() (bool, string) {
+		d = deploymentBody{}
+		if c.do(http.MethodGet, "/api/v1/plans/"+plan.ID+"/deployment", nil, &d) != http.StatusOK {
+			return false, "no deployment yet"
+		}
+		return d.Status != "running" && d.Status != "", d.Status
+	})
+	return d
+}
+
+// e2ePlan plans a manifest for production, approves it and waits for the
+// deployment, which must succeed.
+func e2ePlan(t *testing.T, c *client, project, manifest string) deploymentBody {
+	t.Helper()
+	base := "/api/v1/projects/" + project
+	mustE2E(t, c, http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest}, nil)
+	var plan planBody
+	mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)
+	waitPlanned(t, c, &plan)
+	if plan.Status != "ready" || !plan.Executable {
+		t.Fatalf("plan %+v", plan)
+	}
+	mustE2E(t, c, http.StatusOK, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
+	d := waitE2EDeployment(t, c, plan)
+	if d.Status != "succeeded" {
+		t.Fatalf("deployment %+v", d)
+	}
+	return d
+}
+
+// A node joins a Cloud from Docker in Docker, as a user would run it, and
+// is adopted. A service builds from source on it, with no registry, and a
+// domain in a managed zone serves it over HTTPS with a certificate from an
+// ACME CA. When the node's public address changes, the record follows, and
+// HTTPS keeps answering with the control plane stopped. Started again, the
+// control plane gets the node back.
+//
+// It runs on Linux only, where the test reaches containers by address as a
+// control plane reaches a node, and only when LOOMPLANE_TEST_NODE_E2E=1.
+func TestNodeDeploysAndServes(t *testing.T) {
+	if os.Getenv("LOOMPLANE_TEST_NODE_E2E") != "1" {
+		t.Skip("set LOOMPLANE_TEST_NODE_E2E=1 to run the node end to end test (Docker in Docker, Pebble, a real build)")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skipf("the node end to end test needs Linux, where this machine reaches containers by their addresses; on %s, run it in a Linux container on the same Docker with %s set to that container's name", runtime.GOOS, e2eSelfEnv)
+	}
+	if os.Getenv("LOOMPLANE_TEST_DATABASE_URL") == "" {
+		t.Skip("set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
+	}
+	arch := dockerArch(t)
+	loomctl := buildLoomctl(t, arch)
+	f := newE2EFixture(t)
+	f.startCloudflare(arch)
+	f.startPebble()
+	// Loomplane checks a route's certificate against the system roots, and
+	// a visitor would too: both trust the CA's issuing root here.
+	issuedRoot := f.issuedRoot()
+	trustForThisProcess(t, issuedRoot)
+	issued := x509.NewCertPool()
+	issued.AppendCertsFromPEM(issuedRoot)
+	t.Logf("networks: control %s, public A %s, public B %s; Pebble at %s, the zone's nameserver at %s, the control plane at %s", f.ctl.Subnet, f.pubA.Subnet, f.pubB.Subnet, f.pebbleIP, f.cfIP, f.controlHost)
+
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port //nolint:forcetypeassert // a tcp listener
+	publicURL := "http://" + net.JoinHostPort(f.controlHost, strconv.Itoa(port))
+	cfg := nodesConfig(t, publicURL)
+	cfg.GitHub.APIURL = fakeGitHubRepos(t, map[string][]byte{"acme/hello": helloSource(t)}).URL
+	cfg.Analysis.WorkDir = t.TempDir()
+	cfg.Storage.URL = "file://" + t.TempDir()
+	cfg.Clouds.CloudflareEndpoint = "http://" + net.JoinHostPort(f.cfIP, "8081")
+	cfg.Clouds.ACMEDirectory = "https://" + net.JoinHostPort(f.pebbleIP, "14000") + "/dir"
+	cfg.Clouds.ACMERootsFile = f.caRootFile
+	cp := bootE2EControlPlane(t, cfg, l, f.zoneResolver())
+	c := &client{t: t, base: cp.base, key: cfg.Identity.PublishableKey}
+	api := adminKey(t, c, cp.base)
+
+	var cloud struct {
+		ID       string `json:"id"`
+		Revision int64  `json:"revision"`
+	}
+	mustE2E(t, c, http.StatusCreated, http.MethodPost, "/api/v1/clouds", map[string]string{"name": "e2e"}, &cloud)
+	cloudBase := "/api/v1/clouds/" + cloud.ID
+	addressA, addressB := f.pubA.host(10), f.pubB.host(10)
+	const nodeName = "e2e-node"
+	var node nodes.Node
+
+	e2eStep(t, "1 a node joins the e2e Cloud", func(t *testing.T) {
+		f.startNode()
+		f.docker("cp", loomctl, f.node+":/loomctl")
+		// What a user runs on the machine: node join with Loomplane's
+		// address and their admin key in the environment. It mints the join
+		// token, scoped to the Cloud, and spends it.
+		f.docker("exec", "-d", "-e", "LOOMPLANE_URL="+publicURL, "-e", "LOOMPLANE_API_KEY="+api.token, f.node, "sh", "-c",
+			"exec /loomctl node join --cloud "+cloud.ID+" --builder dedicated --allow docker,dial,probe --name "+nodeName+" --state-dir /var/lib/e2e-node --foreground >/var/log/loomplane-node.log 2>&1")
+		took := waitE2E(t, 2*time.Minute, "the node coming online", func() (bool, string) {
+			var list struct {
+				Nodes []nodes.Node `json:"nodes"`
+			}
+			mustE2E(t, c, http.StatusOK, http.MethodGet, "/api/v1/nodes", nil, &list)
+			for _, n := range list.Nodes {
+				if n.Name == nodeName {
+					node = n
+					return n.Status == nodes.StatusOnline, string(n.Status)
+				}
+			}
+			return false, "not joined"
+		})
+		t.Logf("node %s joined and came online after %s, allowing %v", node.ID, took.Round(time.Second), node.Endpoints)
+	})
+
+	var host cloudinfra.Server
+	e2eStep(t, "2 the node is adopted as a server", func(t *testing.T) {
+		took := waitE2E(t, 5*time.Minute, "the adoption", func() (bool, string) {
+			var adoptions infraext.NodeAdoptionList
+			mustE2E(t, c, http.StatusOK, http.MethodGet, cloudBase+"/node-adoptions", nil, &adoptions)
+			if len(adoptions.Adoptions) != 1 {
+				return false, fmt.Sprintf("%d adoptions", len(adoptions.Adoptions))
+			}
+			a := adoptions.Adoptions[0]
+			if a.Status != cloudinfra.NodeAdoptionApplied {
+				return false, a.Status + ": " + a.Reason
+			}
+			var servers struct {
+				Servers []cloudinfra.Server `json:"servers"`
+			}
+			mustE2E(t, c, http.StatusOK, http.MethodGet, cloudBase+"/servers", nil, &servers)
+			for _, s := range servers.Servers {
+				if s.ID == a.ServerID {
+					host = s
+					return s.Status == "ready", "server " + s.Status
+				}
+			}
+			return false, "no server yet"
+		})
+		if host.Ownership != "adopted" || host.Name != nodeName || host.Health.DockerID == "" {
+			t.Fatalf("adopted server %+v", host)
+		}
+		t.Logf("adopted as server %s (%s, Docker %s) after %s", host.ID, host.Ownership, host.Health.DockerID, took.Round(time.Second))
+		took = waitE2E(t, 4*time.Minute, "the node's public address confirmed", func() (bool, string) {
+			node = getNode(t, c, node.ID)
+			return node.PublicAddress == addressA && node.PublicAddressConfirmedAt != nil && node.IngressMode == "direct",
+				fmt.Sprintf("address %q confirmed %v, ingress %q (%s), candidates %v", node.PublicAddress, node.PublicAddressConfirmedAt, node.IngressMode, node.IngressDetail, node.Inventory.PublicAddresses)
+		})
+		t.Logf("public address %s confirmed from outside after another %s; ingress mode %s", node.PublicAddress, took.Round(time.Second), node.IngressMode)
+	})
+
+	var project, environment string
+	var image string
+	e2eStep(t, "3 hello builds from source on the node with no registry", func(t *testing.T) {
+		var p struct {
+			ID string `json:"id"`
+		}
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, "/api/v1/projects", map[string]string{"name": "hello", "repository_url": "https://github.com/acme/hello"}, &p)
+		project = p.ID
+		base := "/api/v1/projects/" + project
+		analyze(t, cfg, c, project)
+		var envs struct {
+			Environments []struct{ ID, Name string } `json:"environments"`
+		}
+		mustE2E(t, c, http.StatusOK, http.MethodGet, base+"/environments", nil, &envs)
+		for _, e := range envs.Environments {
+			if e.Name == "production" {
+				environment = e.ID
+			}
+		}
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "GREETING", "value": "built here", "environment": "production"}, nil)
+		begin := time.Now()
+		d := e2ePlan(t, c, project, helloManifest(host.RuntimeConnectionID))
+		image = d.Steps[0].Image
+		t.Logf("deployment %s built and ran hello in %s: image %s", d.ID, time.Since(begin).Round(time.Second), image)
+		var conns struct {
+			Connections []struct {
+				Cloud string `json:"cloud"`
+			} `json:"connections"`
+		}
+		mustE2E(t, c, http.StatusOK, http.MethodGet, "/api/v1/connections", nil, &conns)
+		for _, conn := range conns.Connections {
+			if conn.Cloud == "registry" {
+				t.Fatal("the organization has a registry connection")
+			}
+		}
+		// The image is on the node's own Docker, and so is the container
+		// running it.
+		f.docker("exec", f.node, "docker", "image", "inspect", image)
+		running := f.docker("exec", f.node, "docker", "ps", "-q", "--filter", "label=loomplane.project="+project)
+		if running == "" {
+			t.Fatal("no hello container on the node")
+		}
+		answer := f.docker("exec", f.node, "docker", "exec", strings.Fields(running)[0], "wget", "-qO-", "http://127.0.0.1:8080/")
+		if answer != "hello from a node: built here" {
+			t.Fatalf("hello answered %q", answer)
+		}
+		t.Logf("hello answers on the node: %q", answer)
+	})
+
+	hostname := "web." + e2eZone
+	var route cloudinfra.Route
+	e2eStep(t, "4 a route in a managed zone serves HTTPS with a Pebble certificate", func(t *testing.T) {
+		base := "/api/v1/projects/" + project
+		var dns struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, "/api/v1/connections", map[string]any{"cloud": "cloudflare", "name": "e2e DNS", "credential": e2eCloudflareToken, "settings": map[string]string{"account_id": e2eAccount}}, &dns)
+		if dns.Status != "ready" {
+			t.Fatalf("Cloudflare connection is %s", dns.Status)
+		}
+		var zone cloudinfra.Zone
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, "/api/v1/dns-zones", cloudinfra.ZoneInput{Name: e2eZone, Mode: "managed", ConnectionID: dns.ID, ProjectIDs: []string{project}}, &zone)
+		if zone.VerifiedAt.IsZero() {
+			mustE2E(t, c, http.StatusOK, http.MethodPost, "/api/v1/dns-zones/"+zone.ID+"/verify", nil, &zone)
+		}
+		// A route reaches a service placed through a Cloud: a pool on the
+		// node's server, a target on the pool, and the environment on the
+		// Cloud. A server joins a pool only once its direct workloads are
+		// gone, so the direct hello goes first. The routed service, web,
+		// runs an image pinned by digest, as a Cloud placement requires;
+		// hello's local build has no digest without a registry.
+		e2ePlan(t, c, project, "version: 1\nservices: {}\n")
+		var pool cloudinfra.Pool
+		mustE2E(t, c, http.StatusOK, http.MethodPost, cloudBase+"/pools", cloudinfra.PoolInput{Name: "nodes", Members: []cloudinfra.PoolMember{{ServerID: host.ID, CPUMillis: 500, MemoryBytes: 256 << 20}}}, &pool)
+		mustE2E(t, c, http.StatusOK, http.MethodPut, cloudBase+"/projects/"+project, map[string]any{"target_ids": []string{}}, nil)
+		var target cloudprofiles.Target
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: "node", Provider: "server", Runtime: "server", PoolID: pool.ID}, &target)
+		var preview cloudprofiles.Preview
+		mustE2E(t, c, http.StatusOK, http.MethodPost, base+"/environments/"+environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
+		if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-e2e").ID); result.Status != cloudprofiles.SyncSucceeded {
+			t.Fatalf("the environment's Cloud assignment: %+v", result)
+		}
+		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "WHOAMI_NAME", "value": webName, "environment": "production"}, nil)
+		e2ePlan(t, c, project, webManifest)
+		var op cloudinfra.RouteOperation
+		mustE2E(t, c, http.StatusOK, http.MethodPost, base+"/domain-routes/preview", cloudinfra.RouteInput{ZoneID: zone.ID, CloudID: cloud.ID, EnvironmentID: environment, Service: "web", Hostname: hostname, Port: 80}, &op)
+		if op.DesiredRecord.Type != "A" || op.DesiredRecord.Value != addressA {
+			t.Fatalf("the route would write %+v, want an A record for %s", op.DesiredRecord, addressA)
+		}
+		mustE2E(t, c, http.StatusAccepted, http.MethodPost, base+"/route-operations/"+op.ID+"/apply", cloudinfra.ApplyInput{Review: op.Review}, &op)
+		took := waitE2E(t, 6*time.Minute, "the route", func() (bool, string) {
+			mustE2E(t, c, http.StatusOK, http.MethodGet, base+"/route-operations/"+op.ID, nil, &op)
+			if op.Status == "waiting" {
+				c.do(http.MethodPost, base+"/route-operations/"+op.ID+"/retry", nil, nil)
+			}
+			if op.Status == "failed" {
+				t.Fatalf("the route operation failed: %s", op.Message)
+			}
+			return op.Status == "succeeded", op.Status + ": " + op.Message
+		})
+		route = op.Route
+		t.Logf("route %s ready after %s: %s -> %s", route.ID, took.Round(time.Second), hostname, route.Binding.Address)
+		addrs, lookupErr := f.zoneResolver().LookupHost(t.Context(), hostname)
+		if lookupErr != nil || len(addrs) != 1 || addrs[0] != addressA {
+			t.Fatalf("the zone answers %v %v for %s, want %s", addrs, lookupErr, hostname, addressA)
+		}
+		var body string
+		var leaf *x509.Certificate
+		waitE2E(t, 2*time.Minute, "HTTPS at "+addressA, func() (bool, string) {
+			var getErr error
+			body, leaf, getErr = nodeHTTPS(t, addressA, hostname, issued)
+			if getErr != nil {
+				return false, getErr.Error()
+			}
+			return true, ""
+		})
+		if !strings.Contains(body, "Name: "+webName) {
+			t.Fatalf("HTTPS answered %q", body)
+		}
+		t.Logf("https://%s at %s answers as %q with a certificate for %v from %q, which chains to Pebble's root", hostname, addressA, webName, leaf.DNSNames, leaf.Issuer.CommonName)
+	})
+
+	e2eStep(t, "5 the record follows the node's new address", func(t *testing.T) {
+		// The machine gets a second public address, then loses the first.
+		f.docker("network", "connect", "--ip", addressB, f.pubB.Name, f.node)
+		waitE2E(t, 3*time.Minute, "the node reporting both addresses", func() (bool, string) {
+			n := getNode(t, c, node.ID)
+			return slices.Contains(n.Inventory.PublicAddresses, addressA) && slices.Contains(n.Inventory.PublicAddresses, addressB), fmt.Sprint(n.Inventory.PublicAddresses)
+		})
+		begin := time.Now()
+		f.docker("network", "disconnect", f.pubA.Name, f.node)
+		waitE2E(t, 6*time.Minute, "the route following the node", func() (bool, string) {
+			n := getNode(t, c, node.ID)
+			var routes infraext.DomainRouteList
+			mustE2E(t, c, http.StatusOK, http.MethodGet, "/api/v1/projects/"+project+"/domain-routes", nil, &routes)
+			current := cloudinfra.Route{}
+			for _, r := range routes.Routes {
+				if r.ID == route.ID {
+					current = *r
+				}
+			}
+			var status cloudinfra.RouteStatus
+			mustE2E(t, c, http.StatusOK, http.MethodGet, "/api/v1/projects/"+project+"/domain-routes/"+route.ID+"/status", nil, &status)
+			addrs, _ := f.zoneResolver().LookupHost(t.Context(), hostname)
+			done := n.PublicAddress == addressB && current.Binding.Address == addressB && slices.Equal(addrs, []string{addressB})
+			return done, fmt.Sprintf("node address %s (%s), route %s at %s (%s), zone answers %v", n.PublicAddress, n.IngressDetail, current.Status, current.Binding.Address, status.Message, addrs)
+		})
+		t.Logf("the node's address, the route and the zone's A record moved to %s after %s", addressB, time.Since(begin).Round(time.Second))
+		waitE2E(t, time.Minute, "HTTPS at "+addressB, func() (bool, string) {
+			body, _, getErr := nodeHTTPS(t, addressB, hostname, issued)
+			if getErr != nil {
+				return false, getErr.Error()
+			}
+			return strings.Contains(body, "Name: "+webName), body
+		})
+		if _, _, err := nodeHTTPS(t, addressA, hostname, issued); err == nil {
+			t.Fatalf("the old address %s still answers", addressA)
+		}
+	})
+
+	e2eStep(t, "6 HTTPS answers with the control plane stopped", func(t *testing.T) {
+		cp.stop()
+		for range 3 {
+			body, _, err := nodeHTTPS(t, addressB, hostname, issued)
+			if err != nil || !strings.Contains(body, "Name: "+webName) {
+				t.Fatalf("with the control plane stopped, HTTPS answered %q %v", body, err)
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Logf("https://%s kept answering at %s with no control plane", hostname, addressB)
+	})
+
+	e2eStep(t, "7 the node reconnects to the restarted control plane", func(t *testing.T) {
+		again, listenErr := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "0.0.0.0:"+strconv.Itoa(port))
+		if listenErr != nil {
+			t.Fatal(listenErr)
+		}
+		begin := time.Now()
+		restarted := bootE2EControlPlane(t, cfg, again, f.zoneResolver())
+		c.base = restarted.base
+		took := waitE2E(t, 3*time.Minute, "the node reconnecting", func() (bool, string) {
+			n := getNode(t, c, node.ID)
+			return restarted.hub.Online(node.ID) && n.Status == nodes.StatusOnline, string(n.Status)
+		})
+		t.Logf("the node reconnected %s after the control plane started again (%s since the restart began)", took.Round(time.Second), time.Since(begin).Round(time.Second))
+		if body, _, err := nodeHTTPS(t, addressB, hostname, issued); err != nil || !strings.Contains(body, "Name: "+webName) {
+			t.Fatalf("after the restart, HTTPS answered %q %v", body, err)
+		}
+	})
+}
+
+// helloManifest places hello on the node's server connection, built from
+// source there.
+func helloManifest(connection string) string {
+	return fmt.Sprintf(`version: 1
+services:
+  hello:
+    source: go:cmd/hello
+    provider: server
+    target: %s
+    public: false
+    port: 8080
+    health_path: /
+    build: {context: .}
+`, connection)
+}
+
+// webName is the name web answers with.
+const webName = "served-from-a-node"
+
+// webManifest places web on the node through the Cloud's target. It runs
+// the whoami image the shared Cloud tests use, pinned by digest.
+const webManifest = `version: 1
+services:
+  web:
+    source: go:cmd/hello
+    cloud_target: node
+    public: false
+    port: 80
+    health_path: /
+    size: {cpu: 0.2, memory: 128}
+    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}
+`

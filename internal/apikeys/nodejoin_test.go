@@ -318,10 +318,20 @@ func TestInstanceEdgeNeedsPlatformAdmin(t *testing.T) {
 func TestJoinTokenBadScope(t *testing.T) {
 	svc := joinService(t, nil)
 	p := security.Principal{UserID: "admin", OrgID: "org"}
-	for _, sc := range []NodeJoinScope{{EdgeScope: "galaxy", Edge: true}, {EdgeScope: EdgeScopeOrg}, {Labels: map[string]string{"": "x"}}} {
+	for _, sc := range []NodeJoinScope{{EdgeScope: "galaxy", Edge: true}, {EdgeScope: EdgeScopeOrg}, {Labels: map[string]string{"": "x"}}, {Labels: map[string]string{"build_workers": "shared"}}, {Labels: map[string]string{"build_workers": ""}}} {
 		if _, err := svc.CreateNodeJoinToken(t.Context(), p, sc, time.Minute); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("scope %+v: %v", sc, err)
 		}
+	}
+}
+
+// node join --builder dedicated mints build_workers=dedicated into the
+// scope, which is the one value a scope may carry for it.
+func TestJoinTokenDedicatedBuilder(t *testing.T) {
+	svc := joinService(t, nil)
+	p := security.Principal{UserID: "admin", OrgID: "org"}
+	if _, err := svc.CreateNodeJoinToken(t.Context(), p, NodeJoinScope{Labels: map[string]string{"build_workers": "dedicated"}}, time.Minute); err != nil {
+		t.Fatal(err)
 	}
 }
 

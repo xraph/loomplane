@@ -102,6 +102,9 @@ type NodeJoined struct {
 	IdentityGeneration int64                `json:"identity_generation"`
 	Endpoints          []nodeproto.Endpoint `json:"endpoints"`
 	CloudID            string               `json:"cloud_id,omitempty"`
+	// Name is the node's name, which node leave asks for before it
+	// deletes the node's volumes.
+	Name string `json:"name,omitempty"`
 }
 
 // routes mounts the nodes API. Everything but join sits behind the guard.
@@ -157,6 +160,9 @@ func (e *Extension) routes(r forge.Router, guard ...forge.Middleware) error {
 		forge.WithSummary("Stop trusting a node, at once. Its key can't connect again."),
 		forge.WithResponseSchema(http.StatusOK, "Node", nodes.Node{}),
 	); err != nil {
+		return err
+	}
+	if err := e.drainRoutes(g); err != nil {
 		return err
 	}
 	// The token in the body is the machine's only credential, so no guard.
@@ -337,7 +343,7 @@ func (e *Extension) join(c forge.Context) error {
 	}
 	return c.JSON(http.StatusCreated, NodeJoined{
 		NodeID: res.NodeID, OrgID: res.OrgID, IdentityGeneration: res.IdentityGeneration,
-		Endpoints: res.Endpoints, CloudID: res.CloudID,
+		Endpoints: res.Endpoints, CloudID: res.CloudID, Name: res.Name,
 	})
 }
 

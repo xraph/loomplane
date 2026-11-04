@@ -397,8 +397,14 @@ type CloudsConfig struct {
 	// sandbox, which never registers or charges for a real domain.
 	CloudflareRegistrarSandbox bool
 	// ACMEDirectory replaces the ACME directory certificates are ordered
-	// from. Empty means Let's Encrypt's production directory.
+	// from, for server and Kubernetes routes. Empty means Let's Encrypt's
+	// production directory.
 	ACMEDirectory string
+	// ACMERootsFile is a PEM file of the CA certificates ACMEDirectory's
+	// own TLS certificate chains to, for a directory the proxies' system
+	// roots don't trust, such as a test CA. Server proxies get a copy.
+	// Kubernetes routes don't use it. Empty uses the system roots.
+	ACMERootsFile string
 	// KubernetesInCluster lets organizations connect the Kubernetes cluster
 	// Loomplane runs in, as Loomplane's own service account. Every
 	// organization on the instance shares that account, so it's off unless
@@ -589,6 +595,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	r.str(&c.Clouds.ACMERootsFile, "clouds.acme_roots_file")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
 	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")

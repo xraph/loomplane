@@ -47,6 +47,11 @@ var (
 	// ErrEndpointRefused is returned when the node refuses a stream. The
 	// error's text ends with the node's reason.
 	ErrEndpointRefused = errors.New("the node refused the stream")
+	// ErrEndpointNotAllowed is returned, along with ErrEndpointRefused, when
+	// the node refused a stream because it doesn't allow the endpoint, which
+	// only its owner can change on the machine. Other refusals, such as a
+	// dial target that didn't answer, are ErrEndpointRefused alone.
+	ErrEndpointNotAllowed = errors.New("the node doesn't allow the endpoint")
 	// ErrUnauthorized is returned by Accept for a connection it does not
 	// trust. The wrapped error says why, for logs; don't show it to the node.
 	ErrUnauthorized = errors.New("nodes: the node could not be authenticated")
@@ -88,11 +93,51 @@ func offline(n *Node) error {
 	return ErrNodeOffline{NodeID: n.ID, Name: n.Name, Since: since}
 }
 
-// refusedError carries the node's reason for refusing a stream.
-type refusedError struct{ reason string }
+// refusedError carries the node's reason for refusing a stream, and
+// whether it refused because the endpoint isn't allowed.
+type refusedError struct {
+	reason     string
+	notAllowed bool
+}
 
 func (e *refusedError) Error() string { return ErrEndpointRefused.Error() + ": " + e.reason }
-func (e *refusedError) Unwrap() error { return ErrEndpointRefused }
+
+func (e *refusedError) Unwrap() []error {
+	if e.notAllowed {
+		return []error{ErrEndpointRefused, ErrEndpointNotAllowed}
+	}
+	return []error{ErrEndpointRefused}
+}
+
+// Refusal is the error Open returns when the node refuses a stream for
+// reason, with notAllowed set when it doesn't allow the endpoint. Fakes of
+// the hub refuse with it.
+func Refusal(reason string, notAllowed bool) error {
+	return &refusedError{reason: reason, notAllowed: notAllowed}
+}
+
+// RefusalReason is the node's reason for refusing a stream, when err is
+// the hub's refusal. The hub keeps only printable text, at most 512 bytes.
+func RefusalReason(err error) (string, bool) {
+	var re *refusedError
+	if !errors.As(err, &re) {
+		return "", false
+	}
+	return re.reason, true
+}
+
+// notAllowed marks err, the node's refusal of a stream to endpoint, as one
+// for an endpoint the node doesn't allow when n's stored endpoints, which
+// the node reports, leave it out. A node from before VerdictNotAllowed
+// refuses those with the plain verdict. Public isn't stored: ingress mode
+// grants it.
+func notAllowed(n *Node, endpoint nodeproto.Endpoint, err error) error {
+	var re *refusedError
+	if errors.As(err, &re) && !re.notAllowed && endpoint != nodeproto.EndpointPublic && !slices.Contains(n.Endpoints, endpoint) {
+		re.notAllowed = true
+	}
+	return err
+}
 
 // HubConfig is what a hub needs to know about the instance and its replica.
 type HubConfig struct {
@@ -349,6 +394,7 @@ func (h *Hub) Accept(ctx context.Context, conn *websocket.Conn, n *Node) error {
 	}
 	s := newSession(h, n, epoch, mux, ctrl)
 	s.conn = conn
+	s.remote = conn.RemoteAddr().String()
 	// Hello goes first, before the writer starts, so nothing can pass it.
 	if err := s.writeNow(nodeproto.Hello{Version: nodeproto.Version, Epoch: epoch}); err != nil {
 		s.close()
@@ -500,7 +546,7 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 		if errors.Is(err, yamux.ErrSessionShutdown) {
 			return nil, offline(n)
 		}
-		return st, err
+		return st, notAllowed(n, hdr.Endpoint, err)
 	case row.Replica != h.self && hop && hopTarget(row.Replica):
 		if s != nil {
 			s.close() // a newer session lives on another replica
@@ -509,7 +555,8 @@ func (h *Hub) open(ctx context.Context, orgID, nodeID string, hdr nodeproto.Stre
 			h.log.Warn("nodes: not hopping to a replica over plain http", "node", n.ID, "replica", row.Replica)
 			return nil, ErrHopInsecure
 		}
-		return h.hopOpen(ctx, row.Replica, n, hdr)
+		st, err := h.hopOpen(ctx, row.Replica, n, hdr)
+		return st, notAllowed(n, hdr.Endpoint, err)
 	}
 	if s != nil && row != nil && row.Epoch > s.epoch {
 		s.close()

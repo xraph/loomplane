@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,8 @@ type session struct {
 	ctrl   net.Conn
 	// conn is the node's WebSocket, for the close frame that follows Revoked.
 	conn *websocket.Conn
+	// remote is the address the node connected from, as this replica saw it.
+	remote string
 
 	out  chan any
 	done chan struct{}
@@ -167,7 +170,7 @@ func (s *session) readLoop() {
 		case nodeproto.NarrowApplied:
 			s.hub.log.Debug("nodes: node applied a narrow", "node", s.nodeID, "endpoints", m.Endpoints)
 		case nodeproto.IngressApplied:
-			s.hub.log.Debug("nodes: node applied an ingress mode", "node", s.nodeID, "mode", m.Mode)
+			s.hub.ingressApplied(s, m.Mode)
 		case nodeproto.Leave:
 			s.hub.leave(s)
 		}
@@ -178,7 +181,8 @@ func (s *session) readLoop() {
 }
 
 // open opens a data stream, writes the header and waits for the node's
-// verdict: 0 accepts; anything else is followed by a reason line.
+// verdict: VerdictAccepted accepts; anything else is followed by a reason
+// line.
 func (s *session) open(ctx context.Context, hdr nodeproto.StreamHeader) (net.Conn, error) {
 	st, err := s.mux.OpenStream()
 	if err != nil {
@@ -213,8 +217,9 @@ func (s *session) open(ctx context.Context, hdr nodeproto.StreamHeader) (net.Con
 	if _, err := io.ReadFull(st, v[:]); err != nil {
 		return fail(err)
 	}
-	if v[0] != 0 {
-		return fail(&refusedError{reason: readReason(st)})
+	if v[0] != nodeproto.VerdictAccepted {
+		// A code this hub doesn't know is a plain refusal.
+		return fail(&refusedError{reason: readReason(st), notAllowed: v[0] == nodeproto.VerdictNotAllowed})
 	}
 	if !stop() {
 		return fail(ctx.Err())
@@ -356,6 +361,7 @@ func (h *Hub) heartbeat(s *session, hb nodeproto.Heartbeat) {
 // report it sends Narrow with the stored endpoints, so a narrow made while
 // the node was away applies, then fires OnOnline.
 func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
+	inv = withRemoteAddress(inv, s.remote)
 	ctx, cancel := opCtx()
 	defer cancel()
 	old, err := h.store.GetByID(ctx, s.nodeID)
@@ -397,12 +403,34 @@ func (h *Hub) inventory(s *session, inv nodeproto.Inventory) {
 			mode = nodeproto.IngressNone
 		}
 		s.deliver(nodeproto.SetIngress{Mode: mode})
+		// Sent now, so the node gets its grace before a mismatch shows.
+		if err = h.store.MarkIngressSent(ctx, s.nodeID, h.now()); err != nil && !errors.Is(err, ErrNotFound) {
+			h.log.Warn("nodes: recording that a node was sent its ingress mode", "node", s.nodeID, "error", err)
+		}
 	}
 	if !inventoryEqual(old.Inventory, inv) {
 		h.fireInventory(n, old.Inventory, inv)
 	}
 	if first {
 		h.fireOnline(n)
+	}
+}
+
+// ingressApplied records the ingress mode a node says it now runs. A mode
+// this Loomplane doesn't know is logged and dropped.
+func (h *Hub) ingressApplied(s *session, mode string) {
+	switch mode {
+	case nodeproto.IngressNone, nodeproto.IngressDirect, nodeproto.IngressRelay:
+	default:
+		h.log.Debug("nodes: skipping an ingress mode this Loomplane doesn't know", "node", s.nodeID)
+		return
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	// An answer from a superseded session doesn't count: its node may
+	// have been sent a newer mode since.
+	if err := h.store.RecordIngressApplied(ctx, s.nodeID, mode, s.epoch); err != nil && !errors.Is(err, ErrNotFound) {
+		h.log.Warn("nodes: recording the ingress mode a node applied", "node", s.nodeID, "error", err)
 	}
 }
 
@@ -480,6 +508,29 @@ func (h *Hub) leave(s *session) {
 	// The revoke's own notice may have gone to another replica or been
 	// dropped; a second Revoked on this session is harmless.
 	s.deliver(nodeproto.Revoked{})
+}
+
+// withRemoteAddress adds the address the node connected from to its public
+// address candidates, after the ones it reported, when it is a public IP.
+// Many cloud machines have their public IP translated to a private one, so
+// no interface carries it. Behind a proxy the address is the proxy's; it
+// never answers the address check with the node's nonce, so it is never
+// confirmed.
+func withRemoteAddress(inv nodeproto.Inventory, remote string) nodeproto.Inventory {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return inv
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil || !nodeproto.PublicAddress(a) {
+		return inv
+	}
+	ip := a.Unmap().String()
+	if slices.Contains(inv.PublicAddresses, ip) {
+		return inv
+	}
+	inv.PublicAddresses = append(slices.Clone(inv.PublicAddresses), ip)
+	return inv.Bounded()
 }
 
 // inventoryEqual compares inventories by their wire encoding, so a nil slice

@@ -834,6 +834,13 @@ export const ops = {
     invalidates: ['Operation[]'],
     responseCodec: CODECS['Operation'],
   },
+  'cloudNodeAdoptions.list': {
+    method: 'GET',
+    path: '/api/v1/clouds/{cloudId}/node-adoptions',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NodeAdoptionList'],
+  },
   'cloudPlacements.acceptMove': {
     method: 'POST',
     path: '/api/v1/clouds/{cloudId}/placements/accept-move',
@@ -1808,6 +1815,23 @@ export const ops = {
     bodyCodec: CODECS['NodeUpdateBody'],
     responseCodec: CODECS['Node'],
   },
+  'nodes.drain': {
+    method: 'POST',
+    path: '/api/v1/nodes/{id}/drain',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DrainReview'],
+  },
+  'nodes.drainApply': {
+    method: 'POST',
+    path: '/api/v1/nodes/{id}/drain/apply',
+    entity: 'Node',
+    rootType: 'Node',
+    provides: ['Node:{id}'],
+    invalidates: ['Node[]'],
+    bodyCodec: CODECS['ApplyInputBody'],
+    responseCodec: CODECS['Node'],
+  },
   'nodes.revoke': {
     method: 'POST',
     path: '/api/v1/nodes/{id}/revoke',
@@ -1816,6 +1840,13 @@ export const ops = {
     provides: ['Node:{id}'],
     invalidates: ['Node[]'],
     responseCodec: CODECS['Node'],
+  },
+  'nodes.workloads': {
+    method: 'GET',
+    path: '/api/v1/nodes/{id}/workloads',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NodeWorkloadList'],
   },
   'notifications.list': {
     method: 'GET',

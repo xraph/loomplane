@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
-// LegacyIngressImage pins the multi-platform Caddy 2.11.7 Alpine release.
-// It has no DNS provider modules, so it can't answer DNS-01 challenges.
-const LegacyIngressImage = "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
+// LegacyIngressImage is the stock proxy image. It lives in fencerules so the
+// node's fence checks read the same value.
+const LegacyIngressImage = fencerules.LegacyIngressImage
 
 // IngressImageTag is the same Caddy built with the Cloudflare DNS module,
 // from deployments/ingress. IngressImage pins it by its multi-platform
@@ -23,30 +25,19 @@ const LegacyIngressImage = "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478
 // wildcard routes.
 const (
 	IngressImageTag = "ghcr.io/xraph/loomplane-ingress:2.11.7-1"
-	IngressImage    = ""
+	IngressImage    = fencerules.IngressImage
 )
-
-// dnsIngressImage is IngressImage. Tests stand an image in through export_test.go.
-var dnsIngressImage = IngressImage
 
 // IngressImagePinned reports whether the DNS-capable proxy image is
 // published and pinned, so servers can serve wildcard routes.
-func IngressImagePinned() bool { return dnsIngressImage != "" }
+func IngressImagePinned() bool { return fencerules.DNSImage != "" }
 
 // ingressCreateImage is what a new proxy runs.
 func ingressCreateImage() string {
 	if IngressImagePinned() {
-		return dnsIngressImage
+		return fencerules.DNSImage
 	}
 	return LegacyIngressImage
-}
-
-// ingressImages are the images an owned proxy may run.
-func ingressImages() []string {
-	if IngressImagePinned() {
-		return []string{LegacyIngressImage, dnsIngressImage}
-	}
-	return []string{LegacyIngressImage}
 }
 
 // IngressDNSChallenge names the zone whose DNS answers a wildcard route's
@@ -109,6 +100,110 @@ type IngressConfig struct {
 	// DNSResolvers find a challenge zone's nameservers in place of the
 	// system resolver. Restricted to isolated fixture callers too.
 	DNSResolvers []string `json:"-"`
+	// AddressCheck is a nonce the proxy serves on port 80 at
+	// NodeAddressPath, for the moment Loomplane checks a node's public
+	// address from outside. It is never stored with a config.
+	AddressCheck string `json:"-"`
+}
+
+// NodeAddressPath is where a node's proxy answers an address check. The
+// nonce follows it, and the answer is the nonce itself.
+const NodeAddressPath = "/.well-known/loomplane-node/"
+
+// addressCheckNonce is the shape of a nonce: 16 to 32 random bytes in hex.
+var addressCheckNonce = regexp.MustCompile(`^[0-9a-f]{32,64}$`)
+
+// WithoutAddressChecks is config with every route that serves
+// NodeAddressPath taken out, and a server those routes leave empty
+// dropped. changed says whether there was any. Only an address check puts
+// a route on that path, so what is left is the config the check was added
+// to.
+func WithoutAddressChecks(config []byte) (out []byte, changed bool) {
+	var doc map[string]any
+	if json.Unmarshal(config, &doc) != nil {
+		return config, false
+	}
+	servers := object(object(object(doc, "apps"), "http"), "servers")
+	for name, raw := range servers {
+		srv, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		routes, ok := srv["routes"].([]any)
+		if !ok {
+			continue
+		}
+		kept := make([]any, 0, len(routes))
+		for _, r := range routes {
+			if !isAddressCheckRoute(r) {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) == len(routes) {
+			continue
+		}
+		changed = true
+		if len(kept) == 0 {
+			delete(servers, name)
+		} else {
+			srv["routes"] = kept
+		}
+	}
+	if !changed {
+		return config, false
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return config, false
+	}
+	return out, true
+}
+
+// object is the JSON object at key of m, or nil.
+func object(m map[string]any, key string) map[string]any {
+	if v, ok := m[key].(map[string]any); ok {
+		return v
+	}
+	return nil
+}
+
+// isAddressCheckRoute reports a route that matches a path under
+// NodeAddressPath.
+func isAddressCheckRoute(r any) bool {
+	route, ok := r.(map[string]any)
+	if !ok {
+		return false
+	}
+	matches, ok := route["match"].([]any)
+	if !ok {
+		return false
+	}
+	for _, m := range matches {
+		match, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		paths, ok := match["path"].([]any)
+		if !ok {
+			continue
+		}
+		for _, p := range paths {
+			if path, ok := p.(string); ok && strings.HasPrefix(path, NodeAddressPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// addressCheckRoute answers GET NodeAddressPath<nonce> on any host with the
+// nonce.
+func addressCheckRoute(nonce string) map[string]any {
+	return map[string]any{
+		"match":    []any{map[string]any{"method": []string{"GET"}, "path": []string{NodeAddressPath + nonce}}},
+		"handle":   []any{map[string]any{"handler": "static_response", "status_code": 200, "body": nonce, "headers": map[string]any{"Content-Type": []string{"text/plain"}, "Cache-Control": []string{"no-store"}}}},
+		"terminal": true,
+	}
 }
 
 func IngressName(org, server string) string {
@@ -182,7 +277,7 @@ func validIngressHost(host string) bool {
 // JSON produces one complete configuration. The loopback probe follows the
 // same reverse proxy routes as HTTPS and cannot return a synthetic success.
 func (v IngressConfig) JSON() ([]byte, error) {
-	if v.OrgID == "" || v.ServerID == "" || v.Version == "" {
+	if v.OrgID == "" || v.ServerID == "" || v.Version == "" || (v.AddressCheck != "" && !addressCheckNonce.MatchString(v.AddressCheck)) {
 		return nil, ErrInvalid
 	}
 	// Exact hostnames match before any wildcard, so *.acme.dev never takes
@@ -230,6 +325,10 @@ func (v IngressConfig) JSON() ([]byte, error) {
 			challengeRoutes = append(challengeRoutes, map[string]any{"match": []any{map[string]any{"host": []string{r.Hostname}, "path": []string{"/.well-known/acme-challenge/*"}}}, "handle": []any{map[string]any{"handler": "reverse_proxy", "upstreams": []any{map[string]any{"dial": net.JoinHostPort(r.ChallengeAddress, "80")}}}}, "terminal": true})
 		}
 	}
+	if v.AddressCheck != "" {
+		// Port 80 has one server, so the check joins the challenge routes.
+		challengeRoutes = append(challengeRoutes, addressCheckRoute(v.AddressCheck))
+	}
 	servers := map[string]any{
 		"probe": map[string]any{"listen": []string{"127.0.0.1:8081"}, "routes": probeRoutes, "automatic_https": map[string]any{"disable": true}},
 	}
@@ -275,6 +374,11 @@ func (v IngressConfig) issuer(challenges map[string]any) map[string]any {
 	if v.ACMEDir != "" {
 		issuer["ca"] = v.ACMEDir
 		issuer["trusted_roots_pem_files"] = v.ACMERoots
+	} else if a := configuredACMEIssuer(); a != nil {
+		issuer["ca"] = a.Directory
+		if len(a.Roots) > 0 {
+			issuer["trusted_roots_pem_files"] = []string{"/config/" + ingressACMERoots}
+		}
 	}
 	return issuer
 }

@@ -6,7 +6,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
+)
+
+// What CheckVacant refuses an adoption for. The text is what an operator
+// reads; callers match the values to say it in their own words.
+var (
+	ErrWorkloadsPresent = errors.New("adoption refused: existing Docker workloads need an explicit migration")
+	ErrIngressInUse     = errors.New("adoption refused: ingress listeners are already in use")
 )
 
 // Capacity reads actual daemon capacity after the pinned connection check.
@@ -25,7 +31,8 @@ func (c *Client) Capacity(ctx context.Context) (cpus int, memoryBytes int64, err
 }
 
 // CheckVacant refuses adoption of a host with existing containers or listeners
-// on the ingress ports. It runs a fixed read-only command over pinned SSH.
+// on the ingress ports. It reads the listeners through the host access, which
+// over SSH is a fixed read-only command.
 func (c *Client) CheckVacant(ctx context.Context) error {
 	response, err := c.Request(ctx, http.MethodGet, "/containers/json?all=1", nil)
 	if err != nil {
@@ -40,21 +47,14 @@ func (c *Client) CheckVacant(ctx context.Context) error {
 		return checkErr
 	}
 	if len(containers) > 0 {
-		return errors.New("adoption refused: existing Docker workloads need an explicit migration")
+		return ErrWorkloadsPresent
 	}
-	session, err := c.ssh.NewSession()
+	ports, err := c.access.IngressListeners(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stop()
-	output, err := session.Output("LC_ALL=C ss -H -ltn '( sport = :80 or sport = :443 or sport = :2019 )'")
-	if err != nil {
-		return errors.New("cannot verify ingress listener availability")
-	}
-	if strings.TrimSpace(string(output)) != "" {
-		return errors.New("adoption refused: ingress listeners are already in use")
+	if len(ports) > 0 {
+		return ErrIngressInUse
 	}
 	return nil
 }

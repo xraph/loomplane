@@ -61,6 +61,22 @@ type Node struct {
 	RevokedBy          string               `json:"revoked_by"`
 	CreatedAt          time.Time            `json:"created_at"`
 	UpdatedAt          time.Time            `json:"updated_at"`
+
+	// PublicAddress is the address Loomplane fetched a nonce from, through
+	// the node's own proxy, at PublicAddressConfirmedAt. Routes reach the
+	// node there only once it is confirmed.
+	PublicAddress            string     `json:"public_address"`
+	PublicAddressConfirmedAt *time.Time `json:"public_address_confirmed_at"`
+	// IngressApplied is the mode the node last said it runs, and
+	// IngressSentAt when the stored mode was last sent to it.
+	IngressApplied string     `json:"ingress_applied"`
+	IngressSentAt  *time.Time `json:"-"`
+	// IngressDetail says why ingress isn't what was asked: the last address
+	// check's finding, or, worked out on read, a mode the node didn't apply.
+	IngressDetail string `json:"ingress_detail"`
+	// IngressModeByOwner is set once a person chose the ingress mode. An
+	// address check never moves a node its owner put in mode none.
+	IngressModeByOwner bool `json:"-"`
 }
 
 // SettingsUpdate is the part of a node an owner may change remotely. A nil
@@ -70,6 +86,17 @@ type SettingsUpdate struct {
 	Labels      map[string]string
 	IngressMode *string
 	Endpoints   []nodeproto.Endpoint
+}
+
+// IngressSetting is what an address check settles: the mode, the confirmed
+// address and when, and the detail an admin reads.
+type IngressSetting struct {
+	Mode          string
+	PublicAddress string
+	ConfirmedAt   *time.Time
+	Detail        string
+	// SentAt is when the mode goes out to the node.
+	SentAt time.Time
 }
 
 // Session is the live connection a replica holds for a node. A newer epoch
@@ -102,6 +129,19 @@ type Store interface {
 	// alone) on a live node of org, and returns the stored node. A non-nil
 	// Endpoints must be a subset of the stored set, else ErrWidenRemotely.
 	UpdateSettings(ctx context.Context, org, id string, u SettingsUpdate) (*Node, error)
+	// SetIngress writes in on a node that is not revoked, and returns the
+	// stored node.
+	SetIngress(ctx context.Context, id string, in IngressSetting) (*Node, error)
+	// RecordIngressApplied writes the mode the node says it now runs, only
+	// while epoch is still the node's session epoch, so an answer from a
+	// superseded session is dropped. No match is ErrNotFound.
+	RecordIngressApplied(ctx context.Context, id, mode string, epoch int64) error
+	// MarkIngressSent records that the stored mode was sent to the node at
+	// at, on a node that is not revoked.
+	MarkIngressSent(ctx context.Context, id string, at time.Time) error
+	// SetIngressDetail writes only the detail an admin reads on a node that
+	// is not revoked, such as an address check's finding.
+	SetIngressDetail(ctx context.Context, id, detail string) error
 	// Touch writes last_seen_at and usage only, so a heartbeat appends no event.
 	Touch(ctx context.Context, id string, at time.Time, usage nodeproto.Usage) error
 	SetStatus(ctx context.Context, id string, s Status) error

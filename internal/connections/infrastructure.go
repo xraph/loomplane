@@ -10,25 +10,48 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 )
 
-type ServerChecker struct{}
+// ServerChecker checks Docker on a server: over pinned SSH, or through a
+// joined node's streams for a node connection's marker.
+type ServerChecker struct {
+	// Streams reach joined nodes. Nil reaches only SSH servers.
+	Streams server.NodeStreams
+}
 
-// IsGrant implements GrantChecker.
-func (ServerChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
+// IsGrant implements GrantChecker. A node's marker counts, so nobody can
+// paste it to reach another node's Docker.
+func (ServerChecker) IsGrant(raw []byte) bool {
+	return keylessJSON(raw) || server.IsNodeCredential(raw)
+}
+
+// PastedGrant implements pastedGrantAdvice. A server connection's grant is
+// only ever a node's marker, which Loomplane makes itself.
+func (ServerChecker) PastedGrant() string {
+	return "paste an SSH private key, or join the machine as a node instead of pasting a node credential"
+}
+
+// serverAccount is what a server connection acts as: the SSH user at the
+// host, or the node it reaches.
+func serverAccount(cfg *server.Config) string {
+	if cfg.Node != nil {
+		return "node/" + cfg.Node.NodeID
+	}
+	return cfg.User + "@" + cfg.Address
+}
 
 func (ServerChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := server.ParseConfig(raw, settings)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	return Check{Account: cfg.User + "@" + cfg.Address, Details: cfg.Details}, nil
+	return Check{Account: serverAccount(cfg), Details: cfg.Details}, nil
 }
 
-func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]string) (Check, error) {
+func (sc ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := server.ParseConfig(raw, settings)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	c, err := server.Dial(ctx, cfg)
+	c, err := server.Connect(ctx, cfg, sc.Streams)
 	if err != nil {
 		return Check{}, err
 	}
@@ -43,7 +66,7 @@ func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]
 			maps.Copy(details, inv.Details())
 		}
 	}
-	return Check{Account: cfg.User + "@" + cfg.Address, Details: details, Missing: missing}, err
+	return Check{Account: serverAccount(cfg), Details: details, Missing: missing}, err
 }
 
 type KubernetesChecker struct{}

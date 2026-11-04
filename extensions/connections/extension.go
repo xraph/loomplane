@@ -29,6 +29,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
@@ -48,6 +49,8 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg     config.Config
 	plugins *plugins.Set
+	// streams reach joined nodes, for the servers they connect.
+	streams server.NodeStreams
 	svc     *connections.Service
 	issuer  *issuer.Service
 	// platformUser says whether a request is a platform owner's or admin's,
@@ -66,10 +69,12 @@ const startupRotateTimeout = time.Minute
 // issuer is serving its keys.
 const issuerCheckTimeout = 10 * time.Second
 
-// New returns the extension.
-func New(cfg config.Config, plugs *plugins.Set) *Extension {
+// New returns the extension. streams reach joined nodes: the nodes
+// extension's hub.
+func New(cfg config.Config, plugs *plugins.Set, streams server.NodeStreams) *Extension {
 	return &Extension{
 		plugins:       plugs,
+		streams:       streams,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud connections"),
 		cfg:           cfg,
 	}
@@ -144,7 +149,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
 		connections.Cloudflare:   connections.CloudflareChecker{Client: cfClient},
-		connections.Server:       connections.ServerChecker{},
+		connections.Server:       connections.ServerChecker{Streams: e.streams},
 		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},

@@ -58,7 +58,7 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if source.Binding.BackendName() == RouteBackendPlatform {
 		return nil, errPlatformHandoff
 	}
-	if source.Revision != in.Revision || source.Status != "ready" {
+	if source.Revision != in.Revision || (source.Status != "ready" && source.Status != RouteRoutingPending) {
 		return nil, ErrConflict
 	}
 	input := source.Input
@@ -274,7 +274,7 @@ func (s *Service) prepareSourceIngress(ctx context.Context, st DomainStore, op *
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 		if err != nil {
 			return err
 		}
@@ -313,7 +313,7 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	} else if !reflect.DeepEqual(current.Binding, prepared.Route.Binding) {
 		return nil, ErrConflict
 	}
-	if current.Status != "ready" {
+	if current.Status != "ready" && current.Status != RouteRoutingPending {
 		return nil, ErrConflict
 	}
 	drainSeconds = max(drainSeconds, prepared.Source.Input.ExternalTTLSeconds, prepared.Route.Input.ExternalTTLSeconds, current.Input.ExternalTTLSeconds)
@@ -451,7 +451,7 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 			return readErr
 		}
 		if !server.SameIngressConfig(raw, actual.Config) {
-			actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+			actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 			if err != nil {
 				return err
 			}

@@ -29,7 +29,7 @@ func TestPreparePoolEffectsArmsTheFenceForResourceActions(t *testing.T) {
 	creds := dialCredentials{"conn_server": {ID: "conn_server", OrgID: "org", Cloud: connections.Server, Status: connections.StatusReady, Details: details}}
 	refused := errors.New("ssh: handshake refused")
 	var dialed *server.Config
-	target := &OwnedTarget{Cloud: connections.Server, Credentials: creds, ServerDial: func(_ context.Context, cfg *server.Config) (*server.Client, error) {
+	target := &OwnedTarget{Cloud: connections.Server, Credentials: creds, ServerConnect: func(_ context.Context, cfg *server.Config, _ server.NodeStreams) (*server.Client, error) {
 		dialed = cfg
 		return nil, refused
 	}}

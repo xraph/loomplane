@@ -135,6 +135,13 @@ type RouteOperation struct {
 	AppliedConfig      *server.IngressSnapshot `json:"-"`
 	Principal          security.Principal      `json:"-"`
 	ExecutionPrincipal *security.Principal     `json:"-"`
+	// Automatic is an operation Loomplane started by itself inside what an
+	// earlier review approved, such as following a node's new address.
+	// Nobody reviews it again.
+	Automatic bool `json:"automatic,omitempty"`
+	// PreviousAddress is the address an address change moves the route
+	// from. Route.Binding.Address is the one it moves to.
+	PreviousAddress string `json:"previous_address,omitempty"`
 }
 
 // executionPrincipal falls back for operations accepted before retry actors were stored.
@@ -517,7 +524,7 @@ func (s *Service) routeCredentialClient(ctx context.Context, route Route, cleanu
 		return nil, err
 	}
 	cfg.Details["docker_id"] = route.Binding.RuntimeID
-	c, err := server.Dial(ctx, cfg)
+	c, err := server.Connect(ctx, cfg, s.NodeStreams)
 	if err != nil {
 		return nil, err
 	}

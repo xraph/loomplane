@@ -63,6 +63,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/pools/:poolId", "cloudPools.update", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/check", "cloudServers.check", e.checkServer, nil, infra.Server{}, http.StatusOK},
 		{http.MethodGet, "/servers", "cloudServers.list", e.list, nil, ServerList{}, http.StatusOK},
+		{http.MethodGet, "/node-adoptions", "cloudNodeAdoptions.list", e.nodeAdoptions, nil, NodeAdoptionList{}, http.StatusOK},
 		{http.MethodGet, "/capacity-policy", "cloudCapacity.getPolicy", e.capacityPolicy, nil, CapacityPolicyView{}, http.StatusOK},
 		{http.MethodPost, "/capacity-policy", "cloudCapacity.savePolicy", e.saveCapacityPolicy, CapacityPolicyInput{}, CapacityPolicyView{}, http.StatusOK},
 		{http.MethodGet, "/expansions", "cloudCapacity.listExpansions", e.expansions, nil, ExpansionList{}, http.StatusOK},

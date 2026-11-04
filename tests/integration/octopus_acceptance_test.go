@@ -391,7 +391,7 @@ func (x *octoRun) find() {
 			t.Fatalf("read the server credential: %v", parseErr)
 		}
 		container := server.ContainerName(iid)
-		dial := func(ctx context.Context) (*server.Client, error) { return server.Dial(ctx, serverCfg) }
+		dial := func(ctx context.Context) (*server.Client, error) { return server.Connect(ctx, serverCfg, nil) }
 		x.get = func(ctx context.Context, path string) (octoAnswer, error) {
 			client, dialErr := dial(ctx)
 			if dialErr != nil {
@@ -779,7 +779,7 @@ func (x *octoRun) cleanup() {
 			t.Errorf("cleanup: %v", err)
 			return
 		}
-		client, err := server.Dial(ctx, cfg)
+		client, err := server.Connect(ctx, cfg, nil)
 		if err != nil {
 			t.Errorf("cleanup: reach the server: %v", err)
 			return

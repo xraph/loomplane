@@ -54,6 +54,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
@@ -98,6 +99,7 @@ type Extension struct {
 	ctrlplane           func() *app.CtrlPlane
 	deployments         *orchestration.Deployments
 	plugins             *plugins.Set
+	streams             server.NodeStreams
 	manifests           *manifests.Service
 	plans               *planning.Service
 	memberPrerequisites *planning.MemberPrerequisiteService
@@ -128,10 +130,12 @@ type Extension struct {
 // New returns the extension. engineOf returns the dispatch extension's
 // engine, which starts and signals each plan's workflow; workflow is the
 // deployment workflow the platform gave Dispatch; ctrlplane is Ctrl
-// Plane, which runs Cloud Run services.
-func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane, plugs *plugins.Set) *Extension {
+// Plane, which runs Cloud Run services. streams reach joined nodes, which
+// deploy and build on their Docker; nil reaches only SSH servers.
+func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane, plugs *plugins.Set, streams server.NodeStreams) *Extension {
 	return &Extension{
 		plugins:       plugs,
+		streams:       streams,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Manifests and deployment plans"),
 		cfg:           cfg,
 		features:      map[string]bool{recipes.FeatureAI: cfg.AI.Enabled, planning.FeatureMultiLocationDelivery: cfg.Clouds.MultiLocationDelivery},
@@ -377,7 +381,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey, NodeStreams: e.streams}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)
@@ -390,8 +394,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	managedControllers := kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled)
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
-	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey, NodeStreams: e.streams}
+	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore, NodeStreams: e.streams}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings

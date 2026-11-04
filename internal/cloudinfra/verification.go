@@ -90,6 +90,9 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 			}
 			var notice *routeNoticeError
 			switch {
+			case errors.Is(err, errAddressAbandoned):
+				// Its node no longer takes traffic directly; the route is free.
+				op.Status = "cancelled"
 			case errors.Is(err, ErrPending):
 				op.Status, op.Message = "waiting", "DNS, certificate or backend verification is still pending."
 			case err != nil:
@@ -144,6 +147,11 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			}
 		default:
 			current, err := st.ResolveRouteBinding(ctx, route.OrgID, route.ProjectID, route.Input)
+			if op.Kind == "address" {
+				if waitErr := s.addressNotSettled(ctx, op, current, err); waitErr != nil {
+					return waitErr
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -178,6 +186,10 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		if checkErr := s.prepareSourceIngress(ctx, st, op); checkErr != nil {
 			return checkErr
 		}
+	}
+	// A node's new address moves DNS alone; the proxy config stays.
+	if op.Kind == "address" {
+		return s.followRouteAddress(ctx, st, op, state, zone)
 	}
 	client := s.routeClient
 	if op.Kind == "remove" || op.Kind == "release" {
@@ -287,7 +299,8 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 			state.Current = snapshot
 			state.Config = server.IngressConfig{OrgID: route.OrgID, ServerID: route.Binding.ServerID, Version: "initial", Routes: []server.IngressRoute{}}
 			initial, configErr := state.Config.JSON()
-			if configErr != nil || !server.SameIngressConfig(initial, snapshot.Config) {
+			// An address check left behind is replaced by this change's config.
+			if configErr != nil || proxyAgainst(initial, snapshot.Config) == proxyChanged {
 				return ErrConflict
 			}
 		}
@@ -338,7 +351,7 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, op.PreviousConfig, *op.DesiredConfig)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(op.PreviousConfig, actual), *op.DesiredConfig)
 		if err != nil {
 			return err
 		}

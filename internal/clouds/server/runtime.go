@@ -458,7 +458,13 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 		if labels[nativecache.LabelEngine] != "" {
 			protocol = "redis"
 		}
-		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
+		address := protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value))
+		if host == "" {
+			// A node without a confirmed address has no advertise_host, so
+			// the port has no public URL yet.
+			address = ""
+		}
+		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: address, Port: value, Protocol: protocol, Public: public})
 	}
 	return out
 }
@@ -544,7 +550,7 @@ func healthPorts(info *containerInfo, labels map[string]string) []int {
 
 func probeServer(ctx context.Context, c *Client, port int, path string) error {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return c.ssh.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		return c.access.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

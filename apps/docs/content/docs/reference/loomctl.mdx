@@ -147,13 +147,14 @@ Most of these review before they act and apply only with `--yes`. Many take `--w
 | `node run [--state-dir DIR] [--root-allowlist]` | Runs the node in the foreground. `--root-allowlist` trusts only a root-owned `allow.json`; the systemd unit sets it |
 | `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
 | `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Writes `allow.json`, then tells the running node. Needs root on Linux |
-| `node leave` | Revokes this node, stops its service and removes its config. The next join makes a fresh key |
+| `node leave [--purge] [--purge-volumes [--yes-delete-volumes=NAME]]` | Revokes this node, stops its service and removes its config. The next join makes a fresh key. `--purge` also removes the containers and networks Loomplane made on this machine's Docker. `--purge-volumes` deletes its volumes and their data too, and asks you to type the node's name first; `--yes-delete-volumes=NAME` answers for you in a script |
+| `node drain NAME-OR-ID [--yes]` | Stops new placements on the node's server, after listing what runs there and warning about databases with no backups. Asks first unless you pass `--yes`. Moving what runs there is a reviewed move each, in the dashboard |
 | `node list [--json]` | Lists the organization's nodes |
 | `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
 | `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start or stops within five seconds |
 | `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
 
-`join`, `list` and `revoke` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
+`join`, `list`, `revoke` and `drain` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
 
 ## AI agents
 

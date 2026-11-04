@@ -111,7 +111,7 @@ func verifyPoolSourceBuildFence(t *testing.T, host string, cfg *server.Config, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	builderClient, err := server.Dial(t.Context(), builderConfig)
+	builderClient, err := server.Connect(t.Context(), builderConfig, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func verifyPoolSourceBuildFence(t *testing.T, host string, cfg *server.Config, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeClient, err := server.Dial(t.Context(), runtimeConfig)
+	runtimeClient, err := server.Connect(t.Context(), runtimeConfig, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func verifyPoolSourceBuildFence(t *testing.T, host string, cfg *server.Config, r
 	if images := infraDocker(t, "exec", host, "docker", "-H", "unix:///tmp/builder.sock", "images", "-q"); images == "" {
 		t.Fatal("builder image was silently deleted")
 	}
-	runtimeClient, err = server.Dial(t.Context(), cfg)
+	runtimeClient, err = server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

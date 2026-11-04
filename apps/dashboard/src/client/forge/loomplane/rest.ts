@@ -1662,6 +1662,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudNodeAdoptions = {
+    /**
+     * cloudNodeAdoptions.list
+     */
+    list: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeAdoptionList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/node-adoptions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeAdoptionList"],
+      };
+
+      return this.request<types.NodeAdoptionList>(config);
+    },
+
+  };
+
   public readonly cloudPlacements = {
     /**
      * cloudPlacements.acceptMove
@@ -4890,6 +4909,40 @@ export class RESTClient extends Client {
 
   public readonly nodes = {
     /**
+     * Review draining the Cloud server a node was adopted as: what it holds now
+     */
+    drain: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DrainReview> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/drain`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DrainReview"],
+      };
+
+      return this.request<types.DrainReview>(config);
+    },
+
+    /**
+     * Drain a node's server as reviewed, so nothing new is placed on it
+     */
+    drainApply: async (id: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/drain/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Node"],
+      };
+
+      return this.request<types.Node>(config);
+    },
+
+    /**
      * One node
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Node> => {
@@ -4971,6 +5024,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Node>(config);
+    },
+
+    /**
+     * What Loomplane runs on a node, and which databases have no backups
+     */
+    workloads: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NodeWorkloadList> => {
+      let __path = `/api/v1/nodes/${encodeURIComponent(String(id))}/workloads`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NodeWorkloadList"],
+      };
+
+      return this.request<types.NodeWorkloadList>(config);
     },
 
   };
