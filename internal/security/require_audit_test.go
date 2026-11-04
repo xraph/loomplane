@@ -134,6 +134,9 @@ var workspaceChecks = map[string]int{
 	// project, checked with that project's ID so a team's grant counts.
 	"internal/agentreports/service.go:List": 1,
 	"internal/agentreports/service.go:Get":  1,
+	// The watcher's status, paused for the budget or not, is agent:use
+	// at the root, like the agent's own status.
+	"internal/agentwatch/watcher.go:Status": 1,
 }
 
 // rootChecks walks every non-test Go file under internal and extensions
@@ -219,8 +222,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 100 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the 6 Bitbucket ones and the 8 GitLab ones, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 101 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones and the 8 GitLab ones, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

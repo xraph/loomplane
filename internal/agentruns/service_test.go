@@ -166,6 +166,31 @@ func TestStartRefusesUnknownKindsAndReservedMetadata(t *testing.T) {
 	}
 }
 
+// Only an investigation the agent runs alone names a report: a chat, or
+// an investigation for a person, can't take one over.
+func TestOnlyTheAgentsInvestigationNamesAReport(t *testing.T) {
+	w := newWorld(t)
+	if err := w.svc.RegisterKind(KindSpec{Kind: KindInvestigation, Agent: "loomplane-investigation", MaxSteps: 1, DefaultMaxTokens: 1, MaxTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{MetaReportID, MetaFingerprint} {
+		for name, in := range map[string]StartInput{
+			"a chat":                        {Kind: KindChat, OnBehalfOf: personPtr(orgA, ada)},
+			"an investigation for a person": {Kind: KindInvestigation, OnBehalfOf: personPtr(orgA, ada)},
+		} {
+			in.OrgID, in.Input, in.Metadata = orgA, "hi", map[string]string{key: "arep_1"}
+			if _, err := w.svc.Start(context.Background(), in); !errors.Is(err, ErrInvalid) {
+				t.Errorf("%s with %s: %v", name, key, err)
+			}
+		}
+	}
+	task := w.start(t, StartInput{Kind: KindInvestigation, ProjectID: "prj_mono",
+		Metadata: map[string]string{MetaReportID: "arep_1", MetaFingerprint: "fp_1"}})
+	if task.Metadata[MetaReportID] != "arep_1" || task.Metadata[MetaFingerprint] != "fp_1" {
+		t.Fatalf("metadata %v", task.Metadata)
+	}
+}
+
 // A conversation continues only for the person who started it, at the
 // same scope.
 func TestSessionsStayWithTheirPerson(t *testing.T) {

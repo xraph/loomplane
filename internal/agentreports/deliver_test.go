@@ -318,7 +318,7 @@ func newEnv(t *testing.T, h *harness, db notifications.Querier, notices func(*te
 
 func newMemEnv(t *testing.T, o deliverOptions) *deliverEnv {
 	t.Helper()
-	m := newMemStore()
+	m := NewMemStore()
 	log := &noticeLog{}
 	m.notices = log
 	h := newHarness(t, m, m, "org_a")

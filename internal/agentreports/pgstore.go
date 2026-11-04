@@ -249,7 +249,7 @@ func (s *PgStore) Clear(ctx context.Context, c Clearance) ([]*Report, error) {
 			issue_comments = issue_comments || '["resolved"]'::jsonb, updated_at = $8
 		WHERE org_id = $1 AND project_id = $2 AND environment_id = $3 AND status = 'open' AND signal = ANY($4)
 			AND ($5 OR component = ANY($6))
-			AND signal <> 'manual' AND opened_by = '' AND opened_by_task = ''
+			AND signal <> 'manual' AND opened_by = '' AND opened_by_task = '' AND last_seen_at <= $8
 		RETURNING `+reportColumns,
 		c.OrgID, c.ProjectID, c.EnvironmentID, c.Signals, components == nil, nonNil(components), c.Reason, c.At.UTC())
 }

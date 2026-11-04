@@ -291,6 +291,13 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 			return nil, invalid("%s is Loomplane's to set", key)
 		}
 	}
+	if in.Kind != KindInvestigation || in.OnBehalfOf != nil {
+		for _, key := range []string{MetaReportID, MetaFingerprint} {
+			if _, reserved := in.Metadata[key]; reserved {
+				return nil, invalid("%s names the report of an investigation the agent runs alone", key)
+			}
+		}
+	}
 	if s.settings == nil {
 		return nil, errors.New("agentruns: the agent's settings aren't configured")
 	}

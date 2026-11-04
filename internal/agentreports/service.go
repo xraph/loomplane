@@ -144,7 +144,9 @@ type Store interface {
 	// Observe opens, repeats or reopens the report for sig's fingerprint.
 	// A report that resolved or closed at or after reopenAfter reopens.
 	Observe(ctx context.Context, sig Signal, reopenAfter time.Time, now time.Time) (*Observation, error)
-	// Clear resolves the open reports c names. Manual reports never clear.
+	// Clear resolves the open reports c names that weren't seen after
+	// c.At, so a clearance read from an older event leaves a newer
+	// occurrence open. Manual reports never clear.
 	Clear(ctx context.Context, c Clearance) ([]*Report, error)
 	// Close closes an open report, or returns ErrNotOpen.
 	Close(ctx context.Context, orgID, id, by, reason string, at time.Time) (*Report, error)

@@ -156,6 +156,6 @@ func investigationOf(runs func() runsByRun) func(ctx context.Context, orgID, run
 		if t.OrgID != orgID || t.RunID != runID || t.Kind != agentruns.KindInvestigation || agentruns.Terminal(t.Status) {
 			return "", "", nil
 		}
-		return t.ID, t.Metadata["report_id"], nil
+		return t.ID, t.Metadata[agentruns.MetaReportID], nil
 	}
 }

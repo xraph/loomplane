@@ -178,6 +178,15 @@ const (
 	metaReleaseRevision = "release_revision"
 )
 
+// The metadata keys that name the report an investigation is about. Only
+// an investigation the agent runs alone, which only the watcher starts,
+// may carry them: Start refuses them on any other task, so a chat can
+// never name a report as its own.
+const (
+	MetaReportID    = "report_id"
+	MetaFingerprint = "fingerprint"
+)
+
 var (
 	ErrNotFound      = errors.New("agent task not found")
 	ErrUnknownKind   = errors.New("unknown agent task kind")

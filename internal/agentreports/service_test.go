@@ -10,12 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xraph/grove/driver"
 	"github.com/xraph/shield/scan"
 
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
-	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -192,7 +190,7 @@ func (passEngine) ScanOutput(context.Context, *scan.Input) (*scan.Result, error)
 func newHarness(t *testing.T, store Store, peek inspector, org string) *harness {
 	t.Helper()
 	h := &harness{org: org, store: store, peek: peek, clock: &clock{now: base}, audit: &fakeAudit{}}
-	if m, ok := store.(*memStore); ok {
+	if m, ok := store.(*MemStore); ok {
 		m.now = h.clock.Now
 	}
 	h.svc = NewService(Deps{
@@ -209,7 +207,7 @@ func newHarness(t *testing.T, store Store, peek inspector, org string) *harness 
 
 func newMemHarness(t *testing.T) *harness {
 	t.Helper()
-	m := newMemStore()
+	m := NewMemStore()
 	return newHarness(t, m, m, "org_a")
 }
 
@@ -292,6 +290,7 @@ var serviceCases = []serviceCase{
 	{"ReportsStayInTheirWorkspace", reportsStayInTheirWorkspace},
 	{"DocumentsNeverSplitABatch", documentsNeverSplitABatch},
 	{"AReplayedOccurrenceNeverReopens", aReplayedOccurrenceNeverReopens},
+	{"AnOlderClearanceLeavesANewerOccurrenceOpen", anOlderClearanceLeavesANewerOccurrenceOpen},
 }
 
 func TestFingerprintIsStable(t *testing.T) {
@@ -304,6 +303,9 @@ func TestFingerprintIsStable(t *testing.T) {
 }
 
 func TestFirstSignalOpensAReport(t *testing.T) { firstSignalOpensAReport(t, newMemHarness(t)) }
+func TestAnOlderClearanceLeavesANewerOccurrenceOpen(t *testing.T) {
+	anOlderClearanceLeavesANewerOccurrenceOpen(t, newMemHarness(t))
+}
 func TestRepeatUpdatesTheSameReport(t *testing.T) {
 	repeatUpdatesTheSameReport(t, newMemHarness(t))
 }
@@ -1082,233 +1084,7 @@ func reportsStayInTheirWorkspace(t *testing.T, h *harness) {
 	}
 }
 
-// memStore is the in-memory Store: the same rules as PgStore, under one
-// lock.
-type memStore struct {
-	mu      sync.Mutex
-	records map[string]*record
-	now     func() time.Time
-	// notices is where SaveNotice queues notices, as the database
-	// transaction would; nil drops them.
-	notices notifications.Execer
-	// queued records when each delivery was queued, and claims who
-	// holds it until when.
-	queued map[string]time.Time
-	claims map[string]memClaim
-}
-
-type memClaim struct {
-	owner string
-	until time.Time
-}
-
-func newMemStore() *memStore {
-	return &memStore{records: map[string]*record{}, now: time.Now, queued: map[string]time.Time{}, claims: map[string]memClaim{}}
-}
-
-var _ Store = (*memStore)(nil)
-
-func (m *memStore) find(orgID, id string) (*record, error) {
-	r, ok := m.records[id]
-	if !ok || r.OrgID != orgID {
-		return nil, ErrNotFound
-	}
-	return r, nil
-}
-
-func (m *memStore) Get(_ context.Context, orgID, id string) (*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	return r.report(), nil
-}
-
-// sorted returns the workspace's records that match keep, by less.
-func (m *memStore) sorted(orgID string, keep func(*record) bool, less func(a, b *record) int) []*Report {
-	var rs []*record
-	for _, r := range m.records {
-		if r.OrgID == orgID && keep(r) {
-			rs = append(rs, r)
-		}
-	}
-	slices.SortFunc(rs, less)
-	out := make([]*Report, 0, len(rs))
-	for _, r := range rs {
-		out = append(out, r.report())
-	}
-	return out
-}
-
-func newestFirst(a, b *record) int {
-	if c := b.LastSeenAt.Compare(a.LastSeenAt); c != 0 {
-		return c
-	}
-	return strings.Compare(b.ID, a.ID)
-}
-
-func oldestFirst(a, b *record) int {
-	if c := a.FirstSeenAt.Compare(b.FirstSeenAt); c != 0 {
-		return c
-	}
-	return strings.Compare(a.ID, b.ID)
-}
-
-func (m *memStore) List(_ context.Context, orgID string, projectIDs []string, f ListFilter) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := m.sorted(orgID, func(r *record) bool {
-		return slices.Contains(projectIDs, r.ProjectID) && (f.Status == "all" || r.Status == f.Status)
-	}, newestFirst)
-	if len(out) > f.Limit {
-		out = out[:f.Limit]
-	}
-	return out, nil
-}
-
-func (m *memStore) Open(_ context.Context, orgID, projectID, environmentID string) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.sorted(orgID, func(r *record) bool {
-		return r.Status == StatusOpen && (projectID == "" || r.ProjectID == projectID) &&
-			(environmentID == "" || r.EnvironmentID == environmentID)
-	}, oldestFirst), nil
-}
-
-func (m *memStore) Investigating(_ context.Context, orgID string) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.sorted(orgID, func(r *record) bool {
-		return r.Investigation == InvestigationQueued || r.Investigation == InvestigationRunning
-	}, oldestFirst), nil
-}
-
-func (m *memStore) Observe(_ context.Context, sig Signal, reopenAfter, now time.Time) (*Observation, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	fp := Fingerprint(sig.ProjectID, sig.EnvironmentID, sig.Kind, sig.Component)
-	var latest *record
-	for _, r := range m.records {
-		if r.OrgID != sig.OrgID || r.Fingerprint != fp {
-			continue
-		}
-		if r.Status == StatusOpen {
-			change, _ := r.repeat(sig, now)
-			return &Observation{Report: r.report(), Change: change}, nil
-		}
-		if r.ResolvedAt != nil && !r.ResolvedAt.Before(reopenAfter) && (latest == nil || r.ResolvedAt.After(*latest.ResolvedAt)) {
-			latest = r
-		}
-	}
-	if latest != nil && latest.counted(sig) {
-		return &Observation{Report: latest.report(), Change: ChangeUnchanged}, nil
-	}
-	if latest != nil {
-		latest.reopen(sig, now)
-		return &Observation{Report: latest.report(), Change: ChangeReopened}, nil
-	}
-	id, err := newID()
-	if err != nil {
-		return nil, err
-	}
-	r := newRecord(id, sig, now)
-	m.records[id] = r
-	return &Observation{Report: r.report(), Change: ChangeOpened}, nil
-}
-
-func (m *memStore) Clear(_ context.Context, c Clearance) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var cleared []*record
-	for _, r := range m.records {
-		if r.OrgID == c.OrgID && r.ProjectID == c.ProjectID && r.EnvironmentID == c.EnvironmentID && r.Status == StatusOpen &&
-			slices.Contains(c.Signals, r.Signal) && (c.Components == nil || slices.Contains(c.Components, r.Component)) && !r.manual() {
-			r.Status, r.Resolution = StatusResolved, c.Reason
-			r.settle(c.At, "resolved")
-			cleared = append(cleared, r)
-		}
-	}
-	slices.SortFunc(cleared, oldestFirst)
-	out := make([]*Report, 0, len(cleared))
-	for _, r := range cleared {
-		out = append(out, r.report())
-	}
-	return out, nil
-}
-
-func (m *memStore) Close(_ context.Context, orgID, id, by, reason string, at time.Time) (*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	if r.Status != StatusOpen {
-		return nil, ErrNotOpen
-	}
-	r.Status, r.ClosedBy, r.Resolution = StatusClosed, by, reason
-	r.settle(at, "closed")
-	return r.report(), nil
-}
-
-func (m *memStore) SetInvestigation(_ context.Context, orgID, id string, from []string, inv Investigation, at time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if errors.Is(err, ErrNotFound) || (err == nil && !slices.Contains(from, r.Investigation)) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	r.investigate(inv, at)
-	return true, nil
-}
-
-func (m *memStore) WriteFindings(_ context.Context, orgID, id string, w Writer, f Findings) (*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	queued := r.TaskID == "" && (r.Investigation == InvestigationQueued || r.Investigation == InvestigationRunning) && !r.manual()
-	if w.TaskID == "" || (w.TaskID != r.TaskID && w.TaskID != r.OpenedByTask && (!queued || w.Investigates != id)) {
-		return nil, ErrNotYourReport
-	}
-	written := f
-	written.Suggestions = slices.Clone(f.Suggestions)
-	r.Findings = &written
-	r.Revision++
-	r.UpdatedAt = f.WrittenAt
-	return r.report(), nil
-}
-
-func (m *memStore) Documents(_ context.Context, orgID string, after time.Time, limit int) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := m.sorted(orgID, func(r *record) bool {
-		return (r.Findings != nil || r.Status != StatusOpen) && r.UpdatedAt.After(after)
-	}, func(a, b *record) int {
-		if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
-	if len(out) > limit {
-		// Finish the last report's moment, as PgStore does.
-		end := limit
-		for end < len(out) && out[end].UpdatedAt.Equal(out[limit-1].UpdatedAt) {
-			end++
-		}
-		out = out[:end]
-	}
-	return out, nil
-}
-
-func (m *memStore) hidden(t *testing.T, orgID, id string) record {
+func (m *MemStore) hidden(t *testing.T, orgID, id string) record {
 	t.Helper()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1319,7 +1095,7 @@ func (m *memStore) hidden(t *testing.T, orgID, id string) record {
 	return *r.clone()
 }
 
-func (m *memStore) setIssueNumber(t *testing.T, orgID, id string, n int) {
+func (m *MemStore) setIssueNumber(t *testing.T, orgID, id string, n int) {
 	t.Helper()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1330,7 +1106,7 @@ func (m *memStore) setIssueNumber(t *testing.T, orgID, id string, n int) {
 	r.Issue.Number, r.Issue.State = n, IssueOpen
 }
 
-func (m *memStore) noticeSent(t *testing.T, orgID, id string, at time.Time) {
+func (m *MemStore) noticeSent(t *testing.T, orgID, id string, at time.Time) {
 	t.Helper()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1340,126 +1116,6 @@ func (m *memStore) noticeSent(t *testing.T, orgID, id string, at time.Time) {
 	}
 	r.PendingNotice, r.LastNoticeAt = "", &at
 }
-
-func (m *memStore) Pending(_ context.Context, orgID string) ([]*Report, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.sorted(orgID, func(r *record) bool {
-		return r.Revision > r.NotifiedRevision || r.Revision > r.IssueRevision ||
-			(r.Issue.State == IssueWaiting && r.Status == StatusOpen)
-	}, oldestFirst), nil
-}
-
-func (m *memStore) QueueDelivery(_ context.Context, orgID, id string, now time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, err := m.find(orgID, id); err != nil {
-		return false, nil
-	}
-	if at, ok := m.queued[id]; ok && !at.Before(now.Add(-DeliveryRequeue)) {
-		return false, nil
-	}
-	m.queued[id] = now
-	return true, nil
-}
-
-func (m *memStore) ClaimDelivery(_ context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	now := m.now()
-	if c, ok := m.claims[id]; ok && c.owner != owner && !c.until.Before(now) {
-		return nil, nil
-	}
-	m.claims[id] = memClaim{owner: owner, until: now.Add(lease)}
-	return r.delivery(), nil
-}
-
-func (m *memStore) holds(id, owner string) bool { return m.claims[id].owner == owner }
-
-func (m *memStore) RenewDelivery(_ context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	now := m.now()
-	c, ok := m.claims[id]
-	if !ok || c.owner != owner || !c.until.After(now) {
-		return nil, ErrLeaseLost
-	}
-	m.claims[id] = memClaim{owner: owner, until: now.Add(lease)}
-	return r.delivery(), nil
-}
-
-func (m *memStore) SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
-	send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return false, err
-	}
-	if r.Revision != revision || r.PendingNotice != pendingNotice || !m.holds(id, owner) {
-		return false, nil
-	}
-	if pendingNotice != "" {
-		q := m.notices
-		if q == nil {
-			q = dropExecer{}
-		}
-		if err := send(ctx, q, r.NoticeSeq+1); err != nil {
-			return false, err
-		}
-		r.NoticeSeq++
-		r.LastNoticeAt, r.PendingNotice = &at, ""
-	}
-	r.NotifiedRevision = max(r.NotifiedRevision, revision)
-	return true, nil
-}
-
-func (m *memStore) SaveIssue(_ context.Context, orgID, id, owner string, revision int, in IssueSave) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	r, err := m.find(orgID, id)
-	if err != nil {
-		return err
-	}
-	if !m.holds(id, owner) {
-		return ErrLeaseLost
-	}
-	r.Issue = Issue{Number: in.Number, URL: in.URL, State: in.State, Error: in.Error}
-	r.IssueComments = append(slices.Clone(in.Requeue), r.IssueComments[min(in.Handled, len(r.IssueComments)):]...)
-	if in.CommentAt != nil {
-		r.IssueCommentAt = cloneTime(in.CommentAt)
-	}
-	if in.Done {
-		r.IssueRevision = max(r.IssueRevision, revision)
-	}
-	return nil
-}
-
-func (m *memStore) ReleaseDelivery(_ context.Context, _, id, owner string, done bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.holds(id, owner) {
-		return nil
-	}
-	delete(m.claims, id)
-	if done {
-		delete(m.queued, id)
-	}
-	return nil
-}
-
-// dropExecer is an Execer that runs nothing.
-type dropExecer struct{}
-
-func (dropExecer) Exec(context.Context, string, ...any) (driver.Result, error) { return nil, nil }
 
 // A Clear stamps every report it resolves alike. A backfill that pages on
 // from the last UpdatedAt still reads every one of them.
@@ -1526,5 +1182,25 @@ func aReplayedOccurrenceNeverReopens(t *testing.T, h *harness) {
 	back := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_2#0"))
 	if back.Change != ChangeReopened || back.Report.ID != r.ID || back.Report.Occurrences != 2 {
 		t.Fatalf("a new occurrence: change %s, occurrences %d", back.Change, back.Report.Occurrences)
+	}
+}
+
+// A clearance the watcher read from an event older than the report's last
+// occurrence leaves it open: the problem came back after what cleared it.
+func anOlderClearanceLeavesANewerOccurrenceOpen(t *testing.T, h *harness) {
+	sig := h.signal(SignalDeploymentFailed, "service:api", "dep_2#0")
+	sig.At = base.Add(2 * time.Minute)
+	r := h.observe(t, sig).Report
+	h.clock.advance(5 * time.Minute)
+	older := Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "dep_1 succeeded", At: base.Add(time.Minute)}
+	if n := len(h.clear(t, older)); n != 0 {
+		t.Fatalf("an older clearance resolved %d reports", n)
+	}
+	if h.lookup(t, r.ID).Status != StatusOpen {
+		t.Fatal("the newer occurrence resolved")
+	}
+	same := Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "dep_3 succeeded", At: sig.At}
+	if n := len(h.clear(t, same)); n != 1 {
+		t.Fatalf("a clearance at the occurrence resolved %d reports, want 1", n)
 	}
 }
