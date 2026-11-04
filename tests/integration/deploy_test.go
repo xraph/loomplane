@@ -43,8 +43,10 @@ type fakeCloud struct {
 	services map[string]map[string]any
 	patches  int
 	public   map[string]bool
-	// failBuilds makes builds fail while it's set.
+	// failBuilds makes builds fail while it's set, with failDetail as
+	// what Cloud Build says when it's set.
 	failBuilds bool
+	failDetail string
 	failed     map[string]bool
 	// secrets are Secret Manager's versions by secret, and who may read
 	// each.
@@ -167,7 +169,11 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case f.polls[id] > 1:
 			status = "SUCCESS"
 		}
-		build := map[string]any{"id": id, "status": status, "statusDetail": "step 0 exited 1", "logUrl": "https://console/" + id}
+		detail := "step 0 exited 1"
+		if f.failed[id] && f.failDetail != "" {
+			detail = f.failDetail
+		}
+		build := map[string]any{"id": id, "status": status, "statusDetail": detail, "logUrl": "https://console/" + id}
 		if status == "SUCCESS" {
 			// Cloud Build reports the images it pushed; pack pushes its own.
 			ref := f.pushes[id]
