@@ -3,11 +3,17 @@ package aiagent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/xraph/cortex"
 	cortexengine "github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/knowledge"
+
+	"github.com/xraph/loomplane/internal/agentknowledge"
+	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // failingKnowledge fails every call the way cortex's weave adapter does
@@ -35,7 +41,7 @@ func (f failingKnowledge) ListCollections(context.Context) ([]knowledge.Collecti
 func TestKnowledgeSearchErrorsAreQuiet(t *testing.T) {
 	var logged []error
 	warn := func(_ string, err error) { logged = append(logged, err) }
-	eng, err := cortexengine.New(cortexengine.WithKnowledge(failingKnowledge{fail: true}), quietKnowledgeOption(warn))
+	eng, err := cortexengine.New(cortexengine.WithKnowledge(failingKnowledge{fail: true}), quietKnowledgeOption(warn, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +57,7 @@ func TestKnowledgeSearchErrorsAreQuiet(t *testing.T) {
 	}
 
 	// A search that works is passed through.
-	eng, err = cortexengine.New(cortexengine.WithKnowledge(failingKnowledge{}), quietKnowledgeOption(warn))
+	eng, err = cortexengine.New(cortexengine.WithKnowledge(failingKnowledge{}), quietKnowledgeOption(warn, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +66,65 @@ func TestKnowledgeSearchErrorsAreQuiet(t *testing.T) {
 		t.Fatalf("Retrieve: %v %v", chunks, err)
 	}
 	// No knowledge, nothing to wrap.
-	if eng, err = cortexengine.New(quietKnowledgeOption(warn)); err != nil || eng.Knowledge() != nil {
+	if eng, err = cortexengine.New(quietKnowledgeOption(warn, nil)); err != nil || eng.Knowledge() != nil {
 		t.Fatalf("without knowledge: %v, %v", eng.Knowledge(), err)
+	}
+}
+
+// pastReports finds a report of each of two projects beside a docs page,
+// as weave hands them back.
+type pastReports struct{}
+
+func (pastReports) Retrieve(context.Context, string, *knowledge.RetrieveParams) ([]knowledge.ScoredChunk, error) {
+	return []knowledge.ScoredChunk{
+		{Content: "p1's report", Metadata: map[string]string{"kind": "report", "project_id": "proj_1", "source_key": "report/arep_1"}},
+		{Content: "p2's report", Metadata: map[string]string{"kind": "report", "project_id": "proj_2", "source_key": "report/arep_2"}},
+		{Content: "docs", Metadata: map[string]string{"source_key": "docs/index"}},
+	}, nil
+}
+
+func (pastReports) ListCollections(context.Context) ([]knowledge.CollectionInfo, error) {
+	return nil, nil
+}
+
+// readsOn allows deployment:read on one project.
+type readsOn string
+
+func (r readsOn) AllowedOn(_ context.Context, _ security.Principal, perm security.Permission, projectID string) (bool, error) {
+	return perm == security.DeploymentRead && projectID == string(r), nil
+}
+
+// A knowledge search through cortex finds a past report only for a run
+// whose principal reads deployments on its project, and none at all
+// before the authorizer is bound.
+func TestKnowledgeSearchFindsOnlyReadableReports(t *testing.T) {
+	warn := func(string, error) {}
+	person := security.Principal{Kind: security.KindUser, UserID: "usr_1", OrgID: "aorg_1"}
+	ctx := cortex.WithPrincipal(cortex.WithScope(t.Context(), agentscope.Scope{OrgID: "aorg_1"}.Cortex()),
+		security.AgentPrincipal("aorg_1", &person))
+	found := func(authz func() agentknowledge.ProjectAuthorizer) []string {
+		t.Helper()
+		eng, err := cortexengine.New(cortexengine.WithKnowledge(pastReports{}), quietKnowledgeOption(warn, authz))
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks, err := eng.Knowledge().Retrieve(ctx, "why did it fail", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(chunks))
+		for _, c := range chunks {
+			out = append(out, c.Content)
+		}
+		return out
+	}
+	if got := found(func() agentknowledge.ProjectAuthorizer { return readsOn("proj_1") }); !slices.Equal(got, []string{"p1's report", "docs"}) {
+		t.Fatalf("a reader of proj_1 found %v", got)
+	}
+	if got := found(func() agentknowledge.ProjectAuthorizer { return nil }); !slices.Equal(got, []string{"docs"}) {
+		t.Fatalf("before the authorizer is bound the search found %v", got)
+	}
+	if got := (&Extension{}).knowledgeAuthz(); got != nil {
+		t.Fatalf("an extension with no authorizer gives %v", got)
 	}
 }

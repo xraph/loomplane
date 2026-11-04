@@ -95,7 +95,7 @@ If a run dies partway, a check every five minutes fails any page that went quiet
 
 ## Your workspace's documents
 
-Each workspace gets a collection of its own, made the first time it's needed, for its own documents, such as reports and runbooks. Only that workspace's agent can search it. Embeddings for them are billed to the workspace's AI budget, so they count against the same limit as the agent's other model calls.
+Each workspace gets a collection of its own, made the first time it's needed, for its own documents, such as reports and runbooks. Only that workspace's agent can search it. A report turns up only when the person the agent works for has `deployment:read` on the report's project, so a search never hands you a report you couldn't open yourself. Embeddings for them are billed to the workspace's AI budget, so they count against the same limit as the agent's other model calls.
 
 ## Turning it on for a workspace
 

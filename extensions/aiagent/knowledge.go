@@ -67,8 +67,9 @@ func (k *knowledgeExtension) Register(app forge.App) error {
 	weaveext.WithVectorStore(newVectorStore(db, k.ai.Knowledge.Dimensions))(k.Extension)
 	weaveext.WithEngineOption(weaveengine.WithEmbedder(newEmbedder(k.ai, k.gateway, k.tenants)))(k.Extension)
 	// Weave's extension sets no chunker, and ingest refuses to run
-	// without one.
-	weaveext.WithEngineOption(weaveengine.WithChunker(chunker.NewRecursiveChunker()))(k.Extension)
+	// without one. agentknowledge's writes each document's kind and
+	// project on its chunks, which is what a search gets back.
+	weaveext.WithEngineOption(weaveengine.WithChunker(agentknowledge.Chunker(chunker.NewRecursiveChunker())))(k.Extension)
 	return k.Extension.Register(app)
 }
 
@@ -213,10 +214,15 @@ func (e *Extension) startKnowledge(ctx context.Context) {
 var errSearchNotReady = errors.New("knowledge search isn't ready yet; answer from your tools")
 
 // quietKnowledge is cortex's knowledge provider with its errors replaced
-// by errSearchNotReady and logged.
+// by errSearchNotReady and logged, and with what it finds cut to what the
+// run may read (agentknowledge.Readable): a past report only for those
+// who read deployments on its project.
 type quietKnowledge struct {
 	knowledge.Provider
 	warn func(msg string, err error)
+	// authz returns the authorizer that checks a report's project. While
+	// it returns nil, no report is found.
+	authz func() agentknowledge.ProjectAuthorizer
 }
 
 func (q quietKnowledge) Retrieve(ctx context.Context, query string, params *knowledge.RetrieveParams) ([]knowledge.ScoredChunk, error) {
@@ -224,6 +230,14 @@ func (q quietKnowledge) Retrieve(ctx context.Context, query string, params *know
 	if err != nil {
 		q.warn("aiagent: a knowledge search failed", err)
 		return nil, errSearchNotReady
+	}
+	var authz agentknowledge.ProjectAuthorizer
+	if q.authz != nil {
+		authz = q.authz()
+	}
+	chunks, err = agentknowledge.Readable(ctx, authz, chunks)
+	if err != nil {
+		q.warn("aiagent: a knowledge search couldn't check who may read a report, so it left the report out", err)
 	}
 	return chunks, nil
 }
@@ -239,15 +253,26 @@ func (q quietKnowledge) ListCollections(ctx context.Context) ([]knowledge.Collec
 
 // quietKnowledgeOption wraps the knowledge provider cortex has by the
 // time the host's engine options run (the weave adapter it wired) in
-// quietKnowledge. With none, it does nothing.
-func quietKnowledgeOption(warn func(msg string, err error)) cortexengine.Option {
+// quietKnowledge, checking reports' projects with authz. With none, it
+// does nothing.
+func quietKnowledgeOption(warn func(msg string, err error), authz func() agentknowledge.ProjectAuthorizer) cortexengine.Option {
 	return func(eng *cortexengine.Engine) error {
 		k := eng.Knowledge()
 		if k == nil {
 			return nil
 		}
-		return cortexengine.WithKnowledge(quietKnowledge{Provider: k, warn: warn})(eng)
+		return cortexengine.WithKnowledge(quietKnowledge{Provider: k, warn: warn, authz: authz})(eng)
 	}
+}
+
+// knowledgeAuthz is the authorizer knowledge searches check a report's
+// project with, once bindAuthorization has set it, else nil.
+func (e *Extension) knowledgeAuthz() agentknowledge.ProjectAuthorizer {
+	if e.authz == nil || e.authz.Authz == nil {
+		// Returned as is, a nil *Authorizer would make a non-nil interface.
+		return nil
+	}
+	return e.authz.Authz
 }
 
 // warnKnowledge logs a knowledge search's failure, once the extension has

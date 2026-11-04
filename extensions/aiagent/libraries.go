@@ -108,7 +108,7 @@ func (e *Extension) cortexOptions() []cortexext.ExtOption {
 			cortexext.WithWeaveOptions(knowledgeOptions()...),
 			// A host engine option runs after the weave adapter is wired,
 			// so this wraps it.
-			cortexext.WithEngineOption(quietKnowledgeOption(e.warnKnowledge)),
+			cortexext.WithEngineOption(quietKnowledgeOption(e.warnKnowledge, e.knowledgeAuthz)),
 		)
 	}
 	engineOpts := e.engineOptions()

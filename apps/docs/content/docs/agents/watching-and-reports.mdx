@@ -133,7 +133,7 @@ Until an installation accepts, its reports go to Herald only. The dashboard show
 
 In the dashboard, **Deployments, Reports** lists the open reports, with a count beside it. Filter by status (open, resolved, closed or all) and by project. A report's page has its facts, what Loomplane already did, what the agent thinks, where it went (the issue, or why there's none) and the records it's about. **Close** is there when you can close it. When the watcher has stopped for the budget, a banner says so.
 
-You see a report when you have `agent:use` and `deployment:read` on its project. A team's grant on a project counts there.
+You see a report when you have `agent:use` and `deployment:read` on its project. A team's grant on a project counts there. The agent keeps to the same rule when it searches past reports for you: it only finds reports of projects you can read deployments on.
 
 From the command line:
 

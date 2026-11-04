@@ -229,6 +229,8 @@ func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome
 	if d.Untrusted {
 		md["trust"] = TrustUntrusted
 	}
+	// Every chunk carries the kind and project too, for Readable.
+	ctx = withChunkMetadata(ctx, map[string]string{"kind": d.Kind, "project_id": d.ProjectID})
 	return s.ingest(ctx, eng, &weaveengine.IngestInput{
 		CollectionID: col.ID, SourceKey: d.SourceKey, Title: d.Title, Source: d.URL,
 		Content: d.Content, Metadata: md,
