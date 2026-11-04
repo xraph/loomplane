@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/cortex/llm"
 	"github.com/xraph/cortex/tool"
 
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -510,6 +511,21 @@ type Deps struct {
 	// aiagent sets it to the tool authorizer's Promote, which reads the
 	// gate installed at call time. Nil never allows.
 	Promote func(ctx context.Context, call Call, plan *planning.Plan) (allowed bool, failed []string, err error)
+	// Reports are the agent's reports, for internal/agentreports/reportops.
+	// Nil until aiagent builds them; the report operations refuse then.
+	Reports *agentreports.Service
+	// InvestigationOf reads the task record of the run runID: the task and
+	// the report it investigates, when the run is a report's investigation
+	// that hasn't finished, else "" and "". update_report asks it, since
+	// the watcher starts an investigation before it stores the task on the
+	// report. aiagent adapts agentruns.Service.ByRun. Nil: no run is an
+	// investigation.
+	InvestigationOf func(ctx context.Context, orgID, runID string) (taskID, reportID string, err error)
+	// DeliverReport queues the delivery job of a report whose delivery
+	// open_report just marked queued. The watcher's jobs set it; nil
+	// leaves delivery to the watcher's next pass, and open_report doesn't
+	// mark the delivery queued then.
+	DeliverReport func(ctx context.Context, orgID, reportID string)
 }
 
 // PersonNamer names a person by their user ID, never by their email.

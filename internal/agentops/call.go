@@ -8,6 +8,7 @@ import (
 
 	"github.com/xraph/cortex"
 
+	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -116,16 +117,25 @@ func (c Call) inScope(ctx context.Context, projectID, environmentID string) erro
 	return nil
 }
 
+// InScope is inScope for operations served outside this package: it
+// refuses a project or environment the run isn't scoped to, as if it
+// didn't exist, and notes the project for the call's audit entry.
+func (c Call) InScope(ctx context.Context, projectID, environmentID string) error {
+	return c.inScope(ctx, projectID, environmentID)
+}
+
 // notFound are the errors that mean "no such thing" across the services.
 var notFound = []error{
 	errOutOfScope, errProjectNotFound, errNoService,
 	projects.ErrNotFound, projects.ErrEnvironmentNotFound, planning.ErrNotFound, deployments.ErrNotFound,
 	discovery.ErrNotFound, environments.ErrNotFound, manifests.ErrNotFound, releasewatch.ErrNotFound,
+	agentreports.ErrNotFound,
 }
 
 // invalid are the errors that mean the request itself was wrong.
 var invalid = []error{
 	errInvalid, projects.ErrInvalid, planning.ErrInvalid, discovery.ErrInvalid, environments.ErrInvalid, manifests.ErrInvalid,
+	agentreports.ErrInvalid,
 }
 
 // errInvalid is a request an operation refuses before calling a service.
@@ -137,7 +147,8 @@ func ErrorKind(err error) string {
 	switch {
 	case err == nil:
 		return "success"
-	case errors.Is(err, security.ErrForbidden), errors.Is(err, security.ErrUnauthenticated), errors.Is(err, errNeedsAPerson):
+	case errors.Is(err, security.ErrForbidden), errors.Is(err, security.ErrUnauthenticated), errors.Is(err, errNeedsAPerson),
+		errors.Is(err, agentreports.ErrNotYourReport):
 		return "forbidden"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "canceled"

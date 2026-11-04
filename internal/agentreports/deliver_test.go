@@ -684,7 +684,7 @@ func secretsNeverReachTheIssueOrNotice(t *testing.T, e *deliverEnv) {
 	if ok, err := e.svc.SetInvestigation(ctx, e.org, r.ID, []string{InvestigationNone}, Investigation{Status: InvestigationRunning, TaskID: "atask_1"}); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	if _, err := e.svc.WriteFindings(ctx, e.org, r.ID, "atask_1", FindingsInput{
+	if _, err := e.svc.WriteFindings(ctx, e.org, r.ID, Writer{TaskID: "atask_1"}, FindingsInput{
 		Summary: "The database password " + projectSecret + " was rejected.", LikelyCause: "It connects with " + dbURL + ".",
 		Suggestions: []string{"Rotate " + awsKey}, Confidence: "high",
 	}); err != nil {

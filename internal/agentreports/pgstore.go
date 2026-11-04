@@ -295,15 +295,20 @@ func (s *PgStore) SetInvestigation(ctx context.Context, orgID, id string, from [
 }
 
 // WriteFindings implements Store.
-func (s *PgStore) WriteFindings(ctx context.Context, orgID, id, taskID string, f Findings) (*Report, error) {
+// The task is checked in the same UPDATE, so an investigation replaced
+// or stored meanwhile decides it.
+func (s *PgStore) WriteFindings(ctx context.Context, orgID, id string, w Writer, f Findings) (*Report, error) {
 	findings, err := json.Marshal(f)
 	if err != nil {
 		return nil, err
 	}
 	r, err := scanRecord(s.db.QueryRow(ctx, `UPDATE loomplane_agent_reports
 		SET findings = $3, revision = revision + 1, updated_at = $4
-		WHERE org_id = $1 AND id = $2 AND $5::text <> '' AND $5::text IN (task_id, opened_by_task)
-		RETURNING `+reportColumns, orgID, id, findings, f.WrittenAt.UTC(), taskID))
+		WHERE org_id = $1 AND id = $2 AND $5::text <> '' AND (
+			$5::text IN (task_id, opened_by_task)
+			OR ($6::boolean AND task_id = '' AND investigation IN ('queued', 'running')
+				AND signal <> 'manual' AND opened_by = '' AND opened_by_task = ''))
+		RETURNING `+reportColumns, orgID, id, findings, f.WrittenAt.UTC(), w.TaskID, w.Investigates == id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		if _, gerr := s.Get(ctx, orgID, id); gerr != nil {
 			return nil, gerr

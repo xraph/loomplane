@@ -178,6 +178,7 @@ func (e *Extension) knowledgeOn(ctx context.Context, orgID string) bool {
 // agent on. It provides the scope binder, the scanner, the runs, the
 // conversations and knowledge, and serves the agent's status, each
 // project's autonomy, its requests, and the conversations and their tasks.
+// It builds and provides the agent's reports.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -233,6 +234,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	if knowledgeErr := e.registerKnowledge(c, settings); knowledgeErr != nil {
 		return knowledgeErr
+	}
+	if reportsErr := e.registerReports(c, projectSvc); reportsErr != nil {
+		return reportsErr
 	}
 	if routesErr := mountRoutes(fapp.Router(), guard, settings, projectSvc); routesErr != nil {
 		return routesErr

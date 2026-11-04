@@ -59,6 +59,20 @@ func (d *Deps) findProject(ctx context.Context, call Call, ref string) (*project
 	return found, nil
 }
 
+// FindProject is findProject for operations served outside this package:
+// a project by ID, slug or name, as the principal sees it and within the
+// run's scope.
+func (d *Deps) FindProject(ctx context.Context, call Call, ref string) (*projects.Project, error) {
+	return d.findProject(ctx, call, ref)
+}
+
+// FindEnvironment is environment for operations served outside this
+// package: one of the project's environments by name, within the run's
+// scope.
+func (d *Deps) FindEnvironment(ctx context.Context, call Call, projectID, name string) (*projects.Environment, error) {
+	return d.environment(ctx, call, projectID, name)
+}
+
 // environment finds one of a project's environments by name.
 func (d *Deps) environment(ctx context.Context, call Call, projectID, name string) (*projects.Environment, error) {
 	envs, err := d.Projects.Environments(ctx, call.Principal, projectID)

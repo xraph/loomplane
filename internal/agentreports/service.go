@@ -90,6 +90,17 @@ type FindingsInput struct {
 	Confidence  string   `json:"confidence"`   // low, medium or high
 }
 
+// Writer is the task writing a report's findings.
+type Writer struct {
+	TaskID string
+	// Investigates is the report the task's own record says it
+	// investigates, read from the task store and never from the model;
+	// "" for every other task. The watcher starts an investigation before
+	// it can store the task's ID on the report, so until it does, this is
+	// how the investigation is told apart.
+	Investigates string
+}
+
 // ListFilter narrows a person's list.
 type ListFilter struct {
 	Status    string // "open" (default), "resolved", "closed" or "all"
@@ -137,9 +148,12 @@ type Store interface {
 	// SetInvestigation moves the investigation only when it is in from,
 	// and reports whether it did.
 	SetInvestigation(ctx context.Context, orgID, id string, from []string, inv Investigation, at time.Time) (bool, error)
-	// WriteFindings writes only for taskID, the report's investigation or
-	// the chat that opened it, or returns ErrNotYourReport.
-	WriteFindings(ctx context.Context, orgID, id, taskID string, f Findings) (*Report, error)
+	// WriteFindings writes only for w's task when it is the report's
+	// investigation or the chat that opened it, or returns
+	// ErrNotYourReport. An investigation the watcher has queued but not
+	// yet stored the task of (no task ID, queued or running) also takes
+	// the findings of a task whose own record names the report.
+	WriteFindings(ctx context.Context, orgID, id string, w Writer, f Findings) (*Report, error)
 	// Documents returns the reports with findings or no longer open,
 	// updated after after, oldest first. A full page goes on through every
 	// report updated at the same moment as its last, so it can hold more
@@ -544,7 +558,7 @@ func (s *Service) SetInvestigation(ctx context.Context, orgID, id string, from [
 
 // WriteFindings stores what an investigation found. Only the task that
 // investigates the report, or the chat that opened a manual one, may.
-func (s *Service) WriteFindings(ctx context.Context, orgID, id, taskID string, in FindingsInput) (*Report, error) {
+func (s *Service) WriteFindings(ctx context.Context, orgID, id string, w Writer, in FindingsInput) (*Report, error) {
 	f, err := validFindings(in)
 	if err != nil {
 		return nil, err
@@ -552,7 +566,7 @@ func (s *Service) WriteFindings(ctx context.Context, orgID, id, taskID string, i
 	f.WrittenAt = s.now()
 	// The store checks the task in the same write, so an investigation
 	// replaced meanwhile can't write.
-	return s.d.Store.WriteFindings(ctx, orgID, id, taskID, f)
+	return s.d.Store.WriteFindings(ctx, orgID, id, w, f)
 }
 
 func validFindings(in FindingsInput) (Findings, error) {

@@ -282,6 +282,7 @@ var serviceCases = []serviceCase{
 	{"CloseNeedsDeploymentCreate", closeNeedsDeploymentCreate},
 	{"PeopleOnlySeeProjectsTheyCanRead", peopleOnlySeeProjectsTheyCanRead},
 	{"FindingsOnlyFromTheInvestigation", findingsOnlyFromTheInvestigation},
+	{"FindingsBeforeTheTaskIsStored", findingsBeforeTheTaskIsStored},
 	{"InvestigationMovesOnlyFromTheGivenStates", investigationMovesOnlyFromTheGivenStates},
 	{"FindingsCommentOnlyWithAnIssue", findingsCommentOnlyWithAnIssue},
 	{"InvestigatingFollowsReportsThatResolved", investigatingFollowsReportsThatResolved},
@@ -332,6 +333,9 @@ func TestPeopleOnlySeeProjectsTheyCanRead(t *testing.T) {
 }
 func TestFindingsOnlyFromTheInvestigation(t *testing.T) {
 	findingsOnlyFromTheInvestigation(t, newMemHarness(t))
+}
+func TestFindingsBeforeTheTaskIsStored(t *testing.T) {
+	findingsBeforeTheTaskIsStored(t, newMemHarness(t))
 }
 func TestInvestigationMovesOnlyFromTheGivenStates(t *testing.T) {
 	investigationMovesOnlyFromTheGivenStates(t, newMemHarness(t))
@@ -704,10 +708,10 @@ func findingsOnlyFromTheInvestigation(t *testing.T, h *harness) {
 	}
 	in := FindingsInput{Summary: "The API ran out of memory on start.", LikelyCause: "A new cache.",
 		Suggestions: []string{"Raise the memory limit."}, Confidence: "medium"}
-	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, "atask_2", in); !errors.Is(err, ErrNotYourReport) {
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: "atask_2"}, in); !errors.Is(err, ErrNotYourReport) {
 		t.Fatalf("another task: %v", err)
 	}
-	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, "", in); !errors.Is(err, ErrNotYourReport) {
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: ""}, in); !errors.Is(err, ErrNotYourReport) {
 		t.Fatalf("no task: %v", err)
 	}
 	for name, bad := range map[string]FindingsInput{
@@ -719,12 +723,12 @@ func findingsOnlyFromTheInvestigation(t *testing.T, h *harness) {
 		"long suggestion":  {Summary: "s", Suggestions: []string{strings.Repeat("x", 501)}, Confidence: "low"},
 		"confidence":       {Summary: "s", Confidence: "certain"},
 	} {
-		if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, "atask_1", bad); !errors.Is(err, ErrInvalid) {
+		if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: "atask_1"}, bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	h.clock.advance(time.Minute)
-	got, err := h.svc.WriteFindings(ctx, h.org, r.ID, "atask_1", in)
+	got, err := h.svc.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: "atask_1"}, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,13 +745,13 @@ func findingsOnlyFromTheInvestigation(t *testing.T, h *harness) {
 		Investigation{Status: InvestigationQueued, TaskID: "atask_3"}); !ok || err != nil {
 		t.Fatalf("requeue: %v %v", ok, err)
 	}
-	if _, err := h.store.WriteFindings(ctx, h.org, r.ID, "atask_1", Findings{Summary: "stale", Confidence: "low", WrittenAt: base}); !errors.Is(err, ErrNotYourReport) {
+	if _, err := h.store.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: "atask_1"}, Findings{Summary: "stale", Confidence: "low", WrittenAt: base}); !errors.Is(err, ErrNotYourReport) {
 		t.Fatalf("a replaced task writes: %v", err)
 	}
 	if read := h.lookup(t, r.ID); read.Findings == nil || read.Findings.Summary != in.Summary {
 		t.Fatalf("findings after a stale write: %+v", read.Findings)
 	}
-	if _, err := h.svc.WriteFindings(ctx, h.org, "arep_missing", "atask_1", in); !errors.Is(err, ErrNotFound) {
+	if _, err := h.svc.WriteFindings(ctx, h.org, "arep_missing", Writer{TaskID: "atask_1"}, in); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
 	}
 
@@ -755,8 +759,78 @@ func findingsOnlyFromTheInvestigation(t *testing.T, h *harness) {
 	sig := h.signal(SignalManual, "chat", "")
 	sig.OpenedBy, sig.OpenedByTask = developer, "atask_chat"
 	manual := h.observe(t, sig).Report
-	if _, err := h.svc.WriteFindings(ctx, h.org, manual.ID, "atask_chat", in); err != nil {
+	if _, err := h.svc.WriteFindings(ctx, h.org, manual.ID, Writer{TaskID: "atask_chat"}, in); err != nil {
 		t.Fatalf("manual: %v", err)
+	}
+}
+
+// The watcher claims a report (queued, no task), starts the run, and only
+// then stores the task. A fast investigation writing in between is told
+// apart by its own task record, which names the report; nothing else is.
+func findingsBeforeTheTaskIsStored(t *testing.T, h *harness) {
+	ctx := context.Background()
+	in := FindingsInput{Summary: "The API ran out of memory on start.", Confidence: "medium"}
+	r := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_1#0")).Report
+	other := h.observe(t, h.signal(SignalDeploymentFailed, "service:web", "dep_1#0")).Report
+	ours := Writer{TaskID: "atask_1", Investigates: r.ID}
+
+	// Not queued yet: nothing is being investigated.
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, ours, in); !errors.Is(err, ErrNotYourReport) {
+		t.Fatalf("before the claim: %v", err)
+	}
+	for _, id := range []string{r.ID, other.ID} {
+		if ok, err := h.svc.SetInvestigation(ctx, h.org, id, []string{InvestigationNone},
+			Investigation{Status: InvestigationQueued}); !ok || err != nil {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+	}
+	for name, w := range map[string]Writer{
+		"a chat":                       {TaskID: "atask_chat"},
+		"an investigation of another":  {TaskID: "atask_2", Investigates: other.ID},
+		"a record without a task":      {Investigates: r.ID},
+		"the right task, other report": {TaskID: "atask_1", Investigates: other.ID},
+	} {
+		if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, w, in); !errors.Is(err, ErrNotYourReport) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, ours, in); err != nil {
+		t.Fatalf("the investigation, queued: %v", err)
+	}
+	// Running, still without the task: the same.
+	if ok, err := h.svc.SetInvestigation(ctx, h.org, other.ID, []string{InvestigationQueued},
+		Investigation{Status: InvestigationRunning}); !ok || err != nil {
+		t.Fatalf("run: %v %v", ok, err)
+	}
+	if _, err := h.svc.WriteFindings(ctx, h.org, other.ID, Writer{TaskID: "atask_2", Investigates: other.ID}, in); err != nil {
+		t.Fatalf("the investigation, running: %v", err)
+	}
+	// Once the task is stored, only it writes, whatever a record says.
+	if ok, err := h.svc.SetInvestigation(ctx, h.org, r.ID, []string{InvestigationQueued},
+		Investigation{Status: InvestigationRunning, TaskID: "atask_1", RunID: "arun_1"}); !ok || err != nil {
+		t.Fatalf("store the task: %v %v", ok, err)
+	}
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, Writer{TaskID: "atask_9", Investigates: r.ID}, in); !errors.Is(err, ErrNotYourReport) {
+		t.Fatalf("another task once the task is stored: %v", err)
+	}
+	if _, err := h.svc.WriteFindings(ctx, h.org, r.ID, ours, in); err != nil {
+		t.Fatalf("the stored task: %v", err)
+	}
+	// Done: no task record opens it again.
+	if ok, err := h.svc.SetInvestigation(ctx, h.org, other.ID, []string{InvestigationRunning},
+		Investigation{Status: InvestigationDone}); !ok || err != nil {
+		t.Fatalf("finish: %v %v", ok, err)
+	}
+	if _, err := h.svc.WriteFindings(ctx, h.org, other.ID, Writer{TaskID: "atask_2", Investigates: other.ID}, in); !errors.Is(err, ErrNotYourReport) {
+		t.Fatalf("after it finished: %v", err)
+	}
+
+	// A manual report keeps the chat rule, whatever a record names.
+	sig := h.signal(SignalManual, "chat", "")
+	sig.OpenedBy, sig.OpenedByTask = developer, "atask_chat"
+	manual := h.observe(t, sig).Report
+	if _, err := h.svc.WriteFindings(ctx, h.org, manual.ID, Writer{TaskID: "atask_5", Investigates: manual.ID}, in); !errors.Is(err, ErrNotYourReport) {
+		t.Fatalf("a record naming a manual report: %v", err)
 	}
 }
 
@@ -955,7 +1029,7 @@ func documentsSkipOpenReportsWithoutFindings(t *testing.T, h *harness) {
 	h.clock.advance(time.Minute)
 	h.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}, Components: []string{"service:db"}, Reason: "fixed"})
 	h.clock.advance(time.Minute)
-	if _, err := h.svc.WriteFindings(ctx, h.org, withFindings.ID, "atask_1", FindingsInput{Summary: "Out of memory.", Confidence: "high"}); err != nil {
+	if _, err := h.svc.WriteFindings(ctx, h.org, withFindings.ID, Writer{TaskID: "atask_1"}, FindingsInput{Summary: "Out of memory.", Confidence: "high"}); err != nil {
 		t.Fatal(err)
 	}
 	docs, err := h.svc.Documents(ctx, h.org, time.Time{}, 10)
@@ -1003,7 +1077,7 @@ func reportsStayInTheirWorkspace(t *testing.T, h *harness) {
 	if h.lookup(t, r.ID).Status != StatusOpen {
 		t.Fatal("clear crossed workspaces")
 	}
-	if _, err := h.svc.WriteFindings(ctx, otherOrg, r.ID, "atask_1", FindingsInput{Summary: "s", Confidence: "low"}); !errors.Is(err, ErrNotFound) {
+	if _, err := h.svc.WriteFindings(ctx, otherOrg, r.ID, Writer{TaskID: "atask_1"}, FindingsInput{Summary: "s", Confidence: "low"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("findings across workspaces: %v", err)
 	}
 }
@@ -1193,14 +1267,15 @@ func (m *memStore) SetInvestigation(_ context.Context, orgID, id string, from []
 	return true, nil
 }
 
-func (m *memStore) WriteFindings(_ context.Context, orgID, id, taskID string, f Findings) (*Report, error) {
+func (m *memStore) WriteFindings(_ context.Context, orgID, id string, w Writer, f Findings) (*Report, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, err := m.find(orgID, id)
 	if err != nil {
 		return nil, err
 	}
-	if taskID == "" || (taskID != r.TaskID && taskID != r.OpenedByTask) {
+	queued := r.TaskID == "" && (r.Investigation == InvestigationQueued || r.Investigation == InvestigationRunning) && !r.manual()
+	if w.TaskID == "" || (w.TaskID != r.TaskID && w.TaskID != r.OpenedByTask && (!queued || w.Investigates != id)) {
 		return nil, ErrNotYourReport
 	}
 	written := f
