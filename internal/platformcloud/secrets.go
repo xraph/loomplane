@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -93,4 +94,25 @@ func (s *Service) registryConfig(ctx context.Context, orgID string) (*registry.C
 		Password:     cred.Password,
 		Token:        cred.Token,
 	}, nil
+}
+
+// errRegistryUnavailable stands in for anything that went wrong reading the
+// platform registry: its settings, its credential or the secret store.
+var errRegistryUnavailable = &workspaceError{msg: "Loomplane Cloud's image registry isn't ready right now."}
+
+// Registry is the registry the organization's platform builds push to and
+// its platform deploys pull from: the platform registry, in the
+// organization's own repository. Tokens minted from it are scoped under that
+// repository, so a workspace never reaches another's images. Its errors are
+// safe to show the workspace.
+func (s *Service) Registry(ctx context.Context, orgID string) (*registry.Config, error) {
+	if err := checkTenant(ctx, orgID); err != nil {
+		return nil, err
+	}
+	cfg, err := s.registryConfig(ctx, orgID)
+	if err != nil {
+		slog.ErrorContext(ctx, "platform cloud registry failed", "org", orgID, "error", err)
+		return nil, errRegistryUnavailable
+	}
+	return cfg, nil
 }

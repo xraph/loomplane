@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/platformcloud"
 )
 
 func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *ImageArtifact, save func() error, reg *registry.Config) (reference string, err error) {
@@ -67,6 +68,38 @@ func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *
 		return "", fc.ErrConflict
 	}
 	state.SourceID, state.Builder, state.Registry, state.Attempt, state.Architecture = job.SourceID, target.Builder, target.Registry, job.LogAttempt(), client.Details["architecture"]
+	scope := fc.Scope{Org: job.Deployment.OrgID, Connection: target.Builder, Project: job.Deployment.ProjectID, Environment: job.Deployment.EnvironmentID, Resource: state.Operation}
+	return b.runFirecrackerBuild(ctx, job, state, save, reg, firecrackerBuildHost{client: client, scope: scope, credential: raw})
+}
+
+// firecrackerBuildHost is the checked host a build runs on, the scope its VM
+// runs under there, and what the build learns about how it ended.
+type firecrackerBuildHost struct {
+	client *fc.Client
+	scope  fc.Scope
+	// credential is the host credential, kept out of the build's logs.
+	credential []byte
+	// redact turns a failure into what the workspace may read, before the
+	// collector flattens it. Nil passes it on.
+	redact func(error) error
+	// exit, when set, is told when the build VM ran and whether it is gone.
+	exit *firecrackerBuildExit
+}
+
+// firecrackerBuildExit is how a build VM ended.
+type firecrackerBuildExit struct {
+	// applied is set once the VM was asked for, so one may be on the host.
+	applied bool
+	// started and ended bound the time the VM ran.
+	started, ended time.Time
+	// removed is set once the VM is known to be gone.
+	removed bool
+}
+
+// runFirecrackerBuild builds the approved source in a fresh build VM on a
+// checked host and pushes it to reg. The VM is removed when the build ends.
+func (b *ImageBuilder) runFirecrackerBuild(ctx context.Context, job *Job, state *ImageArtifact, save func() error, reg *registry.Config, host firecrackerBuildHost) (reference string, err error) {
+	client := host.client
 	endpoint, err := url.Parse(reg.Endpoint)
 	if err != nil {
 		return "", err
@@ -76,8 +109,14 @@ func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *
 	if saveErr := save(); saveErr != nil {
 		return "", saveErr
 	}
-	collector = job.Collector(state.Operation, state.Attempt)
-	collector.addCredential(raw)
+	collector := job.Collector(state.Operation, state.Attempt)
+	defer func() {
+		if err != nil && host.redact != nil {
+			err = host.redact(err)
+		}
+		err = collector.safeError(err)
+	}()
+	collector.addCredential(host.credential)
 	collector.addCredential([]byte(reg.Password))
 	collector.addCredential([]byte(reg.Token))
 	auth, err := registry.New(reg).DockerAuth(ctx, reg.Repository+"/loomplane/"+imageName(job), "pull,push")
@@ -99,7 +138,7 @@ func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *
 		return "", sourceErr
 	}
 	sourceDigest := sha256.Sum256(prepared.Tar)
-	q := fc.Request{Scope: fc.Scope{Org: job.Deployment.OrgID, Connection: target.Builder, Project: job.Deployment.ProjectID, Environment: job.Deployment.EnvironmentID, Resource: state.Operation}, RuntimeIdentity: client.Details["runtime_identity"], Spec: fc.Spec{Kind: "build", SourceDigest: fmt.Sprintf("%x", sourceDigest), VCPUs: 2, MemoryMiB: 2048, DiskMiB: 16384, Dockerfile: ".loomplane-build/Dockerfile", BuildImage: state.Tag}, Values: fc.Values{RegistryConfig: config}}
+	q := fc.Request{Scope: host.scope, RuntimeIdentity: client.Details["runtime_identity"], Spec: fc.Spec{Kind: "build", SourceDigest: fmt.Sprintf("%x", sourceDigest), VCPUs: platformcloud.BuildVCPUs, MemoryMiB: platformcloud.BuildMemoryMiB, DiskMiB: platformcloud.BuildDiskMiB, Dockerfile: ".loomplane-build/Dockerfile", BuildImage: state.Tag}, Values: fc.Values{RegistryConfig: config}}
 	renew := func() error {
 		var e error
 		q.Authority, e = b.FirecrackerAuthority.IssueFirecracker(ctx, q.Scope, "build/"+state.Operation, firecrackerDigest(q.Spec))
@@ -108,11 +147,18 @@ func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *
 	if renewErr := renew(); renewErr != nil {
 		return "", renewErr
 	}
+	exit := host.exit
+	if exit == nil {
+		exit = &firecrackerBuildExit{}
+	}
+	exit.applied = true
 	_, err = client.Apply(ctx, q)
 	if err != nil {
 		return "", err
 	}
+	exit.started = time.Now()
 	defer func() {
+		exit.ended = time.Now()
 		cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer stop()
 		cleanup := q
@@ -124,7 +170,9 @@ func (b *ImageBuilder) buildInFirecracker(ctx context.Context, job *Job, state *
 		}
 		if cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("build VM cleanup remains pending: %w", cleanupErr))
+			return
 		}
+		exit.removed = true
 	}()
 	status, err := client.Guest(ctx, q, "status", nil)
 	if err != nil {

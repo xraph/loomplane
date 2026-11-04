@@ -12,9 +12,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -30,13 +32,15 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/platformcloud"
 )
 
-// platformDriver runs nothing: every VM it is asked for is up and ready.
+// platformDriver runs nothing: every VM it is asked for is up and ready,
+// and a build VM succeeds once it has its source.
 type platformDriver struct {
 	mu       sync.Mutex
 	hostID   string
@@ -44,10 +48,19 @@ type platformDriver struct {
 	started  int
 	stopped  int
 	removed  int
+	// smt reports SMT on, which the platform policy refuses.
+	smt bool
+	// sources counts the source archives build VMs were sent.
+	sources int
+	// failBuild makes every build fail.
+	failBuild bool
 }
 
 func (d *platformDriver) Check(context.Context) (fc.Capabilities, error) {
-	return fc.Capabilities{HostID: d.hostID, Architecture: "amd64", RuntimeIdentity: strings.Repeat("a", 64), Isolation: true, Platform: true, IngressAddress: "203.0.113.9"}, nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return fc.Capabilities{HostID: d.hostID, Architecture: "amd64", RuntimeIdentity: strings.Repeat("a", 64), Isolation: true, Platform: true, IngressAddress: "203.0.113.9",
+		SMTActive: d.smt, DeniedPorts: []int{25, 465, 587}}, nil
 }
 func (d *platformDriver) Start(context.Context, fc.VM, fc.Spec) error {
 	d.mu.Lock()
@@ -74,8 +87,25 @@ func (d *platformDriver) Remove(context.Context, fc.VM) error {
 	d.removed++
 	return nil
 }
-func (d *platformDriver) Guest(context.Context, fc.VM, string, io.Reader) (fc.GuestStatus, error) {
-	return fc.GuestStatus{Ready: true, Output: "hello"}, nil
+func (d *platformDriver) Guest(_ context.Context, vm fc.VM, action string, body io.Reader) (fc.GuestStatus, error) {
+	if vm.Spec.Kind != "build" {
+		return fc.GuestStatus{Ready: true, Output: "hello"}, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if action == "source" {
+		if _, err := io.Copy(io.Discard, body); err != nil {
+			return fc.GuestStatus{}, err
+		}
+		d.sources++
+	}
+	switch {
+	case d.sources == 0:
+		return fc.GuestStatus{State: "awaiting-source"}, nil
+	case d.failBuild:
+		return fc.GuestStatus{State: "failed", Output: "step 1 failed"}, nil
+	}
+	return fc.GuestStatus{State: "succeeded", Digest: "sha256:" + strings.Repeat("c", 64), Output: "built"}, nil
 }
 
 // platformHost is a fake platform host: the real agent handler over a
@@ -86,6 +116,16 @@ type platformHost struct {
 	host   *fc.Host
 	driver *platformDriver
 	ca     string
+
+	mu    sync.Mutex
+	paths []string // every agent path the platform called
+}
+
+// called reports whether the platform called path on the host.
+func (h *platformHost) called(path string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Contains(h.paths, path)
 }
 
 // records lists what the host keeps, by scope.
@@ -132,14 +172,20 @@ func newPlatformHost(t *testing.T, name string, who platformIdentity) *platformH
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	h := &platformHost{id: "hw-" + name, driver: &platformDriver{hostID: "hw-" + name}}
-	h.host = &fc.Host{Store: store, Driver: h.driver, Limits: fc.Limits{VMs: 8, VCPUs: 16, MemoryMiB: 32768, DiskMiB: 100000}, Key: []byte(strings.Repeat("k", 32))}
+	h.host = &fc.Host{Store: store, Driver: h.driver, Limits: fc.Limits{VMs: 8, VCPUs: 16, MemoryMiB: 32768, DiskMiB: 100000, PerOrg: fc.OrgLimits{VMs: 4, VCPUs: 8, MemoryMiB: 8192}}, Key: []byte(strings.Repeat("k", 32))}
 	cert, err := x509.ParseCertificate(who.der)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
-	h.server = httptest.NewUnstartedServer(fc.Handler{Host: h.host, Platform: who.fingerprint})
+	agent := fc.Handler{Host: h.host, Platform: who.fingerprint}
+	h.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		h.paths = append(h.paths, r.URL.Path)
+		h.mu.Unlock()
+		agent.ServeHTTP(w, r)
+	}))
 	h.server.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS13}
 	h.server.StartTLS()
 	t.Cleanup(h.server.Close)
@@ -159,6 +205,10 @@ type fakePlatform struct {
 	moveTo     string
 	placements []*platformcloud.Placement
 	n          int
+	// registry is the platform registry builds push to.
+	registry *platformRegistry
+	// builds are the build VMs metered, by placement.
+	builds []string
 }
 
 func (f *fakePlatform) client(hostID string) (*fc.Client, error) {
@@ -194,7 +244,7 @@ func (f *fakePlatform) Session(ctx context.Context, orgID, projectID, envID, res
 		host = f.moveTo
 	}
 	f.n++
-	p := &platformcloud.Placement{ID: fmt.Sprintf("plc_%d", f.n), OrgID: orgID, ProjectID: projectID, EnvironmentID: envID, Resource: req.Resource, Kind: "service", HostID: &host,
+	p := &platformcloud.Placement{ID: fmt.Sprintf("plc_%d", f.n), OrgID: orgID, ProjectID: projectID, EnvironmentID: envID, Resource: req.Resource, Kind: req.Kind, HostID: &host,
 		VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: "reserved", InstanceID: resource}
 	f.placements = append(f.placements, p)
 	c, err := f.client(host)
@@ -271,22 +321,66 @@ func (f *fakePlatform) Removed(_ context.Context, orgID, placementID string) err
 	return nil
 }
 
-// countingIssuer authorizes every operation at the next generation.
+func (f *fakePlatform) Release(_ context.Context, placementID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.placements {
+		if p.ID == placementID {
+			p.State = "released"
+			return nil
+		}
+	}
+	return platformcloud.ErrNotFound
+}
+
+func (f *fakePlatform) Registry(_ context.Context, orgID string) (*registry.Config, error) {
+	if f.registry == nil {
+		return nil, errors.New("no platform registry")
+	}
+	return f.registry.config(orgID), nil
+}
+
+func (f *fakePlatform) RecordBuild(_ context.Context, p platformcloud.Placement, started, ended time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p.Kind != "build" || started.IsZero() || ended.Before(started) {
+		return fmt.Errorf("metered %+v from %v to %v", p, started, ended)
+	}
+	f.builds = append(f.builds, p.ID)
+	return nil
+}
+
+// countingIssuer authorizes every operation at the next generation. A build
+// renewing its authority keeps the generation it has, as the deployment
+// store does.
 type countingIssuer struct {
 	mu     sync.Mutex
 	n      int64
 	scopes []fc.Scope
+	builds map[string]fc.Authority
 }
 
-func (i *countingIssuer) IssueFirecracker(_ context.Context, scope fc.Scope, _, digest string) (fc.Authority, error) {
+func (i *countingIssuer) IssueFirecracker(_ context.Context, scope fc.Scope, operation, digest string) (fc.Authority, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if !scope.Valid() || len(digest) != 64 {
 		return fc.Authority{}, fc.ErrConflict
 	}
-	i.n++
 	i.scopes = append(i.scopes, scope)
-	return fc.Authority{Generation: i.n, Operation: fmt.Sprintf("op-%d", i.n), Expires: time.Now().Add(time.Minute)}, nil
+	key := scope.Key() + "/" + operation + "/" + digest
+	if a, ok := i.builds[key]; ok {
+		a.Expires = time.Now().Add(time.Minute)
+		return a, nil
+	}
+	i.n++
+	a := fc.Authority{Generation: i.n, Operation: fmt.Sprintf("op-%d", i.n), Expires: time.Now().Add(time.Minute)}
+	if strings.HasPrefix(operation, "build/") {
+		if i.builds == nil {
+			i.builds = map[string]fc.Authority{}
+		}
+		i.builds[key] = a
+	}
+	return a, nil
 }
 
 // platformInstances is Ctrl Plane's instance store as far as a deployment
@@ -527,13 +621,20 @@ func TestPlatformDeployRefusesNonRegistryConnection(t *testing.T) {
 
 // Loomplane Cloud runs only images named by a sha256 digest.
 func TestPlatformDeployNeedsDigestPinnedImage(t *testing.T) {
-	for _, image := range []string{"", "docker.io/team/web:latest", "docker.io/team/web@sha256:short", "@sha256:" + strings.Repeat("a", 64)} {
+	for _, image := range []string{"docker.io/team/web:latest", "docker.io/team/web@sha256:short", "@sha256:" + strings.Repeat("a", 64)} {
 		f := newPlatformFixture(t)
 		job := f.job(t)
 		job.Action.Service.BuildTarget.Image = image
 		if _, err := f.target.Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
 			t.Fatalf("%q: %v", image, err)
 		}
+	}
+	// Only the platform's own builder builds from source.
+	f := newPlatformFixture(t)
+	job := f.job(t)
+	job.Action.Service.BuildTarget = &planning.BuildTarget{BuilderCloud: connections.Firecracker, Builder: "conn_fc"}
+	if _, err := f.target.Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "digest-pinned") {
+		t.Fatalf("another builder: %v", err)
 	}
 }
 

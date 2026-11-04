@@ -88,6 +88,9 @@ type ImageArtifact struct {
 type ImageBuilder struct {
 	FirecrackerAuthority fc.Issuer
 	Dial                 func(context.Context, *server.Config) (*server.Client, error)
+	// Platform builds services that build from source on Loomplane Cloud.
+	// Nil refuses them.
+	Platform PlatformHosts
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -138,6 +141,20 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", errors.New("registry trust settings changed since review; plan again")
 		}
 	}
+	if platformSourceBuild(target) {
+		// Loomplane Cloud builds into, and reuses from, the workspace's own
+		// repository in the platform registry. It never goes through the
+		// workspace's connections.
+		if b.Platform == nil {
+			return "", errors.New("Loomplane Cloud builds aren't available here")
+		}
+		registryConfig, err = b.Platform.Registry(ctx, job.Deployment.OrgID)
+		if err != nil {
+			return "", err
+		}
+		collector.addCredential([]byte(registryConfig.Password))
+		collector.addCredential([]byte(registryConfig.Token))
+	}
 	if target.Image != "" || reused {
 		image, what := target.Image, "pinned"
 		if image == "" {
@@ -171,6 +188,9 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	}
 	if target.BuilderCloud == connections.Firecracker {
 		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
+	}
+	if platformSourceBuild(target) {
+		return b.buildOnPlatform(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")

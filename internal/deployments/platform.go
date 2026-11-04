@@ -9,12 +9,14 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xraph/ctrlplane"
 	cpauth "github.com/xraph/ctrlplane/auth"
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
@@ -43,6 +45,14 @@ type PlatformHosts interface {
 	Running(ctx context.Context, orgID, placementID, instance string, generation int64) error
 	Stopped(ctx context.Context, orgID, placementID string) error
 	Removed(ctx context.Context, orgID, placementID string) error
+	// Release gives a placement's room back, keeping its instance so
+	// whatever it may have left on its host can still be found.
+	Release(ctx context.Context, placementID string) error
+	// Registry is the platform registry, in the organization's own
+	// repository, that its source builds push to and its deploys pull from.
+	Registry(ctx context.Context, orgID string) (*registry.Config, error)
+	// RecordBuild meters a build VM that ran from started to ended.
+	RecordBuild(ctx context.Context, p platformcloud.Placement, started, ended time.Time) error
 }
 
 var _ PlatformHosts = (*platformcloud.Service)(nil)
@@ -55,9 +65,9 @@ var _ PlatformHosts = (*platformcloud.Service)(nil)
 // environment, and the platform connection. It never reads an
 // organization's connections.
 //
-// Loomplane Cloud doesn't build from source or route releases yet: a
-// service runs a digest-pinned image, and is reached on its private
-// address until its generated hostname is published.
+// A service runs a digest-pinned image or builds from source on Loomplane
+// Cloud itself, into the workspace's own repository in the platform
+// registry. Loomplane Cloud doesn't route releases yet.
 type PlatformTarget struct {
 	Ctrl     CtrlPlane
 	Platform PlatformHosts
@@ -89,7 +99,10 @@ func (t *PlatformTarget) region(region string) (*OwnedTarget, error) {
 		return e, nil
 	}
 	e := &OwnedTarget{Cloud: platformProvider, Ctrl: t.Ctrl, Credentials: registryOnly{t.Credentials}, Secrets: t.Secrets, RouteGuard: t.RouteGuard, FirecrackerAuthority: t.Authority, Bindings: t.Bindings,
-		providerKey: platformProvider + "." + region}
+		Builder:     &ImageBuilder{FirecrackerAuthority: t.Authority, Platform: t.Platform},
+		providerKey: platformProvider + "." + region, platformRegistry: func(ctx context.Context, orgID string) (*registry.Config, error) {
+			return t.Platform.Registry(ctx, orgID)
+		}}
 	e.Backend = func(string, string) owned.Backend { return t.newBackend(e, region) }
 	if t.regions == nil {
 		t.regions = map[string]*OwnedTarget{}
@@ -140,8 +153,8 @@ func (t *PlatformTarget) Apply(ctx context.Context, job *Job) (*Outcome, error) 
 		return nil, fmt.Errorf("%s isn't a reviewed Loomplane Cloud placement; plan again", a.Name)
 	case len(a.Routes) > 0:
 		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud doesn't run routed releases yet, so %s wasn't deployed.", a.Name))
-	case cfg.BuildTarget == nil || !pinnedImage(cfg.BuildTarget.Image):
-		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud runs digest-pinned images only for now. Give %s an image pinned with @sha256.", a.Name))
+	case cfg.BuildTarget == nil || (!platformSourceBuild(cfg.BuildTarget) && !pinnedImage(cfg.BuildTarget.Image)):
+		return nil, platformRefusalError(fmt.Sprintf("Loomplane Cloud builds from source or runs digest-pinned images. Give %s an image pinned with @sha256, or build it from source.", a.Name))
 	}
 	e, err := t.region(a.Region)
 	if err != nil {

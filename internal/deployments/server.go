@@ -44,6 +44,10 @@ const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
 const labelImage = owned.LabelImage
 
+// labelPlatformRegistry marks a service whose image Loomplane Cloud built,
+// pulled from the platform registry rather than a workspace connection.
+const labelPlatformRegistry = "loomplane.registry.platform"
+
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
@@ -104,6 +108,10 @@ type OwnedTarget struct {
 	// providerKey, when set, is the one Ctrl Plane provider key this
 	// target registers, whatever the connection: a Loomplane Cloud region's.
 	providerKey string
+	// platformRegistry is the Loomplane Cloud registry an image built there
+	// is pulled from, in the workspace's own repository. Nil refuses such
+	// an image.
+	platformRegistry func(ctx context.Context, orgID string) (*registry.Config, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -276,6 +284,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 	}
 	connection := labels[labelRegistry]
 	if connection == "" {
+		if labels[labelPlatformRegistry] == "true" {
+			return e.platformPull(ctx, labels, values)
+		}
 		return values, nil
 	}
 	if e.Credentials == nil {
@@ -742,6 +753,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[labelRegistry] = cfg.BuildTarget.Registry
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
+		if platformSourceBuild(cfg.BuildTarget) {
+			labels[labelPlatformRegistry] = "true"
+		}
 	}
 	if len(job.files) > 0 {
 		// The rendered bytes are part of the revision, so a changed file
