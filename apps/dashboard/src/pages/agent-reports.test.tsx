@@ -274,6 +274,14 @@ it("shows nothing, and asks for nothing, with AI off", async () => {
   expect(reads).toEqual([])
 })
 
+it("asks for nothing on a report when the agent is off", async () => {
+  state.agentOn = false
+  const { reads } = serve([report()])
+  showOne()
+  await screen.findByText(/The agent is off/)
+  expect(reads).toEqual([])
+})
+
 it("closes a report with a reason", async () => {
   const { writes } = serve([report()])
   showOne()

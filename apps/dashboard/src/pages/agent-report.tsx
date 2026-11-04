@@ -31,14 +31,16 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { useFeatures } from "@/lib/features"
+import { useAgent, useFeatures } from "@/lib/features"
+import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
 import { ago } from "@/lib/relative-time"
 import { Link } from "@/lib/router"
 import { useNow, usePeople, isAgentActor } from "@/lib/use-runs"
 import { IssueLine, SeverityDot, investigationText } from "./agent-reports"
 
-/** What Loomplane did on its own, by the signal that raised the report. */
+/** What Loomplane did on its own, by the signal that raised the report.
+ * Keep in step with alreadyDid in internal/agentreports/render.go. */
 function alreadyDid(signal: string): string {
   switch (signal) {
     case "canary_rolled_back":
@@ -53,6 +55,8 @@ function alreadyDid(signal: string): string {
 /** AgentReport is the page of one report. */
 export function AgentReport({ id }: { id: string }) {
   const features = useFeatures()
+  const agent = useAgent()
+  const { can } = useOrganization()
   return (
     <>
       <SiteHeader
@@ -61,7 +65,25 @@ export function AgentReport({ id }: { id: string }) {
           { label: "Report" },
         ]}
       />
-      <Page className="max-w-[880px]">{features.ai && <Loaded id={id} />}</Page>
+      <Page className="max-w-[880px]">
+        {!features.ai ? null : !can("agent:use") ? (
+          <Alert>
+            <AlertDescription>
+              Reports are restricted. Ask a workspace admin for access to the
+              agent.
+            </AlertDescription>
+          </Alert>
+        ) : !agent.enabled && !agent.loading ? (
+          <Alert>
+            <AlertDescription>
+              The agent is off. Reports show up here once a workspace admin
+              turns it on in AI settings.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          agent.enabled && <Loaded id={id} />
+        )}
+      </Page>
     </>
   )
 }
