@@ -397,6 +397,7 @@ var deliverCases = []deliverCase{
 	{name: "CommentsAreRedactedBeforeTheyAreEscaped", run: commentsAreRedactedBeforeTheyAreEscaped,
 		opts: deliverOptions{secrets: fakeSecrets{values: []string{"s3<cr@et-Val"}}}},
 	{name: "StalledWorkerOpensNoSecondIssue", run: stalledWorkerOpensNoSecondIssue},
+	{name: "DeletedIssueIsOpenedAgain", run: deletedIssueIsOpenedAgain},
 	{name: "UnreadableSecretsSendNothing", run: unreadableSecretsSendNothing,
 		opts: deliverOptions{secrets: fakeSecrets{values: []string{projectSecret}, err: errors.New("vault is down")}}},
 	{name: "SecretsOfAGoneProjectAreSkipped", run: secretsOfAGoneProjectAreSkipped,
@@ -989,7 +990,37 @@ func TestCloseIsRetriedWithoutASecondComment(t *testing.T) {
 func TestLostLeaseOpensNoIssue(t *testing.T)           { runMem(t, "LostLeaseOpensNoIssue") }
 func TestUnsavedNoticeHoldsBackGitHub(t *testing.T)    { runMem(t, "UnsavedNoticeHoldsBackGitHub") }
 func TestStalledWorkerOpensNoSecondIssue(t *testing.T) { runMem(t, "StalledWorkerOpensNoSecondIssue") }
-func TestUnreadableSecretsSendNothing(t *testing.T)    { runMem(t, "UnreadableSecretsSendNothing") }
+func TestDeletedIssueIsOpenedAgain(t *testing.T)       { runMem(t, "DeletedIssueIsOpenedAgain") }
+
+// An issue someone deleted on GitHub is opened again, once, on the next
+// change, and the report records the new one.
+func deletedIssueIsOpenedAgain(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	e.deliver(t, r.ID)
+	e.gh.DeleteIssue("acme/api", 1)
+	e.clock.advance(2 * time.Hour)
+	e.observe(t, e.signal(SignalDeploymentFailed, "service:api", "dep_2#0"))
+	e.deliver(t, r.ID)
+	if e.creates() != 2 {
+		t.Fatalf("%d creates", e.creates())
+	}
+	issues := e.issues()
+	if len(issues) != 2 || !issues[0].Deleted || issues[1].Deleted || !strings.Contains(issues[1].Body, "seen 2 times.") {
+		t.Fatalf("issues %+v", issues)
+	}
+	got := e.lookup(t, r.ID)
+	if got.Issue.Number != 2 || got.Issue.State != IssueOpen || got.Issue.Error != "" {
+		t.Fatalf("report issue %+v", got.Issue)
+	}
+	if hid := e.peek.hidden(t, e.org, r.ID); hid.IssueRevision != got.Revision || len(hid.IssueComments) != 0 {
+		t.Fatalf("delivery columns %+v", hid)
+	}
+	e.deliver(t, r.ID)
+	if e.creates() != 2 {
+		t.Fatalf("a delivery with nothing new opened another: %d creates", e.creates())
+	}
+}
+func TestUnreadableSecretsSendNothing(t *testing.T) { runMem(t, "UnreadableSecretsSendNothing") }
 func TestSecretsOfAGoneProjectAreSkipped(t *testing.T) {
 	runMem(t, "SecretsOfAGoneProjectAreSkipped")
 }

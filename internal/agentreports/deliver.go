@@ -353,13 +353,15 @@ func (st *issueStep) sync(iss repositories.Issues) error {
 		default:
 			// Opening an issue is the one step a second worker must never
 			// repeat. The lease is renewed first, only while it's still
-			// this worker's, and the issue is opened only when no worker
-			// recorded one meanwhile; it's recorded right after.
+			// this worker's, and the issue is opened only when the row
+			// still records the issue this step started from (none, or
+			// one GitHub just said is gone): another number means another
+			// worker opened one meanwhile. It's recorded right after.
 			held, err := st.s.d.Store.RenewDelivery(st.ctx, r.OrgID, r.ID, st.owner, DeliveryLease)
 			if err != nil {
 				return err
 			}
-			if held.Report.Issue.Number > 0 {
+			if held.Report.Issue.Number != r.Issue.Number {
 				return ErrLeaseLost
 			}
 			got, err := iss.Create(st.ctx, repositories.IssueInput{Title: title, Body: body, Labels: []string{Label}})

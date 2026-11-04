@@ -61,6 +61,9 @@ type IssueRecord struct {
 	// App's bot user or "User" for a person.
 	Author     string `json:"author"`
 	AuthorType string `json:"author_type"`
+	// Deleted is an issue someone deleted: GitHub answers 410 for it and
+	// lists it no more.
+	Deleted bool `json:"deleted"`
 }
 
 // TokenRequest is what one access_tokens call asked for.
@@ -164,6 +167,15 @@ func (s *Server) AddPullRequest(repo, title, body string, labels ...string) {
 		Number: len(r.issues) + 1, Title: title, Body: body, State: "open",
 		Labels: slices.Clone(labels), Comments: []string{}, PullRequest: true, Author: "octocat", AuthorType: "User",
 	})
+}
+
+// DeleteIssue deletes an issue, as a repository admin can on GitHub.
+func (s *Server) DeleteIssue(repo string, number int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.repos[strings.ToLower(repo)]; ok && number >= 1 && number <= len(r.issues) {
+		r.issues[number-1].Deleted = true
+	}
 }
 
 // AddIssue adds an issue as someone other than the App opened it, and
@@ -428,7 +440,7 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request, repo *reposi
 	var matched []*IssueRecord
 	for i := len(repo.issues) - 1; i >= 0; i-- {
 		is := repo.issues[i]
-		if state != "all" && is.State != state {
+		if is.Deleted || (state != "all" && is.State != state) {
 			continue
 		}
 		if !slices.ContainsFunc(want, func(l string) bool { return !slices.Contains(is.Labels, l) }) {
@@ -467,6 +479,10 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, repo *repository)
 	n, err := strconv.Atoi(r.PathValue("number"))
 	if err != nil || n < 1 || n > len(repo.issues) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return nil, false
+	}
+	if repo.issues[n-1].Deleted {
+		writeJSON(w, http.StatusGone, map[string]string{"message": "This issue was deleted"})
 		return nil, false
 	}
 	return repo.issues[n-1], true
