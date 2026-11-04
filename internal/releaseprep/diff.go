@@ -27,9 +27,8 @@ const (
 	MaxPatchedMigrations = 10
 
 	maxTitleRunes = 200
-	// githubCommitCap and githubFileCap are the most a GitHub comparison lists.
-	githubCommitCap = 250
-	githubFileCap   = 300
+	// githubFileCap is the most files a GitHub comparison lists.
+	githubFileCap = 300
 )
 
 // DiffCommit is one commit staging has and production doesn't.
@@ -71,7 +70,9 @@ type SourceDiff struct {
 	Additions    int             `json:"additions"`
 	Deletions    int             `json:"deletions"`
 	Migrations   []MigrationFile `json:"migrations"`
-	// Truncated is true when GitHub's 250-commit or 300-file cap was hit.
+	// Truncated is true when the diff isn't complete: GitHub's 250-commit or
+	// 300-file cap was hit, it counted more commits than were read, or a page
+	// failed. It always comes with an Error.
 	Truncated bool `json:"truncated"`
 	// Error says why the diff couldn't be read. A diff with an Error counts as
 	// unreadable evidence, never as no change.
@@ -98,7 +99,10 @@ func BuildDiff(d SourceDiff, c *repositories.Comparison) SourceDiff {
 		d.Error = "GitHub answered a comparison status Loomplane doesn't know"
 	}
 	d.AheadBy, d.BehindBy, d.TotalCommits = c.AheadBy, c.BehindBy, c.TotalCommits
-	d.Truncated = c.TotalCommits > len(c.Commits) && len(c.Commits) >= githubCommitCap || len(c.Files) >= githubFileCap
+	d.Truncated = c.Truncated || c.TotalCommits > len(c.Commits) || len(c.Files) >= githubFileCap
+	if d.Truncated && d.Error == "" {
+		d.Error = "the diff is incomplete, so commits or migrations may be missing"
+	}
 
 	d.Commits = nil
 	for i := len(c.Commits) - 1; i >= 0 && len(d.Commits) < MaxCommits; i-- {

@@ -3,8 +3,10 @@ package repositories_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -155,5 +157,99 @@ func TestCompareWithoutTokenSendsNoAuthorization(t *testing.T) {
 	})
 	if _, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// pagedCompare serves a comparison in pages of 100: commitsOn[page] commits
+// and filesOn[page] files, with a next link while pages remain. failPage
+// answers 500 for that page.
+func pagedCompare(t *testing.T, total int, commitsOn, filesOn map[int][]string, pages, failPage int) *repositories.GitHub {
+	t.Helper()
+	gh, _ := compareClient(t, func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page == failPage {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if page < pages {
+			w.Header().Set("Link", `<https://api.github.com/x?page=`+strconv.Itoa(page+1)+`>; rel="next", <https://api.github.com/x?page=9>; rel="last"`)
+		}
+		var commits, files []string
+		for _, n := range commitsOn[page] {
+			commits = append(commits, `{"sha":"`+n+`","commit":{"message":"m","author":{"name":"a"}}}`)
+		}
+		for _, n := range filesOn[page] {
+			files = append(files, `{"filename":"`+n+`","status":"added"}`)
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"ahead","ahead_by":%d,"total_commits":%d,"commits":[%s],"files":[%s]}`,
+			total, total, strings.Join(commits, ","), strings.Join(files, ","))
+	})
+	return gh
+}
+
+func names(prefix string, from, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s%03d", prefix, from+i)
+	}
+	return out
+}
+
+func TestCompareFollowsPagesAndFindsPageTwoFiles(t *testing.T) {
+	gh := pagedCompare(t, 150,
+		map[int][]string{1: names("c", 0, 100), 2: names("c", 100, 50)},
+		map[int][]string{1: names("a", 0, 100), 2: {"db/migrate/9.sql"}}, 2, 0)
+	got, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commits) != 150 || got.Commits[149].SHA != "c149" || got.Truncated {
+		t.Fatalf("commits = %d, truncated = %v", len(got.Commits), got.Truncated)
+	}
+	if len(got.Files) != 101 || got.Files[100].Filename != "db/migrate/9.sql" {
+		t.Fatalf("files = %d", len(got.Files))
+	}
+}
+
+func TestCompareTruncatesAtTheCommitCap(t *testing.T) {
+	gh := pagedCompare(t, 400,
+		map[int][]string{1: names("c", 0, 100), 2: names("c", 100, 100), 3: names("c", 200, 100)},
+		nil, 3, 0)
+	got, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commits) != 250 || !got.Truncated || got.TotalCommits != 400 {
+		t.Fatalf("commits = %d, truncated = %v, total = %d", len(got.Commits), got.Truncated, got.TotalCommits)
+	}
+}
+
+func TestCompareSecondPageFailureIsTruncated(t *testing.T) {
+	gh := pagedCompare(t, 150,
+		map[int][]string{1: names("c", 0, 100), 2: names("c", 100, 50)}, nil, 2, 2)
+	got, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, "")
+	if err == nil && (got == nil || !got.Truncated) {
+		t.Fatalf("a failed page read as complete: %+v, %v", got, err)
+	}
+}
+
+func TestCompareFilesOverTheCapAreTruncated(t *testing.T) {
+	gh := pagedCompare(t, 1,
+		map[int][]string{1: {"c1"}},
+		map[int][]string{1: names("f", 0, 100), 2: names("f", 100, 100), 3: names("f", 200, 100), 4: names("f", 300, 20)}, 4, 0)
+	got, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 300 || !got.Truncated {
+		t.Fatalf("files = %d, truncated = %v", len(got.Files), got.Truncated)
+	}
+}
+
+func TestCompareMoreCommitsThanCollectedIsTruncated(t *testing.T) {
+	gh := pagedCompare(t, 120, map[int][]string{1: names("c", 0, 100)}, nil, 1, 0)
+	got, err := gh.Compare(context.Background(), acmeAPI, baseSHA, headSHA, "")
+	if err != nil || !got.Truncated {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

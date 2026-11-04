@@ -163,3 +163,23 @@ func TestBuildDiffMarksGitHubCaps(t *testing.T) {
 		t.Error("180 of 180 commits is not GitHub's cap")
 	}
 }
+
+// A diff that isn't complete is unreadable evidence: the gate reads Error and
+// asks a person, so a migration that wasn't listed can never pass unseen.
+func TestBuildDiffIncompleteDiffIsUnreadable(t *testing.T) {
+	partial := comparison(10)
+	partial.Truncated = true
+	short := comparison(10)
+	short.TotalCommits = 40
+	capped := comparison(250)
+	capped.TotalCommits = 400
+	for name, c := range map[string]*repositories.Comparison{"partial read": partial, "total above collected": short, "commit cap": capped} {
+		got := releaseprep.BuildDiff(releaseprep.SourceDiff{}, c)
+		if !got.Truncated || got.Error == "" {
+			t.Errorf("%s: Truncated %v, Error %q", name, got.Truncated, got.Error)
+		}
+	}
+	if got := releaseprep.BuildDiff(releaseprep.SourceDiff{}, comparison(10)); got.Truncated || got.Error != "" {
+		t.Errorf("complete diff: %+v", got)
+	}
+}
