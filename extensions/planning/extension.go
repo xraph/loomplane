@@ -398,6 +398,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings
 	executors[connections.Firecracker] = firecrackerTarget
+	// Loomplane Cloud runs services on the platform's own Firecracker
+	// hosts, through no connection of the organization's. It refuses an
+	// organization it isn't enabled for, which is every organization on an
+	// instance with no platform hosts.
+	platformCloud := platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil)
+	executors[platformcloud.RuntimePlatform] = &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, guard: dialGuard, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
@@ -485,10 +491,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Dialer:            dialer,
 		Features:          e.features,
 		CatalogInputs:     catalogInputs,
-		// Loomplane Cloud previews room for services on its targets. It
-		// refuses an organization it isn't enabled for, which is every
-		// organization on an instance with no platform hosts.
-		Platform: platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil),
+		// Loomplane Cloud previews room for services on its targets with
+		// the service that places them.
+		Platform: platformCloud,
 	})
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}

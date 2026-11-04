@@ -40,7 +40,13 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if r.cloudProfiles == nil {
 		return stale("cannot be revalidated because the Cloud resolver is unavailable")
 	}
-	if pin.AccountIdentity == "" || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
+	// A Loomplane Cloud pin names no connection, so it has no account
+	// identity to verify; its target and room are checked below.
+	platform := pin.Platform != nil
+	if platform && (pin.Default || pin.ConnectionID != "" || a.ConnectionID != "" || pin.PoolID != "" || pin.Platform.Region != pin.Region) {
+		return stale("is not a Loomplane Cloud placement")
+	}
+	if pin.AccountIdentity == "" && !platform || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
 		return stale("has no verified identity or revision")
 	}
 	if pin.Provider != a.Provider || reviewed.provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || reviewed.region != a.Region {
@@ -91,6 +97,13 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 		if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID || target.LocationID != pin.LocationID || target.ManagedResourceID != pin.ManagedResourceID {
 			return stale("changed since review or is outside this scope")
 		}
+		if platform != (target.Runtime == platformProvider) || platform && target.Region != pin.Region {
+			return stale("changed since review or is outside this scope")
+		}
+	}
+	if platform {
+		// The platform places it when it deploys, under its own limits.
+		return nil
 	}
 	if pin.PoolID != "" && (a.Compensation == nil || !a.Compensation.Retained) {
 		validator, ok := r.plans.(interface {

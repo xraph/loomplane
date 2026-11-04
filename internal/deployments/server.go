@@ -101,6 +101,9 @@ type OwnedTarget struct {
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
+	// providerKey, when set, is the one Ctrl Plane provider key this
+	// target registers, whatever the connection: a Loomplane Cloud region's.
+	providerKey string
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -326,6 +329,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 // Register restores a connection-specific provider without opening credentials.
 func (e *OwnedTarget) Register(org, connection string) string {
 	key := e.Cloud + "." + connection
+	if e.providerKey != "" {
+		key = e.providerKey
+	}
 	if _, err := e.Ctrl.Providers.Get(key); err == nil {
 		return key
 	}
@@ -336,7 +342,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Cloud == connections.Server:
 		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	case e.Cloud == connections.Firecracker:
-		backend = &firecrackerBackend{target: e, org: org, connection: connection}
+		backend = e.orgFirecracker(org, connection)
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -679,7 +685,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker") && cfg.Component == nil {
+	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker" || job.Action.Provider == platformProvider) && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
