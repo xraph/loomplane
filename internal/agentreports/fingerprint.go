@@ -95,7 +95,7 @@ func (r *record) repeat(sig Signal, now time.Time) (change Change, written bool)
 		r.LastSeenAt = sig.At
 		return ChangeUnchanged, true
 	}
-	if slices.Contains(r.OccurrenceKeys, sig.Occurrence) {
+	if r.counted(sig) {
 		return ChangeUnchanged, false
 	}
 	r.addOccurrence(sig)
@@ -110,6 +110,12 @@ func (r *record) repeat(sig Signal, now time.Time) (change Change, written bool)
 		r.PendingNotice = noticeRepeated
 	}
 	return ChangeRepeated, true
+}
+
+// counted reports whether r already holds sig's occurrence: a replayed
+// edge signal, which neither repeats nor reopens.
+func (r *record) counted(sig Signal) bool {
+	return sig.Occurrence != "" && slices.Contains(r.OccurrenceKeys, sig.Occurrence)
 }
 
 // reopen brings a report that resolved or closed within ReopenWindow back

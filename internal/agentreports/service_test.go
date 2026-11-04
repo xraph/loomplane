@@ -289,6 +289,8 @@ var serviceCases = []serviceCase{
 	{"ObserversHearResolvedReports", observersHearResolvedReports},
 	{"DocumentsSkipOpenReportsWithoutFindings", documentsSkipOpenReportsWithoutFindings},
 	{"ReportsStayInTheirWorkspace", reportsStayInTheirWorkspace},
+	{"DocumentsNeverSplitABatch", documentsNeverSplitABatch},
+	{"AReplayedOccurrenceNeverReopens", aReplayedOccurrenceNeverReopens},
 }
 
 func TestFingerprintIsStable(t *testing.T) {
@@ -346,6 +348,12 @@ func TestObserversHearResolvedReports(t *testing.T) {
 }
 func TestDocumentsSkipOpenReportsWithoutFindings(t *testing.T) {
 	documentsSkipOpenReportsWithoutFindings(t, newMemHarness(t))
+}
+func TestDocumentsNeverSplitABatch(t *testing.T) {
+	documentsNeverSplitABatch(t, newMemHarness(t))
+}
+func TestAReplayedOccurrenceNeverReopens(t *testing.T) {
+	aReplayedOccurrenceNeverReopens(t, newMemHarness(t))
 }
 func TestReportsStayInTheirWorkspace(t *testing.T) {
 	reportsStayInTheirWorkspace(t, newMemHarness(t))
@@ -726,6 +734,18 @@ func findingsOnlyFromTheInvestigation(t *testing.T, h *harness) {
 	}
 	if read := h.lookup(t, r.ID); read.Findings == nil || read.Findings.LikelyCause != "A new cache." || read.RunID != "arun_1" {
 		t.Fatalf("read back %+v", read.Findings)
+	}
+	// A task the report no longer belongs to can't write, even past the
+	// service's own read.
+	if ok, err := h.svc.SetInvestigation(ctx, h.org, r.ID, []string{InvestigationQueued},
+		Investigation{Status: InvestigationQueued, TaskID: "atask_3"}); !ok || err != nil {
+		t.Fatalf("requeue: %v %v", ok, err)
+	}
+	if _, err := h.store.WriteFindings(ctx, h.org, r.ID, "atask_1", Findings{Summary: "stale", Confidence: "low", WrittenAt: base}); !errors.Is(err, ErrNotYourReport) {
+		t.Fatalf("a replaced task writes: %v", err)
+	}
+	if read := h.lookup(t, r.ID); read.Findings == nil || read.Findings.Summary != in.Summary {
+		t.Fatalf("findings after a stale write: %+v", read.Findings)
 	}
 	if _, err := h.svc.WriteFindings(ctx, h.org, "arep_missing", "atask_1", in); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
@@ -1108,6 +1128,9 @@ func (m *memStore) Observe(_ context.Context, sig Signal, reopenAfter, now time.
 			latest = r
 		}
 	}
+	if latest != nil && latest.counted(sig) {
+		return &Observation{Report: latest.report(), Change: ChangeUnchanged}, nil
+	}
 	if latest != nil {
 		latest.reopen(sig, now)
 		return &Observation{Report: latest.report(), Change: ChangeReopened}, nil
@@ -1170,12 +1193,15 @@ func (m *memStore) SetInvestigation(_ context.Context, orgID, id string, from []
 	return true, nil
 }
 
-func (m *memStore) WriteFindings(_ context.Context, orgID, id string, f Findings) (*Report, error) {
+func (m *memStore) WriteFindings(_ context.Context, orgID, id, taskID string, f Findings) (*Report, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, err := m.find(orgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if taskID == "" || (taskID != r.TaskID && taskID != r.OpenedByTask) {
+		return nil, ErrNotYourReport
 	}
 	written := f
 	written.Suggestions = slices.Clone(f.Suggestions)
@@ -1197,7 +1223,12 @@ func (m *memStore) Documents(_ context.Context, orgID string, after time.Time, l
 		return strings.Compare(a.ID, b.ID)
 	})
 	if len(out) > limit {
-		out = out[:limit]
+		// Finish the last report's moment, as PgStore does.
+		end := limit
+		for end < len(out) && out[end].UpdatedAt.Equal(out[limit-1].UpdatedAt) {
+			end++
+		}
+		out = out[:end]
 	}
 	return out, nil
 }
@@ -1338,3 +1369,71 @@ func (m *memStore) ReleaseDelivery(_ context.Context, _, id, owner string, done 
 type dropExecer struct{}
 
 func (dropExecer) Exec(context.Context, string, ...any) (driver.Result, error) { return nil, nil }
+
+// A Clear stamps every report it resolves alike. A backfill that pages on
+// from the last UpdatedAt still reads every one of them.
+func documentsNeverSplitABatch(t *testing.T, h *harness) {
+	ctx := context.Background()
+	alone := h.observe(t, h.signal(SignalDeploymentFailed, "service:solo", "dep_0#0")).Report
+	h.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}, Components: []string{"service:solo"}})
+	h.clock.advance(time.Minute)
+	want := map[string]bool{alone.ID: true}
+	for _, c := range []string{"service:a", "service:b", "service:c", "service:d"} {
+		want[h.observe(t, h.signal(SignalDeploymentFailed, c, c+"#0")).Report.ID] = true
+	}
+	if n := len(h.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}})); n != 4 {
+		t.Fatalf("cleared %d", n)
+	}
+	first, err := h.svc.Documents(ctx, h.org, time.Time{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 5 {
+		t.Fatalf("a full page ending inside the batch holds %d documents, want all 5", len(first))
+	}
+	seen := map[string]bool{}
+	after := time.Time{}
+	for range 10 {
+		page, err := h.svc.Documents(ctx, h.org, after, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range page {
+			id := strings.TrimPrefix(d.SourceKey, SourcePrefix)
+			if seen[id] {
+				t.Fatalf("%s read twice", id)
+			}
+			seen[id] = true
+		}
+		if len(page) < 2 {
+			break
+		}
+		after = page[len(page)-1].UpdatedAt
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("the backfill read %d of %d reports", len(seen), len(want))
+	}
+}
+
+// A detector re-reading an occurrence it already counted, after the
+// report resolved, neither reopens nor counts it again.
+func aReplayedOccurrenceNeverReopens(t *testing.T, h *harness) {
+	r := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_1#0")).Report
+	h.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "fixed"})
+	h.clock.advance(time.Hour)
+	replay := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_1#0"))
+	if replay.Change != ChangeUnchanged || replay.Report.ID != r.ID || replay.Report.Status != StatusResolved {
+		t.Fatalf("replay: change %s, status %s", replay.Change, replay.Report.Status)
+	}
+	got := h.lookup(t, r.ID)
+	if got.Status != StatusResolved || got.Occurrences != 1 || got.Revision != 2 {
+		t.Fatalf("after the replay: %+v", got)
+	}
+	if keys := h.peek.hidden(t, h.org, r.ID).OccurrenceKeys; len(keys) != 1 {
+		t.Fatalf("keys %v", keys)
+	}
+	back := h.observe(t, h.signal(SignalDeploymentFailed, "service:api", "dep_2#0"))
+	if back.Change != ChangeReopened || back.Report.ID != r.ID || back.Report.Occurrences != 2 {
+		t.Fatalf("a new occurrence: change %s, occurrences %d", back.Change, back.Report.Occurrences)
+	}
+}

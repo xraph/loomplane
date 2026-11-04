@@ -138,8 +138,11 @@ func TestPgStoreObserveIsRaceFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opened != 1 || len(open) != 1 || open[0].Occurrences != writers || open[0].Revision != writers {
-		t.Fatalf("opened %d, open reports %d, occurrences %d", opened, len(open), open[0].Occurrences)
+	if opened != 1 || len(open) != 1 {
+		t.Fatalf("opened %d, open reports %d", opened, len(open))
+	}
+	if open[0].Occurrences != writers || open[0].Revision != writers {
+		t.Fatalf("occurrences %d, revision %d", open[0].Occurrences, open[0].Revision)
 	}
 	if keys := h.peek.hidden(t, h.org, open[0].ID).OccurrenceKeys; len(keys) != writers {
 		t.Fatalf("keys %v", keys)

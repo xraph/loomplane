@@ -61,8 +61,10 @@ func (s *Service) notify(ctx context.Context, r *Report) {
 
 // Documents returns the workspace's reports with findings or no longer
 // open, updated after after, oldest first: what a backfill of the agent's
-// knowledge reads. limit is 1 to 200. While the workspace's agent is off
-// it returns none.
+// knowledge reads. limit is 1 to 200; a full page goes on through every
+// report updated at the same moment as its last one, so reading on from
+// the last UpdatedAt never skips a report. While the workspace's agent is
+// off it returns none.
 func (s *Service) Documents(ctx context.Context, orgID string, after time.Time, limit int) ([]KnowledgeDocument, error) {
 	if orgID == "" {
 		return nil, invalid("no workspace")

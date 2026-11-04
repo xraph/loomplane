@@ -137,9 +137,13 @@ type Store interface {
 	// SetInvestigation moves the investigation only when it is in from,
 	// and reports whether it did.
 	SetInvestigation(ctx context.Context, orgID, id string, from []string, inv Investigation, at time.Time) (bool, error)
-	WriteFindings(ctx context.Context, orgID, id string, f Findings) (*Report, error)
+	// WriteFindings writes only for taskID, the report's investigation or
+	// the chat that opened it, or returns ErrNotYourReport.
+	WriteFindings(ctx context.Context, orgID, id, taskID string, f Findings) (*Report, error)
 	// Documents returns the reports with findings or no longer open,
-	// updated after after, oldest first.
+	// updated after after, oldest first. A full page goes on through every
+	// report updated at the same moment as its last, so it can hold more
+	// than limit.
 	Documents(ctx context.Context, orgID string, after time.Time, limit int) ([]*Report, error)
 
 	// Pending returns the reports whose notice or issue is behind their
@@ -545,15 +549,10 @@ func (s *Service) WriteFindings(ctx context.Context, orgID, id, taskID string, i
 	if err != nil {
 		return nil, err
 	}
-	r, err := s.d.Store.Get(ctx, orgID, id)
-	if err != nil {
-		return nil, err
-	}
-	if taskID == "" || (taskID != r.TaskID && taskID != r.OpenedByTask) {
-		return nil, ErrNotYourReport
-	}
 	f.WrittenAt = s.now()
-	return s.d.Store.WriteFindings(ctx, orgID, id, f)
+	// The store checks the task in the same write, so an investigation
+	// replaced meanwhile can't write.
+	return s.d.Store.WriteFindings(ctx, orgID, id, taskID, f)
 }
 
 func validFindings(in FindingsInput) (Findings, error) {

@@ -157,6 +157,8 @@ func (s *PgStore) Observe(ctx context.Context, sig Signal, reopenAfter, now time
 		WHERE org_id = $1 AND fingerprint = $2 AND status IN ('resolved', 'closed') AND resolved_at >= $3
 		ORDER BY resolved_at DESC, id DESC LIMIT 1 FOR UPDATE`, sig.OrgID, fp, reopenAfter.UTC()))
 	switch {
+	case err == nil && latest.counted(sig):
+		return &Observation{Report: &latest.Report, Change: ChangeUnchanged}, tx.Commit()
 	case err == nil:
 		latest.reopen(sig, now)
 		if serr := save(ctx, tx, latest); serr != nil {
@@ -293,17 +295,20 @@ func (s *PgStore) SetInvestigation(ctx context.Context, orgID, id string, from [
 }
 
 // WriteFindings implements Store.
-func (s *PgStore) WriteFindings(ctx context.Context, orgID, id string, f Findings) (*Report, error) {
+func (s *PgStore) WriteFindings(ctx context.Context, orgID, id, taskID string, f Findings) (*Report, error) {
 	findings, err := json.Marshal(f)
 	if err != nil {
 		return nil, err
 	}
 	r, err := scanRecord(s.db.QueryRow(ctx, `UPDATE loomplane_agent_reports
 		SET findings = $3, revision = revision + 1, updated_at = $4
-		WHERE org_id = $1 AND id = $2
-		RETURNING `+reportColumns, orgID, id, findings, f.WrittenAt.UTC()))
+		WHERE org_id = $1 AND id = $2 AND $5::text <> '' AND $5::text IN (task_id, opened_by_task)
+		RETURNING `+reportColumns, orgID, id, findings, f.WrittenAt.UTC(), taskID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		if _, gerr := s.Get(ctx, orgID, id); gerr != nil {
+			return nil, gerr
+		}
+		return nil, ErrNotYourReport
 	}
 	if err != nil {
 		return nil, fmt.Errorf("write agent report findings: %w", err)
@@ -312,10 +317,24 @@ func (s *PgStore) WriteFindings(ctx context.Context, orgID, id string, f Finding
 }
 
 // Documents implements Store.
+// A full page goes on through every report updated at the same moment as
+// its last one (a Clear stamps a whole batch alike), so a caller that
+// reads on from the last UpdatedAt never skips one.
 func (s *PgStore) Documents(ctx context.Context, orgID string, after time.Time, limit int) ([]*Report, error) {
-	return s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
+	page, err := s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
 		WHERE org_id = $1 AND (findings IS NOT NULL OR status <> 'open') AND updated_at > $2
 		ORDER BY updated_at, id LIMIT $3`, orgID, after.UTC(), limit)
+	if err != nil || len(page) < limit {
+		return page, err
+	}
+	last := page[len(page)-1]
+	rest, err := s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
+		WHERE org_id = $1 AND (findings IS NOT NULL OR status <> 'open') AND updated_at = $2 AND id > $3
+		ORDER BY id`, orgID, last.UpdatedAt.UTC(), last.ID)
+	if err != nil {
+		return nil, err
+	}
+	return append(page, rest...), nil
 }
 
 // Pending implements Store.
