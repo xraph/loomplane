@@ -46,10 +46,11 @@ func NewLedger(db *grove.DB, cfg Config) (*ledger.Ledger, *stripe.Provider, erro
 }
 
 // newLedgerWith is NewLedger with any payment provider plugin, for tests.
+// A nil plugin builds a ledger with no payment provider.
 func newLedgerWith(db *grove.DB, p plugin.PaymentProviderPlugin) *ledger.Ledger {
-	return ledger.New(pgstore.New(db),
-		ledger.WithPlugin(p),
-		ledger.WithoutMigrate(),
-		ledger.WithLifecycleInterval(0),
-	)
+	opts := []ledger.Option{ledger.WithoutMigrate(), ledger.WithLifecycleInterval(0)}
+	if p != nil {
+		opts = append(opts, ledger.WithPlugin(p))
+	}
+	return ledger.New(pgstore.New(db), opts...)
 }

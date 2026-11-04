@@ -65,3 +65,12 @@ func scratchDB(t *testing.T) (*grove.DB, *pgdriver.PgDB) {
 	}
 	return db, pg
 }
+
+// at is a UTC instant for tests.
+func at(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t.UTC()
+}
