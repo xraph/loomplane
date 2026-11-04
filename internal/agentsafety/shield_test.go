@@ -79,11 +79,17 @@ func TestScansWithTheSeededProfiles(t *testing.T) {
 		t.Fatalf("the quote doesn't name its source: %q", got)
 	}
 
-	// A token the agent was about to send is redacted.
+	// A token the agent was about to send blocks the whole text, since a
+	// credential must not leave in any form.
 	token := "ghp_" + strings.Repeat("a1B2c3", 6)
 	out, err := s.Outbound(ctx, "The deploy key is "+token)
-	if err != nil || strings.Contains(out, token) {
-		t.Fatalf("outbound: %q, %v", out, err)
+	if !errors.Is(err, agentsafety.ErrOutboundBlocked) || out != "" {
+		t.Fatalf("outbound: %q, %v, want it blocked", out, err)
+	}
+	// Personal data is still redacted, and the rest of the text goes out.
+	const email = "dana@example.com"
+	if out, err = s.Outbound(ctx, "Ask "+email+" about the deploy."); err != nil || out == "" || strings.Contains(out, email) {
+		t.Fatalf("outbound with an email: %q, %v, want it redacted", out, err)
 	}
 	if out, err = s.Outbound(ctx, "The deploy finished."); err != nil || out != "The deploy finished." {
 		t.Fatalf("plain outbound: %q, %v", out, err)

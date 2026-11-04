@@ -80,9 +80,9 @@ type groupSnapshotFixture struct {
 	variable  *environments.Variable
 }
 
-func newGroupSnapshotFixture(t *testing.T, accept bool, through ...string) *groupSnapshotFixture {
+func newGroupSnapshotFixture(t *testing.T, accept bool) *groupSnapshotFixture {
 	t.Helper()
-	x := newPlacementGroupFixture(t, through...)
+	x := newPlacementGroupFixture(t)
 	ctx := t.Context()
 	dsn := x.f.sql.Config().ConnString()
 	db := pgdriver.New()
