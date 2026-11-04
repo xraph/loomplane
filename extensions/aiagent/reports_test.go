@@ -31,6 +31,7 @@ func TestRegisterOpsAddsTheReportOperations(t *testing.T) {
 	for name, risk := range map[string]defs.Risk{
 		"list_reports": defs.RiskRead, "get_report": defs.RiskRead,
 		"open_report": defs.RiskChange, "update_report": defs.RiskChange,
+		"prepare_release": defs.RiskChange, "get_release_report": defs.RiskRead, "note_release_concern": defs.RiskChange,
 	} {
 		op, ok := r.Lookup(name)
 		if !ok || op.Def.Risk != risk {
