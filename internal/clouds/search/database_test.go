@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 )
 
 func TestNativeSearchRejectsMalformedHTTPStatus(t *testing.T) {
@@ -115,6 +117,51 @@ func TestNativeSnapshotIncludesHiddenUserDataAndStreamsWithoutSecurityState(t *t
 				if !ok || len(feature) != 1 || feature[0] != "none" {
 					t.Fatal("security feature state not excluded")
 				}
+			}
+		})
+	}
+}
+
+func TestSnapshotAdmitsOnlyNativeShardPathMetadata(t *testing.T) {
+	metadata := "snapshot_shard_paths/snapshot_path_a.events.1.0.1"
+	for _, tc := range []struct {
+		name    string
+		headers []tar.Header
+		valid   bool
+	}{
+		{"directory", []tar.Header{{Name: "snapshot_shard_paths/", Typeflag: tar.TypeDir}}, true},
+		{"metadata", []tar.Header{{Name: metadata, Typeflag: tar.TypeReg}}, true},
+		{"hidden index", []tar.Header{{Name: "snapshot_shard_paths/snapshot_path_a..user-history.1.0.1", Typeflag: tar.TypeReg}}, true},
+		{"root file", []tar.Header{{Name: "snapshot_shard_paths", Typeflag: tar.TypeReg}}, false},
+		{"other child", []tar.Header{{Name: "snapshot_shard_paths/ca.pem", Typeflag: tar.TypeReg}}, false},
+		{"empty suffix", []tar.Header{{Name: "snapshot_shard_paths/snapshot_path_", Typeflag: tar.TypeReg}}, false},
+		{"nested child", []tar.Header{{Name: metadata + "/child", Typeflag: tar.TypeReg}}, false},
+		{"child directory", []tar.Header{{Name: metadata, Typeflag: tar.TypeDir}}, false},
+		{"symlink", []tar.Header{{Name: metadata, Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}}, false},
+		{"hardlink", []tar.Header{{Name: metadata, Typeflag: tar.TypeLink, Linkname: "index-0"}}, false},
+		{"traversal", []tar.Header{{Name: "snapshot_shard_paths/../index-0", Typeflag: tar.TypeReg}}, false},
+		{"duplicate", []tar.Header{{Name: metadata, Typeflag: tar.TypeReg}, {Name: "./" + metadata, Typeflag: tar.TypeReg}}, false},
+		{"oversized", []tar.Header{{Name: metadata, Typeflag: tar.TypeReg, Size: enginebackup.MaxPayload + 1}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := os.Create(filepath.Join(t.TempDir(), "snapshot.tar"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			archive := tar.NewWriter(file)
+			for _, header := range tc.headers {
+				if err := archive.WriteHeader(&header); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.headers[len(tc.headers)-1].Size == 0 {
+				if err := archive.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ValidateSnapshot(file); (err == nil) != tc.valid {
+				t.Fatalf("valid=%t: %v", tc.valid, err)
 			}
 		})
 	}
