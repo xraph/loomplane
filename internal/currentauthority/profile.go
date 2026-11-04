@@ -11,6 +11,7 @@ import (
 // installed authority additionally requires engine, connection and principal
 // qualification. No public constructor installs either profile.
 type profile struct {
+	ordinary    *ordinaryProfile
 	engine      *warden.Engine
 	invalidator plugin.Plugin
 }

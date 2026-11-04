@@ -126,11 +126,20 @@ type Attempt struct {
 }
 
 // Decision is bound to one attempt and one operation. Stage consumes it once.
+type decisionKind uint8
+
+const (
+	mechanismDecision decisionKind = iota
+	ordinaryDecision
+)
+
 type Decision struct {
-	attempt *Attempt
-	binding binding
-	at      time.Time
-	used    bool
+	kind     decisionKind
+	ordinary *ordinaryProof
+	attempt  *Attempt
+	binding  binding
+	at       time.Time
+	used     bool
 }
 
 // Tx returns a compatibility handle for existing guards. Commit and Rollback

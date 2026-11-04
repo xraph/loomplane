@@ -559,10 +559,10 @@ func TestPostgresReaderReadOnlyAndFixedLockTimeout(t *testing.T) {
 			return fmt.Errorf("lock_timeout=%q", timeout)
 		}
 		var rows int
-		if err := a.Tx().QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid() AND mode='ShareLock' AND relation IN (SELECT oid FROM pg_class WHERE relnamespace=$1::regnamespace AND relname LIKE ANY($2))`, f.schema, []string{"authsome_%", "keysmith_%", "warden_%"}).Scan(&rows); err != nil {
+		if err := a.Tx().QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE pid=pg_backend_pid() AND mode='ShareLock' AND relation IN (SELECT oid FROM pg_class WHERE relnamespace=$1::regnamespace AND relname=ANY($2))`, f.schema, authorityTables[:]).Scan(&rows); err != nil {
 			return err
 		}
-		if rows != 13 {
+		if rows != len(authorityTables) {
 			return fmt.Errorf("fenced tables=%d", rows)
 		}
 		return f.stage(ctx, a, testBinding())

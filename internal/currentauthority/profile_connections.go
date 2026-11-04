@@ -56,20 +56,7 @@ func inspectConnections(ctx context.Context, main *pgdriver.PgDB, owned *nativeB
 	}
 	ctx, cancel := context.WithTimeout(ctx, AttemptLimit)
 	defer cancel()
-	queries := []profileQuery{
-		func(ctx context.Context, q string, args ...any) profileScanner { return main.QueryRow(ctx, q, args...) },
-		func(ctx context.Context, q string, args ...any) profileScanner {
-			ctx, op := owned.telemetry.StartSQL(ctx, q)
-			return profileScanFunc(func(dest ...any) error {
-				err := owned.writer.QueryRow(ctx, q, args...).Scan(dest...)
-				op.End(err)
-				return err
-			})
-		},
-		func(ctx context.Context, q string, args ...any) profileScanner {
-			return owned.reader.QueryRow(ctx, q, args...)
-		},
-	}
+	queries := connectionQueries(main, owned)
 	var baseline *connectionProfile
 	for i, query := range queries {
 		current, err := inspectConnection(ctx, query, schema)
@@ -95,6 +82,40 @@ func inspectConnections(ctx context.Context, main *pgdriver.PgDB, owned *nativeB
 		// Connection bounds differ from main; identity, visibility and relations may not.
 		if !sameDatabaseProfile(*baseline, current) {
 			return nil, fmt.Errorf("%w: connection %d does not match main", ErrUnavailable, i)
+		}
+	}
+	return baseline, nil
+}
+
+func connectionQueries(main *pgdriver.PgDB, owned *nativeBackend) []profileQuery {
+	return []profileQuery{
+		func(ctx context.Context, q string, args ...any) profileScanner { return main.QueryRow(ctx, q, args...) },
+		func(ctx context.Context, q string, args ...any) profileScanner {
+			ctx, op := owned.telemetry.StartSQL(ctx, q)
+			return profileScanFunc(func(dest ...any) error {
+				err := owned.writer.QueryRow(ctx, q, args...).Scan(dest...)
+				op.End(err)
+				return err
+			})
+		},
+		func(ctx context.Context, q string, args ...any) profileScanner {
+			return owned.reader.QueryRow(ctx, q, args...)
+		},
+	}
+}
+
+// inspectOrdinaryConnections adds the full finite installed schema contract to
+// mechanism visibility checks. It does not install an execution profile.
+func inspectOrdinaryConnections(ctx context.Context, main *pgdriver.PgDB, owned *nativeBackend, schema string, migrationRole uint32) (*connectionProfile, error) {
+	ctx, cancel := context.WithTimeout(ctx, AttemptLimit)
+	defer cancel()
+	baseline, err := inspectConnections(ctx, main, owned, schema)
+	if err != nil {
+		return nil, err
+	}
+	for _, query := range connectionQueries(main, owned) {
+		if err := inspectOrdinarySchema(ctx, query, schema, migrationRole); err != nil {
+			return nil, err
 		}
 	}
 	return baseline, nil
@@ -136,7 +157,7 @@ func (p *connectionProfile) validate(schema string) error {
 		"authsome_users":     {"ban_expires": "timestamp with time zone", "banned": "boolean"},
 	}
 	for i, table := range p.Tables {
-		if table.Name != authorityTables[i] || table.OID == 0 || table.OID != table.Resolved || table.Kind != "r" || !table.Readable || table.RLS || table.ForcedRLS || table.Triggers != 0 || table.Rules != 0 || table.Inheritance != 0 || table.Generated != 0 {
+		if table.Name != authorityTables[i] || table.OID == 0 || table.OID != table.Resolved || table.Kind != "r" || !table.Readable || table.RLS || table.ForcedRLS || (table.Triggers != 0 && (table.Name != "loomplane_projects" || table.Triggers != 4)) || table.Rules != 0 || table.Inheritance != 0 || table.Generated != 0 {
 			return fmt.Errorf("%w: unsupported identity or visibility for %s", ErrUnavailable, table.Name)
 		}
 		for column, typ := range temporal[table.Name] {
