@@ -244,23 +244,57 @@ func finished(dep *deployments.Deployment, fallback time.Time) time.Time {
 }
 
 // deploymentRepository is where a deployment's signal belongs: the one
-// repository it moved for a deployment-level signal, else RepositoryFor.
+// repository it moved for a deployment-level signal, else the component's.
 func (d *Detector) deploymentRepository(ctx context.Context, dep *deployments.Deployment, component string) string {
 	if component == componentDeployment && len(dep.Sources) == 1 {
 		return dep.Sources[0].Repository
 	}
-	return d.repository(ctx, dep.OrgID, dep.ProjectID, component)
+	return d.repository(ctx, nil, dep.OrgID, dep.ProjectID, component)
 }
 
-// repository is RepositoryFor, with a read error costing the report its
-// repository rather than the report itself.
-func (d *Detector) repository(ctx context.Context, orgID, projectID, component string) string {
-	repo, err := d.World.RepositoryFor(ctx, orgID, projectID, component)
-	if err != nil {
-		d.warn("agentwatch: find the repository of "+component, err)
+// repoReads remembers, for one sweep, what PickRepository reads of each
+// project, by project ID, so several bindings of one project read its
+// sources and bindings once.
+type repoReads map[string]*projectRepos
+
+type projectRepos struct {
+	sources      []*discovery.Source
+	sourcesErr   error
+	bindings     []*planning.Binding
+	bindingsErr  error
+	bindingsRead bool
+}
+
+// repository is the repository a component is built from, by
+// PickRepository. A read error costs the report its repository rather
+// than the report itself. reads nil reads afresh.
+func (d *Detector) repository(ctx context.Context, reads repoReads, orgID, projectID, component string) string {
+	if reads == nil {
+		reads = repoReads{}
+	}
+	pr, ok := reads[projectID]
+	if !ok {
+		pr = &projectRepos{}
+		reads[projectID] = pr
+		if pr.sources, pr.sourcesErr = d.World.Sources(ctx, orgID, projectID); pr.sourcesErr != nil {
+			d.warn("agentwatch: read the sources of project "+projectID, pr.sourcesErr)
+		}
+	}
+	if pr.sourcesErr != nil || len(pr.sources) == 0 {
 		return ""
 	}
-	return repo
+	if _, service := serviceName(component); service {
+		if !pr.bindingsRead {
+			pr.bindingsRead = true
+			if pr.bindings, pr.bindingsErr = d.World.ProjectBindings(ctx, orgID, projectID); pr.bindingsErr != nil {
+				d.warn("agentwatch: read the bindings of project "+projectID, pr.bindingsErr)
+			}
+		}
+		if pr.bindingsErr != nil {
+			return ""
+		}
+	}
+	return PickRepository(component, pr.bindings, pr.sources)
 }
 
 func (d *Detector) canarySignal(ctx context.Context, ev realtime.Event, id string) (*agentreports.Signal, error) {
@@ -490,7 +524,7 @@ func (d *Detector) fromWatch(ctx context.Context, ev realtime.Event, data eventD
 		OrgID: ev.OrgID, ProjectID: w.ProjectID, EnvironmentID: w.EnvironmentID, Environment: w.Environment,
 		Kind: kind, Component: component, Severity: severity, Title: title, Facts: facts,
 		Evidence:   agentreports.Evidence{DeploymentID: w.DeploymentID, PlanID: w.PlanID, WatchID: w.ID, BindingID: bindingID},
-		Repository: d.repository(ctx, ev.OrgID, w.ProjectID, component),
+		Repository: d.repository(ctx, nil, ev.OrgID, w.ProjectID, component),
 		Occurrence: w.ID,
 		At:         at,
 	}, nil
@@ -514,12 +548,12 @@ func (d *Detector) fromBinding(ctx context.Context, ev realtime.Event, data even
 	if err != nil {
 		return nil, nil, err
 	}
-	return d.driftSignal(ctx, b, env, ev.Time), nil, nil
+	return d.driftSignal(ctx, nil, b, env, ev.Time), nil, nil
 }
 
 // driftSignal reports b's drift when it runs in production: drift
 // elsewhere is someone's experiment, not an incident.
-func (d *Detector) driftSignal(ctx context.Context, b *planning.Binding, env *projects.Environment, fallback time.Time) *agentreports.Signal {
+func (d *Detector) driftSignal(ctx context.Context, reads repoReads, b *planning.Binding, env *projects.Environment, fallback time.Time) *agentreports.Signal {
 	if b.Drift == "" || env.Kind != projects.KindProduction {
 		return nil
 	}
@@ -537,7 +571,7 @@ func (d *Detector) driftSignal(ctx context.Context, b *planning.Binding, env *pr
 		Kind: agentreports.SignalDrift, Component: b.Name, Severity: agentreports.SeverityMedium,
 		Title: fmt.Sprintf("%s drifted on %s: %s", b.Name, env.Name, what), Facts: facts,
 		Evidence:   agentreports.Evidence{BindingID: b.ID, PlanID: b.PlanID},
-		Repository: d.repository(ctx, b.OrgID, b.ProjectID, string(b.Subject)+":"+b.Name),
+		Repository: d.repository(ctx, reads, b.OrgID, b.ProjectID, string(b.Subject)+":"+b.Name),
 		At:         observed(b, fallback),
 	}
 }

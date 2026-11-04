@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -37,11 +38,22 @@ type Check struct {
 // of every production binding, so ones that left production drop out.
 func (d *Detector) Sweep(ctx context.Context, orgID string, checks map[string]Check) ([]agentreports.Signal, []agentreports.Clearance, map[string]Check, error) {
 	bindings, err := d.World.ProductionBindings(ctx, orgID)
-	if err != nil {
+	var skipped *SkippedProjectsError
+	switch {
+	case errors.As(err, &skipped):
+		for id, perr := range skipped.Errs {
+			d.warn("agentwatch: read the production bindings of project "+id, perr)
+		}
+	case err != nil:
 		return nil, nil, checks, fmt.Errorf("list production bindings: %w", err)
 	}
 	now := d.now()
 	next := make(map[string]Check, len(bindings))
+	if skipped != nil {
+		// The skipped projects' bindings aren't known to have left
+		// production, so their checks stay.
+		maps.Copy(next, checks)
+	}
 	var due []*planning.Binding
 	for _, b := range bindings {
 		c := checks[b.ID]
@@ -57,7 +69,10 @@ func (d *Detector) Sweep(ctx context.Context, orgID string, checks map[string]Ch
 		due = due[:MaxBindingsPerSweep]
 	}
 
-	s := &sweep{d: d, orgID: orgID, now: now, envs: map[string]*projects.Environment{}, busy: map[string]bool{}, plans: map[string]releasehealth.Thresholds{}}
+	s := &sweep{
+		d: d, orgID: orgID, now: now, envs: map[string]*projects.Environment{}, busy: map[string]bool{},
+		plans: map[string]releasehealth.Thresholds{}, repos: repoReads{},
+	}
 	s.current, s.baseline, err = windows(now)
 	if err != nil {
 		// The windows are constants, so this never happens; if it did,
@@ -98,6 +113,7 @@ type sweep struct {
 	envs              map[string]*projects.Environment
 	busy              map[string]bool // environment ID: a canary or a watch holds it
 	plans             map[string]releasehealth.Thresholds
+	repos             repoReads
 	signals           []agentreports.Signal
 	clearances        []agentreports.Clearance
 }
@@ -112,7 +128,7 @@ func (s *sweep) binding(ctx context.Context, b *planning.Binding, c Check) Check
 	// Drift, from the row the drift checker wrote, catches what an event
 	// gap missed.
 	if b.Drift != "" {
-		if sig := s.d.driftSignal(ctx, b, env, s.now); sig != nil {
+		if sig := s.d.driftSignal(ctx, s.repos, b, env, s.now); sig != nil {
 			s.signals = append(s.signals, *sig)
 		}
 	} else {
@@ -241,7 +257,7 @@ func (s *sweep) errorSignal(ctx context.Context, b *planning.Binding, env *proje
 			{Label: "Threshold", Value: thresholds(t)},
 		},
 		Evidence:   agentreports.Evidence{BindingID: b.ID, PlanID: b.PlanID},
-		Repository: s.d.repository(ctx, s.orgID, b.ProjectID, string(b.Subject)+":"+b.Name),
+		Repository: s.d.repository(ctx, s.repos, s.orgID, b.ProjectID, string(b.Subject)+":"+b.Name),
 		At:         s.current.End,
 	}
 }

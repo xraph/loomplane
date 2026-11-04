@@ -2,8 +2,10 @@ package agentwatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,5 +301,54 @@ func TestSweepWindowsEndBeforeTheLag(t *testing.T) {
 	}
 	if !baseline.End.Equal(current.Start) {
 		t.Errorf("baseline %+v doesn't end where current %+v starts", baseline, current)
+	}
+}
+
+func TestSweepReadsAProjectsRepositoriesOnce(t *testing.T) {
+	bindings := make([]*planning.Binding, 0, 4)
+	for i := range 4 {
+		b := driftedBinding(fmt.Sprintf("b_%d", i), "env_prod", planning.DriftChanged)
+		b.Name = fmt.Sprintf("svc%d", i)
+		b.Provider = "fly" // no error counts: drift alone
+		bindings = append(bindings, b)
+	}
+	s := newSweeper(t, bindings...)
+	sigs, _ := s.sweep()
+	drift := ofKind(sigs, agentreports.SignalDrift)
+	if len(drift) != 4 {
+		t.Fatalf("drift signals = %d, want 4", len(drift))
+	}
+	for _, sig := range drift {
+		if sig.Repository != "acme/app" {
+			t.Errorf("%s repository = %q, want acme/app", sig.Component, sig.Repository)
+		}
+	}
+	// One Sources read and one ProjectBindings read for the project.
+	if s.world.sourceReads != 2 {
+		t.Errorf("four drifted bindings of one project made %d repository reads, want 2", s.world.sourceReads)
+	}
+}
+
+func TestSweepGoesOnPastAProjectItCantRead(t *testing.T) {
+	s := newSweeper(t, productionBinding("b_1", "env_prod", "cloud-run"))
+	s.checks = map[string]Check{"b_other": {CheckedAt: t0.Add(-time.Hour), Failing: true}}
+	s.world.skipped = &SkippedProjectsError{Errs: map[string]error{"prj_2": errors.New("the database is down")}}
+	s.reader.current = health(3000, 300)
+	var warned []string
+	d := &Detector{World: s.world, Health: s.reader, Now: func() time.Time { return s.now },
+		Warn: func(msg string, _ error) { warned = append(warned, msg) }}
+	sigs, _, checks, err := d.Sweep(t.Context(), org, s.checks)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if len(ofKind(sigs, agentreports.SignalErrorRate)) != 1 {
+		t.Errorf("the readable project's failing binding didn't fire: %+v", sigs)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "prj_2") {
+		t.Errorf("warned = %q, want one warning naming prj_2", warned)
+	}
+	// The skipped project's check isn't known to have left production.
+	if c, ok := checks["b_other"]; !ok || !c.Failing {
+		t.Errorf("the skipped project's check = %+v, %v; want it kept", c, ok)
 	}
 }

@@ -40,9 +40,11 @@ type fakeWorld struct {
 	envs        map[string]*projects.Environment
 	analyses    []*discovery.Analysis // newest first
 	sources     []*discovery.Source
-	ramping     map[string]string // by environment ID
-	watching    map[string]bool   // by environment name
+	ramping     map[string]string     // by environment ID
+	watching    map[string]bool       // by environment name
+	skipped     *SkippedProjectsError // ProductionBindings' error, with production as the rest
 	calls       int
+	sourceReads int // Sources and ProjectBindings calls
 }
 
 func newWorld() *fakeWorld {
@@ -126,6 +128,9 @@ func (w *fakeWorld) Binding(_ context.Context, _, id string) (*planning.Binding,
 
 func (w *fakeWorld) ProductionBindings(context.Context, string) ([]*planning.Binding, error) {
 	w.calls++
+	if w.skipped != nil {
+		return w.production, w.skipped
+	}
 	return w.production, nil
 }
 
@@ -167,13 +172,20 @@ func (w *fakeWorld) RecentAnalyses(_ context.Context, _, _, sourceID string, n i
 	return sourceAnalyses(w.analyses, sourceID, n), nil
 }
 
-func (w *fakeWorld) RepositoryFor(_ context.Context, _, _, component string) (string, error) {
+func (w *fakeWorld) Sources(context.Context, string, string) ([]*discovery.Source, error) {
 	w.calls++
+	w.sourceReads++
+	return w.sources, nil
+}
+
+func (w *fakeWorld) ProjectBindings(context.Context, string, string) ([]*planning.Binding, error) {
+	w.calls++
+	w.sourceReads++
 	bindings := make([]*planning.Binding, 0, len(w.bindings))
 	for _, b := range w.bindings {
 		bindings = append(bindings, b)
 	}
-	return PickRepository(component, bindings, w.sources), nil
+	return bindings, nil
 }
 
 func detector(w World) *Detector {

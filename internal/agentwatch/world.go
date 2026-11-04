@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/deployments"
@@ -33,7 +34,9 @@ type World interface {
 	Watch(ctx context.Context, orgID, deploymentID string) (*releasewatch.Watch, error)
 	Binding(ctx context.Context, orgID, id string) (*planning.Binding, error)
 	// ProductionBindings returns the bindings of every project's
-	// production-kind environments.
+	// production-kind environments. A project it can't read is left out:
+	// the error is then a *SkippedProjectsError, and the bindings are the other
+	// projects'.
 	ProductionBindings(ctx context.Context, orgID string) ([]*planning.Binding, error)
 	// RampingCanary returns the deployment whose canary holds the
 	// environment, or "".
@@ -47,9 +50,35 @@ type World interface {
 	// RecentAnalyses returns up to n of a source's analyses, newest first,
 	// leaving out the pinned ones a promotion asked for.
 	RecentAnalyses(ctx context.Context, orgID, projectID, sourceID string, n int) ([]*discovery.Analysis, error)
-	// RepositoryFor returns the repository key a component is built from,
-	// or "" when Loomplane can't tell (see PickRepository).
-	RepositoryFor(ctx context.Context, orgID, projectID, component string) (string, error)
+	// Sources returns a project's live sources, which PickRepository picks
+	// a component's repository from.
+	Sources(ctx context.Context, orgID, projectID string) ([]*discovery.Source, error)
+	// ProjectBindings returns the bindings of every environment of a
+	// project, whose service configs name the source alias each service is
+	// built from.
+	ProjectBindings(ctx context.Context, orgID, projectID string) ([]*planning.Binding, error)
+}
+
+// SkippedProjectsError is ProductionBindings leaving out the projects whose
+// environments or bindings it couldn't read, by project ID.
+type SkippedProjectsError struct{ Errs map[string]error }
+
+func (e *SkippedProjectsError) Error() string {
+	ids := make([]string, 0, len(e.Errs))
+	for id := range e.Errs {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return "couldn't read the production bindings of " + strings.Join(ids, ", ")
+}
+
+// Unwrap returns each project's error.
+func (e *SkippedProjectsError) Unwrap() []error {
+	out := make([]error, 0, len(e.Errs))
+	for _, err := range e.Errs {
+		out = append(out, err)
+	}
+	return out
 }
 
 // ServiceWorld reads through Loomplane's services as the workspace's agent
@@ -61,7 +90,14 @@ type ServiceWorld struct {
 	Watches     *releasewatch.Service
 	Projects    *projects.Service
 	Discovery   *discovery.Service
-	Bindings    interface {
+	// SourceStore lists a project's sources without the webhook state
+	// discovery.Service.Sources adds, which costs a repository host call
+	// per repository on some hosts. *discovery.PgStore is the real one;
+	// nil reads through Discovery.
+	SourceStore interface {
+		ListSources(ctx context.Context, orgID, projectID string, withRemoved bool) ([]*discovery.Source, error)
+	}
+	Bindings interface {
 		GetBinding(ctx context.Context, orgID, id string) (*planning.Binding, error)
 	}
 }
@@ -138,7 +174,8 @@ func (w *ServiceWorld) Binding(ctx context.Context, orgID, id string) (*planning
 }
 
 // ProductionBindings implements World: every project's environments of
-// kind production, and what runs in each.
+// kind production, and what runs in each. A project whose environments or
+// bindings can't be read costs only its own bindings.
 func (w *ServiceWorld) ProductionBindings(ctx context.Context, orgID string) ([]*planning.Binding, error) {
 	p := agent(orgID)
 	list, err := w.Projects.List(ctx, p)
@@ -146,21 +183,36 @@ func (w *ServiceWorld) ProductionBindings(ctx context.Context, orgID string) ([]
 		return nil, err
 	}
 	var out []*planning.Binding
+	skipped := map[string]error{}
 	for _, project := range list {
-		envs, err := w.Projects.Environments(ctx, p, project.ID)
+		bindings, err := w.productionBindings(ctx, p, project.ID)
+		if err != nil {
+			skipped[project.ID] = err
+			continue
+		}
+		out = append(out, bindings...)
+	}
+	if len(skipped) > 0 {
+		return out, &SkippedProjectsError{Errs: skipped}
+	}
+	return out, nil
+}
+
+func (w *ServiceWorld) productionBindings(ctx context.Context, p security.Principal, projectID string) ([]*planning.Binding, error) {
+	envs, err := w.Projects.Environments(ctx, p, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*planning.Binding
+	for _, env := range envs {
+		if env.Kind != projects.KindProduction {
+			continue
+		}
+		bindings, err := w.Plans.Bindings(ctx, p, projectID, env.Name)
 		if err != nil {
 			return nil, err
 		}
-		for _, env := range envs {
-			if env.Kind != projects.KindProduction {
-				continue
-			}
-			bindings, err := w.Plans.Bindings(ctx, p, project.ID, env.Name)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, bindings...)
-		}
+		out = append(out, bindings...)
 	}
 	return out, nil
 }
@@ -235,37 +287,38 @@ func sourceAnalyses(list []*discovery.Analysis, sourceID string, n int) []*disco
 	return out
 }
 
-// RepositoryFor implements World. It reads the project's sources and, for
-// a service, its bindings in each environment, which say the repository
-// alias it's built from.
-func (w *ServiceWorld) RepositoryFor(ctx context.Context, orgID, projectID, component string) (string, error) {
-	p := agent(orgID)
-	sources, err := w.Discovery.Sources(ctx, p, projectID)
-	if err != nil || len(sources) == 0 {
-		return "", err
+// Sources implements World.
+func (w *ServiceWorld) Sources(ctx context.Context, orgID, projectID string) ([]*discovery.Source, error) {
+	if w.SourceStore != nil {
+		return w.SourceStore.ListSources(ctx, orgID, projectID, false)
 	}
-	var bindings []*planning.Binding
-	if _, ok := serviceName(component); ok {
-		envs, err := w.Projects.Environments(ctx, p, projectID)
-		if err != nil {
-			return "", err
-		}
-		for _, env := range envs {
-			list, err := w.Plans.Bindings(ctx, p, projectID, env.Name)
-			if err != nil {
-				return "", err
-			}
-			bindings = append(bindings, list...)
-		}
-	}
-	return PickRepository(component, bindings, sources), nil
+	return w.Discovery.Sources(ctx, agent(orgID), projectID)
 }
 
-// PickRepository is RepositoryFor's rule. A component naming a service
-// binding uses the source its ServiceConfig.Repo alias names. An empty
-// alias, a resource, or "deployment" uses the project's only source when
-// it has exactly one. Otherwise it's "". Keys may be GitLab or Bitbucket
-// ones: delivery decides what it can open an issue on.
+// ProjectBindings implements World.
+func (w *ServiceWorld) ProjectBindings(ctx context.Context, orgID, projectID string) ([]*planning.Binding, error) {
+	p := agent(orgID)
+	envs, err := w.Projects.Environments(ctx, p, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var out []*planning.Binding
+	for _, env := range envs {
+		list, err := w.Plans.Bindings(ctx, p, projectID, env.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list...)
+	}
+	return out, nil
+}
+
+// PickRepository is the rule for which repository a component is built
+// from. A component naming a service binding uses the source its
+// ServiceConfig.Repo alias names. An empty alias, a resource, or
+// "deployment" uses the project's only source when it has exactly one.
+// Otherwise it's "". Keys may be GitLab or Bitbucket ones: delivery
+// decides what it can open an issue on.
 func PickRepository(component string, bindings []*planning.Binding, sources []*discovery.Source) string {
 	alias := ""
 	if name, ok := serviceName(component); ok {
