@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -400,6 +401,7 @@ func TestRouteErrorStatuses(t *testing.T) {
 		{agentchat.ErrNotFound, http.StatusNotFound, agentchat.ErrNotFound.Error()},
 		{fmt.Errorf("%w: write a message", agentchat.ErrInvalid), http.StatusUnprocessableEntity, "invalid message: write a message"},
 		{wrapped(agentsettings.ErrBudgetExhausted), http.StatusConflict, agentsettings.ErrBudgetExhausted.Error()},
+		{wrapped(&metering.Blocked{Reason: "Turn on the AI add-on in Settings > Billing, or add your own model key."}), http.StatusPaymentRequired, "Turn on the AI add-on in Settings"},
 		{wrapped(agentsettings.ErrDisabled), http.StatusConflict, agentsettings.ErrDisabled.Error()},
 		{agentruns.ErrNotFound, http.StatusNotFound, agentruns.ErrNotFound.Error()},
 		{fmt.Errorf("%w: there's no such conversation", agentruns.ErrInvalid), http.StatusUnprocessableEntity, "no such conversation"},

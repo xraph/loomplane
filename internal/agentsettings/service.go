@@ -16,6 +16,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -109,6 +110,9 @@ type Service struct {
 	policy policy
 	now    func() time.Time
 
+	// metering gates and claims the calls served on the server's key.
+	metering metering.Late
+
 	mu        sync.RWMutex
 	gateway   Gateway
 	seeder    Seeder
@@ -131,6 +135,10 @@ func NewService(d Deps) *Service {
 		},
 	}
 }
+
+// WithMetering sets the gate and meter for the calls the server's own
+// key serves. Until it is called, they all run and none is claimed.
+func (s *Service) WithMetering(g metering.Gate, m metering.Meter) { s.metering.Set(g, m) }
 
 // BindGateway binds nexus and the guardrail seeder, once the agent's
 // extension has built them.

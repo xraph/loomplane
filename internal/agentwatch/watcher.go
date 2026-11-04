@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
@@ -487,7 +488,7 @@ func (p *pass) investigate() error {
 		}
 		if !p.st.Paused && running < MaxConcurrentInvestigations {
 			switch berr := p.w.Budget.RequireBudget(p.ctx, p.org); {
-			case errors.Is(berr, agentsettings.ErrBudgetExhausted):
+			case errors.Is(berr, agentsettings.ErrBudgetExhausted), errors.Is(berr, metering.ErrBlocked):
 				if serr := p.pause(); serr != nil {
 					return serr
 				}
@@ -548,7 +549,7 @@ func (p *pass) start(r *agentreports.Report) (started bool, err error) {
 		Metadata: map[string]string{agentruns.MetaReportID: r.ID, agentruns.MetaFingerprint: r.Fingerprint},
 	})
 	switch {
-	case errors.Is(err, agentsettings.ErrBudgetExhausted):
+	case errors.Is(err, agentsettings.ErrBudgetExhausted), errors.Is(err, metering.ErrBlocked):
 		if serr := p.pause(); serr != nil {
 			return false, serr
 		}
@@ -642,7 +643,7 @@ func (p *pass) follow() error {
 				return err
 			}
 			// A run that ran out of budget pauses the rest.
-			if berr := p.w.Budget.RequireBudget(p.ctx, p.org); errors.Is(berr, agentsettings.ErrBudgetExhausted) {
+			if berr := p.w.Budget.RequireBudget(p.ctx, p.org); errors.Is(berr, agentsettings.ErrBudgetExhausted) || errors.Is(berr, metering.ErrBlocked) {
 				if err := p.pause(); err != nil {
 					return err
 				}
@@ -749,7 +750,7 @@ func (p *pass) pause() error {
 // resume starts investigating again once the budget has room.
 func (p *pass) resume() error {
 	err := p.w.Budget.RequireBudget(p.ctx, p.org)
-	if errors.Is(err, agentsettings.ErrBudgetExhausted) {
+	if errors.Is(err, agentsettings.ErrBudgetExhausted) || errors.Is(err, metering.ErrBlocked) {
 		return nil
 	}
 	if err != nil {

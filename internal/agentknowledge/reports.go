@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentreports"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 // Past agent reports become each workspace's own knowledge: the reports
@@ -130,7 +131,7 @@ func (s *Service) BackfillReports(ctx context.Context, r Reports, orgID string) 
 		}
 		for _, doc := range page {
 			err = s.keepReport(ctx, orgID, doc)
-			if errors.Is(err, agentsettings.ErrBudgetExhausted) {
+			if errors.Is(err, agentsettings.ErrBudgetExhausted) || errors.Is(err, metering.ErrBlocked) {
 				return kept, with(errs, err)
 			}
 			if err != nil {
@@ -207,5 +208,5 @@ func onlyBudget(err error) bool {
 	if _, joined := err.(interface{ Unwrap() []error }); joined {
 		return false
 	}
-	return errors.Is(err, agentsettings.ErrBudgetExhausted)
+	return errors.Is(err, agentsettings.ErrBudgetExhausted) || errors.Is(err, metering.ErrBlocked)
 }
