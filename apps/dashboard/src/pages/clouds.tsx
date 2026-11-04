@@ -1,3 +1,4 @@
+import { RunByInstance } from "@/components/platform-cloud-usage"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CloudsIcon } from "@/components/icons"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
@@ -314,6 +315,7 @@ function CloudRow({ cloud: c, project }: { cloud: Profile; project: Project }) {
           <CloudsIcon className="size-4" />
         </span>
         <span className="truncate text-[14px] font-semibold">{c.name}</span>
+        {c.platformOwned && <RunByInstance />}
       </span>
       <ProjectName project={project} />
       <span className="min-w-0 text-[12.5px]">
@@ -448,6 +450,7 @@ function OrganizationCloudRow({ cloud: c }: { cloud: Profile }) {
           <CloudsIcon className="size-4" />
         </span>
         <span className="truncate text-[14px] font-semibold">{c.name}</span>
+        {c.platformOwned && <RunByInstance />}
       </span>
       <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
         {!grants.data ? (

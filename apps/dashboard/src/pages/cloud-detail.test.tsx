@@ -128,6 +128,7 @@ function fixture({
   profile = {} as Record<string, unknown>,
   syncs = [] as unknown[],
   clusterOperations = [] as unknown[],
+  workspace = undefined as unknown,
 } = {}) {
   const writes: { method: string; path: string; body: unknown }[] = []
   const reads: string[] = []
@@ -173,6 +174,7 @@ function fixture({
         body = unused ? { cloud_id: "c", environments: [] } : usage
       if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
         body = { syncs }
+      if (path === "/api/v1/platform-cloud") body = workspace ?? {}
       if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
       if (path === "/api/v1/clouds/c/pools")
         body = {
@@ -767,4 +769,97 @@ it("keeps cluster operations beyond the first history page reachable", async () 
     screen.getByRole("button", { name: "Newer cluster changes" })
   )
   await screen.findByRole("link", { name: "Create cluster: workers-0" })
+})
+
+const view = {
+  enabled: true,
+  suspend_reasons: [] as string[],
+  limits: { vcpus: 8, memory_mib: 16384, vms: 4, concurrent_builds: 2 },
+  use: { vcpus: 3, memory_mib: 4096, vms: 1, concurrent_builds: 0 },
+  regions: [{ name: "eu", display_name: "Europe", status: "ready" }],
+  placements: [
+    {
+      project: "Web app",
+      environment: "production",
+      service: "api",
+      region: "eu",
+      state: "running",
+      waiting_capacity: false,
+    },
+    {
+      project: "Web app",
+      environment: "staging",
+      service: "worker",
+      region: "eu",
+      state: "pending",
+      waiting_capacity: true,
+    },
+  ],
+}
+const platform = { platform_owned: true, name: "Loomplane Cloud" }
+
+it("platform Cloud is read only", async () => {
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  await screen.findByRole("heading", { name: "Loomplane Cloud" })
+  await screen.findByText("Use and limits")
+  expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Add target" })).toBeNull()
+  expect(screen.queryByText("Rename")).toBeNull()
+  expect(screen.queryByText("Delete Cloud")).toBeNull()
+  await userEvent.setup().click(screen.getByRole("tab", { name: /Projects/ }))
+  expect(
+    (await screen.findAllByRole("button", { name: "Give a project access" }))
+      .length
+  ).toBeGreaterThan(0)
+})
+
+it("shows use, regions and placements", async () => {
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(await screen.findByText("3 of 8 vCPUs")).toBeInTheDocument()
+  expect(screen.getByText("4 of 16 GiB memory")).toBeInTheDocument()
+  expect(screen.getByText("Europe")).toBeInTheDocument()
+  expect(
+    within(screen.getByLabelText("Loomplane Cloud use")).getByText("worker")
+  ).toBeInTheDocument()
+  expect(screen.getByText("Waiting for room")).toBeInTheDocument()
+})
+
+it("shows the suspension banner", async () => {
+  fixture({
+    profile: platform,
+    workspace: { ...view, suspend_reasons: ["past_due"] },
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText(
+      "Loomplane Cloud work is stopped because a payment is past due. It starts again when it is resolved."
+    )
+  ).toBeInTheDocument()
+})
+
+it("says so when the workspace is disabled", async () => {
+  fixture({ profile: platform, workspace: { ...view, enabled: false } })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText("Loomplane Cloud isn't available to this workspace")
+  ).toBeInTheDocument()
+  expect(screen.queryByText("Use and limits")).toBeNull()
 })

@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { CloudsWorkspace } from "./clouds"
+import { Clouds, CloudsWorkspace } from "./clouds"
 import { ChangeReview } from "@/components/cloud-targets/change-review"
 import { SyncHistory } from "@/components/cloud-targets/sync-history"
 
@@ -22,6 +22,7 @@ vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
+  useNavigate: () => () => Promise.resolve(),
 }))
 afterEach(() => {
   cleanup()
@@ -71,6 +72,7 @@ function fixture(
   options: {
     failure?: string
     noClouds?: boolean
+    profiles?: Record<string, unknown>[]
     noEnvironments?: boolean
     /** One Cloud over two DigitalOcean accounts and a Vercel one. */
     spread?: boolean
@@ -78,7 +80,7 @@ function fixture(
 ) {
   const writes: { url: string; body: Record<string, unknown> }[] = []
   const reads: string[] = []
-  let profiles = options.noClouds ? [] : [profile]
+  let profiles = options.noClouds ? [] : (options.profiles ?? [profile])
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -747,5 +749,32 @@ it("explains retained preview protection when deleting an unassigned Cloud", asy
   expect(writes[0].url).toBe("/api/v1/projects/p/clouds/cloud")
   expect(screen.getByRole("textbox", { name: "Cloud name" })).toHaveValue(
     "Production"
+  )
+})
+it("lists Loomplane Cloud in the normal order", async () => {
+  const row = (id: string, name: string, platformOwned: boolean) => ({
+    ...profile,
+    id,
+    name,
+    project_id: "",
+    platform_owned: platformOwned,
+  })
+  fixture({
+    profiles: [
+      row("a", "Alpha", false),
+      row("l", "Loomplane Cloud", true),
+      row("z", "Zeta", false),
+    ],
+  })
+  show(<Clouds />)
+  await screen.findByText("Loomplane Cloud")
+  const rows = Array.from(document.querySelectorAll("a[href='/clouds/$id']"))
+  expect(
+    rows.map((r) => /Alpha|Loomplane Cloud|Zeta/.exec(r.textContent!)?.[0])
+  ).toEqual(["Alpha", "Loomplane Cloud", "Zeta"])
+  expect(screen.getAllByText("Run by this instance")).toHaveLength(1)
+  expect(rows[1]).toHaveTextContent("Run by this instance")
+  expect(rows[1]!.textContent).not.toMatch(
+    /recommended|default|suggested|featured/i
   )
 })

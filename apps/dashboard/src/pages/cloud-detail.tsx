@@ -32,6 +32,7 @@ import {
 } from "@/components/cloud-detail/data"
 import { UseInEnvironment } from "@/components/cloud-detail/environments"
 import { Overview, type CloudTab } from "@/components/cloud-detail/overview"
+import { PlatformCloudUsage } from "@/components/platform-cloud-usage"
 import { Projects } from "@/components/cloud-detail/projects"
 import { Settings } from "@/components/cloud-detail/settings"
 import { Targets } from "@/components/cloud-detail/targets"
@@ -397,6 +398,8 @@ function CloudPage({
 }) {
   const { cloud, project } = scope
   const { can } = useOrganization()
+  // The instance owner runs a platform Cloud, so a workspace never edits it.
+  const edit = manage && !cloud.platformOwned
   const [place, go] = usePlace(wanted)
   const [using, setUsing] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -491,7 +494,7 @@ function CloudPage({
         count: open(syncs.list.filter(movingSync).length),
         show: true,
       },
-      { id: "settings", label: "Settings", show: manage },
+      { id: "settings", label: "Settings", show: edit },
     ]
   const tab = tabs.some((t) => t.id === place.tab && t.show)
     ? place.tab
@@ -584,7 +587,7 @@ function CloudPage({
                 </Button>
               )}
               <PageMenu label="More Cloud actions">
-                {manage && (
+                {edit && (
                   <DropdownMenuItem onClick={() => go({ tab: "settings" })}>
                     Rename
                   </DropdownMenuItem>
@@ -604,7 +607,7 @@ function CloudPage({
                 >
                   {copied ? "Cloud ID copied" : "Copy Cloud ID"}
                 </DropdownMenuItem>
-                {manage && (
+                {edit && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -631,6 +634,7 @@ function CloudPage({
             }}
           />
         )}
+        {cloud.platformOwned && <PlatformCloudUsage />}
         {failed ? (
           <QueryError
             error={targets.error ?? connections.error ?? projects.error}
@@ -684,7 +688,7 @@ function CloudPage({
                 connections={accounts}
                 pools={pools}
                 usage={usage.data}
-                manage={manage}
+                manage={edit}
                 onSaved={refresh}
               />
             </TabsContent>
@@ -743,7 +747,7 @@ function CloudPage({
                 onChanged={refresh}
               />
             </TabsContent>
-            {manage && (
+            {edit && (
               <TabsContent value="settings">
                 <Settings
                   cloud={cloud}
