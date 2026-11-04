@@ -71,7 +71,14 @@ func RenderInstance(release fleet.TemplateRelease, instance fleet.Instance, inpu
 	}
 	for name, size := range profile.Services {
 		service := m.Services[name]
-		service.Size = &manifest.Size{CPU: float64(size.CPUMillis) / 1000, Memory: int(size.MemoryMiB)}
+		resolved := &manifest.Size{CPU: float64(size.CPUMillis) / 1000, Memory: int(size.MemoryMiB)}
+		if service.Size != nil {
+			resolved.GPU, resolved.Shm = service.Size.GPU, service.Size.Shm
+		}
+		if resolved.Shm > 0 && resolved.Shm >= resolved.Memory {
+			return nil, ErrInvalid
+		}
+		service.Size = resolved
 		// A profile's maximum is an admission ceiling, not autoscaling consent.
 		service.Scale = &manifest.Scale{Min: size.MinReplicas, Max: size.MinReplicas}
 		m.Services[name] = service

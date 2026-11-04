@@ -18,6 +18,29 @@ func TestPodGroupGrantCountsSurgeScratchAndJobs(t *testing.T) {
 	}
 }
 
+func TestFleetScaleGPUGrantRequiresReviewedBound(t *testing.T) {
+	template := fleet.Template{Manifest: manifest.Manifest{Services: map[string]manifest.Service{"api": {Settings: manifest.Settings{Size: &manifest.Size{GPU: &manifest.GPU{Kind: "gpu-a", Count: 1}}}}}}}
+	profile := fleet.Profile{Services: map[string]fleet.ServiceProfile{"api": {CPUMillis: 500, MemoryMiB: 256, MinReplicas: 1, MaxReplicas: 3}}}
+	if _, err := templateWorkloadDemand(template, profile); err == nil {
+		t.Fatal("GPU admitted by a grant without GPU bounds")
+	}
+}
+
+func TestFleetScaleSnapshotUsesProfileMaximum(t *testing.T) {
+	release, instance, input := renderFixture(t)
+	snapshot, err := RenderInstance(release, instance, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	demand, err := FleetDemand(*snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if demand.CPUMillis != 1500 || demand.MemoryBytes != 805306368 || demand.Pods != 3 || demand.EphemeralStorageBytes != 201326592 {
+		t.Fatalf("profile maximum not reserved: %+v", demand)
+	}
+}
+
 func TestInstanceGrantCountsContainerAndJobStorage(t *testing.T) {
 	template := fleet.Template{Manifest: manifest.Manifest{Services: map[string]manifest.Service{"api": {}}}, Jobs: map[string]fleet.LifecycleJob{"bootstrap": {}}}
 	profile := fleet.Profile{Services: map[string]fleet.ServiceProfile{"api": {CPUMillis: 500, MemoryMiB: 256, MinReplicas: 1, MaxReplicas: 16}}}
