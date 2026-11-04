@@ -24,6 +24,9 @@ func (s *Service) ResolveManagedCredentialForObservation(ctx context.Context, c 
 
 func (s *Service) resolveManagedCredential(ctx context.Context, c connections.Connection, observing bool) (connections.ManagedCredential, error) {
 	empty := connections.ManagedCredential{}
+	if connections.IsInstanceConnection(&c) {
+		return empty, connections.ErrChanged
+	}
 	if c.Method != connections.MethodManagedKubernetes || c.Cloud != connections.Kubernetes || s.Clusters == nil || s.Secrets == nil {
 		return empty, connections.ErrNotReady
 	}
