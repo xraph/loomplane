@@ -375,21 +375,126 @@ func TestUnsettledSpansOrganizations(t *testing.T) {
 	}
 }
 
-func TestMarkNotifiedOncePerState(t *testing.T) {
-	s, _ := openPg(t)
+// reviewingReport is a stored report whose agent run is reviewing it.
+func reviewingReport(t *testing.T, s *PgStore, to string) *ReleaseReport {
+	t.Helper()
+	r := mustCreate(t, s, newReport("org_a", "proj_a", to))
+	if ok, err := s.SetTask(context.Background(), "org_a", r.ID, "atask_"+r.ID, "arun_"+r.ID); !ok || err != nil {
+		t.Fatalf("set task: %v %v", ok, err)
+	}
+	return r
+}
+
+func notifiedState(t *testing.T, pg *pgdriver.PgDB, id string) string {
+	t.Helper()
+	var state string
+	if err := pg.QueryRow(context.Background(), `SELECT notified_state FROM loomplane_release_reports WHERE id = $1`, id).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// Finish settles a report and sends its notice once: a second Finish, for
+// the same state or any other, finds the report settled and sends nothing,
+// so one report never gets notices for two states.
+func TestFinishSettlesAndNotifiesOnce(t *testing.T) {
+	s, pg := openPg(t)
 	ctx := context.Background()
-	r := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
-	for i, step := range []struct {
-		state string
-		want  bool
-	}{{StatePromoted, true}, {StatePromoted, false}, {StateStale, true}, {StateStale, false}} {
-		got, err := s.MarkNotified(ctx, "org_a", r.ID, step.state, nil)
-		if err != nil || got != step.want {
-			t.Fatalf("step %d (%s): %v %v", i, step.state, got, err)
+	r := reviewingReport(t, s, "env_prod")
+	sends := 0
+	send := func(context.Context, NoticeTx) error { sends++; return nil }
+	if err := s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "the agent approved the plan", "", t0, send); err != nil {
+		t.Fatal(err)
+	}
+	got := mustGet(t, s, r.ID)
+	if got.Status != StatusDone || got.State != StatePromoted || got.StateReason != "the agent approved the plan" || got.FinishedAt == nil || sends != 1 {
+		t.Fatalf("finished %s/%s %q, %d sends", got.Status, got.State, got.StateReason, sends)
+	}
+	if n := notifiedState(t, pg, r.ID); n != StatePromoted {
+		t.Fatalf("notified_state %q", n)
+	}
+	for _, step := range []struct{ from, state string }{{StateReviewing, StatePromoted}, {StatePromoted, StateStale}, {StateReviewing, StateStale}} {
+		if err := s.Finish(ctx, "org_a", r.ID, step.from, StatusDone, step.state, "again", "", t0, send); !errors.Is(err, ErrMovedOn) {
+			t.Fatalf("finish %s from %s again: %v", step.state, step.from, err)
 		}
 	}
-	if _, err := s.MarkNotified(ctx, "org_a", "rrep_missing", StatePromoted, nil); !errors.Is(err, ErrNotFound) {
+	if sends != 1 || mustGet(t, s, r.ID).State != StatePromoted {
+		t.Fatalf("%d sends, state %s", sends, mustGet(t, s, r.ID).State)
+	}
+	if err := s.Finish(ctx, "org_a", "rrep_missing", StateReviewing, StatusDone, StatePromoted, "", "", t0, send); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing report: %v", err)
+	}
+	// Without a notice, notified_state stays as it was.
+	q := reviewingReport(t, s, "env_prod_quiet")
+	if err := s.Finish(ctx, "org_a", q.ID, StateReviewing, StatusDone, StateApproved, "approved by usr_ada", "", t0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := notifiedState(t, pg, q.ID); n != "" {
+		t.Fatalf("notified_state %q with no notice", n)
+	}
+	if err := s.Finish(ctx, "org_a", q.ID, StateReviewing, StatusReviewing, StatePromoted, "", "", t0, nil); err == nil {
+		t.Fatal("finished as reviewing")
+	}
+}
+
+// A cancel that lands first leaves Finish nothing to settle and no notice
+// to send.
+func TestFinishLosesToAnEarlierCancel(t *testing.T) {
+	s, _ := openPg(t)
+	ctx := context.Background()
+	r := reviewingReport(t, s, "env_prod")
+	if err := s.Settle(ctx, "org_a", r.ID, StateReviewing, StatusCancelled, StateCancelled, "cancelled by usr_dev", "", t0); err != nil {
+		t.Fatal(err)
+	}
+	sends := 0
+	err := s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0, func(context.Context, NoticeTx) error { sends++; return nil })
+	if !errors.Is(err, ErrMovedOn) || sends != 0 || mustGet(t, s, r.ID).State != StateCancelled {
+		t.Fatalf("%v, %d sends, state %s", err, sends, mustGet(t, s, r.ID).State)
+	}
+}
+
+// Finish holds the report through its notice: a cancel that arrives
+// meanwhile waits, then finds the report settled.
+func TestFinishHoldsTheReportAgainstACancel(t *testing.T) {
+	s, pg := openPg(t)
+	ctx := context.Background()
+	if _, err := pg.Exec(ctx, `CREATE TABLE notice_probe (report_id TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	r := reviewingReport(t, s, "env_prod")
+	inSend, release := make(chan struct{}), make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		finished <- s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0, func(ctx context.Context, tx NoticeTx) error {
+			close(inSend)
+			<-release
+			_, err := tx.Exec(ctx, `INSERT INTO notice_probe VALUES ($1)`, r.ID)
+			return err
+		})
+	}()
+	<-inSend
+	cancelled := make(chan error, 1)
+	go func() {
+		cancelled <- s.Settle(ctx, "org_a", r.ID, StateReviewing, StatusCancelled, StateCancelled, "cancelled by usr_dev", "", t0)
+	}()
+	select {
+	case err := <-cancelled:
+		t.Fatalf("the cancel didn't wait for the notice: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-cancelled; !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("cancel after the notice: %v", err)
+	}
+	var probes int
+	if err := pg.QueryRow(ctx, `SELECT count(*) FROM notice_probe`).Scan(&probes); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGet(t, s, r.ID); got.State != StatePromoted || probes != 1 {
+		t.Fatalf("state %s, %d notices", got.State, probes)
 	}
 }
 
@@ -436,16 +541,16 @@ func TestReportsStayInTheirOrganization(t *testing.T) {
 	if err := s.Settle(ctx, "org_b", a.ID, StatePlanning, StatusCancelled, StateCancelled, "", "", t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("org b settled: %v", err)
 	}
-	if ok, err := s.MarkNotified(ctx, "org_b", a.ID, StatePromoted, nil); ok || !errors.Is(err, ErrNotFound) {
-		t.Fatalf("org b marked notified: %v %v", ok, err)
+	if err := s.Finish(ctx, "org_b", a.ID, StatePlanning, StatusFailed, StateFailed, "", "", t0, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("org b finished: %v", err)
 	}
 
 	got := mustGet(t, s, a.ID)
 	if got.PlanID != "plan_a" || got.TaskID != "" || got.Evidence != nil || got.Status != StatusPlanning || len(got.Concerns) != 0 || got.Decision != "" {
 		t.Fatalf("org b changed org a's report: %+v", got)
 	}
-	if ok, err := s.MarkNotified(ctx, "org_a", a.ID, StatePromoted, nil); !ok || err != nil {
-		t.Fatalf("org a's own notice was spent by org b: %v %v", ok, err)
+	if err := s.Finish(ctx, "org_a", a.ID, StatePlanning, StatusFailed, StateFailed, "", "", t0, nil); err != nil {
+		t.Fatalf("org a's own finish: %v", err)
 	}
 }
 
@@ -537,8 +642,8 @@ func TestReleaseReportEventsAreEmitted(t *testing.T) {
 	}
 
 	// Notice bookkeeping alone emits nothing.
-	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, nil); !ok || err != nil {
-		t.Fatalf("mark notified: %v %v", ok, err)
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_release_reports SET notified_state = 'promoted' WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
 	}
 	if n := len(events()); n != 1 {
 		t.Fatalf("notice bookkeeping emitted: %d events", n)
@@ -729,9 +834,9 @@ func TestSettleIsCompareAndSet(t *testing.T) {
 	}
 }
 
-// Fix round 1, I2: the notice is enqueued in the mark's transaction, so a
-// failed enqueue leaves the report unmarked and the next sweep retries.
-func TestMarkNotifiedRollsBackWhenTheNoticeFails(t *testing.T) {
+// The notice is enqueued in the settle's transaction, so a failed enqueue
+// leaves the report unsettled and un-notified, and the next sweep retries.
+func TestFinishRollsBackWhenTheNoticeFails(t *testing.T) {
 	s, pg := openPg(t)
 	ctx := context.Background()
 	if _, err := pg.Exec(ctx, `CREATE TABLE notice_probe (report_id TEXT NOT NULL)`); err != nil {
@@ -744,7 +849,7 @@ func TestMarkNotifiedRollsBackWhenTheNoticeFails(t *testing.T) {
 		}
 		return n
 	}
-	r := mustCreate(t, s, newReport("org_a", "proj_a", "env_prod"))
+	r := reviewingReport(t, s, "env_prod")
 	refuse := errors.New("enqueue failed")
 	failing := func(ctx context.Context, tx NoticeTx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO notice_probe VALUES ($1)`, r.ID); err != nil {
@@ -752,11 +857,11 @@ func TestMarkNotifiedRollsBackWhenTheNoticeFails(t *testing.T) {
 		}
 		return refuse
 	}
-	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, failing); ok || !errors.Is(err, refuse) {
-		t.Fatalf("failing send: %v %v", ok, err)
+	if err := s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0, failing); !errors.Is(err, refuse) {
+		t.Fatalf("failing send: %v", err)
 	}
-	if n := probes(); n != 0 {
-		t.Fatalf("the failed notice was kept: %d", n)
+	if got := mustGet(t, s, r.ID); got.Status != StatusReviewing || got.State != StateReviewing || got.FinishedAt != nil || probes() != 0 || notifiedState(t, pg, r.ID) != "" {
+		t.Fatalf("a failed notice kept %s/%s, %d notices", got.Status, got.State, probes())
 	}
 	sends := 0
 	working := func(ctx context.Context, tx NoticeTx) error {
@@ -764,11 +869,11 @@ func TestMarkNotifiedRollsBackWhenTheNoticeFails(t *testing.T) {
 		_, err := tx.Exec(ctx, `INSERT INTO notice_probe VALUES ($1)`, r.ID)
 		return err
 	}
-	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, working); !ok || err != nil {
-		t.Fatalf("retry: %v %v", ok, err)
+	if err := s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0, working); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
-	if ok, err := s.MarkNotified(ctx, "org_a", r.ID, StatePromoted, working); ok || err != nil {
-		t.Fatalf("second notice: %v %v", ok, err)
+	if err := s.Finish(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0, working); !errors.Is(err, ErrMovedOn) {
+		t.Fatalf("second notice: %v", err)
 	}
 	if sends != 1 || probes() != 1 {
 		t.Fatalf("%d sends, %d notices", sends, probes())

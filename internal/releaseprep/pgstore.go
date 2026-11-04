@@ -432,40 +432,51 @@ func (s *PgStore) Settle(ctx context.Context, orgID, id, from, status, state, re
 		orgID, id, from, status, state, reason, errText, at)
 }
 
-// MarkNotified implements Store. The mark and send share a transaction,
-// and the mark's row lock keeps two sweepers from both sending. It leaves
-// updated_at alone, and the event trigger ignores notified_state, so
-// marking emits nothing.
-func (s *PgStore) MarkNotified(ctx context.Context, orgID, id, state string, send func(ctx context.Context, tx NoticeTx) error) (bool, error) {
+// Finish implements Store. The compare-and-set update and the notice share
+// a transaction: the update's row lock holds the report through send, the
+// notice and the settle commit together, and a failed send rolls both
+// back. notified_state isn't in the event, so it adds nothing there.
+func (s *PgStore) Finish(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time, send func(ctx context.Context, tx NoticeTx) error) error {
+	if status != StatusDone && status != StatusFailed && status != StatusCancelled {
+		return fmt.Errorf("a release report finishes as done, failed or cancelled, not %q", status)
+	}
+	if !knownState(state) {
+		return fmt.Errorf("unknown release report state %q", state)
+	}
+	at = stored(at)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer rollback(tx)
 	res, err := tx.Exec(ctx, `UPDATE loomplane_release_reports
-		SET notified_state = $3
-		WHERE org_id = $1 AND id = $2 AND notified_state <> $3`,
-		orgID, id, state)
+		SET status = $4, state = $5, state_reason = $6, error = $7, updated_at = $8, finished_at = COALESCE(finished_at, $8),
+			notified_state = CASE WHEN $9 THEN $5 ELSE notified_state END
+		WHERE org_id = $1 AND id = $2 AND state = $3 AND `+unsettled,
+		orgID, id, from, status, state, reason, errText, at, send != nil)
 	if err != nil {
-		return false, fmt.Errorf("mark release report notified: %w", err)
+		return fmt.Errorf("finish release report: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, err
+		return err
 	}
 	if n == 0 {
 		rollback(tx)
-		return false, s.exists(ctx, orgID, id)
+		if err := s.exists(ctx, orgID, id); err != nil {
+			return err
+		}
+		return ErrMovedOn
 	}
 	if send != nil {
 		if err := send(ctx, tx); err != nil {
-			return false, err
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("mark release report notified: %w", err)
+		return fmt.Errorf("finish release report: %w", err)
 	}
-	return true, nil
+	return nil
 }
 
 func rollback(tx driver.Tx) { _ = tx.Rollback() } //nolint:errcheck // a committed or rolled back transaction cannot roll back

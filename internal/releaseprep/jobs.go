@@ -37,6 +37,14 @@ const (
 type JobPayload struct {
 	OrgID    string `json:"org_id"`
 	ReportID string `json:"report_id"`
+	// Supersedes is production's open plan the person saw at Prepare and
+	// agreed to replace with replace: true; "" when they agreed to none.
+	// TODO(3d task 7): the job re-reads production's newest open plan just
+	// before it creates one: none, or this ID, may be superseded; a
+	// reusable promotion is reused; any other open plan settles the report
+	// failed with an ErrOpenPlan reason naming the plan and its creator. A
+	// small window remains between that read and CreatePlan's supersede.
+	Supersedes string `json:"supersedes,omitempty"`
 }
 
 // JobOptions are how JobPrepare is queued.

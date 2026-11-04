@@ -7,8 +7,8 @@ import (
 	"github.com/xraph/loomplane/internal/notifications"
 )
 
-// NoticeTx is the transaction MarkNotified hands its send: enough to
-// enqueue a notice and to resolve its recipients in the same transaction.
+// NoticeTx is the transaction Finish hands its send: enough to enqueue a
+// notice and to resolve its recipients in the same transaction.
 type NoticeTx interface {
 	notifications.Execer
 	notifications.Querier
@@ -58,10 +58,12 @@ type Store interface {
 	// that isn't Terminal); otherwise ErrMovedOn. A settled report never
 	// moves again and never takes back its environment.
 	Settle(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time) error
-	// MarkNotified reports true once per (report, state): the first call
-	// for a state that differs from the last one marked. send runs in the
-	// same transaction, after the mark; when it fails the mark rolls back
-	// and the error is returned, so the next sweep tries again. send may be
-	// nil.
-	MarkNotified(ctx context.Context, orgID, id, state string, send func(ctx context.Context, tx NoticeTx) error) (bool, error)
+	// Finish is Settle with its notice: in one transaction it moves the
+	// report from state from to the final status and state, records the
+	// state as notified when send is set, and calls send. When the report
+	// has moved on it returns ErrMovedOn and sends nothing. When send
+	// fails, nothing is kept and its error is returned, so the next sweep
+	// tries again. The report stays locked through send, so a cancel that
+	// arrives meanwhile waits and then finds it settled.
+	Finish(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time, send func(ctx context.Context, tx NoticeTx) error) error
 }

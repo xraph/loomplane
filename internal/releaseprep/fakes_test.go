@@ -339,6 +339,10 @@ func (f *fakeAuthz) Require(_ context.Context, p security.Principal, perm securi
 	if f.err != nil {
 		return f.err
 	}
+	// A read-only key only reads, as the authorizer has it.
+	if p.ReadOnly && !perm.Reads() {
+		return security.ErrForbidden
+	}
 	if f.deny[p.UserID] || f.refuse[p.UserID+" "+perm.Name()] {
 		return security.ErrForbidden
 	}

@@ -50,6 +50,19 @@ type rig struct {
 	jobs      *dispatchengine.Engine
 	warnings  []string
 	mu        sync.Mutex
+	clock     time.Time
+}
+
+func (r *rig) now() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.clock
+}
+
+func (r *rig) advance(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clock = r.clock.Add(d)
 }
 
 var rigNow = time.Date(2026, 11, 4, 13, 0, 0, 0, time.UTC)
@@ -63,7 +76,7 @@ func newRig(t *testing.T) *rig {
 		planStore: &fakePlanStore{plans: map[string]*planning.Plan{}},
 		places:    &fakePlaces{},
 		audit:     &fakeAudit{}, notices: &noticeLog{}, shield: &fakeShield{},
-		tenants: &fakeTenants{off: map[string]bool{}},
+		tenants: &fakeTenants{off: map[string]bool{}}, clock: rigNow,
 	}
 	r.jobStore = dispatchmemory.New()
 	d, err := dispatch.New(dispatch.WithStore(r.jobStore))
@@ -83,7 +96,7 @@ func newRig(t *testing.T) *rig {
 		Places:    r.places,
 		Audit:     r.audit,
 		Notify:    r.notices.enqueue,
-		Now:       func() time.Time { return rigNow },
+		Now:       r.now,
 		Warn: func(msg string, err error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -167,8 +180,8 @@ func payloadOf(t *testing.T, j *job.Job) JobPayload {
 }
 
 // memStore is the Store in memory, with PgStore's rules: one planning or
-// reviewing report per target environment, Settle only from the state
-// read, MarkNotified once per state with its send in the same step.
+// reviewing report per target environment, Settle and Finish only from the
+// state read, Finish's send in the same step as its settle.
 type memStore struct {
 	mu       sync.Mutex
 	reports  map[string]*ReleaseReport
@@ -176,6 +189,9 @@ type memStore struct {
 	order    []string
 	next     int
 	settles  int
+	// beforeFinish, when set, runs as Finish starts, before its
+	// compare-and-set: tests land a cancel there.
+	beforeFinish func()
 }
 
 func newMemStore() *memStore {
@@ -380,22 +396,38 @@ func (m *memStore) Settle(_ context.Context, orgID, id, from, status, state, rea
 	return nil
 }
 
-func (m *memStore) MarkNotified(ctx context.Context, orgID, id, state string, send func(ctx context.Context, tx NoticeTx) error) (bool, error) {
+func (m *memStore) Finish(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time, send func(ctx context.Context, tx NoticeTx) error) error {
+	if hook := m.beforeFinish; hook != nil {
+		m.beforeFinish = nil
+		hook()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, err := m.get(orgID, id); err != nil {
-		return false, err
+	r, err := m.get(orgID, id)
+	if err != nil {
+		return err
 	}
-	if m.notified[id] == state {
-		return false, nil
+	if status != StatusDone && status != StatusFailed && status != StatusCancelled {
+		return fmt.Errorf("memStore: can't finish as %q", status)
+	}
+	if r.State != from || !unsettledReport(r) {
+		return ErrMovedOn
+	}
+	before := cloneReport(r)
+	m.settles++
+	r.Status, r.State, r.StateReason, r.Error, r.UpdatedAt = status, state, reason, errText, at
+	if r.FinishedAt == nil {
+		r.FinishedAt = &at
 	}
 	if send != nil {
 		if err := send(ctx, fakeTx{}); err != nil {
-			return false, err
+			m.reports[id] = before
+			m.settles--
+			return err
 		}
+		m.notified[id] = state
 	}
-	m.notified[id] = state
-	return true, nil
+	return nil
 }
 
 func (m *memStore) stored(t *testing.T, id string) *ReleaseReport {

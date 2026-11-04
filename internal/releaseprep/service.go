@@ -207,7 +207,7 @@ func (s *Service) Prepare(ctx context.Context, p security.Principal, projectID s
 	if cerr := s.d.Store.Create(ctx, r); cerr != nil {
 		return nil, cerr
 	}
-	if qerr := s.enqueue(ctx, r); qerr != nil {
+	if qerr := s.enqueue(ctx, JobPayload{OrgID: r.OrgID, ReportID: r.ID, Supersedes: t.supersedes}); qerr != nil {
 		// Nothing will prepare it: settle it, so the environment is free.
 		if serr := s.d.Store.Settle(context.WithoutCancel(ctx), r.OrgID, r.ID, StatePlanning, StatusFailed, StateFailed,
 			"Loomplane couldn't start preparing the release; try again", "the preparation job couldn't be queued", s.now()); serr != nil {
@@ -217,6 +217,7 @@ func (s *Service) Prepare(ctx context.Context, p security.Principal, projectID s
 	}
 	s.audit(ctx, "release.prepare", "info", p, projectID, map[string]any{
 		"report_id": r.ID, "from": t.from.Name, "to": t.to.Name, "scope": slices.Clone(t.scope), "replace": in.Replace, "via": via,
+		"supersedes": t.supersedes,
 	})
 	return r, nil
 }
@@ -260,6 +261,8 @@ type target struct {
 	scope    []string
 	planID   string
 	reused   bool
+	// supersedes is the open plan the person agreed to replace.
+	supersedes string
 }
 
 // target resolves the environments and the scope, makes room for a new
@@ -283,7 +286,7 @@ func (s *Service) target(ctx context.Context, p security.Principal, projectID st
 	if aerr := s.clearActive(ctx, p.OrgID, t.to.ID); aerr != nil {
 		return nil, aerr
 	}
-	if t.planID, t.reused, err = s.openPlan(ctx, p, projectID, t.from, t.to, scope, in.Replace); err != nil {
+	if t.planID, t.reused, t.supersedes, err = s.openPlan(ctx, p, projectID, t.from, t.to, scope, in.Replace); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -369,30 +372,31 @@ func (s *Service) clearActive(ctx context.Context, orgID, environmentID string) 
 // openPlan finds production's open plan. A promotion from the same
 // staging environment that still matches what staging runs, of the same
 // scope, is reused. Any other open plan is someone's to decide, and is
-// ErrOpenPlan unless the person asked to replace it.
-func (s *Service) openPlan(ctx context.Context, p security.Principal, projectID string, from, to *projects.Environment, scope []string, replace bool) (planID string, reused bool, err error) {
+// ErrOpenPlan unless the person asked to replace it; then supersedes names
+// it, so the job replaces that plan and no other.
+func (s *Service) openPlan(ctx context.Context, p security.Principal, projectID string, from, to *projects.Environment, scope []string, replace bool) (planID string, reused bool, supersedes string, err error) {
 	src := s.sources()
 	plans, _, err := src.Plans.List(ctx, p, projectID, to.Name, page.Cursor{}, 1)
 	if err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 	if len(plans) == 0 || plans[0] == nil || !plans[0].Open() {
-		return "", false, nil
+		return "", false, "", nil
 	}
 	plan := plans[0]
 	if plan.Kind == planning.KindPromotion && plan.FromEnvironmentID == from.ID && sameScope(plan, scope) {
 		match, _, perr := src.Plans.PinsMatchSource(ctx, p.OrgID, plan)
 		if perr != nil {
-			return "", false, fmt.Errorf("check production's open plan against staging: %w", perr)
+			return "", false, "", fmt.Errorf("check production's open plan against staging: %w", perr)
 		}
 		if match {
-			return plan.ID, true, nil
+			return plan.ID, true, "", nil
 		}
 	}
 	if replace {
-		return "", false, nil
+		return "", false, plan.ID, nil
 	}
-	return "", false, fmt.Errorf("%w: plan %s, made by %s; decide it, or prepare again with replace to supersede it",
+	return "", false, "", fmt.Errorf("%w: plan %s, made by %s; decide it, or prepare again with replace to supersede it",
 		ErrOpenPlan, plan.ID, actorName(plan.CreatedBy))
 }
 
@@ -413,7 +417,7 @@ func sameScope(plan *planning.Plan, scope []string) bool {
 }
 
 // enqueue queues the prepare job.
-func (s *Service) enqueue(ctx context.Context, r *ReleaseReport) error {
+func (s *Service) enqueue(ctx context.Context, payload JobPayload) error {
 	var eng *dispatchengine.Engine
 	if s.d.Jobs != nil {
 		eng = s.d.Jobs()
@@ -421,7 +425,7 @@ func (s *Service) enqueue(ctx context.Context, r *ReleaseReport) error {
 	if eng == nil {
 		return errors.New("releaseprep: the job engine isn't ready")
 	}
-	_, err := dispatchengine.Enqueue(ctx, eng, JobPrepare, JobPayload{OrgID: r.OrgID, ReportID: r.ID}, JobOptions()...)
+	_, err := dispatchengine.Enqueue(ctx, eng, JobPrepare, payload, JobOptions()...)
 	return err
 }
 
@@ -560,9 +564,13 @@ func (s *Service) task(ctx context.Context, r *ReleaseReport, sw *sweep) (*agent
 	return t, nil
 }
 
-// Cancel stops a preparation: the person who asked for it, or someone who
-// may approve the project's deployments. The plan is left as it is, for a
-// person to decide.
+// Cancel stops a preparation that is still under way: someone who may
+// approve the project's deployments, or the person who asked for it while
+// they may use the agent on the project. A read-only key may do neither.
+// What already happened stands: Cancel derives the report's state first,
+// and a final one (the agent promoted it, a person decided it, the run
+// stopped) is settled as it is, with its notice, and refused with
+// ErrNotCancelable. The plan is left as it is, for a person to decide.
 func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (*ReleaseReport, error) {
 	if !aPerson(p) {
 		return nil, fmt.Errorf("%w: only a person can cancel a release preparation", security.ErrForbidden)
@@ -571,20 +579,15 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (
 	if err != nil {
 		return nil, err
 	}
-	if rerr := s.require(ctx, p, security.DeploymentRead, r.ProjectID); rerr != nil {
-		return nil, rerr
-	}
-	requester := p.UserID == r.RequestedBy
-	if !requester {
-		if aerr := s.require(ctx, p, security.DeploymentApprove, r.ProjectID); aerr != nil {
-			return nil, aerr
-		}
+	requester, err := s.mayCancel(ctx, p, r)
+	if err != nil {
+		return nil, err
 	}
 	// The job may set the task between the read and the write, which moves
 	// the state: read again once and cancel what's there then.
 	for try := 0; ; try++ {
-		if r.Status != StatusPlanning && r.Status != StatusReviewing {
-			return nil, ErrNotCancelable
+		if ferr := s.finalOutcome(ctx, r); ferr != nil {
+			return nil, ferr
 		}
 		err = s.d.Store.Settle(ctx, r.OrgID, r.ID, r.State, StatusCancelled, StateCancelled, "cancelled by "+p.UserID, "", s.now())
 		if !errors.Is(err, ErrMovedOn) || try == 1 {
@@ -615,6 +618,45 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (
 	}
 	s.audit(ctx, "release.cancel", "info", p, r.ProjectID, map[string]any{"report_id": r.ID, "task_id": r.TaskID, "requester": requester})
 	return s.Get(ctx, p, id)
+}
+
+// mayCancel checks p may cancel r: deployment:approve on the project, or
+// being its requester with agent:use there. requester says which applied.
+func (s *Service) mayCancel(ctx context.Context, p security.Principal, r *ReleaseReport) (requester bool, err error) {
+	if rerr := s.require(ctx, p, security.DeploymentRead, r.ProjectID); rerr != nil {
+		return false, rerr
+	}
+	err = s.require(ctx, p, security.DeploymentApprove, r.ProjectID)
+	if err == nil {
+		return p.UserID == r.RequestedBy, nil
+	}
+	if !errors.Is(err, security.ErrForbidden) || p.UserID != r.RequestedBy {
+		return false, err
+	}
+	if uerr := s.require(ctx, p, security.AgentUse, r.ProjectID); uerr != nil {
+		return false, uerr
+	}
+	return true, nil
+}
+
+// finalOutcome refuses to cancel a report that isn't under way, or whose
+// derived state is already final; the latter is settled as it is first.
+func (s *Service) finalOutcome(ctx context.Context, r *ReleaseReport) error {
+	if r.Status != StatusPlanning && r.Status != StatusReviewing {
+		return ErrNotCancelable
+	}
+	sw := newSweep()
+	o, err := s.derive(ctx, r, sw)
+	if err != nil {
+		return err
+	}
+	if !Terminal(o.state) {
+		return nil
+	}
+	if ferr := s.finish(ctx, r, o, sw); ferr != nil {
+		return ferr
+	}
+	return fmt.Errorf("%w: it ended %s", ErrNotCancelable, o.state)
 }
 
 // Note adds the agent's concern to the report its run is reviewing.

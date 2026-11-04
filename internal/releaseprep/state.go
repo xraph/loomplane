@@ -19,7 +19,7 @@ const (
 	reasonNoProject     = "the project this release was for no longer exists"
 	reasonNoEnvironment = "an environment this release was for no longer exists"
 	reasonPromoted      = "the agent approved the plan; its canary or post-deploy watch takes it from here"
-	reasonStale         = "the plan changed after it was reviewed, so its approval didn't go through; prepare the release again"
+	reasonStale         = "the plan changed after it was reviewed; prepare the release again"
 	reasonExpired       = "the plan expired before anyone decided"
 	reasonBlocked       = "the plan has problems that block it; open it to see them"
 	reasonPlanFailed    = "planning the promotion failed; open the plan to see why"
@@ -31,8 +31,10 @@ const (
 	// reasonCantApprove ends a review for someone who can't approve
 	// production (owner Q1): the job starts their run without the release
 	// fields, so the agent can review but never approve.
-	reasonCantApprove   = "the agent reviewed it; it waits for someone who can approve production in Needs approval"
-	reasonFailed        = "the release preparation failed"
+	reasonCantApprove = "the agent reviewed it; it waits for someone who can approve production in Needs approval"
+	reasonFailed      = "the release preparation failed"
+	// reasonJobNeverRan stops a report the prepare job never moved on.
+	reasonJobNeverRan   = "the preparation job never ran"
 	reasonCancelled     = "the release preparation was cancelled"
 	approvalDidntGoThru = "the agent's approval didn't go through"
 )

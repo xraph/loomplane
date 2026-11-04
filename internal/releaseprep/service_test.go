@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	dispatchengine "github.com/xraph/dispatch/engine"
 
@@ -934,5 +935,190 @@ func TestServiceSharesItsCollectorWithTheGate(t *testing.T) {
 	r.svc.SetSources(w.sources())
 	if r.svc.Collector().Sources.Plans != w.plans {
 		t.Fatal("SetSources didn't reach the collector")
+	}
+}
+
+// Fix round 1, I1: the agent promoted, and a cancel arrives before the
+// sweep. The outcome stands: the cancel is refused, the report settles
+// promoted, and the promoted notice goes.
+func TestCancelRefusesAnOutcomeThatHappened(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusRunning, DecisionPromote)
+	r.planStore.plans["plan_a"].Status = planning.StatusApproved
+	r.planStore.plans["plan_a"].DecidedBy = security.AgentSubject("org_a")
+	r.w.plans.byID["plan_a"].Status = planning.StatusApproved
+	r.w.plans.byID["plan_a"].DecidedBy = security.AgentSubject("org_a")
+
+	_, err := r.svc.Cancel(context.Background(), dev, rep.ID)
+	if !errors.Is(err, ErrNotCancelable) || !strings.Contains(err.Error(), StatePromoted) {
+		t.Fatalf("%v, want ErrNotCancelable naming %s", err, StatePromoted)
+	}
+	if s := r.store.stored(t, rep.ID); s.Status != StatusDone || s.State != StatePromoted {
+		t.Fatalf("report %s/%s, want done/promoted", s.Status, s.State)
+	}
+	notices := r.notices.all()
+	if len(notices) != 1 || notices[0].SubjectID != rep.ID+":"+StatePromoted {
+		t.Fatalf("notices %+v", notices)
+	}
+	if len(r.runs.cancels)+len(r.runs.cancelTasks) != 0 || len(r.audit.named("release.cancel")) != 0 {
+		t.Fatalf("cancelled %v %v", r.runs.cancels, r.runs.cancelTasks)
+	}
+	// A stopped run is an outcome too.
+	r = newRig(t)
+	rep = r.reviewing(t, agentruns.StatusCompleted, DecisionAsk)
+	if _, err = r.svc.Cancel(context.Background(), ada, rep.ID); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("stopped: %v", err)
+	}
+	if s := r.store.stored(t, rep.ID); s.State != StateStopped {
+		t.Fatalf("report %s", s.State)
+	}
+}
+
+// Fix round 1, I2: a cancel that lands between the sweep's derive and its
+// settle wins cleanly, and no notice goes for the state that lost.
+func TestSettleLosesToACancelCleanly(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusCompleted, DecisionAsk)
+	r.store.beforeFinish = func() {
+		if err := r.store.Settle(context.Background(), "org_a", rep.ID, StateReviewing, StatusCancelled, StateCancelled, "cancelled by usr_dev", "", rigNow); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := r.svc.Settle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.store.stored(t, rep.ID); s.State != StateCancelled {
+		t.Fatalf("report %s", s.State)
+	}
+	if n := r.notices.all(); len(n) != 0 {
+		t.Fatalf("notices %+v", n)
+	}
+}
+
+// A failed notice leaves the report unsettled and un-notified.
+func TestSettleFailedNoticeLeavesNoMark(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusCompleted, DecisionAsk)
+	r.notices.err = errors.New("outbox down")
+	_ = r.svc.Settle(context.Background())
+	if s := r.store.stored(t, rep.ID); s.Status != StatusReviewing || s.State != StateReviewing || s.FinishedAt != nil {
+		t.Fatalf("report %s/%s", s.Status, s.State)
+	}
+	if n := r.store.notified[rep.ID]; n != "" {
+		t.Fatalf("marked %q", n)
+	}
+}
+
+// Fix round 1, I3: the plan the person agreed to replace travels with the
+// job, so the job supersedes that plan and no other.
+func TestPrepareCarriesThePlanItMaySupersede(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		setup func(r *rig)
+		in    PrepareInput
+		want  string
+	}{
+		{"replace against a person's plan", func(r *rig) { r.openPlan(planning.KindRelease, "", "usr_ada") }, PrepareInput{Replace: true}, "plan_open"},
+		{"no open plan", func(*rig) {}, PrepareInput{}, ""},
+		{"replace with no open plan", func(*rig) {}, PrepareInput{Replace: true}, ""},
+		{"a decided plan", func(r *rig) {
+			r.openPlan(planning.KindRelease, "", "usr_ada").Status = planning.StatusApproved
+			r.w.plans.open[0].Status = planning.StatusApproved
+		}, PrepareInput{Replace: true}, ""},
+		{"a reused plan", func(r *rig) { r.openPlan(planning.KindPromotion, "staging", "usr_ada") }, PrepareInput{Scope: []string{"api"}, Replace: true}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cr := newRig(t)
+			c.setup(cr)
+			got, err := cr.svc.Prepare(ctx, dev, "proj_a", c.in, ViaDashboard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			jobs := cr.pendingJobs(t)
+			if len(jobs) != 1 {
+				t.Fatalf("%d jobs", len(jobs))
+			}
+			if p := payloadOf(t, jobs[0]); p != (JobPayload{OrgID: "org_a", ReportID: got.ID, Supersedes: c.want}) {
+				t.Fatalf("payload %+v, want supersedes %q", p, c.want)
+			}
+			if a := cr.audit.named("release.prepare"); len(a) != 1 || a[0].Attributes["supersedes"] != c.want {
+				t.Fatalf("audit %+v", a)
+			}
+		})
+	}
+}
+
+// Fix round 1, I4: cancelling takes deployment:approve, or being the
+// requester with agent:use. A read-only key holds neither.
+func TestCancelNeedsAgentUseOrApprove(t *testing.T) {
+	ctx := context.Background()
+	readOnly := dev
+	readOnly.ReadOnly = true
+
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusRunning, DecisionNone)
+	if _, err := r.svc.Cancel(ctx, readOnly, rep.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("read-only key: %v, want ErrForbidden", err)
+	}
+	r.w.authz.refuse = map[string]bool{
+		"usr_dev " + security.AgentUse.Name(): true, "usr_dev " + security.DeploymentApprove.Name(): true,
+	}
+	if _, err := r.svc.Cancel(ctx, dev, rep.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("requester without agent:use: %v, want ErrForbidden", err)
+	}
+	if s := r.store.stored(t, rep.ID); s.Status != StatusReviewing || len(r.runs.cancels)+len(r.runs.cancelTasks) != 0 {
+		t.Fatalf("refused cancels changed %s, %v %v", s.Status, r.runs.cancels, r.runs.cancelTasks)
+	}
+	// The requester with agent:use, who can't approve, cancels.
+	r.w.authz.refuse = map[string]bool{"usr_dev " + security.DeploymentApprove.Name(): true}
+	if got, err := r.svc.Cancel(ctx, dev, rep.ID); err != nil || got.Status != StatusCancelled {
+		t.Fatalf("requester: %+v %v", got, err)
+	}
+	for _, c := range r.w.authz.checks {
+		if c.resource != "proj_a" {
+			t.Fatalf("%s checked on %q", c.perm.Name(), c.resource)
+		}
+	}
+	// An approver without agent:use cancels someone else's.
+	r = newRig(t)
+	rep = r.reviewing(t, agentruns.StatusRunning, DecisionNone)
+	r.w.authz.refuse = map[string]bool{"usr_ada " + security.AgentUse.Name(): true}
+	if got, err := r.svc.Cancel(ctx, ada, rep.ID); err != nil || got.Status != StatusCancelled {
+		t.Fatalf("approver: %+v %v", got, err)
+	}
+}
+
+// Fix round 1, M1: a preparation whose job never ran (lost while AI was
+// off, or a crash between storing it and queueing the job) stops holding
+// production after an hour.
+func TestSettleStopsAPreparationWhoseJobNeverRan(t *testing.T) {
+	r := newRig(t)
+	got, err := r.svc.Prepare(context.Background(), dev, "proj_a", PrepareInput{}, ViaDashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.advance(59 * time.Minute)
+	if err = r.svc.Settle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.store.stored(t, got.ID); s.Status != StatusPlanning {
+		t.Fatalf("settled early: %s", s.Status)
+	}
+	r.advance(2 * time.Minute)
+	if err = r.svc.Settle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := r.store.stored(t, got.ID)
+	if s.Status == StatusPlanning || s.State != StateStopped || s.StateReason != reasonJobNeverRan {
+		t.Fatalf("report %s/%s %q", s.Status, s.State, s.StateReason)
+	}
+	if n := r.notices.all(); len(n) != 1 || n[0].SubjectID != got.ID+":"+StateStopped {
+		t.Fatalf("notices %+v", n)
+	}
+	// Production is free again.
+	if _, err = r.svc.Prepare(context.Background(), dev, "proj_a", PrepareInput{}, ViaDashboard); err != nil {
+		t.Fatal(err)
 	}
 }

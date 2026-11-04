@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,16 +39,20 @@ var noticeWords = map[string]string{
 	StateFailed:   "preparation failed",
 }
 
+// planningBackstop is how long a report may stay planning before Settle
+// stops it: well past the prepare job's retries and timeouts, so only a
+// job that never ran is caught (lost while AI was off, or a crash between
+// storing the report and queueing the job).
+const planningBackstop = time.Hour
+
 // Settle is the settle cron's body. For each unsettled report it reads
 // the plan and the task with no principal, so it keeps working after the
 // workspace turns its agent off, derives the state, and settles a report
 // whose state is final. A report whose project, environment or plan no
-// longer exists is closed as failed. A final state that needs someone is
-// told to the person who asked and the project's team once.
-//
-// The notice goes before the report settles: the sweep only comes back to
-// unsettled reports, so a notice that fails leaves the report for the next
-// sweep instead of losing the notice. MarkNotified sends once per state.
+// longer exists is closed as failed, and one whose prepare job never ran
+// is stopped. A final state that needs someone is told to the person who
+// asked and the project's team, in the settle's own transaction, so the
+// notice and the settle commit together or not at all.
 func (s *Service) Settle(ctx context.Context) error {
 	reports, err := s.d.Store.Unsettled(ctx, settleBatch)
 	if err != nil {
@@ -63,44 +68,62 @@ func (s *Service) Settle(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// outcome is where a report stands, and the status it settles as when
+// that's final.
+type outcome struct {
+	status, state, reason string
+}
+
 // settle settles one report when its state is final.
 func (s *Service) settle(ctx context.Context, r *ReleaseReport, sw *sweep) error {
-	why, err := s.gone(ctx, r, sw)
-	if err != nil {
+	o, err := s.derive(ctx, r, sw)
+	if err != nil || !Terminal(o.state) {
 		return err
 	}
+	return s.finish(ctx, r, o, sw)
+}
+
+// derive is where r stands now, read with no principal: closed when its
+// project or an environment is gone, stopped when its job never ran,
+// otherwise DeriveState from the plan and the task.
+func (s *Service) derive(ctx context.Context, r *ReleaseReport, sw *sweep) (outcome, error) {
+	why, err := s.gone(ctx, r, sw)
+	if err != nil {
+		return outcome{}, err
+	}
 	if why != "" {
-		return s.finish(ctx, r, StatusFailed, StateFailed, why, sw)
+		return outcome{StatusFailed, StateFailed, why}, nil
 	}
 	if r.Status == StatusPlanning {
 		// The prepare job moves a planning report on, or settles it.
-		return nil
+		if !r.CreatedAt.IsZero() && s.now().Sub(r.CreatedAt) > planningBackstop {
+			return outcome{StatusFailed, StateStopped, reasonJobNeverRan}, nil
+		}
+		return outcome{state: StatePlanning}, nil
 	}
 	var plan *planning.Plan
-	if r.PlanID != "" && s.d.PlanStore != nil {
+	if r.PlanID != "" {
+		if s.d.PlanStore == nil {
+			return outcome{}, errors.New("releaseprep: no plan store is configured")
+		}
 		plan, err = s.d.PlanStore.GetPlan(ctx, r.OrgID, r.PlanID)
 		if errors.Is(err, planning.ErrNotFound) {
 			plan, err = nil, nil
 		}
 		if err != nil {
-			return fmt.Errorf("read the plan: %w", err)
+			return outcome{}, fmt.Errorf("read the plan: %w", err)
 		}
-	} else if r.PlanID != "" {
-		return errors.New("releaseprep: no plan store is configured")
 	}
 	task, err := s.task(ctx, r, sw)
 	if err != nil {
-		return fmt.Errorf("read the task: %w", err)
+		return outcome{}, fmt.Errorf("read the task: %w", err)
 	}
 	state, reason := DeriveState(r, plan, task)
-	if !Terminal(state) {
-		return nil
-	}
 	status := StatusDone
 	if state == StateFailed {
 		status = StatusFailed
 	}
-	return s.finish(ctx, r, status, state, reason, sw)
+	return outcome{status, state, reason}, nil
 }
 
 // gone is why a report can't go on: its project or one of its
@@ -138,23 +161,24 @@ func (s *Service) gone(ctx context.Context, r *ReleaseReport, sw *sweep) (string
 	return "", nil
 }
 
-// finish tells who needs to know, then settles the report. A report that
-// moved on meanwhile, such as a person cancelling it, is left as it is.
-func (s *Service) finish(ctx context.Context, r *ReleaseReport, status, state, reason string, sw *sweep) error {
-	if _, ok := noticeWords[state]; ok {
-		n := s.notice(ctx, r, state, reason, sw)
-		if _, err := s.d.Store.MarkNotified(ctx, r.OrgID, r.ID, state, func(ctx context.Context, tx NoticeTx) error {
+// finish settles the report, and in the same transaction tells who needs
+// to know. The notice is built only once the report is held, so nothing is
+// scanned or mapped for a report that moved on. A report that moved on
+// meanwhile, such as a person cancelling it, is left as it is.
+func (s *Service) finish(ctx context.Context, r *ReleaseReport, o outcome, sw *sweep) error {
+	var send func(ctx context.Context, tx NoticeTx) error
+	if _, ok := noticeWords[o.state]; ok {
+		send = func(ctx context.Context, tx NoticeTx) error {
 			recipients, err := s.recipients(ctx, tx, r)
 			if err != nil {
 				return err
 			}
+			n := s.notice(ctx, r, o.state, o.reason, sw)
 			n.Recipients = recipients
 			return s.send(ctx, tx, n)
-		}); err != nil {
-			return fmt.Errorf("send its notice: %w", err)
 		}
 	}
-	err := s.d.Store.Settle(ctx, r.OrgID, r.ID, r.State, status, state, reason, "", s.now())
+	err := s.d.Store.Finish(ctx, r.OrgID, r.ID, r.State, o.status, o.state, o.reason, "", s.now(), send)
 	if errors.Is(err, ErrMovedOn) {
 		return nil
 	}
