@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -19,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/agenttest"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
@@ -394,6 +396,11 @@ var deliverCases = []deliverCase{
 	{name: "UnsavedNoticeHoldsBackGitHub", run: unsavedNoticeHoldsBackGitHub},
 	{name: "CommentsAreRedactedBeforeTheyAreEscaped", run: commentsAreRedactedBeforeTheyAreEscaped,
 		opts: deliverOptions{secrets: fakeSecrets{values: []string{"s3<cr@et-Val"}}}},
+	{name: "StalledWorkerOpensNoSecondIssue", run: stalledWorkerOpensNoSecondIssue},
+	{name: "UnreadableSecretsSendNothing", run: unreadableSecretsSendNothing,
+		opts: deliverOptions{secrets: fakeSecrets{values: []string{projectSecret}, err: errors.New("vault is down")}}},
+	{name: "SecretsOfAGoneProjectAreSkipped", run: secretsOfAGoneProjectAreSkipped,
+		opts: deliverOptions{secrets: fakeSecrets{err: fmt.Errorf("read project: %w", projects.ErrNotFound)}, engine: blockEngine{}}},
 }
 
 func runMem(t *testing.T, name string) {
@@ -979,8 +986,14 @@ func stepsKeepWhatChangedMeanwhile(t *testing.T, e *deliverEnv) {
 func TestCloseIsRetriedWithoutASecondComment(t *testing.T) {
 	runMem(t, "CloseIsRetriedWithoutASecondComment")
 }
-func TestLostLeaseOpensNoIssue(t *testing.T)        { runMem(t, "LostLeaseOpensNoIssue") }
-func TestUnsavedNoticeHoldsBackGitHub(t *testing.T) { runMem(t, "UnsavedNoticeHoldsBackGitHub") }
+func TestLostLeaseOpensNoIssue(t *testing.T)           { runMem(t, "LostLeaseOpensNoIssue") }
+func TestUnsavedNoticeHoldsBackGitHub(t *testing.T)    { runMem(t, "UnsavedNoticeHoldsBackGitHub") }
+func TestStalledWorkerOpensNoSecondIssue(t *testing.T) { runMem(t, "StalledWorkerOpensNoSecondIssue") }
+func TestUnreadableSecretsSendNothing(t *testing.T)    { runMem(t, "UnreadableSecretsSendNothing") }
+func TestSecretsOfAGoneProjectAreSkipped(t *testing.T) {
+	runMem(t, "SecretsOfAGoneProjectAreSkipped")
+}
+
 func TestCommentsAreRedactedBeforeTheyAreEscaped(t *testing.T) {
 	runMem(t, "CommentsAreRedactedBeforeTheyAreEscaped")
 }
@@ -1019,6 +1032,10 @@ type claimThief struct {
 	claims int
 }
 
+func (c *claimThief) RenewDelivery(context.Context, string, string, string, time.Duration) (*Delivery, error) {
+	return nil, ErrLeaseLost
+}
+
 func (c *claimThief) ClaimDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
 	c.mu.Lock()
 	c.claims++
@@ -1037,7 +1054,8 @@ func lostLeaseOpensNoIssue(t *testing.T, e *deliverEnv) {
 	r := e.opened(t)
 	deps := e.svc.d
 	deps.Store = &claimThief{Store: e.store}
-	if err := NewService(deps).Deliver(ctx, e.org, r.ID, owner1); !errors.Is(err, ErrLeaseLost) {
+	// Losing the delivery is a handoff, not a failure to retry.
+	if err := NewService(deps).Deliver(ctx, e.org, r.ID, owner1); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
 	if e.creates() != 0 || len(e.notices(t)) != len(everyone) {
@@ -1060,6 +1078,109 @@ func lostLeaseOpensNoIssue(t *testing.T, e *deliverEnv) {
 	}
 	if got := e.lookup(t, r.ID); got.Issue.Number == 9 {
 		t.Fatal("a worker without the lease wrote the issue")
+	}
+}
+
+// staleFind answers Find as it did before another worker opened the
+// issue: nothing yet.
+type staleFind struct{ repositories.Issues }
+
+func (staleFind) Find(context.Context, string, string) (*repositories.Issue, error) { return nil, nil }
+
+type staleTracker struct{ repositories.IssueTracker }
+
+func (s staleTracker) Issues(ctx context.Context, orgID, repo string) (repositories.Issues, error) {
+	iss, err := s.IssueTracker.Issues(ctx, orgID, repo)
+	if err != nil {
+		return nil, err
+	}
+	return staleFind{iss}, nil
+}
+
+// Worker A claims, stalls past its lease, and has already looked for the
+// issue; worker B claims, opens and records the issue and lets go. When A
+// carries on, it can't take the delivery back up, and opens no second
+// issue over B's.
+func stalledWorkerOpensNoSecondIssue(t *testing.T, e *deliverEnv) {
+	ctx := context.Background()
+	r := e.opened(t)
+	stale, err := e.store.ClaimDelivery(ctx, e.org, r.ID, "worker_a", time.Millisecond)
+	if err != nil || stale == nil {
+		t.Fatalf("claim: %v, %v", stale, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	e.clock.advance(time.Second)
+	if err = e.svc.Deliver(ctx, e.org, r.ID, "worker_b"); err != nil {
+		t.Fatal(err)
+	}
+	if e.creates() != 1 {
+		t.Fatalf("worker B: %d creates", e.creates())
+	}
+
+	deps := e.svc.d
+	deps.Issues = staleTracker{deps.Issues}
+	a := NewService(deps)
+	bound, _, err := a.bind(ctx, e.org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.sender(bound, stale.Report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.deliverIssue(bound, out, stale, "worker_a"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("worker A: %v", err)
+	}
+	if e.creates() != 1 || len(e.issues()) != 1 {
+		t.Fatalf("%d creates", e.creates())
+	}
+	if got := e.lookup(t, r.ID); got.Issue.Number != 1 || got.Issue.State != IssueOpen {
+		t.Fatalf("report issue %+v", got.Issue)
+	}
+	// Nor can A renew a lease it let lapse while nobody else took it.
+	if _, err = e.store.ClaimDelivery(ctx, e.org, r.ID, "worker_c", time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	e.clock.advance(time.Second)
+	if _, err = e.store.RenewDelivery(ctx, e.org, r.ID, "worker_c", DeliveryLease); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("renew a lapsed lease: %v", err)
+	}
+	if _, err = e.store.RenewDelivery(ctx, e.org, "arep_gone", "worker_c", DeliveryLease); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("renew a missing report: %v", err)
+	}
+	if err = e.store.SaveIssue(ctx, e.org, "arep_gone", "worker_c", 1, IssueSave{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("save a missing report: %v", err)
+	}
+}
+
+// A failed read of the secrets sends nothing, and the job retries.
+func unreadableSecretsSendNothing(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	if err := e.svc.Deliver(context.Background(), e.org, r.ID, owner1); err == nil || !strings.Contains(err.Error(), "vault is down") {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(e.notices(t)) != 0 || len(e.gh.Requests()) != 0 {
+		t.Fatal("delivered without the report's secrets")
+	}
+	if hid := e.peek.hidden(t, e.org, r.ID); hid.NotifiedRevision != 0 || hid.IssueRevision != 0 {
+		t.Fatalf("delivery columns %+v", hid)
+	}
+}
+
+// A project that no longer exists has no secrets left to leak: delivery
+// logs it and goes on, with the scan still in the way.
+func secretsOfAGoneProjectAreSkipped(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	e.deliver(t, r.ID)
+	if is := e.issues()[0]; !strings.HasPrefix(is.Body, Marker(r.ID)+"\n\nLoomplane opened a report for this repository.") {
+		t.Fatalf("the scan didn't run:\n%s", is.Body)
+	}
+	if n := len(e.notices(t)); n != len(everyone) {
+		t.Fatalf("%d notices", n)
+	}
+	if w := e.warned(); len(w) == 0 || !strings.Contains(w[0], "no longer exist") {
+		t.Fatalf("warnings %v", w)
 	}
 }
 
@@ -1150,15 +1271,16 @@ func TestRecipientsAreAdminsTheTeamAndTheStarter(t *testing.T) {
 	}
 }
 
-// A failed read of the secrets is logged and the scan still runs.
-func TestSecretsErrorStillScans(t *testing.T) {
-	e := newMemEnv(t, deliverOptions{secrets: fakeSecrets{err: errors.New("vault is down")}, engine: blockEngine{}})
-	r := e.opened(t)
-	e.deliver(t, r.ID)
-	if is := e.issues()[0]; !strings.HasPrefix(is.Body, Marker(r.ID)+"\n\nLoomplane opened a report for this repository.") {
-		t.Fatalf("the scan didn't run:\n%s", is.Body)
-	}
-	if w := e.warned(); len(w) == 0 || !strings.Contains(w[0], "vault is down") {
-		t.Fatalf("warnings %v", w)
+// Only parts that no longer exist are passed over: a joined error with
+// anything else in it fails closed.
+func TestGoneSecretsAreOnlyNotFound(t *testing.T) {
+	missing := fmt.Errorf("reveal TOKEN: %w", environments.ErrNotFound)
+	for err, want := range map[error]bool{
+		projects.ErrNotFound: true, missing: true, errors.Join(missing, missing): true,
+		errors.Join(missing, errors.New("vault is down")): false, errors.New("vault is down"): false,
+	} {
+		if gone(err) != want {
+			t.Fatalf("gone(%v) = %v", err, !want)
+		}
 	}
 }

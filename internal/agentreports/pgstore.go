@@ -441,9 +441,30 @@ func (s *PgStore) SaveIssue(ctx context.Context, orgID, id, owner string, revisi
 		return err
 	}
 	if n == 0 {
+		if _, gerr := s.Get(ctx, orgID, id); gerr != nil {
+			return gerr
+		}
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+// RenewDelivery implements Store, on the database's clock.
+func (s *PgStore) RenewDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
+	r, err := scanRecord(s.db.QueryRow(ctx, `UPDATE loomplane_agent_reports
+		SET delivery_until = now() + ($4::float8 * interval '1 second')
+		WHERE org_id = $1 AND id = $2 AND delivery_owner = $3 AND delivery_until > now()
+		RETURNING `+reportColumns, orgID, id, owner, lease.Seconds()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := s.Get(ctx, orgID, id); gerr != nil {
+			return nil, gerr
+		}
+		return nil, ErrLeaseLost
+	}
+	if err != nil {
+		return nil, fmt.Errorf("renew agent report delivery: %w", err)
+	}
+	return r.delivery(), nil
 }
 
 // ReleaseDelivery implements Store.

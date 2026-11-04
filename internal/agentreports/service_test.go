@@ -1380,6 +1380,22 @@ func (m *memStore) ClaimDelivery(_ context.Context, orgID, id, owner string, lea
 
 func (m *memStore) holds(id, owner string) bool { return m.claims[id].owner == owner }
 
+func (m *memStore) RenewDelivery(_ context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, err := m.find(orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	now := m.now()
+	c, ok := m.claims[id]
+	if !ok || c.owner != owner || !c.until.After(now) {
+		return nil, ErrLeaseLost
+	}
+	m.claims[id] = memClaim{owner: owner, until: now.Add(lease)}
+	return r.delivery(), nil
+}
+
 func (m *memStore) SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
 	send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error) {
 	m.mu.Lock()

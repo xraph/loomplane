@@ -3,6 +3,7 @@ package agentreports
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
@@ -54,7 +56,10 @@ func (s *Service) Text(ctx context.Context, r *Report) (Rendered, error) {
 	if err != nil || !on {
 		return Rendered{}, err
 	}
-	out := s.sender(bound, r)
+	out, err := s.sender(bound, r)
+	if err != nil {
+		return Rendered{}, err
+	}
 	n := s.names(bound, r, out)
 	title, body := s.noticeTexts(bound, out, r, "", n)
 	issueTitle, issueText := s.issueTexts(bound, out, r, n)
@@ -64,10 +69,18 @@ func (s *Service) Text(ctx context.Context, r *Report) (Rendered, error) {
 // Deliver is the delivery job's body: it sends a report's notice through
 // Herald and brings its GitHub issue up to date. It does nothing for a
 // report another worker is delivering, or while the workspace's agent is
-// off, and running it again after it succeeded does nothing. An error
-// means Dispatch should retry; the notice, once queued, is never queued
-// again.
+// off, and running it again after it succeeded does nothing. A worker
+// that loses the delivery to another stops quietly. An error means
+// Dispatch should retry; the notice, once queued, is never queued again.
 func (s *Service) Deliver(ctx context.Context, orgID, id, owner string) error {
+	err := s.deliver(ctx, orgID, id, owner)
+	if errors.Is(err, ErrLeaseLost) {
+		return nil // the worker that holds it now finishes it
+	}
+	return err
+}
+
+func (s *Service) deliver(ctx context.Context, orgID, id, owner string) error {
 	if orgID == "" || id == "" || owner == "" {
 		return invalid("a delivery names its workspace, report and owner")
 	}
@@ -92,7 +105,10 @@ func (s *Service) Deliver(ctx context.Context, orgID, id, owner string) error {
 		done = true
 		return nil
 	}
-	out := s.sender(bound, d.Report)
+	out, err := s.sender(bound, d.Report)
+	if err != nil {
+		return err
+	}
 	if d, err = s.deliverNotice(bound, out, d, owner); err != nil || d == nil {
 		return err
 	}
@@ -336,13 +352,14 @@ func (st *issueStep) sync(iss repositories.Issues) error {
 			return nil
 		default:
 			// Opening an issue is the one step a second worker must never
-			// repeat, so the claim is renewed first and the issue recorded
-			// right after.
-			held, err := st.s.d.Store.ClaimDelivery(st.ctx, r.OrgID, r.ID, st.owner, DeliveryLease)
+			// repeat. The lease is renewed first, only while it's still
+			// this worker's, and the issue is opened only when no worker
+			// recorded one meanwhile; it's recorded right after.
+			held, err := st.s.d.Store.RenewDelivery(st.ctx, r.OrgID, r.ID, st.owner, DeliveryLease)
 			if err != nil {
 				return err
 			}
-			if held == nil {
+			if held.Report.Issue.Number > 0 {
 				return ErrLeaseLost
 			}
 			got, err := iss.Create(st.ctx, repositories.IssueInput{Title: title, Body: body, Labels: []string{Label}})
@@ -533,18 +550,37 @@ type sender struct {
 	redact  *realtime.Redactor
 }
 
-// sender reads r's secrets. A failed read is logged and the outbound
-// scan still runs on everything sent.
-func (s *Service) sender(ctx context.Context, r *Report) *sender {
+// sender reads r's secrets. A read that fails sends nothing: the caller
+// returns the error and tries again later. Only a project, environment or
+// secret that no longer exists is logged and passed over, since there's
+// nothing of it left to leak; the outbound scan still runs.
+func (s *Service) sender(ctx context.Context, r *Report) (*sender, error) {
 	var values []string
 	if s.d.Secrets != nil {
 		v, err := s.d.Secrets.SecretValues(ctx, r.OrgID, r.ProjectID, r.Environment)
 		if err != nil {
-			s.warn("agentreports: read the secrets to redact from report "+r.ID, err)
+			if !gone(err) {
+				return nil, fmt.Errorf("read the secrets to redact from report %s: %w", r.ID, err)
+			}
+			s.warn("agentreports: some secrets of report "+r.ID+" no longer exist", err)
 		}
 		values = v
 	}
-	return &sender{scanner: s.d.Safety, redact: realtime.NewRedactor(secretForms(values))}
+	return &sender{scanner: s.d.Safety, redact: realtime.NewRedactor(secretForms(values))}, nil
+}
+
+// gone is whether err says only that something no longer exists: the
+// project, or a secret's variable. Every part of a joined error must.
+func gone(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !gone(e) {
+				return false
+			}
+		}
+		return len(joined.Unwrap()) > 0
+	}
+	return errors.Is(err, projects.ErrNotFound) || errors.Is(err, environments.ErrNotFound)
 }
 
 // secretForms adds the password of a URL-shaped secret, and its escaped

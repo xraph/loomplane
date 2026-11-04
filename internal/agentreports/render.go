@@ -307,10 +307,12 @@ const wordJoiner = "\u2060"
 
 // neutralise makes text safe to put in an issue outside a fence. Every
 // mention of a person or a team is broken by an invisible word joiner
-// after its @, so nobody is paged, and every < is escaped, so the text
-// can't start an HTML element or comment: nobody can forge a second
-// marker or render an image or a details block. Markdown links stay.
+// after its @, so nobody is paged, and every & and < is escaped: the text
+// can't spell an @ as an entity (&#64;), and can't start an HTML element
+// or comment, so nobody can forge a second marker or render an image or
+// a details block. Markdown links stay.
 func neutralise(text string) string {
+	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	return mention.ReplaceAllString(text, "${1}@"+wordJoiner+"${2}")
 }

@@ -183,6 +183,11 @@ type Store interface {
 	// reports false, having saved nothing, when the report moved on.
 	SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
 		send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error)
+	// RenewDelivery extends owner's hold on the delivery by lease, only
+	// while owner still holds it and the lease hasn't run out, and returns
+	// where it stands now. Otherwise it's ErrLeaseLost: unlike
+	// ClaimDelivery, it never takes up a delivery that was let go.
+	RenewDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error)
 	// SaveIssue records the issue step while owner holds the delivery,
 	// and is ErrLeaseLost when owner no longer does.
 	SaveIssue(ctx context.Context, orgID, id, owner string, revision int, in IssueSave) error

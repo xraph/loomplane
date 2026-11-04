@@ -1,6 +1,7 @@
 package agentreports
 
 import (
+	"html"
 	"os"
 	"regexp"
 	"strings"
@@ -106,12 +107,14 @@ func TestNeutraliseBreaksEveryMention(t *testing.T) {
 	for _, text := range []string{
 		"`ping @acme`", ".@acme", "-@acme", "/@acme", "@@acme", "_@acme_", "@acme/oncall", "@everyone",
 		"**@acme**", "(@acme)", "[@acme](http://e)", "ping\n@acme",
+		// An @ spelled as an entity is one once GitHub decodes it.
+		"&#64;acme", "&#x40;acme", "&commat;acme", "@&#97;cme",
 	} {
 		got := neutralise(text)
-		if liveMention.MatchString(got) {
+		if liveMention.MatchString(html.UnescapeString(got)) {
 			t.Errorf("neutralise(%q) = %q leaves a mention", text, got)
 		}
-		if strings.ReplaceAll(got, wordJoiner, "") != text {
+		if html.UnescapeString(strings.ReplaceAll(got, wordJoiner, "")) != text {
 			t.Errorf("neutralise(%q) = %q changes more than the mention", text, got)
 		}
 	}
@@ -121,10 +124,10 @@ func TestNeutraliseBreaksEveryMention(t *testing.T) {
 	r.Findings = &Findings{Summary: "_@acme_ and .@acme", LikelyCause: "`@everyone`", Suggestions: []string{"-@acme/oncall"}, Confidence: "low"}
 	r.Resolution = "@@acme"
 	body := issueBody(r, renderNames(r), true)
-	if liveMention.MatchString(body) {
+	if liveMention.MatchString(html.UnescapeString(body)) {
 		t.Fatalf("a mention is live:\n%s", body)
 	}
-	if text, _ := comment(commentResolved, r, renderNames(r)); liveMention.MatchString(text) {
+	if text, _ := comment(commentResolved, r, renderNames(r)); liveMention.MatchString(html.UnescapeString(text)) {
 		t.Fatalf("a mention is live in %q", text)
 	}
 }

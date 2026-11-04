@@ -90,7 +90,9 @@ func (s *Service) Documents(ctx context.Context, orgID string, after time.Time, 
 		key := [2]string{r.ProjectID, r.Environment}
 		out, ok := senders[key]
 		if !ok {
-			out = s.sender(bound, r)
+			if out, err = s.sender(bound, r); err != nil {
+				return nil, err
+			}
 			senders[key] = out
 		}
 		title, body := s.issueTexts(bound, out, r, s.names(bound, r, out))
@@ -107,7 +109,10 @@ func (s *Service) knowledge(ctx context.Context, r *Report) (text string, on boo
 	if err != nil || !on {
 		return "", on, err
 	}
-	out := s.sender(bound, r)
+	out, err := s.sender(bound, r)
+	if err != nil {
+		return "", true, err
+	}
 	title, body := s.issueTexts(bound, out, r, s.names(bound, r, out))
 	return knowledgeText(r, Rendered{IssueTitle: title, IssueBody: body}), true, nil
 }
