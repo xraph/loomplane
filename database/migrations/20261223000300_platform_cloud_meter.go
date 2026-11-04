@@ -17,11 +17,22 @@ import (
 // loomplane_platform_meter_egress holds the bytes one placement sent in one
 // hour, summed from the deltas of the host's counters.
 //
+// loomplane_platform_placements.running_since is when the placement last
+// moved into running. The meter never bills a minute before it, so a placement
+// that was suspended and resumed under the same generation is not billed for
+// the time it was off.
+//
 // Neither table references placements: usage outlives the placement row.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
-			err := db.NewCreateTable("loomplane_platform_meter_compute").IfNotExists().
+			err := db.NewAlterTable("loomplane_platform_placements").
+				AddColumn("running_since", migrate.Timestamp).IfNotExists().
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+			err = db.NewCreateTable("loomplane_platform_meter_compute").IfNotExists().
 				Column("placement_id", migrate.Text, migrate.NotNull()).
 				Column("generation", migrate.BigInt, migrate.NotNull()).
 				Column("hour", migrate.Timestamp, migrate.NotNull()).
@@ -66,7 +77,10 @@ func init() {
 			if err := db.NewDropTable("loomplane_platform_meter_egress").IfExists().Exec(ctx); err != nil {
 				return err
 			}
-			return db.NewDropTable("loomplane_platform_meter_compute").IfExists().Exec(ctx)
+			if err := db.NewDropTable("loomplane_platform_meter_compute").IfExists().Exec(ctx); err != nil {
+				return err
+			}
+			return db.NewAlterTable("loomplane_platform_placements").DropColumn("running_since").IfExists().Exec(ctx)
 		},
 	)
 }

@@ -176,9 +176,9 @@ func (s *Service) Running(ctx context.Context, orgID, placementID, instance stri
 	if err := checkTenant(ctx, orgID); err != nil {
 		return err
 	}
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,updated_at=now()
+	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,running_since=CASE WHEN state='running' THEN running_since ELSE $5 END,updated_at=now()
 WHERE id=$1 AND org_id=$2 AND state<>'released'
-AND NOT EXISTS(SELECT 1 FROM loomplane_platform_tenants t WHERE t.org_id=$2 AND cardinality(t.suspend_reasons)>0)`, placementID, orgID, instance, generation)
+AND NOT EXISTS(SELECT 1 FROM loomplane_platform_tenants t WHERE t.org_id=$2 AND cardinality(t.suspend_reasons)>0)`, placementID, orgID, instance, generation, s.now().UTC())
 	if err != nil {
 		return storeError(err)
 	}
@@ -191,7 +191,7 @@ AND NOT EXISTS(SELECT 1 FROM loomplane_platform_tenants t WHERE t.org_id=$2 AND 
 	}
 	if !suspended {
 		// Not suspended after all: a released or missing placement.
-		return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false`, instance, generation)
+		return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,running_since=CASE WHEN state='running' THEN running_since ELSE $5 END`, instance, generation, s.now().UTC())
 	}
 	res, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='suspended',restore_running=true,suspended_at=coalesce(suspended_at,$5),instance_id=$3,generation=$4,updated_at=now()
 WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID, instance, generation, s.now().UTC())

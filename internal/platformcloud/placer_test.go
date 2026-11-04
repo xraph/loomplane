@@ -20,6 +20,7 @@ type placerEnv struct {
 	store *PgStore
 	pg    *pgdriver.PgDB
 	hosts []*Host
+	clock *testClock
 }
 
 func newPlacerEnv(t *testing.T, limits Limits) *placerEnv {

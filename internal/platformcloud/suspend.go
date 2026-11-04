@@ -416,7 +416,7 @@ func (s *Service) startPlacement(ctx context.Context, orgID, placementID string)
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,updated_at=now() WHERE id=$1`, p.ID, stateRunning)
+		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=false,waiting_capacity=false,suspended_at=NULL,running_since=$3,updated_at=now() WHERE id=$1`, p.ID, stateRunning, s.now().UTC())
 		return err
 	})
 }

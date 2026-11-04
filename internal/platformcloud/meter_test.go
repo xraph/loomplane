@@ -4,8 +4,10 @@ package platformcloud
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,11 +62,31 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
 var meterHour = time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 
+// testClock is the service's clock, set by the test.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
 func meterEnv(t *testing.T) (*placerEnv, *recordingMeter) {
 	t.Helper()
 	e, _ := suspendEnv(t)
 	m := newRecordingMeter()
 	e.svc.WithMeter(m)
+	e.clock = &testClock{t: meterHour}
+	e.svc.now = e.clock.now
 	return e, m
 }
 
@@ -72,6 +94,7 @@ func meterEnv(t *testing.T) (*placerEnv, *recordingMeter) {
 func (e *placerEnv) restarted(m metering.Meter) *Service {
 	s := NewService(e.store, e.svc.settings, e.svc.orgs).WithMeter(m)
 	s.usage = e.svc.usage
+	s.now = e.svc.now
 	return s
 }
 
@@ -99,7 +122,7 @@ func TestComputeEventsAreStableAcrossRestarts(t *testing.T) {
 	if err := e.svc.Stopped(ctx, "org_a", p.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := again.SampleCompute(ctx, meterHour.Add(time.Hour+time.Minute)); err != nil {
+	if err := again.SampleCompute(ctx, meterHour.Add(time.Hour+emitDelay)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := m.total("compute_vcpu_hours"), 3.0/60; !near(got, want) {
@@ -153,6 +176,7 @@ func TestComputeSplitsAcrossHours(t *testing.T) {
 	e, m := meterEnv(t)
 	ctx := t.Context()
 	e.readyHost(t, "a", bigAllotment)
+	e.clock.set(meterHour.Add(57 * time.Minute))
 	p := e.running(t, "web")
 	for _, at := range []time.Duration{58 * time.Minute, 59 * time.Minute, 60 * time.Minute, 61 * time.Minute} {
 		if err := e.svc.SampleCompute(ctx, meterHour.Add(at)); err != nil {
@@ -225,7 +249,7 @@ func TestEgressCounterReset(t *testing.T) {
 	if err := e.restarted(m).SampleEgress(ctx, meterHour.Add(4*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Hour+time.Minute)); err != nil {
+	if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Hour+emitDelay)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := m.total("egress_gb"), 290/1e9; !near(got, want) {
@@ -249,7 +273,7 @@ func TestEgressCounterGoingBackwardsIsAReset(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Hour)); err != nil {
+	if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Hour+emitDelay)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := m.total("egress_gb"), 530/1e9; !near(got, want) {
@@ -346,5 +370,185 @@ func TestOnlyPlatformEventsAreMarked(t *testing.T) {
 		if ev.ResourceRef != p.ID && ev.ResourceRef != "plc_b" {
 			t.Errorf("%s resource ref %q", id, ev.ResourceRef)
 		}
+	}
+}
+
+func closeHours(t *testing.T, e *placerEnv, placementID string, at time.Time) {
+	t.Helper()
+	if err := e.svc.Stopped(t.Context(), "org_a", placementID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SampleCompute(t.Context(), at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSuspendedMinutesAreNotBilled(t *testing.T) {
+	e, m := meterEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	p := e.running(t, "web")
+	for i := 1; i <= 3; i++ {
+		if err := e.svc.SampleCompute(ctx, meterHour.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.clock.set(meterHour.Add(3 * time.Minute))
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SampleCompute(ctx, meterHour.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.set(meterHour.Add(33 * time.Minute))
+	if err := e.svc.Restore(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.placement(t, p.ID); got.State != "running" || got.Generation != 3 {
+		t.Fatalf("placement %+v", got)
+	}
+	if err := e.svc.SampleCompute(ctx, meterHour.Add(34*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	closeHours(t, e, p.ID, meterHour.Add(2*time.Hour))
+	if got, want := m.total("compute_vcpu_hours"), 4.0/60; !near(got, want) {
+		t.Fatalf("vcpu hours = %v, want 4 minutes (the 30 suspended minutes are not billed)", got)
+	}
+}
+
+func TestSamplerOutageWhileRunningIsBilledInFull(t *testing.T) {
+	e, m := meterEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	p := e.running(t, "web")
+	for _, at := range []time.Duration{time.Minute, 61 * time.Minute} {
+		if err := e.svc.SampleCompute(ctx, meterHour.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closeHours(t, e, p.ID, meterHour.Add(3*time.Hour))
+	if got, want := m.total("compute_vcpu_hours"), 61.0/60; !near(got, want) {
+		t.Fatalf("vcpu hours = %v, want 61 minutes", got)
+	}
+}
+
+type logBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *logBuffer) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(b)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func TestCatchUpPastTheLimitIsLogged(t *testing.T) {
+	e, m := meterEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	p := e.running(t, "web")
+	logs := &logBuffer{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	defer slog.SetDefault(old)
+	if err := e.svc.SampleCompute(ctx, meterHour.Add(30*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if out := logs.String(); !strings.Contains(out, "dropped") || !strings.Contains(out, p.ID) || !strings.Contains(out, "minutes=360") {
+		t.Fatalf("no log of the dropped minutes:\n%s", out)
+	}
+	closeHours(t, e, p.ID, meterHour.Add(40*time.Hour))
+	if got, want := m.total("compute_vcpu_hours"), 24.0; !near(got, want) {
+		t.Fatalf("vcpu hours = %v, want 24h", got)
+	}
+}
+
+// hookMeter runs hook once, on the first event it records.
+type hookMeter struct {
+	*recordingMeter
+	once sync.Once
+	hook func()
+}
+
+func (h *hookMeter) Record(ctx context.Context, e metering.Event) error {
+	h.once.Do(h.hook)
+	return h.recordingMeter.Record(ctx, e)
+}
+
+func TestEmitDoesNotFreezeAPartialHour(t *testing.T) {
+	e, rec := meterEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	p := e.placement(t, e.running(t, "web").ID)
+	for i := 1; i <= 3; i++ {
+		if err := e.svc.SampleCompute(ctx, meterHour.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	e.svc.WithMeter(&hookMeter{recordingMeter: rec, hook: func() {
+		// A count for the same hour arrives while the hour is being emitted.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.svc.countMinutes(ctx, *p, meterHour.Add(30*time.Minute)); err != nil {
+				t.Error(err)
+			}
+		}()
+		time.Sleep(300 * time.Millisecond)
+	}})
+	if err := e.svc.emitComputeHours(ctx, meterHour.Add(time.Hour+5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	var minutes int
+	if err := e.pg.QueryRow(ctx, `SELECT minutes FROM loomplane_platform_meter_compute WHERE placement_id=$1 AND hour=$2`, p.ID, meterHour).Scan(&minutes); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rec.total("compute_vcpu_hours"), float64(minutes)/60; !near(got, want) {
+		t.Fatalf("emitted %v, but the hour's final total is %d minutes", got, minutes)
+	}
+}
+
+func TestConcurrentEgressSamplersNeverReadAFalseReset(t *testing.T) {
+	e, m := meterEnv(t)
+	ctx := t.Context()
+	e.readyHost(t, "a", bigAllotment)
+	p := e.placement(t, e.running(t, "web").ID)
+	var mu sync.Mutex
+	counter := uint64(0)
+	e.svc.usage = func(context.Context, string) ([]fc.UsageSample, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		counter += 100
+		return []fc.UsageSample{sample(p, "c1", counter)}, nil
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Minute)); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := e.svc.SampleEgress(ctx, meterHour.Add(time.Hour+emitDelay)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	final := counter
+	mu.Unlock()
+	if got, want := m.total("egress_gb"), float64(final-100)/1e9; !near(got, want) {
+		// The last sample ran in the next hour, so its 100 bytes are not in the first.
+		t.Fatalf("egress = %v, want %v", got, want)
 	}
 }
