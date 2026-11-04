@@ -109,22 +109,30 @@ func (s *Service) FollowNodeAddress(ctx context.Context, n *nodes.Node) error {
 }
 
 // CatchUpNodeAddress is FollowNodeAddress for a node that came back
-// online: its address is checked again at most every
-// nodeAddressRecheckEvery, like a reconcile's.
+// online, which may have moved while away.
 func (s *Service) CatchUpNodeAddress(ctx context.Context, n *nodes.Node) error {
-	return s.followNode(ctx, n, followMode{wait: true, recheck: true, retryHeld: true})
+	return s.followNode(ctx, n, followMode{wait: true, retryHeld: true})
+}
+
+// CheckNodeAddress is FollowNodeAddress for a node whose owner just asked
+// for direct ingress: the check runs whenever nodeCheckDue would hold it
+// back, since a person asked for it.
+func (s *Service) CheckNodeAddress(ctx context.Context, n *nodes.Node) error {
+	return s.followNode(ctx, n, followMode{wait: true, retryHeld: true, asked: true})
 }
 
 // followMode is how a follow runs. wait waits for a follow that holds the
-// node, where otherwise that follow is left to it. recheck limits how often
-// the node's address is checked again. retryHeld offers held routes again
-// until the context ends.
-type followMode struct{ wait, recheck, retryHeld bool }
+// node, where otherwise that follow is left to it. retryHeld offers held
+// routes again until the context ends. asked runs an address check that
+// nodeCheckDue would otherwise hold back.
+type followMode struct{ wait, retryHeld, asked bool }
 
 // ReconcileNodeAddresses finishes what a follow left: a node whose
 // connection doesn't name its confirmed address, one whose inventory no
 // longer offers that address, and one with a route on another address, or
-// routing pending, that no operation or handoff is moving. A node that is
+// routing pending, that no operation or handoff is moving. It also checks
+// the address of an adopted node that has none confirmed, as when its
+// first check found nothing or it was adopted by review. A node that is
 // consistent isn't looked at, a node another follow holds is left for the
 // next pass, and held routes aren't waited for. Each pass looks at the
 // nodes after the last pass's, a few at a time, each for at most
@@ -173,7 +181,7 @@ func (s *Service) ReconcileNodeAddresses(ctx context.Context) error {
 				defer func() { <-slots; wg.Done() }()
 				nodeCtx, cancel := context.WithTimeout(passCtx, nodeAddressReconcileWait)
 				defer cancel()
-				if followErr := s.followNode(nodeCtx, n, followMode{recheck: true}); followErr != nil && !errors.Is(followErr, ErrBusy) && !errors.Is(followErr, ErrPending) {
+				if followErr := s.followNode(nodeCtx, n, followMode{}); followErr != nil && !errors.Is(followErr, ErrBusy) && !errors.Is(followErr, ErrPending) {
 					mu.Lock()
 					errs = append(errs, fmt.Errorf("node %s: %w", n.ID, followErr))
 					mu.Unlock()
@@ -225,9 +233,17 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 		}
 		n = stored
 	}
-	// Only a confirmed address is followed. A node in mode none stays
-	// there until its owner or an adoption asks again.
-	if n.Status == nodes.StatusRevoked || n.IngressMode != nodeproto.IngressDirect || n.PublicAddress == "" || n.PublicAddressConfirmedAt == nil {
+	if n.Status == nodes.StatusRevoked {
+		return nil
+	}
+	// A node with no confirmed address has one found first. A node in
+	// mode none that had one kept it there by its owner's choice. Relay
+	// isn't this phase's.
+	if n.PublicAddressConfirmedAt == nil && n.IngressMode != nodeproto.IngressRelay {
+		return s.confirmNode(ctx, n, mode)
+	}
+	// Only a confirmed address is followed.
+	if n.IngressMode != nodeproto.IngressDirect || n.PublicAddress == "" || n.PublicAddressConfirmedAt == nil {
 		return nil
 	}
 	conn, err := s.nodeServerConnection(ctx, n)
@@ -239,8 +255,9 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 		return err
 	}
 	address := n.PublicAddress
+	var checked []string
 	if offered := publicNodeAddresses(n.Inventory.PublicAddresses); len(offered) > 0 && !slices.Contains(offered, n.PublicAddress) {
-		if mode.recheck && !s.nodeCheckDue(n.ID) {
+		if !s.nodeCheckDue(n.ID, offered) && !mode.asked {
 			return nil
 		}
 		_, _, found, checkErr := s.checkNodeAddress(ctx, n.OrgID, conn.ID, n.Inventory.PublicAddresses)
@@ -250,7 +267,7 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 		if found == "" {
 			return s.recordUnansweredAddress(ctx, n, offered[0])
 		}
-		address = found
+		address, checked = found, offered
 	}
 	offer := &routeOffer{done: map[string]bool{}}
 	if offerErr := s.offerAddressOperations(ctx, st, n, conn, address, offer); offerErr != nil {
@@ -266,6 +283,11 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 	err = s.settleNodeAddress(settleCtx, conn, n.ID, address, n.PublicAddress)
 	cancel()
 	if err != nil {
+		// The address answered; only the writes failed, so the next
+		// follow may check it again at once.
+		if checked != nil {
+			s.forgetNodeCheck(n.ID, checked)
+		}
 		return err
 	}
 	moved := address != n.PublicAddress
@@ -298,36 +320,110 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 	return s.reportHeldRoutes(reportCtx, n, offer, address, moved)
 }
 
-// nodeFollowState is this process's record of node follows: when each
-// node's address was last checked, and the last node a reconcile pass
-// reached, so the next pass carries on after it.
+// nodeFollowState is this process's record of node follows: which
+// addresses each node had checked lately, and the last node a reconcile
+// pass reached, so the next pass carries on after it.
 type nodeFollowState struct {
 	mu      sync.Mutex
-	checked map[string]time.Time
+	checked map[string][]addressCheck
 	after   string
 }
 
-// nodeCheckDue reports whether nodeID's address may be checked again now,
-// and if so marks it checked. Marks older than nodeAddressRecheckEvery are
-// dropped as it goes.
-func (s *Service) nodeCheckDue(nodeID string) bool {
+// addressCheck is one address check of a node: the candidates it fetched
+// from, and when.
+type addressCheck struct {
+	candidates string
+	at         time.Time
+}
+
+// nodeChecksPerWindow is how many address checks a node gets within
+// nodeAddressRecheckEvery, whatever it offers.
+const nodeChecksPerWindow = 3
+
+// nodeCheckDue reports whether nodeID's address may be checked against
+// candidates now, and if so records the check. Within
+// nodeAddressRecheckEvery a node gets one check per set of candidates, so
+// a new address is checked as soon as it is offered, and at most
+// nodeChecksPerWindow checks in all, so a node whose addresses flap, or
+// one that lies about them, can't make Loomplane change its proxy and
+// fetch from it over and over. Checks older than the window are dropped
+// as it goes.
+func (s *Service) nodeCheckDue(nodeID string, candidates []string) bool {
 	f := s.nodeFollows
 	if f == nil {
 		return true
 	}
+	key := checkKey(candidates)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := s.now()
-	for id, at := range f.checked {
-		if now.Sub(at) >= nodeAddressRecheckEvery {
+	for id, checks := range f.checked {
+		checks = slices.DeleteFunc(checks, func(c addressCheck) bool { return now.Sub(c.at) >= nodeAddressRecheckEvery })
+		if len(checks) == 0 {
 			delete(f.checked, id)
+		} else {
+			f.checked[id] = checks
 		}
 	}
-	if _, ok := f.checked[nodeID]; ok {
+	checks := f.checked[nodeID]
+	if len(checks) >= nodeChecksPerWindow || slices.ContainsFunc(checks, func(c addressCheck) bool { return c.candidates == key }) {
 		return false
 	}
-	f.checked[nodeID] = now
+	f.checked[nodeID] = append(checks, addressCheck{candidates: key, at: now})
 	return true
+}
+
+// forgetNodeCheck takes back nodeCheckDue's record of checking nodeID
+// against candidates.
+func (s *Service) forgetNodeCheck(nodeID string, candidates []string) {
+	f := s.nodeFollows
+	if f == nil {
+		return
+	}
+	key := checkKey(candidates)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checked[nodeID] = slices.DeleteFunc(f.checked[nodeID], func(c addressCheck) bool { return c.candidates == key })
+}
+
+// checkKey names a set of candidates whatever their order.
+func checkKey(candidates []string) string {
+	set := slices.Clone(candidates)
+	slices.Sort(set)
+	return strings.Join(set, ",")
+}
+
+// confirmNode checks the address of an adopted node that has none
+// confirmed: one whose first check found nothing, one adopted by review
+// or by hand, or one whose owner asked for direct ingress. Nothing runs
+// until the node's server is ready, since an adoption checks that ports 80
+// and 443 are free before the proxy may start, nor without a public
+// candidate. The check runs as nodeCheckDue allows, unless a person asked
+// for it, and settles the node the way ConfirmNodeAddress does: direct on
+// the address that answered, or none, with the reason on the node.
+func (s *Service) confirmNode(ctx context.Context, n *nodes.Node, mode followMode) error {
+	candidates := publicNodeAddresses(n.Inventory.PublicAddresses)
+	if len(candidates) == 0 {
+		return nil
+	}
+	conn, err := s.nodeServerConnection(ctx, n)
+	if err != nil || conn == nil {
+		return err
+	}
+	if _, err = s.nodeServer(ctx, conn); errors.Is(err, ErrPending) || errors.Is(err, ErrNotFound) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if !s.nodeCheckDue(n.ID, candidates) && !mode.asked {
+		return nil
+	}
+	_, err = s.ConfirmNodeAddress(ctx, n.OrgID, conn.ID, n.Inventory.PublicAddresses)
+	// Both findings are on the node for its owner to read.
+	if errors.Is(err, ErrNoPublicAddress) || errors.Is(err, errProxyPortsTaken) {
+		return nil
+	}
+	return err
 }
 
 // nodeServerConnection is the node's ready server connection, nil when it
@@ -501,7 +597,7 @@ func (s *Service) offerAddressOperations(ctx context.Context, st DomainStore, n 
 		op, opErr := s.newAddressOperation(ctx, st, r, address)
 		if opErr != nil {
 			offer.done[r.ID] = true
-			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: opErr.Error()})
+			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: stuckReason(opErr)})
 			continue
 		}
 		switch opErr = st.AcceptRoute(ctx, op); {
@@ -513,10 +609,20 @@ func (s *Service) offerAddressOperations(ctx context.Context, st DomainStore, n 
 			offer.held = append(offer.held, r)
 		default:
 			offer.done[r.ID] = true
-			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: opErr.Error()})
+			offer.stuck = append(offer.stuck, stuckRoute{route: r, reason: stuckReason(opErr)})
 		}
 	}
 	return nil
+}
+
+// stuckReason is why a route stays on its old address, as the node and the
+// audit trail show it. Loomplane's own refusals say what to do; anything
+// else, such as a store or provider error, is put in safeFailure's words.
+func stuckReason(err error) string {
+	if errors.Is(err, ErrInvalid) {
+		return err.Error()
+	}
+	return safeFailure(err)
 }
 
 // newAddressOperation moves r to address, as Loomplane. Only the binding's
@@ -812,23 +918,29 @@ func yieldAddressRoute(ctx context.Context, tx driver.Tx, op *RouteOperation) er
 }
 
 // NodesBehindAddress lists, across organizations and after the node ID
-// after, at most limit nodes in direct ingress mode with a confirmed
-// address that a follow left behind: the node's server connection names
-// another address, its inventory doesn't offer that address, or a server
-// route on the connection is on another address or still routing pending
-// with no operation of any status but succeeded or cancelled, and no
-// handoff, on it. A route whose operation failed waits for a person, so it
-// doesn't bring its node back.
+// after, at most limit nodes a follow left behind. One is in direct
+// ingress mode with a confirmed address and the node's server connection
+// names another address, its inventory doesn't offer that address, or a
+// server route on the connection is on another address or still routing
+// pending with no operation of any status but succeeded or cancelled, and
+// no handoff, on it. A route whose operation failed waits for a person,
+// so it doesn't bring its node back. The other has no confirmed address
+// yet, outside relay mode, offers public addresses and has a ready server
+// on its connection, so its address can be checked.
 func (s *PgStore) NodesBehindAddress(ctx context.Context, after string, limit int) ([]*nodes.Node, error) {
 	rows, err := s.db.Query(ctx, `SELECT n.id,n.org_id FROM loomplane_nodes n
  JOIN loomplane_cloud_connections c ON c.org_id=n.org_id AND c.details->>'node_id'=n.id AND c.cloud='server' AND c.status='ready'
- WHERE n.id>$1 AND n.revoked_at IS NULL AND n.ingress_mode='direct' AND n.public_address<>'' AND n.public_address_confirmed_at IS NOT NULL
- AND (coalesce(c.details->>'advertise_host','')<>n.public_address
-  OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(coalesce(n.inventory->'public_addresses','[]'::jsonb)) a(address) WHERE a.address=n.public_address)
-  OR EXISTS(SELECT 1 FROM loomplane_domain_routes r WHERE r.org_id=n.org_id AND r.connection_id=c.id AND r.backend='server'
-   AND (r.status='routing_pending' OR (r.status='ready' AND coalesce(r.body->'binding'->>'address','')<>n.public_address))
-   AND NOT EXISTS(SELECT 1 FROM loomplane_route_operations o WHERE o.org_id=r.org_id AND o.route_id=r.id AND o.status NOT IN ('preview','succeeded','cancelled'))
-   AND NOT EXISTS(SELECT 1 FROM loomplane_route_handoffs h WHERE h.org_id=r.org_id AND h.route_id=r.id AND NOT h.released)))
+ WHERE n.id>$1 AND n.revoked_at IS NULL AND (
+  (n.ingress_mode='direct' AND n.public_address<>'' AND n.public_address_confirmed_at IS NOT NULL
+  AND (coalesce(c.details->>'advertise_host','')<>n.public_address
+   OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(coalesce(n.inventory->'public_addresses','[]'::jsonb)) a(address) WHERE a.address=n.public_address)
+   OR EXISTS(SELECT 1 FROM loomplane_domain_routes r WHERE r.org_id=n.org_id AND r.connection_id=c.id AND r.backend='server'
+    AND (r.status='routing_pending' OR (r.status='ready' AND coalesce(r.body->'binding'->>'address','')<>n.public_address))
+    AND NOT EXISTS(SELECT 1 FROM loomplane_route_operations o WHERE o.org_id=r.org_id AND o.route_id=r.id AND o.status NOT IN ('preview','succeeded','cancelled'))
+    AND NOT EXISTS(SELECT 1 FROM loomplane_route_handoffs h WHERE h.org_id=r.org_id AND h.route_id=r.id AND NOT h.released))))
+  OR (n.ingress_mode<>'relay' AND n.public_address_confirmed_at IS NULL
+   AND CASE WHEN jsonb_typeof(n.inventory->'public_addresses')='array' THEN jsonb_array_length(n.inventory->'public_addresses') ELSE 0 END>0
+   AND EXISTS(SELECT 1 FROM loomplane_cloud_servers v WHERE v.org_id=c.org_id AND v.runtime_connection_id=c.id AND v.status='ready')))
  GROUP BY n.id,n.org_id ORDER BY n.id LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, err

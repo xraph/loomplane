@@ -627,15 +627,30 @@ func TestDDNSFollowsOneChangeAtATime(t *testing.T) {
 	}
 }
 
+// A node its owner put in mode none after its address was confirmed
+// stays there. One that never had an address confirmed, because its first
+// check found nothing or it was adopted by review, has it checked.
 func TestDDNSLeavesANodeWithoutDirectIngress(t *testing.T) {
 	r := newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	r.records.set(func(n *nodes.Node) { n.IngressMode = nodeproto.IngressNone })
+	r.follow(t)
+	if len(r.fetches()) != 0 || len(r.domains.ops()) != 0 || len(r.ingress.list()) != 0 {
+		t.Fatal("followed a node its owner took out of direct ingress")
+	}
+
+	r = newDDNSRig(t)
 	r.answering[ddnsNew] = true
 	r.records.set(func(n *nodes.Node) {
 		n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt = nodeproto.IngressNone, "", nil
 	})
 	r.follow(t)
-	if len(r.fetches()) != 0 || len(r.domains.ops()) != 0 || len(r.ingress.list()) != 0 {
-		t.Fatal("followed a node that has no confirmed address")
+	if c := r.ingress.list(); !slices.Equal(c, []ingressCall{{"node_1", nodeproto.IngressDirect, ddnsNew}}) || r.advertised(t) != ddnsNew {
+		t.Fatalf("an unconfirmed node wasn't confirmed: %+v, advertise %q", c, r.advertised(t))
+	}
+	// Its routes are a reconcile's to move; the check moves none.
+	if len(r.domains.ops()) != 0 {
+		t.Fatalf("operations %+v", r.domains.ops())
 	}
 }
 
@@ -920,9 +935,26 @@ func TestDDNSReconcileChecksAnUnansweredAddressSeldom(t *testing.T) {
 	if f := r.fetches(); len(f) != 1 {
 		t.Fatalf("fetched %v", f)
 	}
-	// The hook doesn't wait for that.
+	// Nor does the hook, for the same addresses: a node whose addresses
+	// flap can't have its proxy changed over and over.
 	r.follow(t)
-	if f := r.fetches(); len(f) != 2 {
+	if f := r.fetches(); len(f) != 1 {
+		t.Fatalf("fetched %v", f)
+	}
+	// A new address is checked as soon as it is offered, but a node gets
+	// only so many checks in a window, whatever it offers.
+	for i := range nodeChecksPerWindow + 2 {
+		r.records.set(func(n *nodes.Node) { n.Inventory.PublicAddresses = []string{fmt.Sprintf("198.51.100.%d", 20+i)} })
+		r.follow(t)
+	}
+	if f := r.fetches(); len(f) != nodeChecksPerWindow {
+		t.Fatalf("fetched %v", f)
+	}
+	// After the window, each is checked again.
+	now := time.Now().Add(nodeAddressRecheckEvery)
+	r.svc.now = func() time.Time { return now }
+	r.follow(t)
+	if f := r.fetches(); len(f) != nodeChecksPerWindow+1 {
 		t.Fatalf("fetched %v", f)
 	}
 }
@@ -1002,6 +1034,19 @@ func TestDDNSReportsAnOperationItCantMakeWithItsReason(t *testing.T) {
 	r.follow(t)
 	d := r.nodeIn.recorded()
 	if len(d) != 1 || !strings.Contains(d[0], "route app.example.com stays on "+ddnsOld+"; ") || !strings.Contains(d[0], "Loomplane has no record of the DNS record it wrote for app.example.com") || strings.Contains(d[0], "held") {
+		t.Fatalf("details %v", d)
+	}
+}
+
+// A store's or provider's error behind a stuck route is shown in the
+// words every other failure uses, not as it came.
+func TestDDNSStuckRouteReasonIsSafe(t *testing.T) {
+	r := newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	r.domains.busy["route_x"] = errors.New("dial tcp 10.0.0.9:5432: password authentication failed for user loomplane")
+	r.follow(t)
+	d := r.nodeIn.recorded()
+	if len(d) != 1 || !strings.Contains(d[0], "route api.shop.dev stays on "+ddnsOld+"; "+safeFailure(errors.New("x"))) || strings.Contains(d[0], "10.0.0.9") || strings.Contains(d[0], "password") {
 		t.Fatalf("details %v", d)
 	}
 }

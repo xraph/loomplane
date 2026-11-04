@@ -226,18 +226,99 @@ func (s *Service) AdoptOnline(ctx context.Context, n *nodes.Node) error {
 // confirmAdoptedNode checks the address of a node it just adopted, once
 // the adopt operation has made its server ready: the operation checks
 // that ports 80 and 443 are free, so the proxy can't start before it. It
-// runs on its own deadline, past the hook's. A failure is reported, and
-// the node keeps ingress mode none until a later check.
+// runs on its own deadline, past the hook's, under the node's address
+// lock, so no other check or follow of the node runs beside it. A failure
+// is reported, and the node keeps ingress mode none until a later check:
+// a reconcile, the node coming back, or its owner asking for direct.
 func (s *Service) confirmAdoptedNode(ctx context.Context, n *nodes.Node, a *NodeAdoption) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoptedNodeConfirmWait)
 	defer cancel()
-	v, err := s.waitServerReady(ctx, a)
+	_, err := s.waitServerReady(ctx, a)
 	if err == nil {
-		_, err = s.ConfirmNodeAddress(ctx, a.OrgID, v.RuntimeConnectionID, n.Inventory.PublicAddresses)
+		err = s.followNode(ctx, n, followMode{wait: true, asked: true})
 	}
-	if err != nil && !errors.Is(err, ErrNoPublicAddress) {
+	if err != nil {
 		s.warn("Couldn't check an adopted node's public address; it runs without direct ingress for now", fmt.Errorf("node %s: %w", n.ID, err))
 	}
+}
+
+// adoptAccepted follows an accepted adopt operation onto a node's
+// connection that the node's own adoption didn't apply: an admin's, from
+// the Cloud's Changes tab or the servers page, or a retry of one that
+// failed. Once the server is ready, the node's adoption, if it names the
+// operation's Cloud, is marked applied with the real server and
+// operation, and the node's address is checked. The adoption's own
+// attempt, which saved the operation on its waiting row before applying
+// it, settles and checks for itself. It all runs in the background, on its
+// own deadline, so the apply doesn't wait for the server.
+func (s *Service) adoptAccepted(ctx context.Context, o *Operation) {
+	if o == nil || o.Input.Kind != "adopt" || s.Connections == nil {
+		return
+	}
+	connectionID := o.ConnectionID
+	if connectionID == "" {
+		connectionID = o.Input.ConnectionID
+	}
+	conn, _, err := s.Connections.Credential(ctx, o.OrgID, connectionID)
+	if err != nil || conn.Method != connections.MethodNode || conn.Details["node_id"] == "" {
+		return
+	}
+	nodeID := conn.Details["node_id"]
+	st, keeps := s.Store.(NodeAdoptionStore)
+	if keeps {
+		if a, getErr := st.GetNodeAdoption(ctx, o.OrgID, nodeID); getErr == nil && a.Status == NodeAdoptionWaiting && a.OperationID == o.ID {
+			return
+		}
+	}
+	base := context.WithoutCancel(ctx)
+	s.background(func() {
+		ctx, cancel := context.WithTimeout(base, adoptedNodeConfirmWait)
+		defer cancel()
+		v, err := s.waitServerReady(ctx, &NodeAdoption{OrgID: o.OrgID, CloudID: o.CloudID, ServerID: o.ServerID, OperationID: o.ID})
+		if err != nil {
+			return
+		}
+		if keeps {
+			if settleErr := s.settleManualAdoption(ctx, st, nodeID, o, v); settleErr != nil {
+				s.warn("Couldn't mark a node's adoption applied; its server is ready", fmt.Errorf("node %s: %w", nodeID, settleErr))
+			}
+		}
+		if s.NodeIngress == nil || s.NodeRecords == nil {
+			return
+		}
+		n, err := s.NodeRecords.GetByID(ctx, nodeID)
+		if err == nil {
+			err = s.followNode(ctx, n, followMode{wait: true, asked: true})
+		}
+		if err != nil {
+			s.warn("Couldn't check an adopted node's public address; it runs without direct ingress for now", fmt.Errorf("node %s: %w", nodeID, err))
+		}
+	})
+}
+
+// settleManualAdoption marks the node's adoption applied by o, which made
+// server v, unless it already is or it names another Cloud. A node with
+// no adoption has nothing to settle.
+func (s *Service) settleManualAdoption(ctx context.Context, st NodeAdoptionStore, nodeID string, o *Operation, v *Server) error {
+	err := s.Store.WithOperationLock(ctx, "node-adoption/"+nodeID, func() error {
+		a, err := st.GetNodeAdoption(ctx, o.OrgID, nodeID)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if a.CloudID != o.CloudID || a.Status == NodeAdoptionApplied && a.ServerID == v.ID && a.OperationID == o.ID {
+			return nil
+		}
+		a.ServerID, a.OperationID = v.ID, o.ID
+		return s.settleNodeAdoption(ctx, st, a, NodeAdoptionApplied, "")
+	})
+	// An attempt holding the adoption settles it itself.
+	if errors.Is(err, ErrBusy) {
+		return nil
+	}
+	return err
 }
 
 // waitServerReady waits for the adoption's server to be ready. An adopt

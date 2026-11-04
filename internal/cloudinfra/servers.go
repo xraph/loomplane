@@ -247,6 +247,9 @@ type Service struct {
 	// record of address checks and reconcile passes.
 	routeAddressProbe func(ctx context.Context, op *RouteOperation, state *IngressState) (func(context.Context, Route) RouteVerification, func(), error)
 	nodeFollows       *nodeFollowState
+	// background runs work that outlasts its caller, such as settling a
+	// node adopted by hand once its server is ready. Tests run it inline.
+	background func(func())
 }
 
 func NewService(d Deps) *Service {
@@ -257,7 +260,8 @@ func NewService(d Deps) *Service {
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
 	s.serveNodeNonce, s.fetchNodeNonce, s.serverReadyPoll = s.serveNodeNonceThroughIngress, fetchNodeNonce, 2*time.Second
-	s.routeAddressProbe, s.nodeFollows = s.probeRouteAddress, &nodeFollowState{checked: map[string]time.Time{}}
+	s.routeAddressProbe, s.nodeFollows = s.probeRouteAddress, &nodeFollowState{checked: map[string][]addressCheck{}}
+	s.background = func(f func()) { go f() }
 	return s
 }
 

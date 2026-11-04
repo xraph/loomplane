@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -340,9 +341,120 @@ func adoptedAddressRig(t *testing.T) *addressRig {
 		return nil, errors.New("connection refused")
 	}
 	r.node.Inventory.PublicAddresses = []string{"10.0.0.5", "203.0.113.7"}
+	r.node.IngressMode = nodeproto.IngressNone
 	// Without a key ID the approval is the minter's session.
 	r.svc.CapacityPrincipal = nil
+	// What waits for a server runs inline, so a second check would show.
+	r.svc.background = func(f func()) { f() }
 	return r
+}
+
+// storedNode makes the rig's node the one the follows read as stored.
+func (r *addressRig) storedNode() *ddnsNodes {
+	stored := *r.node
+	records := &ddnsNodes{nodes: map[string]*nodes.Node{stored.ID: &stored}}
+	r.svc.NodeRecords = records
+	return records
+}
+
+// A node whose first check found nothing isn't left in mode none: a
+// reconcile checks it again once the window is over.
+func TestReconcileConfirmsANodeWhoseFirstCheckFailed(t *testing.T) {
+	r := adoptedAddressRig(t)
+	answers := false
+	r.svc.fetchNodeNonce = func(_ context.Context, url string) ([]byte, error) {
+		if answers && strings.HasPrefix(url, "http://203.0.113.7/") && r.proxy.current() != "" {
+			return []byte(r.proxy.current()), nil
+		}
+		return nil, errors.New("connection refused")
+	}
+	r.storedNode()
+	if a := r.join(t, sessionClaim()); a.Status != NodeAdoptionApplied {
+		t.Fatalf("adoption %+v", a)
+	}
+	if c := r.ingress.list(); !slices.Equal(c, []ingressCall{{"node_1", nodeproto.IngressNone, ""}}) {
+		t.Fatalf("first check: %+v", c)
+	}
+	answers = true
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ingress.list()) != 1 {
+		t.Fatalf("checked again within the window: %+v", r.ingress.list())
+	}
+	later := time.Now().Add(nodeAddressRecheckEvery)
+	r.svc.now = func() time.Time { return later }
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.ingress.list(); !slices.Equal(c, []ingressCall{{"node_1", nodeproto.IngressNone, ""}, {"node_1", nodeproto.IngressDirect, "203.0.113.7"}}) {
+		t.Fatalf("reconcile: %+v", c)
+	}
+	if c, _ := r.conns.GetConnection(t.Context(), "org", "conn_node_1"); c.Details["advertise_host"] != "203.0.113.7" {
+		t.Fatalf("connection %+v", c.Details)
+	}
+}
+
+// An adoption left for review that an admin adopts by hand is settled
+// with the real server and operation once the server is ready, and the
+// node's address is checked.
+func TestManualAdoptSettlesTheAdoptionAndConfirms(t *testing.T) {
+	r := adoptedAddressRig(t)
+	r.storedNode()
+	r.authz.denied["user_admin"] = true
+	if a := r.join(t, sessionClaim()); a.Status != NodeAdoptionReview {
+		t.Fatalf("adoption %+v", a)
+	}
+	ops := security.Principal{UserID: "user_ops", OrgID: "org"}
+	conn, err := r.conns.CreateNodeConnection(t.Context(), ops, connections.NodeConnectionInput{Cloud: connections.Server, NodeID: r.node.ID, Name: r.node.Name, IdentityGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := r.svc.PreviewServer(t.Context(), ops, "cloud", ServerInput{Kind: "adopt", ConnectionID: conn.ID, Name: "web-1", CloudRevision: 3, ConfirmAdoption: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.svc.ApplyServerOperation(t.Context(), ops, "cloud", o.ID, ApplyInput{Review: o.Review}); err != nil {
+		t.Fatal(err)
+	}
+	a := r.store.adoption(r.node.ID)
+	if a.Status != NodeAdoptionApplied || a.Reason != "" || a.ServerID != o.ServerID || a.OperationID != o.ID {
+		t.Fatalf("adoption %+v, want applied by %s on %s", a, o.ID, o.ServerID)
+	}
+	if !slices.Contains(r.audit.actions(), "cloud.node_adoption.applied") {
+		t.Fatalf("audit %v", r.audit.actions())
+	}
+	if c := r.ingress.list(); !slices.Equal(c, []ingressCall{{"node_1", nodeproto.IngressDirect, "203.0.113.7"}}) {
+		t.Fatalf("ingress %+v", c)
+	}
+}
+
+// Asking for direct ingress checks the address even when a check just ran.
+func TestCheckNodeAddressRunsWhenAsked(t *testing.T) {
+	r := adoptedAddressRig(t)
+	records := r.storedNode()
+	r.svc.fetchNodeNonce = func(context.Context, string) ([]byte, error) { return nil, errors.New("connection refused") }
+	if a := r.join(t, sessionClaim()); a.Status != NodeAdoptionApplied || len(r.ingress.list()) != 1 {
+		t.Fatalf("adoption %+v ingress %+v", a, r.ingress.list())
+	}
+	r.svc.fetchNodeNonce = func(_ context.Context, url string) ([]byte, error) {
+		if strings.HasPrefix(url, "http://203.0.113.7/") && r.proxy.current() != "" {
+			return []byte(r.proxy.current()), nil
+		}
+		return nil, errors.New("connection refused")
+	}
+	// The owner's update set direct, which settles nothing by itself.
+	records.set(func(n *nodes.Node) { n.IngressMode = nodeproto.IngressDirect })
+	if err := r.svc.FollowNodeAddress(t.Context(), r.node); err != nil || len(r.ingress.list()) != 1 {
+		t.Fatalf("a follow checked within the window: %v %+v", err, r.ingress.list())
+	}
+	if err := r.svc.CheckNodeAddress(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.ingress.list(); len(c) != 2 || c[1] != (ingressCall{"node_1", nodeproto.IngressDirect, "203.0.113.7"}) {
+		t.Fatalf("ingress %+v", c)
+	}
 }
 
 func sessionClaim() *apikeys.NodeJoinClaim {

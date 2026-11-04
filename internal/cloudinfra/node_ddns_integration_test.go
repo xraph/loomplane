@@ -225,6 +225,40 @@ func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 	route("node_r6", "ready", "203.0.113.7")                                             // on the node's address
 	operation(route("node_r7", "ready", "192.0.2.1"), "node_r7", "address", "succeeded") // a finished operation doesn't count
 
+	// Nodes without a confirmed address: only one with public addresses
+	// and a ready server on its connection has its address checked.
+	unconfirmed := func(id string, offered []string, serverStatus string) {
+		t.Helper()
+		n := &nodes.Node{ID: id, OrgID: "org", Name: id, PublicKey: []byte(id), KeyFingerprint: "fp-" + id, IdentityGeneration: 1, Status: nodes.StatusOnline,
+			Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}, IngressMode: "none", Role: "node", Labels: map[string]string{}, Version: "1.0.0", ProtocolVersion: 1,
+			Inventory: nodeproto.Inventory{OS: "linux", PublicAddresses: offered}, JoinedBy: "usr", JoinedByKeyID: "key", CreatedAt: now, UpdatedAt: now}
+		if err := ns.Create(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+		if err := cs.CreateConnection(ctx, &connections.Connection{ID: "conn_" + id, OrgID: "org", Cloud: connections.Server, Method: connections.MethodNode, Name: id, Status: connections.StatusReady,
+			Details: map[string]string{"node_id": id, "docker_id": "daemon-" + id}, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if serverStatus != "" {
+			if err := st.SaveServer(ctx, &Server{ID: "srv_" + id, OrgID: "org", CloudID: "cloud_1", Name: id, Ownership: "adopted", Provider: "server", AccountID: "daemon-" + id, ResourceID: "daemon-" + id, ConnectionID: "conn_" + id, RuntimeConnectionID: "conn_" + id, Revision: 1, Status: serverStatus}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	unconfirmed("node_u1", []string{"203.0.113.9"}, "ready") // its first check found nothing, or it was adopted by review
+	unconfirmed("node_u2", []string{"203.0.113.9"}, "")      // no server on its connection
+	unconfirmed("node_u3", []string{"203.0.113.9"}, "adopting")
+	unconfirmed("node_u4", nil, "ready") // nothing to check
+	// An owner who put a confirmed node in mode none keeps it there.
+	unconfirmed("node_u5", []string{"203.0.113.9"}, "ready")
+	if _, err := ns.SetIngress(ctx, "node_u5", nodes.IngressSetting{Mode: "direct", PublicAddress: "203.0.113.9", ConfirmedAt: &now, SentAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	none := "none"
+	if _, err := ns.UpdateSettings(ctx, "org", "node_u5", nodes.SettingsUpdate{IngressMode: &none}); err != nil {
+		t.Fatal(err)
+	}
+
 	list := func(after string, limit int) []string {
 		t.Helper()
 		behind, err := st.NodesBehindAddress(ctx, after, limit)
@@ -240,7 +274,7 @@ func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 		}
 		return ids
 	}
-	if got := list("", 10); !slices.Equal(got, []string{"node_half", "node_moved", "node_r1", "node_r3", "node_r7"}) {
+	if got := list("", 10); !slices.Equal(got, []string{"node_half", "node_moved", "node_r1", "node_r3", "node_r7", "node_u1"}) {
 		t.Fatalf("behind %v", got)
 	}
 	// A pass carries on after the last node the one before it reached.
