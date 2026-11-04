@@ -50,7 +50,7 @@ Open a project's **Settings** tab. When the agent is on, an **Autonomy** card si
 
 **Autonomous promotion** says whether the agent may promote a release to production without asking first, once someone has asked it to release and every gate is green. It starts off for every project, so new projects ask first. The **minimum staging soak** (none, 30 minutes, 1, 2, 6, 12 or 24 hours) is how long staging has to have run the same commits, healthy, before the agent may promote them.
 
-In this version both settings are stored and nothing more. The agent still asks a person before every production promotion, whatever the switch says. The settings take effect when the promotion gate ships, and until then turning the switch on changes nothing you'd notice.
+With the switch on, the agent promotes only a release someone asked it to prepare, and only when all seven gates hold. [Release preparation](/docs/agents/release-preparation) lists the gates and what always goes to a person. With the switch off, the agent still asks before production.
 
 Both need `deployment:approve` on the project. Without it you see the card with the controls disabled. The agent can't change either setting, whatever it's asked. The same call is `PUT /api/v1/projects/{id}/autonomy` with `autonomous_promotion` and `min_staging_soak_seconds`, which must be a multiple of 60 up to a week.
 

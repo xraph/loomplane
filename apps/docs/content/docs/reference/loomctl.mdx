@@ -88,6 +88,17 @@ These need the agent on. On a server with `ai.enabled` off they print "This Loom
 
 See [What needs a person](/docs/agents/what-needs-a-person#requests) for who is asked and who can answer.
 
+### Releases
+
+| Command | What it does |
+|---|---|
+| `release prepare PROJECT [--from ENV] [--to ENV] [--scope ALIAS] [--replace] [--wait] [--json]` | Asks for a release. Loomplane plans the promotion, collects evidence and has the agent review it. It prints the report's ID and path. Without `--from` and `--to` it uses the project's only staging and production environments. `--scope` takes aliases and is repeatable or comma separated. `--replace` replaces a production plan someone else has open. With `--wait` it follows the report every 3 seconds until it finishes or waits for a person, then prints it |
+| `release report ID [--json]` | Shows a release report: its state and reason, the seven gates as `pass` or `FAIL` with their details, each source's direction, commits and migrations, the soak, canaries, coverage, images and budget, and the agent's concerns under "From the agent". Text from outside Loomplane is printed in quotation marks. A report waiting for a person ends with `approve with: loomctl approve PLAN --revision REV` |
+| `release list PROJECT [--json]` | Lists a project's release reports: ID, environments, state, how many gates passed and its age |
+| `release cancel ID` | Stops a preparation that's still going |
+
+Preparing needs `deployment:create` and `agent:use` on the project. `loomctl mcp` has no tool that prepares a release, so a model can't start one through it. See [Release preparation](/docs/agents/release-preparation).
+
 ## Plans and deployments
 
 | Command | What it does |

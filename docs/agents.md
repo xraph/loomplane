@@ -44,6 +44,10 @@ For Claude Code, that's `claude mcp add loomplane --env LOOMPLANE_URL=... --env 
 
 The manifest's JSON schema is the resource `loomplane://schema/loomplane.yaml`, so an agent writing one knows every field. A manifest that doesn't parse comes back as an error listing each problem with its line, which an agent can fix and save again.
 
+## Release preparation
+
+The built-in agent can prepare a release to production on request. A person starts it from the dashboard, with `loomctl release prepare`, or in a chat with the agent. Loomplane plans the promotion, collects evidence and has the agent review it, then reports seven gates. If all seven hold, and the person asked from the dashboard or `loomctl` and may approve deployments, the agent may approve the plan. Otherwise it waits for a person. `loomctl mcp` offers no tool that prepares a release. The gates, and what always goes to a person, are in the docs under AI agents, Release preparation.
+
 ## What it can't do
 
 Three things decide what an agent may do, and all three have to agree.

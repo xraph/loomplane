@@ -114,6 +114,19 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json"
 
 A report's `issue.state` is `none`, `open`, `closed`, `waiting_for_permission` (its installation hasn't accepted Issues), `no_repository` (no repository Loomplane can open an issue on) or `failed` (the last attempt failed and is retried). `issue.error` says why when there's no issue or the last attempt failed. Its `investigation` is `none`, `queued`, `running`, `done`, `failed` or `skipped`, and `investigation_note` says why when one failed or was skipped. Changes arrive on the realtime stream as `agent_report.updated` events.
 
+## Release reports
+
+These routes exist only on a server with `ai.enabled` on. [Release preparation](/docs/agents/release-preparation) explains what a report holds and what the gates are.
+
+| Route | What it does | Needs |
+|---|---|---|
+| `POST /projects/{id}/release-reports` | Starts a release preparation and returns 202 with the report. The body is optional: `{"from", "to", "scope", "replace"}`. `from` and `to` are environment names and default to the project's only staging and production ones. `scope` is a list of source aliases. `replace` supersedes a production plan someone else has open | `agent:use` and `deployment:create` on the project |
+| `GET /projects/{id}/release-reports` | Lists the project's reports, newest first, as `{"reports": [...]}`. Takes `limit`, 1 to 50, 20 by default | `deployment:read` |
+| `GET /release-reports/{id}` | One report: state, gates, evidence, concerns, and the plan and request it's about | `deployment:read` on its project |
+| `POST /release-reports/{id}/cancel` | Stops a preparation that's still going | The person who asked, while they hold `agent:use`, or `deployment:approve` |
+
+Every route needs a person acting as themselves, which includes an API key made by one. A report in another workspace returns 404. A request with a plan already open on production, a preparation already running there, or a report that has finished returns 409 with the reason. A project without a staging or production environment, or with more than one and no `from` or `to`, returns 422. Changes arrive on the realtime stream as `release_report.updated` and `release_report.deleted` events, which leave out the evidence and the concerns. Read the report again for those.
+
 ## Live events
 
 `/api/v1/realtime/ws` upgrades to a WebSocket, `/api/v1/realtime/events` serves server-sent events, and `/api/v1/realtime/snapshot` returns the current state for REST recovery. All three use the same authenticated contract and an organization-scoped cursor.

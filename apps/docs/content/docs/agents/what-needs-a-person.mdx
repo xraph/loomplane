@@ -14,7 +14,7 @@ Every operation the agent has belongs to one of six classes. The class decides w
 | `read` | list projects, read a plan, logs, metrics, status | Allowed |
 | `change` | create a project or environment, save a manifest, add a source, set a variable that isn't secret, plan staging | Allowed within the permissions of the person it acts for |
 | `deploy_nonproduction` | approve a staging, preview or development plan | Allowed within those permissions |
-| `promote_production` | approve a production plan that deletes nothing | Asks a person. The project's autonomy switch is stored, and takes effect when the promotion gate ships |
+| `promote_production` | approve a production plan that deletes nothing | Asks a person, unless the project allows autonomous promotion and all seven gates hold. See [Release preparation](/docs/agents/release-preparation) |
 | `destroy_production` | a production plan with a delete, a delete or replace of anything that holds data, deleting a production environment, connection or project, removing a production variable | Always a person |
 | `secret_or_external` | set a secret, connect GitHub, create a cloud connection | Always a person, through a request |
 
