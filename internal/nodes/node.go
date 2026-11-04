@@ -74,6 +74,9 @@ type Node struct {
 	// IngressDetail says why ingress isn't what was asked: the last address
 	// check's finding, or, worked out on read, a mode the node didn't apply.
 	IngressDetail string `json:"ingress_detail"`
+	// IngressModeByOwner is set once a person chose the ingress mode. An
+	// address check never moves a node its owner put in mode none.
+	IngressModeByOwner bool `json:"-"`
 }
 
 // SettingsUpdate is the part of a node an owner may change remotely. A nil

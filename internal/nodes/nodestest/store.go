@@ -177,6 +177,9 @@ func (s *Store) UpdateSettings(_ context.Context, org, id string, u nodes.Settin
 	if u.Labels != nil {
 		n.Labels = u.Labels
 	}
+	if u.IngressMode != nil {
+		n.IngressModeByOwner = true
+	}
 	if u.IngressMode != nil && *u.IngressMode != n.IngressMode {
 		now := time.Now().UTC()
 		n.IngressMode, n.IngressSentAt, n.IngressDetail = *u.IngressMode, &now, ""

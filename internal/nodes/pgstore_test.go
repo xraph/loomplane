@@ -399,13 +399,23 @@ func TestUpdateSettings(t *testing.T) {
 	if err := s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
 		t.Fatal(err)
 	}
+	// A rename leaves the ingress mode nobody's choice.
+	name := "web-1b"
+	if got, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name}); err != nil || got.IngressModeByOwner {
+		t.Fatalf("rename: %+v %v", got, err)
+	}
 	name, mode := "web-2", "relay"
 	got, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name, IngressMode: &mode, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusOnline || got.Name != "web-2" || got.IngressMode != "relay" || len(got.Endpoints) != 1 || got.Labels["zone"] != "a" {
+	if got.Status != StatusOnline || got.Name != "web-2" || got.IngressMode != "relay" || len(got.Endpoints) != 1 || got.Labels["zone"] != "a" || !got.IngressModeByOwner {
 		t.Fatalf("node %+v", got)
+	}
+	// An address check's settling doesn't take the owner's choice away.
+	at := time.Now().UTC()
+	if got, err = s.SetIngress(ctx, "node_1", IngressSetting{Mode: "none", Detail: "no public address answered", SentAt: at}); err != nil || !got.IngressModeByOwner {
+		t.Fatalf("after a check: %+v %v", got, err)
 	}
 
 	// A stale widen is refused, and nothing changes.

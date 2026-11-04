@@ -254,8 +254,21 @@ func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 	if _, err := ns.SetIngress(ctx, "node_u5", nodes.IngressSetting{Mode: "direct", PublicAddress: "203.0.113.9", ConfirmedAt: &now, SentAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	none := "none"
+	none, direct := "none", "direct"
 	if _, err := ns.UpdateSettings(ctx, "org", "node_u5", nodes.SettingsUpdate{IngressMode: &none}); err != nil {
+		t.Fatal(err)
+	}
+	// An unconfirmed node its owner switched to none stays out; one its
+	// owner switched to direct is checked.
+	unconfirmed("node_u6", []string{"203.0.113.9"}, "ready")
+	if _, err := ns.UpdateSettings(ctx, "org", "node_u6", nodes.SettingsUpdate{IngressMode: &direct}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ns.UpdateSettings(ctx, "org", "node_u6", nodes.SettingsUpdate{IngressMode: &none}); err != nil || !n.IngressModeByOwner || n.PublicAddressConfirmedAt != nil {
+		t.Fatalf("node_u6 %+v %v", n, err)
+	}
+	unconfirmed("node_u7", []string{"203.0.113.9"}, "ready")
+	if _, err := ns.UpdateSettings(ctx, "org", "node_u7", nodes.SettingsUpdate{IngressMode: &direct}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -274,7 +287,7 @@ func TestDDNSNodesBehindAddressQuery(t *testing.T) {
 		}
 		return ids
 	}
-	if got := list("", 10); !slices.Equal(got, []string{"node_half", "node_moved", "node_r1", "node_r3", "node_r7", "node_u1"}) {
+	if got := list("", 10); !slices.Equal(got, []string{"node_half", "node_moved", "node_r1", "node_r3", "node_r7", "node_u1", "node_u7"}) {
 		t.Fatalf("behind %v", got)
 	}
 	// A pass carries on after the last node the one before it reached.

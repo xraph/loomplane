@@ -652,6 +652,32 @@ func TestDDNSLeavesANodeWithoutDirectIngress(t *testing.T) {
 	if len(r.domains.ops()) != 0 {
 		t.Fatalf("operations %+v", r.domains.ops())
 	}
+
+	// An unconfirmed node its owner put in mode none, say to stop a check,
+	// stays there: no follow or reconcile checks it, after the window too.
+	r = newDDNSRig(t)
+	r.answering[ddnsNew] = true
+	r.records.set(func(n *nodes.Node) {
+		n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt, n.IngressModeByOwner = nodeproto.IngressNone, "", nil, true
+	})
+	r.follow(t)
+	r.svc.Store = &behindStore{adoptionStore: r.store, behind: []*nodes.Node{{ID: "node_1", OrgID: "org"}}}
+	later := time.Now().Add(2 * nodeAddressRecheckEvery)
+	r.svc.now = func() time.Time { return later }
+	if err := r.svc.ReconcileNodeAddresses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.fetches()) != 0 || len(r.ingress.list()) != 0 || len(r.proxy.served) != 0 {
+		t.Fatalf("checked a node its owner put in mode none: fetched %v ingress %+v", r.fetches(), r.ingress.list())
+	}
+	// Asking for direct again has it checked.
+	r.records.set(func(n *nodes.Node) { n.IngressMode = nodeproto.IngressDirect })
+	if err := r.svc.CheckNodeAddress(t.Context(), r.node); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.ingress.list(); !slices.Equal(c, []ingressCall{{"node_1", nodeproto.IngressDirect, ddnsNew}}) {
+		t.Fatalf("direct again: %+v", c)
+	}
 }
 
 func TestDDNSHoldsABusyRouteUntilItsDeadline(t *testing.T) {

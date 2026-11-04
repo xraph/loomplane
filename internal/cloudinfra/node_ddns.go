@@ -236,10 +236,14 @@ func (s *Service) followNodeAddress(ctx context.Context, hooked *nodes.Node, mod
 	if n.Status == nodes.StatusRevoked {
 		return nil
 	}
-	// A node with no confirmed address has one found first. A node in
-	// mode none that had one kept it there by its owner's choice. Relay
-	// isn't this phase's.
+	// A node with no confirmed address has one found first, unless its
+	// owner put it in mode none: no check takes it out of that. A node in
+	// mode none that had an address confirmed was put there by its owner
+	// too. Relay isn't this phase's.
 	if n.PublicAddressConfirmedAt == nil && n.IngressMode != nodeproto.IngressRelay {
+		if n.IngressMode == nodeproto.IngressNone && n.IngressModeByOwner {
+			return nil
+		}
 		return s.confirmNode(ctx, n, mode)
 	}
 	// Only a confirmed address is followed.
@@ -395,7 +399,8 @@ func checkKey(candidates []string) string {
 
 // confirmNode checks the address of an adopted node that has none
 // confirmed: one whose first check found nothing, one adopted by review
-// or by hand, or one whose owner asked for direct ingress. Nothing runs
+// or by hand, or one whose owner asked for direct ingress. The caller
+// leaves out a node its owner put in mode none. Nothing runs
 // until the node's server is ready, since an adoption checks that ports 80
 // and 443 are free before the proxy may start, nor without a public
 // candidate. The check runs as nodeCheckDue allows, unless a person asked
@@ -925,8 +930,9 @@ func yieldAddressRoute(ctx context.Context, tx driver.Tx, op *RouteOperation) er
 // pending with no operation of any status but succeeded or cancelled, and
 // no handoff, on it. A route whose operation failed waits for a person,
 // so it doesn't bring its node back. The other has no confirmed address
-// yet, outside relay mode, offers public addresses and has a ready server
-// on its connection, so its address can be checked.
+// yet, outside relay mode and not put in mode none by its owner, offers
+// public addresses and has a ready server on its connection, so its
+// address can be checked.
 func (s *PgStore) NodesBehindAddress(ctx context.Context, after string, limit int) ([]*nodes.Node, error) {
 	rows, err := s.db.Query(ctx, `SELECT n.id,n.org_id FROM loomplane_nodes n
  JOIN loomplane_cloud_connections c ON c.org_id=n.org_id AND c.details->>'node_id'=n.id AND c.cloud='server' AND c.status='ready'
@@ -938,7 +944,7 @@ func (s *PgStore) NodesBehindAddress(ctx context.Context, after string, limit in
     AND (r.status='routing_pending' OR (r.status='ready' AND coalesce(r.body->'binding'->>'address','')<>n.public_address))
     AND NOT EXISTS(SELECT 1 FROM loomplane_route_operations o WHERE o.org_id=r.org_id AND o.route_id=r.id AND o.status NOT IN ('preview','succeeded','cancelled'))
     AND NOT EXISTS(SELECT 1 FROM loomplane_route_handoffs h WHERE h.org_id=r.org_id AND h.route_id=r.id AND NOT h.released))))
-  OR (n.ingress_mode<>'relay' AND n.public_address_confirmed_at IS NULL
+  OR (n.ingress_mode<>'relay' AND NOT (n.ingress_mode='none' AND n.ingress_mode_by_owner) AND n.public_address_confirmed_at IS NULL
    AND CASE WHEN jsonb_typeof(n.inventory->'public_addresses')='array' THEN jsonb_array_length(n.inventory->'public_addresses') ELSE 0 END>0
    AND EXISTS(SELECT 1 FROM loomplane_cloud_servers v WHERE v.org_id=c.org_id AND v.runtime_connection_id=c.id AND v.status='ready')))
  GROUP BY n.id,n.org_id ORDER BY n.id LIMIT $2`, after, limit)

@@ -11,8 +11,10 @@ import (
 // the node's own proxy, and when. Routes reach a node there only once it is
 // confirmed. ingress_applied is the mode the node last said it runs,
 // ingress_sent_at when the stored mode was last sent to it, and
-// ingress_detail why ingress isn't what was asked. The node.updated payload
-// gains public_address and is otherwise unchanged.
+// ingress_detail why ingress isn't what was asked. ingress_mode_by_owner is
+// set once a person chose the ingress mode, so an automatic address check
+// never takes a node its owner put in mode none into direct. The
+// node.updated payload gains public_address and is otherwise unchanged.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -21,7 +23,8 @@ func init() {
 	ADD COLUMN IF NOT EXISTS public_address_confirmed_at TIMESTAMPTZ,
 	ADD COLUMN IF NOT EXISTS ingress_applied TEXT NOT NULL DEFAULT '',
 	ADD COLUMN IF NOT EXISTS ingress_sent_at TIMESTAMPTZ,
-	ADD COLUMN IF NOT EXISTS ingress_detail TEXT NOT NULL DEFAULT ''`); err != nil {
+	ADD COLUMN IF NOT EXISTS ingress_detail TEXT NOT NULL DEFAULT '',
+	ADD COLUMN IF NOT EXISTS ingress_mode_by_owner BOOLEAN NOT NULL DEFAULT false`); err != nil {
 				return fmt.Errorf("add node public address columns: %w", err)
 			}
 			if _, err := db.Exec(ctx, nodeEventTrigger(`'public_address',NEW.public_address`, `'public_address',OLD.public_address`)); err != nil {
@@ -34,6 +37,7 @@ func init() {
 				return fmt.Errorf("restore function loomplane_node_event_trigger: %w", err)
 			}
 			_, err := db.Exec(ctx, `ALTER TABLE loomplane_nodes
+	DROP COLUMN IF EXISTS ingress_mode_by_owner,
 	DROP COLUMN IF EXISTS ingress_detail,
 	DROP COLUMN IF EXISTS ingress_sent_at,
 	DROP COLUMN IF EXISTS ingress_applied,

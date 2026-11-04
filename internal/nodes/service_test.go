@@ -173,6 +173,9 @@ func (f *fakeStore) UpdateSettings(_ context.Context, org, id string, u Settings
 	if u.Labels != nil {
 		n.Labels = u.Labels
 	}
+	if u.IngressMode != nil {
+		n.IngressModeByOwner = true
+	}
 	if u.IngressMode != nil && *u.IngressMode != n.IngressMode {
 		now := time.Now().UTC()
 		n.IngressMode, n.IngressSentAt, n.IngressDetail = *u.IngressMode, &now, ""
@@ -838,6 +841,9 @@ func TestUpdateDirectChecksTheAddress(t *testing.T) {
 		if _, err := r.svc.Update(context.Background(), admin, id, u); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if n, _ := r.store.GetByID(context.Background(), id); !n.IngressModeByOwner {
+		t.Fatal("an owner's ingress mode wasn't marked as theirs")
 	}
 	// Direct twice, since no check confirmed an address in between.
 	if want := []string{id + ":direct", id + ":direct"}; !slices.Equal(checked, want) {
