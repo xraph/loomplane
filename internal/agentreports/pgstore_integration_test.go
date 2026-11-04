@@ -4,6 +4,7 @@ package agentreports
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -168,4 +169,66 @@ func TestPgStoreReopenClearsTheTakerAndKeepsTheLastKeys(t *testing.T) {
 	if back.Change != ChangeReopened || back.Report.TakenBy != "" || back.Report.TakenAt != nil {
 		t.Fatalf("reopened: %s %+v", back.Change, back.Report)
 	}
+}
+
+// TestPgStoreDelivers runs the delivery cases on Postgres, with notices
+// queued in the real outbox and the admins read from authsome_members.
+func TestPgStoreDelivers(t *testing.T) {
+	pg := openPg(t)
+	store := NewPgStore(pg)
+	exec := func(t *testing.T, q string, args ...any) {
+		t.Helper()
+		if _, err := pg.Exec(context.Background(), q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(t, `INSERT INTO authsome_apps(id,name,slug) VALUES('app','App','app')`)
+	exec(t, `INSERT INTO authsome_environments(id,app_id,name,slug,type,is_default) VALUES('env','app','Production','production','production',true)`)
+	people := []struct{ id, role string }{{userOwner, "owner"}, {userAdmin, "admin"}, {"user_dev", "developer"}}
+	for _, u := range people {
+		exec(t, `INSERT INTO authsome_users(id,app_id,env_id,email,first_name,last_name) VALUES($1,'app','env',$2,'','')`, u.id, u.id+"@example.com")
+	}
+	for i, c := range deliverCases {
+		t.Run(c.name, func(t *testing.T) {
+			org := fmt.Sprintf("org_d%02d", i)
+			exec(t, `INSERT INTO authsome_organizations(id,app_id,env_id,name,slug,created_by) VALUES($1,'app','env',$1,$1,$2)`, org, userOwner)
+			for _, u := range people {
+				exec(t, `INSERT INTO authsome_members(id,org_id,user_id,role) VALUES ($1,$2,$3,$4)`, "amem_"+org+"_"+u.id, org, u.id, u.role)
+			}
+			h := newHarness(t, store, pgPeek{pg: pg, store: store}, org)
+			c.run(t, newEnv(t, h, pg, func(t *testing.T) []sentNotice { return pgNotices(t, pg, org) }, c.opts))
+		})
+	}
+}
+
+func pgNotices(t *testing.T, pg *pgdriver.PgDB, org string) []sentNotice {
+	t.Helper()
+	rows, err := pg.Query(context.Background(), `SELECT user_id, subject_id, payload FROM loomplane_notification_outbox
+		WHERE org_id = $1 AND kind = 'agent.report'`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []sentNotice
+	for rows.Next() {
+		var n sentNotice
+		var payload []byte
+		if err = rows.Scan(&n.User, &n.Subject, &payload); err != nil {
+			t.Fatal(err)
+		}
+		var p struct {
+			Title, Body, Path, Need string
+			Metadata                map[string]string
+		}
+		if err = json.Unmarshal(payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		n.Title, n.Body, n.Path, n.Need, n.Metadata = p.Title, p.Body, p.Path, p.Need, p.Metadata
+		out = append(out, n)
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	sortNotices(out)
+	return out
 }

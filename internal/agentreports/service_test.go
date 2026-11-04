@@ -10,6 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/grove/driver"
+	"github.com/xraph/shield/scan"
+
+	"github.com/xraph/loomplane/internal/agentsafety"
+	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -165,11 +171,33 @@ type harness struct {
 	warnings []string
 }
 
+// tenantsOn answers every workspace's model tenant: the agent is on.
+type tenantsOn struct{}
+
+func (tenantsOn) NexusTenant(_ context.Context, orgID string) (string, error) {
+	return "tenant_" + orgID, nil
+}
+
+// passEngine is a safety engine that lets every text through as it is.
+type passEngine struct{}
+
+func (passEngine) ScanInput(_ context.Context, in *scan.Input) (*scan.Result, error) {
+	return &scan.Result{Decision: scan.DecisionAllow, Redacted: in.Text}, nil
+}
+
+func (passEngine) ScanOutput(context.Context, *scan.Input) (*scan.Result, error) {
+	return &scan.Result{Decision: scan.DecisionAllow}, nil
+}
+
 func newHarness(t *testing.T, store Store, peek inspector, org string) *harness {
 	t.Helper()
 	h := &harness{org: org, store: store, peek: peek, clock: &clock{now: base}, audit: &fakeAudit{}}
+	if m, ok := store.(*memStore); ok {
+		m.now = h.clock.Now
+	}
 	h.svc = NewService(Deps{
 		Store: store, Authz: newFakeAuthz(), Projects: fakeProjects{}, Audit: h.audit, Now: h.clock.Now,
+		Binder: &agentscope.Binder{Tenants: tenantsOn{}}, Safety: &agentsafety.Scanner{Engine: passEngine{}},
 		Warn: func(msg string, err error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -965,9 +993,24 @@ func reportsStayInTheirWorkspace(t *testing.T, h *harness) {
 type memStore struct {
 	mu      sync.Mutex
 	records map[string]*record
+	now     func() time.Time
+	// notices is where SaveNotice queues notices, as the database
+	// transaction would; nil drops them.
+	notices notifications.Execer
+	// queued records when each delivery was queued, and claims who
+	// holds it until when.
+	queued map[string]time.Time
+	claims map[string]memClaim
 }
 
-func newMemStore() *memStore { return &memStore{records: map[string]*record{}} }
+type memClaim struct {
+	owner string
+	until time.Time
+}
+
+func newMemStore() *memStore {
+	return &memStore{records: map[string]*record{}, now: time.Now, queued: map[string]time.Time{}, claims: map[string]memClaim{}}
+}
 
 var _ Store = (*memStore)(nil)
 
@@ -1191,3 +1234,107 @@ func (m *memStore) noticeSent(t *testing.T, orgID, id string, at time.Time) {
 	}
 	r.PendingNotice, r.LastNoticeAt = "", &at
 }
+
+func (m *memStore) Pending(_ context.Context, orgID string) ([]*Report, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sorted(orgID, func(r *record) bool {
+		return r.Revision > r.NotifiedRevision || r.Revision > r.IssueRevision ||
+			(r.Issue.State == IssueWaiting && r.Status == StatusOpen)
+	}, oldestFirst), nil
+}
+
+func (m *memStore) QueueDelivery(_ context.Context, orgID, id string, now time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, err := m.find(orgID, id); err != nil {
+		return false, nil
+	}
+	if at, ok := m.queued[id]; ok && !at.Before(now.Add(-DeliveryRequeue)) {
+		return false, nil
+	}
+	m.queued[id] = now
+	return true, nil
+}
+
+func (m *memStore) ClaimDelivery(_ context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, err := m.find(orgID, id)
+	if err != nil {
+		return nil, err
+	}
+	now := m.now()
+	if c, ok := m.claims[id]; ok && c.owner != owner && !c.until.Before(now) {
+		return nil, nil
+	}
+	m.claims[id] = memClaim{owner: owner, until: now.Add(lease)}
+	return r.delivery(), nil
+}
+
+func (m *memStore) holds(id, owner string) bool { return m.claims[id].owner == owner }
+
+func (m *memStore) SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
+	send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, err := m.find(orgID, id)
+	if err != nil {
+		return false, err
+	}
+	if r.Revision != revision || r.PendingNotice != pendingNotice || !m.holds(id, owner) {
+		return false, nil
+	}
+	if pendingNotice != "" {
+		q := m.notices
+		if q == nil {
+			q = dropExecer{}
+		}
+		if err := send(ctx, q, r.NoticeSeq+1); err != nil {
+			return false, err
+		}
+		r.NoticeSeq++
+		r.LastNoticeAt, r.PendingNotice = &at, ""
+	}
+	r.NotifiedRevision = max(r.NotifiedRevision, revision)
+	return true, nil
+}
+
+func (m *memStore) SaveIssue(_ context.Context, orgID, id, owner string, revision int, in IssueSave) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, err := m.find(orgID, id)
+	if err != nil {
+		return err
+	}
+	if !m.holds(id, owner) {
+		return nil
+	}
+	r.Issue = Issue{Number: in.Number, URL: in.URL, State: in.State, Error: in.Error}
+	r.IssueComments = slices.Clone(r.IssueComments[min(in.Handled, len(r.IssueComments)):])
+	if in.CommentAt != nil {
+		r.IssueCommentAt = cloneTime(in.CommentAt)
+	}
+	if in.Done {
+		r.IssueRevision = max(r.IssueRevision, revision)
+	}
+	return nil
+}
+
+func (m *memStore) ReleaseDelivery(_ context.Context, _, id, owner string, done bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.holds(id, owner) {
+		return nil
+	}
+	delete(m.claims, id)
+	if done {
+		delete(m.queued, id)
+	}
+	return nil
+}
+
+// dropExecer is an Execer that runs nothing.
+type dropExecer struct{}
+
+func (dropExecer) Exec(context.Context, string, ...any) (driver.Result, error) { return nil, nil }

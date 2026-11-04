@@ -30,6 +30,10 @@ import (
 // AppID is the App's ID in AppConfig.
 const AppID = 4242
 
+// AppSlug is the App's slug in AppConfig. Issues the App opens are
+// authored by its bot user, AppSlug + "[bot]".
+const AppSlug = "loomplane-test"
+
 var (
 	keyOnce sync.Once
 	key     *rsa.PrivateKey
@@ -53,6 +57,10 @@ type IssueRecord struct {
 	Labels      []string `json:"labels"`
 	Comments    []string `json:"comments"`
 	PullRequest bool     `json:"pull_request"`
+	// Author is the login that opened it, and AuthorType "Bot" for an
+	// App's bot user or "User" for a person.
+	Author     string `json:"author"`
+	AuthorType string `json:"author_type"`
 }
 
 // TokenRequest is what one access_tokens call asked for.
@@ -123,7 +131,7 @@ func (s *Server) URL() string { return s.srv.URL }
 // AppConfig is an App configuration whose JWT the fake accepts.
 func (s *Server) AppConfig() repositories.AppConfig {
 	return repositories.AppConfig{
-		ID: AppID, Slug: "loomplane-test", ClientID: "Iv1.test", ClientSecret: "test-secret",
+		ID: AppID, Slug: AppSlug, ClientID: "Iv1.test", ClientSecret: "test-secret",
 		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(s.key)})),
 		APIURL:     s.srv.URL, WebURL: s.srv.URL,
 	}
@@ -154,8 +162,33 @@ func (s *Server) AddPullRequest(repo, title, body string, labels ...string) {
 	r := s.repoLocked(repo)
 	r.issues = append(r.issues, &IssueRecord{
 		Number: len(r.issues) + 1, Title: title, Body: body, State: "open",
-		Labels: slices.Clone(labels), Comments: []string{}, PullRequest: true,
+		Labels: slices.Clone(labels), Comments: []string{}, PullRequest: true, Author: "octocat", AuthorType: "User",
 	})
+}
+
+// AddIssue adds an issue as someone other than the App opened it, and
+// returns its number. An empty State is open, and an empty Author is a
+// person, octocat.
+func (s *Server) AddIssue(repo string, is IssueRecord) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.repoLocked(repo)
+	is.Number, is.PullRequest = len(r.issues)+1, false
+	is.Labels, is.Comments = slices.Clone(is.Labels), slices.Clone(is.Comments)
+	if is.Labels == nil {
+		is.Labels = []string{}
+	}
+	if is.Comments == nil {
+		is.Comments = []string{}
+	}
+	if is.State == "" {
+		is.State = "open"
+	}
+	if is.Author == "" {
+		is.Author, is.AuthorType = "octocat", "User"
+	}
+	r.issues = append(r.issues, &is)
+	return is.Number
 }
 
 // Issues returns a copy of repo's issues and pull requests, oldest first.
@@ -419,7 +452,7 @@ func (s *Server) createIssue(w http.ResponseWriter, r *http.Request, repo *repos
 	}
 	is := &IssueRecord{
 		Number: len(repo.issues) + 1, Title: body.Title, Body: body.Body, State: "open",
-		Labels: slices.Clone(body.Labels), Comments: []string{},
+		Labels: slices.Clone(body.Labels), Comments: []string{}, Author: AppSlug + "[bot]", AuthorType: "Bot",
 	}
 	if is.Labels == nil {
 		is.Labels = []string{}
@@ -502,6 +535,7 @@ func (s *Server) issueJSON(r *http.Request, is *IssueRecord) map[string]any {
 		"body":     is.Body,
 		"state":    is.State,
 		"labels":   labels,
+		"user":     map[string]string{"login": is.Author, "type": is.AuthorType},
 		"html_url": fmt.Sprintf("%s/%s/%s/%s/%d", s.srv.URL, r.PathValue("owner"), r.PathValue("repo"), kind, is.Number),
 	}
 	if is.StateReason != "" {

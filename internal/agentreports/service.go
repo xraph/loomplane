@@ -10,13 +10,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/xraph/grove/drivers/pgdriver"
-
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/teams"
 )
 
 const (
@@ -141,7 +141,60 @@ type Store interface {
 	// Documents returns the reports with findings or no longer open,
 	// updated after after, oldest first.
 	Documents(ctx context.Context, orgID string, after time.Time, limit int) ([]*Report, error)
-	// delivery columns are Task 4's
+
+	// Pending returns the reports whose notice or issue is behind their
+	// revision, and the open ones waiting for an installation to accept
+	// Issues, oldest first.
+	Pending(ctx context.Context, orgID string) ([]*Report, error)
+	// QueueDelivery marks a report's delivery queued at now, when it
+	// isn't, or was queued over DeliveryRequeue before now, and reports
+	// whether it did.
+	QueueDelivery(ctx context.Context, orgID, id string, now time.Time) (bool, error)
+	// ClaimDelivery holds the report's delivery for owner for lease, when
+	// nobody else holds it, and returns where it stands. It's nil, with
+	// no error, when another owner holds it.
+	ClaimDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error)
+	// SaveNotice records the notice step in one transaction, only while
+	// owner holds the delivery and the report is still at revision with
+	// pendingNotice queued: when pendingNotice is set, send runs inside
+	// the transaction with the notice's sequence number, and the notice
+	// counts as sent. notified_revision becomes revision either way. It
+	// reports false, having saved nothing, when the report moved on.
+	SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
+		send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error)
+	// SaveIssue records the issue step while owner holds the delivery.
+	SaveIssue(ctx context.Context, orgID, id, owner string, revision int, in IssueSave) error
+	// ReleaseDelivery lets the delivery go; done also clears its queued
+	// mark.
+	ReleaseDelivery(ctx context.Context, orgID, id, owner string, done bool) error
+}
+
+// Delivery is a report with where its delivery stands, which people
+// never see.
+type Delivery struct {
+	Report           *Report
+	NotifiedRevision int
+	IssueRevision    int
+	PendingNotice    string // "", "opened", "reopened" or "repeated"
+	NoticeSeq        int
+	LastNoticeAt     *time.Time
+	IssueComments    []string // queued comment kinds, oldest first
+	IssueCommentAt   *time.Time
+}
+
+// IssueSave is what the issue step writes back.
+type IssueSave struct {
+	Number int
+	URL    string
+	State  string // Issue* constant
+	Error  string
+	// Handled is how many of the queued comments, from the front, were
+	// posted or dropped. Those go; ones queued since stay.
+	Handled int
+	// CommentAt is when the last repeat comment went out; nil keeps it.
+	CommentAt *time.Time
+	// Done moves issue_revision to the revision delivered.
+	Done bool
 }
 
 // Authorizer is the part of *security.Authorizer reports use.
@@ -170,21 +223,45 @@ type Starters interface {
 	StartedBy(ctx context.Context, orgID, deploymentID string) (string, error)
 }
 
+// Teams names a project's responsible team. *teams.Service is the real
+// one.
+type Teams interface {
+	Resolve(ctx context.Context, q notifications.Querier, orgID, projectID, named, reason string) (teams.Route, error)
+}
+
+// ProjectReader reads one project without a person, for the name a
+// report shows. *projects.PgStore is the real one.
+type ProjectReader interface {
+	GetProject(ctx context.Context, orgID, id string) (*projects.Project, error)
+}
+
+// People names a person in what reports send. agentrequests.PgPeople is
+// the real one: it never returns an email.
+type People interface {
+	Name(ctx context.Context, userID string) string
+}
+
 // Deps are what a Service needs.
 type Deps struct {
-	Store     Store
-	DB        *pgdriver.PgDB // notices share delivery's transaction (Task 4)
-	Authz     Authorizer
-	Projects  Projects
-	Safety    *agentsafety.Scanner
-	Binder    *agentscope.Binder
-	Issues    repositories.IssueTracker // nil: Herald only
-	Secrets   SecretValues              // nil until delivery redacts (Task 4)
-	Starters  Starters                  // nil until delivery names the starter (Task 4)
-	Audit     projects.Auditor
-	PublicURL string
-	Now       func() time.Time
-	Warn      func(msg string, err error)
+	Store Store
+	// DB reads who hears about a report: the owners and admins, and,
+	// through Teams, the project's responsible team. *pgdriver.PgDB is
+	// the real one.
+	DB            notifications.Querier
+	Authz         Authorizer
+	Projects      Projects
+	ProjectReader ProjectReader // nil: reports name the project by its ID
+	People        People        // nil: a person closing a report is "Someone"
+	Teams         Teams         // nil: no responsible team hears about reports
+	Safety        *agentsafety.Scanner
+	Binder        *agentscope.Binder
+	Issues        repositories.IssueTracker // nil: Herald only
+	Secrets       SecretValues              // nil: only the outbound scan stands between a report and GitHub
+	Starters      Starters                  // nil: the deployment's starter isn't told
+	Audit         projects.Auditor
+	PublicURL     string
+	Now           func() time.Time
+	Warn          func(msg string, err error)
 }
 
 // Service keeps one report per incident: detectors and the agent open and

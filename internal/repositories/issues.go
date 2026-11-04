@@ -86,7 +86,9 @@ type Issues interface {
 	// EnsureLabel creates the label, or does nothing when it exists.
 	EnsureLabel(ctx context.Context, name, color, description string) error
 	// Find returns the first issue with label whose body contains
-	// marker, open or closed, or nil when there's none.
+	// marker, open or closed, opened by a bot, or nil when there's none.
+	// A person's issue never counts, so nobody who can label an issue can
+	// plant one for Loomplane to take over.
 	Find(ctx context.Context, label, marker string) (*Issue, error)
 	Create(ctx context.Context, in IssueInput) (*Issue, error)
 	// Edit returns ErrNotFound only when the issue is gone.
@@ -124,6 +126,10 @@ type issueJSON struct {
 	State       string         `json:"state"`
 	Body        string         `json:"body"`
 	PullRequest map[string]any `json:"pull_request"`
+	User        struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
 }
 
 func (j issueJSON) issue() *Issue { return &Issue{Number: j.Number, URL: j.HTMLURL, State: j.State} }
@@ -150,8 +156,9 @@ func (g *githubIssues) Find(ctx context.Context, label, marker string) (*Issue, 
 			return nil, issueError(err)
 		}
 		for _, it := range items {
-			// The issues list has pull requests in it too.
-			if it.PullRequest == nil && strings.Contains(it.Body, marker) {
+			// The issues list has pull requests in it too, and only an
+			// App's issue can be Loomplane's.
+			if it.PullRequest == nil && it.User.Type == "Bot" && strings.Contains(it.Body, marker) {
 				return it.issue(), nil
 			}
 		}

@@ -1,0 +1,562 @@
+package agentreports
+
+import (
+	"context"
+	"errors"
+	"net/url"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/xraph/loomplane/internal/agentsafety"
+	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/repositories"
+	"github.com/xraph/loomplane/internal/security"
+)
+
+const noRepository = "Loomplane couldn't tell which repository this belongs to"
+
+// Rendered are a report's texts as they leave Loomplane: known secrets
+// redacted, then scanned on the way out, with the fixed fallback for any
+// text the scan blocked.
+type Rendered struct{ NoticeTitle, NoticeBody, IssueTitle, IssueBody string }
+
+// Pending returns the reports whose notice or issue is behind, and the
+// open ones waiting for an installation to accept Issues.
+func (s *Service) Pending(ctx context.Context, orgID string) ([]*Report, error) {
+	if orgID == "" {
+		return nil, invalid("no workspace")
+	}
+	return s.d.Store.Pending(ctx, orgID)
+}
+
+// QueueDelivery marks a report's delivery queued, unless it already was
+// within DeliveryRequeue, and reports whether the caller should enqueue
+// the delivery job.
+func (s *Service) QueueDelivery(ctx context.Context, orgID, id string, now time.Time) (bool, error) {
+	if orgID == "" || id == "" {
+		return false, invalid("no workspace or report")
+	}
+	return s.d.Store.QueueDelivery(ctx, orgID, id, now.UTC())
+}
+
+// Text returns a report's texts as delivery would send them, for the
+// agent's knowledge and for tests. While the workspace's agent is off it
+// returns a zero Rendered and no error: nothing can be scanned then.
+func (s *Service) Text(ctx context.Context, r *Report) (Rendered, error) {
+	bound, on, err := s.bind(ctx, r.OrgID)
+	if err != nil || !on {
+		return Rendered{}, err
+	}
+	out := s.sender(bound, r)
+	n := s.names(bound, r, out)
+	title, body := s.noticeTexts(bound, out, r, "", n)
+	issueTitle, issueText := s.issueTexts(bound, out, r, n)
+	return Rendered{NoticeTitle: title, NoticeBody: body, IssueTitle: issueTitle, IssueBody: issueText}, nil
+}
+
+// Deliver is the delivery job's body: it sends a report's notice through
+// Herald and brings its GitHub issue up to date. It does nothing for a
+// report another worker is delivering, or while the workspace's agent is
+// off, and running it again after it succeeded does nothing. An error
+// means Dispatch should retry; the notice, once queued, is never queued
+// again.
+func (s *Service) Deliver(ctx context.Context, orgID, id, owner string) error {
+	if orgID == "" || id == "" || owner == "" {
+		return invalid("a delivery names its workspace, report and owner")
+	}
+	d, err := s.d.Store.ClaimDelivery(ctx, orgID, id, owner, DeliveryLease)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil || d == nil {
+		return err
+	}
+	done := false
+	defer func() {
+		if rerr := s.d.Store.ReleaseDelivery(context.WithoutCancel(ctx), orgID, id, owner, done); rerr != nil {
+			s.warn("agentreports: release the delivery of report "+id, rerr)
+		}
+	}()
+	bound, on, err := s.bind(ctx, orgID)
+	if err != nil {
+		return err
+	}
+	if !on {
+		done = true
+		return nil
+	}
+	out := s.sender(bound, d.Report)
+	if d, err = s.deliverNotice(bound, out, d, owner); err != nil || d == nil {
+		return err
+	}
+	if ierr := s.deliverIssue(bound, out, d, owner); ierr != nil {
+		return ierr
+	}
+	done = true
+	return nil
+}
+
+// bind binds ctx to the workspace as the agent alone. on is false when
+// the workspace's agent is off.
+func (s *Service) bind(ctx context.Context, orgID string) (bound context.Context, on bool, err error) {
+	if s.d.Binder == nil {
+		return ctx, false, errors.New("agentreports: no binder is configured")
+	}
+	bound, err = s.d.Binder.Bind(ctx, security.AgentPrincipal(orgID, nil), agentscope.Scope{OrgID: orgID})
+	if errors.Is(err, agentsettings.ErrDisabled) {
+		return ctx, false, nil
+	}
+	return bound, err == nil, err
+}
+
+// deliverNotice sends the pending notice, or just records that the
+// revision needs none, before any GitHub call. A report that moves on
+// meanwhile is read again, at most three times; after that the next
+// delivery catches up. It returns nil, with no error, when another
+// worker took the delivery over.
+func (s *Service) deliverNotice(ctx context.Context, out *sender, d *Delivery, owner string) (*Delivery, error) {
+	for range 3 {
+		r := d.Report
+		if r.Revision <= d.NotifiedRevision {
+			return d, nil
+		}
+		var send func(context.Context, notifications.Execer, int) error
+		if d.PendingNotice != "" {
+			n := s.names(ctx, r, out)
+			title, body := s.noticeTexts(ctx, out, r, d.PendingNotice, n)
+			recipients, err := s.recipients(ctx, r)
+			if err != nil {
+				return nil, err
+			}
+			notice := notifications.Notice{
+				Kind: notifications.KindAgentReport, OrgID: r.OrgID, ProjectID: r.ProjectID, Recipients: recipients,
+				Title: title, Body: body, Path: "/agent/reports/" + r.ID, Need: security.DeploymentRead.Name(),
+				Metadata: map[string]string{"report_id": r.ID, "signal": r.Signal, "severity": r.Severity, "environment": r.Environment},
+			}
+			send = func(ctx context.Context, q notifications.Execer, seq int) error {
+				notice.SubjectID = r.ID + ":" + strconv.Itoa(seq)
+				return notifications.Enqueue(ctx, q, notice)
+			}
+		}
+		saved, err := s.d.Store.SaveNotice(ctx, r.OrgID, r.ID, owner, r.Revision, d.PendingNotice, send, s.now())
+		if err != nil {
+			return nil, err
+		}
+		if saved {
+			d.NotifiedRevision, d.PendingNotice = r.Revision, ""
+			return d, nil
+		}
+		if d, err = s.d.Store.ClaimDelivery(ctx, r.OrgID, r.ID, owner, DeliveryLease); err != nil || d == nil {
+			return nil, err
+		}
+	}
+	return d, nil
+}
+
+// recipients are who hears about a report: the workspace's owners and
+// admins, the members of the project's responsible team, and the person
+// who started the deployment it's about, each once.
+func (s *Service) recipients(ctx context.Context, r *Report) ([]string, error) {
+	if s.d.DB == nil {
+		return nil, errors.New("agentreports: no database to read recipients from")
+	}
+	admins, err := notifications.Admins(ctx, s.d.DB, r.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	add := func(users ...string) {
+		for _, u := range users {
+			if u != "" && !slices.Contains(out, u) {
+				out = append(out, u)
+			}
+		}
+	}
+	add(admins...)
+	if s.d.Teams != nil && r.ProjectID != "" {
+		route, err := s.d.Teams.Resolve(ctx, s.d.DB, r.OrgID, r.ProjectID, "", "")
+		if err != nil {
+			return nil, err
+		}
+		if route.Source == "project" {
+			add(route.Members...)
+		}
+	}
+	if s.d.Starters != nil && r.Evidence.DeploymentID != "" {
+		by, err := s.d.Starters.StartedBy(ctx, r.OrgID, r.Evidence.DeploymentID)
+		if err != nil {
+			s.warn("agentreports: read who started deployment "+r.Evidence.DeploymentID, err)
+		} else if person(by) {
+			add(by)
+		}
+	}
+	return out, nil
+}
+
+// person is a subject that is a person: not the agent, not Loomplane's
+// automation.
+func person(subject string) bool {
+	if subject == "" {
+		return false
+	}
+	if _, ok := security.IsAgentSubject(subject); ok {
+		return false
+	}
+	_, ok := security.IsSystemSubject(subject)
+	return !ok
+}
+
+// issueStep is where one run of the issue step has got to.
+type issueStep struct {
+	s     *Service
+	ctx   context.Context
+	out   *sender
+	d     *Delivery
+	owner string
+	n     names
+	save  IssueSave
+}
+
+// deliverIssue brings the report's GitHub issue up to date.
+func (s *Service) deliverIssue(ctx context.Context, out *sender, d *Delivery, owner string) error {
+	r := d.Report
+	waiting := r.Issue.State == IssueWaiting && r.Status == StatusOpen
+	if r.Revision <= d.IssueRevision && !waiting {
+		return nil
+	}
+	st := &issueStep{
+		s: s, ctx: ctx, out: out, d: d, owner: owner, n: s.names(ctx, r, out),
+		save: IssueSave{Number: r.Issue.Number, URL: r.Issue.URL, State: r.Issue.State},
+	}
+	if r.Repository == "" {
+		return st.finish(IssueNoRepository, noRepository)
+	}
+	if s.d.Issues == nil {
+		return st.finish(IssueNoRepository, "This Loomplane has no GitHub App, so reports go to Herald only")
+	}
+	iss, err := s.d.Issues.Issues(ctx, r.OrgID, r.Repository)
+	switch {
+	case errors.Is(err, repositories.ErrIssuesNotAccepted):
+		return st.finish(IssueWaiting, reason(err, repositories.ErrIssuesNotAccepted))
+	case errors.Is(err, repositories.ErrNoInstallation):
+		return st.finish(IssueNoRepository, reason(err, repositories.ErrNoInstallation))
+	case err != nil:
+		return st.fail(err)
+	}
+	if err = st.sync(iss); err != nil {
+		return st.fail(err)
+	}
+	st.save.Error, st.save.Done = "", true
+	return s.d.Store.SaveIssue(ctx, r.OrgID, r.ID, owner, r.Revision, st.save)
+}
+
+// reason is the person-facing reason an Issues error carries.
+func reason(err, sentinel error) string {
+	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
+}
+
+// finish ends the issue step without GitHub: the state and why, queued
+// comments dropped, the revision delivered.
+func (st *issueStep) finish(state, why string) error {
+	r := st.d.Report
+	st.save.State, st.save.Error = state, why
+	st.save.Handled, st.save.Done = len(st.d.IssueComments), true
+	return st.s.d.Store.SaveIssue(st.ctx, r.OrgID, r.ID, st.owner, r.Revision, st.save)
+}
+
+// fail keeps what the step did before err, so a retry neither opens a
+// second issue nor posts a comment twice, and returns err for Dispatch.
+func (st *issueStep) fail(err error) error {
+	r := st.d.Report
+	st.save.State, st.save.Error, st.save.Done = IssueFailed, failure(err), false
+	if serr := st.s.d.Store.SaveIssue(st.ctx, r.OrgID, r.ID, st.owner, r.Revision, st.save); serr != nil {
+		st.s.warn("agentreports: record the failed issue step of report "+r.ID, serr)
+	}
+	return err
+}
+
+// failure is a GitHub error as a person reads it, without a token or a
+// URL in it.
+func failure(err error) string {
+	msg := err.Error()
+	if errors.Is(err, repositories.ErrRateLimited) {
+		return "GitHub rate-limited Loomplane; it will try again"
+	}
+	return cutRunes(urlPasswords.ReplaceAllString(msg, "${1}[redacted]@"), maxReasonRunes)
+}
+
+// sync makes the issue say what the report says, then posts the queued
+// comments and transitions.
+func (st *issueStep) sync(iss repositories.Issues) error {
+	r := st.d.Report
+	title, body := st.s.issueTexts(st.ctx, st.out, r, st.n)
+	if err := iss.EnsureLabel(st.ctx, Label, LabelColor, LabelDescription); err != nil {
+		return err
+	}
+	if st.save.Number > 0 {
+		got, err := iss.Edit(st.ctx, st.save.Number, repositories.IssueEdit{Title: &title, Body: &body})
+		switch {
+		case errors.Is(err, repositories.ErrNotFound):
+			st.save.Number, st.save.URL = 0, ""
+		case err != nil:
+			return err
+		default:
+			st.saw(got, "edited")
+		}
+	}
+	created := false
+	if st.save.Number == 0 {
+		found, err := iss.Find(st.ctx, Label, Marker(r.ID))
+		if err != nil {
+			return err
+		}
+		switch {
+		case found != nil:
+			st.saw(found, "")
+			got, err := iss.Edit(st.ctx, found.Number, repositories.IssueEdit{Title: &title, Body: &body})
+			if err != nil {
+				return err
+			}
+			st.saw(got, "edited")
+		case r.Status != StatusOpen:
+			// A report that ended before it had an issue doesn't open one.
+			st.save.State, st.save.Handled = IssueNone, len(st.d.IssueComments)
+			return nil
+		default:
+			got, err := iss.Create(st.ctx, repositories.IssueInput{Title: title, Body: body, Labels: []string{Label}})
+			if err != nil {
+				return err
+			}
+			st.saw(got, "created")
+			created = true
+		}
+	}
+	for _, kind := range st.d.IssueComments {
+		// A new issue already says everything queued before it.
+		if !created {
+			if err := st.post(iss, kind); err != nil {
+				return err
+			}
+		}
+		st.save.Handled++
+	}
+	return nil
+}
+
+// saw records the issue as GitHub returned it, and audits action.
+func (st *issueStep) saw(is *repositories.Issue, action string) {
+	st.save.Number, st.save.URL = is.Number, is.URL
+	switch is.State {
+	case "open":
+		st.save.State = IssueOpen
+	case "closed":
+		st.save.State = IssueClosed
+	}
+	if action != "" {
+		st.s.auditIssue(st.ctx, st.d.Report, is.Number, action)
+	}
+}
+
+// post posts one queued comment with its transition: a reopen opens the
+// issue before its comment, a resolve or a close closes it after.
+func (st *issueStep) post(iss repositories.Issues, kind string) error {
+	r, number := st.d.Report, st.save.Number
+	now := st.s.now()
+	if kind == commentRepeated {
+		if last := st.lastRepeat(); last != nil && last.After(now.Add(-RepeatNoticeEvery)) {
+			return nil // the body's count says it
+		}
+	}
+	if kind == commentReopened {
+		got, err := iss.Edit(st.ctx, number, repositories.IssueEdit{State: "open", StateReason: "reopened"})
+		if err != nil {
+			return err
+		}
+		st.saw(got, "reopened")
+	}
+	if text, ok := comment(kind, r, st.n); ok {
+		if sent, ok := st.out.text(st.ctx, text); ok {
+			if err := iss.Comment(st.ctx, number, sent); err != nil {
+				return err
+			}
+			st.s.auditIssue(st.ctx, r, number, "commented")
+			if kind == commentRepeated {
+				st.save.CommentAt = &now
+			}
+		} else {
+			st.s.warn("agentreports: the safety scan blocked a comment on report "+r.ID, agentsafety.ErrOutboundBlocked)
+		}
+	}
+	reasonFor := map[string]string{commentResolved: "completed", commentClosed: "not_planned"}
+	if why, ok := reasonFor[kind]; ok {
+		got, err := iss.Edit(st.ctx, number, repositories.IssueEdit{State: "closed", StateReason: why})
+		if err != nil {
+			return err
+		}
+		st.saw(got, "closed")
+	}
+	return nil
+}
+
+func (st *issueStep) lastRepeat() *time.Time {
+	if st.save.CommentAt != nil {
+		return st.save.CommentAt
+	}
+	return st.d.IssueCommentAt
+}
+
+// auditIssue records a change Loomplane made on GitHub.
+func (s *Service) auditIssue(ctx context.Context, r *Report, number int, action string) {
+	if s.d.Audit == nil {
+		return
+	}
+	s.d.Audit.Record(context.WithoutCancel(ctx), projects.AuditEvent{
+		Action: "agent.report.issue", Severity: "info", ProjectID: r.ProjectID, Principal: security.AgentPrincipal(r.OrgID, nil),
+		Attributes: map[string]any{"report_id": r.ID, "repository": r.Repository, "number": number, "action": action},
+	})
+}
+
+// names are what r's texts call the things around it.
+func (s *Service) names(ctx context.Context, r *Report, out *sender) names {
+	n := names{Project: r.ProjectID, Link: strings.TrimRight(s.d.PublicURL, "/") + "/agent/reports/" + r.ID}
+	if s.d.ProjectReader != nil {
+		p, err := s.d.ProjectReader.GetProject(ctx, r.OrgID, r.ProjectID)
+		switch {
+		case err != nil:
+			s.warn("agentreports: read the name of project "+r.ProjectID, err)
+		case p.Name != "":
+			n.Project = p.Name
+		}
+	}
+	switch _, system := security.IsSystemSubject(r.ClosedBy); {
+	case r.ClosedBy == "":
+	case system:
+		n.Closer = "Loomplane automation"
+	case !person(r.ClosedBy):
+		n.Closer = security.AgentActorName
+	case s.d.People != nil:
+		n.Closer = s.d.People.Name(ctx, r.ClosedBy)
+	}
+	n.Project, n.Closer = out.scrub(n.Project), out.scrub(n.Closer)
+	return n
+}
+
+// noticeTexts are the notice's title and body for pending.
+func (s *Service) noticeTexts(ctx context.Context, out *sender, r *Report, pending string, n names) (title, body string) {
+	clean := out.clean(r)
+	var ok bool
+	if title, ok = out.text(ctx, noticeTitle(clean, pending, n)); !ok {
+		title = fallbackTitle(n)
+	}
+	if body, ok = out.text(ctx, noticeBody(clean, pending)); !ok {
+		body = "Open it in Loomplane to read it."
+	}
+	return cutRunes(title, MaxNoticeTitle), cutRunes(body, MaxNoticeBody)
+}
+
+// issueTexts are the issue's title and body. A body that lost its
+// marker or outgrew GitHub on the way out is the fallback, which keeps
+// the marker.
+func (s *Service) issueTexts(ctx context.Context, out *sender, r *Report, n names) (title, body string) {
+	clean := out.clean(r)
+	var ok bool
+	if title, ok = out.text(ctx, cutRunes(clean.Title, MaxNoticeTitle)); !ok || title == "" {
+		title = fallbackTitle(n)
+	}
+	body, ok = out.text(ctx, issueBody(clean, n, true))
+	if !ok || !strings.HasPrefix(body, Marker(r.ID)+"\n") || len(body) > MaxIssueBody {
+		body = Marker(r.ID) + "\n\nLoomplane opened a report for this repository. Read it in Loomplane: " + n.Link
+	}
+	return title, body
+}
+
+func fallbackTitle(n names) string {
+	return cutRunes("Loomplane opened a report for "+n.Project, MaxNoticeTitle)
+}
+
+// sender is how one report's texts leave Loomplane: the report's known
+// secret values and any URL password redacted, then the outbound scan.
+type sender struct {
+	scanner *agentsafety.Scanner
+	redact  *realtime.Redactor
+}
+
+// sender reads r's secrets. A failed read is logged and the outbound
+// scan still runs on everything sent.
+func (s *Service) sender(ctx context.Context, r *Report) *sender {
+	var values []string
+	if s.d.Secrets != nil {
+		v, err := s.d.Secrets.SecretValues(ctx, r.OrgID, r.ProjectID, r.Environment)
+		if err != nil {
+			s.warn("agentreports: read the secrets to redact from report "+r.ID, err)
+		}
+		values = v
+	}
+	return &sender{scanner: s.d.Safety, redact: realtime.NewRedactor(secretForms(values))}
+}
+
+// secretForms adds the password of a URL-shaped secret, and its escaped
+// forms, since an error message often quotes only that part.
+func secretForms(values []string) []string {
+	out := slices.Clone(values)
+	for _, v := range values {
+		if u, err := url.Parse(strings.TrimSpace(v)); err == nil && u.User != nil {
+			if pw, ok := u.User.Password(); ok && pw != "" {
+				out = append(out, pw, url.QueryEscape(pw), url.PathEscape(pw))
+			}
+		}
+	}
+	return out
+}
+
+// urlPasswords finds the password in scheme://user:password@host.
+var urlPasswords = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^\s:/?#@]*:)[^\s/?#@]+@`)
+
+// scrub redacts the known secrets and URL passwords in text.
+func (o *sender) scrub(text string) string {
+	text, _ = o.redact.Line(text, len(text)+1)
+	return urlPasswords.ReplaceAllString(text, "${1}[redacted]@")
+}
+
+// text is text as it may leave, and false when the scan blocked it.
+func (o *sender) text(ctx context.Context, text string) (string, bool) {
+	text = o.scrub(text)
+	if text == "" {
+		return "", true
+	}
+	sent, err := o.scanner.Outbound(ctx, text)
+	if err != nil {
+		return "", false
+	}
+	return sent, true
+}
+
+// clean is a copy of r with every text in it scrubbed, so what the
+// renderer cuts to fit is what is sent.
+func (o *sender) clean(r *Report) *Report {
+	c := *r
+	c.Title, c.Environment = o.scrub(r.Title), o.scrub(r.Environment)
+	c.Resolution, c.InvestigationNote = o.scrub(r.Resolution), o.scrub(r.InvestigationNote)
+	c.Facts = make([]Fact, len(r.Facts))
+	for i, f := range r.Facts {
+		f.Label, f.Value = o.scrub(f.Label), o.scrub(f.Value)
+		c.Facts[i] = f
+	}
+	if r.Findings != nil {
+		f := *r.Findings
+		f.Summary, f.LikelyCause = o.scrub(f.Summary), o.scrub(f.LikelyCause)
+		f.Suggestions = make([]string, len(r.Findings.Suggestions))
+		for i, sug := range r.Findings.Suggestions {
+			f.Suggestions[i] = o.scrub(sug)
+		}
+		c.Findings = &f
+	}
+	return &c
+}

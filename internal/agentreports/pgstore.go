@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
+
+	"github.com/xraph/loomplane/internal/notifications"
 )
 
 // PgStore is the Postgres Store, over loomplane_agent_reports
@@ -27,7 +29,8 @@ const reportColumns = `id, org_id, project_id, environment_id, environment, sign
 	title, facts, evidence, findings, repository, occurrences, first_seen_at, last_seen_at, resolved_at, closed_by, resolution,
 	taken_by, taken_at, investigation, investigation_note, task_id, run_id, investigation_started_at,
 	issue_number, issue_url, issue_state, issue_error, revision, opened_by, opened_by_task, created_at, updated_at,
-	occurrence_keys, pending_notice, last_notice_at, issue_comments`
+	occurrence_keys, pending_notice, last_notice_at, issue_comments, notified_revision, issue_revision, notice_seq,
+	issue_comment_at`
 
 func scanRecord(row driver.Row) (*record, error) {
 	var r record
@@ -37,7 +40,7 @@ func scanRecord(row driver.Row) (*record, error) {
 		&r.LastSeenAt, &r.ResolvedAt, &r.ClosedBy, &r.Resolution, &r.TakenBy, &r.TakenAt, &r.Investigation,
 		&r.InvestigationNote, &r.TaskID, &r.RunID, &r.InvestigationStartedAt, &r.Issue.Number, &r.Issue.URL, &r.Issue.State,
 		&r.Issue.Error, &r.Revision, &r.OpenedBy, &r.OpenedByTask, &r.CreatedAt, &r.UpdatedAt, &keys, &r.PendingNotice,
-		&r.LastNoticeAt, &comments); err != nil {
+		&r.LastNoticeAt, &comments, &r.NotifiedRevision, &r.IssueRevision, &r.NoticeSeq, &r.IssueCommentAt); err != nil {
 		return nil, err
 	}
 	r.Facts, r.OccurrenceKeys, r.IssueComments = []Fact{}, []string{}, []string{}
@@ -59,7 +62,7 @@ func scanRecord(row driver.Row) (*record, error) {
 		r.Findings.WrittenAt = r.Findings.WrittenAt.UTC()
 	}
 	r.FirstSeenAt, r.LastSeenAt, r.CreatedAt, r.UpdatedAt = r.FirstSeenAt.UTC(), r.LastSeenAt.UTC(), r.CreatedAt.UTC(), r.UpdatedAt.UTC()
-	for _, t := range []**time.Time{&r.ResolvedAt, &r.TakenAt, &r.InvestigationStartedAt, &r.LastNoticeAt} {
+	for _, t := range []**time.Time{&r.ResolvedAt, &r.TakenAt, &r.InvestigationStartedAt, &r.LastNoticeAt, &r.IssueCommentAt} {
 		if *t != nil {
 			at := (*t).UTC()
 			*t = &at
@@ -313,4 +316,118 @@ func (s *PgStore) Documents(ctx context.Context, orgID string, after time.Time, 
 	return s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
 		WHERE org_id = $1 AND (findings IS NOT NULL OR status <> 'open') AND updated_at > $2
 		ORDER BY updated_at, id LIMIT $3`, orgID, after.UTC(), limit)
+}
+
+// Pending implements Store.
+func (s *PgStore) Pending(ctx context.Context, orgID string) ([]*Report, error) {
+	return s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
+		WHERE org_id = $1 AND (revision > notified_revision OR revision > issue_revision
+			OR (issue_state = 'waiting_for_permission' AND status = 'open'))
+		ORDER BY first_seen_at, id`, orgID)
+}
+
+// QueueDelivery implements Store.
+func (s *PgStore) QueueDelivery(ctx context.Context, orgID, id string, now time.Time) (bool, error) {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_agent_reports SET delivery_queued_at = $3
+		WHERE org_id = $1 AND id = $2 AND (delivery_queued_at IS NULL OR delivery_queued_at < $4)`,
+		orgID, id, now.UTC(), now.UTC().Add(-DeliveryRequeue))
+	if err != nil {
+		return false, fmt.Errorf("queue agent report delivery: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ClaimDelivery implements Store. The lease runs on the database's
+// clock, so workers on different machines agree on when it ends.
+func (s *PgStore) ClaimDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
+	r, err := scanRecord(s.db.QueryRow(ctx, `UPDATE loomplane_agent_reports
+		SET delivery_owner = $3, delivery_until = now() + ($4::float8 * interval '1 second')
+		WHERE org_id = $1 AND id = $2 AND (delivery_until IS NULL OR delivery_until < now() OR delivery_owner = $3)
+		RETURNING `+reportColumns, orgID, id, owner, lease.Seconds()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := s.Get(ctx, orgID, id); gerr != nil {
+			return nil, gerr
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim agent report delivery: %w", err)
+	}
+	return r.delivery(), nil
+}
+
+// SaveNotice implements Store: the notice is queued in the transaction
+// that records it, so it's queued once.
+func (s *PgStore) SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
+	send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer rollback(tx)
+	var current, seq int
+	var pending, holder string
+	err = tx.QueryRow(ctx, `SELECT revision, pending_notice, notice_seq, delivery_owner FROM loomplane_agent_reports
+		WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&current, &pending, &seq, &holder)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("read agent report notice: %w", err)
+	}
+	if current != revision || pending != pendingNotice || holder != owner {
+		return false, nil
+	}
+	if pending == "" {
+		_, err = tx.Exec(ctx, `UPDATE loomplane_agent_reports SET notified_revision = GREATEST(notified_revision, $3)
+			WHERE org_id = $1 AND id = $2`, orgID, id, revision)
+	} else {
+		if serr := send(ctx, tx, seq+1); serr != nil {
+			return false, serr
+		}
+		_, err = tx.Exec(ctx, `UPDATE loomplane_agent_reports
+			SET notice_seq = $3, last_notice_at = $4, pending_notice = '', notified_revision = GREATEST(notified_revision, $5)
+			WHERE org_id = $1 AND id = $2`, orgID, id, seq+1, at.UTC(), revision)
+	}
+	if err != nil {
+		return false, fmt.Errorf("record agent report notice: %w", err)
+	}
+	return true, tx.Commit()
+}
+
+// SaveIssue implements Store. It drops only the comments the step
+// handled, so one queued meanwhile waits for the next delivery.
+func (s *PgStore) SaveIssue(ctx context.Context, orgID, id, owner string, revision int, in IssueSave) error {
+	_, err := s.db.Exec(ctx, `UPDATE loomplane_agent_reports
+		SET issue_number = $4, issue_url = $5, issue_state = $6, issue_error = $7,
+			issue_comments = COALESCE((SELECT jsonb_agg(c.e ORDER BY c.i) FROM jsonb_array_elements(issue_comments) WITH ORDINALITY AS c(e, i)
+				WHERE c.i > $8), '[]'::jsonb),
+			issue_comment_at = COALESCE($9::timestamptz, issue_comment_at),
+			issue_revision = CASE WHEN $10 THEN GREATEST(issue_revision, $11) ELSE issue_revision END
+		WHERE org_id = $1 AND id = $2 AND delivery_owner = $3`,
+		orgID, id, owner, in.Number, in.URL, in.State, in.Error, in.Handled, utcOrNil(in.CommentAt), in.Done, revision)
+	if err != nil {
+		return fmt.Errorf("record agent report issue: %w", err)
+	}
+	return nil
+}
+
+// ReleaseDelivery implements Store.
+func (s *PgStore) ReleaseDelivery(ctx context.Context, orgID, id, owner string, done bool) error {
+	_, err := s.db.Exec(ctx, `UPDATE loomplane_agent_reports
+		SET delivery_owner = '', delivery_until = NULL, delivery_queued_at = CASE WHEN $4 THEN NULL ELSE delivery_queued_at END
+		WHERE org_id = $1 AND id = $2 AND delivery_owner = $3`, orgID, id, owner, done)
+	if err != nil {
+		return fmt.Errorf("release agent report delivery: %w", err)
+	}
+	return nil
+}
+
+func utcOrNil(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }

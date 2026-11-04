@@ -52,10 +52,14 @@ func newID() (string, error) {
 // the in-memory store and PgStore can't drift apart.
 type record struct {
 	Report
-	OccurrenceKeys []string
-	PendingNotice  string
-	LastNoticeAt   *time.Time
-	IssueComments  []string
+	OccurrenceKeys   []string
+	PendingNotice    string
+	LastNoticeAt     *time.Time
+	IssueComments    []string
+	NotifiedRevision int
+	IssueRevision    int
+	NoticeSeq        int
+	IssueCommentAt   *time.Time
 }
 
 // newRecord is a report for a signal no report holds.
@@ -190,7 +194,18 @@ func (r *record) clone() *record {
 	}
 	c.ResolvedAt, c.TakenAt = cloneTime(r.ResolvedAt), cloneTime(r.TakenAt)
 	c.InvestigationStartedAt, c.LastNoticeAt = cloneTime(r.InvestigationStartedAt), cloneTime(r.LastNoticeAt)
+	c.IssueCommentAt = cloneTime(r.IssueCommentAt)
 	return &c
+}
+
+// delivery is a copy of where the report's delivery stands.
+func (r *record) delivery() *Delivery {
+	c := r.clone()
+	return &Delivery{
+		Report: &c.Report, NotifiedRevision: c.NotifiedRevision, IssueRevision: c.IssueRevision,
+		PendingNotice: c.PendingNotice, NoticeSeq: c.NoticeSeq, LastNoticeAt: c.LastNoticeAt,
+		IssueComments: c.IssueComments, IssueCommentAt: c.IssueCommentAt,
+	}
 }
 
 func cloneTime(t *time.Time) *time.Time {

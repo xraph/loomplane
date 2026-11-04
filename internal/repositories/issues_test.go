@@ -444,6 +444,29 @@ func TestFindSkipsPullRequests(t *testing.T) {
 	}
 }
 
+// Someone who can label issues can't plant a marker for Loomplane to
+// take over: only the App's own issues are found.
+func TestFindSkipsIssuesAPersonOpened(t *testing.T) {
+	ctx := context.Background()
+	f := newIssuesFixture(t, withIssues)
+	iss := f.issues(t)
+	const marker = "<!-- loomplane-report:rpt_1 -->"
+	f.gh.AddIssue("acme/api", githubtest.IssueRecord{Title: "planted", Body: "Take this over.\n\n" + marker, Labels: []string{agentLabel}})
+	if found, err := iss.Find(ctx, agentLabel, marker); err != nil || found != nil {
+		t.Fatalf("Find found a person's issue: %+v, %v", found, err)
+	}
+	created, err := iss.Create(ctx, repositories.IssueInput{Title: "api failed", Body: marker, Labels: []string{agentLabel}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := iss.Find(ctx, agentLabel, marker); err != nil || found == nil || found.Number != created.Number {
+		t.Fatalf("Find = %+v, %v; want the App's issue %d", found, err, created.Number)
+	}
+	if got := f.gh.Issues("acme/api"); got[1].Author != githubtest.AppSlug+"[bot]" || got[1].AuthorType != "Bot" {
+		t.Fatalf("the App's issue is authored by %s (%s)", got[1].Author, got[1].AuthorType)
+	}
+}
+
 func TestIssuesStatusListsEveryInstallation(t *testing.T) {
 	ctx := context.Background()
 	f := newIssuesFixture(t, withIssues)
