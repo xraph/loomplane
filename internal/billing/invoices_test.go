@@ -165,14 +165,15 @@ func TestCloseMonth_RunTwiceBillsOnce(t *testing.T) {
 }
 
 func TestCloseMonth_InvoicesBeforeRollover(t *testing.T) {
-	t.Skip("Task 9") // Task 9 adds SetAI
 	clock := at("2026-10-05T00:00:00Z")
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	// Task 9: if _, err := s.SetAI(ctx, "org_1", true); err != nil { t.Fatal(err) }
+	if _, err := s.SetAI(ctx, "org_1", true); err != nil {
+		t.Fatal(err)
+	}
 	clock = at("2026-10-20T00:00:00Z")
-	// Task 9: _, _ = s.SetAI(ctx, "org_1", false) // on until 1 November
+	_, _ = s.SetAI(ctx, "org_1", false) // on until 1 November
 	clock = at("2026-11-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
 		t.Fatal(err)

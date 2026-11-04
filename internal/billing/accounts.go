@@ -139,7 +139,7 @@ func (s *Service) MarkCardReady(ctx context.Context, orgID string) error {
 		return fmt.Errorf("billing: save the card of %s: %w", orgID, err)
 	}
 	if subID == "" {
-		if subID, err = s.cloudSubscription(ctx, orgID); err != nil {
+		if subID, err = s.liveSubscription(ctx, orgID, PlanCloud); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE loomplane_billing_accounts SET cloud_subscription_id = $2 WHERE org_id = $1`,
@@ -153,13 +153,16 @@ func (s *Service) MarkCardReady(ctx context.Context, orgID string) error {
 	return nil
 }
 
-// cloudSubscription returns the id of the workspace's live cloud
-// subscription in ledger, making it when there is none: active, from 00:00
-// UTC on the 1st of this month, and with no trial.
-func (s *Service) cloudSubscription(ctx context.Context, orgID string) (string, error) {
-	p, err := s.l.GetPlanBySlug(ctx, PlanCloud, s.appID)
+// liveSubscription returns the id of the workspace's live subscription to
+// the plan called slug in ledger, making it when there is none: active,
+// from 00:00 UTC on the 1st of this month, and with no trial. A live one
+// ledger holds that the account never recorded (a crash came between
+// making it and storing its id) is the one returned, so a retry never
+// makes a second.
+func (s *Service) liveSubscription(ctx context.Context, orgID, slug string) (string, error) {
+	p, err := s.l.GetPlanBySlug(ctx, slug, s.appID)
 	if err != nil {
-		return "", fmt.Errorf("billing: read the %s plan: %w", PlanCloud, err)
+		return "", fmt.Errorf("billing: read the %s plan: %w", slug, err)
 	}
 	subs, err := s.l.Store().ListSubscriptions(ctx, orgID, s.appID, subscription.ListOpts{})
 	if err != nil {
@@ -170,8 +173,8 @@ func (s *Service) cloudSubscription(ctx context.Context, orgID string) (string, 
 			continue
 		}
 		if start := monthStart(s.now()); !sub.CurrentPeriodStart.Equal(start) {
-			slog.WarnContext(ctx, "billing: recording a cloud subscription whose period doesn't start this month",
-				"org", orgID, "subscription", sub.ID.String(),
+			slog.WarnContext(ctx, "billing: recording a subscription whose period doesn't start this month",
+				"org", orgID, "plan", slug, "subscription", sub.ID.String(),
 				"period_start", sub.CurrentPeriodStart.UTC().Format(time.RFC3339), "month", start.Format("2006-01"))
 		}
 		return sub.ID.String(), nil
@@ -180,7 +183,7 @@ func (s *Service) cloudSubscription(ctx context.Context, orgID string) (string, 
 }
 
 // reusable says whether a subscription ledger already holds is the
-// workspace's live cloud subscription: on plan p, neither canceled nor
+// workspace's live subscription to plan p: on p, neither canceled nor
 // expired, and never one with a trial, since billing gives no trial.
 func reusable(sub *subscription.Subscription, p *plan.Plan) bool {
 	switch {

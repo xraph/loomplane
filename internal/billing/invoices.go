@@ -46,8 +46,9 @@ type billedAccount struct {
 }
 
 // CloseMonth bills the month that ended before now, in this order:
-//  1. PushUsage, waiting for a push already running elsewhere, so every
-//     event of the month is in ledger at its own timestamp;
+//  1. PriceAIClaims, then PushUsage, waiting for a push already running
+//     elsewhere, so every event of the month is in ledger at its own
+//     timestamp;
 //  2. ledger.Advance(now), so every subscription's period has rolled;
 //  3. for each account, for its cloud subscription and then its ai
 //     subscription: GenerateInvoice(sub, ForPeriod(prevStart, prevEnd)),
@@ -133,7 +134,14 @@ func (s *Service) closeMonth(ctx context.Context, now time.Time, month subscript
 	// closed, so the next hourly run tries again.
 	var errs, open []error
 
-	// 1. The month's usage into ledger.
+	// 1. The month's usage into ledger: AI on the server's key priced from
+	// nexus's records first, so it is in the push. A pricing run that
+	// fails fails the close, but doesn't hold the month open: a claim it
+	// left is priced by the next run, as late usage.
+	if err := s.PriceAIClaims(ctx); err != nil {
+		slog.ErrorContext(ctx, "billing: the month close's AI pricing didn't finish", "month", periodKey(month.Start), "error", err)
+		errs = append(errs, err)
+	}
 	if _, err := s.push(ctx, "", true); err != nil {
 		slog.ErrorContext(ctx, "billing: the month close's push didn't finish", "month", periodKey(month.Start), "error", err)
 		errs = append(errs, err)
@@ -508,63 +516,6 @@ func (s *Service) deleteCredit(ctx context.Context, creditID, couponID, invID st
 	}
 	_, err = s.pg.Exec(ctx, `UPDATE loomplane_billing_credits SET deleted_at = $2 WHERE id = $1 AND deleted_at IS NULL`,
 		creditID, s.now().UTC())
-	return err
-}
-
-// rollOverAI cancels, in ledger, each ai subscription whose add-on was
-// turned off and ended by cutoff, the end of the month just invoiced, then
-// clears it from the account. Only workspaces in invoiced are rolled over:
-// an add-on whose last month isn't invoiced yet stays, so the next close
-// still invoices it.
-func (s *Service) rollOverAI(ctx context.Context, cutoff time.Time, invoiced map[string]bool) error {
-	rows, err := s.pg.Query(ctx, `SELECT org_id, ai_subscription_id FROM loomplane_billing_accounts
-		WHERE ai_subscription_id <> '' AND ai_ends_at IS NOT NULL AND ai_ends_at <= $1 ORDER BY org_id`, cutoff)
-	if err != nil {
-		return fmt.Errorf("billing: list the AI add-ons to roll over: %w", err)
-	}
-	type ending struct{ org, sub string }
-	var due []ending
-	for rows.Next() {
-		var e ending
-		if err = rows.Scan(&e.org, &e.sub); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("billing: list the AI add-ons to roll over: %w", err)
-		}
-		due = append(due, e)
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return fmt.Errorf("billing: list the AI add-ons to roll over: %w", err)
-	}
-
-	var errs []error
-	for _, e := range due {
-		if !invoiced[e.org] {
-			continue
-		}
-		if rollErr := s.endAI(ctx, e.org, e.sub, cutoff); rollErr != nil {
-			slog.ErrorContext(ctx, "billing: rolling the AI add-on over failed", "org", e.org, "error", rollErr)
-			errs = append(errs, fmt.Errorf("billing: roll over the AI add-on of %s: %w", e.org, rollErr))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// endAI cancels one ai subscription now and clears it from the account,
-// unless the account moved on to another meanwhile.
-func (s *Service) endAI(ctx context.Context, org, subID string, cutoff time.Time) error {
-	sid, err := id.ParseSubscriptionID(subID)
-	if err != nil {
-		return fmt.Errorf("read subscription id %q: %w", subID, err)
-	}
-	err = s.l.CancelSubscription(ctx, sid, true)
-	if err != nil && !errors.Is(err, ledger.ErrSubscriptionCanceled) && !errors.Is(err, ledger.ErrSubscriptionExpired) {
-		return err
-	}
-	defer s.forget(org)
-	_, err = s.pg.Exec(ctx, `UPDATE loomplane_billing_accounts SET ai_subscription_id = '', ai_ends_at = NULL, updated_at = $4
-		WHERE org_id = $1 AND ai_subscription_id = $2 AND ai_ends_at IS NOT NULL AND ai_ends_at <= $3`, org, subID, cutoff, s.now().UTC())
 	return err
 }
 

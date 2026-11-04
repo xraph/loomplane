@@ -36,6 +36,7 @@ type billingService interface {
 	Summary(ctx context.Context, orgID string) (billing.Summary, error)
 	SetupSession(ctx context.Context, orgID, userID string) (string, error)
 	SetSpendingLimit(ctx context.Context, orgID string, cents *int64) (billing.Account, error)
+	SetAI(ctx context.Context, orgID string, enabled bool) (billing.Account, error)
 	Invoices(ctx context.Context, orgID string) ([]billing.InvoiceSummary, error)
 	InvoiceLink(ctx context.Context, orgID, invoiceID string) (string, error)
 	HandleStripeWebhook(ctx context.Context, payload []byte, signature string) error
@@ -92,6 +93,7 @@ const (
 	msgOwnerSession = "Billing changes need the owner signed in."
 	msgFailed       = "Billing couldn't do that right now. Try again in a minute."
 	msgBusy         = "Billing is busy right now. Try again in a minute."
+	msgNeedsPayment = "Add a card, or pay the invoice whose payment failed, before you turn on the AI add-on."
 )
 
 // allow returns the principal when it holds perm in its own workspace.
@@ -142,6 +144,8 @@ func fail(ctx context.Context, org string, err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, "This workspace or your account can't be found. Reload and try again.")
 	case errors.Is(err, billing.ErrInvoiceNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, "There's no such invoice in this workspace.")
+	case errors.Is(err, billing.ErrNeedsPayment):
+		return forge.NewHTTPError(http.StatusConflict, msgNeedsPayment)
 	case errors.Is(err, context.DeadlineExceeded):
 		slog.WarnContext(ctx, "billing: a request ran out of time", "org", org, "error", err)
 		return forge.NewHTTPError(http.StatusServiceUnavailable, msgBusy)
@@ -337,12 +341,34 @@ func leftPad(s string) string {
 	return s
 }
 
-// setAI turns the AI add-on on or off. Task 9 fills it in.
+type aiBody struct {
+	Enabled *bool `json:"enabled"`
+}
+
+type aiView struct {
+	Status    billing.Status `json:"status"`
+	AIEnabled bool           `json:"ai_enabled"`
+	AIEndsAt  *time.Time     `json:"ai_ends_at"`
+}
+
+// setAI turns the AI add-on on or off. Off keeps it on until the month
+// ends, and ai_ends_at says when; on again in the same month costs nothing
+// more. Turning it on with no card, or with a failed payment unpaid, is 409.
 func (r *routes) setAI(c forge.Context) error {
-	if _, err := r.allowOwner(c); err != nil {
+	p, err := r.allowOwner(c)
+	if err != nil {
 		return err
 	}
-	return forge.NewHTTPError(http.StatusNotImplemented, "The AI add-on can't be changed yet.")
+	var body aiBody
+	if err = json.NewDecoder(io.LimitReader(c.Request().Body, 4<<10)).Decode(&body); err != nil || body.Enabled == nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `The body must be JSON: {"enabled": true} or {"enabled": false}`)
+	}
+	ctx := c.Request().Context()
+	a, err := r.svc.SetAI(ctx, p.OrgID, *body.Enabled)
+	if err != nil {
+		return fail(ctx, p.OrgID, err)
+	}
+	return c.JSON(http.StatusOK, aiView{Status: a.Status, AIEnabled: a.AIEnabled, AIEndsAt: a.AIEndsAt})
 }
 
 type invoiceView struct {

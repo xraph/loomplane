@@ -19,8 +19,9 @@ import (
 // in UTC). None retries: each is safe to run again, and its next run is
 // the retry.
 const (
-	// JobPushUsage moves usage into ledger, rolls ledger's periods on and
-	// settles every workspace's spending limit.
+	// JobPushUsage prices AI on the server's key from nexus's records,
+	// moves usage into ledger, rolls ledger's periods on and settles every
+	// workspace's spending limit.
 	JobPushUsage = "billing.push_usage"
 	// JobCloseMonth invoices the month that just ended.
 	JobCloseMonth = "billing.close_month"
@@ -51,6 +52,7 @@ func cronDefinitions() []*cron.Definition[jobPayload] {
 
 // biller is what the jobs run, so a test can count the calls.
 type biller interface {
+	PriceAIClaims(ctx context.Context) error
 	PushUsage(ctx context.Context) ([]string, error)
 	EvaluateAll(ctx context.Context) error
 	CloseMonth(ctx context.Context) error
@@ -65,14 +67,16 @@ type advancer func(ctx context.Context, now time.Time) error
 func jobHandlers(svc biller, advance advancer, now func() time.Time) map[string]func(context.Context, jobPayload) error {
 	return map[string]func(context.Context, jobPayload) error{
 		// Every step runs even when one before it fails: a failed push
-		// still leaves the limits to settle on what did arrive.
+		// still leaves the limits to settle on what did arrive. AI is
+		// priced first, so its usage goes out in the same push.
 		JobPushUsage: func(ctx context.Context, _ jobPayload) error {
+			priceErr := svc.PriceAIClaims(ctx)
 			_, pushErr := svc.PushUsage(ctx)
 			advErr := advance(ctx, now().UTC())
 			if advErr != nil {
 				advErr = fmt.Errorf("billing: advance ledger's clock: %w", advErr)
 			}
-			return errors.Join(pushErr, advErr, svc.EvaluateAll(ctx))
+			return errors.Join(priceErr, pushErr, advErr, svc.EvaluateAll(ctx))
 		},
 		JobCloseMonth: func(ctx context.Context, _ jobPayload) error {
 			return svc.CloseMonth(ctx)

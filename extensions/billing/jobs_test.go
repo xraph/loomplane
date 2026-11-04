@@ -109,8 +109,14 @@ func TestRegisterNeedsTheEngine(t *testing.T) {
 
 // billerSpy records the jobs' calls, in order.
 type billerSpy struct {
-	calls   []string
-	pushErr error
+	calls    []string
+	priceErr error
+	pushErr  error
+}
+
+func (b *billerSpy) PriceAIClaims(context.Context) error {
+	b.calls = append(b.calls, "price")
+	return b.priceErr
 }
 
 func (b *billerSpy) PushUsage(context.Context) ([]string, error) {
@@ -134,7 +140,7 @@ func (b *billerSpy) SyncInvoices(context.Context) error {
 func TestJobs_RunTheirStepsInOrder(t *testing.T) {
 	now := time.Date(2026, 11, 1, 1, 15, 0, 0, time.UTC)
 	for job, want := range map[string][]string{
-		JobPushUsage:    {"push", "advance", "evaluate"},
+		JobPushUsage:    {"price", "push", "advance", "evaluate"},
 		JobCloseMonth:   {"close"},
 		JobSyncInvoices: {"close-if-open", "sync"},
 	} {
@@ -168,7 +174,23 @@ func TestPushJob_KeepsGoingPastAFailedPush(t *testing.T) {
 	if err := h[JobPushUsage](t.Context(), jobPayload{}); err == nil {
 		t.Fatal("the failed push was dropped")
 	}
-	if !slices.Equal(spy.calls, []string{"push", "advance", "evaluate"}) {
+	if !slices.Equal(spy.calls, []string{"price", "push", "advance", "evaluate"}) {
+		t.Fatalf("ran %v", spy.calls)
+	}
+}
+
+// AI pricing that fails still lets the push, the clock and the limits run,
+// and the job reports the failure.
+func TestPushJob_KeepsGoingPastFailedAIPricing(t *testing.T) {
+	spy := &billerSpy{priceErr: errors.New("nexus is down")}
+	h := jobHandlers(spy, func(context.Context, time.Time) error {
+		spy.calls = append(spy.calls, "advance")
+		return nil
+	}, time.Now)
+	if err := h[JobPushUsage](t.Context(), jobPayload{}); err == nil {
+		t.Fatal("the failed pricing was dropped")
+	}
+	if !slices.Equal(spy.calls, []string{"price", "push", "advance", "evaluate"}) {
 		t.Fatalf("ran %v", spy.calls)
 	}
 }

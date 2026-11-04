@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 	"github.com/xraph/ledger/provider"
@@ -28,6 +29,8 @@ type fakeBilling struct {
 	lastUser   string
 	limit      *int64
 	limitErr   error
+	aiSet      *bool // the last SetAI call's enabled
+	aiErr      error
 	invoiceOrg map[string]string // invoice id -> its workspace
 	err        error             // returned by every read when set
 	webhookErr error
@@ -64,6 +67,19 @@ func (f *fakeBilling) SetupSession(_ context.Context, org, user string) (string,
 func (f *fakeBilling) SetSpendingLimit(_ context.Context, org string, cents *int64) (billing.Account, error) {
 	f.lastOrg, f.limit = org, cents
 	return billing.Account{OrgID: org, Status: billing.StatusActive, SpendingLimitCents: cents}, f.limitErr
+}
+
+func (f *fakeBilling) SetAI(_ context.Context, org string, enabled bool) (billing.Account, error) {
+	f.lastOrg, f.aiSet = org, &enabled
+	if f.aiErr != nil {
+		return billing.Account{}, f.aiErr
+	}
+	a := billing.Account{OrgID: org, Status: billing.StatusActive, AIEnabled: true}
+	if !enabled {
+		ends := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+		a.AIEndsAt = &ends
+	}
+	return a, nil
 }
 
 func (f *fakeBilling) Invoices(_ context.Context, org string) ([]billing.InvoiceSummary, error) {
@@ -287,8 +303,43 @@ func TestWritesAreOwnerSessionsOnly(t *testing.T) {
 	if !strings.Contains(res.Body.String(), "Billing changes need the owner signed in.") {
 		t.Errorf("an API key read %s", res.Body)
 	}
-	if got := rg.do(t, http.MethodPut, "/api/v1/billing/ai", `{"enabled":true}`, owner).Code; got != http.StatusNotImplemented {
-		t.Errorf("the AI add-on before Task 9: %d", got)
+	if rg.svc.aiSet != nil {
+		t.Fatalf("someone other than the owner turned the AI add-on to %v", *rg.svc.aiSet)
+	}
+	if got := rg.do(t, http.MethodPut, "/api/v1/billing/ai", `{"enabled":true}`, owner).Code; got != http.StatusOK {
+		t.Errorf("the owner turning the AI add-on on: %d", got)
+	}
+}
+
+func TestSetAI_Route(t *testing.T) {
+	rg := newRig(t)
+	for body, want := range map[string]int{
+		`{"enabled":true}`: http.StatusOK, `{"enabled":false}`: http.StatusOK,
+		`{}`: http.StatusBadRequest, `{"enabled":"yes"}`: http.StatusBadRequest, `not json`: http.StatusBadRequest,
+	} {
+		if got := rg.do(t, http.MethodPut, "/api/v1/billing/ai", body, owner).Code; got != want {
+			t.Errorf("%s: %d, want %d", body, got, want)
+		}
+	}
+	res := rg.do(t, http.MethodPut, "/api/v1/billing/ai", `{"enabled":false,"org_id":"org_other"}`, owner)
+	var v map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if rg.svc.lastOrg != "org_1" || rg.svc.aiSet == nil || *rg.svc.aiSet {
+		t.Fatalf("set %v for %q", rg.svc.aiSet, rg.svc.lastOrg)
+	}
+	if v["status"] != "active" || v["ai_enabled"] != true || v["ai_ends_at"] != "2026-12-01T00:00:00Z" {
+		t.Fatalf("off: %s", res.Body)
+	}
+
+	// No card, or a failed payment unpaid: 409 with what to do.
+	rg.svc.aiErr = fmt.Errorf("%w: org_1 is pending_payment", billing.ErrNeedsPayment)
+	res = rg.do(t, http.MethodPut, "/api/v1/billing/ai", `{"enabled":true}`, owner)
+	var body struct{ Error string }
+	_ = json.Unmarshal(res.Body.Bytes(), &body)
+	if res.Code != http.StatusConflict || !strings.Contains(body.Error, "Add a card") || strings.Contains(body.Error, "pending_payment") {
+		t.Fatalf("needs payment: %d %s", res.Code, res.Body)
 	}
 }
 
