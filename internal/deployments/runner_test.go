@@ -24,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/pkg/nodeproto"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -2135,7 +2136,7 @@ func TestOfflineNodeMessage(t *testing.T) {
 	if !errors.As(sessionErr, &off) {
 		t.Fatalf("the session hid the node being offline: %v", sessionErr)
 	}
-	want := "node web-1 is offline since 13:07 UTC; its apps keep running, and the deploy continues when it reconnects"
+	want := "node web-1 is offline since 13:07 UTC; its apps keep running. Run the deploy again once it reconnects"
 	if got, ok := nodeOfflineMessage(sessionErr); !ok || got != want {
 		t.Fatalf("message %q %v", got, ok)
 	}
@@ -2158,7 +2159,7 @@ func TestOfflineNodeMessage(t *testing.T) {
 }
 
 func TestRefusedEndpointNotRetried(t *testing.T) {
-	sessionErr := nodeSessionError(t, fmt.Errorf("%w: docker isn't in the node's allow list", nodes.ErrEndpointRefused))
+	sessionErr := nodeSessionError(t, nodes.Refusal("endpoint docker is not allowed on this node", true))
 	if !errors.Is(sessionErr, nodes.ErrEndpointRefused) {
 		t.Fatalf("the session hid the refusal: %v", sessionErr)
 	}
@@ -2178,5 +2179,31 @@ func TestRefusedEndpointNotRetried(t *testing.T) {
 	var final *drt.ApplicationError
 	if !errors.As(runErr, &final) || !final.NonRetryable || final.Message != want {
 		t.Fatalf("a refused endpoint would be retried: %+v (%v)", final, runErr)
+	}
+}
+
+// A node refuses a stream for reasons other than its allow list, such as
+// a dial target that isn't listening yet. That isn't final, and the
+// action records the node's reason, bounded.
+func TestOtherRefusalRetriedWithReason(t *testing.T) {
+	sessionErr := nodeSessionError(t, nodes.Refusal("dial 127.0.0.1:2375: connect: connection refused", false))
+	if !errors.Is(sessionErr, nodes.ErrEndpointRefused) || errors.Is(sessionErr, nodes.ErrEndpointNotAllowed) {
+		t.Fatalf("the session changed the refusal: %v", sessionErr)
+	}
+	want := "node web-1 refused a docker stream: dial 127.0.0.1:2375: connect: connection refused"
+	if got, ok := nodeOfflineMessage(sessionErr); !ok || got != want {
+		t.Fatalf("message %q %v", got, ok)
+	}
+	step, runErr := runFailing(t, sessionErr)
+	if step.Status != StepFailed || step.Message != want {
+		t.Fatalf("the action recorded %q (%s), not the node's message", step.Message, step.Status)
+	}
+	var final *drt.ApplicationError
+	if errors.As(runErr, &final) && final.NonRetryable {
+		t.Fatalf("a refusal the node may not repeat was final: %+v", final)
+	}
+	long := &endpointRefusedError{node: "web-1", endpoint: nodeproto.EndpointDial, err: nodes.Refusal(strings.Repeat("x", 600), false)}
+	if got, _ := nodeOfflineMessage(long); len(got) > 260 || !strings.HasSuffix(got, "...") {
+		t.Fatalf("a long reason wasn't bounded: %d bytes", len(got))
 	}
 }

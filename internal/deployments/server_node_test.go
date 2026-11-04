@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -257,7 +256,7 @@ func nodeBuild(t *testing.T, streams *fakeNodeStreams, reconnect nodeReconnect) 
 // refusal: the action recorded the raw stream error and was retried.
 func TestBuildOnRefusingNodeIsFinal(t *testing.T) {
 	slept := 0
-	exec, rig := nodeBuild(t, &fakeNodeStreams{t: t, err: fmt.Errorf("%w: docker isn't in the node's allow list", nodes.ErrEndpointRefused)}, instantReconnect(time.Minute, &slept))
+	exec, rig := nodeBuild(t, &fakeNodeStreams{t: t, err: nodes.Refusal("endpoint docker is not allowed on this node", true)}, instantReconnect(time.Minute, &slept))
 	step, runErr := runOnce(t, exec)
 	want := "node build-1 doesn't allow docker; allow it on the machine with: loomctl node allow docker"
 	if step.Status != StepFailed || step.Message != want {
@@ -278,7 +277,7 @@ func TestBuildOnOfflineNodeWaitsThenFails(t *testing.T) {
 	slept := 0
 	exec, rig := nodeBuild(t, streams, instantReconnect(15*time.Second, &slept))
 	step, runErr := runOnce(t, exec)
-	want := "node hetzner-1 is offline since 14:02 UTC; its apps keep running, and the deploy continues when it reconnects"
+	want := "node hetzner-1 is offline since 14:02 UTC; its apps keep running. Run the deploy again once it reconnects"
 	if step.Status != StepFailed || step.Message != want || runErr == nil || runErr.Error() != want {
 		t.Fatalf("the action recorded %q (%s), run returned %v", step.Message, step.Status, runErr)
 	}
@@ -312,5 +311,60 @@ func TestOfflineNodeWaitsOnlyInADeploy(t *testing.T) {
 	var off nodes.ErrNodeOffline
 	if _, err := exec.builder.Build(t.Context(), exec.job, &ImageArtifact{}, func() error { return nil }); !errors.As(err, &off) || slept != 0 {
 		t.Fatalf("waited %d times, got %v", slept, err)
+	}
+}
+
+// scriptedStreams answers each Open with the next of errs, then opens.
+type scriptedStreams struct {
+	errs  []error
+	opens int
+}
+
+func (s *scriptedStreams) Open(context.Context, string, string, nodeproto.StreamHeader) (net.Conn, error) {
+	s.opens++
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	a, b := net.Pipe()
+	_ = b.Close()
+	return a, nil
+}
+
+// A refusal other than not-allowed, such as a probe that failed, explains
+// a failed check but isn't latched: an offline node met afterwards still
+// gets the wait, and a stream that opens forgets it. Not-allowed holds.
+func TestNodeSessionLatchesOnlyNotAllowed(t *testing.T) {
+	ctx := security.WithDeploymentRun(t.Context())
+	probe := nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}
+	offline := nodes.ErrNodeOffline{NodeID: testNodeID, Name: "web-1", Since: time.Now()}
+	slept := 0
+	streams := &scriptedStreams{errs: []error{nodes.Refusal("probe filesystem: no such file", false), offline, nil}}
+	s := &nodeSession{streams: streams, name: "web-1", reconnect: instantReconnect(time.Minute, &slept).orDefault()}
+	_, err := s.Open(ctx, "org_1", testNodeID, probe)
+	var refused *endpointRefusedError
+	if !errors.As(err, &refused) || refused.notAllowed || !errors.Is(s.unreachable(), nodes.ErrEndpointRefused) {
+		t.Fatalf("probe refusal: %v, unreachable %v", err, s.unreachable())
+	}
+	conn, err := s.Open(ctx, "org_1", testNodeID, probe)
+	if err != nil || slept != 1 {
+		t.Fatalf("after a probe refusal an offline node got no wait: %v, slept %d", err, slept)
+	}
+	_ = conn.Close()
+	if s.unreachable() != nil {
+		t.Fatalf("an opened stream left %v", s.unreachable())
+	}
+
+	slept = 0
+	streams = &scriptedStreams{errs: []error{nodes.Refusal("endpoint docker is not allowed on this node", true), offline}}
+	s = &nodeSession{streams: streams, name: "web-1", reconnect: instantReconnect(time.Minute, &slept).orDefault()}
+	if _, err = s.Open(ctx, "org_1", testNodeID, nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker}); !errors.As(err, &refused) || !refused.notAllowed {
+		t.Fatalf("not allowed: %v", err)
+	}
+	if _, err = s.Open(ctx, "org_1", testNodeID, probe); slept != 0 || !errors.As(s.unreachable(), &refused) || !refused.notAllowed {
+		t.Fatalf("not allowed wasn't kept: %v, slept %d, unreachable %v", err, slept, s.unreachable())
 	}
 }

@@ -883,22 +883,37 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
 }
 
+// maxRefusalReason bounds how much of a node's reason for refusing a
+// stream an action records.
+const maxRefusalReason = 200
+
 // nodeOfflineMessage says why an action couldn't reach its node, when err
-// is the hub's: the node is offline, or it refused the endpoint a stream
-// asked for. Anything else is false.
+// is the hub's: the node is offline, it doesn't allow the endpoint a
+// stream asked for, or it refused the stream for a reason of its own.
+// Anything else is false.
 func nodeOfflineMessage(err error) (string, bool) {
 	var refused *endpointRefusedError
 	if errors.As(err, &refused) {
-		return fmt.Sprintf("node %s doesn't allow %s; allow it on the machine with: loomctl node allow %s", refused.node, refused.endpoint, refused.endpoint), true
+		if refused.notAllowed {
+			return fmt.Sprintf("node %s doesn't allow %s; allow it on the machine with: loomctl node allow %s", refused.node, refused.endpoint, refused.endpoint), true
+		}
+		reason, _ := nodes.RefusalReason(err)
+		if len(reason) > maxRefusalReason {
+			reason = strings.ToValidUTF8(reason[:maxRefusalReason], "") + "..."
+		}
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fmt.Sprintf("node %s refused a %s stream: %s", refused.node, refused.endpoint, reason), true
 	}
 	var off nodes.ErrNodeOffline
 	if !errors.As(err, &off) {
 		return "", false
 	}
 	if off.Since.IsZero() {
-		return fmt.Sprintf("node %s is offline; its apps keep running, and the deploy continues when it reconnects", off.Name), true
+		return fmt.Sprintf("node %s is offline; its apps keep running. Run the deploy again once it reconnects", off.Name), true
 	}
-	return fmt.Sprintf("node %s is offline since %s; its apps keep running, and the deploy continues when it reconnects", off.Name, off.Since.UTC().Format("15:04 UTC")), true
+	return fmt.Sprintf("node %s is offline since %s; its apps keep running. Run the deploy again once it reconnects", off.Name, off.Since.UTC().Format("15:04 UTC")), true
 }
 
 // nodeFailed is err in nodeOfflineMessage's words, or err itself.
@@ -911,13 +926,14 @@ func nodeFailed(err error) error {
 		return err
 	}
 	var refused *endpointRefusedError
-	return &nodeFailureError{message: message, err: err, final: errors.As(err, &refused)}
+	return &nodeFailureError{message: message, err: err, final: errors.As(err, &refused) && refused.notAllowed}
 }
 
 // nodeFailureError is a node's failure as the action records it. An offline
-// node is retried within the activity's attempts, since it may reconnect;
-// a refused endpoint is final, since only someone on the machine can allow
-// it.
+// node is retried within the activity's attempts, since it may reconnect,
+// and so is a stream the node refused for a reason of its own, such as a
+// dial target that wasn't up yet; an endpoint the node doesn't allow is
+// final, since only someone on the machine can allow it.
 type nodeFailureError struct {
 	message string
 	err     error

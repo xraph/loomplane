@@ -101,36 +101,51 @@ func serverClientFor(ctx context.Context, conn *connections.Connection, raw []by
 
 // nodeSession is the hub's streams for one node connection. It names an
 // endpoint the node refused, which the hub's error leaves out, and keeps
-// the first error that says the node can't be reached: Client.Check reads
-// an unreachable daemon as a missing docker:access, not as its error.
-// Within a deployment run, a node found offline gets reconnect's window to
-// come back, once per session.
+// why the node can't be reached: Client.Check reads an unreachable daemon
+// as a missing docker:access, not as its error. Within a deployment run,
+// a node found offline gets reconnect's window to come back, once per
+// session.
 type nodeSession struct {
 	streams   server.NodeStreams
 	name      string // the connection's name, which adoption gives the node's
 	reconnect nodeReconnect
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// failed is the first failure that holds for the rest of the session:
+	// the node stayed offline through the wait, or it doesn't allow an
+	// endpoint, which only its owner can change.
 	failed error
+	// refused is the last other refusal, such as a dial target that
+	// didn't answer, until a stream opens. It explains a failed check but
+	// holds nothing back: the next open asks the node again.
+	refused error
 }
 
 func (s *nodeSession) Open(ctx context.Context, orgID, nodeID string, hdr nodeproto.StreamHeader) (net.Conn, error) {
 	conn, err := s.streams.Open(ctx, orgID, nodeID, hdr)
 	if err == nil {
+		s.opened()
 		return conn, nil
 	}
 	var off nodes.ErrNodeOffline
 	// Only a deploy waits: an API read that reaches the node answers now.
 	// A session whose wait already ran out doesn't wait again.
-	if errors.As(err, &off) && security.InDeploymentRun(ctx) && s.unreachable() == nil {
+	if errors.As(err, &off) && security.InDeploymentRun(ctx) && s.final() == nil {
 		conn, err = s.awaitNode(ctx, orgID, nodeID, hdr, err)
 		if err == nil {
+			s.opened()
 			return conn, nil
 		}
 	}
 	switch {
+	case errors.Is(err, nodes.ErrEndpointNotAllowed):
+		err = &endpointRefusedError{node: s.name, endpoint: hdr.Endpoint, notAllowed: true, err: err}
 	case errors.Is(err, nodes.ErrEndpointRefused):
 		err = &endpointRefusedError{node: s.name, endpoint: hdr.Endpoint, err: err}
+		s.mu.Lock()
+		s.refused = err
+		s.mu.Unlock()
+		return nil, err
 	case errors.As(err, &off):
 	default:
 		return nil, err
@@ -141,6 +156,20 @@ func (s *nodeSession) Open(ctx context.Context, orgID, nodeID string, hdr nodepr
 	}
 	s.mu.Unlock()
 	return nil, err
+}
+
+// opened forgets the last refusal: the node answered since.
+func (s *nodeSession) opened() {
+	s.mu.Lock()
+	s.refused = nil
+	s.mu.Unlock()
+}
+
+// final is the failure that holds for the rest of the session, or nil.
+func (s *nodeSession) final() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
 }
 
 // awaitNode opens the stream again every reconnect.every until the node
@@ -162,22 +191,29 @@ func (s *nodeSession) awaitNode(ctx context.Context, orgID, nodeID string, hdr n
 	return nil, err
 }
 
-// unreachable is why the node couldn't be reached, or nil. A nil session
-// is an SSH server's, which this never explains.
+// unreachable is why the node couldn't be reached, or nil: the session's
+// final failure, else the last refusal since a stream opened. A nil
+// session is an SSH server's, which this never explains.
 func (s *nodeSession) unreachable() error {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.failed
+	if s.failed != nil {
+		return s.failed
+	}
+	return s.refused
 }
 
 // endpointRefusedError is the hub's refusal, with the node and endpoint.
+// notAllowed is set when the node refused because it doesn't allow the
+// endpoint.
 type endpointRefusedError struct {
-	node     string
-	endpoint nodeproto.Endpoint
-	err      error
+	node       string
+	endpoint   nodeproto.Endpoint
+	notAllowed bool
+	err        error
 }
 
 func (e *endpointRefusedError) Error() string {
