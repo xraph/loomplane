@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -123,12 +124,9 @@ func (e *OwnedTarget) platformPull(ctx context.Context, labels map[string]string
 	if err != nil {
 		return values, err
 	}
-	if !strings.HasPrefix(image, endpoint.Host+"/"+reg.Repository+"/") {
+	repository, ok := platformRepository(image, endpoint.Host, reg.Repository)
+	if !ok {
 		return values, platformRefusalError("The image is outside the workspace's Loomplane Cloud repository.")
-	}
-	repository, _, _ := strings.Cut(strings.TrimPrefix(image, endpoint.Host+"/"), "@")
-	if i := strings.LastIndex(repository, ":"); i > strings.LastIndex(repository, "/") {
-		repository = repository[:i]
 	}
 	auth, err := registry.New(reg).DockerAuth(ctx, repository, "pull")
 	if err != nil {
@@ -136,4 +134,30 @@ func (e *OwnedTarget) platformPull(ctx context.Context, labels map[string]string
 	}
 	values.PullAuth = base64.URLEncoding.EncodeToString(auth)
 	return values, nil
+}
+
+// canonicalRepository is a repository path as the distribution spec writes
+// it: lowercase components joined by single separators.
+var canonicalRepository = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+
+// platformRepository reads the repository of image, a reference
+// host/repository[:tag]@sha256:digest, and reports whether it is a canonical
+// repository under base on host. Anything else, a tag-only reference
+// included, is refused.
+func platformRepository(image, host, base string) (string, bool) {
+	rest, ok := strings.CutPrefix(image, host+"/")
+	if !ok {
+		return "", false
+	}
+	name, digest, ok := strings.Cut(rest, "@")
+	if !ok || !imageDigest.MatchString(digest) {
+		return "", false
+	}
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		name = name[:i]
+	}
+	if !canonicalRepository.MatchString(name) || !strings.HasPrefix(name, base+"/") {
+		return "", false
+	}
+	return name, true
 }

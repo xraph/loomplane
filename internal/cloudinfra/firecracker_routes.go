@@ -76,7 +76,7 @@ func (s *Service) executeFirecrackerRoute(ctx context.Context, st DomainStore, o
 		return errors.New("firecracker managed TLS currently requires an exact hostname")
 	}
 	if op.Kind != "remove" {
-		if err := checkPlatformCloudZone(*route, zone); err != nil {
+		if err := s.checkPlatformCloudZone(ctx, *route, zone); err != nil {
 			return err
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -15,6 +16,8 @@ import (
 // PlatformRouteHosts opens the Loomplane Cloud host a platform service runs
 // on, with the scope its VM runs under there. *platformcloud.Service is one.
 type PlatformRouteHosts interface {
+	// Apex is the domain Loomplane Cloud names services under, or "".
+	Apex(ctx context.Context) (string, error)
 	Attach(ctx context.Context, orgID, projectID, envID, resource, name string) (*fc.Client, fc.Scope, *platformcloud.Placement, error)
 }
 
@@ -35,28 +38,45 @@ func isPlatformCloud(b RouteBinding) bool {
 // serves every workspace, so its ingress takes a name only on that proof.
 var errUnverifiedPlatformDomain = platformRefusal(ErrConflict, "Add and verify this domain first.")
 
+// errPlatformApexDomain refuses a custom domain under the platform apex,
+// where Loomplane Cloud names every workspace's services itself.
+var errPlatformApexDomain = platformRefusal(ErrInvalid, "That name is under Loomplane Cloud's own domain, which names services itself. Use a domain of your own.")
+
 // checkPlatformCloudZone refuses a Loomplane Cloud route whose hostname
-// isn't in a zone the route's own organization has verified. Generated
-// hostnames never come here: platformcloud publishes those itself.
-func checkPlatformCloudZone(route Route, zone *Zone) error {
+// isn't in a zone the route's own organization has verified, or is under
+// the platform apex, whatever zone it came from. Generated hostnames never
+// come here: platformcloud publishes those itself.
+func (s *Service) checkPlatformCloudZone(ctx context.Context, route Route, zone *Zone) error {
 	if !isPlatformCloud(route.Binding) {
 		return nil
 	}
 	if zone == nil || zone.OrgID != route.OrgID || !zone.Verified() {
 		return errUnverifiedPlatformDomain
 	}
+	if s.PlatformRoutes == nil {
+		return errors.New("Loomplane Cloud routes aren't available here")
+	}
+	apex, err := s.PlatformRoutes.Apex(ctx)
+	if err != nil {
+		return err
+	}
+	apex = strings.TrimSuffix(strings.ToLower(apex), ".")
+	name := strings.TrimSuffix(strings.ToLower(route.Input.Hostname), ".")
+	if apex != "" && (name == apex || strings.HasSuffix(name, "."+apex)) {
+		return errPlatformApexDomain
+	}
 	return nil
 }
 
 // A Loomplane Cloud binding is a running service on the platform Cloud with
-// a running placement on a host. The binding records the host's public
+// a running placement on a ready host. The binding records the host's public
 // ingress address, which its DNS record points at anyway, and nothing else
 // about the host.
 var platformCloudRouteBindingQuery = `SELECT b.id,b.external_id,coalesce(ph.evidence->>'ingress_address','')
  FROM loomplane_bindings b
  JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routedService + `
  JOIN loomplane_platform_placements pl ON pl.org_id=b.org_id AND pl.environment_id=b.environment_id AND pl.resource=b.name AND pl.kind='service' AND pl.state='running' AND pl.instance_id=b.external_id
- JOIN loomplane_platform_hosts ph ON ph.id=pl.host_id
+ JOIN loomplane_platform_hosts ph ON ph.id=pl.host_id AND ph.status='ready'
  WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='` + platformCloudService + `' AND b.subject='service' AND i.state='running'
  AND coalesce(b.config->'cloud_placement'->'platform','null'::jsonb)<>'null'::jsonb AND ($5='' OR b.config->'cloud_placement'->>'cloud_id'=$5)`
 

@@ -260,7 +260,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
-	if checkErr := checkPlatformCloudZone(Route{OrgID: p.OrgID, Binding: binding}, zone); checkErr != nil {
+	if checkErr := s.checkPlatformCloudZone(ctx, Route{OrgID: p.OrgID, Input: in, Binding: binding}, zone); checkErr != nil {
 		return nil, checkErr
 	}
 	switch backend := binding.BackendName(); {

@@ -108,11 +108,38 @@ VALUES($1,'org_a','prj_1','env_1','web','service',$2,'host_2',1,512,4096,'runnin
 		t.Fatalf("a move's cleanup deleted %+v", dns.deletes)
 	}
 
+	// A move to an IPv6 host replaces the A record with an AAAA one.
+	v6 := &Host{ID: "host_3", RegionID: h.RegionID, Endpoint: "https://192.0.2.3:7443", HostID: "hw-3", Status: "ready",
+		Evidence: Evidence{IngressAddress: "2001:db8::8"}, Allotment: h.Allotment}
+	if err = e.store.CreateHost(ctx, v6); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id='host_3' WHERE id=$1`, moved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.svc.Publish(ctx, "org_a", moved); err != nil {
+		t.Fatal(err)
+	}
+	if len(dns.deletes) != 1 || dns.deletes[0].Type != "A" || len(dns.upserts) != 3 || dns.upserts[2].Type != "AAAA" || dns.upserts[2].Value != "2001:db8::8" || dns.priors[2] != nil {
+		t.Fatalf("IPv6 move: upserts %+v priors %+v deletes %+v", dns.upserts, dns.priors, dns.deletes)
+	}
+	// A host whose ingress address isn't an IP gets no record.
+	if _, err = e.pg.Exec(ctx, `UPDATE loomplane_platform_hosts SET evidence='{"ingress_address":"ingress.example.com"}' WHERE id='host_3'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.pg.Exec(ctx, `UPDATE loomplane_platform_hostnames SET address='' WHERE resource='web'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.svc.Publish(ctx, "org_a", moved); err == nil || len(dns.upserts) != 3 {
+		t.Fatalf("published to a name: %v", err)
+	}
+	dns.deletes = nil
+
 	// Releasing the service deletes its record, and its name with it.
 	if err = e.svc.Removed(ctx, "org_a", moved); err != nil {
 		t.Fatal(err)
 	}
-	if len(dns.deletes) != 1 || dns.deletes[0].ID != "rec_xx" || dns.deletes[0].Value != "203.0.113.8" {
+	if len(dns.deletes) != 1 || dns.deletes[0].ID != "rec_xxx" || dns.deletes[0].Value != "2001:db8::8" {
 		t.Fatalf("deletes %+v", dns.deletes)
 	}
 	if _, err = e.svc.hostnameOf(ctx, "org_a", "env_1", "web"); err == nil {

@@ -18,7 +18,8 @@ import (
 // A custom domain on a Loomplane Cloud service is a Firecracker route on the
 // platform's connection, "platform", which isn't an organization connection.
 // It rests on the service's live placement instead, and holds no connection
-// use. Everything else in both functions is as the migrations before left it.
+// use, and is never handed off to or from another backend. Everything else
+// in both functions is as the migrations before left it.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -112,7 +113,10 @@ BEGIN
 		INSERT INTO loomplane_connection_uses(org_id,connection_id,kind,owner_id) VALUES(NEW.org_id,NEW.body->'route'->'binding'->>'connection_id','route_operation',NEW.id) ON CONFLICT DO NOTHING;
 	END IF;
 
-	IF TG_OP='INSERT' AND NEW.body->>'kind'='prepare' AND NEW.body->'route'->'binding'->>'connection_id'<>'platform' THEN
+	IF TG_OP='INSERT' AND NEW.body->>'kind'='prepare' AND 'platform' IN (NEW.body->'route'->'binding'->>'connection_id',NEW.body->'source'->'binding'->>'connection_id') THEN
+		RAISE EXCEPTION 'a Loomplane Cloud route is never handed off' USING ERRCODE='23514';
+	END IF;
+	IF TG_OP='INSERT' AND NEW.body->>'kind'='prepare' THEN
 		INSERT INTO loomplane_route_handoffs(id,org_id,route_id,source_connection_id,destination_connection_id) VALUES(NEW.id,NEW.org_id,NEW.route_id,NEW.body->'source'->'binding'->>'connection_id',NEW.body->'route'->'binding'->>'connection_id');
 		INSERT INTO loomplane_connection_uses(org_id,connection_id,kind,owner_id) VALUES(NEW.org_id,NEW.body->'source'->'binding'->>'connection_id','route_handoff',NEW.id),(NEW.org_id,NEW.body->'route'->'binding'->>'connection_id','route_handoff',NEW.id) ON CONFLICT DO NOTHING;
 	END IF;

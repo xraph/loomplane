@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 
 	"github.com/xraph/loomplane/pkg/provider"
@@ -207,6 +208,17 @@ VALUES($1,$2,$3,$4,$5,now(),now()) ON CONFLICT (org_id,environment_id,resource) 
 // a generated hostname. Its text never names the host.
 var errHostnameUnavailable = &workspaceError{msg: "Loomplane Cloud couldn't publish this service's hostname right now."}
 
+// Apex is the domain the platform names services under, or "" when it
+// names none.
+func (s *Service) Apex(ctx context.Context) (string, error) {
+	cfg, err := s.settings.PlatformCloud(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "platform cloud settings failed", "error", err)
+		return "", errHostnameUnavailable
+	}
+	return cfg.Apex, nil
+}
+
 // Publish gives the organization's running service placement its generated
 // hostname, made the first time, and points the name's record at the public
 // ingress address of the host the placement is on: the first time it runs,
@@ -248,7 +260,7 @@ func (s *Service) hostnameError(ctx context.Context, orgID, placementID string, 
 	return errHostnameUnavailable
 }
 
-// publishHostname points hostname's A record at the public ingress address
+// publishHostname points hostname's A (or, for IPv6, AAAA) record at the public ingress address
 // of the host p is on, unless it already points there. The provider's
 // receipt is kept, so the next write replaces exactly that record.
 func (s *Service) publishHostname(ctx context.Context, p Placement, name string) error {
@@ -263,9 +275,13 @@ func (s *Service) publishHostname(ctx context.Context, p Placement, name string)
 	if err != nil {
 		return err
 	}
-	address := host.Evidence.IngressAddress
-	if address == "" {
-		return errors.New("platformcloud: the host reports no ingress address")
+	ip := net.ParseIP(host.Evidence.IngressAddress)
+	if ip == nil {
+		return errors.New("platformcloud: the host's ingress address isn't an IP address")
+	}
+	address, kind := ip.String(), "AAAA"
+	if ip.To4() != nil {
+		address, kind = ip.To4().String(), "A"
 	}
 	if h.Receipt != nil && h.HostID != nil && *h.HostID == host.ID && h.Address == address {
 		return nil
@@ -281,8 +297,21 @@ func (s *Service) publishHostname(ctx context.Context, p Placement, name string)
 	// The owner names the record by its first label, unique under the
 	// apex, so it stays inside providers' comment limits.
 	label, _, _ := strings.Cut(name, ".")
-	record := provider.DNSRecord{Name: relative, Type: "A", Value: address, TTL: 60, Owner: "loomplane:hostname:" + label}
-	receipt, err := s.dns.Upsert(ctx, zone, record, h.Receipt)
+	record := provider.DNSRecord{Name: relative, Type: kind, Value: address, TTL: 60, Owner: "loomplane:hostname:" + label}
+	expected := h.Receipt
+	if expected != nil && expected.Type != kind {
+		// Providers replace a record only with one of the same type, so a
+		// move between an IPv4 and an IPv6 host deletes the old one first.
+		if err = s.dns.Delete(ctx, zone, *expected); err != nil {
+			return err
+		}
+		if _, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_hostnames SET host_id=NULL,address='',receipt=NULL,updated_at=now()
+WHERE org_id=$1 AND environment_id=$2 AND resource=$3`, p.OrgID, p.EnvironmentID, p.Resource); err != nil {
+			return storeError(err)
+		}
+		expected = nil
+	}
+	receipt, err := s.dns.Upsert(ctx, zone, record, expected)
 	if err != nil {
 		return err
 	}

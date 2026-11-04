@@ -258,6 +258,28 @@ func TestRegistryConfigIsPerWorkspace(t *testing.T) {
 	if b.Repository != "platform/ws-org-b" {
 		t.Fatal(b.Repository)
 	}
+	if !cfg.ScopedOnly || cfg.Token != "" {
+		t.Fatalf("the platform registry hands out more than minted tokens: %+v", cfg)
+	}
+}
+
+// A registry token alone would reach every workspace's repository from any
+// VM it was handed to, so the platform registry refuses one.
+func TestRegistrySecretRefusesTokenOnly(t *testing.T) {
+	e := newHostEnv(t)
+	e.svc.settings = fixedSettings{instance.PlatformCloudSettings{Registry: instance.RegistrySettings{Endpoint: "https://registry.example", Repository: "platform"}}}
+	for _, c := range [][3]string{{"", "", "platform-wide-token"}, {"robot", "pw", "platform-wide-token"}, {"robot", "", ""}} {
+		if err := e.svc.SetRegistrySecret(t.Context(), "owner", c[0], c[1], c[2]); err == nil {
+			t.Fatalf("stored %q", c)
+		}
+	}
+	// One stored before the refusal existed is refused when read.
+	if err := e.secret.Put(t.Context(), "platform-cloud/registry", []byte(`{"token":"platform-wide-token"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := e.svc.registryConfig(t.Context(), "org-a"); err == nil {
+		t.Fatalf("read a token-only credential: %+v", cfg)
+	}
 }
 
 type fixedSettings struct {

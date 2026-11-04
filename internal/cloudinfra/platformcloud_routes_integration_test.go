@@ -44,7 +44,7 @@ VALUES('binding','org','shop','prod','service','api','platform','http','instance
 	if binding != want {
 		t.Fatalf("binding %+v", binding)
 	}
-	for _, change := range []string{"port", "cloud", "environment", "stopped"} {
+	for _, change := range []string{"port", "cloud", "environment", "draining", "stopped"} {
 		invalid := in
 		switch change {
 		case "port":
@@ -53,7 +53,10 @@ VALUES('binding','org','shop','prod','service','api','platform','http','instance
 			invalid.CloudID = "foreign"
 		case "environment":
 			invalid.EnvironmentID = "other"
+		case "draining":
+			exec(`UPDATE loomplane_platform_hosts SET status='draining' WHERE id='host_1'`)
 		case "stopped":
+			exec(`UPDATE loomplane_platform_hosts SET status='ready' WHERE id='host_1'`)
 			exec(`UPDATE loomplane_platform_placements SET state='stopped' WHERE id='plc_1'`)
 		}
 		if _, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", invalid); !errors.Is(resolveErr, ErrNotFound) {

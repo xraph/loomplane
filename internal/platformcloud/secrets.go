@@ -43,11 +43,18 @@ type registryCredential struct {
 	Token    string `json:"token,omitempty"`
 }
 
+// errRegistryLogin refuses a platform registry credential that can't mint
+// repository-scoped tokens. A direct token would reach every workspace's
+// repository from any VM it was handed to.
+var errRegistryLogin = errors.New("platformcloud: the platform registry needs a username and password its token service mints repository-scoped tokens for; a registry token alone is refused")
+
 // SetRegistrySecret stores the credential platform builds use to push to the
 // registry named in the instance settings. It replaces the previous one.
+// Only a username and password are taken: the registry's token service mints
+// each build and deploy a token for one workspace repository from them.
 func (s *Service) SetRegistrySecret(ctx context.Context, _ /* actor */, username, password, token string) error {
-	if token == "" && (username == "" || password == "") {
-		return errors.New("platformcloud: a registry token, or a username and password, is required")
+	if username == "" || password == "" || token != "" {
+		return errRegistryLogin
 	}
 	vault, err := s.secretStore()
 	if err != nil {
@@ -86,13 +93,18 @@ func (s *Service) registryConfig(ctx context.Context, orgID string) (*registry.C
 	if err = json.Unmarshal(raw, &cred); err != nil {
 		return nil, errors.New("platformcloud: the stored registry credential is unreadable")
 	}
+	if cred.Username == "" || cred.Password == "" {
+		return nil, errRegistryLogin
+	}
+	// No direct token, and ScopedOnly: every token a VM gets is minted by
+	// the registry's token service for one repository under this one.
 	return &registry.Config{
 		Endpoint:     reg.Endpoint,
 		Repository:   strings.TrimRight(reg.Repository, "/") + "/ws-" + orgID,
 		AuthEndpoint: reg.AuthEndpoint,
 		Username:     cred.Username,
 		Password:     cred.Password,
-		Token:        cred.Token,
+		ScopedOnly:   true,
 	}, nil
 }
 

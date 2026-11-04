@@ -24,6 +24,8 @@ type platformRegistry struct {
 	mu     sync.Mutex
 	url    string
 	scopes []string
+	// anonymous lets every probe through without a challenge.
+	anonymous bool
 }
 
 func newPlatformRegistry(t *testing.T) *platformRegistry {
@@ -37,6 +39,13 @@ func newPlatformRegistry(t *testing.T) *platformRegistry {
 			_, _ = io.WriteString(w, `{"token":"platform-scoped-token"}`)
 			return
 		}
+		r.mu.Lock()
+		anonymous := r.anonymous
+		r.mu.Unlock()
+		if anonymous {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="`+r.url+`/token",service="platform"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -48,7 +57,7 @@ func newPlatformRegistry(t *testing.T) *platformRegistry {
 // config is the platform registry as platformcloud hands it to a build or
 // deploy of org: the workspace's own repository under the platform's.
 func (r *platformRegistry) config(org string) *registry.Config {
-	return &registry.Config{Endpoint: r.url, Repository: "loomplane/ws-" + org, Username: "platform", Password: "platform-registry-secret"}
+	return &registry.Config{Endpoint: r.url, Repository: "loomplane/ws-" + org, Username: "platform", Password: "platform-registry-secret", ScopedOnly: true}
 }
 
 func (r *platformRegistry) minted() []string {
@@ -247,5 +256,38 @@ func TestPlatformServicePublishedOnItsGeneratedHostname(t *testing.T) {
 	}
 	if f.platform.hostnames["web"] != "" {
 		t.Fatal("a private service kept its hostname")
+	}
+}
+
+// A platform registry that lets anything through without minting a scoped
+// token is refused before a build VM is started.
+func TestPlatformBuildRefusesUnscopedRegistry(t *testing.T) {
+	f := newPlatformFixture(t)
+	job := f.sourceJob(t)
+	f.platform.registry.anonymous = true
+	if _, err := f.target.Apply(t.Context(), job); err == nil {
+		t.Fatal("built against a registry that mints no scoped token")
+	}
+	if host := f.hosts["host_a"]; host.called("/v1/apply") || host.called("/v1/source") {
+		t.Fatalf("the host was sent work: %v", host.paths)
+	}
+}
+
+func TestPlatformRepositoryReadsOnlyCanonicalReferences(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("c", 64)
+	for image, want := range map[string]string{
+		"reg.test/loomplane/ws-org_a/loomplane/web-1:abc" + digest: "loomplane/ws-org_a/loomplane/web-1",
+		"reg.test/loomplane/ws-org_a/loomplane/web" + digest:       "loomplane/ws-org_a/loomplane/web",
+		"reg.test/loomplane/ws-org_a/../ws-org_b/web" + digest:     "",
+		"reg.test/loomplane/ws-org_a//web" + digest:                "",
+		"reg.test/loomplane/ws-org_a/Web" + digest:                 "",
+		"reg.test/loomplane/ws-org_ab/web" + digest:                "",
+		"reg.test/loomplane/ws-org_a/web:latest":                   "",
+		"other.test/loomplane/ws-org_a/web" + digest:               "",
+	} {
+		got, ok := platformRepository(image, "reg.test", "loomplane/ws-org_a")
+		if got != want || ok != (want != "") {
+			t.Errorf("%s: %q %v", image, got, ok)
+		}
 	}
 }

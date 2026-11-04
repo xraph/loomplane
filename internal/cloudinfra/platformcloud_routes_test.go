@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +13,12 @@ import (
 
 // fakePlatformHosts stands in for Loomplane Cloud's control plane. It
 // records every host it is asked to open and opens none.
-type fakePlatformHosts struct{ opened []string }
+type fakePlatformHosts struct {
+	opened []string
+	apex   string
+}
+
+func (f *fakePlatformHosts) Apex(context.Context) (string, error) { return f.apex, nil }
 
 func (f *fakePlatformHosts) Attach(_ context.Context, orgID, projectID, envID, resource, name string) (*fc.Client, fc.Scope, *platformcloud.Placement, error) {
 	f.opened = append(f.opened, orgID+"/"+projectID+"/"+envID+"/"+resource+"/"+name)
@@ -62,5 +68,41 @@ func TestPlatformRouteNeedsVerifiedZone(t *testing.T) {
 	_ = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil)
 	if len(hosts.opened) != 1 || hosts.opened[0] != "org/shop/prod/inst_web/octo--gateway" {
 		t.Fatalf("opened %v, operation %s: %q", hosts.opened, st.op.Status, st.op.Message)
+	}
+}
+
+// A name under the platform apex is refused even from a verified zone that
+// holds it: Loomplane Cloud names services there itself.
+func TestPlatformRouteRefusesTheApex(t *testing.T) {
+	svc, st, _, dns := kubernetesRouteFixture(t)
+	hosts := &fakePlatformHosts{apex: "example.com"} // the fixture's verified zone
+	svc.PlatformRoutes = hosts
+	st.binding = platformCloudBinding()
+	st.op.Route.Binding = st.binding
+	_ = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil)
+	if st.op.Status != "failed" || !strings.Contains(st.op.Message, "Loomplane Cloud's own domain") || len(hosts.opened) != 0 || dns.writes != 0 {
+		t.Fatalf("operation %s: %q, opened %v", st.op.Status, st.op.Message, hosts.opened)
+	}
+}
+
+// A route to or from a Loomplane Cloud service is never handed off.
+func TestPlatformCloudRouteRefusesHandoff(t *testing.T) {
+	for name, platformSide := range map[string]bool{"from Loomplane Cloud": true, "to Loomplane Cloud": false} {
+		t.Run(name, func(t *testing.T) {
+			svc, st, _, _ := kubernetesRouteFixture(t)
+			route := st.op.Route
+			route.Status = "ready"
+			if platformSide {
+				route.Binding = platformCloudBinding()
+			} else {
+				route.Binding = RouteBinding{Backend: RouteBackendServer, BindingID: "binding_gw", ServerID: "srv_1", Address: "203.0.113.10"}
+				st.binding = platformCloudBinding()
+			}
+			st.route = &route
+			_, err := svc.PrepareRouteHandoff(t.Context(), kubeRouteManager, "shop", route.ID, HandoffInput{Revision: route.Revision})
+			if !errors.Is(err, errPlatformCloudHandoff) {
+				t.Fatalf("handoff: %v", err)
+			}
+		})
 	}
 }
