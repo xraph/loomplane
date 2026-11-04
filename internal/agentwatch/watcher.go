@@ -51,6 +51,11 @@ const (
 	noteBudget     = "The agent didn't investigate this: the workspace's AI budget for the month is used up."
 	noteCapped     = "Three investigations were already running."
 	noteUnfinished = "The investigation didn't finish within an hour."
+	// A run that couldn't start or stopped early gets one of these, never
+	// its error: an error can name a host, a database or a provider, and
+	// the note goes into the issue. The log keeps the error.
+	noteNotStarted = "The agent couldn't start looking into this."
+	noteStopped    = "The agent couldn't finish looking into this."
 
 	pausedTitle  = "The agent stopped investigating: this workspace has used its AI budget for the month"
 	pausedBody   = "Loomplane still opens reports from what it sees and sends them as usual. The agent won't investigate them until the budget has room. An admin can raise it in AI settings."
@@ -549,7 +554,8 @@ func (p *pass) start(r *agentreports.Report) (started bool, err error) {
 		}
 		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: noteBudget})
 	case err != nil:
-		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: "The investigation couldn't start: " + err.Error()})
+		p.w.warn("agentwatch: start the investigation of report "+r.ID, err)
+		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteNotStarted})
 	}
 	// The run is live now. Losing its run ID here would leave follow()
 	// nothing to follow it by, so the move is tried again before giving
@@ -629,11 +635,10 @@ func (p *pass) follow() error {
 				return err
 			}
 		case agentruns.StatusFailed, agentruns.StatusCancelled:
-			why := task.Error
-			if why == "" {
-				why = "The investigation stopped before it finished."
+			if task.Error != "" {
+				p.w.warn("agentwatch: the investigation of report "+r.ID+" ended "+task.Status, errors.New(task.Error))
 			}
-			if err := p.move(r, running, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: why}); err != nil {
+			if err := p.move(r, running, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteStopped}); err != nil {
 				return err
 			}
 			// A run that ran out of budget pauses the rest.

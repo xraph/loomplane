@@ -760,7 +760,7 @@ func TestRunOutOfBudgetMidRunPauses(t *testing.T) {
 	// No new report: only the failed run can pause the watcher.
 	r.run()
 	rep = r.lookup(rep.ID)
-	if rep.Investigation != agentreports.InvestigationFailed || rep.InvestigationNote != "The workspace's AI budget for the month is used up." {
+	if rep.Investigation != agentreports.InvestigationFailed || rep.InvestigationNote != noteStopped {
 		t.Fatalf("investigation %s %q", rep.Investigation, rep.InvestigationNote)
 	}
 	if !r.state().Paused {
@@ -1227,5 +1227,61 @@ func TestALiveRunIsRecordedDespiteAFailedMove(t *testing.T) {
 	r.run()
 	if rep := r.only(); rep.Investigation != agentreports.InvestigationRunning || rep.RunID != "arun_1" {
 		t.Fatalf("investigation %s, run %q, want the run recorded", rep.Investigation, rep.RunID)
+	}
+}
+
+// pgError is the kind of error a run fails with: it names the host, the
+// user and the database.
+const pgError = `failed to connect to host=db.internal user=loomplane database=loomplane: dial tcp 10.0.3.7:5432: connect: connection refused`
+
+// An investigation that can't start, or stops early, leaves a fixed note
+// on its report. The error goes to the log, never into the note, and so
+// never into the issue the report becomes.
+func TestFailedInvestigationsKeepTheirErrorsOutOfTheIssue(t *testing.T) {
+	issueBody := func(r *rig, id string) string {
+		t.Helper()
+		svc := agentreports.NewService(agentreports.Deps{Store: r.rstore, Binder: r.w.Binder, Safety: r.w.Safety, Now: r.clock})
+		text, err := svc.Text(context.Background(), r.lookup(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text.IssueBody
+	}
+
+	// The run can't start.
+	r := newRig(t)
+	r.run()
+	r.runs.err = errors.New(pgError)
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	rep := r.only()
+	if rep.Investigation != agentreports.InvestigationFailed || rep.InvestigationNote != noteNotStarted {
+		t.Fatalf("investigation %s %q", rep.Investigation, rep.InvestigationNote)
+	}
+	if body := issueBody(r, rep.ID); strings.Contains(body, "db.internal") || !strings.Contains(body, noteNotStarted) {
+		t.Fatalf("issue body %q", body)
+	}
+	if got := r.warnings("db.internal"); len(got) != 1 {
+		t.Fatalf("warnings %v, want the error logged once", got)
+	}
+
+	// The run starts and then fails.
+	r = newRig(t)
+	r.run()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	rep = r.only()
+	r.runs.set("arun_1", agentruns.StatusFailed, pgError)
+	r.advance(time.Minute)
+	r.run()
+	rep = r.lookup(rep.ID)
+	if rep.Investigation != agentreports.InvestigationFailed || rep.InvestigationNote != noteStopped {
+		t.Fatalf("investigation %s %q", rep.Investigation, rep.InvestigationNote)
+	}
+	if body := issueBody(r, rep.ID); strings.Contains(body, "db.internal") || strings.Contains(body, "5432") || !strings.Contains(body, noteStopped) {
+		t.Fatalf("issue body %q", body)
+	}
+	if got := r.warnings("db.internal"); len(got) != 1 {
+		t.Fatalf("warnings %v, want the error logged once", got)
 	}
 }
