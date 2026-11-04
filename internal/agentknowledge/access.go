@@ -65,10 +65,11 @@ type ProjectAuthorizer interface {
 // chunk, or any chunk about one project, needs deployment:read on its
 // project for the run's principal (the agent, with the person it acts
 // for), the same check that shows a report anywhere else. A report's
-// chunk with no project is dropped, and so is every such chunk when ctx
-// carries no agent principal or authz is nil. The docs and workspace-wide
-// documents pass. The error joins the checks that failed; their chunks
-// are dropped too.
+// chunk that names no project needs deployment:read on the whole
+// workspace, which reaches every project. Every such chunk is dropped
+// when ctx carries no agent principal or authz is nil. The docs and
+// workspace-wide documents pass. The error joins the checks that failed;
+// their chunks are dropped too.
 func Readable(ctx context.Context, authz ProjectAuthorizer, chunks []knowledge.ScoredChunk) ([]knowledge.ScoredChunk, error) {
 	call, callErr := agentops.CallFrom(cortex.Invocation{Subject: cortex.Subject{
 		Scope: cortex.ScopeFromContext(ctx), Principal: cortex.PrincipalFromContext(ctx),
@@ -82,15 +83,16 @@ func Readable(ctx context.Context, authz ProjectAuthorizer, chunks []knowledge.S
 			out = append(out, c)
 			continue
 		}
-		if projectID == "" || callErr != nil || authz == nil {
+		if callErr != nil || authz == nil {
 			continue
 		}
 		ok, seen := allowed[projectID]
 		if !seen {
 			var err error
+			// With no project, "" checks at the workspace's root.
 			ok, err = authz.AllowedOn(ctx, call.Principal, security.DeploymentRead, projectID)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("agentknowledge: check %s on %s: %w", security.DeploymentRead.Name(), projectID, err))
+				errs = append(errs, fmt.Errorf("agentknowledge: check %s on %q: %w", security.DeploymentRead.Name(), projectID, err))
 				ok = false
 			}
 			allowed[projectID] = ok

@@ -71,8 +71,9 @@ func projectReport(id, projectID, text string) agentreports.KnowledgeDocument {
 // A knowledge search, the way cortex's knowledge_search makes it, gives a
 // person's run only the past reports of projects they read deployments
 // on: someone with deployment:read on p1 alone, through a team, gets p1's
-// report and never p2's. The docs reach everyone, the agent alone reads
-// both reports, and a run with no principal reads neither.
+// report and never p2's, nor one that names no project, which needs the
+// whole workspace. The docs reach everyone, the agent alone reads every
+// report, and a run with no principal reads none.
 func TestKnowledgeSearchKeepsReportsToTheirProject(t *testing.T) {
 	f := newFixture(t, dims)
 	ctx := context.Background()
@@ -84,6 +85,7 @@ func TestKnowledgeSearchKeepsReportsToTheirProject(t *testing.T) {
 	for _, doc := range []agentreports.KnowledgeDocument{
 		projectReport("arep_p1", p1, "Project one's deployment failed: the image wasn't found."),
 		projectReport("arep_p2", p2, "Project two's deployment failed: its database password expired."),
+		projectReport("arep_none", "", "A deployment failed somewhere in the workspace."),
 	} {
 		if err := o.ReportChanged(ctx, doc); err != nil {
 			t.Fatal(err)
@@ -103,7 +105,7 @@ func TestKnowledgeSearchKeepsReportsToTheirProject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := len(chunks); got < 6 {
+		if got := len(chunks); got < 7 {
 			t.Fatalf("the search found %d chunks, want both reports and the docs", got)
 		}
 		chunks, err = agentknowledge.Readable(sctx, authz, chunks)
@@ -127,8 +129,8 @@ func TestKnowledgeSearchKeepsReportsToTheirProject(t *testing.T) {
 	}
 	got, _ = found(security.AgentPrincipal(accessOrg, nil))
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"report/arep_p1", "report/arep_p2"}) {
-		t.Fatalf("the agent alone read %v, want both reports", got)
+	if !slices.Equal(got, []string{"report/arep_none", "report/arep_p1", "report/arep_p2"}) {
+		t.Fatalf("the agent alone read %v, want every report", got)
 	}
 	if got, docs = found(nil); len(got) != 0 || docs == 0 {
 		t.Fatalf("a run with no principal read %v and %d docs chunks", got, docs)
@@ -149,8 +151,9 @@ func (a fakeProjectAuthz) AllowedOn(_ context.Context, _ security.Principal, per
 }
 
 // Readable decides a chunk by what weave hands back: its own metadata.
-// A report's chunk with no project, a check that fails, or no authorizer
-// drop it; a chunk that names no project and isn't a report's passes.
+// A check that fails, or no authorizer, drops a report's chunk; one that
+// names no project needs deployment:read on the whole workspace; a chunk
+// that names no project and isn't a report's passes.
 func TestReadableFailsClosed(t *testing.T) {
 	ctx := cortex.WithPrincipal(cortex.WithScope(context.Background(), agentscope.Scope{OrgID: accessOrg}.Cortex()),
 		security.AgentPrincipal(accessOrg, nil))
@@ -173,6 +176,12 @@ func TestReadableFailsClosed(t *testing.T) {
 	got, err := agentknowledge.Readable(ctx, fakeProjectAuthz{projects: []string{"proj_1"}}, chunks)
 	if err != nil || !slices.Equal(contents(got), []string{"docs", "runbook", "p1"}) {
 		t.Fatalf("Readable = %v, %v", contents(got), err)
+	}
+	// deployment:read on the whole workspace reads a report with no
+	// project, but not one whose project it isn't granted on.
+	got, err = agentknowledge.Readable(ctx, fakeProjectAuthz{projects: []string{""}}, chunks)
+	if err != nil || !slices.Equal(contents(got), []string{"docs", "runbook", "no project", "unstamped"}) {
+		t.Fatalf("Readable for the workspace = %v, %v", contents(got), err)
 	}
 	boom := errors.New("warden is down")
 	got, err = agentknowledge.Readable(ctx, fakeProjectAuthz{err: boom}, chunks)
