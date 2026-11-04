@@ -131,7 +131,7 @@ Use a machine that only builds. Untrusted source builds on a dedicated builder, 
 
 ## Domains on a node
 
-A node serves a domain directly when it has a public address that answers on port 80. Loomplane confirms that from the outside before DNS points at the address, by fetching a one-time token through the node's own proxy. Until the check passes, the route keeps serving where it was. The node's page shows the address, when it was confirmed, and why not if it wasn't.
+A node serves a domain directly when it has a public address that answers on port 80. Loomplane confirms that from the outside before DNS points at the address, by fetching a one-time token through the node's own proxy. Until the check passes, the route keeps serving where it was. The node's page shows the address, when it was confirmed, and why not if it wasn't. A check that found nothing runs again every five minutes or so, and straight away when you set the node's ingress mode to `direct`.
 
 If the node's address changes, Loomplane notices and checks the new one. In a zone Loomplane manages, the record moves once the new address answers. In an external zone, the route shows you the record to set, and you set it. Either way DNS never points at an address that hasn't answered.
 
