@@ -138,6 +138,9 @@ type Extension struct {
 	// createOrgHook stands between setup and the organization plugin when
 	// set. Only integration builds set it (export_integration.go).
 	createOrgHook setupOrgHook
+
+	// edition is what only this edition builds (edition_cloud.go).
+	edition editionState
 }
 
 // New returns the identity extension.
@@ -231,6 +234,9 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {
+		return fmt.Errorf("provide identity services: %w", err)
+	}
+	if err := e.editionProvide(c); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
 	}
 	// Global, so it runs before the console's routes, which the dashboard

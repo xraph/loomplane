@@ -65,6 +65,7 @@ require (
 	github.com/xraph/herald v1.10.0
 	github.com/xraph/herald/drivers/apns v1.10.0
 	github.com/xraph/keysmith v1.8.1
+	github.com/xraph/ledger v1.9.1
 	github.com/xraph/nexus v1.9.1
 	github.com/xraph/nexus/providers/anthropic v1.9.1
 	github.com/xraph/nexus/providers/openai v1.9.1
@@ -256,6 +257,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/stripe/stripe-go/v87 v87.1.0 // indirect
 	github.com/theupdateframework/go-tuf v0.7.0 // indirect
 	github.com/theupdateframework/go-tuf/v2 v2.4.2 // indirect
 	github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 // indirect
@@ -278,7 +280,6 @@ require (
 	github.com/xraph/grove/drivers/mongodriver v1.10.2 // indirect
 	github.com/xraph/grove/kv v1.9.1 // indirect
 	github.com/xraph/grove/kv/drivers/redisdriver v1.9.1 // indirect
-	github.com/xraph/ledger v1.9.1 // indirect
 	github.com/xraph/sentinel v1.10.0 // indirect
 	github.com/xraph/vessel v1.0.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

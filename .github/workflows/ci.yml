@@ -64,7 +64,7 @@ jobs:
         with:
           go-version: "1.26.10"
       - run: go build -tags cloud ./...
-      - run: go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
+      - run: go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./internal/billing/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
       - name: Schema guards on the public build
         run: go test -count=1 ./internal/platform/ -run TestGuard_
       - name: Schema guards on the cloud build
@@ -72,7 +72,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          args: --build-tags=cloud --timeout=10m ./extensions/billing/... ./internal/platform/... ./database/migrations/... ./extensions/identity/...
+          args: --build-tags=cloud --timeout=10m ./internal/billing/... ./extensions/billing/... ./internal/platform/... ./database/migrations/... ./extensions/identity/...
 
   cloud-image:
     name: Cloud image
