@@ -134,6 +134,8 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || state == nil || save == nil {
 		return "", errors.New("the service needs reviewed remote build settings")
 	}
+	// Managed Kubernetes builds run on the workspace's own cluster, and the
+	// deploy gates refuse first, so they aren't gated here.
 	if job.Action.Service.ManagedKubernetesBuild() {
 		return b.buildInKubernetes(ctx, job, state, save)
 	}

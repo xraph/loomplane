@@ -28,9 +28,6 @@ func (d *Deployments) RuntimeAccessOptions(owner string, concurrency int) drt.Op
 }
 
 func (d *Deployments) StartRuntimeAccessOperation(ctx context.Context, org, id string, attempt int) error {
-	if err := d.canRun(ctx, org); err != nil {
-		return err
-	}
 	if d.runs == nil {
 		return errors.New("runtime access routing store is unavailable")
 	}

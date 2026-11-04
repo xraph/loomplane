@@ -23,7 +23,8 @@ func (g *refuseGate) CanRun(_ context.Context, _ string, k metering.Kind, owned 
 }
 
 func TestRunnerStartRefusedByTheGateRecordsNothing(t *testing.T) {
-	plan := &planning.Plan{ID: "plan", OrgID: "org", ProjectID: "project", Status: planning.StatusApproved, Executable: true}
+	plan := &planning.Plan{ID: "plan", OrgID: "org", ProjectID: "project", Status: planning.StatusApproved, Executable: true,
+		Actions: []planning.Action{{ID: "service:api", Op: planning.Create, Subject: planning.ServiceSubject}}}
 	m := &memStore{d: map[string]*Deployment{}}
 	r := NewRunner(RunnerDeps{Store: m, Plans: &fakePlans{plan: plan}, Gate: &refuseGate{}})
 	if _, _, err := r.Start(t.Context(), "org", "plan"); !errors.Is(err, metering.ErrBlocked) {
@@ -81,5 +82,16 @@ func TestImageBuilderNeverGatesPlatformSourceBuilds(t *testing.T) {
 	_, err := b.Build(t.Context(), job, &ImageArtifact{}, func() error { return nil })
 	if errors.Is(err, metering.ErrBlocked) || len(g.kinds) != 0 {
 		t.Fatalf("a platform build reached the gate: %v kinds=%v", err, g.kinds)
+	}
+}
+
+func TestRunnerStartNeverRefusesATeardown(t *testing.T) {
+	plan := &planning.Plan{ID: "plan", OrgID: "org", ProjectID: "project", Status: planning.StatusApproved, Executable: true,
+		Actions: []planning.Action{{ID: "service:api", Op: planning.Delete, Subject: planning.ServiceSubject}}}
+	g := &refuseGate{}
+	r := NewRunner(RunnerDeps{Store: &memStore{d: map[string]*Deployment{}}, Plans: &fakePlans{plan: plan}, Gate: g})
+	_, _, err := r.Start(t.Context(), "org", "plan")
+	if errors.Is(err, metering.ErrBlocked) || len(g.kinds) != 0 {
+		t.Fatalf("a teardown reached the gate: %v kinds=%v", err, g.kinds)
 	}
 }

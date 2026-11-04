@@ -412,8 +412,11 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	if err != nil {
 		return "", nil, err
 	}
-	if gateErr := r.gate.CanRun(ctx, orgID, metering.KindDeploy, false); gateErr != nil {
-		return "", nil, gateErr
+	// A teardown runs nothing, so it is never refused for billing.
+	if !plan.TeardownOnly() {
+		if gateErr := r.gate.CanRun(ctx, orgID, metering.KindDeploy, false); gateErr != nil {
+			return "", nil, gateErr
+		}
 	}
 	id, err := typeid.Generate("dep")
 	if err != nil {

@@ -113,6 +113,8 @@ func (t *PlatformTarget) region(region string) (*OwnedTarget, error) {
 		return e, nil
 	}
 	e := &OwnedTarget{Cloud: platformProvider, Ctrl: t.Ctrl, Credentials: registryOnly{t.Credentials}, Secrets: t.Secrets, RouteGuard: t.RouteGuard, FirecrackerAuthority: t.Authority, Bindings: t.Bindings,
+		// No Gate: the deploy gates (approval and Runner.Start) refuse a
+		// workspace that can't run before a build is reached.
 		Builder:     &ImageBuilder{FirecrackerAuthority: t.Authority, Platform: t.Platform},
 		providerKey: platformProvider + "." + region, platformRegistry: func(ctx context.Context, orgID string) (*registry.Config, error) {
 			return t.Platform.Registry(ctx, orgID)

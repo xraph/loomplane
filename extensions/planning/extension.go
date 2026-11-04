@@ -620,7 +620,6 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
-	e.deployments.BindGate(&e.metering)
 	e.deployments.BindCloudSync(e.plans)
 	failedCleanups := deployments.NewFailedCleanups(runner, deployStore, e.deployments).WithManagedCleanup(cleanupExecution.Store, cleanupExecution)
 	e.failedCleanups = failedCleanups

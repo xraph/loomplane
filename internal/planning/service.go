@@ -617,8 +617,12 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
 			return nil, checkErr
 		}
-		if gateErr := s.gate.CanRun(ctx, plan.OrgID, metering.KindDeploy, false); gateErr != nil {
-			return nil, gateErr
+		// Teardowns run nothing, so a workspace without a card can still
+		// remove what it has.
+		if !plan.TeardownOnly() {
+			if gateErr := s.gate.CanRun(ctx, plan.OrgID, metering.KindDeploy, false); gateErr != nil {
+				return nil, gateErr
+			}
 		}
 	}
 	reqID, err := typeid.Generate("dec")
