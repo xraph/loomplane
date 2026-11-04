@@ -483,6 +483,16 @@ export interface CanaryService {
   provider: string;
 }
 
+export interface CanarySummary {
+  actionIds: string[];
+  deploymentId: string;
+  finishedAt?: string;
+  planId: string;
+  reason?: string;
+  services: string[];
+  status: string;
+}
+
 export interface CanaryVerdict {
   actionId: string;
   attempt: number;
@@ -749,6 +759,15 @@ export interface ChangeInputBody {
   revision: number;
   runtime?: string;
   targetId?: string;
+}
+
+export interface ChangedService {
+  actionId: string;
+  canary: boolean;
+  lastCanary: string;
+  name: string;
+  op: string;
+  provider: string;
 }
 
 export interface CheckInputBody {
@@ -1461,6 +1480,13 @@ export interface CompromisedRevoke {
   revoked: APIKey;
 }
 
+export interface Concern {
+  at: string;
+  kind: string;
+  runId: string;
+  text: string;
+}
+
 export interface ConnectGitHubInputBody {
   code: string;
   installationId: number;
@@ -1853,6 +1879,13 @@ export interface DeploymentsDeployment {
   startedBy: string;
   status: string;
   steps: Step[];
+}
+
+export interface DiffCommit {
+  at: string;
+  author: string;
+  sha: string;
+  title: string;
 }
 
 export interface DiscoveredService {
@@ -2508,6 +2541,13 @@ export interface GPUUsage {
   reserved: number;
 }
 
+export interface GateCheck {
+  detail: string;
+  name: string;
+  number: number;
+  passed: boolean;
+}
+
 export interface GatewayList {
   gateways: GatewayStatus[];
 }
@@ -3017,6 +3057,15 @@ export interface ManifestEndpoint {
 export interface ManifestGPU {
   count: number;
   kind: string;
+}
+
+export interface MigrationFile {
+  additions: number;
+  deletions: number;
+  patch: string;
+  path: string;
+  status: string;
+  truncated: boolean;
 }
 
 export interface ModelDeploymentList {
@@ -3583,6 +3632,14 @@ export interface OpenCompatModel {
   task: string;
 }
 
+export interface OpenReport {
+  id: string;
+  openedAt: string;
+  path: string;
+  severity?: string;
+  title: string;
+}
+
 export interface Operation {
   absenceConfirmedAt?: string;
   accelerator?: Accelerator;
@@ -3901,6 +3958,13 @@ export interface Preferences {
   agentEmail: boolean;
   deploymentEmail: boolean;
   mailEnabled: boolean;
+}
+
+export interface PrepareInputBody {
+  from?: string;
+  replace?: boolean;
+  scope?: string[];
+  to?: string;
 }
 
 export interface Preview {
@@ -4251,6 +4315,29 @@ export interface Reach {
   mode: string;
 }
 
+export interface ReadinessEvidence {
+  artifacts: ArtifactChoice[];
+  backupSchedule: boolean;
+  budget?: BudgetState;
+  canaries: CanarySummary[];
+  changedServices: ChangedService[];
+  collectedAt: string;
+  coverage?: Coverage;
+  dataUpdates: string[];
+  destroy: string[];
+  openReports: OpenReport[];
+  pinDifferences: string[];
+  pinsMatch: boolean;
+  planStatus: string;
+  problems: Finding[];
+  productionRelease?: ReleaseEvidence;
+  soak?: Soak;
+  sources: SourceDiff[];
+  stagingRelease?: ReleaseEvidence;
+  unavailable: Record<string, any>;
+  warnings: Finding[];
+}
+
 export interface RealtimeAgentEnd {
   error?: string;
   status: string;
@@ -4464,6 +4551,72 @@ export interface ReleaseRef {
   kind: string;
   planId: string;
   status: string;
+}
+
+export interface ReleaseReport {
+  concerns: Concern[];
+  createdAt: string;
+  decidedBy: string;
+  decision: string;
+  error: string;
+  evaluatedAt?: string;
+  evidence?: ReadinessEvidence;
+  finishedAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
+  gates: GateCheck[];
+  id: string;
+  orgId: string;
+  planId: string;
+  planRevision: string;
+  preview: boolean;
+  projectId: string;
+  requestId: string;
+  requestedBy: string;
+  reusedPlan: boolean;
+  runId: string;
+  scope: string[];
+  state: string;
+  stateReason: string;
+  status: string;
+  taskId: string;
+  toEnvironment: string;
+  toEnvironmentId: string;
+  updatedAt: string;
+  via: string;
+}
+
+export interface ReleaseReportEvent {
+  createdAt: string;
+  decision: string;
+  error: string;
+  evaluatedAt?: string;
+  finishedAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
+  gates: GateCheck[];
+  id: string;
+  orgId: string;
+  planId: string;
+  planRevision: string;
+  preview: boolean;
+  projectId: string;
+  requestedBy: string;
+  reusedPlan: boolean;
+  runId: string;
+  scope: string[];
+  state: string;
+  stateReason: string;
+  status: string;
+  taskId: string;
+  toEnvironment: string;
+  toEnvironmentId: string;
+  updatedAt: string;
+  via: string;
+}
+
+export interface ReleaseReportList {
+  reports: (ReleaseReport | null)[];
 }
 
 export interface RemoveRouteInputBody {
@@ -5518,6 +5671,25 @@ export interface SourceCounts {
   all: number;
   farp: number;
   here: number;
+}
+
+export interface SourceDiff {
+  additions: number;
+  aheadBy: number;
+  alias: string;
+  behindBy: number;
+  commits: DiffCommit[];
+  deletions: number;
+  direction: string;
+  error?: string;
+  filesChanged: number;
+  migrations: MigrationFile[];
+  productionCommit: string;
+  repository: string;
+  sourceId: string;
+  stagingCommit: string;
+  totalCommits: number;
+  truncated: boolean;
 }
 
 export interface SourceList {

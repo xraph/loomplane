@@ -589,10 +589,11 @@ func TestScenario_budgetExhaustedRefusesNewWork(t *testing.T) {
 	}
 }
 
-// With autonomy on and the gate saying no (the ask-first gate), a
-// production release Ada planned waits for a person, and the request says
-// why. Ada approves it in the API, and the resumed call reports her
-// approval.
+// With autonomy on and the gate saying no, a production release Ada
+// planned waits for a person, and the request says why: release
+// preparation's gate is installed, and no readiness report covers a plan
+// approved from a chat, so gate 2 fails. Ada approves it in the API, and
+// the resumed call reports her approval.
 func TestScenario_promotionAsksWhenTheGateSaysNo(t *testing.T) {
 	approve := &lateInput{}
 	fake := agenttest.Anthropic(t,
@@ -614,7 +615,7 @@ func TestScenario_promotionAsksWhenTheGateSaysNo(t *testing.T) {
 
 	runs, task := s.chat(t, ada, "Promote the release.")
 	req := s.pendingRequest(t, task.ID, agentrequests.KindApprovePlan)
-	if !strings.Contains(req.Question, "isn't available yet") {
+	if !strings.HasPrefix(req.Question, "Needs a person: gate 2 (") || !strings.Contains(req.Question, "no release readiness report covers this plan") {
 		t.Fatalf("request %+v", req)
 	}
 	if p := s.planStatus(t, plan.ID); p.Status != "ready" {

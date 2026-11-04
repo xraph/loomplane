@@ -311,6 +311,24 @@
           "title": "realtime.status event",
           "summary": "SSE event: realtime.status"
         },
+        "release_report.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/ReleaseReportEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_report.deleted",
+          "title": "release_report.deleted event",
+          "summary": "SSE event: release_report.deleted"
+        },
+        "release_report.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ReleaseReportEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_report.updated",
+          "title": "release_report.updated event",
+          "summary": "SSE event: release_report.updated"
+        },
         "release_watch.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Watch"
@@ -777,6 +795,26 @@
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         },
         {
+          "entityType": "ReleaseReportEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.updated",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "evict",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
           "entityType": "Report",
           "intent": "upsert",
           "invalidates": [
@@ -1170,6 +1208,26 @@
           ],
           "message": "agent_report.deleted",
           "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.updated",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "evict",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
         }
       ]
     },
@@ -1325,6 +1383,12 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/realtime.status"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_report.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_report.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/release_watch.deleted"
@@ -2769,6 +2833,29 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "GateCheck": {
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "passed",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "passed": {
+            "type": "boolean"
           }
         }
       },
@@ -5536,6 +5623,124 @@
           "time": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ReleaseReportEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "from_environment_id",
+          "from_environment",
+          "to_environment_id",
+          "to_environment",
+          "scope",
+          "status",
+          "state",
+          "state_reason",
+          "requested_by",
+          "via",
+          "plan_id",
+          "plan_revision",
+          "reused_plan",
+          "task_id",
+          "run_id",
+          "gates",
+          "preview",
+          "decision",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "evaluated_at": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCheck"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "string"
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "reused_plan": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string"
+          },
+          "state_reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "to_environment": {
+            "type": "string"
+          },
+          "to_environment_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "via": {
+            "type": "string"
           }
         }
       },

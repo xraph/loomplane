@@ -502,6 +502,15 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 	if err := s.require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
 	}
+	// The check above names a project ID; only the store knows its
+	// workspace. Another workspace's project is not found, as planning's
+	// list has it, never an empty list.
+	if s.d.Places == nil {
+		return nil, errors.New("releaseprep: release preparation isn't wired on this server")
+	}
+	if _, err := s.d.Places.GetProject(ctx, p.OrgID, projectID); err != nil {
+		return nil, err
+	}
 	reports, err := s.d.Store.List(ctx, p.OrgID, projectID, limit)
 	if err != nil {
 		return nil, err

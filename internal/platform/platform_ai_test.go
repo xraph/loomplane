@@ -13,6 +13,10 @@ import (
 	"github.com/xraph/loomplane/extensions/agentwatch"
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/aiagent"
+	"github.com/xraph/loomplane/extensions/identity"
+	notificationsext "github.com/xraph/loomplane/extensions/notifications"
+	planningext "github.com/xraph/loomplane/extensions/planning"
+	releaseprepext "github.com/xraph/loomplane/extensions/releaseprep"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/orchestration"
 )
@@ -114,6 +118,37 @@ func TestWatchExtensionOnlyWithAI(t *testing.T) {
 	for _, ext := range Extensions(cfg) {
 		if ext.Name() == agentwatch.Name && !slices.Contains(ext.Dependencies(), aiagent.Name) {
 			t.Fatalf("the watcher doesn't wait for the agent: %v", ext.Dependencies())
+		}
+	}
+}
+
+// Release preparation exists only with AI on, after the agent, whose
+// runs, requests, binder and authorizer it works through. With AI off the
+// AI-off extension answers its jobs and adds nothing else; the routes and
+// the settle cron are the extension's, so with it gone they are too.
+func TestReleasePreparationOnlyWithAI(t *testing.T) {
+	off := names(config.Defaults())
+	if slices.Contains(off, releaseprepext.Name) {
+		t.Fatalf("AI is off and release preparation is registered: %v", off)
+	}
+	if !slices.Contains(off, aiext.OffName) {
+		t.Fatalf("AI is off and nothing answers its jobs: %v", off)
+	}
+	cfg := config.Defaults()
+	cfg.AI.Enabled = true
+	got := names(cfg)
+	prep, agent, watch := slices.Index(got, releaseprepext.Name), slices.Index(got, aiagent.Name), slices.Index(got, agentwatch.Name)
+	if prep < 0 || agent < 0 || prep < agent || prep < watch {
+		t.Fatalf("AI is on: release preparation at %d, the agent at %d, the watcher at %d: %v", prep, agent, watch, got)
+	}
+	for _, ext := range Extensions(cfg) {
+		if ext.Name() != releaseprepext.Name {
+			continue
+		}
+		for _, d := range []string{aiagent.Name, planningext.Name, notificationsext.Name, identity.Name} {
+			if !slices.Contains(ext.Dependencies(), d) {
+				t.Errorf("release preparation doesn't wait for %s: %v", d, ext.Dependencies())
+			}
 		}
 	}
 }

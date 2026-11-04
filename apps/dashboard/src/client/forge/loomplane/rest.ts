@@ -6526,6 +6526,87 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly releaseReports = {
+    /**
+     * Stop a release preparation
+     * The person who asked for it, while they may use the agent on the project, or someone who may approve its deployments. What already happened stands: a report that has finished is a 409. The plan is left for a person to decide.
+     */
+    cancel: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseReport> => {
+      let __path = `/api/v1/release-reports/${encodeURIComponent(String(id))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseReport"],
+      };
+
+      return this.request<types.ReleaseReport>(config);
+    },
+
+    /**
+     * One release report
+     * Needs deployment:read on the report's project.
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseReport> => {
+      let __path = `/api/v1/release-reports/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseReport"],
+      };
+
+      return this.request<types.ReleaseReport>(config);
+    },
+
+    /**
+     * A project's release reports
+     * Needs deployment:read on the project. Newest first.
+     */
+    list: async (id: string, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseReportList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/release-reports`;
+      const queryParams: Record<string, any> = {};
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseReportList"],
+      };
+
+      return this.request<types.ReleaseReportList>(config);
+    },
+
+    /**
+     * Ask the agent to prepare a production release
+     * Needs agent:use and deployment:create on the project, as a person. Loomplane plans the promotion from staging, collects the evidence and the agent reviews it. Only someone who may approve production gets a release promoted without a second person; anyone else's waits for an approver in Needs approval. A plan waiting for a decision on production is a 409 naming it, unless you set replace.
+     */
+    prepare: async (id: string, body: types.PrepareInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseReport> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/release-reports`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PrepareInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseReport"],
+      };
+
+      return this.request<types.ReleaseReport>(config);
+    },
+
+  };
+
   public readonly releaseWatches = {
     /**
      * How long a release in the environment would be watched, which services a canary would ramp, and whether each other service can be watched

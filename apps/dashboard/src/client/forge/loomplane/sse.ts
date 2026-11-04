@@ -772,6 +772,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('release_report.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
+            this.emit('release_report.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('release_report.updated', (event: MessageEvent) => {
+          try {
+            const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
+            this.emit('release_report.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('release_watch.deleted', (event: MessageEvent) => {
           try {
             const data: types.Watch = decode(JSON.parse(event.data), "Watch");
@@ -1458,6 +1476,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
     this.off('realtime.status', handler);
+  }
+
+  /**
+   * Register a handler for release_report.deleted events.
+   * @param handler - Function to call when release_report.deleted event is received
+   */
+  onReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.on('release_report.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for release_report.deleted events.
+   * @param handler - The handler to remove
+   */
+  offReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.off('release_report.deleted', handler);
+  }
+
+  /**
+   * Register a handler for release_report.updated events.
+   * @param handler - Function to call when release_report.updated event is received
+   */
+  onReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.on('release_report.updated', handler);
+  }
+
+  /**
+   * Remove a handler for release_report.updated events.
+   * @param handler - The handler to remove
+   */
+  offReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.off('release_report.updated', handler);
   }
 
   /**

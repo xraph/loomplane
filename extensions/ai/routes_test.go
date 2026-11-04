@@ -38,6 +38,7 @@ import (
 	"github.com/xraph/loomplane/internal/platform"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/releaseprep"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -276,6 +277,10 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	if err = engine.RegisterCron(ctx, eng, &cron.Definition[struct{}]{Name: agentwatch.CronTick, JobName: agentwatch.JobTick, Schedule: agentwatch.TickSchedule, Queue: agentruns.SweepQueue}); err != nil {
 		t.Fatal(err)
 	}
+	// Release preparation's settle, scheduled while AI was on.
+	if err = engine.RegisterCron(ctx, eng, &cron.Definition[struct{}]{Name: releaseprep.CronSettle, JobName: releaseprep.JobSettle, Schedule: "@every 30s", Queue: releaseprep.JobQueue}); err != nil {
+		t.Fatal(err)
+	}
 	app := forge.New(forge.WithAppName("ai-off-test"))
 	off := aiext.NewOff(func() *engine.Engine { return eng })
 	if err = off.Register(app); err != nil {
@@ -287,23 +292,24 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	for _, name := range []string{
 		aiext.JobReconcileModels, aiext.JobAccrueModels, agentruns.JobSweep, agentknowledge.JobRecover,
 		agentknowledge.JobBackfillReports, agentwatch.JobTick, agentwatch.JobOrg, agentwatch.JobDeliver,
+		releaseprep.JobPrepare, releaseprep.JobSettle,
 	} {
 		run, ok := eng.Registry().Get(name)
 		if !ok {
 			t.Fatalf("no %s handler with AI off: %v", name, eng.Registry().Names())
 		}
 		// What the cron enqueues runs, and does nothing.
-		for _, payload := range [][]byte{nil, []byte("{}"), []byte(`{"OrgID":"org_1","ReportID":"arep_1"}`)} {
+		for _, payload := range [][]byte{nil, []byte("{}"), []byte(`{"OrgID":"org_1","ReportID":"arep_1"}`), []byte(`{"org_id":"org_1","report_id":"rrep_1","supersedes":"pln_1","waits":2}`)} {
 			if err = run(ctx, payload); err != nil {
 				t.Errorf("%s with AI off, payload %q: %v", name, payload, err)
 			}
 		}
 	}
-	if names := eng.Registry().Names(); len(names) != 8 {
+	if names := eng.Registry().Names(); len(names) != 10 {
 		t.Errorf("AI off registers %v", names)
 	}
 	crons, err := eng.CronStore().ListCrons(ctx)
-	if err != nil || len(crons) != 4 {
+	if err != nil || len(crons) != 5 {
 		t.Errorf("crons %+v, %v", crons, err)
 	}
 }

@@ -607,6 +607,28 @@ func TestListBoundsItsLimit(t *testing.T) {
 	}
 }
 
+// A project of another workspace lists as not found, as planning's list
+// does, rather than as an empty list: the permission check names a
+// project ID, and only the store knows which workspace it belongs to.
+func TestListKeepsToItsWorkspacesProjects(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.reviewing(t, agentruns.StatusWaiting, DecisionAsk)
+	r.places.goneProj = map[string]bool{"proj_elsewhere": true}
+	if got, err := r.svc.List(ctx, dev, "proj_elsewhere", 0); !errors.Is(err, projects.ErrNotFound) || got != nil {
+		t.Fatalf("another workspace's project: %+v %v, want projects.ErrNotFound", got, err)
+	}
+	r.places.mu.Lock()
+	orgs := slices.Clone(r.places.lastOrgIDs)
+	r.places.mu.Unlock()
+	if len(orgs) != 1 || orgs[0] != dev.OrgID {
+		t.Fatalf("the project was read in %v", orgs)
+	}
+	if got, err := r.svc.List(ctx, dev, "proj_a", 0); err != nil || len(got) != 1 {
+		t.Fatalf("its own project: %+v %v", got, err)
+	}
+}
+
 func TestSettleNotifiesOncePerState(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)

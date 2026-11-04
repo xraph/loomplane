@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentwatch"
+	"github.com/xraph/loomplane/internal/releaseprep"
 )
 
 // OffName is the name of the extension the platform registers when AI is
@@ -99,4 +100,13 @@ func RegisterOffJobs(eng *engine.Engine) {
 	engine.Register(eng, job.NewDefinition(agentwatch.JobDeliver, func(context.Context, agentwatch.DeliverPayload) error {
 		return nil
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// Release preparation's settle, scheduled while AI was on, and a
+	// preparation queued just before AI went off: they do nothing. A
+	// report left planning or reviewing is settled when AI is on again.
+	engine.Register(eng, job.NewDefinition(releaseprep.JobSettle, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(releaseprep.JobQueue), job.WithMaxRetries(0)))
+	engine.Register(eng, job.NewDefinition(releaseprep.JobPrepare, func(context.Context, releaseprep.JobPayload) error {
+		return nil
+	}, job.WithQueue(releaseprep.JobQueue), job.WithMaxRetries(0)))
 }

@@ -47,6 +47,7 @@ import (
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
+	releaseprepext "github.com/xraph/loomplane/extensions/releaseprep"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
@@ -190,8 +191,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 		agent := aiagent.New(cfg, jobs.Engine)
 		exts = append(exts, agent.LibraryExtensions()...)
 		// The watcher comes after the agent, whose reports, runs and binder
-		// it works through.
-		exts = append(exts, agent, agentwatch.New(cfg, jobs.Engine))
+		// it works through, and so does release preparation, which also
+		// installs the promotion gate in the agent's authorizer.
+		exts = append(exts, agent, agentwatch.New(cfg, jobs.Engine), releaseprepext.New(cfg, jobs.Engine))
 	} else {
 		// What AI scheduled while it was on stays in the database and keeps
 		// firing; this gives those jobs handlers that do nothing, and adds

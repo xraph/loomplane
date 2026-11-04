@@ -10153,6 +10153,88 @@
         }
       }
     },
+    "/api/v1/projects/{id}/release-reports": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "A project's release reports",
+        "description": "Needs deployment:read on the project. Newest first.",
+        "operationId": "releaseReports.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release reports, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReportList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Ask the agent to prepare a production release",
+        "description": "Needs agent:use and deployment:create on the project, as a person. Loomplane plans the promotion from staging, collects the evidence and the agent reviews it. Only someone who may approve production gets a release promoted without a second person; anyone else's waits for an approver in Needs approval. A plan waiting for a decision on production is a 409 naming it, unless you set replace.",
+        "operationId": "releaseReports.prepare",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The release report, while it's prepared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/rollbacks": {
       "post": {
         "tags": [
@@ -13496,6 +13578,72 @@
         }
       }
     },
+    "/api/v1/release-reports/{id}": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "One release report",
+        "description": "Needs deployment:read on the report's project.",
+        "operationId": "releaseReports.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/release-reports/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Stop a release preparation",
+        "description": "The person who asked for it, while they may use the agent on the project, or someone who may approve its deployments. What already happened stands: a report that has finished is a 409. The plan is left for a person to decide.",
+        "operationId": "releaseReports.cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cancelled release report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/service-backup-retirements/{id}": {
       "get": {
         "tags": [
@@ -16766,6 +16914,45 @@
           }
         }
       },
+      "CanarySummary": {
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "plan_id",
+          "status",
+          "services",
+          "action_ids"
+        ],
+        "properties": {
+          "action_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "CanaryVerdict": {
         "type": "object",
         "required": [
@@ -17671,6 +17858,37 @@
             "type": "string"
           },
           "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangedService": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "provider",
+          "op",
+          "canary",
+          "last_canary"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "canary": {
+            "type": "boolean"
+          },
+          "last_canary": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           }
         }
@@ -21298,6 +21516,30 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/deployments.Deployment"
       },
+      "DiffCommit": {
+        "type": "object",
+        "required": [
+          "sha",
+          "title",
+          "author",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "author": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "DiscoveredService": {
         "type": "object",
         "required": [
@@ -23903,6 +24145,29 @@
           }
         }
       },
+      "GateCheck": {
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "passed",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "passed": {
+            "type": "boolean"
+          }
+        }
+      },
       "GatewayList": {
         "properties": {
           "gateways": {
@@ -25437,6 +25702,37 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "MigrationFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "status",
+          "additions",
+          "deletions",
+          "patch",
+          "truncated"
+        ],
+        "properties": {
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "patch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
       },
       "ModelDeploymentList": {
         "properties": {
@@ -27027,6 +27323,33 @@
           }
         }
       },
+      "OpenReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "path",
+          "opened_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "Operation": {
         "type": "object",
         "required": [
@@ -28172,6 +28495,26 @@
           },
           "mail_enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "PrepareInputBody": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "replace": {
+            "type": "boolean"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "to": {
+            "type": "string"
           }
         }
       },
@@ -29405,6 +29748,120 @@
           }
         }
       },
+      "ReadinessEvidence": {
+        "type": "object",
+        "required": [
+          "collected_at",
+          "plan_status",
+          "sources",
+          "problems",
+          "warnings",
+          "destroy",
+          "data_updates",
+          "backup_schedule",
+          "changed_services",
+          "artifacts",
+          "pins_match",
+          "pin_differences",
+          "canaries",
+          "open_reports",
+          "unavailable"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChoice"
+            }
+          },
+          "backup_schedule": {
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "canaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanarySummary"
+            }
+          },
+          "changed_services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedService"
+            }
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          },
+          "data_updates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destroy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "open_reports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenReport"
+            }
+          },
+          "pin_differences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pins_match": {
+            "type": "boolean"
+          },
+          "plan_status": {
+            "type": "string"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "production_release": {
+            "$ref": "#/components/schemas/ReleaseEvidence"
+          },
+          "soak": {
+            "$ref": "#/components/schemas/Soak"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDiff"
+            }
+          },
+          "staging_release": {
+            "$ref": "#/components/schemas/ReleaseEvidence"
+          },
+          "unavailable": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
+        }
+      },
       "Rebuild": {
         "type": "object",
         "required": [
@@ -30008,6 +30465,167 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ReleaseReport": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "from_environment_id",
+          "from_environment",
+          "to_environment_id",
+          "to_environment",
+          "scope",
+          "status",
+          "state",
+          "state_reason",
+          "requested_by",
+          "via",
+          "plan_id",
+          "plan_revision",
+          "reused_plan",
+          "task_id",
+          "run_id",
+          "gates",
+          "preview",
+          "decision",
+          "concerns",
+          "request_id",
+          "decided_by",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "concerns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Concern"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decided_by": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "evaluated_at": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ReadinessEvidence"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCheck"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "string"
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "reused_plan": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string"
+          },
+          "state_reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "to_environment": {
+            "type": "string"
+          },
+          "to_environment_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "via": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleaseReportList": {
+        "type": "object",
+        "required": [
+          "reports"
+        ],
+        "properties": {
+          "reports": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
           }
         }
       },
@@ -33177,6 +33795,82 @@
           }
         }
       },
+      "SourceDiff": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "alias",
+          "repository",
+          "production_commit",
+          "staging_commit",
+          "direction",
+          "ahead_by",
+          "behind_by",
+          "total_commits",
+          "commits",
+          "files_changed",
+          "additions",
+          "deletions",
+          "migrations",
+          "truncated"
+        ],
+        "properties": {
+          "additions": {
+            "type": "integer"
+          },
+          "ahead_by": {
+            "type": "integer"
+          },
+          "alias": {
+            "type": "string"
+          },
+          "behind_by": {
+            "type": "integer"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiffCommit"
+            }
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "files_changed": {
+            "type": "integer"
+          },
+          "migrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationFile"
+            }
+          },
+          "production_commit": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "staging_commit": {
+            "type": "string"
+          },
+          "total_commits": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
       "SourceList": {
         "properties": {
           "sources": {
@@ -35020,6 +35714,30 @@
           },
           "revoked": {
             "$ref": "#/components/schemas/APIKey"
+          }
+        }
+      },
+      "Concern": {
+        "type": "object",
+        "required": [
+          "kind",
+          "text",
+          "run_id",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
           }
         }
       },
