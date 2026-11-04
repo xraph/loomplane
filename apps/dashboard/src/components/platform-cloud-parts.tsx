@@ -1,6 +1,17 @@
 import type { ReactNode } from "react"
 
 import { messageOf } from "@/client/errors"
+import { PlatformCloudIcon } from "@/components/icons"
+import { StatusPill, type Tone } from "@/components/runs"
+import {
+  ZeroState,
+  ZeroStateContent,
+  ZeroStateDescription,
+  ZeroStateHeader,
+  ZeroStateMedia,
+  ZeroStateTitle,
+} from "@/components/zero-state"
+import { statusLabel } from "@/lib/platform-cloud"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -95,5 +106,62 @@ export function Confirm({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+/** PlatformCloudEmpty keeps section empty states on the shared inline treatment. */
+export function PlatformCloudEmpty({
+  title,
+  children,
+  action,
+}: {
+  title: string
+  children: ReactNode
+  action?: ReactNode
+}) {
+  return (
+    <ZeroState variant="inline" preview={false}>
+      <ZeroStateHeader>
+        <ZeroStateMedia variant="icon">
+          <PlatformCloudIcon />
+        </ZeroStateMedia>
+        <ZeroStateTitle>{title}</ZeroStateTitle>
+        <ZeroStateDescription>{children}</ZeroStateDescription>
+      </ZeroStateHeader>
+      {action && <ZeroStateContent>{action}</ZeroStateContent>}
+    </ZeroState>
+  )
+}
+
+const platformTones: Record<string, Tone> = {
+  ready: "live",
+  active: "live",
+  enabled: "live",
+  running: "live",
+  reserved: "flight",
+  pending: "waiting",
+  draining: "waiting",
+  suspended: "waiting",
+  failed: "failed",
+  error: "failed",
+  blocked: "failed",
+}
+
+/** PlatformCloudStatus keeps domain labels while using shared semantic tones. */
+export function PlatformCloudStatus({
+  kind,
+  status,
+  waitingCapacity = false,
+}: {
+  kind: Parameters<typeof statusLabel>[0]
+  status: string
+  waitingCapacity?: boolean
+}) {
+  return (
+    <StatusPill
+      tone={waitingCapacity ? "waiting" : (platformTones[status] ?? "quiet")}
+    >
+      {waitingCapacity ? "Waiting for room" : statusLabel(kind, status)}
+    </StatusPill>
   )
 }

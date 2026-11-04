@@ -8,13 +8,15 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Region } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { errorOf } from "@/components/platform-cloud-parts"
+import {
+  errorOf,
+  PlatformCloudEmpty,
+  PlatformCloudStatus,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { statusLabel } from "@/lib/platform-cloud"
 
 /** PlatformCloudRegions lists the regions workspaces pick from, with add and close. */
 export function PlatformCloudRegions() {
@@ -62,6 +64,32 @@ export function PlatformCloudRegions() {
     }
   }
 
+  const addForm = (
+    <form onSubmit={add} className="flex flex-wrap items-center gap-2">
+      <Input
+        aria-label="Region name"
+        className="w-40"
+        placeholder="eu-west"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <Input
+        aria-label="Region display name"
+        className="w-48"
+        placeholder="Western Europe"
+        value={displayName}
+        onChange={(e) => setDisplayName(e.target.value)}
+      />
+      <Button
+        type="submit"
+        size="sm"
+        disabled={create.isPending || !name.trim() || !displayName.trim()}
+      >
+        Add region
+      </Button>
+    </form>
+  )
+
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-base font-medium">Regions</h2>
@@ -84,7 +112,7 @@ export function PlatformCloudRegions() {
             <div className="font-medium">{r.displayName}</div>
             <div className="text-xs text-muted-foreground">{r.name}</div>
           </div>
-          <Badge variant="outline">{statusLabel("region", r.status)}</Badge>
+          <PlatformCloudStatus kind="region" status={r.status} />
           {r.status === "closed" ? (
             <Button
               size="sm"
@@ -108,29 +136,13 @@ export function PlatformCloudRegions() {
           )}
         </div>
       ))}
-      <form onSubmit={add} className="flex flex-wrap items-center gap-2">
-        <Input
-          aria-label="Region name"
-          className="w-40"
-          placeholder="eu-west"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          aria-label="Region display name"
-          className="w-48"
-          placeholder="Western Europe"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-        />
-        <Button
-          type="submit"
-          size="sm"
-          disabled={create.isPending || !name.trim() || !displayName.trim()}
-        >
-          Add region
-        </Button>
-      </form>
+      {regions.data?.regions.length === 0 ? (
+        <PlatformCloudEmpty title="No regions yet." action={addForm}>
+          Add a region so you can group hosts by location.
+        </PlatformCloudEmpty>
+      ) : regions.data || regions.status === "error" ? (
+        addForm
+      ) : null}
     </section>
   )
 }

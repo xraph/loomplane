@@ -2,7 +2,11 @@ import { statusOf } from "@/client/errors"
 import { useWorkspacePlatformCloudGet } from "@/client/forge/loomplane/hooks"
 import type { EnvironmentUsage, Project } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { errorOf } from "@/components/platform-cloud-parts"
+import {
+  errorOf,
+  PlatformCloudEmpty,
+  PlatformCloudStatus,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -14,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { statusLabel, suspendMessage, usageRows } from "@/lib/platform-cloud"
+import { suspendMessage, usageRows } from "@/lib/platform-cloud"
 
 /** RunByInstance marks a Cloud the instance owner runs. It says nothing else. */
 export function RunByInstance() {
@@ -43,9 +47,9 @@ export function PlatformCloudUsage({
 
   if (view.status === "error" && statusOf(view.error) === 403) {
     return (
-      <p className="mb-5 text-sm text-muted-foreground">
-        You can&apos;t see this Cloud&apos;s use.
-      </p>
+      <PlatformCloudEmpty title="You can't see this Cloud's use.">
+        Ask a workspace owner for permission to view usage.
+      </PlatformCloudEmpty>
     )
   }
   if (view.status === "error") {
@@ -61,9 +65,9 @@ export function PlatformCloudUsage({
   const data = view.data
   if (!data.enabled) {
     return (
-      <p className="mb-5 text-sm text-muted-foreground">
-        Loomplane Cloud isn&apos;t available to this workspace
-      </p>
+      <PlatformCloudEmpty title="Loomplane Cloud isn't available to this workspace">
+        The instance owner manages access to this Cloud.
+      </PlatformCloudEmpty>
     )
   }
   const message = suspendMessage(data.suspendReasons ?? [])
@@ -103,12 +107,14 @@ export function PlatformCloudUsage({
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-medium">Regions</h2>
         {regions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No regions yet.</p>
+          <PlatformCloudEmpty title="No regions yet.">
+            Regions appear here when the instance owner makes them available.
+          </PlatformCloudEmpty>
         ) : (
           regions.map((r) => (
             <div key={r.name} className="flex items-center gap-2 text-sm">
               <span>{r.displayName}</span>
-              <Badge variant="outline">{statusLabel("region", r.status)}</Badge>
+              <PlatformCloudStatus kind="region" status={r.status} />
             </div>
           ))
         )}
@@ -116,9 +122,9 @@ export function PlatformCloudUsage({
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-medium">Placements</h2>
         {placements.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Nothing is placed here yet.
-          </p>
+          <PlatformCloudEmpty title="Nothing is placed here yet.">
+            Services appear here after you deploy to this Cloud.
+          </PlatformCloudEmpty>
         ) : (
           <Table>
             <TableHeader>
@@ -142,9 +148,11 @@ export function PlatformCloudUsage({
                   <TableCell>{environmentName(p.environment)}</TableCell>
                   <TableCell>{regionName(p.region)}</TableCell>
                   <TableCell>
-                    {p.waitingCapacity
-                      ? "Waiting for room"
-                      : statusLabel("placement", p.state)}
+                    <PlatformCloudStatus
+                      kind="placement"
+                      status={p.state}
+                      waitingCapacity={p.waitingCapacity}
+                    />
                   </TableCell>
                 </TableRow>
               ))}
