@@ -91,18 +91,7 @@ func TestReportRoundTrip(t *testing.T) {
 	full.Via = ViaCLI
 	full.PlanID, full.PlanRevision, full.ReusedPlan = "plan_1", "rev_1", true
 	full.TaskID, full.RunID = "atask_1", "run_1"
-	full.Evidence = &ReadinessEvidence{
-		Diffs: []SourceDiff{{
-			SourceID: "src_1", Alias: "api", Repository: "acme/api", ProductionCommit: "a", StagingCommit: "b",
-			Direction: DirectionAhead, AheadBy: 1, TotalCommits: 1,
-			Commits:    []DiffCommit{{SHA: "b", Title: "Add users", Author: "ada", At: t0}},
-			Migrations: []MigrationFile{{Path: "db/migrate/1_users.rb", Status: "added", Additions: 3, Patch: "+create_table"}},
-		}},
-		Canaries:       []CanarySummary{{Status: "promoted", Services: []string{"api"}, ActionIDs: []string{"act_1"}}},
-		OpenReports:    []OpenReport{{ID: "arep_1", Title: "Errors up", Severity: "high", FirstSeenAt: t0}},
-		Unavailable:    map[string]string{"canaries": "no canary has run"},
-		BackupSchedule: true,
-	}
+	full.Evidence = fullEvidence()
 	full.Gates = []GateCheck{{Number: 1, Name: "autonomy", Passed: true, Detail: "the project allows it"}}
 	full.Preview = false
 	full.Decision = DecisionPromote
@@ -515,7 +504,7 @@ func TestReleaseReportEventsAreEmitted(t *testing.T) {
 	}
 
 	r := newReport("org_a", "proj_a", "env_prod")
-	r.Evidence = &ReadinessEvidence{Diffs: []SourceDiff{{Commits: []DiffCommit{{Title: "secret commit message"}}}}}
+	r.Evidence = &ReadinessEvidence{Sources: []SourceDiff{{Commits: []DiffCommit{{Title: "secret commit message"}}}}}
 	r.Concerns = []Concern{{Kind: ConcernAsk, Text: "secret concern"}}
 	mustCreate(t, s, r)
 

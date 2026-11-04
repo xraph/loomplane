@@ -156,45 +156,6 @@ type Concern struct {
 	At    time.Time `json:"at"`
 }
 
-// ReadinessEvidence is what the preparation read before the review.
-// Anything it couldn't read is named in Unavailable, and fails the gate that
-// needs it.
-//
-// Placeholder: ReadinessEvidence, ChangedService, CanarySummary and
-// OpenReport carry only the fields the store's tests need. Task 4 replaces
-// them with its own field list (keeping BackupSchedule and
-// CanarySummary.ActionIDs) and doesn't build on these names.
-type ReadinessEvidence struct {
-	Diffs          []SourceDiff      `json:"diffs"`
-	Services       []ChangedService  `json:"services"`
-	Canaries       []CanarySummary   `json:"canaries"`
-	OpenReports    []OpenReport      `json:"open_reports"`
-	BackupSchedule bool              `json:"backup_schedule"` // the plan sets a default backup schedule
-	Unavailable    map[string]string `json:"unavailable"`     // evidence name to why it couldn't be read
-}
-
-// ChangedService is a service the plan would change in production.
-type ChangedService struct {
-	ActionID string `json:"action_id"`
-	Name     string `json:"name"`
-}
-
-// CanarySummary is one recent canary of the project.
-type CanarySummary struct {
-	Status    string   `json:"status"`
-	Reason    string   `json:"reason"` // untrusted: the provider's words
-	Services  []string `json:"services"`
-	ActionIDs []string `json:"action_ids"`
-}
-
-// OpenReport is an agent report still open for the target environment.
-type OpenReport struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"` // untrusted: trimmed and cut, not scanned
-	Severity    string    `json:"severity"`
-	FirstSeenAt time.Time `json:"first_seen_at"`
-}
-
 // Errors of the store.
 var (
 	ErrNotFound        = errors.New("release report not found")
