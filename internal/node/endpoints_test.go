@@ -47,7 +47,9 @@ func TestServeRefusesDisallowed(t *testing.T) {
 	r.Register(eKube, func(context.Context, nodeproto.StreamHeader, net.Conn) error { t.Error("ran"); return nil })
 	c, done := serveWith(t, r, NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker}}), nodeproto.StreamHeader{Endpoint: eKube})
 	v, line := readRefusal(t, c)
-	if v != 1 || line != "endpoint kube is not allowed on this node\n" {
+	// Not allowed has a verdict of its own, so the hub can tell it from
+	// any other refusal.
+	if v != nodeproto.VerdictNotAllowed || line != "endpoint kube is not allowed on this node\n" {
 		t.Fatalf("%d %q", v, line)
 	}
 	<-done
@@ -57,7 +59,7 @@ func TestServeRefusesUnregistered(t *testing.T) {
 	r := &Registry{Log: discardLog()}
 	c, done := serveWith(t, r, NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker}}), nodeproto.StreamHeader{Endpoint: eDocker})
 	v, line := readRefusal(t, c)
-	if v != 1 || line != "endpoint docker is not available in this node version\n" {
+	if v != nodeproto.VerdictRefused || line != "endpoint docker is not available in this node version\n" {
 		t.Fatalf("%d %q", v, line)
 	}
 	<-done
@@ -93,7 +95,7 @@ func TestServeProbeGatedLikeAnyOther(t *testing.T) {
 	r := &Registry{Log: discardLog()}
 	r.Register(eProbe, ProbeHandler(func() DetectOptions { return DetectOptions{} }))
 	c, done := serveWith(t, r, NewLive(Config{}), nodeproto.StreamHeader{Endpoint: eProbe})
-	if v, _ := readRefusal(t, c); v != 1 {
+	if v, _ := readRefusal(t, c); v != nodeproto.VerdictNotAllowed {
 		t.Fatalf("probe should be refused when not allowed, got %d", v)
 	}
 	<-done
@@ -106,7 +108,7 @@ func TestServeRefusesAfterNarrowAndLogs(t *testing.T) {
 	live := NewLive(Config{Endpoints: []nodeproto.Endpoint{eDocker, eKube}})
 	live.Update(func(c *Config) { c.Narrow([]nodeproto.Endpoint{eDocker}) })
 	c, done := serveWith(t, r, live, nodeproto.StreamHeader{Endpoint: eKube})
-	if v, line := readRefusal(t, c); v != 1 || !strings.Contains(line, "not allowed") {
+	if v, line := readRefusal(t, c); v != nodeproto.VerdictNotAllowed || !strings.Contains(line, "not allowed") {
 		t.Fatalf("%d %q", v, line)
 	}
 	<-done

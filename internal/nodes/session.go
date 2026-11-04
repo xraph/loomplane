@@ -172,7 +172,8 @@ func (s *session) readLoop() {
 }
 
 // open opens a data stream, writes the header and waits for the node's
-// verdict: 0 accepts; anything else is followed by a reason line.
+// verdict: VerdictAccepted accepts; anything else is followed by a reason
+// line.
 func (s *session) open(ctx context.Context, hdr nodeproto.StreamHeader) (net.Conn, error) {
 	st, err := s.mux.OpenStream()
 	if err != nil {
@@ -207,8 +208,9 @@ func (s *session) open(ctx context.Context, hdr nodeproto.StreamHeader) (net.Con
 	if _, err := io.ReadFull(st, v[:]); err != nil {
 		return fail(err)
 	}
-	if v[0] != 0 {
-		return fail(&refusedError{reason: readReason(st)})
+	if v[0] != nodeproto.VerdictAccepted {
+		// A code this hub doesn't know is a plain refusal.
+		return fail(&refusedError{reason: readReason(st), notAllowed: v[0] == nodeproto.VerdictNotAllowed})
 	}
 	if !stop() {
 		return fail(ctx.Err())

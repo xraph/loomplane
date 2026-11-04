@@ -22,6 +22,19 @@ const (
 	CloseUnauthorized = 4401
 )
 
+// A node answers each stream's header with one verdict byte. Anything but
+// VerdictAccepted is followed by a reason line ending in a newline. A
+// reader takes a code it doesn't know for VerdictRefused, so a code added
+// later stays within protocol Version 1.
+const (
+	VerdictAccepted byte = 0
+	// VerdictRefused refuses the stream for the reason that follows.
+	VerdictRefused byte = 1
+	// VerdictNotAllowed refuses a stream whose endpoint the node doesn't
+	// allow, which only its owner can change on the machine.
+	VerdictNotAllowed byte = 2
+)
+
 // MaxHeaderSize is the largest stream header body, in bytes.
 const MaxHeaderSize = 16 * 1024
 

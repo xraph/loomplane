@@ -221,7 +221,7 @@ func TestRunNarrow(t *testing.T) {
 		return err == nil && len(c.Endpoints) == 1 && c.Endpoints[0] == nodeproto.EndpointProbe
 	})
 	_, err := r.open(nodeproto.EndpointDocker, cfg.NodeID)
-	if !errors.Is(err, nodes.ErrEndpointRefused) || !strings.Contains(err.Error(), "not allowed") {
+	if !errors.Is(err, nodes.ErrEndpointNotAllowed) || !errors.Is(err, nodes.ErrEndpointRefused) || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("docker after the narrow: %v", err)
 	}
 }

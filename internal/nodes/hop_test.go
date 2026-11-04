@@ -40,8 +40,15 @@ func TestHopForwards(t *testing.T) {
 		return 0, ""
 	}
 	_, err := b.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker})
-	if !errors.Is(err, ErrEndpointRefused) || !strings.HasSuffix(err.Error(), ": endpoint not allowed") {
+	if !errors.Is(err, ErrEndpointRefused) || !strings.HasSuffix(err.Error(), ": endpoint not allowed") || errors.Is(err, ErrEndpointNotAllowed) {
 		t.Fatalf("refused through hop: %v", err)
+	}
+	// The node's not-allowed verdict crosses the hop. (A hop's MAC is used
+	// once, so this header differs from the last one.)
+	n.verdict = func(nodeproto.StreamHeader) (byte, string) { return nodeproto.VerdictNotAllowed, "endpoint docker is not allowed on this node" }
+	_, err = b.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointDocker, OperationID: "op_2"})
+	if !errors.Is(err, ErrEndpointNotAllowed) || !errors.Is(err, ErrEndpointRefused) {
+		t.Fatalf("not allowed through hop: %v", err)
 	}
 	if _, err := b.hub.Open(context.Background(), "org_2", "node_1", nodeproto.StreamHeader{Endpoint: nodeproto.EndpointProbe}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other org through hop: %v", err)

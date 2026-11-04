@@ -41,8 +41,6 @@ func (r *Registry) Register(e nodeproto.Endpoint, h Handler) {
 	r.handlers[e] = h
 }
 
-const verdictRefused = 1
-
 // refusedError, returned by a Handler before it has used the stream, refuses
 // the stream with its reason instead of accepting it. Once the stream has
 // been used, Serve only logs it.
@@ -83,7 +81,7 @@ func (r *Registry) Serve(ctx context.Context, cfg *Live, stream net.Conn) {
 		return
 	}
 	if !cfg.Load().Allows(hdr.Endpoint) {
-		r.refuse(stream, fmt.Sprintf("endpoint %s is not allowed on this node", hdr.Endpoint))
+		r.refuseWith(stream, nodeproto.VerdictNotAllowed, fmt.Sprintf("endpoint %s is not allowed on this node", hdr.Endpoint))
 		return
 	}
 	// The rules every handler shares, such as a fenced docker stream
@@ -127,7 +125,7 @@ type acceptOnUse struct {
 
 // accept writes the accept verdict unless it, or a refusal, went first.
 func (a *acceptOnUse) accept() error {
-	a.once.Do(func() { _, a.err = a.Conn.Write([]byte{0}) })
+	a.once.Do(func() { _, a.err = a.Conn.Write([]byte{nodeproto.VerdictAccepted}) })
 	return a.err
 }
 
@@ -164,12 +162,17 @@ func accept(stream net.Conn) error {
 // single-line reason. The hub reads at most 512 bytes of reason, so the line
 // is capped below that.
 func (r *Registry) refuse(stream net.Conn, reason string) {
+	r.refuseWith(stream, nodeproto.VerdictRefused, reason)
+}
+
+// refuseWith is refuse with verdict code in place of VerdictRefused.
+func (r *Registry) refuseWith(stream net.Conn, code byte, reason string) {
 	reason = sanitize(reason)
 	if len(reason) > 500 {
 		reason = strings.ToValidUTF8(reason[:500], "")
 	}
 	r.logger().Warn("loomplane-node: refused a stream", "reason", reason)
-	if _, err := stream.Write(append([]byte{verdictRefused}, reason+"\n"...)); err != nil {
+	if _, err := stream.Write(append([]byte{code}, reason+"\n"...)); err != nil {
 		r.logger().Warn("loomplane-node: writing a refusal", "error", err)
 	}
 }
