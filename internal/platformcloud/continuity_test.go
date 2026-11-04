@@ -295,9 +295,9 @@ func TestSuspensionDuringARedeployStopsBoth(t *testing.T) {
 	}
 }
 
-// While both VMs exist the workspace's limits count only the new size, and
-// the host counts both.
-func TestRedeployLimitsCountTheNewSizeAndTheHostCountsBoth(t *testing.T) {
+// While both VMs exist the workspace's limits count the bigger size once,
+// here the new one, and the host counts both.
+func TestRedeployLimitsCountTheBiggerSizeAndTheHostCountsBoth(t *testing.T) {
 	e := newPlacerEnv(t, defaultTestLimits) // 4 vCPUs
 	h := e.readyHost(t, "a", Allotment{VCPUs: 8, MemoryMiB: 8192, DiskMiB: 8192, VMs: 4})
 	ctx := t.Context()
@@ -338,6 +338,128 @@ func TestRedeployLimitsCountTheNewSizeAndTheHostCountsBoth(t *testing.T) {
 	}
 	if got := e.placement(t, old.ID); got.State != stateRunning {
 		t.Fatalf("old = %+v", got)
+	}
+}
+
+// A small replacement that never runs doesn't make the big VM still running
+// look small: the workspace's use counts the bigger of the two until the
+// replacement runs.
+func TestASmallReplacementCountsTheBigServiceItWaitsOn(t *testing.T) {
+	e := newPlacerEnv(t, defaultTestLimits) // 4 vCPUs
+	e.readyHost(t, "a", Allotment{VCPUs: 8, MemoryMiB: 8192, DiskMiB: 8192, VMs: 4})
+	ctx := t.Context()
+	old, err := e.svc.Reserve(ctx, serviceReq("web", 3, 2048))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Running(ctx, "org_a", old.ID, "inst_web", 1); err != nil {
+		t.Fatal(err)
+	}
+	small := e.redeploy(t, "web", 1, 512)
+	if small.Replaces != old.ID {
+		t.Fatalf("small = %+v", small)
+	}
+	use, err := e.store.TenantUse(ctx, "org_a")
+	if err != nil || use.VCPUs != 3 || use.MemoryMiB != 2048 || use.VMs != 1 {
+		t.Fatalf("TenantUse = %+v, %v", use, err)
+	}
+	if _, err = e.svc.Reserve(ctx, serviceReq("worker", 2, 512)); !errors.Is(err, ErrLimit) {
+		t.Fatalf("another service past the limit while the big VM runs: %v", err)
+	}
+	// Placing the small one again still counts the running VM.
+	if _, err = e.svc.Reserve(ctx, serviceReq("web", 1, 512)); err != nil {
+		t.Fatalf("redeploying the small size again: %v", err)
+	}
+	if use, err = e.store.TenantUse(ctx, "org_a"); err != nil || use.VCPUs != 3 || use.VMs != 1 {
+		t.Fatalf("TenantUse after placing again = %+v, %v", use, err)
+	}
+}
+
+// A workspace above a limit the owner lowered can still shrink a running
+// service, and redeploy it at its size, without stopping it first. Growing
+// it, or adding another, is refused.
+func TestAWorkspaceAboveALoweredLimitCanShrinkWhatRuns(t *testing.T) {
+	e := newPlacerEnv(t, defaultTestLimits) // 4 vCPUs
+	e.readyHost(t, "a", Allotment{VCPUs: 8, MemoryMiB: 8192, DiskMiB: 8192, VMs: 4})
+	ctx := t.Context()
+	old, err := e.svc.Reserve(ctx, serviceReq("web", 4, 2048))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.svc.Running(ctx, "org_a", old.ID, "inst_web", 1); err != nil {
+		t.Fatal(err)
+	}
+	lowered := Limits{VCPUs: 2, MemoryMiB: 1024, VMs: 1, ConcurrentBuilds: 1}
+	if _, err = e.svc.SetTenant(ctx, "org_a", "enabled", &lowered); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.svc.Reserve(ctx, serviceReq("web", 5, 2048)); !errors.Is(err, ErrLimit) {
+		t.Fatalf("growing past the lowered limit: %v", err)
+	}
+	if _, err = e.svc.Reserve(ctx, serviceReq("web", 4, 2048)); err != nil {
+		t.Fatalf("redeploying at the same size: %v", err)
+	}
+	small, err := e.svc.Reserve(ctx, serviceReq("web", 2, 1024))
+	if err != nil {
+		t.Fatalf("shrinking under the lowered limit: %v", err)
+	}
+	if small.Replaces != old.ID {
+		t.Fatalf("small = %+v", small)
+	}
+	if _, err = e.svc.Reserve(ctx, serviceReq("worker", 1, 256)); !errors.Is(err, ErrLimit) {
+		t.Fatalf("another service while above the limit: %v", err)
+	}
+}
+
+// reserveOnRedeploy is a repair's redeploy that places the service again
+// with the context the repair handed it, as the deploy path does.
+type reserveOnRedeploy struct {
+	*fakeControl
+	svc    *Service
+	placed []*Placement
+	errs   []error
+}
+
+func (r *reserveOnRedeploy) Redeploy(ctx context.Context, _ string) error {
+	p, err := r.svc.Reserve(ctx, serviceReq("web", 1, 512))
+	r.placed, r.errs = append(r.placed, p), append(r.errs, err)
+	return err
+}
+
+// A service whose VM is gone from the only host, which it fills, comes back
+// on that host: the repair's reservation doesn't count the placement whose VM
+// is gone, which stays live until the new one runs.
+func TestRepairPutsAServiceBackOnTheFullHostItLost(t *testing.T) {
+	e, ctl := suspendEnv(t)
+	ctx := t.Context()
+	h := e.readyHost(t, "a", Allotment{VCPUs: 1, MemoryMiB: 512, DiskMiB: 1024, VMs: 1})
+	old := e.running(t, "web")
+	if _, err := e.svc.Reserve(ctx, serviceReq("web", 1, 512)); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("a redeploy beside the running VM: %v", err)
+	}
+	rr := &reserveOnRedeploy{fakeControl: ctl, svc: e.svc}
+	e.svc.WithInstances(rr)
+	e.svc.inspect = func(context.Context, string, fc.Scope) (fc.Record, error) { return fc.Record{}, fc.ErrMissing }
+	e.age(t, `true`)
+	if err := e.svc.RepairMissingVMs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(rr.placed) != 1 || rr.errs[0] != nil {
+		t.Fatalf("repair reservations = %v, %v", rr.placed, rr.errs)
+	}
+	if p := rr.placed[0]; hostOf(t, p) != h.ID || p.Replaces != old.ID {
+		t.Fatalf("repaired = %+v", p)
+	}
+	if got := e.placement(t, old.ID); got.State != stateRunning {
+		t.Fatalf("old = %+v, want it live until the new one runs", got)
+	}
+	// The repair's exemption is for that placement only: anything else
+	// still sees the host full.
+	if _, err := e.svc.Reserve(withVMGone(ctx, old.ID), serviceReq("worker", 1, 512)); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("another service under the repair's mark: %v", err)
+	}
+	if _, err := e.svc.Reserve(ctx, serviceReq("api", 1, 512)); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("another service after the repair: %v", err)
 	}
 }
 

@@ -412,7 +412,9 @@ func (s *PgStore) ListTenants(ctx context.Context) ([]Tenant, error) {
 
 // TenantUse adds up an organization's live placements. Services count toward
 // vCPUs, memory and VMs, whatever their state short of released (a suspended
-// service still holds its place). Reserved and running builds count as concurrent.
+// service still holds its place). A service and the replacement waiting to
+// take over from it count once, at the bigger of the two sizes. Reserved and
+// running builds count as concurrent.
 func (s *PgStore) TenantUse(ctx context.Context, orgID string) (Use, error) {
 	return tenantUse(ctx, s.db, orgID)
 }
@@ -424,15 +426,19 @@ func (s *PgStore) TenantUseTx(ctx context.Context, tx driverTx, orgID string) (U
 
 func tenantUse(ctx context.Context, q querier, orgID string) (Use, error) {
 	var u Use
-	// A placement a live replacement is taking over from is counted as the
-	// replacement: the service holds one place at the replacement's size.
+	// A placement and the live replacement taking over from it hold one
+	// place, at the bigger of the two sizes: the old VM keeps running until
+	// the new one does, and a replacement that never runs mustn't make it
+	// look smaller. A replacement whose placement is gone counts alone.
 	err := q.QueryRow(ctx, `SELECT
-coalesce(sum(vcpus) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
-coalesce(sum(memory_mib) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
-count(*) FILTER (WHERE kind='service' AND state<>'released')::int,
-count(*) FILTER (WHERE kind='build' AND state IN ('reserved','running'))::int
-FROM loomplane_platform_placements p WHERE org_id=$1
-AND NOT EXISTS(SELECT 1 FROM loomplane_platform_placements r WHERE r.replaces=p.id AND r.state<>'released')`, orgID).Scan(&u.VCPUs, &u.MemoryMiB, &u.VMs, &u.ConcurrentBuilds)
+coalesce(sum(greatest(p.vcpus,coalesce(r.vcpus,0))) FILTER (WHERE p.kind='service'),0)::int,
+coalesce(sum(greatest(p.memory_mib,coalesce(r.memory_mib,0))) FILTER (WHERE p.kind='service'),0)::int,
+count(*) FILTER (WHERE p.kind='service')::int,
+count(*) FILTER (WHERE p.kind='build' AND p.state IN ('reserved','running'))::int
+FROM loomplane_platform_placements p
+LEFT JOIN loomplane_platform_placements r ON r.org_id=p.org_id AND r.replaces=p.id AND r.state<>'released'
+WHERE p.org_id=$1 AND p.state<>'released'
+AND (p.replaces='' OR NOT EXISTS(SELECT 1 FROM loomplane_platform_placements o WHERE o.id=p.replaces AND o.state<>'released'))`, orgID).Scan(&u.VCPUs, &u.MemoryMiB, &u.VMs, &u.ConcurrentBuilds)
 	return u, err
 }
 

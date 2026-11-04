@@ -179,8 +179,9 @@ func (s *Service) preview(ctx context.Context, req Request) (*Ref, error) {
 // A running service placed again (a redeploy, a resize, a move) keeps
 // running: the new placement replaces it, and Running releases it once the
 // new VM is up. Until then both count on their hosts, since both VMs exist,
-// while the workspace's limits count only the new one, so a resize only
-// needs the difference. A new placement that never runs is released by
+// while the workspace's limits count the pair once, at the bigger of the two
+// sizes, so a resize only needs the difference. A new placement that never
+// runs is released by
 // Abandon or the sweep, and the old one runs on. Any other live placement
 // of the resource, and a replacement still waiting from an earlier deploy,
 // is released in the same transaction.
@@ -255,10 +256,10 @@ func (s *Service) reserveTx(ctx context.Context, tx driverTx, t *Tenant, req Req
 		release = append(release, live.current.ID)
 	}
 	// What the host loads leave out: what this reservation releases, and a
-	// kept placement whose service a move puts back on its host, where
-	// the move stopped it.
+	// kept placement whose VM isn't on its host any more: a move stopped it
+	// and puts the service back, or a repair found it gone.
 	exclude := slices.Clone(release)
-	if keep && live.current.HostID != nil && *live.current.HostID == keepHostFrom(ctx) {
+	if keep && vmAway(ctx, live.current) {
 		exclude = append(exclude, live.current.ID)
 	}
 	hosts, listErr := s.candidates(ctx, tx, req, region, live.current, exclude)
@@ -363,9 +364,11 @@ func limitsOf(t *Tenant, defaults Limits) Limits {
 }
 
 // checkLimits resolves the region, finds the resource's live placements, if
-// any, and checks the request against the workspace's limits as if the one
-// the workspace's use counts were already released: a replacement still
-// waiting to run, or else the current placement. Builds count only against
+// any, and checks the request against the workspace's limits as if what the
+// resource holds were already given back, adding what it will hold once
+// placed: the request, or while a running service stays until its
+// replacement runs, the bigger of the two. A resource that already holds a
+// place is refused only what it adds. Builds count only against
 // concurrent builds and services only against vCPUs, memory and VMs.
 func (s *Service) checkLimits(ctx context.Context, q querier, req Request, limits Limits) (*Region, livePair, error) {
 	region, err := regionByName(ctx, q, req.Region)
@@ -393,17 +396,22 @@ func (s *Service) checkLimits(ctx context.Context, q querier, req Request, limit
 		}
 		return region, live, nil
 	}
-	if old != nil {
-		use.VCPUs -= old.VCPUs
-		use.MemoryMiB -= old.MemoryMiB
-		use.VMs--
+	heldVCPUs, heldMem := live.held()
+	use.VCPUs -= heldVCPUs
+	use.MemoryMiB -= heldMem
+	needVCPUs, needMem := req.VCPUs, req.MemoryMiB
+	if c := live.current; c != nil && c.State == stateRunning && c.Kind == kindService {
+		needVCPUs, needMem = max(needVCPUs, c.VCPUs), max(needMem, c.MemoryMiB)
 	}
+	// Only what raises the workspace's use is refused: a workspace above a
+	// lowered limit can still redeploy or shrink what it runs, and the bigger
+	// of a pair is what it already holds.
 	switch {
-	case use.VCPUs+req.VCPUs > limits.VCPUs:
+	case req.VCPUs > heldVCPUs && use.VCPUs+needVCPUs > limits.VCPUs:
 		return nil, livePair{}, limitError(vcpuAmount, req.VCPUs, use.VCPUs, limits.VCPUs)
-	case use.MemoryMiB+req.MemoryMiB > limits.MemoryMiB:
+	case req.MemoryMiB > heldMem && use.MemoryMiB+needMem > limits.MemoryMiB:
 		return nil, livePair{}, limitError(memoryAmount, req.MemoryMiB, use.MemoryMiB, limits.MemoryMiB)
-	case use.VMs >= limits.VMs:
+	case old == nil && use.VMs >= limits.VMs:
 		return nil, livePair{}, limitError(vmAmount, 1, use.VMs, limits.VMs)
 	}
 	return region, live, nil
@@ -448,6 +456,17 @@ func (l livePair) counted() *Placement {
 	return l.current
 }
 
+// held is what the workspace's use counts for the resource, as tenantUse
+// counts it: the bigger of the current placement and its replacement.
+func (l livePair) held() (vcpus, memoryMiB int) {
+	for _, p := range []*Placement{l.current, l.pending} {
+		if p != nil {
+			vcpus, memoryMiB = max(vcpus, p.VCPUs), max(memoryMiB, p.MemoryMiB)
+		}
+	}
+	return vcpus, memoryMiB
+}
+
 // replaced is what a Preview leaves out of the host loads, as Reserve
 // would: the waiting replacement, and the current placement unless it is a
 // running service that stays until the new one runs.
@@ -456,8 +475,7 @@ func (l livePair) replaced(ctx context.Context, req Request) []string {
 	if l.pending != nil {
 		out = append(out, l.pending.ID)
 	}
-	if c := l.current; c != nil && (c.State != stateRunning || c.Kind != kindService || restoreFrom(ctx) != "" ||
-		(c.HostID != nil && *c.HostID == keepHostFrom(ctx))) {
+	if c := l.current; c != nil && (c.State != stateRunning || c.Kind != kindService || restoreFrom(ctx) != "" || vmAway(ctx, c)) {
 		out = append(out, c.ID)
 	}
 	return out
@@ -495,6 +513,26 @@ func KeptHost(ctx context.Context) string { return keepHostFrom(ctx) }
 func keepHostFrom(ctx context.Context) string {
 	id, _ := ctx.Value(keepHostKey{}).(string)
 	return id
+}
+
+type vmGoneKey struct{}
+
+// withVMGone marks ctx as redeploying the placement whose VM a repair found
+// stopped or gone. The placement stays live until the new one runs, so a
+// failed redeploy leaves something for the next repair, but it takes no room
+// on its host: the service can come back where it was, in a full region of
+// one host too.
+func withVMGone(ctx context.Context, placementID string) context.Context {
+	return context.WithValue(ctx, vmGoneKey{}, placementID)
+}
+
+// vmAway reports whether c's VM is off its host while c stays live: the
+// host a move put the service back on, or a repair's.
+func vmAway(ctx context.Context, c *Placement) bool {
+	if id, _ := ctx.Value(vmGoneKey{}).(string); id != "" && id == c.ID {
+		return true
+	}
+	return c.HostID != nil && *c.HostID == keepHostFrom(ctx)
 }
 
 // eligibleFor is eligible, letting the host WithKeepHost names take the

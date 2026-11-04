@@ -193,7 +193,7 @@ AND l.resource=loomplane_platform_placements.resource AND l.state='released' AND
 		if redeploy == nil {
 			continue
 		}
-		if repairErr := callStart(ctx, func(c context.Context) error { return redeploy.Redeploy(c, p.InstanceID) }); repairErr != nil {
+		if repairErr := callStart(withVMGone(ctx, p.ID), func(c context.Context) error { return redeploy.Redeploy(c, p.InstanceID) }); repairErr != nil {
 			slog.ErrorContext(ctx, "platform cloud could not redeploy a placement that lost its VM", "org", p.OrgID, "placement", p.ID, "error", repairErr)
 			errs = append(errs, fmt.Errorf("redeploy placement %s: %w", p.ID, repairErr))
 		}
