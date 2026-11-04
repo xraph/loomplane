@@ -38,8 +38,8 @@ type firecrackerBackend struct {
 	session firecrackerSession
 	// place opens the host to apply the instance on and returns what to do
 	// once the host has applied it, which may give the instance a public
-	// endpoint. Nil applies through session.
-	place func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error)
+	// endpoint, and if the apply fails. Nil applies through session.
+	place func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerPlaced, error)
 	// effect stops or removes the instance, running act against each
 	// host and scope it may run under. Nil acts once, through session.
 	effect func(ctx context.Context, iid id.ID, labels map[string]string, action string, act func(*fc.Client, fc.Scope) error) error
@@ -56,6 +56,17 @@ type firecrackerSession func(ctx context.Context, iid id.ID, labels map[string]s
 // firecrackerApplied runs once the host has applied an instance. A non-nil
 // endpoint is where the instance is reached publicly.
 type firecrackerApplied func(ctx context.Context, r fc.Record) (*cpprovider.Endpoint, error)
+
+// firecrackerPlaced is what place hands the apply: what to run once the host
+// has applied the instance and, if set, what to run when the apply fails
+// before that has succeeded. abandon runs on a context of its own.
+type firecrackerPlaced struct {
+	applied firecrackerApplied
+	abandon func(ctx context.Context)
+}
+
+// abandonTimeout bounds what a failed apply's abandon writes.
+const abandonTimeout = 30 * time.Second
 
 // orgFirecracker is the backend for an organization's Firecracker
 // connection: every session opens that connection's host, after the
@@ -151,16 +162,26 @@ func (b *firecrackerBackend) apply(ctx context.Context, iid id.ID, sp cpprovider
 	}
 	place := b.place
 	if place == nil {
-		place = func(ctx context.Context, iid id.ID, labels map[string]string, _ fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error) {
+		place = func(ctx context.Context, iid id.ID, labels map[string]string, _ fc.Spec) (*fc.Client, fc.Scope, firecrackerPlaced, error) {
 			client, scope, sessionErr := b.session(ctx, iid, labels)
-			return client, scope, func(context.Context, fc.Record) (*cpprovider.Endpoint, error) { return nil, nil }, sessionErr
+			return client, scope, firecrackerPlaced{applied: func(context.Context, fc.Record) (*cpprovider.Endpoint, error) { return nil, nil }}, sessionErr
 		}
 	}
-	client, scope, applied, err := place(ctx, iid, labels, spec)
+	client, scope, placed, err := place(ctx, iid, labels, spec)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
+	done := false
+	if placed.abandon != nil {
+		defer func() {
+			if !done {
+				after, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonTimeout)
+				defer cancel()
+				placed.abandon(after)
+			}
+		}()
+	}
 	values, err := b.target.values(ctx, labels)
 	if err != nil {
 		return nil, err
@@ -201,10 +222,11 @@ func (b *firecrackerBackend) apply(ctx context.Context, iid id.ID, sp cpprovider
 	if r.Scope != q.Scope || r.Generation != q.Authority.Generation || r.Current == nil {
 		return nil, fc.ErrConflict
 	}
-	public, appliedErr := applied(ctx, r)
+	public, appliedErr := placed.applied(ctx, r)
 	if appliedErr != nil {
 		return nil, appliedErr
 	}
+	done = true
 	endpoints := b.endpoints(client, sp.Name, spec)
 	if public != nil {
 		endpoints = append([]cpprovider.Endpoint{*public}, endpoints...)

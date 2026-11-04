@@ -218,7 +218,7 @@ func TestReserveKeepsHostOnRedeploy(t *testing.T) {
 	if hostOf(t, first) != a.ID {
 		t.Fatalf("first placement on %s", hostOf(t, first))
 	}
-	if err = e.svc.SetState(ctx, first.ID, "running"); err != nil {
+	if err = e.svc.Running(ctx, "org_a", first.ID, "inst_web", 1); err != nil {
 		t.Fatal(err)
 	}
 	// Left to itself the placer would now pick b, which has more free memory.
@@ -230,6 +230,13 @@ func TestReserveKeepsHostOnRedeploy(t *testing.T) {
 	}
 	if hostOf(t, again) != a.ID {
 		t.Fatalf("redeploy moved to %s, want it kept on %s", hostOf(t, again), a.ID)
+	}
+	// The running placement keeps running until the new one does.
+	if again.Replaces != first.ID || e.placementState(t, first.ID) != stateRunning {
+		t.Fatalf("redeploy = %+v, first is %s", again, e.placementState(t, first.ID))
+	}
+	if err = e.svc.Running(ctx, "org_a", again.ID, "inst_web", 2); err != nil {
+		t.Fatal(err)
 	}
 	if n := countPlacements(t, e.pg, `resource='web' AND state='released'`); n != 1 {
 		t.Fatalf("released placements for web = %d, want the old one", n)
@@ -433,7 +440,7 @@ END $$`); err != nil {
 	}
 }
 
-func TestSetStateAndRelease(t *testing.T) {
+func TestRelease(t *testing.T) {
 	e := newPlacerEnv(t, defaultTestLimits)
 	e.readyHost(t, "a", bigAllotment)
 	ctx := t.Context()
@@ -441,11 +448,8 @@ func TestSetStateAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = e.svc.SetState(ctx, p.ID, "running"); err != nil {
+	if err = e.svc.Running(ctx, "org_a", p.ID, "inst_web", 1); err != nil {
 		t.Fatal(err)
-	}
-	if err = e.svc.SetState(ctx, p.ID, "bogus"); err == nil {
-		t.Fatal("SetState took an unknown state")
 	}
 	if err = e.svc.Release(ctx, p.ID); err != nil {
 		t.Fatal(err)
@@ -453,10 +457,29 @@ func TestSetStateAndRelease(t *testing.T) {
 	if err = e.svc.Release(ctx, p.ID); err != nil {
 		t.Fatalf("second release: %v", err)
 	}
-	if err = e.svc.SetState(ctx, p.ID, "running"); !errors.Is(err, ErrConflict) {
-		t.Fatalf("SetState on a released placement = %v", err)
+	if err = e.svc.Running(ctx, "org_a", p.ID, "inst_web", 2); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Running on a released placement = %v", err)
 	}
 	if err = e.svc.Release(ctx, "plc_missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Release missing = %v", err)
+	}
+}
+
+// placementState is the placement's state, read from the database.
+func (e *placerEnv) placementState(t *testing.T, id string) string {
+	t.Helper()
+	var state string
+	if err := e.pg.QueryRow(t.Context(), `SELECT state FROM loomplane_platform_placements WHERE id=$1`, id).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// setState writes a placement's state straight to the database, for a build
+// or a test that has no deploy to report it.
+func (e *placerEnv) setState(t *testing.T, id, state string) {
+	t.Helper()
+	if _, err := e.pg.Exec(t.Context(), `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, id, state); err != nil {
+		t.Fatal(err)
 	}
 }

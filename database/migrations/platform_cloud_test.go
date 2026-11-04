@@ -234,3 +234,41 @@ func TestPlatformCloudMeterTablesUpAndDown(t *testing.T) {
 	}
 	up(t, ex, "platform_cloud_meter")
 }
+
+// A resource has one current live placement and at most one live
+// replacement, and the continuity migration goes down and up again.
+func TestPlatformPlacementReplacementAndEgressCounters(t *testing.T) {
+	conn, ex := platformCloudScratch(t)
+	up(t, ex, "platform_cloud", "platform_cloud_routes", "platform_cloud_meter", "platform_cloud_cleanup", "platform_cloud_continuity")
+	ctx := context.Background()
+	exec(t, conn, `INSERT INTO loomplane_platform_regions (id, name, display_name, status, revision, created_at, updated_at)
+		VALUES ('reg_1', 'eu', 'Europe', 'active', 1, now(), now())`)
+	insert := func(id, state, replaces string) error {
+		_, err := conn.Exec(ctx, `INSERT INTO loomplane_platform_placements
+			(id, org_id, project_id, environment_id, resource, kind, region_id, vcpus, memory_mib, disk_mib, state, restore_running, waiting_capacity, instance_id, generation, replaces, created_at, updated_at)
+			VALUES ($1, 'org', 'proj', 'env', 'web', 'service', 'reg_1', 1, 512, 1024, $2, false, false, '', 1, $3, now(), now())`, id, state, replaces)
+		return err
+	}
+	if err := insert("plc_1", "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	requireSQLState(t, insert("plc_2", "reserved", ""), "23505")
+	if err := insert("plc_2", "reserved", "plc_1"); err != nil {
+		t.Fatal(err)
+	}
+	requireSQLState(t, insert("plc_3", "reserved", "plc_1"), "23505")
+	exec(t, conn,
+		`INSERT INTO loomplane_platform_egress_counters (org_id, instance_id, counter_id, last_bytes) VALUES ('org', 'inst', 'c1', 10)`)
+	if got := strs(t, conn, `SELECT COALESCE(to_regclass('loomplane_platform_egress')::text, '')`); len(got) != 1 || got[0] != "" {
+		t.Fatalf("the old egress table survived: %q", got)
+	}
+
+	down(t, ex, "platform_cloud_continuity")
+	if got := strs(t, conn, `SELECT id||':'||state FROM loomplane_platform_placements ORDER BY id`); !slices.Equal(got, []string{"plc_1:running", "plc_2:released"}) {
+		t.Fatalf("placements after down = %q", got)
+	}
+	if got := strs(t, conn, `SELECT COALESCE(to_regclass('loomplane_platform_egress')::text, '')`); len(got) != 1 || got[0] == "" {
+		t.Fatalf("the old egress table is missing after down: %q", got)
+	}
+	up(t, ex, "platform_cloud_continuity")
+}

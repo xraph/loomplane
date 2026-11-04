@@ -154,11 +154,11 @@ func (s *Service) preview(ctx context.Context, req Request) (*Ref, error) {
 	if err != nil {
 		return nil, err
 	}
-	region, old, err := s.checkLimits(ctx, s.store.db, req, limitsOf(t, defaults))
+	region, live, err := s.checkLimits(ctx, s.store.db, req, limitsOf(t, defaults))
 	if err != nil {
 		return nil, err
 	}
-	hosts, err := s.candidates(ctx, s.store.db, req, region, old)
+	hosts, err := s.candidates(ctx, s.store.db, req, region, live.current, live.replaced(ctx, req))
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +174,16 @@ func (s *Service) preview(ctx context.Context, req Request) (*Ref, error) {
 // it still fits before inserting. It prefers the host with the fewest of the
 // workspace's placements, then the most free memory, then the lowest ID. A
 // resource that already has a live placement stays on its host unless that
-// host can no longer take it; either way the old placement is released in
-// the same transaction, so a resize only needs the difference.
+// host can no longer take it.
+//
+// A running service placed again (a redeploy, a resize, a move) keeps
+// running: the new placement replaces it, and Running releases it once the
+// new VM is up. Until then both count on their hosts, since both VMs exist,
+// while the workspace's limits count only the new one, so a resize only
+// needs the difference. A new placement that never runs is released by
+// Abandon or the sweep, and the old one runs on. Any other live placement
+// of the resource, and a replacement still waiting from an earlier deploy,
+// is released in the same transaction.
 //
 // Lock order: tenant row (WithTenantLock), then host rows (LockHost). The
 // caller must not hold a host lock, and must take the organization's
@@ -234,24 +242,43 @@ func (s *Service) reserveTx(ctx context.Context, tx driverTx, t *Tenant, req Req
 	if admitErr := s.admit(ctx, t, req); admitErr != nil {
 		return nil, admitErr
 	}
-	region, old, checkErr := s.checkLimits(ctx, tx, req, limitsOf(t, defaults))
+	region, live, checkErr := s.checkLimits(ctx, tx, req, limitsOf(t, defaults))
 	if checkErr != nil {
 		return nil, checkErr
 	}
-	hosts, listErr := s.candidates(ctx, tx, req, region, old)
+	keep := live.current != nil && live.current.State == stateRunning && live.current.Kind == kindService && restore == nil
+	var release []string
+	if live.pending != nil {
+		release = append(release, live.pending.ID)
+	}
+	if live.current != nil && !keep {
+		release = append(release, live.current.ID)
+	}
+	// What the host loads leave out: what this reservation releases, and a
+	// kept placement whose service a move puts back on its host, where
+	// the move stopped it.
+	exclude := slices.Clone(release)
+	if keep && live.current.HostID != nil && *live.current.HostID == keepHostFrom(ctx) {
+		exclude = append(exclude, live.current.ID)
+	}
+	hosts, listErr := s.candidates(ctx, tx, req, region, live.current, exclude)
 	if listErr != nil {
 		return nil, listErr
 	}
 	if len(hosts) == 0 {
 		return nil, noCapacity(region)
 	}
-	if old != nil {
-		if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, old.ID, stateReleased); execErr != nil {
+	if len(release) > 0 {
+		if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=ANY($1)`, release, stateReleased); execErr != nil {
 			return nil, execErr
 		}
 	}
+	replaces := ""
+	if keep {
+		replaces = live.current.ID
+	}
 	for _, h := range hosts {
-		p, tryErr := s.tryHost(ctx, tx, req, region, h.ID, restore)
+		p, tryErr := s.tryHost(ctx, tx, req, region, h.ID, restore, replaces, exclude)
 		if tryErr != nil {
 			return nil, tryErr
 		}
@@ -266,7 +293,7 @@ func (s *Service) reserveTx(ctx context.Context, tx driverTx, t *Tenant, req Req
 // the placement. It returns nil when the host can't take it, having let the
 // host's lock go again, so trying hosts one after another never holds more
 // than the one it placed on.
-func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region *Region, hostID string, restore *Placement) (*Placement, error) {
+func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region *Region, hostID string, restore *Placement, replaces string, exclude []string) (*Placement, error) {
 	if _, err := tx.Exec(ctx, `SAVEPOINT platform_place_host`); err != nil {
 		return nil, err
 	}
@@ -275,20 +302,20 @@ func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region 
 		return nil, err
 	}
 	if s.eligibleFor(ctx, h, req) {
-		all, org, loadErr := hostLoad(ctx, tx, h.ID, req.OrgID, "")
+		all, org, loadErr := hostLoad(ctx, tx, h.ID, req.OrgID, exclude)
 		if loadErr != nil {
 			return nil, loadErr
 		}
 		if fits(h, all, org, req) {
 			p := &Placement{ID: newID("plc_"), OrgID: req.OrgID, ProjectID: req.ProjectID, EnvironmentID: req.EnvironmentID, Resource: req.Resource,
-				Kind: req.Kind, RegionID: region.ID, HostID: &h.ID, VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: stateReserved}
+				Kind: req.Kind, RegionID: region.ID, HostID: &h.ID, VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: stateReserved, Replaces: replaces}
 			if restore != nil {
 				at := s.now().UTC()
 				p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt = stateSuspended, true, restore.InstanceID, restore.Generation, &at
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO loomplane_platform_placements(id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,instance_id,generation,suspended_at,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now())`,
-				p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource, p.Kind, p.RegionID, h.ID, p.VCPUs, p.MemoryMiB, p.DiskMiB, p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt)
+			_, err = tx.Exec(ctx, `INSERT INTO loomplane_platform_placements(id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,instance_id,generation,suspended_at,replaces,created_at,updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now())`,
+				p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource, p.Kind, p.RegionID, h.ID, p.VCPUs, p.MemoryMiB, p.DiskMiB, p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt, p.Replaces)
 			if err != nil {
 				return nil, storeError(err)
 			}
@@ -335,34 +362,36 @@ func limitsOf(t *Tenant, defaults Limits) Limits {
 	return defaults
 }
 
-// checkLimits resolves the region, finds the resource's live placement, if
-// any, and checks the request against the workspace's limits as if that
-// placement were already released. Builds count only against concurrent
-// builds and services only against vCPUs, memory and VMs.
-func (s *Service) checkLimits(ctx context.Context, q querier, req Request, limits Limits) (*Region, *Placement, error) {
+// checkLimits resolves the region, finds the resource's live placements, if
+// any, and checks the request against the workspace's limits as if the one
+// the workspace's use counts were already released: a replacement still
+// waiting to run, or else the current placement. Builds count only against
+// concurrent builds and services only against vCPUs, memory and VMs.
+func (s *Service) checkLimits(ctx context.Context, q querier, req Request, limits Limits) (*Region, livePair, error) {
 	region, err := regionByName(ctx, q, req.Region)
 	if err != nil {
-		return nil, nil, err
+		return nil, livePair{}, err
 	}
-	old, err := livePlacement(ctx, q, req)
+	live, err := livePlacements(ctx, q, req)
 	if err != nil {
-		return nil, nil, err
+		return nil, livePair{}, err
 	}
+	old := live.counted()
 	if old != nil && old.Kind != req.Kind {
-		return nil, nil, ErrConflict
+		return nil, livePair{}, ErrConflict
 	}
 	use, err := tenantUse(ctx, q, req.OrgID)
 	if err != nil {
-		return nil, nil, err
+		return nil, livePair{}, err
 	}
 	if req.Kind == kindBuild {
 		if old != nil && (old.State == stateReserved || old.State == stateRunning) {
 			use.ConcurrentBuilds--
 		}
 		if use.ConcurrentBuilds+1 > limits.ConcurrentBuilds {
-			return nil, nil, limitError(buildAmount, 1, use.ConcurrentBuilds, limits.ConcurrentBuilds)
+			return nil, livePair{}, limitError(buildAmount, 1, use.ConcurrentBuilds, limits.ConcurrentBuilds)
 		}
-		return region, old, nil
+		return region, live, nil
 	}
 	if old != nil {
 		use.VCPUs -= old.VCPUs
@@ -371,13 +400,13 @@ func (s *Service) checkLimits(ctx context.Context, q querier, req Request, limit
 	}
 	switch {
 	case use.VCPUs+req.VCPUs > limits.VCPUs:
-		return nil, nil, limitError(vcpuAmount, req.VCPUs, use.VCPUs, limits.VCPUs)
+		return nil, livePair{}, limitError(vcpuAmount, req.VCPUs, use.VCPUs, limits.VCPUs)
 	case use.MemoryMiB+req.MemoryMiB > limits.MemoryMiB:
-		return nil, nil, limitError(memoryAmount, req.MemoryMiB, use.MemoryMiB, limits.MemoryMiB)
+		return nil, livePair{}, limitError(memoryAmount, req.MemoryMiB, use.MemoryMiB, limits.MemoryMiB)
 	case use.VMs >= limits.VMs:
-		return nil, nil, limitError(vmAmount, 1, use.VMs, limits.VMs)
+		return nil, livePair{}, limitError(vmAmount, 1, use.VMs, limits.VMs)
 	}
-	return region, old, nil
+	return region, live, nil
 }
 
 func regionByName(ctx context.Context, q querier, name string) (*Region, error) {
@@ -396,14 +425,58 @@ func regionByName(ctx context.Context, q querier, name string) (*Region, error) 
 	return &r, nil
 }
 
-// livePlacement is the resource's placement that is not released, or nil.
+// livePlacement is the resource's current placement: the live one that
+// replaces nothing, or nil. A replacement still waiting to run is not it.
 func livePlacement(ctx context.Context, q querier, req Request) (*Placement, error) {
 	p, err := scanPlacement(q.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements
-WHERE org_id=$1 AND environment_id=$2 AND resource=$3 AND state<>'released'`, req.OrgID, req.EnvironmentID, req.Resource))
+WHERE org_id=$1 AND environment_id=$2 AND resource=$3 AND state<>'released' AND replaces=''`, req.OrgID, req.EnvironmentID, req.Resource))
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	return p, err
+}
+
+// livePair is a resource's live placements: the current one and the one
+// placed to replace it, either of which may be nil.
+type livePair struct{ current, pending *Placement }
+
+// counted is the placement the workspace's use counts for the resource.
+func (l livePair) counted() *Placement {
+	if l.pending != nil {
+		return l.pending
+	}
+	return l.current
+}
+
+// replaced is what a Preview leaves out of the host loads, as Reserve
+// would: the waiting replacement, and the current placement unless it is a
+// running service that stays until the new one runs.
+func (l livePair) replaced(ctx context.Context, req Request) []string {
+	var out []string
+	if l.pending != nil {
+		out = append(out, l.pending.ID)
+	}
+	if c := l.current; c != nil && (c.State != stateRunning || c.Kind != kindService || restoreFrom(ctx) != "" ||
+		(c.HostID != nil && *c.HostID == keepHostFrom(ctx))) {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+func livePlacements(ctx context.Context, q querier, req Request) (livePair, error) {
+	rows, err := queryPlacements(ctx, q, `org_id=$1 AND environment_id=$2 AND resource=$3 AND state<>'released'`, req.OrgID, req.EnvironmentID, req.Resource)
+	if err != nil {
+		return livePair{}, err
+	}
+	var out livePair
+	for i := range rows {
+		if rows[i].Replaces == "" {
+			out.current = &rows[i]
+		} else {
+			out.pending = &rows[i]
+		}
+	}
+	return out, nil
 }
 
 type keepHostKey struct{}
@@ -441,12 +514,15 @@ func (s *Service) eligible(h *Host, req Request) bool {
 }
 
 // hostLoad adds up the live placements on a host, all of them and the
-// organization's, leaving out the placement exclude.
-func hostLoad(ctx context.Context, q querier, hostID, orgID, exclude string) (all, org Allotment, err error) {
+// organization's, leaving out the placements exclude.
+func hostLoad(ctx context.Context, q querier, hostID, orgID string, exclude []string) (all, org Allotment, err error) {
+	if exclude == nil {
+		exclude = []string{}
+	}
 	err = q.QueryRow(ctx, `SELECT
 coalesce(sum(vcpus),0)::int,coalesce(sum(memory_mib),0)::int,coalesce(sum(disk_mib),0)::int,count(*)::int,
 coalesce(sum(vcpus) FILTER (WHERE org_id=$2),0)::int,coalesce(sum(memory_mib) FILTER (WHERE org_id=$2),0)::int,count(*) FILTER (WHERE org_id=$2)::int
-FROM loomplane_platform_placements WHERE host_id=$1 AND state<>'released' AND id<>$3`, hostID, orgID, exclude).
+FROM loomplane_platform_placements WHERE host_id=$1 AND state<>'released' AND id<>ALL($3)`, hostID, orgID, exclude).
 		Scan(&all.VCPUs, &all.MemoryMiB, &all.DiskMiB, &all.VMs, &org.VCPUs, &org.MemoryMiB, &org.VMs)
 	return all, org, err
 }
@@ -468,15 +544,15 @@ func fits(h *Host, all, org Allotment, req Request) bool {
 }
 
 // candidates lists the region's hosts that could take the request, best
-// first. The resource's current host leads when it can keep it.
-func (s *Service) candidates(ctx context.Context, q querier, req Request, region *Region, old *Placement) ([]Host, error) {
+// first, counting every live placement on them but those in exclude. The
+// resource's current host, old's, leads when it can keep it.
+func (s *Service) candidates(ctx context.Context, q querier, req Request, region *Region, old *Placement, exclude []string) ([]Host, error) {
 	hosts, err := listHosts(ctx, q, region.ID)
 	if err != nil {
 		return nil, err
 	}
-	exclude, keep := "", ""
+	keep := ""
 	if old != nil {
-		exclude = old.ID
 		if old.HostID != nil && old.RegionID == region.ID {
 			keep = *old.HostID
 		}
@@ -534,33 +610,6 @@ RETURNING `+placementColumns, placementID, stateReleased))
 	}
 	s.serviceGone(ctx, p)
 	return nil
-}
-
-// SetState records where a placement's workload is: reserved, running,
-// stopped or suspended. Released goes through Release. A released placement
-// stays released.
-func (s *Service) SetState(ctx context.Context, placementID, state string) error {
-	switch state {
-	case stateReleased:
-		return s.Release(ctx, placementID)
-	case stateReserved, stateRunning, stateStopped, stateSuspended:
-	default:
-		return fmt.Errorf("platformcloud: unknown placement state %q", state)
-	}
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements
-SET state=$2,suspended_at=CASE WHEN $2='suspended' THEN coalesce(suspended_at,$3) ELSE NULL END,
-running_since=CASE WHEN $2<>'running' THEN running_since WHEN state='running' THEN running_since ELSE $3 END,updated_at=$3
-WHERE id=$1 AND state<>'released'`, placementID, state, s.now().UTC())
-	if err != nil {
-		return storeError(err)
-	}
-	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
-		return nErr
-	}
-	if existsErr := placementExists(ctx, s.store.db, placementID); existsErr != nil {
-		return existsErr
-	}
-	return fmt.Errorf("%w: the placement is released", ErrConflict)
 }
 
 func placementExists(ctx context.Context, q querier, placementID string) error {

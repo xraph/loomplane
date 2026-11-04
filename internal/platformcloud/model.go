@@ -114,4 +114,7 @@ type Placement struct {
 	InstanceID      string     `json:"instance_id"`
 	Generation      int64      `json:"generation"`
 	SuspendedAt     *time.Time `json:"suspended_at,omitempty"`
+	// Replaces is the running placement this one is placed to take over
+	// from, until it runs; "" for any other.
+	Replaces string `json:"replaces,omitempty"`
 }

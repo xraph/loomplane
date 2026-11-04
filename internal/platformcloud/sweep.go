@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +14,8 @@ import (
 )
 
 // The sweeps below put right what a failed step left behind: a VM a move
-// left on its old host, a placement whose host lost its VM, a hostname whose
+// left on its old host, a replacement whose deploy never finished, a
+// placement whose host lost its VM, a hostname whose
 // service is gone, a tenant whose organization is gone, and host evidence
 // that is getting old. Each one is safe to run again and again, and one
 // failure never stops the rest. The cron jobs run them.
@@ -36,13 +36,14 @@ type Redeployer interface {
 }
 
 // Sync is the minute job: it brings projections up to date, checks hosts
-// whose evidence is getting old, removes what moves left behind, retries
-// hostnames a failed unpublish kept and cleans up after organizations that
-// are gone.
+// whose evidence is getting old, gives up on replacements that never ran,
+// removes what moves left behind, retries hostnames a failed unpublish kept
+// and cleans up after organizations that are gone.
 func (s *Service) Sync(ctx context.Context) error {
 	return errors.Join(
 		s.SyncProjections(ctx),
 		s.RecheckHosts(ctx),
+		s.SweepStalledReplacements(ctx),
 		s.SweepLeftovers(ctx),
 		s.SweepHostnames(ctx),
 		s.CleanupGoneTenants(ctx),
@@ -72,11 +73,27 @@ func (s *Service) RecheckHosts(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// replaceGrace is how long a replacement may wait to run before the sweep
+// gives up on it: longer than any deploy or move is let run.
+const replaceGrace = time.Hour
+
+// SweepStalledReplacements releases every replacement that has waited to
+// run, unchanged, for replaceGrace: a deploy or move that failed without
+// saying so, or whose process died. The placement it would have replaced
+// runs on, and billed, as before. The released row keeps its host and
+// instance, so SweepLeftovers removes what its deploy left on its host.
+func (s *Service) SweepStalledReplacements(ctx context.Context) error {
+	_, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$1,updated_at=now()
+WHERE state='reserved' AND replaces<>'' AND updated_at<=$2`, stateReleased, s.now().Add(-replaceGrace).UTC())
+	return storeError(err)
+}
+
 // SweepLeftovers removes the VMs that released placements may have left on
-// their hosts: a move's old VM, a cancelled build's. A leftover whose
-// service has a live placement still waiting to run (reserved) is kept: its
-// VM is likely the one still serving, and it goes once the move finishes. A
-// leftover that is the very VM its live placement runs, same host and
+// their hosts: a move's old VM, a replacement's that never ran, a cancelled
+// build's. A leftover whose service's current placement is still waiting to
+// run (reserved) is kept: its VM is likely the one still serving, and it
+// goes once that placement runs. A leftover that is the very VM a live
+// placement of its service runs, or is being deployed as, same host and
 // instance, is only forgotten. One on a retired host is forgotten too: that
 // host is out of service and its credential is gone.
 func (s *Service) SweepLeftovers(ctx context.Context) error {
@@ -96,15 +113,17 @@ func (s *Service) SweepLeftovers(ctx context.Context) error {
 }
 
 func (s *Service) sweepLeftover(ctx context.Context, l Placement) error {
-	live, err := livePlacement(ctx, s.store.db, Request{OrgID: l.OrgID, EnvironmentID: l.EnvironmentID, Resource: l.Resource})
+	live, err := livePlacements(ctx, s.store.db, Request{OrgID: l.OrgID, EnvironmentID: l.EnvironmentID, Resource: l.Resource})
 	if err != nil {
 		return err
 	}
-	switch {
-	case live != nil && live.State == stateReserved:
+	if live.current != nil && live.current.State == stateReserved {
 		return nil
-	case live != nil && live.HostID != nil && *live.HostID == *l.HostID && live.InstanceID == l.InstanceID:
-		return s.Removed(ctx, l.OrgID, l.ID)
+	}
+	for _, p := range []*Placement{live.current, live.pending} {
+		if p != nil && p.HostID != nil && *p.HostID == *l.HostID && p.InstanceID == l.InstanceID {
+			return s.Removed(ctx, l.OrgID, l.ID)
+		}
 	}
 	h, err := s.store.GetHost(ctx, *l.HostID)
 	if err != nil {
@@ -143,8 +162,12 @@ func (s *Service) inspectOn(ctx context.Context, hostID string, scope fc.Scope) 
 func (s *Service) RepairMissingVMs(ctx context.Context) error {
 	// A reserved placement counts only when a move left an older VM of the
 	// service behind: one with none is a deploy that failed, which its
-	// deployment reports and which is not for the platform to retry.
-	live, err := queryPlacements(ctx, s.store.db, `kind='service' AND host_id IS NOT NULL AND instance_id<>'' AND updated_at<=$1
+	// deployment reports and which is not for the platform to retry. A
+	// replacement still waiting to run doesn't count, and neither does the
+	// placement it replaces: a deploy or move is under way, and a move stops
+	// the old VM before it starts the new one.
+	live, err := queryPlacements(ctx, s.store.db, `kind='service' AND host_id IS NOT NULL AND instance_id<>'' AND updated_at<=$1 AND replaces=''
+AND NOT EXISTS(SELECT 1 FROM loomplane_platform_placements r WHERE r.replaces=loomplane_platform_placements.id AND r.state<>'released')
 AND (state='running' OR (state='reserved' AND EXISTS(SELECT 1 FROM loomplane_platform_placements l
 WHERE l.org_id=loomplane_platform_placements.org_id AND l.environment_id=loomplane_platform_placements.environment_id
 AND l.resource=loomplane_platform_placements.resource AND l.state='released' AND l.host_id IS NOT NULL AND l.instance_id<>'')))`,
@@ -262,9 +285,13 @@ func (s *Service) CleanupGoneTenants(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	known := make(map[string]struct{}, len(orgs))
+	for _, o := range orgs {
+		known[o] = struct{}{}
+	}
 	var errs []error
 	for _, t := range tenants {
-		if slices.Contains(orgs, t.OrgID) {
+		if _, ok := known[t.OrgID]; ok {
 			continue
 		}
 		if b, ok := blocked[t.OrgID]; ok && b.Until.After(s.now()) {
@@ -364,6 +391,9 @@ func (s *Service) cleanupTenant(ctx context.Context, orgID string) error {
 				return fmt.Errorf("%w: %s", errCleanupBlocked, pg.Message)
 			}
 			return fmt.Errorf("delete the projection: %w", storeError(execErr))
+		}
+		if _, execErr := tx.Exec(ctx, `DELETE FROM loomplane_platform_egress_counters WHERE org_id=$1`, orgID); execErr != nil {
+			return storeError(execErr)
 		}
 		_, execErr := tx.Exec(ctx, `DELETE FROM loomplane_platform_tenants WHERE org_id=$1`, orgID)
 		return storeError(execErr)

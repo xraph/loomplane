@@ -424,16 +424,19 @@ func (s *PgStore) TenantUseTx(ctx context.Context, tx driverTx, orgID string) (U
 
 func tenantUse(ctx context.Context, q querier, orgID string) (Use, error) {
 	var u Use
+	// A placement a live replacement is taking over from is counted as the
+	// replacement: the service holds one place at the replacement's size.
 	err := q.QueryRow(ctx, `SELECT
 coalesce(sum(vcpus) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
 coalesce(sum(memory_mib) FILTER (WHERE kind='service' AND state<>'released'),0)::int,
 count(*) FILTER (WHERE kind='service' AND state<>'released')::int,
 count(*) FILTER (WHERE kind='build' AND state IN ('reserved','running'))::int
-FROM loomplane_platform_placements WHERE org_id=$1`, orgID).Scan(&u.VCPUs, &u.MemoryMiB, &u.VMs, &u.ConcurrentBuilds)
+FROM loomplane_platform_placements p WHERE org_id=$1
+AND NOT EXISTS(SELECT 1 FROM loomplane_platform_placements r WHERE r.replaces=p.id AND r.state<>'released')`, orgID).Scan(&u.VCPUs, &u.MemoryMiB, &u.VMs, &u.ConcurrentBuilds)
 	return u, err
 }
 
-const placementColumns = `id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,waiting_capacity,instance_id,generation,suspended_at`
+const placementColumns = `id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,waiting_capacity,instance_id,generation,suspended_at,replaces`
 
 func (s *PgStore) listPlacements(ctx context.Context, where string, arg string) ([]Placement, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE `+where+` ORDER BY created_at,id`, arg)
@@ -456,7 +459,7 @@ func scanPlacement(row interface{ Scan(...any) error }) (*Placement, error) {
 	var p Placement
 	var suspended *time.Time
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Resource, &p.Kind, &p.RegionID, &p.HostID, &p.VCPUs, &p.MemoryMiB, &p.DiskMiB,
-		&p.State, &p.RestoreRunning, &p.WaitingCapacity, &p.InstanceID, &p.Generation, &suspended); err != nil {
+		&p.State, &p.RestoreRunning, &p.WaitingCapacity, &p.InstanceID, &p.Generation, &suspended, &p.Replaces); err != nil {
 		return nil, storeError(err)
 	}
 	p.SuspendedAt = suspended

@@ -24,7 +24,8 @@ func (e *placerEnv) age(t *testing.T, where string) {
 }
 
 // moveWeb runs web on host a, drains a and places web again, on b, as a
-// move does. It returns the old placement and the new one.
+// move does. It returns the old placement, still running, and the new one,
+// which replaces it.
 func moveWeb(t *testing.T, e *placerEnv) (old, moved *Placement) {
 	t.Helper()
 	ctx := t.Context()
@@ -48,30 +49,32 @@ func TestSweepLeftoversWaitsForTheMoveThenRemovesTheOldVM(t *testing.T) {
 	e, ctl := suspendEnv(t)
 	ctx := t.Context()
 	old, moved := moveWeb(t, e)
-	if old.State != stateReleased || old.InstanceID == "" {
-		t.Fatalf("old placement = %+v", old)
+	if old.State != stateRunning || moved.Replaces != old.ID {
+		t.Fatalf("old placement = %+v, moved = %+v", old, moved)
 	}
 
-	// Inside the grace nothing is touched.
-	if err := e.svc.SweepLeftovers(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if len(ctl.removes) != 0 {
-		t.Fatalf("a fresh leftover was removed: %v", ctl.removes)
-	}
-
-	// The move's new placement hasn't run yet: the old VM may be the one
+	// The move's new placement hasn't run yet: the old VM is the one
 	// serving, so it stays.
 	e.age(t, `resource='web'`)
 	if err := e.svc.SweepLeftovers(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(ctl.removes) != 0 {
-		t.Fatalf("the leftover went while its move was still reserved: %v", ctl.removes)
+		t.Fatalf("the old VM went while its move was still reserved: %v", ctl.removes)
 	}
 
 	if err := e.svc.Running(ctx, "org_a", moved.ID, "inst_web", 4); err != nil {
 		t.Fatal(err)
+	}
+	if got := e.placement(t, old.ID); got.State != stateReleased || got.InstanceID == "" {
+		t.Fatalf("old placement once the move ran = %+v", got)
+	}
+	// Inside the grace nothing is touched.
+	if err := e.svc.SweepLeftovers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ctl.removes) != 0 {
+		t.Fatalf("a fresh leftover was removed: %v", ctl.removes)
 	}
 	e.age(t, `resource='web'`)
 	if err := e.svc.SweepLeftovers(ctx); err != nil {
@@ -348,10 +351,12 @@ func TestSetTenantDisablesAndKeepsNewLimits(t *testing.T) {
 // A move whose apply failed leaves the new placement reserved with no VM,
 // and the old VM still serving. The repair redeploys it; the leftover sweep
 // keeps the old VM meanwhile.
-func TestRepairRedeploysAMoveThatNeverRan(t *testing.T) {
+// A move whose new placement never ran is given up: the old placement runs
+// on where it was, and what the move left on the new host is removed.
+func TestAMoveThatNeverRanIsGivenUp(t *testing.T) {
 	e, ctl := suspendEnv(t)
 	ctx := t.Context()
-	_, moved := moveWeb(t, e)
+	old, moved := moveWeb(t, e)
 	rc := &redeployControl{fakeControl: ctl}
 	e.svc.WithInstances(rc)
 	e.svc.inspect = func(_ context.Context, hostID string, _ fc.Scope) (fc.Record, error) {
@@ -361,17 +366,44 @@ func TestRepairRedeploysAMoveThatNeverRan(t *testing.T) {
 		return fc.Record{State: "running"}, nil
 	}
 	e.age(t, `true`)
+	// Neither placement is repaired while the move is under way.
 	if err := e.svc.RepairMissingVMs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rc.redeploys, []string{"inst_web"}) {
+	if len(rc.redeploys) != 0 {
 		t.Fatalf("redeploys = %v", rc.redeploys)
 	}
+	// Inside its grace the replacement waits.
+	if _, err := e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET updated_at=now()-interval '30 minutes' WHERE id=$1`, moved.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SweepStalledReplacements(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.placement(t, moved.ID); got.State != stateReserved {
+		t.Fatalf("a replacement inside its grace was given up: %+v", got)
+	}
+	if _, err := e.pg.Exec(ctx, `UPDATE loomplane_platform_placements SET updated_at=now()-interval '2 hours' WHERE id=$1`, moved.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.SweepStalledReplacements(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.placement(t, moved.ID); got.State != stateReleased || got.InstanceID != "inst_web" {
+		t.Fatalf("the stalled replacement = %+v", got)
+	}
+	if got := e.placement(t, old.ID); got.State != stateRunning {
+		t.Fatalf("the old placement = %+v, want it still running", got)
+	}
+	e.age(t, `id='`+moved.ID+`'`)
 	if err := e.svc.SweepLeftovers(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(ctl.removes) != 0 {
-		t.Fatalf("the serving VM was removed while its move was unfinished: %v", ctl.removes)
+	if !slices.Equal(ctl.removes, []string{"inst_web"}) {
+		t.Fatalf("removes = %v, want the new host's VM once", ctl.removes)
+	}
+	if got := e.placement(t, old.ID); got.State != stateRunning || got.InstanceID != "inst_web" {
+		t.Fatalf("the serving placement was touched: %+v", got)
 	}
 }
 

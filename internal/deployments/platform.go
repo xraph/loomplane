@@ -43,7 +43,13 @@ type PlatformHosts interface {
 	// Leftovers are the released placements of service name whose VM may
 	// still be on their host.
 	Leftovers(ctx context.Context, orgID, envID, name string) ([]platformcloud.Placement, error)
+	// Running records the placement's VM up. A placement that replaces
+	// another takes over from it here, and the other is released.
 	Running(ctx context.Context, orgID, placementID, instance string, generation int64) error
+	// Abandon releases a placement that was to replace another and never
+	// ran, so the one it would have replaced runs on. It changes nothing
+	// for any other placement.
+	Abandon(ctx context.Context, orgID, placementID string) error
 	Stopped(ctx context.Context, orgID, placementID string) error
 	Removed(ctx context.Context, orgID, placementID string) error
 	// Release gives a placement's room back, keeping its instance so
@@ -288,16 +294,16 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 		}
 		return c, scope, err
 	}
-	b.place = func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerApplied, error) {
+	b.place = func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerPlaced, error) {
 		org, project, env, name, err := platformScope(ctx, labels)
 		if err != nil {
-			return nil, fc.Scope{}, nil, err
+			return nil, fc.Scope{}, firecrackerPlaced{}, err
 		}
 		req := platformcloud.Request{OrgID: org, ProjectID: project, EnvironmentID: env, Resource: name, Region: region, Kind: "service",
 			Architecture: labels[owned.LabelArchitecture], VCPUs: spec.VCPUs, MemoryMiB: spec.MemoryMiB, DiskMiB: spec.DiskMiB}
 		c, scope, p, err := t.Platform.Session(ctx, org, project, env, iid.String(), req)
 		if err != nil {
-			return nil, fc.Scope{}, nil, err
+			return nil, fc.Scope{}, firecrackerPlaced{}, err
 		}
 		applied := func(ctx context.Context, r fc.Record) (*cpprovider.Endpoint, error) {
 			if runErr := t.Platform.Running(ctx, p.OrgID, p.ID, iid.String(), r.Generation); runErr != nil {
@@ -306,7 +312,14 @@ func (t *PlatformTarget) newBackend(e *OwnedTarget, region string) *firecrackerB
 			t.sweep(ctx, b, labels, p)
 			return t.publish(ctx, c, scope, p, labels, spec, r)
 		}
-		return c, scope, applied, nil
+		// An apply that failed leaves the placement it would have replaced
+		// running, and billed, where it was.
+		abandon := func(ctx context.Context) {
+			if abandonErr := t.Platform.Abandon(ctx, p.OrgID, p.ID); abandonErr != nil {
+				slog.WarnContext(ctx, "give up a platform placement whose apply failed; the platform sweep releases it", "org", p.OrgID, "placement", p.ID, "error", abandonErr.Error())
+			}
+		}
+		return c, scope, firecrackerPlaced{applied: applied, abandon: abandon}, nil
 	}
 	b.effect = func(ctx context.Context, iid id.ID, labels map[string]string, action string, act func(*fc.Client, fc.Scope) error) error {
 		org, project, env, name, err := platformScope(ctx, labels)
@@ -416,6 +429,12 @@ var errPlatformHost error = platformRefusalError("Loomplane Cloud couldn't reach
 // platformRedact keeps what a workspace reads of a failure on a platform
 // host free of the host's address: a transport failure becomes
 // errPlatformHost. The original goes to the platform owner's log.
+//
+// Anything else passes through as it is. That is safe because the host
+// agent's own refusals reach here only as the fc sentinels (ErrConflict,
+// ErrMissing and the rest): fc.Client.call maps every agent error body to
+// one of them and never carries the agent's text or the host's address.
+// TestPlatformRedactPassesOnlyAgentSentinels holds it to that.
 func platformRedact(ctx context.Context, op string, err error) error {
 	var urlErr *url.Error
 	var netErr net.Error

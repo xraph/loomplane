@@ -197,8 +197,9 @@ func (s *Service) Restore(ctx context.Context, orgID string, reason SuspendReaso
 type stopTarget struct{ id, instance string }
 
 // stopWork stops the organization's running platform services and cancels its
-// builds, if the organization is suspended. It reads the work under the tenant
-// lock, stops it with the lock let go, and then marks what it stopped
+// builds, if the organization is suspended. A replacement still waiting to run
+// is released, leaving the placement it would have replaced to be stopped. It
+// reads the work under the tenant lock, stops it with the lock let go, and then marks what it stopped
 // suspended and remembered for the restore, if it is still running as the
 // same instance. A service the user stopped is left stopped. A failure on one
 // service doesn't keep the others from stopping, and every step is safe to
@@ -220,6 +221,14 @@ func (s *Service) stopWork(ctx context.Context, orgID string) error {
 			switch {
 			case p.Kind == kindBuild:
 				builds = true
+			case p.State == stateReserved && p.Replaces != "":
+				// A redeploy or move still waiting to take over: the
+				// suspension ends it, and the placement it would have
+				// replaced is stopped and remembered instead. It keeps its
+				// host and instance, so the sweep removes what it left.
+				if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, p.ID, stateReleased); err != nil {
+					return err
+				}
 			case p.State == stateReserved && p.InstanceID == "":
 				// Nothing was ever started: new work, which suspension blocks.
 				if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, p.ID, stateReleased); err != nil {

@@ -276,13 +276,14 @@ func secretStored(ctx context.Context, vault Secrets, key string) bool {
 }
 
 // PlacementOfInstance is the placement that runs instanceID: the live one,
-// or the newest released one when none is live.
+// the current one before a replacement still waiting to run, or the newest
+// released one when none is live.
 func (s *Service) PlacementOfInstance(ctx context.Context, instanceID string) (*Placement, error) {
 	if instanceID == "" {
 		return nil, ErrNotFound
 	}
 	return scanPlacement(s.store.db.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements
-WHERE instance_id=$1 ORDER BY (state<>'released') DESC, created_at DESC, id DESC LIMIT 1`, instanceID))
+WHERE instance_id=$1 ORDER BY (state<>'released') DESC, (replaces='') DESC, created_at DESC, id DESC LIMIT 1`, instanceID))
 }
 
 // RegionName is the name of the region with ID regionID.
@@ -312,7 +313,7 @@ func (s *Service) HasRoomElsewhere(ctx context.Context, p Placement) (bool, erro
 			req.Architecture = h.Evidence.Architecture
 		}
 	}
-	hosts, err := s.candidates(ctx, s.store.db, req, r, &p)
+	hosts, err := s.candidates(ctx, s.store.db, req, r, &p, nil)
 	if err != nil {
 		return false, err
 	}

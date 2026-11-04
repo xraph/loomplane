@@ -122,9 +122,7 @@ func TestSuspendStopsRunningAndRemembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = e.svc.SetState(ctx, build.ID, "running"); err != nil {
-		t.Fatal(err)
-	}
+	e.setState(t, build.ID, "running")
 
 	if err = e.svc.Suspend(ctx, "org_a", ReasonSpendingLimit); err != nil {
 		t.Fatal(err)

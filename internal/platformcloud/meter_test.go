@@ -607,14 +607,14 @@ func TestRunningWithANewGenerationRestartsTheBillingWindow(t *testing.T) {
 	if got := since(); !got.Equal(meterHour.Add(20 * time.Minute)) {
 		t.Fatalf("new generation left running_since at %v", got)
 	}
-	if err := e.svc.SetState(t.Context(), p.ID, "stopped"); err != nil {
+	if err := e.svc.Stopped(t.Context(), "org_a", p.ID); err != nil {
 		t.Fatal(err)
 	}
 	e.clock.set(meterHour.Add(50 * time.Minute))
-	if err := e.svc.SetState(t.Context(), p.ID, "running"); err != nil {
+	if err := e.svc.Running(t.Context(), "org_a", p.ID, "inst_web", 4); err != nil {
 		t.Fatal(err)
 	}
 	if got := since(); !got.Equal(meterHour.Add(50 * time.Minute)) {
-		t.Fatalf("SetState running left running_since at %v", got)
+		t.Fatalf("running again after a stop left running_since at %v", got)
 	}
 }

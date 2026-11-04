@@ -54,6 +54,8 @@ type platformDriver struct {
 	sources int
 	// failBuild makes every build fail.
 	failBuild bool
+	// failStart makes every VM start fail.
+	failStart bool
 }
 
 func (d *platformDriver) Check(context.Context) (fc.Capabilities, error) {
@@ -65,6 +67,9 @@ func (d *platformDriver) Check(context.Context) (fc.Capabilities, error) {
 func (d *platformDriver) Start(context.Context, fc.VM, fc.Spec) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.failStart {
+		return errors.New("the VM did not start")
+	}
 	d.started++
 	return nil
 }
@@ -195,8 +200,9 @@ func newPlatformHost(t *testing.T, name string, who platformIdentity) *platformH
 
 // fakePlatform keeps placements in memory the way platformcloud does:
 // a session reserves, keeping the live placement's host unless moveTo names
-// another, and releases the old placement, which keeps its host and
-// instance.
+// another. A running placement stays running until the new one runs, which
+// releases it, keeping its host and instance; any other is released at
+// once. A failed apply abandons the new placement.
 type fakePlatform struct {
 	mu         sync.Mutex
 	who        platformIdentity
@@ -227,7 +233,7 @@ func (f *fakePlatform) client(hostID string) (*fc.Client, error) {
 
 func (f *fakePlatform) live(org, env, name string) *platformcloud.Placement {
 	for _, p := range f.placements {
-		if p.OrgID == org && p.EnvironmentID == env && p.Resource == name && p.State != "released" {
+		if p.OrgID == org && p.EnvironmentID == env && p.Resource == name && p.State != "released" && p.Replaces == "" {
 			return p
 		}
 	}
@@ -240,17 +246,26 @@ func (f *fakePlatform) Session(ctx context.Context, orgID, projectID, envID, res
 	if req.OrgID != orgID || req.ProjectID != projectID || req.EnvironmentID != envID {
 		return nil, fc.Scope{}, nil, fmt.Errorf("request outside its scope")
 	}
-	host := f.first
+	host, replaces := f.first, ""
+	for _, p := range f.placements {
+		if p.OrgID == orgID && p.EnvironmentID == envID && p.Resource == req.Resource && p.State != "released" && p.Replaces != "" {
+			p.State = "released"
+		}
+	}
 	if old := f.live(orgID, envID, req.Resource); old != nil {
 		host = *old.HostID
-		old.State = "released"
+		if old.State == "running" {
+			replaces = old.ID
+		} else {
+			old.State = "released"
+		}
 	}
 	if f.moveTo != "" {
 		host = f.moveTo
 	}
 	f.n++
 	p := &platformcloud.Placement{ID: fmt.Sprintf("plc_%d", f.n), OrgID: orgID, ProjectID: projectID, EnvironmentID: envID, Resource: req.Resource, Kind: req.Kind, HostID: &host,
-		VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: "reserved", InstanceID: resource}
+		VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: "reserved", InstanceID: resource, Replaces: replaces}
 	f.placements = append(f.placements, p)
 	c, err := f.client(host)
 	if err == nil {
@@ -306,7 +321,19 @@ func (f *fakePlatform) Running(_ context.Context, orgID, placementID, instance s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.find(orgID, placementID)
-	p.State, p.InstanceID, p.Generation, p.RestoreRunning = "running", instance, generation, false
+	if p.Replaces != "" {
+		f.find(orgID, p.Replaces).State = "released"
+	}
+	p.State, p.InstanceID, p.Generation, p.RestoreRunning, p.Replaces = "running", instance, generation, false, ""
+	return nil
+}
+
+func (f *fakePlatform) Abandon(_ context.Context, orgID, placementID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.find(orgID, placementID); p != nil && p.State == "reserved" && p.Replaces != "" {
+		p.State = "released"
+	}
 	return nil
 }
 
@@ -748,6 +775,34 @@ func TestPlatformMoveRemovesOldVM(t *testing.T) {
 		if p != live && (p.State != "released" || p.InstanceID != "") {
 			t.Fatalf("old placement %+v", p)
 		}
+	}
+}
+
+// A redeploy whose apply fails on the new host gives the new placement up:
+// the old one runs on, and is billed, where it was.
+func TestPlatformFailedMoveKeepsTheOldPlacementRunning(t *testing.T) {
+	f := newPlatformFixture(t)
+	f.deploy(t)
+	old := f.platform.live("org_a", "env_1", "web")
+	f.platform.moveTo = "host_b"
+	f.hosts["host_b"].driver.mu.Lock()
+	f.hosts["host_b"].driver.failStart = true
+	f.hosts["host_b"].driver.mu.Unlock()
+	if _, err := f.target.Apply(t.Context(), f.job(t)); err == nil {
+		t.Fatal("the move to a host whose VM can't start succeeded")
+	}
+	f.platform.mu.Lock()
+	defer f.platform.mu.Unlock()
+	if live := f.platform.live("org_a", "env_1", "web"); live != old || live.State != "running" || *live.HostID != "host_a" {
+		t.Fatalf("live placement %+v, want the old one running", live)
+	}
+	for _, p := range f.platform.placements {
+		if p != old && (p.State != "released" || p.Replaces != old.ID || *p.HostID != "host_b") {
+			t.Fatalf("the failed move's placement %+v, want it released", p)
+		}
+	}
+	if records := f.hosts["host_a"].records(t); len(records) != 1 || records[0].State != "ready" {
+		t.Fatalf("host a keeps %+v", records)
 	}
 }
 

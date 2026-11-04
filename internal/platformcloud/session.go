@@ -168,39 +168,74 @@ ORDER BY created_at,id`, orgID, envID, name)
 }
 
 // Running records that the organization's placement has its VM up as
-// instance at generation. While the organization is suspended it records
-// nothing of the sort: the placement is kept suspended and remembered as
-// running, the late VM is stopped, and the caller gets ErrSuspended, so a
-// deploy that finished after the suspension can't bring the work back.
+// instance at generation. A placement that replaces another takes over from
+// it here: in one transaction the old placement is released and the new one
+// runs, after the old one's minutes up to now are counted, so the service is
+// billed without a gap and no minute twice. While the organization is
+// suspended it records nothing of the sort: the placement is kept suspended
+// and remembered as running, the late VM is stopped, and the caller gets
+// ErrSuspended, so a deploy that finished after the suspension can't bring
+// the work back.
 func (s *Service) Running(ctx context.Context, orgID, placementID, instance string, generation int64) error {
 	if err := checkTenant(ctx, orgID); err != nil {
 		return err
 	}
-	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,running_since=CASE WHEN state='running' AND generation=$4 THEN running_since ELSE $5 END,updated_at=now()
-WHERE id=$1 AND org_id=$2 AND state<>'released'
-AND NOT EXISTS(SELECT 1 FROM loomplane_platform_tenants t WHERE t.org_id=$2 AND cardinality(t.suspend_reasons)>0)`, placementID, orgID, instance, generation, s.now().UTC())
+	now := s.now().UTC()
+	s.countReplaced(ctx, orgID, placementID, now)
+	var found, suspended bool
+	err := s.store.withTx(ctx, func(tx driverTx) error {
+		var replaces string
+		readErr := storeError(tx.QueryRow(ctx, `SELECT replaces FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID).Scan(&replaces))
+		if errors.Is(readErr, ErrNotFound) {
+			return s.isSuspended(ctx, tx, orgID, &suspended)
+		}
+		if readErr != nil {
+			return readErr
+		}
+		// Both rows are locked in creation order, as a suspension locks
+		// them, so the two never deadlock.
+		if _, lockErr := tx.Exec(ctx, `SELECT 1 FROM loomplane_platform_placements WHERE id=ANY($1) ORDER BY created_at,id FOR UPDATE`, []string{placementID, replaces}); lockErr != nil {
+			return lockErr
+		}
+		if readErr = storeError(tx.QueryRow(ctx, `SELECT replaces FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID).Scan(&replaces)); readErr != nil {
+			if errors.Is(readErr, ErrNotFound) {
+				return s.isSuspended(ctx, tx, orgID, &suspended)
+			}
+			return readErr
+		}
+		found = true
+		if suspendedErr := s.isSuspended(ctx, tx, orgID, &suspended); suspendedErr != nil {
+			return suspendedErr
+		}
+		if replaces != "" {
+			// First, so the resource never has two current placements.
+			if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state='released',updated_at=now() WHERE id=$1 AND org_id=$2 AND state<>'released'`, replaces, orgID); execErr != nil {
+				return execErr
+			}
+		}
+		set := `state='running',suspended_at=NULL,restore_running=false,running_since=CASE WHEN state='running' AND generation=$4 THEN running_since ELSE $5 END`
+		if suspended {
+			set = `state='suspended',restore_running=true,suspended_at=coalesce(suspended_at,$5)`
+		}
+		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET `+set+`,instance_id=$3,generation=$4,replaces='',updated_at=now()
+WHERE id=$1 AND org_id=$2`, placementID, orgID, instance, generation, now)
+		return storeError(execErr)
+	})
 	if err != nil {
-		return storeError(err)
-	}
-	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
-		return nErr
-	}
-	var suspended bool
-	if err = s.store.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_platform_tenants WHERE org_id=$1 AND cardinality(suspend_reasons)>0)`, orgID).Scan(&suspended); err != nil {
-		return storeError(err)
+		return err
 	}
 	if !suspended {
-		// Not suspended after all: a released or missing placement.
-		return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,running_since=CASE WHEN state='running' AND generation=$4 THEN running_since ELSE $5 END`, instance, generation, s.now().UTC())
+		if found {
+			return nil
+		}
+		// A released or missing placement.
+		var one int
+		if existsErr := storeError(s.store.db.QueryRow(ctx, `SELECT 1 FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2`, placementID, orgID).Scan(&one)); existsErr != nil {
+			return existsErr
+		}
+		return fmt.Errorf("%w: the placement is released", ErrConflict)
 	}
-	res, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='suspended',restore_running=true,suspended_at=coalesce(suspended_at,$5),instance_id=$3,generation=$4,updated_at=now()
-WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID, instance, generation, s.now().UTC())
-	if err != nil {
-		return storeError(err)
-	}
-	if n, nErr := res.RowsAffected(); nErr != nil {
-		return nErr
-	} else if n != 1 {
+	if !found {
 		// The suspension released the placement, a deploy that never ran
 		// before it: nothing tracks this VM, so stop it by the instance given.
 		slog.WarnContext(ctx, "platform cloud: a deploy finished after its placement was released by a suspension", "org", orgID, "placement", placementID)
@@ -211,6 +246,40 @@ WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID, instance, 
 		}
 	}
 	return ErrSuspended
+}
+
+func (s *Service) isSuspended(ctx context.Context, tx driverTx, orgID string, out *bool) error {
+	return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_platform_tenants WHERE org_id=$1 AND cardinality(suspend_reasons)>0)`, orgID).Scan(out)
+}
+
+// countReplaced counts the minutes of the running placement that placement
+// replaces, up to the minute now is in, before Running releases it. A
+// failure is logged: the sampler has counted all but the last few minutes.
+func (s *Service) countReplaced(ctx context.Context, orgID, placementID string, now time.Time) {
+	old, err := scanPlacement(s.store.db.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements
+WHERE id=(SELECT replaces FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 AND state<>'released') AND org_id=$2 AND state='running'`, placementID, orgID))
+	if errors.Is(err, ErrNotFound) {
+		return
+	}
+	if err == nil {
+		err = s.countMinutes(ctx, *old, now.Truncate(time.Minute))
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "platform meter: could not count the last minutes of a replaced placement", "org", orgID, "placement", placementID, "error", err)
+	}
+}
+
+// Abandon releases the organization's placement if it is a replacement that
+// never ran: its deploy failed or was given up. The placement it would have
+// replaced runs on. It keeps its host and instance, so whatever the deploy
+// left on the host is swept. Any other placement is left as it is.
+func (s *Service) Abandon(ctx context.Context, orgID, placementID string) error {
+	if err := checkTenant(ctx, orgID); err != nil {
+		return err
+	}
+	_, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='released',updated_at=now()
+WHERE id=$1 AND org_id=$2 AND state='reserved' AND replaces<>''`, placementID, orgID)
+	return storeError(err)
 }
 
 // Stopped records that someone stopped the organization's placement's VM.
@@ -243,8 +312,9 @@ func (s *Service) setLive(ctx context.Context, orgID, placementID, set string, a
 }
 
 // Removed records that the organization's placement's VM is gone from its
-// host: the placement is released, if it wasn't, and no longer names an
-// instance, so nothing tries to remove it again. A service nothing else runs
+// host: the placement is released, if it wasn't, with any replacement still
+// waiting to take over from it, and no longer names an instance, so nothing
+// tries to remove it again. A service nothing else runs
 // any more loses its generated hostname.
 func (s *Service) Removed(ctx context.Context, orgID, placementID string) error {
 	if err := checkTenant(ctx, orgID); err != nil {
@@ -254,6 +324,12 @@ func (s *Service) Removed(ctx context.Context, orgID, placementID string) error 
 RETURNING `+placementColumns, placementID, orgID, stateReleased))
 	if err != nil {
 		return err
+	}
+	// A replacement still waiting to take over from it goes with it. It
+	// keeps its instance, so what its deploy left on its host is swept.
+	if _, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$3,updated_at=now() WHERE org_id=$1 AND replaces=$2 AND state<>$3`,
+		orgID, placementID, stateReleased); err != nil {
+		return storeError(err)
 	}
 	s.serviceGone(ctx, p)
 	return nil

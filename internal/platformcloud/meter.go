@@ -253,9 +253,13 @@ func (s *Service) usageOf(ctx context.Context, hostID string) ([]fc.UsageSample,
 // each placement sent since the last read to its hour and emits the egress
 // events of every hour that has closed.
 //
-// The last value read is kept per placement and counter ID in
-// loomplane_platform_egress, so the delta survives a restart. A counter ID
-// not seen before starts from 0 and counts in full. A counter that goes
+// The last value read is kept per VM counter in
+// loomplane_platform_egress_counters, by organization, instance and counter
+// ID, so the delta survives a restart and a VM that keeps sending while its
+// service is placed again (a redeploy, a move, a deploy that failed) is never
+// read from 0 again under the new placement. A counter ID not seen before
+// starts from 0 and counts in full: it is a new VM, or a VM whose meter was
+// recreated. A counter that goes
 // backwards under the same ID is a reset: the new value counts in full and
 // the reset is logged. Samples whose scope maps to no placement are ignored
 // and logged by VM ID only. The hourly event, platform-egress:<placement>:<hour>,
@@ -265,9 +269,11 @@ func (s *Service) usageOf(ctx context.Context, hostID string) ([]fc.UsageSample,
 // holds a per-host lock, so two samplers can't commit one host's readings out
 // of order and mistake the older one for a reset.
 //
-// Bytes a placement's old VM sent while it moved count to the same
-// placement: they are the organization's bytes. Bytes sent between the last
-// sample and the VM's removal are not seen, at most one sampling interval.
+// Bytes go to the instance's live placement on the sampled host, or else its
+// newest live placement, so an old VM's bytes while its service moves count
+// to the service: they are the organization's bytes. Bytes sent between the
+// last sample and the VM's removal are not seen, at most one sampling
+// interval.
 func (s *Service) SampleEgress(ctx context.Context, now time.Time) error {
 	hosts, err := s.store.ListHosts(ctx, "")
 	if err != nil {
@@ -302,7 +308,7 @@ func (s *Service) countHostEgress(ctx context.Context, hostID string, now time.T
 			return cmp.Or(cmp.Compare(a.Scope.Org, b.Scope.Org), cmp.Compare(a.Scope.Resource, b.Scope.Resource), cmp.Compare(a.CounterID, b.CounterID))
 		})
 		for _, smp := range samples {
-			if err = s.countEgress(ctx, tx, smp, now); err != nil {
+			if err = s.countEgress(ctx, tx, hostID, smp, now); err != nil {
 				return err
 			}
 		}
@@ -310,13 +316,14 @@ func (s *Service) countHostEgress(ctx context.Context, hostID string, now time.T
 	})
 }
 
-func (s *Service) countEgress(ctx context.Context, tx driverTx, smp fc.UsageSample, now time.Time) error {
+func (s *Service) countEgress(ctx context.Context, tx driverTx, hostID string, smp fc.UsageSample, now time.Time) error {
 	if smp.Scope.Connection != fc.PlatformConnection {
 		slog.WarnContext(ctx, "platform meter: usage sample outside the platform connection", "vm", smp.VMID)
 		return nil
 	}
 	p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements
-WHERE org_id=$1 AND instance_id=$2 AND instance_id<>'' AND state<>'released' ORDER BY created_at DESC LIMIT 1`, smp.Scope.Org, smp.Scope.Resource))
+WHERE org_id=$1 AND instance_id=$2 AND instance_id<>'' AND state<>'released'
+ORDER BY (host_id IS NOT DISTINCT FROM $3) DESC,created_at DESC,id DESC LIMIT 1`, smp.Scope.Org, smp.Scope.Resource, hostID))
 	if err != nil {
 		if errors.Is(storeError(err), ErrNotFound) {
 			slog.WarnContext(ctx, "platform meter: usage sample maps to no placement", "vm", smp.VMID)
@@ -333,7 +340,8 @@ WHERE org_id=$1 AND instance_id=$2 AND instance_id<>'' AND state<>'released' ORD
 		return err
 	}
 	var last int64
-	if qErr := tx.QueryRow(ctx, `SELECT last_bytes FROM loomplane_platform_egress WHERE placement_id=$1 AND counter_id=$2`, p.ID, smp.CounterID).Scan(&last); qErr != nil {
+	if qErr := tx.QueryRow(ctx, `SELECT last_bytes FROM loomplane_platform_egress_counters WHERE org_id=$1 AND instance_id=$2 AND counter_id=$3`,
+		p.OrgID, p.InstanceID, smp.CounterID).Scan(&last); qErr != nil {
 		if !errors.Is(storeError(qErr), ErrNotFound) {
 			return qErr
 		}
@@ -344,8 +352,8 @@ WHERE org_id=$1 AND instance_id=$2 AND instance_id<>'' AND state<>'released' ORD
 		slog.WarnContext(ctx, "platform meter: egress counter went backwards, counting it as a reset", "vm", smp.VMID, "placement", p.ID)
 		delta = cur
 	}
-	if _, eErr := tx.Exec(ctx, `INSERT INTO loomplane_platform_egress (placement_id,counter_id,last_bytes) VALUES ($1,$2,$3)
-ON CONFLICT (placement_id,counter_id) DO UPDATE SET last_bytes=EXCLUDED.last_bytes`, p.ID, smp.CounterID, cur); eErr != nil {
+	if _, eErr := tx.Exec(ctx, `INSERT INTO loomplane_platform_egress_counters (org_id,instance_id,counter_id,last_bytes) VALUES ($1,$2,$3,$4)
+ON CONFLICT (org_id,instance_id,counter_id) DO UPDATE SET last_bytes=EXCLUDED.last_bytes`, p.OrgID, p.InstanceID, smp.CounterID, cur); eErr != nil {
 		return eErr
 	}
 	if delta == 0 {

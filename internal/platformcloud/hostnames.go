@@ -378,8 +378,8 @@ func (s *Service) serviceGone(ctx context.Context, p *Placement) {
 	if p == nil || p.Kind != kindService {
 		return
 	}
-	live, err := livePlacement(ctx, s.store.db, Request{OrgID: p.OrgID, EnvironmentID: p.EnvironmentID, Resource: p.Resource})
-	if err == nil && live != nil {
+	live, err := livePlacements(ctx, s.store.db, Request{OrgID: p.OrgID, EnvironmentID: p.EnvironmentID, Resource: p.Resource})
+	if err == nil && live.counted() != nil {
 		return // Moved: the live placement keeps the name.
 	}
 	if err == nil {
