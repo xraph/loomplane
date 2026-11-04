@@ -41,6 +41,7 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/catalogproxy"
@@ -173,6 +174,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	authz, err := forge.InjectType[*security.Authorizer](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the identity extension: %w", err)
+	}
+	approvalAdmitter, err := forge.InjectType[approvaladmission.Admitter](c)
+	if err != nil {
+		return fmt.Errorf("planning needs group approval source: %w", err)
+	}
+	approvalVerifier, err := forge.InjectType[approvaladmission.Verification](c)
+	if err != nil {
+		return fmt.Errorf("planning needs group approval verifier: %w", err)
 	}
 	guard, err := forge.InjectType[identity.Guard](c)
 	if err != nil {
@@ -496,6 +505,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	e.plans = planning.NewService(planning.Deps{
+		ApprovalAdmitter: approvalAdmitter, ApprovalVerifier: approvalVerifier, ApprovalAppID: e.cfg.Identity.AppID,
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
 		History:       history,

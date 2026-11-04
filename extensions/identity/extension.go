@@ -56,6 +56,7 @@ import (
 	wardenpg "github.com/xraph/warden/store/postgres"
 
 	"github.com/xraph/loomplane/internal/apikeys"
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/currentauthority"
 	"github.com/xraph/loomplane/internal/instance"
@@ -90,6 +91,10 @@ type Guard []forge.Middleware
 type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
+
+	approvalAdmitter *approvalAdmitter
+	approvalVerifier *approvaladmission.Verifier
+	approvalKeys     *approvalKeyReader
 
 	pg         *pgdriver.PgDB
 	store      *authpg.Store
@@ -208,6 +213,11 @@ func (e *Extension) register(fapp forge.App) error {
 	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}
+	e.approvalKeys = &approvalKeyReader{db: e.pg}
+	e.approvalAdmitter, e.approvalVerifier, err = newApprovalAdmitter(e.cfg.SecretKey, e.cfg.Identity.AppID, e.approvalKeys.read)
+	if err != nil {
+		return fmt.Errorf("prepare group approval source: %w", err)
+	}
 	// ProvideValue keys on its type parameter, so each value goes in with
 	// its own concrete type.
 	c := fapp.Container()
@@ -220,6 +230,8 @@ func (e *Extension) register(fapp forge.App) error {
 	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue[approvaladmission.Admitter](c, e.approvalAdmitter),
+		forge.ProvideValue[approvaladmission.Verification](c, e.approvalVerifier),
 		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
@@ -314,6 +326,9 @@ func (e *Extension) Start(ctx context.Context) error {
 	// at once would both find nothing and one would fail on the duplicate.
 	if err := pglock.Do(ctx, e.pg, pglock.StartupSeed, e.prepare); err != nil {
 		return err
+	}
+	if e.approvalKeys != nil {
+		e.approvalKeys.prepare(ctx)
 	}
 	if err := e.mount(ctx); err != nil {
 		return err
@@ -432,6 +447,7 @@ func (e *Extension) requirePrincipal(next forge.Handler) forge.Handler {
 		if err != nil {
 			return forge.NewHTTPError(security.StatusFor(err), err.Error())
 		}
+		ctx = e.captureSessionApproval(ctx, p)
 		c.WithContext(security.WithPrincipal(ctx, p))
 		return next(c)
 	}

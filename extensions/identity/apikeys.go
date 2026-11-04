@@ -36,6 +36,7 @@ func (e *Extension) guard() forge.Middleware {
 			if err != nil {
 				return forge.NewHTTPError(http.StatusUnauthorized, err.Error())
 			}
+			ctx = e.captureKeyApproval(ctx, p)
 			c.WithContext(security.WithPrincipal(ctx, p))
 			return next(c)
 		}

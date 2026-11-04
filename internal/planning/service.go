@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -111,6 +112,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	approvalAdmitter    approvaladmission.Admitter
+	approvalVerifier    approvaladmission.Verification
+	approvalAppID       string
 	memberPrerequisites *MemberPrerequisiteService
 	instanceRuntime     InstanceRuntimeQualifier
 	instances           InstanceVerifier
@@ -152,6 +156,9 @@ type Service struct {
 
 // Deps are what a Service needs.
 type Deps struct {
+	ApprovalAdmitter  approvaladmission.Admitter
+	ApprovalVerifier  approvaladmission.Verification
+	ApprovalAppID     string
 	InstanceRuntime   InstanceRuntimeQualifier
 	Instances         InstanceVerifier
 	CapacityTemplates CapacityTemplateValidator
@@ -222,6 +229,7 @@ func NewService(d Deps) *Service {
 		warn = func(string, error) {}
 	}
 	return &Service{instanceRuntime: d.InstanceRuntime,
+		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
@@ -616,6 +624,18 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	dec := orchestration.Decision{Actor: &p, Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
 	if !approve {
 		dec.Revision = plan.Revision
+	}
+	if approve && len(plan.PlacementGroups) > 0 {
+		request, admitErr := groupApprovalRequest(plan, p, reqID.String(), dec.Note)
+		if admitErr != nil || s.approvalAdmitter == nil {
+			return nil, ErrUnavailable
+		}
+		envelope, admitErr := s.approvalAdmitter.AdmitPlanApproval(ctx, request)
+		if admitErr != nil {
+			return nil, ErrUnavailable
+		}
+		dec.RequestID = reqID.String()
+		dec.GroupAdmission = string(envelope)
 	}
 	err = s.workflow.Decide(ctx, plan.ID, reqID.String(), dec)
 	if errors.Is(err, orchestration.ErrNotRunning) {
@@ -1246,6 +1266,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
 	}
+	if len(plan.PlacementGroups) > 0 {
+		if verifyErr := s.verifyGroupApproval(plan, d); verifyErr != nil {
+			return "", verifyErr
+		}
+	}
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
 	}
@@ -1276,6 +1301,10 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 			return "", security.ErrForbidden
 		}
 		ctx = security.WithPrincipal(ctx, *d.Actor)
+	}
+	if len(plan.PlacementGroups) > 0 {
+		// Source provenance alone cannot install or bypass group acceptance.
+		return "", ErrUnavailable
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }
