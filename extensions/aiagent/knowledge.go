@@ -14,7 +14,6 @@ import (
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/nexus"
-	"github.com/xraph/weave/chunker"
 	"github.com/xraph/weave/embedder"
 	weavenexus "github.com/xraph/weave/embedder/nexus"
 	weaveengine "github.com/xraph/weave/engine"
@@ -57,8 +56,9 @@ func newKnowledgeExtension(ai config.AIConfig, gateway func() *nexus.Gateway, te
 	}
 }
 
-// Register gives weave pgvector over Loomplane's database, the nexus
-// embedder and the recursive chunker, then registers it.
+// Register gives weave pgvector over Loomplane's database and the nexus
+// embedder, then registers it. Weave chunks with its own default, the
+// recursive chunker.
 func (k *knowledgeExtension) Register(app forge.App) error {
 	db, err := forge.InjectType[*grove.DB](app.Container())
 	if err != nil {
@@ -66,10 +66,6 @@ func (k *knowledgeExtension) Register(app forge.App) error {
 	}
 	weaveext.WithVectorStore(newVectorStore(db, k.ai.Knowledge.Dimensions))(k.Extension)
 	weaveext.WithEngineOption(weaveengine.WithEmbedder(newEmbedder(k.ai, k.gateway, k.tenants)))(k.Extension)
-	// Weave's extension sets no chunker, and ingest refuses to run
-	// without one. agentknowledge's writes each document's kind and
-	// project on its chunks, which is what a search gets back.
-	weaveext.WithEngineOption(weaveengine.WithChunker(agentknowledge.Chunker(chunker.NewRecursiveChunker())))(k.Extension)
 	return k.Extension.Register(app)
 }
 

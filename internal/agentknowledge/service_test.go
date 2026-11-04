@@ -211,7 +211,7 @@ func newStallFixture(t *testing.T, out int, stall time.Duration) *fixture {
 		weaveengine.WithStore(memstore.New()),
 		weaveengine.WithVectorStore(vecmemory.New()),
 		weaveengine.WithEmbedder(f.emb),
-		weaveengine.WithChunker(agentknowledge.Chunker(chunker.NewRecursiveChunker())),
+		weaveengine.WithChunker(chunker.NewRecursiveChunker()),
 		weaveengine.WithRecovery(weaveengine.RecoveryConfig{StalledAfter: stall}),
 	)
 	if err != nil {
