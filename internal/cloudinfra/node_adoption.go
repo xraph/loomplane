@@ -278,19 +278,28 @@ func (s *Service) adoptAccepted(ctx context.Context, o *Operation) {
 		if err != nil {
 			return
 		}
+		// The connection names its node; the node must be the operation's
+		// organization's before anything of it is settled or checked.
+		var n *nodes.Node
+		if s.NodeRecords != nil {
+			if n, err = s.NodeRecords.GetByID(ctx, nodeID); err != nil {
+				s.warn("Couldn't read an adopted node; its adoption and address wait for the next check", fmt.Errorf("node %s: %w", nodeID, err))
+				return
+			}
+			if n.OrgID != o.OrgID {
+				s.warn("An adopt operation's connection names a node of another organization; nothing was settled", fmt.Errorf("node %s, operation %s", nodeID, o.ID))
+				return
+			}
+		}
 		if keeps {
 			if settleErr := s.settleManualAdoption(ctx, st, nodeID, o, v); settleErr != nil {
 				s.warn("Couldn't mark a node's adoption applied; its server is ready", fmt.Errorf("node %s: %w", nodeID, settleErr))
 			}
 		}
-		if s.NodeIngress == nil || s.NodeRecords == nil {
+		if s.NodeIngress == nil || n == nil {
 			return
 		}
-		n, err := s.NodeRecords.GetByID(ctx, nodeID)
-		if err == nil {
-			err = s.followNode(ctx, n, followMode{wait: true, asked: true})
-		}
-		if err != nil {
+		if err = s.followNode(ctx, n, followMode{wait: true, asked: true}); err != nil {
 			s.warn("Couldn't check an adopted node's public address; it runs without direct ingress for now", fmt.Errorf("node %s: %w", nodeID, err))
 		}
 	})

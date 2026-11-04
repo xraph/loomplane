@@ -430,6 +430,38 @@ func TestManualAdoptSettlesTheAdoptionAndConfirms(t *testing.T) {
 	}
 }
 
+// A connection whose node record belongs to another organization settles
+// nothing and checks nothing.
+func TestManualAdoptOfAnotherOrgsNodeSettlesNothing(t *testing.T) {
+	r := adoptedAddressRig(t)
+	records := r.storedNode()
+	r.authz.denied["user_admin"] = true
+	if a := r.join(t, sessionClaim()); a.Status != NodeAdoptionReview {
+		t.Fatalf("adoption %+v", a)
+	}
+	records.set(func(n *nodes.Node) { n.OrgID = "other" })
+	var warned []string
+	r.svc.Warn = func(msg string, _ error) { warned = append(warned, msg) }
+	ops := security.Principal{UserID: "user_ops", OrgID: "org"}
+	conn, err := r.conns.CreateNodeConnection(t.Context(), ops, connections.NodeConnectionInput{Cloud: connections.Server, NodeID: r.node.ID, Name: r.node.Name, IdentityGeneration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := r.svc.PreviewServer(t.Context(), ops, "cloud", ServerInput{Kind: "adopt", ConnectionID: conn.ID, Name: "web-1", CloudRevision: 3, ConfirmAdoption: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.svc.ApplyServerOperation(t.Context(), ops, "cloud", o.ID, ApplyInput{Review: o.Review}); err != nil {
+		t.Fatal(err)
+	}
+	if a := r.store.adoption(r.node.ID); a.Status != NodeAdoptionReview || a.OperationID == o.ID {
+		t.Fatalf("settled from another organization's node: %+v", a)
+	}
+	if len(r.ingress.list()) != 0 || len(warned) != 1 {
+		t.Fatalf("ingress %+v warned %v", r.ingress.list(), warned)
+	}
+}
+
 // Asking for direct ingress checks the address even when a check just ran.
 func TestCheckNodeAddressRunsWhenAsked(t *testing.T) {
 	r := adoptedAddressRig(t)
