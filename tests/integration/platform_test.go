@@ -120,9 +120,9 @@ func startApp(t *testing.T, cfg config.Config, prepare func(forge.App), configur
 // startStoredWaitlist is start with no waitlist override, so the instance's
 // stored setting decides, as it does on a deploy that leaves
 // LOOMPLANE_WAITLIST_ENABLED unset.
-func startStoredWaitlist(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
+func startStoredWaitlist(t *testing.T, cfg config.Config) *running {
 	t.Helper()
-	return boot(t, cfg, nil, configure...)
+	return boot(t, cfg, nil)
 }
 
 func boot(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {

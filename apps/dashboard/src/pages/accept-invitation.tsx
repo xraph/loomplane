@@ -63,7 +63,6 @@ export function AcceptInvitation({ token }: { token: string }) {
     }
   }
 
-
   return (
     <AuthLayout title="Join a workspace">
       <AuthCard
