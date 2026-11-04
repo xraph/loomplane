@@ -410,6 +410,42 @@ func TestDialCachesLabelledContainers(t *testing.T) {
 	}
 }
 
+// A container that just started isn't in a list read before it, so an
+// address the list doesn't hold reads the containers once more, unless the
+// list is newer than labelledMissAge.
+func TestDialRereadsOnAMiss(t *testing.T) {
+	d := dialDaemon()
+	g := newDialGuard(d.start(t))
+	now := time.Unix(1000, 0)
+	var clock sync.Mutex
+	g.now = func() time.Time { clock.Lock(); defer clock.Unlock(); return now }
+	tick := func(by time.Duration) { clock.Lock(); now = now.Add(by); clock.Unlock() }
+	ctx := context.Background()
+	if err := g.check(ctx, "172.18.0.5:1"); err != nil || d.lists.Load() != 1 {
+		t.Fatalf("first check: %v, %d lists", err, d.lists.Load())
+	}
+	d.mu.Lock()
+	d.containers[1].Networks["lp-net"] = fakeEndpoint{NetworkID: "n1", IPAddress: "172.18.0.6"}
+	d.mu.Unlock()
+	tick(time.Second)
+	if err := g.check(ctx, "172.18.0.6:1"); err != nil || d.lists.Load() != 2 {
+		t.Fatalf("the new container was refused: %v, %d lists", err, d.lists.Load())
+	}
+	// A refused address is read again once a check, not on every one.
+	var denied *deniedAddrError
+	if err := g.check(ctx, "172.18.0.99:1"); !errors.As(err, &denied) || d.lists.Load() != 2 {
+		t.Fatalf("a fresh list was read again: %v, %d lists", err, d.lists.Load())
+	}
+	tick(time.Second)
+	if err := g.check(ctx, "172.18.0.99:1"); !errors.As(err, &denied) || d.lists.Load() != 3 {
+		t.Fatalf("an older list wasn't read again once: %v, %d lists", err, d.lists.Load())
+	}
+	// The cached answer still holds for what the list has.
+	if err := g.check(ctx, "172.18.0.5:1"); err != nil || d.lists.Load() != 3 {
+		t.Fatalf("a hit read again: %v, %d lists", err, d.lists.Load())
+	}
+}
+
 func TestRegisterDialNeedsAllowAndSocket(t *testing.T) {
 	sock := dialDaemon().start(t)
 	nowhere := []string{filepath.Join(t.TempDir(), "none.sock")}

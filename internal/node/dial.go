@@ -24,6 +24,11 @@ const (
 	labelledTTL = 5 * time.Second
 	// labelledTimeout bounds reading them from the daemon.
 	labelledTimeout = 5 * time.Second
+	// labelledMissAge is how old a read must be before an address it
+	// doesn't hold reads the containers again: a container that just
+	// started isn't refused for labelledTTL, and a dial retried at a
+	// refused address can't keep the daemon listing.
+	labelledMissAge = 250 * time.Millisecond
 	// dialTimeout bounds a connect. It stays under the hub's 30 second wait
 	// for a verdict, so a dial that fails arrives as a refusal with its
 	// reason rather than as a timeout.
@@ -80,6 +85,7 @@ type dialGuard struct {
 type labelledRead struct {
 	done chan struct{}
 	ips  map[netip.Addr]bool
+	at   time.Time
 	err  error
 }
 
@@ -157,7 +163,11 @@ func (g *dialGuard) check(ctx context.Context, address string) error {
 	if ip.IsLoopback() {
 		return nil
 	}
-	ips, err := g.labelled(ctx)
+	ips, at, err := g.labelled(ctx, time.Time{})
+	if err == nil && !ips[ip] && g.now().Sub(at) >= labelledMissAge {
+		// The container may have started since the list was read.
+		ips, _, err = g.labelled(ctx, at)
+	}
 	if err != nil {
 		return &guardError{reason: "listing Loomplane containers: " + err.Error()}
 	}
@@ -167,19 +177,23 @@ func (g *dialGuard) check(ctx context.Context, address string) error {
 	return nil
 }
 
-// labelled returns the addresses, cached for labelledTTL. The cache is
-// a known, accepted risk: for up to labelledTTL a removed container's address
-// stays allowed, until Docker hands it to another container. When the cache
-// is stale, the first check starts one read and every check waits on it for
-// no longer than its own ctx allows, so a hung daemon holds no dial past its
-// deadline. A failed read is not cached: it fails the checks that waited on
-// it, and the next check reads again.
-func (g *dialGuard) labelled(ctx context.Context) (map[netip.Addr]bool, error) {
+// labelled returns the addresses and when they were read, cached for
+// labelledTTL. The cache is a known, accepted risk: for up to labelledTTL a
+// removed container's address stays allowed, until Docker hands it to
+// another container. A cache read at or before stale doesn't count, so a
+// check that missed in one list can ask for a newer one. When the cache is
+// stale, the first check starts one read and every check waits on it for
+// no longer than its own ctx allows, so a hung daemon holds no dial past
+// its deadline; a check that wants a newer list joins a read already in
+// flight, which started after the list it missed in. A failed read is not
+// cached: it fails the checks that waited on it, and the next check reads
+// again.
+func (g *dialGuard) labelled(ctx context.Context, stale time.Time) (map[netip.Addr]bool, time.Time, error) {
 	g.mu.Lock()
-	if g.ips != nil && g.now().Sub(g.at) < labelledTTL {
-		ips := g.ips
+	if g.ips != nil && g.now().Sub(g.at) < labelledTTL && g.at.After(stale) {
+		ips, at := g.ips, g.at
 		g.mu.Unlock()
-		return ips, nil
+		return ips, at, nil
 	}
 	read := g.reading
 	if read == nil {
@@ -190,9 +204,9 @@ func (g *dialGuard) labelled(ctx context.Context) (map[netip.Addr]bool, error) {
 	g.mu.Unlock()
 	select {
 	case <-read.done:
-		return read.ips, read.err
+		return read.ips, read.at, read.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, time.Time{}, ctx.Err()
 	}
 }
 
@@ -203,8 +217,9 @@ func (g *dialGuard) read(r *labelledRead) {
 	defer cancel()
 	r.ips, r.err = labelledAddrs(ctx, g.api)
 	g.mu.Lock()
+	r.at = g.now()
 	if r.err == nil {
-		g.ips, g.at = r.ips, g.now()
+		g.ips, g.at = r.ips, r.at
 	}
 	g.reading = nil
 	g.mu.Unlock()
