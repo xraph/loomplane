@@ -295,15 +295,28 @@ func sentence(text string) string {
 	return strings.TrimRight(strings.TrimSpace(text), ".")
 }
 
-var mention = regexp.MustCompile("(^|[^A-Za-z0-9_`/@.-])@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?)")
+// mention is an @ that GitHub could read as the start of a mention:
+// anything but a letter or digit before it (so an email address isn't
+// one), and a letter or digit after it.
+var mention = regexp.MustCompile(`(^|[^A-Za-z0-9])@([A-Za-z0-9])`)
 
-// neutralise makes text safe to put in an issue outside a fence: a
-// mention of a person or a team becomes code, so nobody is paged, and an
-// HTML comment can't start, so nobody can forge a second marker.
+// wordJoiner is invisible, and GitHub doesn't read "@" followed by it as
+// a mention, wherever the text sits: in code, in emphasis, after any
+// punctuation.
+const wordJoiner = "\u2060"
+
+// neutralise makes text safe to put in an issue outside a fence. Every
+// mention of a person or a team is broken by an invisible word joiner
+// after its @, so nobody is paged, and every < is escaped, so the text
+// can't start an HTML element or comment: nobody can forge a second
+// marker or render an image or a details block. Markdown links stay.
 func neutralise(text string) string {
-	return mention.ReplaceAllString(noComments(text), "$1`@$2`")
+	text = strings.ReplaceAll(text, "<", "&lt;")
+	return mention.ReplaceAllString(text, "${1}@"+wordJoiner+"${2}")
 }
 
+// noComments keeps a fenced value from starting an HTML comment, which
+// would forge a marker in the issue's source.
 func noComments(text string) string { return strings.ReplaceAll(text, "<!--", "&lt;!--") }
 
 func capitalise(s string) string {

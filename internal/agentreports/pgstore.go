@@ -421,18 +421,27 @@ func (s *PgStore) SaveNotice(ctx context.Context, orgID, id, owner string, revis
 }
 
 // SaveIssue implements Store. It drops only the comments the step
-// handled, so one queued meanwhile waits for the next delivery.
+// handled, so one queued meanwhile waits for the next delivery, and puts
+// what's left of a handled one back in front.
 func (s *PgStore) SaveIssue(ctx context.Context, orgID, id, owner string, revision int, in IssueSave) error {
-	_, err := s.db.Exec(ctx, `UPDATE loomplane_agent_reports
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_agent_reports
 		SET issue_number = $4, issue_url = $5, issue_state = $6, issue_error = $7,
-			issue_comments = COALESCE((SELECT jsonb_agg(c.e ORDER BY c.i) FROM jsonb_array_elements(issue_comments) WITH ORDINALITY AS c(e, i)
-				WHERE c.i > $8), '[]'::jsonb),
+			issue_comments = to_jsonb($12::text[]) || COALESCE((SELECT jsonb_agg(c.e ORDER BY c.i)
+				FROM jsonb_array_elements(issue_comments) WITH ORDINALITY AS c(e, i) WHERE c.i > $8), '[]'::jsonb),
 			issue_comment_at = COALESCE($9::timestamptz, issue_comment_at),
 			issue_revision = CASE WHEN $10 THEN GREATEST(issue_revision, $11) ELSE issue_revision END
 		WHERE org_id = $1 AND id = $2 AND delivery_owner = $3`,
-		orgID, id, owner, in.Number, in.URL, in.State, in.Error, in.Handled, utcOrNil(in.CommentAt), in.Done, revision)
+		orgID, id, owner, in.Number, in.URL, in.State, in.Error, in.Handled, utcOrNil(in.CommentAt), in.Done, revision,
+		nonNil(in.Requeue))
 	if err != nil {
 		return fmt.Errorf("record agent report issue: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrLeaseLost
 	}
 	return nil
 }

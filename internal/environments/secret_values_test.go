@@ -90,8 +90,10 @@ func TestSecretValuesForCoverEveryLayerAndService(t *testing.T) {
 		t.Fatalf("every environment: %v", got)
 	}
 
-	if _, err := svc.SecretValuesFor(ctx, org, project, "staging"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("an environment the project doesn't have: %v", err)
+	// A report about an environment that was deleted still has every
+	// secret the project could carry redacted.
+	if got := sorted("staging"); !slices.Equal(got, want) {
+		t.Fatalf("an environment the project doesn't have: %v", got)
 	}
 	if _, err := svc.SecretValuesFor(ctx, org, "proj_gone", ""); !errors.Is(err, projects.ErrNotFound) {
 		t.Fatalf("another project: %v", err)

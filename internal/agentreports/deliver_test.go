@@ -389,6 +389,11 @@ var deliverCases = []deliverCase{
 	{name: "PendingAndQueueDelivery", run: pendingAndQueueDelivery},
 	{name: "KnowledgeKeepsTheScannedIssueText", run: knowledgeKeepsTheScannedIssueText},
 	{name: "StepsKeepWhatChangedMeanwhile", run: stepsKeepWhatChangedMeanwhile, opts: deliverOptions{engine: passEngine{}}},
+	{name: "CloseIsRetriedWithoutASecondComment", run: closeIsRetriedWithoutASecondComment},
+	{name: "LostLeaseOpensNoIssue", run: lostLeaseOpensNoIssue},
+	{name: "UnsavedNoticeHoldsBackGitHub", run: unsavedNoticeHoldsBackGitHub},
+	{name: "CommentsAreRedactedBeforeTheyAreEscaped", run: commentsAreRedactedBeforeTheyAreEscaped,
+		opts: deliverOptions{secrets: fakeSecrets{values: []string{"s3<cr@et-Val"}}}},
 }
 
 func runMem(t *testing.T, name string) {
@@ -785,12 +790,14 @@ func issueCreatedBeforeACrashIsFoundByItsMarker(t *testing.T, e *deliverEnv) {
 func plantedMarkerIssueIsNotAdopted(t *testing.T, e *deliverEnv) {
 	r := e.opened(t)
 	planted := e.gh.AddIssue("acme/api", githubtest.IssueRecord{Title: "planted", Body: Marker(r.ID), Labels: []string{Label}})
+	e.gh.AddIssue("acme/api", githubtest.IssueRecord{Title: "from a workflow", Body: Marker(r.ID), Labels: []string{Label},
+		Author: "github-actions[bot]", AuthorType: "Bot"})
 	e.deliver(t, r.ID)
 	issues := e.issues()
-	if len(issues) != 2 || issues[0].Body != Marker(r.ID) || issues[0].Title != "planted" {
-		t.Fatalf("the planted issue changed: %+v", issues)
+	if len(issues) != 3 || issues[0].Body != Marker(r.ID) || issues[0].Title != "planted" || issues[1].Title != "from a workflow" {
+		t.Fatalf("a planted issue changed: %+v", issues)
 	}
-	if got := e.lookup(t, r.ID); got.Issue.Number == planted || got.Issue.Number != 2 {
+	if got := e.lookup(t, r.ID); got.Issue.Number == planted || got.Issue.Number != 3 {
 		t.Fatalf("report issue %+v", got.Issue)
 	}
 }
@@ -966,6 +973,158 @@ func stepsKeepWhatChangedMeanwhile(t *testing.T, e *deliverEnv) {
 	}
 	if pending, err := e.svc.Pending(ctx, e.org); err != nil || len(pending) != 1 {
 		t.Fatalf("the reopen isn't pending: %v, %v", pending, err)
+	}
+}
+
+func TestCloseIsRetriedWithoutASecondComment(t *testing.T) {
+	runMem(t, "CloseIsRetriedWithoutASecondComment")
+}
+func TestLostLeaseOpensNoIssue(t *testing.T)        { runMem(t, "LostLeaseOpensNoIssue") }
+func TestUnsavedNoticeHoldsBackGitHub(t *testing.T) { runMem(t, "UnsavedNoticeHoldsBackGitHub") }
+func TestCommentsAreRedactedBeforeTheyAreEscaped(t *testing.T) {
+	runMem(t, "CommentsAreRedactedBeforeTheyAreEscaped")
+}
+
+// A close that fails after its comment went out is retried on its own.
+func closeIsRetriedWithoutASecondComment(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	e.deliver(t, r.ID)
+	e.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "fixed"})
+	// The body edit goes through; the close after the comment doesn't.
+	e.gh.FailNext("/repos/acme/api/issues/1", 0)
+	e.gh.FailNext("/repos/acme/api/issues/1", http.StatusBadGateway)
+	if err := e.svc.Deliver(context.Background(), e.org, r.ID, owner1); err == nil {
+		t.Fatal("a failed close didn't fail the delivery")
+	}
+	if is := e.issues()[0]; is.State != "open" || len(is.Comments) != 1 {
+		t.Fatalf("after the failed close %+v", is)
+	}
+	if hid := e.peek.hidden(t, e.org, r.ID); !slices.Equal(hid.IssueComments, []string{closePrefix + "completed"}) {
+		t.Fatalf("queued %v", hid.IssueComments)
+	}
+	e.deliver(t, r.ID)
+	if is := e.issues()[0]; is.State != "closed" || is.StateReason != "completed" || len(is.Comments) != 1 {
+		t.Fatalf("after the retry %+v", is)
+	}
+	if hid := e.peek.hidden(t, e.org, r.ID); len(hid.IssueComments) != 0 || hid.Issue.State != IssueClosed {
+		t.Fatalf("after the retry %+v", hid)
+	}
+}
+
+// claimThief is a Store that hands the delivery to another worker after
+// the first claim, as a lapsed lease would.
+type claimThief struct {
+	Store
+	mu     sync.Mutex
+	claims int
+}
+
+func (c *claimThief) ClaimDelivery(ctx context.Context, orgID, id, owner string, lease time.Duration) (*Delivery, error) {
+	c.mu.Lock()
+	c.claims++
+	n := c.claims
+	c.mu.Unlock()
+	if n > 1 {
+		return nil, nil
+	}
+	return c.Store.ClaimDelivery(ctx, orgID, id, owner, lease)
+}
+
+// A worker that lost its lease opens no issue and writes nothing more,
+// and a write after the lease went elsewhere is refused.
+func lostLeaseOpensNoIssue(t *testing.T, e *deliverEnv) {
+	ctx := context.Background()
+	r := e.opened(t)
+	deps := e.svc.d
+	deps.Store = &claimThief{Store: e.store}
+	if err := NewService(deps).Deliver(ctx, e.org, r.ID, owner1); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("deliver: %v", err)
+	}
+	if e.creates() != 0 || len(e.notices(t)) != len(everyone) {
+		t.Fatalf("%d creates, %d notices", e.creates(), len(e.notices(t)))
+	}
+	if got := e.lookup(t, r.ID); got.Issue.State == IssueFailed {
+		t.Fatalf("a worker without the lease recorded %+v", got.Issue)
+	}
+
+	if d, err := e.store.ClaimDelivery(ctx, e.org, r.ID, "worker_x", time.Millisecond); err != nil || d == nil {
+		t.Fatalf("claim: %v, %v", d, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	e.clock.advance(time.Second)
+	if d, err := e.store.ClaimDelivery(ctx, e.org, r.ID, "worker_y", DeliveryLease); err != nil || d == nil {
+		t.Fatalf("claim after the lease lapsed: %v, %v", d, err)
+	}
+	if err := e.store.SaveIssue(ctx, e.org, r.ID, "worker_x", r.Revision, IssueSave{Number: 9, State: IssueOpen}); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("save without the lease: %v", err)
+	}
+	if got := e.lookup(t, r.ID); got.Issue.Number == 9 {
+		t.Fatal("a worker without the lease wrote the issue")
+	}
+}
+
+// noticeRefuser is a Store whose report always moves on before the
+// notice is saved.
+type noticeRefuser struct{ Store }
+
+func (noticeRefuser) SaveNotice(context.Context, string, string, string, int, string,
+	func(context.Context, notifications.Execer, int) error, time.Time) (bool, error) {
+	return false, nil
+}
+
+// A revision whose notice isn't recorded doesn't reach GitHub.
+func unsavedNoticeHoldsBackGitHub(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	deps := e.svc.d
+	deps.Store = noticeRefuser{Store: e.store}
+	if err := NewService(deps).Deliver(context.Background(), e.org, r.ID, owner1); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := e.gh.Requests(); len(reqs) != 0 {
+		t.Fatalf("GitHub was called before the notice: %v", reqs)
+	}
+	if pending, err := e.svc.Pending(context.Background(), e.org); err != nil || len(pending) != 1 {
+		t.Fatalf("pending %v, %v", pending, err)
+	}
+}
+
+// A comment is rendered from the redacted report, so escaping can't hide
+// a secret from the redactor.
+func commentsAreRedactedBeforeTheyAreEscaped(t *testing.T, e *deliverEnv) {
+	r := e.opened(t)
+	e.deliver(t, r.ID)
+	e.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}, Reason: "Fixed by rotating s3<cr@et-Val"})
+	e.deliver(t, r.ID)
+	is := e.issues()[0]
+	if len(is.Comments) != 1 || strings.Contains(is.Comments[0], "s3") || strings.Contains(is.Comments[0], "et-Val") ||
+		!strings.Contains(is.Comments[0], "[redacted]") {
+		t.Fatalf("comments %q", is.Comments)
+	}
+}
+
+// countingEngine lets everything through and counts outbound scans.
+type countingEngine struct {
+	passEngine
+	mu  sync.Mutex
+	out int
+}
+
+func (c *countingEngine) ScanOutput(ctx context.Context, in *scan.Input) (*scan.Result, error) {
+	c.mu.Lock()
+	c.out++
+	c.mu.Unlock()
+	return c.passEngine.ScanOutput(ctx, in)
+}
+
+// An observer costs the issue's two scans, never the notice's.
+func TestObserversScanOnlyTheIssueText(t *testing.T) {
+	engine := &countingEngine{}
+	e := newMemEnv(t, deliverOptions{engine: engine})
+	e.svc.AddObserver(&fakeObserver{})
+	e.opened(t)
+	e.clear(t, Clearance{Signals: []string{SignalDeploymentFailed}})
+	if engine.out != 2 {
+		t.Fatalf("%d outbound scans", engine.out)
 	}
 }
 

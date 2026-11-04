@@ -119,9 +119,12 @@ type CloseInput struct {
 }
 
 var (
-	ErrNotFound      = errors.New("report not found")
-	ErrInvalid       = errors.New("invalid report")
-	ErrNotOpen       = errors.New("this report is already closed")
+	ErrNotFound = errors.New("report not found")
+	ErrInvalid  = errors.New("invalid report")
+	ErrNotOpen  = errors.New("this report is already closed")
+	// ErrLeaseLost is a delivery step finding another worker holds the
+	// report's delivery now: it stops, and leaves GitHub alone.
+	ErrLeaseLost     = errors.New("another worker took this report's delivery over")
 	ErrNotYourReport = errors.New("only the investigation of this report can write its findings")
 )
 
@@ -180,7 +183,8 @@ type Store interface {
 	// reports false, having saved nothing, when the report moved on.
 	SaveNotice(ctx context.Context, orgID, id, owner string, revision int, pendingNotice string,
 		send func(ctx context.Context, q notifications.Execer, seq int) error, at time.Time) (bool, error)
-	// SaveIssue records the issue step while owner holds the delivery.
+	// SaveIssue records the issue step while owner holds the delivery,
+	// and is ErrLeaseLost when owner no longer does.
 	SaveIssue(ctx context.Context, orgID, id, owner string, revision int, in IssueSave) error
 	// ReleaseDelivery lets the delivery go; done also clears its queued
 	// mark.
@@ -209,6 +213,9 @@ type IssueSave struct {
 	// Handled is how many of the queued comments, from the front, were
 	// posted or dropped. Those go; ones queued since stay.
 	Handled int
+	// Requeue goes back on the front of the queue: what's left of a
+	// handled comment, such as the close after it.
+	Requeue []string
 	// CommentAt is when the last repeat comment went out; nil keeps it.
 	CommentAt *time.Time
 	// Done moves issue_revision to the revision delivered.

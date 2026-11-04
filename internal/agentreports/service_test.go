@@ -1414,10 +1414,10 @@ func (m *memStore) SaveIssue(_ context.Context, orgID, id, owner string, revisio
 		return err
 	}
 	if !m.holds(id, owner) {
-		return nil
+		return ErrLeaseLost
 	}
 	r.Issue = Issue{Number: in.Number, URL: in.URL, State: in.State, Error: in.Error}
-	r.IssueComments = slices.Clone(r.IssueComments[min(in.Handled, len(r.IssueComments)):])
+	r.IssueComments = append(slices.Clone(in.Requeue), r.IssueComments[min(in.Handled, len(r.IssueComments)):]...)
 	if in.CommentAt != nil {
 		r.IssueCommentAt = cloneTime(in.CommentAt)
 	}

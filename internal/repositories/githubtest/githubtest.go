@@ -208,7 +208,9 @@ func (s *Server) Issues(repo string) []IssueRecord {
 	return out
 }
 
-// FailNext makes the next request to path answer status instead.
+// FailNext makes the next request to path answer status instead. Calls
+// queue up in order, and a status of 0 lets that request through, so a
+// test can fail a later request to the same path.
 func (s *Server) FailNext(path string, status int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -118,9 +118,10 @@ func (s *Service) bind(ctx context.Context, orgID string) (bound context.Context
 
 // deliverNotice sends the pending notice, or just records that the
 // revision needs none, before any GitHub call. A report that moves on
-// meanwhile is read again, at most three times; after that the next
-// delivery catches up. It returns nil, with no error, when another
-// worker took the delivery over.
+// meanwhile is read again, at most three times. It returns nil, with no
+// error, when another worker took the delivery over, or when the report
+// kept moving: then nothing goes to GitHub for a revision whose notice
+// isn't recorded, and the next delivery catches up.
 func (s *Service) deliverNotice(ctx context.Context, out *sender, d *Delivery, owner string) (*Delivery, error) {
 	for range 3 {
 		r := d.Report
@@ -157,7 +158,7 @@ func (s *Service) deliverNotice(ctx context.Context, out *sender, d *Delivery, o
 			return nil, err
 		}
 	}
-	return d, nil
+	return nil, nil
 }
 
 // recipients are who hears about a report: the workspace's owners and
@@ -221,6 +222,7 @@ type issueStep struct {
 	d     *Delivery
 	owner string
 	n     names
+	clean *Report // the report with its texts scrubbed, for comments
 	save  IssueSave
 }
 
@@ -232,7 +234,7 @@ func (s *Service) deliverIssue(ctx context.Context, out *sender, d *Delivery, ow
 		return nil
 	}
 	st := &issueStep{
-		s: s, ctx: ctx, out: out, d: d, owner: owner, n: s.names(ctx, r, out),
+		s: s, ctx: ctx, out: out, d: d, owner: owner, n: s.names(ctx, r, out), clean: out.clean(r),
 		save: IssueSave{Number: r.Issue.Number, URL: r.Issue.URL, State: r.Issue.State},
 	}
 	if r.Repository == "" {
@@ -276,6 +278,9 @@ func (st *issueStep) finish(state, why string) error {
 func (st *issueStep) fail(err error) error {
 	r := st.d.Report
 	st.save.State, st.save.Error, st.save.Done = IssueFailed, failure(err), false
+	if errors.Is(err, ErrLeaseLost) {
+		return err // the issue is another worker's to record now
+	}
 	if serr := st.s.d.Store.SaveIssue(st.ctx, r.OrgID, r.ID, st.owner, r.Revision, st.save); serr != nil {
 		st.s.warn("agentreports: record the failed issue step of report "+r.ID, serr)
 	}
@@ -330,25 +335,54 @@ func (st *issueStep) sync(iss repositories.Issues) error {
 			st.save.State, st.save.Handled = IssueNone, len(st.d.IssueComments)
 			return nil
 		default:
+			// Opening an issue is the one step a second worker must never
+			// repeat, so the claim is renewed first and the issue recorded
+			// right after.
+			held, err := st.s.d.Store.ClaimDelivery(st.ctx, r.OrgID, r.ID, st.owner, DeliveryLease)
+			if err != nil {
+				return err
+			}
+			if held == nil {
+				return ErrLeaseLost
+			}
 			got, err := iss.Create(st.ctx, repositories.IssueInput{Title: title, Body: body, Labels: []string{Label}})
 			if err != nil {
 				return err
 			}
 			st.saw(got, "created")
 			created = true
+			if serr := st.s.d.Store.SaveIssue(st.ctx, r.OrgID, r.ID, st.owner, r.Revision, st.save); serr != nil {
+				return serr
+			}
 		}
 	}
 	for _, kind := range st.d.IssueComments {
 		// A new issue already says everything queued before it.
-		if !created {
-			if err := st.post(iss, kind); err != nil {
-				return err
+		if created {
+			st.save.Handled++
+			continue
+		}
+		posted, err := st.post(iss, kind)
+		if err != nil {
+			if posted {
+				// The comment is out; only its close is left, as a step
+				// of its own.
+				st.save.Handled++
+				st.save.Requeue = []string{closePrefix + closeReason[kind]}
 			}
+			return err
 		}
 		st.save.Handled++
 	}
 	return nil
 }
+
+// A close left over from a comment that went out, queued as its own step:
+// "close:" and the state reason.
+const closePrefix = "close:"
+
+// closeReason is the state reason a comment closes the issue with.
+var closeReason = map[string]string{commentResolved: "completed", commentClosed: "not_planned"}
 
 // saw records the issue as GitHub returned it, and audits action.
 func (st *issueStep) saw(is *repositories.Issue, action string) {
@@ -365,27 +399,32 @@ func (st *issueStep) saw(is *repositories.Issue, action string) {
 }
 
 // post posts one queued comment with its transition: a reopen opens the
-// issue before its comment, a resolve or a close closes it after.
-func (st *issueStep) post(iss repositories.Issues, kind string) error {
+// issue before its comment, a resolve or a close closes it after. posted
+// is whether the comment went out, even when the close after it failed.
+func (st *issueStep) post(iss repositories.Issues, kind string) (posted bool, err error) {
+	if why, ok := strings.CutPrefix(kind, closePrefix); ok {
+		return false, st.close(iss, why)
+	}
 	r, number := st.d.Report, st.save.Number
 	now := st.s.now()
 	if kind == commentRepeated {
 		if last := st.lastRepeat(); last != nil && last.After(now.Add(-RepeatNoticeEvery)) {
-			return nil // the body's count says it
+			return false, nil // the body's count says it
 		}
 	}
 	if kind == commentReopened {
 		got, err := iss.Edit(st.ctx, number, repositories.IssueEdit{State: "open", StateReason: "reopened"})
 		if err != nil {
-			return err
+			return false, err
 		}
 		st.saw(got, "reopened")
 	}
-	if text, ok := comment(kind, r, st.n); ok {
+	if text, ok := comment(kind, st.clean, st.n); ok {
 		if sent, ok := st.out.text(st.ctx, text); ok {
 			if err := iss.Comment(st.ctx, number, sent); err != nil {
-				return err
+				return false, err
 			}
+			posted = true
 			st.s.auditIssue(st.ctx, r, number, "commented")
 			if kind == commentRepeated {
 				st.save.CommentAt = &now
@@ -394,14 +433,20 @@ func (st *issueStep) post(iss repositories.Issues, kind string) error {
 			st.s.warn("agentreports: the safety scan blocked a comment on report "+r.ID, agentsafety.ErrOutboundBlocked)
 		}
 	}
-	reasonFor := map[string]string{commentResolved: "completed", commentClosed: "not_planned"}
-	if why, ok := reasonFor[kind]; ok {
-		got, err := iss.Edit(st.ctx, number, repositories.IssueEdit{State: "closed", StateReason: why})
-		if err != nil {
-			return err
-		}
-		st.saw(got, "closed")
+	if why, ok := closeReason[kind]; ok {
+		return posted, st.close(iss, why)
 	}
+	return posted, nil
+}
+
+// close closes the issue with why as its state reason. Closing a closed
+// issue again does no harm, so a retry can repeat it.
+func (st *issueStep) close(iss repositories.Issues, why string) error {
+	got, err := iss.Edit(st.ctx, st.save.Number, repositories.IssueEdit{State: "closed", StateReason: why})
+	if err != nil {
+		return err
+	}
+	st.saw(got, "closed")
 	return nil
 }
 

@@ -86,9 +86,10 @@ type Issues interface {
 	// EnsureLabel creates the label, or does nothing when it exists.
 	EnsureLabel(ctx context.Context, name, color, description string) error
 	// Find returns the first issue with label whose body contains
-	// marker, open or closed, opened by a bot, or nil when there's none.
-	// A person's issue never counts, so nobody who can label an issue can
-	// plant one for Loomplane to take over.
+	// marker, open or closed, opened by this App's own bot user, or nil
+	// when there's none. Nobody else's issue counts, a person's or
+	// another bot's, so nobody who can label an issue can plant one for
+	// Loomplane to take over.
 	Find(ctx context.Context, label, marker string) (*Issue, error)
 	Create(ctx context.Context, in IssueInput) (*Issue, error)
 	// Edit returns ErrNotFound only when the issue is gone.
@@ -156,9 +157,9 @@ func (g *githubIssues) Find(ctx context.Context, label, marker string) (*Issue, 
 			return nil, issueError(err)
 		}
 		for _, it := range items {
-			// The issues list has pull requests in it too, and only an
-			// App's issue can be Loomplane's.
-			if it.PullRequest == nil && it.User.Type == "Bot" && strings.Contains(it.Body, marker) {
+			// The issues list has pull requests in it too, and only the
+			// App's own issue can be Loomplane's.
+			if it.PullRequest == nil && g.ownIssue(it) && strings.Contains(it.Body, marker) {
 				return it.issue(), nil
 			}
 		}
@@ -167,6 +168,12 @@ func (g *githubIssues) Find(ctx context.Context, label, marker string) (*Issue, 
 		}
 	}
 	return nil, nil
+}
+
+// ownIssue is whether this App's bot user opened it. An App without a
+// slug can't tell, and owns none.
+func (g *githubIssues) ownIssue(it issueJSON) bool {
+	return g.app.slug != "" && it.User.Type == "Bot" && strings.EqualFold(it.User.Login, g.app.slug+"[bot]")
 }
 
 func (g *githubIssues) Create(ctx context.Context, in IssueInput) (*Issue, error) {

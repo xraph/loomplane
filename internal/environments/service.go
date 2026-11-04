@@ -488,6 +488,9 @@ func (s *Service) Values(ctx context.Context, orgID, projectID, environment, ser
 // apply to the project in the named environment, or in any of its
 // environments when environment is "": every layer, organization-wide
 // included, every service, and the ones a more specific layer overrides.
+// An environment the project no longer has (a report about one that was
+// deleted) reads as every environment, so its organization-wide and
+// project-wide secrets are still covered.
 // It is what the agent's report delivery redacts before anything leaves
 // Loomplane, so it errs toward too many values. It checks no role, writes
 // nothing (no store row, no secret version), and nothing it returns is
@@ -497,8 +500,16 @@ func (s *Service) SecretValuesFor(ctx context.Context, orgID, projectID, environ
 	if _, err := s.projects.GetProject(ctx, orgID, projectID); err != nil {
 		return nil, err
 	}
+	var env *projects.Environment
+	if environment != "" {
+		var err error
+		env, err = s.environment(ctx, orgID, projectID, environment)
+		if err != nil && !errors.Is(err, ErrInvalid) {
+			return nil, err
+		}
+	}
 	var candidates []*Variable
-	if environment == "" {
+	if env == nil {
 		org, err := s.store.ListOrganization(ctx, orgID)
 		if err != nil {
 			return nil, err
@@ -510,10 +521,7 @@ func (s *Service) SecretValuesFor(ctx context.Context, orgID, projectID, environ
 		candidates = append(candidates, org...)
 		candidates = append(candidates, own...)
 	} else {
-		env, err := s.environment(ctx, orgID, projectID, environment)
-		if err != nil {
-			return nil, err
-		}
+		var err error
 		if candidates, err = s.store.ForEnvironment(ctx, orgID, projectID, env.ID, env.Name); err != nil {
 			return nil, err
 		}

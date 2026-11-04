@@ -43,15 +43,15 @@ func (s *Service) notify(ctx context.Context, r *Report) {
 	if len(observers) == 0 {
 		return
 	}
-	text, err := s.Text(ctx, r)
+	text, on, err := s.knowledge(ctx, r)
 	if err != nil {
 		s.warn("agentreports: render report "+r.ID+" for its observers", err)
 		return
 	}
-	if text == (Rendered{}) {
+	if !on {
 		return // the agent is off: nothing can be scanned, and knowledge waits
 	}
-	doc := document(r, knowledgeText(r, text))
+	doc := document(r, text)
 	for _, o := range observers {
 		if err := o.ReportChanged(context.WithoutCancel(ctx), doc); err != nil {
 			s.warn("agentreports: an observer failed on report "+r.ID, err)
@@ -97,6 +97,19 @@ func (s *Service) Documents(ctx context.Context, orgID string, after time.Time, 
 		docs = append(docs, document(r, knowledgeText(r, Rendered{IssueTitle: title, IssueBody: body})))
 	}
 	return docs, nil
+}
+
+// knowledge renders r as knowledge keeps it: only the issue's texts, so
+// an observer costs one read of the secrets and two scans. on is false
+// while the agent is off.
+func (s *Service) knowledge(ctx context.Context, r *Report) (text string, on bool, err error) {
+	bound, on, err := s.bind(ctx, r.OrgID)
+	if err != nil || !on {
+		return "", on, err
+	}
+	out := s.sender(bound, r)
+	title, body := s.issueTexts(bound, out, r, s.names(bound, r, out))
+	return knowledgeText(r, Rendered{IssueTitle: title, IssueBody: body}), true, nil
 }
 
 // knowledgeText is the issue's title and its body without the marker:

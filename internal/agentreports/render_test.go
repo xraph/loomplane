@@ -2,6 +2,7 @@ package agentreports
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestIssueBodyNeutralisesMentionsAndFences(t *testing.T) {
 	if !strings.Contains(body, "````\nboom ```\n@acme/oncall [x](http://e)\n````") {
 		t.Fatalf("the untrusted fact isn't in a fence it can't close:\n%s", body)
 	}
-	if !strings.Contains(body, "ping `@everyone`") || !strings.Contains(body, "**Owner:** `@acme/platform`") {
+	if !strings.Contains(body, "ping @"+wordJoiner+"everyone") || !strings.Contains(body, "**Owner:** @"+wordJoiner+"acme/platform") {
 		t.Fatalf("a mention outside a fence would page someone:\n%s", body)
 	}
 	if !strings.Contains(body, "&lt;!-- loomplane-report:arep_x -->") {
@@ -85,7 +86,7 @@ func TestIssueBodyNeutralisesMentionsAndFences(t *testing.T) {
 		t.Fatalf("%d markers:\n%s", n, body)
 	}
 	// An email address isn't a mention.
-	if got := neutralise("mail ops@acme.com or @ops"); got != "mail ops@acme.com or `@ops`" {
+	if got := neutralise("mail ops@acme.com or @ops"); got != "mail ops@acme.com or @"+wordJoiner+"ops" {
 		t.Fatalf("neutralise = %q", got)
 	}
 	// An untrusted value can't plant a marker either, even in a fence.
@@ -93,6 +94,57 @@ func TestIssueBodyNeutralisesMentionsAndFences(t *testing.T) {
 	r.Facts = []Fact{{Label: "Error", Value: Marker("arep_other"), Untrusted: true}}
 	if body = issueBody(r, renderNames(r), true); strings.Contains(body, Marker("arep_other")) {
 		t.Fatalf("a fact planted another report's marker:\n%s", body)
+	}
+}
+
+// liveMention finds an @ GitHub could still read as a mention.
+var liveMention = regexp.MustCompile(`(^|[^A-Za-z0-9])@[A-Za-z0-9]`)
+
+// Whatever markdown sits around a mention, in code, in emphasis or after
+// punctuation, it can't page anyone.
+func TestNeutraliseBreaksEveryMention(t *testing.T) {
+	for _, text := range []string{
+		"`ping @acme`", ".@acme", "-@acme", "/@acme", "@@acme", "_@acme_", "@acme/oncall", "@everyone",
+		"**@acme**", "(@acme)", "[@acme](http://e)", "ping\n@acme",
+	} {
+		got := neutralise(text)
+		if liveMention.MatchString(got) {
+			t.Errorf("neutralise(%q) = %q leaves a mention", text, got)
+		}
+		if strings.ReplaceAll(got, wordJoiner, "") != text {
+			t.Errorf("neutralise(%q) = %q changes more than the mention", text, got)
+		}
+	}
+	// The whole body is safe too, for model text and trusted text alike.
+	r := renderReport()
+	r.Facts = []Fact{{Label: "Owner", Value: "`ping @acme`"}}
+	r.Findings = &Findings{Summary: "_@acme_ and .@acme", LikelyCause: "`@everyone`", Suggestions: []string{"-@acme/oncall"}, Confidence: "low"}
+	r.Resolution = "@@acme"
+	body := issueBody(r, renderNames(r), true)
+	if liveMention.MatchString(body) {
+		t.Fatalf("a mention is live:\n%s", body)
+	}
+	if text, _ := comment(commentResolved, r, renderNames(r)); liveMention.MatchString(text) {
+		t.Fatalf("a mention is live in %q", text)
+	}
+}
+
+// An injected investigation can't render HTML in the issue; its markdown
+// links stay.
+func TestIssueBodyEscapesHTML(t *testing.T) {
+	r := renderReport()
+	r.Facts = []Fact{{Label: "Note", Value: "<details><summary>x</summary>"}}
+	r.Findings = &Findings{Summary: `<img src="https://evil.example/pixel">`, LikelyCause: "See [the docs](https://docs.example).", Confidence: "low"}
+	body := issueBody(r, renderNames(r), true)
+	if strings.Contains(body, "<img") || strings.Contains(body, "<details") {
+		t.Fatalf("raw HTML in the body:\n%s", body)
+	}
+	if !strings.Contains(body, `&lt;img src="https://evil.example/pixel">`) || !strings.Contains(body, "[the docs](https://docs.example)") {
+		t.Fatalf("body:\n%s", body)
+	}
+	// The only HTML left is the marker.
+	if strings.Count(body, "<") != 1 || !strings.HasPrefix(body, Marker(r.ID)) {
+		t.Fatalf("%d < in the body", strings.Count(body, "<"))
 	}
 }
 
