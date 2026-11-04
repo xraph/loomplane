@@ -933,3 +933,53 @@ func TestSweepGivesUpOnATaskThatNeverStarts(t *testing.T) {
 		t.Fatalf("%d starts queued", n)
 	}
 }
+
+// refusingAuthz is the real authorizer with some checks refused, keyed
+// "<user> <resource:action> <resource>".
+type refusingAuthz struct {
+	inner  authorizer
+	refuse map[string]bool
+}
+
+func (a refusingAuthz) Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error {
+	if a.refuse[p.UserID+" "+perm.Name()+" "+resourceID] {
+		return security.ErrForbidden
+	}
+	return a.inner.Require(ctx, p, perm, resourceID)
+}
+
+// The person who asked for a task cancels it only while they may use the
+// agent on its project, or on the workspace for a workspace-wide task. A
+// read-only key of theirs can't.
+func TestCancelByTheRequesterNeedsAgentUse(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
+	w.svc.authz = refusingAuthz{inner: w.authz, refuse: map[string]bool{ada + " " + security.AgentUse.Name() + " prj_mono": true}}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), task.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("without agent:use on the project: %v, want ErrForbidden", err)
+	}
+	readOnly := person(orgA, ada)
+	readOnly.ReadOnly = true
+	w.svc.authz = w.authz
+	if err := w.svc.Cancel(ctx, readOnly, task.ID); err == nil {
+		t.Fatal("a read-only key cancelled a task")
+	}
+	if got, err := w.store.Get(ctx, orgA, task.ID); err != nil || Terminal(got.Status) {
+		t.Fatalf("refused cancels moved the task: %+v %v", got, err)
+	}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), task.ID); err != nil {
+		t.Fatalf("with agent:use: %v", err)
+	}
+
+	// A workspace-wide task needs agent:use on the workspace.
+	wide := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	w.svc.authz = refusingAuthz{inner: w.authz, refuse: map[string]bool{ada + " " + security.AgentUse.Name() + " ": true}}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), wide.ID); err == nil {
+		t.Fatal("cancelled a workspace-wide task without agent:use")
+	}
+	w.svc.authz = w.authz
+	if err := w.svc.Cancel(ctx, person(orgA, ada), wide.ID); err != nil {
+		t.Fatalf("workspace-wide: %v", err)
+	}
+}

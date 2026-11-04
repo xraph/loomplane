@@ -564,8 +564,9 @@ func (s *Service) Events(ctx context.Context, p security.Principal, taskID strin
 	return s.store.Events(ctx, t.OrgID, t.ID, after, limit)
 }
 
-// Cancel stops a task: its requester or someone who manages the
-// workspace's AI may.
+// Cancel stops a task: its requester, while they may use the agent on the
+// task's project (the workspace for a workspace-wide task), or someone who
+// manages the workspace's AI.
 func (s *Service) Cancel(ctx context.Context, p security.Principal, taskID string) error {
 	t, err := s.Get(ctx, p, taskID)
 	if err != nil {
@@ -578,6 +579,11 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, taskID strin
 		if rerr := s.require(ctx, p, security.AIManage, ""); rerr != nil {
 			return rerr
 		}
+	} else if rerr := s.require(ctx, p, security.AgentUse, t.ProjectID); rerr != nil {
+		// The requester stops their own task only while they may use the
+		// agent where it runs: its project, or the workspace for a
+		// workspace-wide task. A read-only key never may.
+		return rerr
 	}
 	moved, err := s.cancel(ctx, t)
 	if err != nil {
