@@ -212,12 +212,14 @@ const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_arr
 // routeServerAddress is where a server binding's route sends traffic: the
 // connection's advertise_host, else its SSH host. A node's connection has
 // no SSH host, and its advertise_host counts only while it is the address
-// the node confirmed by an address check; until then it is empty. So a
-// connection whose advertise_host someone set by hand never routes to an
-// address that didn't answer.
+// the node confirmed by an address check and the node is in direct
+// ingress mode; otherwise it is empty. So a connection whose
+// advertise_host someone set by hand never routes to an address that
+// didn't answer, and a node its owner took out of direct ingress takes no
+// new route.
 const routeServerAddress = `CASE WHEN coalesce(c.details->>'node_id','')='' THEN coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
  ELSE coalesce((SELECT n.public_address FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL
- AND n.public_address_confirmed_at IS NOT NULL AND n.public_address<>'' AND n.public_address=c.details->>'advertise_host'),'') END`
+ AND n.ingress_mode='direct' AND n.public_address_confirmed_at IS NOT NULL AND n.public_address<>'' AND n.public_address=c.details->>'advertise_host'),'') END`
 
 var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),` + routeServerAddress + `,coalesce(c.details->>'node_id','')
  FROM loomplane_bindings b

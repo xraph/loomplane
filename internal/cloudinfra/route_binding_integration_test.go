@@ -251,6 +251,13 @@ func TestCatalogGatewayBindingResolves(t *testing.T) {
 	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); resolveErr != nil || b.Address != "203.0.113.7" || b.ConnectionID != "runtime_2" {
 		t.Fatalf("second connection on the confirmed address: %+v %v", b, resolveErr)
 	}
+	// A node its owner took out of direct ingress routes nowhere, though
+	// it keeps its confirmed address.
+	exec(`UPDATE loomplane_nodes SET ingress_mode='none' WHERE id='node_1'`)
+	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) {
+		t.Fatalf("a node in ingress mode none resolved: %+v %v", b, resolveErr)
+	}
+	exec(`UPDATE loomplane_nodes SET ingress_mode='direct' WHERE id='node_1'`)
 	// A revoked node routes nowhere, confirmed or not.
 	exec(`UPDATE loomplane_nodes SET status='revoked',revoked_at=now() WHERE id='node_1'`)
 	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in); !errors.Is(resolveErr, ErrConflict) {
