@@ -48,7 +48,7 @@ func (s *reportCtl) handler() http.HandlerFunc {
 			_, _ = w.Write([]byte(reportDetail))
 		case "/api/v1/agent/reports/arep_x":
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"agent report not found"}`))
+			_, _ = w.Write([]byte(`{"error":"report not found"}`))
 		case "/api/v1/projects":
 			_, _ = w.Write([]byte(`{"projects":[{"id":"proj_api","name":"Checkout API","slug":"checkout-api"}]}`))
 		case "/api/v1/agent/watcher":

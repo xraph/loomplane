@@ -77,7 +77,7 @@ func agentError(err error) error {
 	if strings.Contains(msg, "agent request") {
 		return sentence("There's no agent request with that ID.")
 	}
-	if strings.Contains(msg, "agent report") {
+	if strings.Contains(msg, "report not found") {
 		return sentence("There's no agent report with that ID.")
 	}
 	if strings.Contains(msg, "conversation not found") || strings.Contains(msg, "agent task not found") {
