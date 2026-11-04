@@ -44,13 +44,14 @@ type SettingsReader interface {
 // Service is the platform Cloud control plane: which organizations may use
 // it and the read-only Cloud each of them sees.
 type Service struct {
-	store    *PgStore
-	settings SettingsReader
-	orgs     OrgLister
-	secrets  Secrets
-	dns      DNSWriter
-	gate     metering.Gate
-	now      func() time.Time
+	store     *PgStore
+	settings  SettingsReader
+	orgs      OrgLister
+	secrets   Secrets
+	dns       DNSWriter
+	gate      metering.Gate
+	instances InstanceControl
+	now       func() time.Time
 }
 
 // WithGate sets what decides whether an organization may start platform
@@ -139,7 +140,10 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 	if orgID == "" {
 		return errors.New("platformcloud: organization is required")
 	}
-	return s.store.withTx(ctx, func(tx driverTx) error {
+	added := false
+	var reasons []SuspendReason
+	var revision int64
+	err := s.store.withTx(ctx, func(tx driverTx) error {
 		// The same lock EnableTenant and SyncProjections take, so a disable
 		// can't interleave with a first enable of the organization.
 		if err := cloudprofiles.LockOrganization(ctx, tx, orgID); err != nil {
@@ -147,6 +151,7 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 		}
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if errors.Is(err, ErrNotFound) {
+			// Nothing of this organization's runs yet, so nothing to stop.
 			created, insertErr := insertTenantTx(ctx, tx, &Tenant{OrgID: orgID, Status: tenantDisabled, SuspendReasons: []SuspendReason{ReasonPlatformOwner}})
 			if insertErr == nil && !created {
 				insertErr = ErrConflict
@@ -160,12 +165,33 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 		next.Status = tenantDisabled
 		if !slices.Contains(t.SuspendReasons, ReasonPlatformOwner) {
 			next.SuspendReasons = append(slices.Clone(t.SuspendReasons), ReasonPlatformOwner)
+			added = true
+			if len(t.SuspendReasons) == 0 {
+				at := s.now().UTC()
+				next.SuspendedAt = &at
+			}
 		}
 		if sameTenant(t, &next) {
 			return nil
 		}
-		return updateTenantTx(ctx, tx, &next)
+		if err = updateTenantTx(ctx, tx, &next); err != nil {
+			return err
+		}
+		reasons, revision = next.SuspendReasons, next.Revision
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if s.instances == nil {
+		return nil
+	}
+	if added {
+		s.notifyOrg(ctx, orgID, NoticeSuspended, fmt.Sprintf("%s:%d", orgID, revision), "Loomplane Cloud work is stopped", suspendMessage(reasons))
+	}
+	// Every step is safe to repeat, so a failure here is for the caller to
+	// retry by disabling again.
+	return s.stopWork(ctx, orgID)
 }
 
 // SyncProjections brings every projection up to date. In attach mode
