@@ -28,6 +28,9 @@ type Service struct {
 	gate      *gate
 	// notify queues one notice; New sets it to enqueue (notify.go).
 	notify func(context.Context, notifications.Notice) error
+	// hostedInvoiceURL reads a Stripe invoice's hosted page; New sets it
+	// to stripeInvoiceURL (links.go).
+	hostedInvoiceURL func(ctx context.Context, stripeInvoiceID string) (string, error)
 }
 
 // Deps is what New builds a Service from.
@@ -61,6 +64,7 @@ func New(d Deps) *Service {
 	// clock moves the cache's clock too.
 	s.gate = &gate{account: s.Account, now: func() time.Time { return s.now() }}
 	s.notify = s.enqueue
+	s.hostedInvoiceURL = s.stripeInvoiceURL
 	return s
 }
 

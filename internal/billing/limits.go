@@ -58,30 +58,22 @@ func aiCovers(a Account, month time.Time) bool {
 }
 
 func (s *Service) spend(ctx context.Context, orgID string, start time.Time, aiOn bool) (PeriodSpend, error) {
-	rows, err := s.pg.Query(ctx, `SELECT feature, sum(micro_usd)::bigint FROM loomplane_billing_usage
-		WHERE org_id = $1 AND occurred_at >= $2 AND occurred_at < $3 GROUP BY feature`,
-		orgID, start, start.AddDate(0, 1, 0))
+	usage, err := s.featureCents(ctx, orgID, start)
 	if err != nil {
-		return PeriodSpend{}, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
+		return PeriodSpend{}, err
 	}
-	defer func() { _ = rows.Close() }()
+	return spendOf(usage, aiOn), nil
+}
+
+// spendOf totals a month's per-feature usage into PeriodSpend.
+func spendOf(usage []FeatureUsage, aiOn bool) PeriodSpend {
 	var sp PeriodSpend
-	for rows.Next() {
-		var (
-			feature string
-			micro   int64
-		)
-		if err = rows.Scan(&feature, &micro); err != nil {
-			return PeriodSpend{}, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
-		}
-		if feature == FeatureAIUSD {
-			sp.AIUsageCents += micro / microUSDPerCent
+	for _, u := range usage {
+		if u.Feature == FeatureAIUSD {
+			sp.AIUsageCents += u.Cents
 		} else {
-			sp.BaseUsageCents += micro / microUSDPerCent
+			sp.BaseUsageCents += u.Cents
 		}
-	}
-	if err = rows.Err(); err != nil {
-		return PeriodSpend{}, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
 	}
 	sp.OverageCents = max(0, sp.BaseUsageCents-baseCreditCents)
 	if aiOn {
@@ -89,7 +81,35 @@ func (s *Service) spend(ctx context.Context, orgID string, start time.Time, aiOn
 	} else {
 		sp.OverageCents += sp.AIUsageCents
 	}
-	return sp, nil
+	return sp
+}
+
+// featureCents is the month's usage from start, one entry per feature with
+// any, each rounded down to the cent on its own, as its push is.
+func (s *Service) featureCents(ctx context.Context, orgID string, start time.Time) ([]FeatureUsage, error) {
+	rows, err := s.pg.Query(ctx, `SELECT feature, sum(micro_usd)::bigint FROM loomplane_billing_usage
+		WHERE org_id = $1 AND occurred_at >= $2 AND occurred_at < $3 GROUP BY feature ORDER BY feature`,
+		orgID, start, start.AddDate(0, 1, 0))
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []FeatureUsage
+	for rows.Next() {
+		var (
+			u     FeatureUsage
+			micro int64
+		)
+		if err = rows.Scan(&u.Feature, &micro); err != nil {
+			return nil, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
+		}
+		u.Cents = micro / microUSDPerCent
+		out = append(out, u)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing: read the usage of %s: %w", orgID, err)
+	}
+	return out, nil
 }
 
 // limitReached says whether spend has reached the limit. The included
@@ -99,6 +119,11 @@ func limitReached(limit *int64, sp PeriodSpend, aiOn bool) bool {
 	return limit != nil && sp.OverageCents >= *limit &&
 		(sp.OverageCents > 0 || sp.BaseUsageCents >= baseCreditCents || (aiOn && sp.AIUsageCents >= aiCreditCents))
 }
+
+// ErrLimitNotChecked is SetSpendingLimit's error when the limit is saved
+// and the evaluation after it failed or ran out of time. The next
+// evaluation, within 15 minutes, applies it.
+var ErrLimitNotChecked = errors.New("billing: the spending limit is saved, but checking it failed")
 
 // SetSpendingLimit stores the limit (nil clears it) and evaluates at once.
 //
@@ -124,7 +149,7 @@ func (s *Service) SetSpendingLimit(ctx context.Context, orgID string, cents *int
 	}
 	effects, err := s.evaluate(ctx, orgID)
 	if err != nil {
-		return Account{}, fmt.Errorf("billing: the spending limit of %s is saved, but checking it failed: %w", orgID, err)
+		return Account{}, fmt.Errorf("%w: %s: %w", ErrLimitNotChecked, orgID, err)
 	}
 	if effects != nil {
 		slog.WarnContext(ctx, "billing: platform Cloud didn't finish applying a spending limit; the next evaluation retries",

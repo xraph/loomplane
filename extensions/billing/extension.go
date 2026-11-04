@@ -24,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/platformcloud"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // Name is the extension's name.
@@ -61,12 +62,29 @@ func (e *Extension) Dependencies() []string {
 
 // Register builds billing's service, provides its gate and meter, which
 // the deploy, build, platform Cloud and AI seams pick up when they start,
-// and registers billing's jobs.
+// registers billing's jobs and mounts its routes and Stripe's webhook.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
-	return e.register(fapp.Container())
+	if err := e.register(fapp.Container()); err != nil {
+		return err
+	}
+	return e.mount(fapp.Router(), fapp.Container())
+}
+
+// mount serves the workspace billing routes behind identity's guard,
+// checked by identity's authorizer, and Stripe's webhook outside it.
+func (e *Extension) mount(router forge.Router, c forge.Container) error {
+	guard, err := forge.InjectType[identity.Guard](c)
+	if err != nil {
+		return fmt.Errorf("billing needs identity's guard: %w", err)
+	}
+	authz, err := forge.InjectType[*security.Authorizer](c)
+	if err != nil {
+		return fmt.Errorf("billing needs identity's authorizer: %w", err)
+	}
+	return mountRoutes(router, guard, e.svc, authz)
 }
 
 // register is Register without forge's own bookkeeping: provide, then the
