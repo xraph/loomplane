@@ -5905,6 +5905,217 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly platformCloudHosts = {
+    /**
+     * Check a host now and record its evidence
+     */
+    check: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Host> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/check`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Host"],
+      };
+
+      return this.request<types.Host>(config);
+    },
+
+    /**
+     * Register a host. The client certificate its agent must trust is returned this once
+     */
+    create: async (body: types.HostInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NewHost> => {
+      let __path = `/api/v1/platform/cloud/hosts`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["HostInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NewHost"],
+      };
+
+      return this.request<types.NewHost>(config);
+    },
+
+    /**
+     * Stop new placements on a host. What runs there keeps running
+     */
+    drain: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Host> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/drain`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Host"],
+      };
+
+      return this.request<types.Host>(config);
+    },
+
+    /**
+     * Every host, with its evidence, allotment and what its placements use
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.HostList> => {
+      let __path = `/api/v1/platform/cloud/hosts`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["HostList"],
+      };
+
+      return this.request<types.HostList>(config);
+    },
+
+    /**
+     * Drain a host and move its services to other hosts one at a time. A service with nowhere to go stays where it is
+     */
+    moveAll: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveAll> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/move-all`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["MoveAll"],
+      };
+
+      return this.request<types.MoveAll>(config);
+    },
+
+    /**
+     * Take a drained, empty host out of service for good
+     */
+    retire: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/retire`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * Change how much of a host the platform may use. The host is checked again before it takes placements
+     */
+    setAllotment: async (host: string, body: types.AllotmentBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Host> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/allotment`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AllotmentBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Host"],
+      };
+
+      return this.request<types.Host>(config);
+    },
+
+  };
+
+  public readonly platformCloudRegions = {
+    /**
+     * Add a region
+     */
+    create: async (body: types.RegionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Region> => {
+      let __path = `/api/v1/platform/cloud/regions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Region"],
+      };
+
+      return this.request<types.Region>(config);
+    },
+
+    /**
+     * Every platform Cloud region
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegionList> => {
+      let __path = `/api/v1/platform/cloud/regions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegionList"],
+      };
+
+      return this.request<types.RegionList>(config);
+    },
+
+    /**
+     * Rename a region for display, or open or close it
+     */
+    update: async (region: string, body: types.RegionUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Region> => {
+      let __path = `/api/v1/platform/cloud/regions/${encodeURIComponent(String(region))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegionUpdateBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Region"],
+      };
+
+      return this.request<types.Region>(config);
+    },
+
+  };
+
+  public readonly platformCloudSettings = {
+    /**
+     * The platform Cloud settings. The registry and DNS credentials are never returned
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SettingsView> => {
+      let __path = `/api/v1/platform/cloud/settings`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SettingsView"],
+      };
+
+      return this.request<types.SettingsView>(config);
+    },
+
+    /**
+     * Replace the platform Cloud settings, and the registry or DNS credential when given
+     */
+    set: async (body: types.SettingsInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SettingsView> => {
+      let __path = `/api/v1/platform/cloud/settings`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SettingsInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SettingsView"],
+      };
+
+      return this.request<types.SettingsView>(config);
+    },
+
+  };
+
   public readonly platformCloudSignInApps = {
     /**
      * Remove the platform's sign-in app for a cloud
@@ -5954,6 +6165,75 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.SignInApp>(config);
+    },
+
+  };
+
+  public readonly platformCloudTenants = {
+    /**
+     * Every organization's standing with the platform Cloud and its use against its limits
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlatformcloudTenantList> => {
+      let __path = `/api/v1/platform/cloud/tenants`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PlatformcloudTenantList"],
+      };
+
+      return this.request<types.PlatformcloudTenantList>(config);
+    },
+
+    /**
+     * Lift the platform owner's suspension. The work starts again within a minute, once nothing else stops it
+     */
+    restore: async (org: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlatformcloudTenant> => {
+      let __path = `/api/v1/platform/cloud/tenants/${encodeURIComponent(String(org))}/restore`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PlatformcloudTenant"],
+      };
+
+      return this.request<types.PlatformcloudTenant>(config);
+    },
+
+    /**
+     * Enable or disable an organization and set its limits
+     */
+    set: async (org: string, body: types.PlatformcloudTenantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlatformcloudTenant> => {
+      let __path = `/api/v1/platform/cloud/tenants/${encodeURIComponent(String(org))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PlatformcloudTenantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PlatformcloudTenant"],
+      };
+
+      return this.request<types.PlatformcloudTenant>(config);
+    },
+
+    /**
+     * Stop an organization's platform work as the platform owner
+     */
+    suspend: async (org: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PlatformcloudTenant> => {
+      let __path = `/api/v1/platform/cloud/tenants/${encodeURIComponent(String(org))}/suspend`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PlatformcloudTenant"],
+      };
+
+      return this.request<types.PlatformcloudTenant>(config);
     },
 
   };
@@ -7373,6 +7653,25 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Variable>(config);
+    },
+
+  };
+
+  public readonly workspacePlatformCloud = {
+    /**
+     * Your workspace's Loomplane Cloud: whether it's enabled, why it's suspended, limits, use, regions and placements
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.WorkspaceView> => {
+      let __path = `/api/v1/platform-cloud`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["WorkspaceView"],
+      };
+
+      return this.request<types.WorkspaceView>(config);
     },
 
   };

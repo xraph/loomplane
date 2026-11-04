@@ -47,6 +47,7 @@ import { Route as NodesIndexRouteImport } from "./routes/nodes.index"
 import { Route as NodesIdRouteImport } from "./routes/nodes.$id"
 import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
 import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
+import { Route as PlatformCloudRouteImport } from "./routes/platform.cloud"
 import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
@@ -262,6 +263,11 @@ const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
   path: "/notifications/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlatformCloudRoute = PlatformCloudRouteImport.update({
+  id: "/platform/cloud",
+  path: "/platform/cloud",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlatformCloudSignInRoute = PlatformCloudSignInRouteImport.update({
   id: "/platform/cloud-sign-in",
   path: "/platform/cloud-sign-in",
@@ -422,6 +428,7 @@ export interface FileRoutesByFullPath {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -486,6 +493,7 @@ export interface FileRoutesByTo {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -551,6 +559,7 @@ export interface FileRoutesById {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -617,6 +626,7 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
@@ -681,6 +691,7 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
@@ -745,6 +756,7 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/services/$kind"
@@ -810,6 +822,7 @@ export interface RootRouteChildren {
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NodesIdRoute: typeof NodesIdRoute
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
+  PlatformCloudRoute: typeof PlatformCloudRoute
   PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
@@ -1111,6 +1124,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof NotificationsSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/platform/cloud": {
+      id: "/platform/cloud"
+      path: "/platform/cloud"
+      fullPath: "/platform/cloud"
+      preLoaderRoute: typeof PlatformCloudRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/platform/cloud-sign-in": {
       id: "/platform/cloud-sign-in"
       path: "/platform/cloud-sign-in"
@@ -1314,6 +1334,7 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NodesIdRoute: NodesIdRoute,
   NotificationsSettingsRoute: NotificationsSettingsRoute,
+  PlatformCloudRoute: PlatformCloudRoute,
   PlatformCloudSignInRoute: PlatformCloudSignInRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,

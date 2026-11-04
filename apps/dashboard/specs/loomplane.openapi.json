@@ -1205,6 +1205,30 @@
         }
       }
     },
+    "/api/v1/platform-cloud": {
+      "get": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Your workspace's Loomplane Cloud: whether it's enabled, why it's suspended, limits, use, regions and placements",
+        "operationId": "workspacePlatformCloud.get",
+        "responses": {
+          "200": {
+            "description": "Loomplane Cloud for this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the Clouds read permission"
+          }
+        }
+      }
+    },
     "/api/v1/platform/cloud-sign-in/apps": {
       "get": {
         "tags": [
@@ -7628,6 +7652,580 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts": {
+      "get": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Every host, with its evidence, allotment and what its placements use",
+        "operationId": "platformCloudHosts.list",
+        "responses": {
+          "200": {
+            "description": "Hosts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Register a host. The client certificate its agent must trust is returned this once",
+        "operationId": "platformCloudHosts.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The host and its client certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewHost"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/allotment": {
+      "put": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Change how much of a host the platform may use. The host is checked again before it takes placements",
+        "operationId": "platformCloudHosts.setAllotment",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllotmentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Host"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/check": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Check a host now and record its evidence",
+        "operationId": "platformCloudHosts.check",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Host"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/drain": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Stop new placements on a host. What runs there keeps running",
+        "operationId": "platformCloudHosts.drain",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Host"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/move-all": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Drain a host and move its services to other hosts one at a time. A service with nowhere to go stays where it is",
+        "operationId": "platformCloudHosts.moveAll",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The host and what moved, was skipped for capacity or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveAll"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/retire": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Take a drained, empty host out of service for good",
+        "operationId": "platformCloudHosts.retire",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The host isn't drained or still has placements"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/regions": {
+      "get": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Every platform Cloud region",
+        "operationId": "platformCloudRegions.list",
+        "responses": {
+          "200": {
+            "description": "Regions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Add a region",
+        "operationId": "platformCloudRegions.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The region",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Region"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "A region has the name"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/regions/{region}": {
+      "patch": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Rename a region for display, or open or close it",
+        "operationId": "platformCloudRegions.update",
+        "parameters": [
+          {
+            "name": "region",
+            "in": "path",
+            "description": "Path parameter: region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegionUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The region",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Region"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The region changed since it was read"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/settings": {
+      "get": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "The platform Cloud settings. The registry and DNS credentials are never returned",
+        "operationId": "platformCloudSettings.get",
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Replace the platform Cloud settings, and the registry or DNS credential when given",
+        "operationId": "platformCloudSettings.set",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "422": {
+            "description": "A setting or credential is invalid"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/tenants": {
+      "get": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Every organization's standing with the platform Cloud and its use against its limits",
+        "operationId": "platformCloudTenants.list",
+        "responses": {
+          "200": {
+            "description": "Tenants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenantList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/tenants/{org}": {
+      "put": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Enable or disable an organization and set its limits",
+        "operationId": "platformCloudTenants.set",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Path parameter: org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformcloudTenantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenant"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The tenant is disabled; some of its work is still being stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenant"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/tenants/{org}/restore": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Lift the platform owner's suspension. The work starts again within a minute, once nothing else stops it",
+        "operationId": "platformCloudTenants.restore",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Path parameter: org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenant"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The organization is disabled, or isn't a tenant"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/tenants/{org}/suspend": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Stop an organization's platform work as the platform owner",
+        "operationId": "platformCloudTenants.suspend",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Path parameter: org",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenant"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The tenant is suspended; some of its work is still being stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformcloudTenant"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The organization isn't a tenant"
           }
         }
       }
@@ -15716,6 +16314,52 @@
           }
         }
       },
+      "Allotment": {
+        "type": "object",
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "disk_mib",
+          "vms"
+        ],
+        "properties": {
+          "disk_mib": {
+            "type": "integer"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "vcpus": {
+            "type": "integer"
+          },
+          "vms": {
+            "type": "integer"
+          }
+        }
+      },
+      "AllotmentBody": {
+        "type": "object",
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "disk_mib",
+          "vms"
+        ],
+        "properties": {
+          "disk_mib": {
+            "type": "integer"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "vcpus": {
+            "type": "integer"
+          },
+          "vms": {
+            "type": "integer"
+          }
+        }
+      },
       "Amount": {
         "type": "object",
         "required": [
@@ -17742,6 +18386,22 @@
         "properties": {
           "connection_id": {
             "type": "string"
+          }
+        }
+      },
+      "CleanupBlock": {
+        "type": "object",
+        "required": [
+          "until",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -21898,6 +22558,169 @@
           }
         }
       },
+      "Host": {
+        "type": "object",
+        "required": [
+          "id",
+          "region_id",
+          "endpoint",
+          "host_id",
+          "status",
+          "client_fingerprint",
+          "evidence",
+          "allotment",
+          "generation",
+          "revision"
+        ],
+        "properties": {
+          "allotment": {
+            "$ref": "#/components/schemas/Allotment"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/PlatformcloudEvidence"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "HostInputBody": {
+        "type": "object",
+        "required": [
+          "region_id",
+          "endpoint",
+          "host_id",
+          "server_ca",
+          "allotment"
+        ],
+        "properties": {
+          "allotment": {
+            "type": "object",
+            "required": [
+              "vcpus",
+              "memory_mib",
+              "disk_mib",
+              "vms"
+            ],
+            "properties": {
+              "disk_mib": {
+                "type": "integer"
+              },
+              "memory_mib": {
+                "type": "integer"
+              },
+              "vcpus": {
+                "type": "integer"
+              },
+              "vms": {
+                "type": "integer"
+              }
+            }
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "server_ca": {
+            "type": "string"
+          }
+        }
+      },
+      "HostList": {
+        "type": "object",
+        "required": [
+          "hosts"
+        ],
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostView"
+            }
+          }
+        }
+      },
+      "HostView": {
+        "type": "object",
+        "required": [
+          "id",
+          "region_id",
+          "endpoint",
+          "host_id",
+          "status",
+          "client_fingerprint",
+          "evidence",
+          "allotment",
+          "generation",
+          "revision",
+          "use",
+          "placements"
+        ],
+        "properties": {
+          "allotment": {
+            "$ref": "#/components/schemas/Allotment"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/PlatformcloudEvidence"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "integer"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "use": {
+            "$ref": "#/components/schemas/Allotment"
+          }
+        }
+      },
       "KeyView": {
         "type": "object",
         "required": [
@@ -21934,6 +22757,262 @@
             "type": "string"
           }
         }
+      },
+      "MoveAll": {
+        "type": "object",
+        "required": [
+          "host",
+          "moved",
+          "skipped",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
+          },
+          "moved": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NewHost": {
+        "type": "object",
+        "required": [
+          "host",
+          "client_certificate",
+          "client_fingerprint"
+        ],
+        "properties": {
+          "client_certificate": {
+            "type": "string"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
+          }
+        }
+      },
+      "PlatformDNSSettings": {
+        "type": "object",
+        "required": [
+          "provider",
+          "zone"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "PlatformLimits": {
+        "type": "object",
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "vms",
+          "concurrent_builds"
+        ],
+        "properties": {
+          "concurrent_builds": {
+            "type": "integer"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "vcpus": {
+            "type": "integer"
+          },
+          "vms": {
+            "type": "integer"
+          }
+        }
+      },
+      "PlatformcloudEvidence": {
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "denied_ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "ingress_address": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "boolean"
+          },
+          "per_org_memory_mib": {
+            "type": "integer"
+          },
+          "per_org_vcpus": {
+            "type": "integer"
+          },
+          "per_org_vms": {
+            "type": "integer"
+          },
+          "platform": {
+            "type": "boolean"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "runtime_identity": {
+            "type": "string"
+          },
+          "smt_active": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "isolation",
+          "platform",
+          "smt_active",
+          "runtime_identity",
+          "architecture",
+          "protocol_version",
+          "denied_ports",
+          "per_org_vms",
+          "per_org_vcpus",
+          "per_org_memory_mib",
+          "ingress_address",
+          "checked_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/platformcloud.Evidence"
+      },
+      "PlatformcloudTenant": {
+        "properties": {
+          "limits": {
+            "$ref": "#/components/schemas/PlatformLimits"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "suspend_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suspended_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "status",
+          "suspend_reasons",
+          "revision"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/platformcloud.Tenant"
+      },
+      "PlatformcloudTenantInputBody": {
+        "properties": {
+          "limits": {
+            "type": "object",
+            "required": [
+              "vcpus",
+              "memory_mib",
+              "vms",
+              "concurrent_builds"
+            ],
+            "properties": {
+              "concurrent_builds": {
+                "type": "integer"
+              },
+              "memory_mib": {
+                "type": "integer"
+              },
+              "vcpus": {
+                "type": "integer"
+              },
+              "vms": {
+                "type": "integer"
+              }
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/platformcloud.TenantInput"
+      },
+      "PlatformcloudTenantList": {
+        "properties": {
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantRow"
+            }
+          }
+        },
+        "required": [
+          "tenants"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/platformcloud.TenantList"
+      },
+      "PlatformcloudUse": {
+        "properties": {
+          "concurrent_builds": {
+            "type": "integer"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "vcpus": {
+            "type": "integer"
+          },
+          "vms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "vms",
+          "concurrent_builds"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/platformcloud.Use"
       },
       "ProviderKeyInputBody": {
         "type": "object",
@@ -21994,6 +23073,98 @@
           }
         }
       },
+      "Region": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "status",
+          "revision"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RegionInputBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "display_name"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RegionList": {
+        "type": "object",
+        "required": [
+          "regions"
+        ],
+        "properties": {
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Region"
+            }
+          }
+        }
+      },
+      "RegionUpdateBody": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistrySettings": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "repository",
+          "auth_endpoint"
+        ],
+        "properties": {
+          "auth_endpoint": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          }
+        }
+      },
       "ServerDefaults": {
         "type": "object",
         "required": [
@@ -22013,6 +23184,160 @@
           },
           "provider": {
             "type": "string"
+          }
+        }
+      },
+      "SettingsInputBody": {
+        "type": "object",
+        "required": [
+          "attach",
+          "default_limits",
+          "apex",
+          "registry",
+          "dns"
+        ],
+        "properties": {
+          "apex": {
+            "type": "string"
+          },
+          "attach": {
+            "type": "string"
+          },
+          "default_limits": {
+            "type": "object",
+            "required": [
+              "vcpus",
+              "memory_mib",
+              "vms",
+              "concurrent_builds"
+            ],
+            "properties": {
+              "concurrent_builds": {
+                "type": "integer"
+              },
+              "memory_mib": {
+                "type": "integer"
+              },
+              "vcpus": {
+                "type": "integer"
+              },
+              "vms": {
+                "type": "integer"
+              }
+            }
+          },
+          "dns": {
+            "type": "object",
+            "required": [
+              "provider",
+              "zone"
+            ],
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "zone": {
+                "type": "string"
+              }
+            }
+          },
+          "dns_account_id": {
+            "type": "string"
+          },
+          "dns_team_id": {
+            "type": "string"
+          },
+          "dns_token": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "object",
+            "required": [
+              "endpoint",
+              "repository",
+              "auth_endpoint"
+            ],
+            "properties": {
+              "auth_endpoint": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              }
+            }
+          },
+          "registry_password": {
+            "type": "string"
+          },
+          "registry_username": {
+            "type": "string"
+          }
+        }
+      },
+      "SettingsView": {
+        "type": "object",
+        "required": [
+          "attach",
+          "default_limits",
+          "apex",
+          "registry",
+          "dns",
+          "registry_credential_saved",
+          "dns_credential_saved"
+        ],
+        "properties": {
+          "apex": {
+            "type": "string"
+          },
+          "attach": {
+            "type": "string"
+          },
+          "default_limits": {
+            "$ref": "#/components/schemas/PlatformLimits"
+          },
+          "dns": {
+            "$ref": "#/components/schemas/PlatformDNSSettings"
+          },
+          "dns_credential_saved": {
+            "type": "boolean"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/RegistrySettings"
+          },
+          "registry_credential_saved": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TenantRow": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "limits",
+          "use",
+          "org_name"
+        ],
+        "properties": {
+          "cleanup_blocked": {
+            "$ref": "#/components/schemas/CleanupBlock"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/PlatformLimits"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "org_name": {
+            "type": "string"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/PlatformcloudTenant"
+          },
+          "use": {
+            "$ref": "#/components/schemas/PlatformcloudUse"
           }
         }
       },
@@ -28268,7 +29593,8 @@
           "default_placement",
           "revision",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "platform_owned"
         ],
         "properties": {
           "created_at": {
@@ -28308,6 +29634,9 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "platform_owned": {
+            "type": "boolean"
           }
         }
       },
@@ -34478,6 +35807,96 @@
           },
           "tool": {
             "type": "string"
+          }
+        }
+      },
+      "WorkspacePlacement": {
+        "type": "object",
+        "required": [
+          "project",
+          "environment",
+          "service",
+          "region",
+          "state",
+          "waiting_capacity"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "waiting_capacity": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WorkspaceRegion": {
+        "type": "object",
+        "required": [
+          "name",
+          "display_name",
+          "status"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceView": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "suspend_reasons",
+          "limits",
+          "use",
+          "regions",
+          "placements"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/PlatformLimits"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspacePlacement"
+            }
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceRegion"
+            }
+          },
+          "suspend_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "use": {
+            "$ref": "#/components/schemas/PlatformcloudUse"
           }
         }
       },

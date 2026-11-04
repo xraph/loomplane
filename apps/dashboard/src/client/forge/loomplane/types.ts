@@ -170,6 +170,20 @@ export interface Allocation {
   updatedAt: string;
 }
 
+export interface Allotment {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
+export interface AllotmentBody {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
 export interface Amount {
   currency: string;
   days: Point[];
@@ -769,6 +783,11 @@ export interface CheckResult {
 
 export interface ChooseConnectionInputBody {
   connectionId: string;
+}
+
+export interface CleanupBlock {
+  reason: string;
+  until: string;
 }
 
 export interface CleanupObject {
@@ -2666,6 +2685,19 @@ export interface History {
   turns: Turn[];
 }
 
+export interface Host {
+  allotment: Allotment;
+  clientFingerprint: string;
+  endpoint: string;
+  evidence: PlatformcloudEvidence;
+  generation: number;
+  hostId: string;
+  id: string;
+  regionId: string;
+  revision: number;
+  status: string;
+}
+
 export interface HostCard {
   attached: boolean;
   domainRouteId?: string;
@@ -2673,6 +2705,38 @@ export interface HostCard {
   hostname: string;
   routes: BoardRoute[];
   status?: CloudinfraRouteStatus;
+}
+
+export interface HostInputBody {
+  allotment: {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  endpoint: string;
+  hostId: string;
+  regionId: string;
+  serverCa: string;
+}
+
+export interface HostList {
+  hosts: HostView[];
+}
+
+export interface HostView {
+  allotment: Allotment;
+  clientFingerprint: string;
+  endpoint: string;
+  evidence: PlatformcloudEvidence;
+  generation: number;
+  hostId: string;
+  id: string;
+  placements: number;
+  regionId: string;
+  revision: number;
+  status: string;
+  use: Allotment;
 }
 
 export interface HostnameUse {
@@ -3120,6 +3184,13 @@ export interface MoneyEstimate {
   priceDigest: string;
 }
 
+export interface MoveAll {
+  failed: string[];
+  host: Host;
+  moved: number;
+  skipped: string[];
+}
+
 export interface MoveInput {
   destinationServerId: string;
   environmentId: string;
@@ -3356,6 +3427,12 @@ export interface Need {
   maxModelLen: number;
   perGpuGib: number;
   ramGib?: number;
+}
+
+export interface NewHost {
+  clientCertificate: string;
+  clientFingerprint: string;
+  host: Host;
 }
 
 export interface NewKeyBody {
@@ -3804,6 +3881,64 @@ export interface PlanningSummary {
   update: number;
 }
 
+export interface PlatformDNSSettings {
+  provider: string;
+  zone: string;
+}
+
+export interface PlatformLimits {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
+export interface PlatformcloudEvidence {
+  architecture: string;
+  checkedAt: string;
+  deniedPorts: number[];
+  ingressAddress: string;
+  isolation: boolean;
+  perOrgMemoryMib: number;
+  perOrgVcpus: number;
+  perOrgVms: number;
+  platform: boolean;
+  protocolVersion: string;
+  reason?: string;
+  runtimeIdentity: string;
+  smtActive: boolean;
+}
+
+export interface PlatformcloudTenant {
+  limits?: PlatformLimits;
+  orgId: string;
+  revision: number;
+  status: string;
+  suspendReasons: string[];
+  suspendedAt?: string;
+}
+
+export interface PlatformcloudTenantInputBody {
+  limits?: {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  status: string;
+}
+
+export interface PlatformcloudTenantList {
+  tenants: TenantRow[];
+}
+
+export interface PlatformcloudUse {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
 export interface Point {
   t: string;
   v: number;
@@ -3932,6 +4067,7 @@ export interface Profile {
   id: string;
   name: string;
   orgId: string;
+  platformOwned: boolean;
   projectId: string;
   revision: number;
   updatedAt: string;
@@ -4351,6 +4487,30 @@ export interface Ref {
   field: string;
 }
 
+export interface Region {
+  displayName: string;
+  id: string;
+  name: string;
+  revision: number;
+  status: string;
+}
+
+export interface RegionInputBody {
+  displayName: string;
+  name: string;
+  status?: string;
+}
+
+export interface RegionList {
+  regions: Region[];
+}
+
+export interface RegionUpdateBody {
+  displayName?: string;
+  revision?: number;
+  status?: string;
+}
+
 export interface RegisterDeviceInputBody {
   handle: string;
   name: string;
@@ -4436,6 +4596,12 @@ export interface RegistryList {
   counts: Record<string, any>;
   entries: EntrySummary[];
   fitsNotice?: string;
+}
+
+export interface RegistrySettings {
+  authEndpoint: string;
+  endpoint: string;
+  repository: string;
 }
 
 export interface Release {
@@ -5394,6 +5560,41 @@ export interface SettingInfo {
   title: string;
 }
 
+export interface SettingsInputBody {
+  apex: string;
+  attach: string;
+  defaultLimits: {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  dns: {
+  provider: string;
+  zone: string;
+};
+  dnsAccountId?: string;
+  dnsTeamId?: string;
+  dnsToken?: string;
+  registry: {
+  authEndpoint: string;
+  endpoint: string;
+  repository: string;
+};
+  registryPassword?: string;
+  registryUsername?: string;
+}
+
+export interface SettingsView {
+  apex: string;
+  attach: string;
+  defaultLimits: PlatformLimits;
+  dns: PlatformDNSSettings;
+  dnsCredentialSaved: boolean;
+  registry: RegistrySettings;
+  registryCredentialSaved: boolean;
+}
+
 export interface SetupRequestBody {
   email: string;
   name: string;
@@ -5750,6 +5951,15 @@ export interface TenantList {
   tenants: Tenant[];
 }
 
+export interface TenantRow {
+  cleanupBlocked?: CleanupBlock;
+  limits: PlatformLimits;
+  orgId: string;
+  orgName: string;
+  tenant?: PlatformcloudTenant;
+  use: PlatformcloudUse;
+}
+
 export interface TestPushResult {
   status: string;
 }
@@ -5985,6 +6195,30 @@ export interface Workspace {
 export interface WorkspaceBudgetInputBody {
   monthlyBudgetUsd: string;
   revision: number;
+}
+
+export interface WorkspacePlacement {
+  environment: string;
+  project: string;
+  region: string;
+  service: string;
+  state: string;
+  waitingCapacity: boolean;
+}
+
+export interface WorkspaceRegion {
+  displayName: string;
+  name: string;
+  status: string;
+}
+
+export interface WorkspaceView {
+  enabled: boolean;
+  limits: PlatformLimits;
+  placements: WorkspacePlacement[];
+  regions: WorkspaceRegion[];
+  suspendReasons: string[];
+  use: PlatformcloudUse;
 }
 
 export interface Zone {
