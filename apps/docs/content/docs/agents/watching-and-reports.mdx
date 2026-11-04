@@ -115,9 +115,9 @@ Before anything leaves Loomplane, every title, body and comment has the project'
 
 ## GitHub issues
 
-Loomplane opens one issue per report on the repository the report is about, through your workspace's GitHub App installation. It picks the repository from the service's source. For a deployment that failed before any step, it's the one repository the deployment moved. A project with a single source always uses that one. When it can't tell, or the installation can't reach the repository, the report goes to notifications only and says why.
+Loomplane opens one issue per report on the repository the report is about, through your workspace's GitHub App installation. It picks the repository from the service's source. For a deployment that failed before any step, it's the one repository the deployment moved. A project with a single source always uses that one. When it can't tell, or the installation can't reach the repository, the report goes to Herald only and says why.
 
-Issues are opened on GitHub repositories only. Reports about code on GitLab or Bitbucket go to notifications only.
+Issues are opened on GitHub repositories only. Reports about code on GitLab or Bitbucket go to Herald only.
 
 Every issue carries the `loomplane` label, which Loomplane creates if the repository doesn't have it. The body says how severe it is, where and how often it was seen, what happened, what Loomplane already did and what the agent thinks, with a link back to the report. Error output sits in a code block it can't break out of. Every `@` that could page someone is broken with an invisible character, so a commit message or error can't mention a person or a team. As the report changes, Loomplane edits the issue to match. If someone deletes the issue while the report is open, the next delivery opens a new one.
 
@@ -127,7 +127,7 @@ Loomplane never reads anything people write on the issue. Comments there stay on
 
 The App needs the Issues permission (read and write), and an owner of each account it's installed on has to accept it on GitHub. [Private repositories](/docs/guides/private-repositories#issues-for-agent-reports) has the setup.
 
-Until an installation accepts, its reports show "waiting for permission" and go to notifications only. The **Watcher** card on **Settings, AI** lists each installation as Accepted, or says it hasn't accepted the Issues permission yet, with a **Review on GitHub** link. `loomctl agent watcher` prints the same. Once an owner accepts, open reports for that installation's repositories get their issues. Loomplane trusts what it last read of an installation's permissions for 5 minutes, so the first report after an owner accepts can still go to notifications only for up to 5 minutes.
+Until an installation accepts, its reports go to Herald only. The dashboard shows "Herald only: GitHub hasn't accepted the Issues permission yet", and `loomctl` and the API call that state `waiting_for_permission`. The **Watcher** card on **Settings, AI** lists each installation as Accepted, or says it hasn't accepted the Issues permission yet, with a **Review on GitHub** link. `loomctl agent watcher` prints the same. Once an owner accepts, open reports for that installation's repositories get their issues. Loomplane trusts what it last read of an installation's permissions for 5 minutes, so the first report after an owner accepts can still go to Herald only for up to 5 minutes.
 
 ## Where you read them
 

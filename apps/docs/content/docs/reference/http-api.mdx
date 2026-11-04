@@ -112,7 +112,7 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json"
   -d '{"reason":"Fixed in the config"}' "$URL/api/v1/agent/reports/$REPORT/close"
 ```
 
-A report's `issue.state` is `none`, `open`, `closed`, `waiting_for_permission` (its installation hasn't accepted Issues), `no_repository` (no repository Loomplane can open an issue on) or `failed` (the last attempt failed and is retried). `issue.error` says why when there's no issue. Its `investigation` is `none`, `queued`, `running`, `done`, `failed` or `skipped`, and `investigation_note` says why when one failed or was skipped. Changes arrive on the realtime stream as `agent_report.updated` events.
+A report's `issue.state` is `none`, `open`, `closed`, `waiting_for_permission` (its installation hasn't accepted Issues), `no_repository` (no repository Loomplane can open an issue on) or `failed` (the last attempt failed and is retried). `issue.error` says why when there's no issue or the last attempt failed. Its `investigation` is `none`, `queued`, `running`, `done`, `failed` or `skipped`, and `investigation_note` says why when one failed or was skipped. Changes arrive on the realtime stream as `agent_report.updated` events.
 
 ## Live events
 
