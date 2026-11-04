@@ -1,11 +1,13 @@
 package platformcloud
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
 	fc "github.com/xraph/loomplane/internal/firecracker"
@@ -220,7 +222,18 @@ WHERE placement_id=$1 AND generation=$2 AND hour=$3 AND NOT emitted FOR UPDATE`,
 // bytesPerGB: egress is metered in decimal gigabytes (10^9 bytes), not GiB.
 const bytesPerGB = 1e9
 
+// defaultUsageTimeout bounds a host's usage read, as Session bounds a check.
+// The read happens inside the host's transaction, so a hung host must not hold
+// a connection for the client's own, much longer, limit.
+const defaultUsageTimeout = 30 * time.Second
+
 func (s *Service) usageOf(ctx context.Context, hostID string) ([]fc.UsageSample, error) {
+	timeout := s.usageTimeout
+	if timeout <= 0 {
+		timeout = defaultUsageTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	if s.usage != nil {
 		return s.usage(ctx, hostID)
 	}
@@ -279,6 +292,11 @@ func (s *Service) countHostEgress(ctx context.Context, hostID string, now time.T
 		if err != nil {
 			return err
 		}
+		// Placement locks are taken in one order on every host, so two hosts
+		// carrying VMs of the same placements can't deadlock.
+		slices.SortStableFunc(samples, func(a, b fc.UsageSample) int {
+			return cmp.Or(cmp.Compare(a.Scope.Org, b.Scope.Org), cmp.Compare(a.Scope.Resource, b.Scope.Resource), cmp.Compare(a.CounterID, b.CounterID))
+		})
 		for _, smp := range samples {
 			if err = s.countEgress(ctx, tx, smp, now); err != nil {
 				return err

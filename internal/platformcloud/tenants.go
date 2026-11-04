@@ -55,6 +55,8 @@ type Service struct {
 	usage     func(ctx context.Context, hostID string) ([]fc.UsageSample, error)
 	instances InstanceControl
 	now       func() time.Time
+	// usageTimeout bounds one host's usage read; zero means defaultUsageTimeout.
+	usageTimeout time.Duration
 }
 
 // WithGate sets what decides whether an organization may start platform

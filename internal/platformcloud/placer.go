@@ -497,7 +497,8 @@ func (s *Service) SetState(ctx context.Context, placementID, state string) error
 		return fmt.Errorf("platformcloud: unknown placement state %q", state)
 	}
 	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements
-SET state=$2,suspended_at=CASE WHEN $2='suspended' THEN coalesce(suspended_at,$3) ELSE NULL END,updated_at=$3
+SET state=$2,suspended_at=CASE WHEN $2='suspended' THEN coalesce(suspended_at,$3) ELSE NULL END,
+running_since=CASE WHEN $2<>'running' THEN running_since WHEN state='running' THEN running_since ELSE $3 END,updated_at=$3
 WHERE id=$1 AND state<>'released'`, placementID, state, s.now().UTC())
 	if err != nil {
 		return storeError(err)

@@ -552,3 +552,69 @@ func TestConcurrentEgressSamplersNeverReadAFalseReset(t *testing.T) {
 		t.Fatalf("egress = %v, want %v", got, want)
 	}
 }
+
+func TestHungHostDoesNotStallLaterHosts(t *testing.T) {
+	e, m := meterEnv(t)
+	ctx := t.Context()
+	hung := e.readyHost(t, "a", bigAllotment)
+	e.readyHost(t, "b", bigAllotment)
+	p := e.placement(t, e.running(t, "web").ID)
+	e.svc.usageTimeout = 200 * time.Millisecond
+	e.svc.usage = func(ctx context.Context, hostID string) ([]fc.UsageSample, error) {
+		if hostID == hung.ID {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return []fc.UsageSample{sample(p, "c1", 4000)}, nil
+	}
+	start := time.Now()
+	err := e.svc.SampleEgress(ctx, meterHour.Add(time.Minute))
+	if err == nil {
+		t.Fatal("the hung host's failure was swallowed")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("SampleEgress took %v", took)
+	}
+	if err = e.svc.SampleEgress(ctx, meterHour.Add(time.Hour+emitDelay)); err == nil {
+		t.Fatal("expected the hung host to fail again")
+	}
+	if got, want := m.total("egress_gb"), 4000/1e9; !near(got, want) {
+		t.Fatalf("egress = %v, want %v from the host that answered", got, want)
+	}
+}
+
+func TestRunningWithANewGenerationRestartsTheBillingWindow(t *testing.T) {
+	e, _ := meterEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	p := e.running(t, "web") // generation 3, since 10:00
+	e.clock.set(meterHour.Add(20 * time.Minute))
+	if err := e.svc.Running(t.Context(), "org_a", p.ID, "inst_web", 3); err != nil {
+		t.Fatal(err)
+	}
+	since := func() time.Time {
+		var at time.Time
+		if err := e.pg.QueryRow(t.Context(), `SELECT running_since FROM loomplane_platform_placements WHERE id=$1`, p.ID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at.UTC()
+	}
+	if got := since(); !got.Equal(meterHour) {
+		t.Fatalf("same generation moved running_since to %v", got)
+	}
+	if err := e.svc.Running(t.Context(), "org_a", p.ID, "inst_web", 4); err != nil {
+		t.Fatal(err)
+	}
+	if got := since(); !got.Equal(meterHour.Add(20 * time.Minute)) {
+		t.Fatalf("new generation left running_since at %v", got)
+	}
+	if err := e.svc.SetState(t.Context(), p.ID, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.set(meterHour.Add(50 * time.Minute))
+	if err := e.svc.SetState(t.Context(), p.ID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if got := since(); !got.Equal(meterHour.Add(50 * time.Minute)) {
+		t.Fatalf("SetState running left running_since at %v", got)
+	}
+}
