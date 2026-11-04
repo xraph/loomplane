@@ -117,6 +117,9 @@ func (r *Runtime) backupEngine(ctx context.Context, iid id.ID, labels map[string
 		return backupfiles.Object{}, err
 	}
 	defer c.Close()
+	if _, err := r.classifyInstance(ctx, c, iid, labels); err != nil {
+		return backupfiles.Object{}, err
+	}
 	run := r.engineRun(c, iid)
 	return enginebackup.Export(ctx, files, key, identity, func(ctx context.Context, out io.Writer) error {
 		switch identity.Kind {
@@ -127,8 +130,8 @@ func (r *Runtime) backupEngine(ctx context.Context, iid id.ID, labels map[string
 				return downloadEngineDirectory(ctx, c, ContainerName(iid), dir, out)
 			}}).Export(ctx, out)
 		case "duckdb":
-			return r.stoppedEngine(ctx, c, iid, labels, func(ctx context.Context) error {
-				return downloadEngineFile(ctx, c, ContainerName(iid), "/data/analytics.db", out)
+			return r.stoppedEngine(ctx, c, iid, labels, "backup", key, func(ctx context.Context, sourceID string) error {
+				return downloadEngineFile(ctx, c, sourceID, "/data/analytics.db", out)
 			})
 		}
 		return errors.New("unsupported native engine")
@@ -153,6 +156,9 @@ func (r *Runtime) restoreEngine(ctx context.Context, iid id.ID, labels map[strin
 		return err
 	}
 	defer c.Close()
+	if _, err := r.classifyInstance(ctx, c, iid, labels); err != nil {
+		return err
+	}
 	run := r.engineRun(c, iid)
 	upload := r.engineUpload(c, iid, identity.Kind)
 	switch identity.Kind {
@@ -163,7 +169,7 @@ func (r *Runtime) restoreEngine(ctx context.Context, iid id.ID, labels map[strin
 			return extractEngineDirectory(ctx, c, ContainerName(iid), dir, payload)
 		}}).Restore(ctx, payload)
 	case "duckdb":
-		return r.stoppedEngine(ctx, c, iid, labels, func(ctx context.Context) error { return uploadEngineFile(ctx, c, ContainerName(iid), payload) })
+		return r.stoppedEngine(ctx, c, iid, labels, "restore", labels[LabelRecovery], func(ctx context.Context, sourceID string) error { return uploadEngineFile(ctx, c, sourceID, payload) })
 	}
 	return errors.New("unsupported native engine")
 }
@@ -189,54 +195,103 @@ func (r *Runtime) restartEngine(ctx context.Context, c *Client, iid id.ID, label
 	return r.wait(ctx, c, ContainerName(iid), iid, labels)
 }
 
-// stoppedEngine always resumes the owned service, including after cancellation.
-func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, labels map[string]string, work func(context.Context) error) (err error) {
-	name := ContainerName(iid)
-	stopped := false
-	if _, err = r.inspect(ctx, c, name, iid, labels); err != nil {
-		return err
-	}
-	release, lockErr := r.checkpointLock(ctx, c, iid, labels)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer func() { err = errors.Join(err, release()) }()
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
-		defer cancel()
-		if _, checkErr := r.inspect(cleanup, c, name, iid, labels); checkErr != nil {
-			err = errors.Join(err, checkErr)
-			return
-		}
-		if !stopped {
-			// A cancelled HTTP request may leave Docker's stop in flight. Reissue
-			// it with the cleanup deadline before starting, so it cannot stop later.
-			stopErr := dockerJSON(cleanup, c, http.MethodPost, "/containers/"+name+"/stop?t=25", nil, nil)
-			current, checkErr := r.inspect(cleanup, c, name, iid, labels)
-			if checkErr != nil || current.State.Running {
-				err = errors.Join(err, stopErr, checkErr, errors.New("could not settle database shutdown"))
-				return
-			}
-		}
-		startErr := dockerJSON(cleanup, c, http.MethodPost, "/containers/"+name+"/start", nil, nil)
-		if startErr == nil {
-			startErr = r.wait(cleanup, c, name, iid, labels)
-		}
-		err = errors.Join(err, startErr)
-	}()
-	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+name+"/stop?t=25", nil, nil); checkErr != nil {
-		return checkErr
-	}
-	info, err := r.inspect(ctx, c, name, iid, labels)
+// stoppedEngine retains the lifecycle reservation until exact-source recovery.
+func (r *Runtime) stoppedEngine(ctx context.Context, c *Client, iid id.ID, labels map[string]string, action, operation string, work func(context.Context, string) error) (err error) {
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: action, Operation: operation})
 	if err != nil {
 		return err
 	}
-	stopped = !info.State.Running
-	if info.State.Running || info.State.ExitCode != 0 {
-		return errors.New("DuckDB did not shut down cleanly; no backup file was copied")
+	if guard == nil {
+		return ErrOwned
 	}
-	return work(ctx)
+	sourceID := guard.record.SourceID
+	stopped := false
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+		defer cancel()
+		for _, check := range []func(context.Context) error{guard.owner, guard.sameSource, guard.sameVolume, guard.noPrevious} {
+			if checkErr := check(cleanup); checkErr != nil {
+				err = errors.Join(err, checkErr, mutationPending(guard.name))
+				return
+			}
+		}
+		if !stopped {
+			// Reissue an uncertain stop and wait for its response before restarting.
+			stopErr := dockerSetRunning(cleanup, c, sourceID, false)
+			current, checkErr := r.inspect(cleanup, c, sourceID, iid, labels)
+			if stopErr != nil || checkErr != nil || current.State.Running {
+				err = errors.Join(err, stopErr, checkErr, mutationPending(guard.name))
+				return
+			}
+		}
+		if action == "restore" && err != nil {
+			err = errors.Join(err, guard.discardRestore(cleanup))
+			return
+		}
+		if checkErr := guard.owner(cleanup); checkErr != nil {
+			err = errors.Join(err, checkErr, mutationPending(guard.name))
+			return
+		}
+		startErr := dockerSetRunning(cleanup, c, sourceID, true)
+		if startErr == nil {
+			startErr = guard.waitAuthenticated(cleanup, sourceID)
+		}
+		if startErr != nil {
+			if action == "restore" {
+				err = errors.Join(err, startErr, guard.discardRestore(cleanup))
+				return
+			}
+			err = errors.Join(err, startErr, mutationPending(guard.name))
+			return
+		}
+		// Copy failure is retryable only after the original source is healthy again.
+		err = errors.Join(err, guard.finish(cleanup, nil))
+	}()
+	if ownerErr := guard.owner(ctx); ownerErr != nil {
+		return ownerErr
+	}
+	if stopErr := dockerJSON(ctx, c, http.MethodPost, "/containers/"+sourceID+"/stop?t=25", nil, nil); stopErr != nil {
+		return stopErr
+	}
+	current, err := r.inspect(ctx, c, sourceID, iid, labels)
+	if err != nil {
+		return err
+	}
+	stopped = !current.State.Running
+	if current.State.Running || current.State.ExitCode != 0 {
+		return errors.New("DuckDB did not shut down cleanly; no database file was copied")
+	}
+	if walErr := noDuckWAL(ctx, c, sourceID); walErr != nil {
+		return walErr
+	}
+	// A 404 can mean the container vanished, not just that its WAL is absent.
+	for _, check := range []func(context.Context) error{guard.owner, guard.sameSource, guard.sameVolume, guard.noPrevious} {
+		if checkErr := check(ctx); checkErr != nil {
+			return checkErr
+		}
+	}
+	current, err = r.inspect(ctx, c, sourceID, iid, labels)
+	if err != nil {
+		return err
+	}
+	if current.ID != sourceID || current.State.Running || current.State.ExitCode != 0 {
+		return ErrOwned
+	}
+	return work(ctx, sourceID)
 }
+
+func noDuckWAL(ctx context.Context, c *Client, containerID string) error {
+	response, err := c.Request(ctx, http.MethodHead, "/containers/"+containerID+"/archive?path=/data/analytics.db.wal", nil)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		return errors.New("DuckDB checkpoint is incomplete: a WAL remains or its absence could not be verified")
+	}
+	return nil
+}
+
 func downloadEngineFile(ctx context.Context, c *Client, container, filename string, out io.Writer) error {
 	response, err := c.Request(ctx, http.MethodGet, "/containers/"+container+"/archive?path="+url.QueryEscape(filename), nil)
 	if err != nil {
@@ -298,6 +353,10 @@ func uploadEngineFile(ctx context.Context, c *Client, container string, payload 
 }
 
 func downloadEngineDirectory(ctx context.Context, c *Client, container, dir string, out io.Writer) error {
+	return downloadEngineDirectoryLimit(ctx, c, container, dir, out, enginebackup.MaxPayload)
+}
+
+func downloadEngineDirectoryLimit(ctx context.Context, c *Client, container, dir string, out io.Writer, limit int64) error {
 	response, err := c.Request(ctx, http.MethodGet, "/containers/"+container+"/archive?path="+url.QueryEscape(dir), nil)
 	if err != nil {
 		return err
@@ -309,7 +368,7 @@ func downloadEngineDirectory(ctx context.Context, c *Client, container, dir stri
 	reader := tar.NewReader(response.Body)
 	writer := tar.NewWriter(out)
 	root := path.Base(dir)
-	remaining := enginebackup.MaxPayload
+	remaining := limit
 	for {
 		h, e := reader.Next()
 		if errors.Is(e, io.EOF) {
@@ -390,32 +449,4 @@ func extractEngineDirectory(ctx context.Context, c *Client, container, dir strin
 	}
 	reader.CloseWithError(err)
 	return errors.Join(err, <-done)
-}
-
-// A daemon-owned reservation serializes checkpoint copies across worker hosts.
-// A worker crash leaves a visible reservation; it is never stolen on a timer.
-func (r *Runtime) checkpointLock(ctx context.Context, c *Client, iid id.ID, labels map[string]string) (func() error, error) {
-	lockLabels := map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelConnection: labels[owned.LabelConnection], "loomplane.engine.checkpoint-lock": "true"}
-	var created struct {
-		ID string `json:"Id"`
-	}
-	body := map[string]any{"Image": labels[owned.LabelImage], "Labels": lockLabels, "HostConfig": map[string]any{"NetworkMode": "none"}}
-	if err := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+ContainerName(iid)+"-checkpoint", body, &created); err != nil {
-		return nil, errors.New("another checkpoint or an unfinished backup holds this service; recover that operation before retrying")
-	}
-	if created.ID == "" {
-		return nil, errors.New("checkpoint reservation has no identity")
-	}
-	return func() error {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		defer cancel()
-		record, err := r.inspect(cleanup, c, created.ID, iid, labels)
-		if err != nil {
-			return err
-		}
-		if record.ID != created.ID || record.Config.Labels["loomplane.engine.checkpoint-lock"] != "true" || record.State.Running {
-			return ErrOwned
-		}
-		return dockerJSON(cleanup, c, http.MethodDelete, "/containers/"+created.ID, nil, nil)
-	}, nil
 }

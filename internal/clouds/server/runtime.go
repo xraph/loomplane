@@ -159,6 +159,32 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	defer c.Close()
+	values := owned.RuntimeValues{}
+	imagePrepared := false
+	prepareImage := func(ctx context.Context) error {
+		if imagePrepared {
+			return nil
+		}
+		if r.Values != nil {
+			resolved, valuesErr := r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server", Namespace: ""}), owned.InstanceLabels(labels, iid))
+			if valuesErr != nil {
+				return valuesErr
+			}
+			values = resolved
+		}
+		if !strings.HasPrefix(spec.Image, "sha256:") {
+			if pullErr := r.pull(ctx, c, spec.Image, values.PullAuth); pullErr != nil {
+				return pullErr
+			}
+		}
+		imagePrepared = true
+		return nil
+	}
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "apply", Image: spec.Image, Revision: labels[owned.LabelRevision], PrepareImage: prepareImage})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
 	name := ContainerName(iid)
 	backup := name + "-previous"
 	old, err := r.inspect(ctx, c, name, iid, labels)
@@ -289,17 +315,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	values := owned.RuntimeValues{}
-	if r.Values != nil {
-		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server", Namespace: ""}), owned.InstanceLabels(labels, iid))
-		if err != nil {
-			return nil, err
-		}
-	}
-	if !strings.HasPrefix(spec.Image, "sha256:") {
-		if checkErr := r.pull(ctx, c, spec.Image, values.PullAuth); checkErr != nil {
-			return nil, checkErr
-		}
+	if checkErr := prepareImage(ctx); checkErr != nil {
+		return nil, checkErr
 	}
 	env := maps.Clone(spec.Env)
 	if env == nil {
@@ -313,7 +330,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
 	// The declared readiness stays on the container, as it does on a
 	// Kubernetes workload's readiness probe.
-	for _, key := range []string{enginebackup.LabelEngine, enginebackup.LabelRevision, enginebackup.LabelSource, owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
+	for _, key := range []string{owned.LabelService, owned.LabelImage, owned.LabelArchitecture, owned.LabelCatalogKind, enginebackup.LabelEngine, enginebackup.LabelRevision, enginebackup.LabelSource, owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -579,12 +596,22 @@ func (r *Runtime) removeContainer(ctx context.Context, c *Client, name string, i
 	}
 	return dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(info.ID)+"?force=1&v=0", nil, nil)
 }
-func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
+func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) (err error) {
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "remove"})
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
+	return r.removeRuntime(ctx, c, iid, labels)
+}
+
+func (r *Runtime) removeRuntime(ctx context.Context, c *Client, iid id.ID, labels map[string]string) error {
+	var err error
 	if checkErr := r.removeContainer(ctx, c, ContainerName(iid), iid, labels); checkErr != nil {
 		return checkErr
 	}
@@ -702,12 +729,17 @@ func (r *Runtime) pull(ctx context.Context, c *Client, image, auth string) error
 		}
 	}
 }
-func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) error {
+func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) (err error) {
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "set-running", Running: &running})
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
 	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
 	if err != nil {
 		return err

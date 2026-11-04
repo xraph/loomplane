@@ -11,7 +11,7 @@ import (
 )
 
 // PurgeRecovery destroys only the temporary recovery instance's owned volume.
-func (r *Runtime) PurgeRecovery(ctx context.Context, iid id.ID, labels map[string]string) error {
+func (r *Runtime) PurgeRecovery(ctx context.Context, iid id.ID, labels map[string]string) (err error) {
 	if labels[LabelRecovery] == "" || labels[owned.LabelPublic] != "false" {
 		return ErrOwned
 	}
@@ -20,6 +20,11 @@ func (r *Runtime) PurgeRecovery(ctx context.Context, iid id.ID, labels map[strin
 		return err
 	}
 	defer c.Close()
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "purge"})
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
 	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
 	if err != nil && !errors.Is(err, ErrMissing) {
 		return err
@@ -48,10 +53,18 @@ func (r *Runtime) PurgeRecovery(ctx context.Context, iid id.ID, labels map[strin
 			}
 		}
 	}
-	if checkErr := r.Remove(ctx, iid, labels); checkErr != nil {
+	if checkErr := r.removeRuntime(ctx, c, iid, labels); checkErr != nil {
 		return checkErr
 	}
 	if volumeErr == nil {
+		if guard != nil {
+			if ownerErr := guard.owner(ctx); ownerErr != nil {
+				return ownerErr
+			}
+			if identityErr := guard.sameVolume(ctx); identityErr != nil {
+				return identityErr
+			}
+		}
 		err = dockerJSON(ctx, c, http.MethodDelete, "/volumes/"+name, nil, nil)
 		if !errors.Is(err, ErrMissing) {
 			return err
