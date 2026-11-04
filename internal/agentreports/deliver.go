@@ -686,9 +686,10 @@ func issueLinks(r *Report, n names) []string {
 	return links
 }
 
-// ownPath is a dashboard path as detectors make them: a route and IDs,
-// with at most a plain query.
-var ownPath = regexp.MustCompile(`^/[A-Za-z0-9_/-]+(\?[A-Za-z0-9_=&-]+)?$`)
+// ownPath is a dashboard path exactly as agentwatch's detectors make
+// them: a plan's deployment page, maybe on its logs or changes tab. Any
+// other path or query is scanned like the rest of the text.
+var ownPath = regexp.MustCompile(`^/deployments/plan_[0-9a-z]{26}(\?tab=(logs|changes))?$`)
 
 // clean is a copy of r with every text in it scrubbed, so what the
 // renderer cuts to fit is what is sent.

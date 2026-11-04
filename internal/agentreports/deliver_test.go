@@ -1384,3 +1384,29 @@ func TestLinksToLoomplaneSurviveTheScan(t *testing.T) {
 		t.Fatalf("textWith(%q) = %q, %v", text, got, ok)
 	}
 }
+
+// Only the paths detectors build are held out of the scan: a plan's
+// deployment page and its logs and changes tabs. Another route, another
+// query or an untrusted fact is scanned with the rest.
+func TestOnlyDetectorPathsAreHeld(t *testing.T) {
+	const plan = "/deployments/plan_01m6jas4d0ehb8z6y2gp02yn8k"
+	n := names{Link: "https://loomplane.example/agent/reports/arep_01m6jas8yyee2tbh724bczwdx1"}
+	for path, held := range map[string]bool{
+		plan: true, plan + "?tab=logs": true, plan + "?tab=changes": true,
+		plan + "?tab=logs&token=AKIAIOSFODNN7EXAMPLE": false,
+		plan + "?next=evil":                           false,
+		plan + "?tab=settings":                        false,
+		"/settings/ai":                                false,
+		"/deployments/dep_1":                          false,
+		"/deployments/plan_01m6jas4d0ehb8z6y2gp02yn8k/../../settings": false,
+	} {
+		r := &Report{Facts: []Fact{{Label: "Plan", Value: "x", Path: path}}}
+		if got := len(issueLinks(r, n)) == 2; got != held {
+			t.Errorf("%s held: %v, want %v", path, got, held)
+		}
+		r.Facts[0].Untrusted = true
+		if len(issueLinks(r, n)) != 1 {
+			t.Errorf("%s held from an untrusted fact", path)
+		}
+	}
+}
