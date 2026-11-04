@@ -334,6 +334,23 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 				// every body through Untrusted, as here.
 				got := w.safety.Untrusted(w.ctx, agentsafety.SourceIssueBody, f.Text)
 				quotedOrWithheld(t, "issue body", got, f.Marker)
+			case redteam.SourceAgentOutput:
+				// Text the agent sends out never goes through Untrusted.
+				// A credential blocks the whole text and personal data is
+				// redacted, so the marker is gone either way.
+				out, err := w.safety.Outbound(w.ctx, f.Text)
+				switch f.Expect {
+				case redteam.ExpectBlock:
+					if !errors.Is(err, agentsafety.ErrOutboundBlocked) || out != "" {
+						t.Fatalf("outbound %s: %q, %v, want it blocked", f.Technique, out, err)
+					}
+				case redteam.ExpectRedact:
+					if err != nil || out == "" || strings.Contains(out, f.Marker) {
+						t.Fatalf("outbound %s: %q, %v, want it redacted", f.Technique, out, err)
+					}
+				default:
+					t.Fatalf("fixture %s expects %q", f.ID, f.Expect)
+				}
 			default:
 				t.Fatalf("no place surfaces source %q", f.Source)
 			}
@@ -351,6 +368,11 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 // pauses for a person and never approves.
 func TestRedTeamObedientModelChangesNothing(t *testing.T) {
 	for _, f := range fixtures(redteam.KindAttack) {
+		if f.Source == redteam.SourceAgentOutput {
+			// A leak fixture is text going out, not an instruction a model
+			// could obey; TestRedTeamTextNeverReachesTheModelRaw scans it.
+			continue
+		}
 		t.Run(f.ID, func(t *testing.T) {
 			w := newRTWorld(t)
 			w.plans.add(&planning.Plan{
@@ -430,12 +452,21 @@ func TestBenignFixturesStillWork(t *testing.T) {
 	for _, f := range benign {
 		t.Run(f.ID, func(t *testing.T) {
 			w := newRTWorld(t)
-			got := w.safety.Untrusted(w.ctx, f.Source, f.Text)
-			if got == agentsafety.Withheld {
-				t.Fatalf("withheld a benign %s", f.Source)
-			}
-			if !isQuote(got) {
-				t.Fatalf("not quoted: %q", got)
+			if f.Source == redteam.SourceAgentOutput {
+				// Outbound text that looks like a credential but isn't goes
+				// out untouched.
+				out, err := w.safety.Outbound(w.ctx, f.Text)
+				if err != nil || out != f.Text {
+					t.Fatalf("outbound benign text: %q, %v", out, err)
+				}
+			} else {
+				got := w.safety.Untrusted(w.ctx, f.Source, f.Text)
+				if got == agentsafety.Withheld {
+					t.Fatalf("withheld a benign %s", f.Source)
+				}
+				if !isQuote(got) {
+					t.Fatalf("not quoted: %q", got)
+				}
 			}
 
 			res, err := w.dispatch("set_variable", map[string]any{"project": "api", "key": "RELEASE_NOTE", "value": f.Text})

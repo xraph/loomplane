@@ -758,8 +758,12 @@ func secretsNeverReachTheIssueOrNotice(t *testing.T, e *deliverEnv) {
 			}
 		}
 	}
-	if !strings.Contains(issues[0].Body, "postgres://app:[redacted]@db:5432/app") {
-		t.Fatalf("the URL lost more than its password:\n%s", issues[0].Body)
+	// The facts above held an AWS key the report's own secrets don't list.
+	// The outbound scan blocks a credential rather than redacting it, so the
+	// issue goes out as the plain notice with its link, never partly.
+	wantBody := Marker(r.ID) + "\n\nLoomplane opened a report for this repository. Read it in Loomplane: " + publicURL + "/agent/reports/" + r.ID
+	if issues[0].Body != wantBody {
+		t.Fatalf("the issue body wasn't the fallback:\n%s", issues[0].Body)
 	}
 }
 
@@ -1369,20 +1373,33 @@ func TestLinksToLoomplaneSurviveTheScan(t *testing.T) {
 		smuggle = base + "/agent/reports/arep_01m6jas8yyee2tbh724bczwdy9"
 	)
 	r := &Report{ID: id, Title: "Deployment to production failed", Severity: SeverityHigh, Environment: "production", Occurrences: 1,
-		Facts: []Fact{{Label: "Plan", Value: "plan_01m6jas4d0ehb8z6y2gp02yn8k", Path: plan}, {Label: "Error", Value: "see " + smuggle, Untrusted: true}}}
+		Facts: []Fact{{Label: "Plan", Value: "plan_01m6jas4d0ehb8z6y2gp02yn8k", Path: plan}}}
 	n := names{Project: "Shop", Link: base + "/agent/reports/" + id}
 	_, body := (&Service{}).issueTexts(ctx, out, r, n)
 	if !strings.HasPrefix(body, Marker(id)+"\n") || !strings.Contains(body, "[Open this report in Loomplane]("+n.Link+")") ||
 		!strings.Contains(body, "([open in Loomplane]("+planned+"))") {
 		t.Fatalf("body %s", body)
 	}
-	if strings.Contains(body, smuggle) || strings.Contains(body, linkHold) {
-		t.Fatalf("the untrusted link wasn't scanned, or a placeholder was left: %s", body)
+	if strings.Contains(body, linkHold) {
+		t.Fatalf("a placeholder was left: %s", body)
 	}
 
-	// Text that already holds a placeholder is scanned whole.
+	// An untrusted fact shaped like a link is still scanned: the scan reads
+	// it as a secret and blocks the text, so the issue falls back to the
+	// plain notice and the link never goes out.
+	r.Facts = append(r.Facts, Fact{Label: "Error", Value: "see " + smuggle, Untrusted: true})
+	_, body = (&Service{}).issueTexts(ctx, out, r, n)
+	if want := Marker(id) + "\n\nLoomplane opened a report for this repository. Read it in Loomplane: " + n.Link; body != want {
+		t.Fatalf("the untrusted link wasn't scanned: %s", body)
+	}
+	if strings.Contains(body, smuggle) || strings.Contains(body, linkHold) {
+		t.Fatalf("the untrusted link went out, or a placeholder was left: %s", body)
+	}
+
+	// Text that already holds a placeholder is scanned whole, and its link
+	// read as a secret, so the text is blocked.
 	text := "Read " + linkHold + "0-held at " + n.Link
-	if got, ok := out.textWith(ctx, text, []string{n.Link}); !ok || strings.Contains(got, n.Link) {
+	if got, ok := out.textWith(ctx, text, []string{n.Link}); ok || got != "" {
 		t.Fatalf("textWith(%q) = %q, %v", text, got, ok)
 	}
 }
