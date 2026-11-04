@@ -52,8 +52,8 @@ type Suspender interface {
 var _ Suspender = (*Service)(nil)
 
 // WithInstances sets what stops, starts and removes instances and returns the
-// service. Without it Suspend and Restore refuse to run, and disabling a
-// tenant records the reason but stops nothing.
+// service. Without it Suspend, Restore and DisableTenant still record their
+// reasons, but fail when there is a VM to stop or start.
 func (s *Service) WithInstances(ic InstanceControl) *Service {
 	s.instances = ic
 	return s
@@ -63,11 +63,44 @@ func knownReason(r SuspendReason) bool {
 	return r == ReasonSpendingLimit || r == ReasonPastDue || r == ReasonPlatformOwner
 }
 
+// instanceCallTimeout bounds every call to InstanceControl, and lockWait how
+// long a suspend, restore or reclaim waits for a row another transaction
+// holds, so one hung host or stuck transaction can't hold an organization
+// up.
+const (
+	instanceCallTimeout = 60 * time.Second
+	lockWait            = "10s"
+)
+
+// errEffects is what a caller of Suspend, Restore, DisableTenant or the cron
+// jobs reads when a VM couldn't be stopped, started or removed. The details,
+// which may name hosts or carry provider text, go to the platform owner's log.
+var errEffects = &workspaceError{msg: "Loomplane Cloud couldn't finish changing this workspace's work right now. It will try again shortly."}
+
+func effectsFailed(ctx context.Context, op, orgID string, errs ...error) error {
+	err := errors.Join(errs...)
+	if err == nil {
+		return nil
+	}
+	slog.ErrorContext(ctx, "platform cloud "+op+" failed", "org", orgID, "error", err)
+	return errEffects
+}
+
+// callInstances runs one InstanceControl call with a time limit.
+func callInstances(ctx context.Context, fn func(context.Context) error) error {
+	c, cancel := context.WithTimeout(ctx, instanceCallTimeout)
+	defer cancel()
+	return fn(c)
+}
+
 // withTenantRow is WithTenantLock for a reason change: it also passes a
 // disabled tenant, since the platform owner's disable is itself a reason.
-// A missing tenant is ErrNotEnabled.
+// A missing tenant is ErrNotEnabled. It gives up on a lock held too long.
 func (s *PgStore) withTenantRow(ctx context.Context, orgID string, fn func(driverTx) error) error {
 	return s.withTx(ctx, func(tx driverTx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+lockWait+`'`); err != nil {
+			return err
+		}
 		if _, err := lockTenantTx(ctx, tx, orgID); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return ErrNotEnabled
@@ -79,14 +112,12 @@ func (s *PgStore) withTenantRow(ctx context.Context, orgID string, fn func(drive
 }
 
 // Suspend adds reason to the organization's suspend reasons. The first one
-// stops new platform work; every call stops whatever still runs and
-// remembers it for the restore. Calling it again changes and stops nothing.
+// stops new platform work, even if the VMs can't be stopped right now; every
+// call stops whatever still runs and remembers it for the restore. Calling it
+// again changes and stops nothing.
 func (s *Service) Suspend(ctx context.Context, orgID string, reason SuspendReason) error {
 	if orgID == "" || !knownReason(reason) {
 		return fmt.Errorf("platformcloud: suspend needs an organization and a known reason, got %q", reason)
-	}
-	if s.instances == nil {
-		return errors.New("platformcloud: no instance control to suspend with")
 	}
 	var reasons []SuspendReason
 	var revision int64
@@ -122,13 +153,14 @@ func (s *Service) Suspend(ctx context.Context, orgID string, reason SuspendReaso
 
 // Restore removes reason. When it was the last one, the work that was
 // running comes back: placements that lost their VM are placed again first,
-// and one with no room waits for RetryRestores.
+// and one with no room waits for RetryRestores. The platform owner's reason
+// is not Restore's to lift: enabling the tenant does that.
 func (s *Service) Restore(ctx context.Context, orgID string, reason SuspendReason) error {
 	if orgID == "" || !knownReason(reason) {
 		return fmt.Errorf("platformcloud: restore needs an organization and a known reason, got %q", reason)
 	}
-	if s.instances == nil {
-		return errors.New("platformcloud: no instance control to restore with")
+	if reason == ReasonPlatformOwner {
+		return fmt.Errorf("%w: the platform owner's suspension is lifted by enabling the tenant", ErrConflict)
 	}
 	cleared := false
 	var revision int64
@@ -162,14 +194,18 @@ func (s *Service) Restore(ctx context.Context, orgID string, reason SuspendReaso
 	return s.restoreWork(ctx, orgID)
 }
 
+type stopTarget struct{ id, instance string }
+
 // stopWork stops the organization's running platform services and cancels its
-// builds, if the organization is suspended. Each service it stops is marked
-// suspended and, if it was running, remembered for the restore. A service
-// the user stopped is left stopped. A failure on one service doesn't keep the
-// others from stopping, and every step is safe to repeat, so a job that
-// crashed or failed can run it again.
+// builds, if the organization is suspended. It reads the work under the tenant
+// lock, stops it with the lock let go, and then marks what it stopped
+// suspended and remembered for the restore, if it is still running as the
+// same instance. A service the user stopped is left stopped. A failure on one
+// service doesn't keep the others from stopping, and every step is safe to
+// repeat, so a job that crashed or failed can run it again.
 func (s *Service) stopWork(ctx context.Context, orgID string) error {
-	var errs []error
+	var targets []stopTarget
+	builds := false
 	err := s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if err != nil || len(t.SuspendReasons) == 0 {
@@ -179,54 +215,83 @@ func (s *Service) stopWork(ctx context.Context, orgID string) error {
 		if err != nil {
 			return err
 		}
-		now := s.now().UTC()
-		builds := false
 		for i := range live {
 			p := &live[i]
-			if p.Kind == kindBuild {
+			switch {
+			case p.Kind == kindBuild:
 				builds = true
-				continue
-			}
-			if p.State == stateReserved && p.InstanceID == "" {
+			case p.State == stateReserved && p.InstanceID == "":
 				// Nothing was ever started: new work, which suspension blocks.
 				if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, p.ID, stateReleased); err != nil {
 					return err
 				}
-				continue
-			}
-			if p.InstanceID != "" {
-				if stopErr := s.instances.Stop(ctx, p.InstanceID); stopErr != nil {
-					errs = append(errs, fmt.Errorf("stop placement %s: %w", p.ID, stopErr))
-					continue
-				}
-			}
-			if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,restore_running=true,waiting_capacity=false,suspended_at=$3,updated_at=now() WHERE id=$1`,
-				p.ID, stateSuspended, now); err != nil {
-				return err
-			}
-		}
-		if builds {
-			if cancelErr := s.instances.CancelBuilds(ctx, orgID); cancelErr != nil {
-				errs = append(errs, fmt.Errorf("cancel builds: %w", cancelErr))
-			} else if _, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE org_id=$1 AND kind='build' AND state IN ('reserved','running')`, orgID, stateReleased); err != nil {
-				// A cancelled build's VM is left for the cleanup sweep of released placements.
-				return err
+			default:
+				targets = append(targets, stopTarget{p.ID, p.InstanceID})
 			}
 		}
 		return nil
 	})
-	return errors.Join(append(errs, err)...)
+	if err != nil {
+		return effectsFailed(ctx, "suspend", orgID, err)
+	}
+	if len(targets) == 0 && !builds {
+		return nil
+	}
+	if s.instances == nil {
+		return effectsFailed(ctx, "suspend", orgID, errors.New("no instance control"))
+	}
+	var errs []error
+	var stopped []stopTarget
+	for _, tg := range targets {
+		if tg.instance != "" {
+			if stopErr := callInstances(ctx, func(c context.Context) error { return s.instances.Stop(c, tg.instance) }); stopErr != nil {
+				errs = append(errs, fmt.Errorf("stop placement %s: %w", tg.id, stopErr))
+				continue
+			}
+		}
+		stopped = append(stopped, tg)
+	}
+	cancelled := false
+	if builds {
+		if cancelErr := callInstances(ctx, func(c context.Context) error { return s.instances.CancelBuilds(c, orgID) }); cancelErr != nil {
+			errs = append(errs, fmt.Errorf("cancel builds: %w", cancelErr))
+		} else {
+			cancelled = true
+		}
+	}
+	if len(stopped) > 0 || cancelled {
+		now := s.now().UTC()
+		err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+			for _, tg := range stopped {
+				// Still running as the same instance: remember it. One a
+				// restore or a redeploy changed since is left as it is.
+				if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$3,restore_running=true,waiting_capacity=false,suspended_at=$4,updated_at=now()
+WHERE id=$1 AND instance_id=$2 AND state IN ('reserved','running')`, tg.id, tg.instance, stateSuspended, now); execErr != nil {
+					return execErr
+				}
+			}
+			if cancelled {
+				// A cancelled build's VM is left for the cleanup sweep of released placements.
+				_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE org_id=$1 AND kind='build' AND state IN ('reserved','running')`, orgID, stateReleased)
+				return execErr
+			}
+			return nil
+		})
+		errs = append(errs, err)
+	}
+	return effectsFailed(ctx, "suspend", orgID, errs...)
 }
 
 // restoreWork starts what the organization's suspension stopped, if it has no
 // reason left. A placement that lost its VM to a reclaim is placed again; if
-// no host has room it keeps waiting and RetryRestores comes back to it.
-// Starting happens under the tenant lock after a fresh look at the placement,
-// so two restores running together start it once.
+// no host has room, or the placement is refused for another reason, it keeps
+// waiting and RetryRestores comes back to it. Starting happens under the
+// tenant lock after a fresh look at the placement, so two restores running
+// together start it once.
 func (s *Service) restoreWork(ctx context.Context, orgID string) error {
 	waiting, err := queryPlacements(ctx, s.store.db, `org_id=$1 AND kind='service' AND state='suspended' AND restore_running`, orgID)
 	if err != nil {
-		return err
+		return effectsFailed(ctx, "restore", orgID, err)
 	}
 	var errs []error
 	for i := range waiting {
@@ -235,12 +300,12 @@ func (s *Service) restoreWork(ctx context.Context, orgID string) error {
 			placed, placeErr := s.placeAgain(ctx, p)
 			switch {
 			case errors.Is(placeErr, ErrSuspended), errors.Is(placeErr, ErrNotEnabled):
-				return errors.Join(errs...)
-			case errors.Is(placeErr, ErrNoCapacity):
-				s.markWaiting(ctx, p)
-				continue
+				return effectsFailed(ctx, "restore", orgID, errs...)
 			case placeErr != nil:
-				errs = append(errs, placeErr)
+				if !errors.Is(placeErr, ErrNoCapacity) {
+					slog.ErrorContext(ctx, "platform cloud could not place a restore again", "org", orgID, "placement", p.ID, "error", placeErr)
+				}
+				s.markWaiting(ctx, p)
 				continue
 			case placed == nil:
 				continue
@@ -249,41 +314,61 @@ func (s *Service) restoreWork(ctx context.Context, orgID string) error {
 		}
 		if startErr := s.startPlacement(ctx, orgID, p.ID); startErr != nil {
 			if errors.Is(startErr, ErrNotEnabled) {
-				return errors.Join(errs...)
+				return effectsFailed(ctx, "restore", orgID, errs...)
 			}
 			errs = append(errs, fmt.Errorf("start placement %s: %w", p.ID, startErr))
 		}
 	}
-	return errors.Join(errs...)
+	return effectsFailed(ctx, "restore", orgID, errs...)
 }
 
-// placeAgain gives a suspended placement that has no host a new one through
-// Reserve and carries what a restore needs over to it. The result is nil when
-// another restore got there first.
+// placeAgain gives a suspended placement that has no host a new one, in one
+// transaction under the tenant lock: it re-reads the old row, places the
+// service through the same code as Reserve and inserts the new row already
+// suspended and remembered, releasing the old. Either all of that happens or
+// none, so a crash or a concurrent suspend never loses the service. The
+// result is nil when the old row is no longer waiting for a host.
 func (s *Service) placeAgain(ctx context.Context, p Placement) (*Placement, error) {
 	var region string
 	if err := s.store.db.QueryRow(ctx, `SELECT name FROM loomplane_platform_regions WHERE id=$1`, p.RegionID).Scan(&region); err != nil {
 		return nil, storeError(err)
 	}
-	np, err := s.Reserve(ctx, Request{OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, Resource: p.Resource, Region: region, Kind: p.Kind,
-		VCPUs: p.VCPUs, MemoryMiB: p.MemoryMiB, DiskMiB: p.DiskMiB})
+	req := Request{OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, Resource: p.Resource, Region: region, Kind: p.Kind,
+		VCPUs: p.VCPUs, MemoryMiB: p.MemoryMiB, DiskMiB: p.DiskMiB}
+	defaults, err := s.defaultLimits(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Keep the new placement suspended and remembered, so a crash before the
-	// start leaves something the next restore resumes. Its clock starts now.
-	now := s.now().UTC()
-	out, err := scanPlacement(s.store.db.QueryRow(ctx, `UPDATE loomplane_platform_placements
-SET state=$2,restore_running=true,waiting_capacity=false,instance_id=$3,generation=$4,suspended_at=$5,updated_at=now() WHERE id=$1 AND state=$6
-RETURNING `+placementColumns, np.ID, stateSuspended, p.InstanceID, p.Generation, now, stateReserved))
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
+	var out *Placement
+	err = s.store.withTenantRow(ctx, p.OrgID, func(tx driverTx) error {
+		t, lockErr := lockTenantTx(ctx, tx, p.OrgID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if t.Status != tenantEnabled {
+			return ErrNotEnabled
+		}
+		old, readErr := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, p.ID, p.OrgID))
+		if errors.Is(readErr, ErrNotFound) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		if old.State != stateSuspended || !old.RestoreRunning || old.HostID != nil {
+			return nil
+		}
+		np, placeErr := s.reserveTx(ctx, tx, t, req, defaults, old)
+		out = np
+		return placeErr
+	})
+	if err != nil {
+		return nil, workspaceSafe(ctx, "restore", req, err)
 	}
-	return out, err
+	return out, nil
 }
 
-// markWaiting records that a placement has no room to come back to, and says
-// so once.
+// markWaiting records that a placement can't come back yet, and says so once.
 func (s *Service) markWaiting(ctx context.Context, p Placement) {
 	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET waiting_capacity=true,updated_at=now() WHERE id=$1 AND state=$2 AND NOT waiting_capacity`, p.ID, stateSuspended)
 	if err != nil {
@@ -298,16 +383,23 @@ func (s *Service) markWaiting(ctx context.Context, p Placement) {
 		subject += fmt.Sprintf(":%d", p.SuspendedAt.Unix())
 	}
 	s.notifyOrg(ctx, p.OrgID, NoticeWaitingCapacity, subject, "Loomplane Cloud work is waiting for room",
-		"Loomplane Cloud has no room to start your work again yet. It starts as soon as there is room.")
+		"Loomplane Cloud can't start your work again yet. It starts as soon as it can.")
 }
 
 // startPlacement starts one remembered placement under the tenant lock, if
-// the organization is not suspended and the placement still waits for it.
+// the organization is enabled and not suspended and the placement still waits
+// for it. The start has a time limit.
 func (s *Service) startPlacement(ctx context.Context, orgID, placementID string) error {
-	return s.store.WithTenantLock(ctx, orgID, func(tx driverTx) error {
+	return s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
-		if err != nil || len(t.SuspendReasons) > 0 {
+		if err != nil {
 			return err
+		}
+		if t.Status != tenantEnabled {
+			return ErrNotEnabled
+		}
+		if len(t.SuspendReasons) > 0 {
+			return nil
 		}
 		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, placementID, orgID))
 		if errors.Is(err, ErrNotFound) {
@@ -320,7 +412,7 @@ func (s *Service) startPlacement(ctx context.Context, orgID, placementID string)
 			return nil
 		}
 		if p.InstanceID != "" {
-			if err = s.instances.Start(ctx, p.InstanceID); err != nil {
+			if err = callInstances(ctx, func(c context.Context) error { return s.instances.Start(c, p.InstanceID) }); err != nil {
 				return err
 			}
 		}
@@ -329,49 +421,75 @@ func (s *Service) startPlacement(ctx context.Context, orgID, placementID string)
 	})
 }
 
-// Reclaim takes the VM off its host for every platform service that has been
-// suspended for ReclaimAfter. The placement stays suspended and still counts
-// toward the workspace's use; only the host's room is freed. Run it from cron.
+// Reclaim first stops again whatever a suspended organization still has
+// running (a stop that failed, a deploy that finished late), then takes the VM
+// off its host for every platform service that has been suspended for
+// ReclaimAfter. The placement stays suspended and still counts toward the
+// workspace's use; only the host's room is freed. Run it from cron.
 func (s *Service) Reclaim(ctx context.Context, now time.Time) error {
 	if s.instances == nil {
 		return errors.New("platformcloud: no instance control to reclaim with")
 	}
+	errs := []error{s.resweep(ctx)}
 	due, err := queryPlacements(ctx, s.store.db, `kind='service' AND state='suspended' AND host_id IS NOT NULL AND suspended_at<=$1
 AND org_id IN (SELECT org_id FROM loomplane_platform_tenants WHERE cardinality(suspend_reasons)>0)`, now.Add(-ReclaimAfter).UTC())
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
-	var errs []error
 	for _, p := range due {
-		if reclaimErr := s.reclaim(ctx, p.OrgID, p.ID, now); reclaimErr != nil {
-			errs = append(errs, fmt.Errorf("reclaim placement %s: %w", p.ID, reclaimErr))
-		}
+		errs = append(errs, s.reclaim(ctx, p.OrgID, p.ID, now))
 	}
 	return errors.Join(errs...)
 }
 
+// resweep runs stopWork for every suspended organization that has work
+// reserved or running.
+func (s *Service) resweep(ctx context.Context) error {
+	orgs, err := s.orgsWhere(ctx, `SELECT DISTINCT org_id FROM loomplane_platform_placements WHERE state IN ('reserved','running')
+AND org_id IN (SELECT org_id FROM loomplane_platform_tenants WHERE cardinality(suspend_reasons)>0) ORDER BY org_id`)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, org := range orgs {
+		errs = append(errs, s.stopWork(ctx, org))
+	}
+	return errors.Join(errs...)
+}
+
+// reclaim removes one placement's VM: it checks the placement is due under the
+// tenant lock, removes the VM with the lock let go, and then clears the host
+// if the placement is still the suspended one it checked.
 func (s *Service) reclaim(ctx context.Context, orgID, placementID string, now time.Time) error {
-	return s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+	var due *Placement
+	err := s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if err != nil || len(t.SuspendReasons) == 0 {
 			return err
 		}
-		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2 FOR UPDATE`, placementID, orgID))
+		p, err := scanPlacement(tx.QueryRow(ctx, `SELECT `+placementColumns+` FROM loomplane_platform_placements WHERE id=$1 AND org_id=$2`, placementID, orgID))
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if p.State != stateSuspended || p.HostID == nil || p.SuspendedAt == nil || now.Sub(*p.SuspendedAt) < ReclaimAfter {
-			return nil
+		if p.State == stateSuspended && p.HostID != nil && p.SuspendedAt != nil && now.Sub(*p.SuspendedAt) >= ReclaimAfter {
+			due = p
 		}
-		if err = s.instances.RemoveVM(ctx, *p); err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id=NULL,updated_at=now() WHERE id=$1`, p.ID)
-		return err
+		return nil
 	})
+	if err != nil || due == nil {
+		return effectsFailed(ctx, "reclaim", orgID, err)
+	}
+	if err = callInstances(ctx, func(c context.Context) error { return s.instances.RemoveVM(c, *due) }); err != nil {
+		return effectsFailed(ctx, "reclaim", orgID, fmt.Errorf("remove placement %s: %w", due.ID, err))
+	}
+	err = s.store.withTenantRow(ctx, orgID, func(tx driverTx) error {
+		_, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET host_id=NULL,updated_at=now() WHERE id=$1 AND state=$2 AND host_id=$3`, due.ID, stateSuspended, *due.HostID)
+		return execErr
+	})
+	return effectsFailed(ctx, "reclaim", orgID, err)
 }
 
 // RetryRestores brings back work that should be running but isn't: a restore
@@ -383,34 +501,35 @@ func (s *Service) RetryRestores(ctx context.Context) error {
 	if s.instances == nil {
 		return errors.New("platformcloud: no instance control to restore with")
 	}
-	rows, err := s.store.db.Query(ctx, `SELECT DISTINCT p.org_id FROM loomplane_platform_placements p
+	orgs, err := s.orgsWhere(ctx, `SELECT DISTINCT p.org_id FROM loomplane_platform_placements p
 JOIN loomplane_platform_tenants t ON t.org_id=p.org_id
 WHERE p.kind='service' AND p.state='suspended' AND p.restore_running AND t.status='enabled' AND cardinality(t.suspend_reasons)=0
 ORDER BY p.org_id`)
 	if err != nil {
 		return err
 	}
+	var errs []error
+	for _, org := range orgs {
+		errs = append(errs, s.restoreWork(ctx, org))
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) orgsWhere(ctx context.Context, query string) ([]string, error) {
+	rows, err := s.store.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
 	var orgs []string
 	for rows.Next() {
 		var org string
 		if scanErr := rows.Scan(&org); scanErr != nil {
-			_ = rows.Close()
-			return scanErr
+			return nil, scanErr
 		}
 		orgs = append(orgs, org)
 	}
-	if err = rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	_ = rows.Close()
-	var errs []error
-	for _, org := range orgs {
-		if restoreErr := s.restoreWork(ctx, org); restoreErr != nil {
-			errs = append(errs, fmt.Errorf("restore %s: %w", org, restoreErr))
-		}
-	}
-	return errors.Join(errs...)
+	return orgs, rows.Err()
 }
 
 // queryPlacements reads the placements matching where, in creation order.

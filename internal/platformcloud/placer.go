@@ -203,36 +203,9 @@ func (s *Service) reserve(ctx context.Context, req Request) (*Placement, error) 
 		if lockErr != nil {
 			return lockErr
 		}
-		if admitErr := s.admit(ctx, t, req); admitErr != nil {
-			return admitErr
-		}
-		region, old, checkErr := s.checkLimits(ctx, tx, req, limitsOf(t, defaults))
-		if checkErr != nil {
-			return checkErr
-		}
-		hosts, listErr := s.candidates(ctx, tx, req, region, old)
-		if listErr != nil {
-			return listErr
-		}
-		if len(hosts) == 0 {
-			return noCapacity(region)
-		}
-		if old != nil {
-			if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, old.ID, stateReleased); execErr != nil {
-				return execErr
-			}
-		}
-		for _, h := range hosts {
-			p, tryErr := s.tryHost(ctx, tx, req, region, h.ID)
-			if tryErr != nil {
-				return tryErr
-			}
-			if p != nil {
-				out = p
-				return nil
-			}
-		}
-		return noCapacity(region)
+		p, placeErr := s.reserveTx(ctx, tx, t, req, defaults, nil)
+		out = p
+		return placeErr
 	})
 	if err != nil {
 		return nil, err
@@ -240,11 +213,48 @@ func (s *Service) reserve(ctx context.Context, req Request) (*Placement, error) 
 	return out, nil
 }
 
+// reserveTx is Reserve inside tx, which holds the tenant row t. restore, if
+// set, is the resource's remembered placement being put back on a host: the
+// new row is inserted suspended with its restore flag, instance, generation
+// and suspended time, in the same transaction that releases the old one, so
+// nothing can see the service in between.
+func (s *Service) reserveTx(ctx context.Context, tx driverTx, t *Tenant, req Request, defaults Limits, restore *Placement) (*Placement, error) {
+	if admitErr := s.admit(ctx, t, req); admitErr != nil {
+		return nil, admitErr
+	}
+	region, old, checkErr := s.checkLimits(ctx, tx, req, limitsOf(t, defaults))
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	hosts, listErr := s.candidates(ctx, tx, req, region, old)
+	if listErr != nil {
+		return nil, listErr
+	}
+	if len(hosts) == 0 {
+		return nil, noCapacity(region)
+	}
+	if old != nil {
+		if _, execErr := tx.Exec(ctx, `UPDATE loomplane_platform_placements SET state=$2,updated_at=now() WHERE id=$1`, old.ID, stateReleased); execErr != nil {
+			return nil, execErr
+		}
+	}
+	for _, h := range hosts {
+		p, tryErr := s.tryHost(ctx, tx, req, region, h.ID, restore)
+		if tryErr != nil {
+			return nil, tryErr
+		}
+		if p != nil {
+			return p, nil
+		}
+	}
+	return nil, noCapacity(region)
+}
+
 // tryHost locks the host, checks it can still take the request and inserts
 // the placement. It returns nil when the host can't take it, having let the
 // host's lock go again, so trying hosts one after another never holds more
 // than the one it placed on.
-func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region *Region, hostID string) (*Placement, error) {
+func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region *Region, hostID string, restore *Placement) (*Placement, error) {
 	if _, err := tx.Exec(ctx, `SAVEPOINT platform_place_host`); err != nil {
 		return nil, err
 	}
@@ -260,9 +270,13 @@ func (s *Service) tryHost(ctx context.Context, tx driverTx, req Request, region 
 		if fits(h, all, org, req) {
 			p := &Placement{ID: newID("plc_"), OrgID: req.OrgID, ProjectID: req.ProjectID, EnvironmentID: req.EnvironmentID, Resource: req.Resource,
 				Kind: req.Kind, RegionID: region.ID, HostID: &h.ID, VCPUs: req.VCPUs, MemoryMiB: req.MemoryMiB, DiskMiB: req.DiskMiB, State: stateReserved}
-			_, err = tx.Exec(ctx, `INSERT INTO loomplane_platform_placements(id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),now())`,
-				p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource, p.Kind, p.RegionID, h.ID, p.VCPUs, p.MemoryMiB, p.DiskMiB, p.State)
+			if restore != nil {
+				at := s.now().UTC()
+				p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt = stateSuspended, true, restore.InstanceID, restore.Generation, &at
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO loomplane_platform_placements(id,org_id,project_id,environment_id,resource,kind,region_id,host_id,vcpus,memory_mib,disk_mib,state,restore_running,instance_id,generation,suspended_at,created_at,updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now())`,
+				p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Resource, p.Kind, p.RegionID, h.ID, p.VCPUs, p.MemoryMiB, p.DiskMiB, p.State, p.RestoreRunning, p.InstanceID, p.Generation, p.SuspendedAt)
 			if err != nil {
 				return nil, storeError(err)
 			}

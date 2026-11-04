@@ -115,6 +115,9 @@ func (s *Service) EnableTenant(ctx context.Context, orgID string, limits *Limits
 				next.Limits = limits
 			}
 			next.SuspendReasons = slices.DeleteFunc(slices.Clone(t.SuspendReasons), func(r SuspendReason) bool { return r == ReasonPlatformOwner })
+			if len(next.SuspendReasons) == 0 {
+				next.SuspendedAt = nil
+			}
 			if !sameTenant(t, &next) {
 				if updateErr := updateTenantTx(ctx, tx, &next); updateErr != nil {
 					return updateErr
@@ -152,7 +155,8 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 		t, err := lockTenantTx(ctx, tx, orgID)
 		if errors.Is(err, ErrNotFound) {
 			// Nothing of this organization's runs yet, so nothing to stop.
-			created, insertErr := insertTenantTx(ctx, tx, &Tenant{OrgID: orgID, Status: tenantDisabled, SuspendReasons: []SuspendReason{ReasonPlatformOwner}})
+			at := s.now().UTC()
+			created, insertErr := insertTenantTx(ctx, tx, &Tenant{OrgID: orgID, Status: tenantDisabled, SuspendReasons: []SuspendReason{ReasonPlatformOwner}, SuspendedAt: &at})
 			if insertErr == nil && !created {
 				insertErr = ErrConflict
 			}
@@ -182,9 +186,6 @@ func (s *Service) DisableTenant(ctx context.Context, orgID string) error {
 	})
 	if err != nil {
 		return err
-	}
-	if s.instances == nil {
-		return nil
 	}
 	if added {
 		s.notifyOrg(ctx, orgID, NoticeSuspended, fmt.Sprintf("%s:%d", orgID, revision), "Loomplane Cloud work is stopped", suspendMessage(reasons))

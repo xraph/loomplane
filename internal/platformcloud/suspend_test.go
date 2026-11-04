@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 type fakeControl struct {
@@ -363,5 +366,218 @@ func TestSuspendNeedsAnEnabledTenant(t *testing.T) {
 	e, _ := suspendEnv(t)
 	if err := e.svc.Suspend(t.Context(), "org_nobody", ReasonPastDue); !errors.Is(err, ErrNotEnabled) {
 		t.Fatalf("Suspend = %v, want ErrNotEnabled", err)
+	}
+}
+
+// reclaimed leaves org_a's "web" suspended without a host, then lifts the
+// reasons by hand so only the cron has the restore to do.
+func reclaimedWeb(t *testing.T, e *placerEnv) {
+	t.Helper()
+	ctx := t.Context()
+	t0 := time.Now().UTC()
+	e.svc.now = func() time.Time { return t0 }
+	e.running(t, "web")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonSpendingLimit); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Reclaim(ctx, t0.Add(8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pg.Exec(ctx, `UPDATE loomplane_platform_tenants SET suspend_reasons='{}',suspended_at=NULL WHERE org_id='org_a'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentRetryRestoresStartOnce(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	e.readyHost(t, "b", bigAllotment)
+	reclaimedWeb(t, e)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = e.svc.RetryRestores(t.Context())
+		}()
+	}
+	wg.Wait()
+	if err := e.svc.RetryRestores(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(fc.starts, []string{"inst_web"}) {
+		t.Fatalf("starts = %v, want exactly one", fc.starts)
+	}
+	if n := countPlacements(t, e.pg, `org_id='org_a' AND resource='web' AND state<>'released'`); n != 1 {
+		t.Fatalf("%d live rows for web, want 1", n)
+	}
+	if web := e.byResource(t, "web"); web.State != "running" || web.HostID == nil {
+		t.Fatalf("web = %+v", web)
+	}
+}
+
+func TestPlaceAgainIsOneStepAndSurvivesASuspend(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	reclaimedWeb(t, e)
+	ctx := t.Context()
+	old := e.byResource(t, "web")
+	placed, err := e.svc.placeAgain(ctx, *old)
+	if err != nil || placed == nil {
+		t.Fatalf("placeAgain = %+v, %v", placed, err)
+	}
+	// One row for the service, already remembered, with the old release.
+	if n := countPlacements(t, e.pg, `org_id='org_a' AND resource='web' AND state<>'released'`); n != 1 {
+		t.Fatalf("%d live rows", n)
+	}
+	got := e.placement(t, placed.ID)
+	if got.State != "suspended" || !got.RestoreRunning || got.HostID == nil || got.InstanceID != "inst_web" || got.Generation != 3 || got.SuspendedAt == nil {
+		t.Fatalf("new row = %+v", got)
+	}
+	if e.placement(t, old.ID).State != "released" {
+		t.Fatal("old row not released")
+	}
+	// A suspend landing now leaves it remembered, and a restore starts it.
+	if err = e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if got = e.placement(t, placed.ID); got.State != "suspended" || !got.RestoreRunning || len(fc.stops) != 1 {
+		t.Fatalf("after suspend = %+v, stops = %v", got, fc.stops)
+	}
+	if err = e.svc.Restore(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(fc.starts, []string{"inst_web"}) || e.placement(t, placed.ID).State != "running" {
+		t.Fatalf("starts = %v", fc.starts)
+	}
+}
+
+func TestPlaceAgainRefusedLeavesTheRememberedRow(t *testing.T) {
+	e, fc := suspendEnv(t)
+	ctx := t.Context()
+	h := e.readyHost(t, "a", Allotment{VCPUs: 64, MemoryMiB: 65536, DiskMiB: 1 << 20, VMs: 1})
+	reclaimedWeb(t, e)
+	e.fillHost(t, h, "plc_squatter")
+	old := e.byResource(t, "web")
+	if _, err := e.svc.placeAgain(ctx, *old); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("placeAgain = %v, want ErrNoCapacity", err)
+	}
+	if got := e.placement(t, old.ID); got.State != "suspended" || !got.RestoreRunning || len(fc.starts) != 0 {
+		t.Fatalf("old row = %+v", got)
+	}
+}
+
+type planGate struct{}
+
+func (planGate) CanRun(context.Context, string, metering.Kind, bool) error {
+	return errors.New("over the plan")
+}
+
+func TestRestoreRefusedForAnotherReasonWaitsQuietly(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	reclaimedWeb(t, e)
+	e.svc.WithGate(planGate{})
+	for range 2 {
+		if err := e.svc.RetryRestores(t.Context()); err != nil {
+			t.Fatalf("RetryRestores = %v, want a quiet wait", err)
+		}
+	}
+	if web := e.byResource(t, "web"); !web.WaitingCapacity || web.State != "suspended" || len(fc.starts) != 0 {
+		t.Fatalf("web = %+v", web)
+	}
+}
+
+func TestLateDeployCannotResurrectSuspendedWork(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	q := e.running(t, "api")
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	fc.stops = nil
+	if err := e.svc.Running(ctx, "org_a", q.ID, "inst_api2", 9); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("Running while suspended = %v, want ErrSuspended", err)
+	}
+	got := e.placement(t, q.ID)
+	if got.State != "suspended" || !got.RestoreRunning || got.InstanceID != "inst_api2" || !slices.Equal(fc.stops, []string{"inst_api2"}) {
+		t.Fatalf("placement = %+v, stops = %v", got, fc.stops)
+	}
+}
+
+func TestReclaimStopsAgainWhatSuspensionMissed(t *testing.T) {
+	e, fc := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	e.running(t, "web")
+	fc.failing["inst_web"] = true
+	err := e.svc.Suspend(ctx, "org_a", ReasonPastDue)
+	if err == nil {
+		t.Fatal("Suspend hid a failed stop")
+	}
+	if strings.Contains(err.Error(), "stop failed") || strings.Contains(err.Error(), "inst_web") {
+		t.Fatalf("error leaks details: %v", err)
+	}
+	fc.failing["inst_web"] = false
+	if err = e.svc.Reclaim(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if web := e.byResource(t, "web"); web.State != "suspended" || !web.RestoreRunning || !slices.Equal(fc.stops, []string{"inst_web"}) {
+		t.Fatalf("web = %+v, stops = %v", web, fc.stops)
+	}
+}
+
+func TestSuspendWithoutControlStillRecordsTheReason(t *testing.T) {
+	e, _ := suspendEnv(t)
+	e.readyHost(t, "a", bigAllotment)
+	ctx := t.Context()
+	e.svc.instances = nil
+	if err := e.svc.Suspend(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatalf("nothing to stop, so no error: %v", err)
+	}
+	if _, err := e.svc.Reserve(ctx, serviceReq("api", 1, 512)); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("Reserve = %v", err)
+	}
+	if err := e.svc.Restore(ctx, "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	e.running(t, "web")
+	if err := e.svc.DisableTenant(ctx, "org_a"); !errors.Is(err, errEffects) {
+		t.Fatalf("DisableTenant = %v, want errEffects", err)
+	}
+	tenant, _ := e.store.GetTenant(ctx, "org_a")
+	if tenant.Status != "disabled" || !slices.Contains(tenant.SuspendReasons, ReasonPlatformOwner) || tenant.SuspendedAt == nil {
+		t.Fatalf("tenant = %+v", tenant)
+	}
+}
+
+func TestRestoreRefusesThePlatformOwnerReason(t *testing.T) {
+	e, _ := suspendEnv(t)
+	if err := e.svc.DisableTenant(t.Context(), "org_a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Restore(t.Context(), "org_a", ReasonPlatformOwner); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restore = %v, want ErrConflict", err)
+	}
+	tenant, _ := e.store.GetTenant(t.Context(), "org_a")
+	if len(tenant.SuspendReasons) != 1 {
+		t.Fatalf("tenant = %+v", tenant)
+	}
+	if _, err := e.svc.EnableTenant(t.Context(), "org_a", nil); err != nil {
+		t.Fatal(err)
+	}
+	if tenant, _ = e.store.GetTenant(t.Context(), "org_a"); len(tenant.SuspendReasons) != 0 || tenant.SuspendedAt != nil {
+		t.Fatalf("tenant after enable = %+v", tenant)
+	}
+}
+
+func TestSuspendOfAnOrgWithNoPlatformWorkCallsNothing(t *testing.T) {
+	e, fc := suspendEnv(t)
+	if err := e.svc.Suspend(t.Context(), "org_a", ReasonPastDue); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.stops)+len(fc.starts)+len(fc.removes)+fc.cancels != 0 {
+		t.Fatalf("calls = %+v", fc)
 	}
 }

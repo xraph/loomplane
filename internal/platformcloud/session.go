@@ -168,9 +168,45 @@ ORDER BY created_at,id`, orgID, envID, name)
 }
 
 // Running records that the organization's placement has its VM up as
-// instance at generation.
+// instance at generation. While the organization is suspended it records
+// nothing of the sort: the placement is kept suspended and remembered as
+// running, the late VM is stopped, and the caller gets ErrSuspended, so a
+// deploy that finished after the suspension can't bring the work back.
 func (s *Service) Running(ctx context.Context, orgID, placementID, instance string, generation int64) error {
-	return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false`, instance, generation)
+	if err := checkTenant(ctx, orgID); err != nil {
+		return err
+	}
+	res, err := s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false,updated_at=now()
+WHERE id=$1 AND org_id=$2 AND state<>'released'
+AND NOT EXISTS(SELECT 1 FROM loomplane_platform_tenants t WHERE t.org_id=$2 AND cardinality(t.suspend_reasons)>0)`, placementID, orgID, instance, generation)
+	if err != nil {
+		return storeError(err)
+	}
+	if n, nErr := res.RowsAffected(); nErr != nil || n == 1 {
+		return nErr
+	}
+	var suspended bool
+	if err = s.store.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_platform_tenants WHERE org_id=$1 AND cardinality(suspend_reasons)>0)`, orgID).Scan(&suspended); err != nil {
+		return storeError(err)
+	}
+	if !suspended {
+		// Not suspended after all: a released or missing placement.
+		return s.setLive(ctx, orgID, placementID, `state='running',suspended_at=NULL,instance_id=$3,generation=$4,restore_running=false`, instance, generation)
+	}
+	res, err = s.store.db.Exec(ctx, `UPDATE loomplane_platform_placements SET state='suspended',restore_running=true,suspended_at=coalesce(suspended_at,$5),instance_id=$3,generation=$4,updated_at=now()
+WHERE id=$1 AND org_id=$2 AND state<>'released'`, placementID, orgID, instance, generation, s.now().UTC())
+	if err != nil {
+		return storeError(err)
+	}
+	if n, nErr := res.RowsAffected(); nErr != nil || n != 1 {
+		return errors.Join(nErr, ErrNotFound)
+	}
+	if s.instances != nil && instance != "" {
+		if stopErr := callInstances(ctx, func(c context.Context) error { return s.instances.Stop(c, instance) }); stopErr != nil {
+			slog.ErrorContext(ctx, "platform cloud could not stop a late deploy", "org", orgID, "placement", placementID, "error", stopErr)
+		}
+	}
+	return ErrSuspended
 }
 
 // Stopped records that someone stopped the organization's placement's VM.
