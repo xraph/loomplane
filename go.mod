@@ -51,8 +51,8 @@ require (
 	github.com/xraph/bastion v1.4.1
 	github.com/xraph/chronicle v1.10.1
 	github.com/xraph/confy v1.1.0
-	github.com/xraph/cortex v1.10.3
-	github.com/xraph/cortex/extension v1.10.3
+	github.com/xraph/cortex v1.10.4
+	github.com/xraph/cortex/extension v1.10.4
 	github.com/xraph/ctrlplane v1.8.1
 	github.com/xraph/dispatch v1.9.3
 	github.com/xraph/forge v1.13.2
@@ -65,7 +65,7 @@ require (
 	github.com/xraph/herald v1.10.0
 	github.com/xraph/herald/drivers/apns v1.10.0
 	github.com/xraph/keysmith v1.8.1
-	github.com/xraph/nexus v1.9.1
+	github.com/xraph/nexus v1.9.2
 	github.com/xraph/nexus/providers/anthropic v1.9.1
 	github.com/xraph/nexus/providers/openai v1.9.1
 	github.com/xraph/nexus/providers/opencompat v1.9.1
@@ -76,8 +76,8 @@ require (
 	github.com/xraph/trove/extension v1.8.1
 	github.com/xraph/vault v1.8.1
 	github.com/xraph/warden v1.8.1
-	github.com/xraph/weave v1.9.2
-	github.com/xraph/weave/embedder/nexus v1.9.2
+	github.com/xraph/weave v1.9.3
+	github.com/xraph/weave/embedder/nexus v1.9.3
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -269,8 +269,8 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
-	github.com/xraph/cortex/optimization v1.10.3 // indirect
-	github.com/xraph/cortex/sentinel v1.10.3 // indirect
+	github.com/xraph/cortex/optimization v1.10.4 // indirect
+	github.com/xraph/cortex/sentinel v1.10.4 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
 	github.com/xraph/forge/extensions/auth v1.13.2 // indirect

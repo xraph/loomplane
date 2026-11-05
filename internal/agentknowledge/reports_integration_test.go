@@ -72,7 +72,7 @@ func TestResolvedReportIsSearchable(t *testing.T) {
 		weaveengine.WithStore(weavepg.New(db)),
 		weaveengine.WithVectorStore(pgvector.New(db, pgvector.WithDimensions(dims))),
 		weaveengine.WithEmbedder(topicEmbedder{}),
-		weaveengine.WithChunker(agentknowledge.Chunker(chunker.NewRecursiveChunker())),
+		weaveengine.WithChunker(chunker.NewRecursiveChunker()),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +174,9 @@ func TestResolvedReportIsSearchable(t *testing.T) {
 	if text := got[0].Content; !strings.Contains(text, "never pushed") || !strings.Contains(text, "/agent/reports/"+id) {
 		t.Fatalf("o1's top result %q has no findings or link", text)
 	}
-	// What a search gets back is the chunk's own metadata, so the chunk
-	// carries the report's kind and project for agentknowledge.Readable.
+	// What a search gets back is the chunk's metadata, which weave fills
+	// from its document's, so it carries the report's kind and project
+	// for agentknowledge.Readable.
 	if md := got[0].Metadata; md["kind"] != agentknowledge.KindReport || md["project_id"] != "proj_1" {
 		t.Fatalf("o1's top result has metadata %v, want the report's kind and project", md)
 	}

@@ -4,55 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 
 	"github.com/xraph/cortex"
 	"github.com/xraph/cortex/knowledge"
-	"github.com/xraph/weave/chunker"
 
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/security"
 )
-
-// A search returns chunks, and weave gives a chunk only its own metadata,
-// never its document's. So Ingest puts the keys Readable decides on, the
-// document's kind and project, on the context, and Chunker writes them on
-// every chunk it makes. Content that is already indexed answers Unchanged
-// before it is chunked, as before.
-
-type chunkMetadataKey struct{}
-
-// withChunkMetadata is ctx with md for Chunker to write on every chunk.
-func withChunkMetadata(ctx context.Context, md map[string]string) context.Context {
-	return context.WithValue(ctx, chunkMetadataKey{}, md)
-}
-
-// Chunker is inner with the metadata Ingest put on the context written on
-// every chunk, over any key of inner's own. Weave's engine must use it
-// for Readable to know whose a report's chunk is: without it a report's
-// chunk has no project, and Readable drops it.
-func Chunker(inner chunker.Chunker) chunker.Chunker { return stampingChunker{inner: inner} }
-
-type stampingChunker struct{ inner chunker.Chunker }
-
-func (c stampingChunker) Chunk(ctx context.Context, text string, opts *chunker.Options) ([]chunker.ChunkResult, error) {
-	out, err := c.inner.Chunk(ctx, text, opts)
-	if err != nil {
-		return nil, err
-	}
-	md, ok := ctx.Value(chunkMetadataKey{}).(map[string]string)
-	if !ok || len(md) == 0 {
-		return out, nil
-	}
-	for i := range out {
-		stamped := make(map[string]string, len(out[i].Metadata)+len(md))
-		maps.Copy(stamped, out[i].Metadata)
-		maps.Copy(stamped, md)
-		out[i].Metadata = stamped
-	}
-	return out, nil
-}
 
 // ProjectAuthorizer checks a permission on one project;
 // *security.Authorizer is the real one, which counts a team's grant on
