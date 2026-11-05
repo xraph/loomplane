@@ -46,8 +46,10 @@ func (e *DeliveryExtension) Register(app forge.App) error {
 	}
 	return errors.Join(
 		forge.ProvideValue(app.Container(), e.svc),
-		// For readers such as Hallproof's witness.
+		// For readers such as Hallproof's witness. The raw endpoint store
+		// lets them list endpoints without decrypting a signing secret.
 		forge.ProvideValue(app.Container(), e.svc.Relay()),
+		forge.ProvideValue(app.Container(), e.svc.RawEndpoints()),
 	)
 }
 func (e *DeliveryExtension) Start(ctx context.Context) error {

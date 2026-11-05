@@ -8,6 +8,8 @@ import (
 	"github.com/xraph/forge"
 	"github.com/xraph/keysmith"
 	"github.com/xraph/relay"
+	"github.com/xraph/relay/endpoint"
+	relaypg "github.com/xraph/relay/store/postgres"
 	"github.com/xraph/vault/secret"
 	vaultstore "github.com/xraph/vault/store"
 	"github.com/xraph/warden"
@@ -17,8 +19,9 @@ import (
 )
 
 // Hallproof's witness finds each library's engine in DI by its type, so
-// each one has to be there. The Vault store also holds the checkpoint
-// signing key the first start created.
+// each one has to be there, with Relay's endpoint store unwrapped beside
+// Relay. The Vault store also holds the checkpoint signing key the first
+// start created.
 func TestWitnessDependenciesAreProvided(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
@@ -31,6 +34,15 @@ func TestWitnessDependenciesAreProvided(t *testing.T) {
 	resolves[*keysmith.Engine](t, c, "keysmith")
 	resolves[*relay.Relay](t, c, "relay")
 	resolves[vaultstore.Store](t, c, "vault store")
+	resolves[endpoint.Store](t, c, "relay endpoint store")
+
+	// The endpoint store is Relay's Postgres store itself, not the wrapper
+	// that decrypts signing secrets.
+	if eps, err := forge.InjectType[endpoint.Store](c); err == nil {
+		if _, raw := eps.(*relaypg.Store); !raw {
+			t.Errorf("the relay endpoint store is %T, want the raw *postgres.Store", eps)
+		}
+	}
 
 	store, err := forge.InjectType[vaultstore.Store](c)
 	if err != nil {

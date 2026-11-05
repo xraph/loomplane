@@ -24,6 +24,7 @@ import (
 	heraldstore "github.com/xraph/herald/store"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	"github.com/xraph/relay"
+	"github.com/xraph/relay/endpoint"
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -89,6 +90,12 @@ func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailE
 // Relay is the webhook engine, over the store that keeps each endpoint's
 // signing secret encrypted at rest.
 func (s *Service) Relay() *relay.Relay { return s.relay }
+
+// RawEndpoints is Relay's endpoint store without the encrypting wrapper,
+// for readers that only need endpoint metadata, such as Hallproof's
+// witness. Reading through it never decrypts a signing secret, so one
+// secret that won't decrypt can't fail a whole list.
+func (s *Service) RawEndpoints() endpoint.Store { return s.relayStore.Store }
 
 // Prepare is called after central migrations and before Authsome starts. It
 // configures exactly one application-owned mail provider (SMTP, Resend or a
