@@ -337,3 +337,14 @@ chronicle:
     enabled: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED:-true}"
     every_events: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS:-1000}"
     every_interval: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL:-15m}"
+
+# Compliance evidence. Set an endpoint and Loomplane pushes evidence about
+# its own staff, keys, roles, platform secrets and audit chain to that
+# Hallproof, never a customer's. Leave it empty and nothing of Hallproof's
+# runs. The endpoint is https, or http on this machine. Give the ingest key
+# from Hallproof as ingest_key or, for a mounted secret, ingest_key_file,
+# not both.
+hallproof:
+  endpoint: "${LOOMPLANE_HALLPROOF_ENDPOINT:-}"
+  ingest_key: "${LOOMPLANE_HALLPROOF_INGEST_KEY:-}"
+  ingest_key_file: "${LOOMPLANE_HALLPROOF_INGEST_KEY_FILE:-}"
