@@ -296,7 +296,10 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
-		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
+		authsome.WithChronicle(staffStream{
+			Chronicle: chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory}),
+			isStaff:   e.IsPlatformAdmin,
+		}),
 		authsome.WithTokenEncryptor(tokens),
 		authsome.WithRateLimiter(routeLimiter{Limiter: ratelimit.NewKVLimiter(e.store)}),
 		authsome.WithWarden(e.warden),

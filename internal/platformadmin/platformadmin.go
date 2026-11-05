@@ -19,6 +19,12 @@ import (
 	wardenpg "github.com/xraph/warden/store/postgres"
 )
 
+// AuditTenant is the Chronicle tenant staff events are recorded under, in
+// Loomplane's app. Staff are the holders of a platform role. Keeping their
+// events apart means the stream holds nothing of a customer's, so it can be
+// proven to someone outside, such as Hallproof, as it is.
+const AuditTenant = "platform"
+
 // ErrNoUser is returned when no user has the email.
 var ErrNoUser = errors.New("no user with that email")
 

@@ -3,8 +3,11 @@ package identity
 import (
 	"context"
 
+	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/audit"
+
+	"github.com/xraph/loomplane/internal/platformadmin"
 )
 
 // authAuditCategory files authsome's own events in Chronicle.
@@ -40,4 +43,29 @@ func (c categorized) Warning(ctx context.Context, action, resource, resourceID s
 
 func (c categorized) Critical(ctx context.Context, action, resource, resourceID string) *chronicle.EventBuilder {
 	return c.Emitter.Critical(ctx, action, resource, resourceID).Category(c.category)
+}
+
+// staffStream is the bridge authsome records through. An event with no
+// organization whose actor holds a platform role goes to the staff stream,
+// platformadmin.AuditTenant. Everything else keeps the stream it had: an
+// organization's events stay in that organization's, and a customer's or
+// an anonymous event with no organization stays at the app level.
+//
+// A role that can't be read counts as not staff, so the staff stream never
+// takes a customer's event on a guess.
+type staffStream struct {
+	bridge.Chronicle
+	isStaff func(ctx context.Context, userID string) (bool, error)
+}
+
+func (s staffStream) Record(ctx context.Context, event *bridge.AuditEvent) error {
+	if event.OrgID != "" || event.ActorID == "" {
+		return s.Chronicle.Record(ctx, event)
+	}
+	if staff, err := s.isStaff(ctx, event.ActorID); err != nil || !staff {
+		return s.Chronicle.Record(ctx, event)
+	}
+	routed := *event
+	routed.OrgID = platformadmin.AuditTenant
+	return s.Chronicle.Record(ctx, &routed)
 }
