@@ -82,6 +82,9 @@ const (
 	authsomeAPIPath = "/v1"
 	appSlug         = "loomplane"
 	pingTimeout     = 3 * time.Second
+	// provideWardenPriority puts the start hook that provides Warden ahead
+	// of the others, which run at Forge's default of 0.
+	provideWardenPriority = 100
 )
 
 // Guard is the middleware for organization-scoped Loomplane routes: it
@@ -258,13 +261,26 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, PlatformOwner(e.platformOwner)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
-		// The engines and the Vault store, for readers such as Hallproof's
-		// witness. Providing a value starts nothing.
-		forge.ProvideValue(c, e.warden),
+		// Keysmith and the Vault store, for readers such as Hallproof's
+		// witness. When the container starts, it calls Start on every
+		// value it holds that has one, and Stop when it stops. Keysmith's
+		// Start does nothing, nothing else starts or stops it, and the
+		// Vault store has neither, so both can go in now.
 		forge.ProvideValue(c, e.smith),
 		forge.ProvideValue[vaultstore.Store](c, vault),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
+	}
+	// Warden goes in only once the container has started. prepare starts
+	// it and Stop stops it, and the container would start it a second time
+	// (a second maintenance loop, of which Stop cancels only the last).
+	// A value provided after the container started is never started or
+	// stopped by it. The hook runs ahead of the other start hooks, so
+	// witness, which looks in one, finds Warden.
+	if err := fapp.RegisterHook(forge.PhaseAfterStart, func(context.Context, forge.App) error {
+		return forge.ProvideValue(c, e.warden)
+	}, forge.LifecycleHookOptions{Name: "loomplane-provide-warden", Priority: provideWardenPriority}); err != nil {
+		return fmt.Errorf("provide warden: %w", err)
 	}
 	if err := e.editionProvide(c); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
