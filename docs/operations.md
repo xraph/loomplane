@@ -66,7 +66,7 @@ Under the [production Compose stack](docker-production.md), run it in the API co
 docker compose exec loomplane loomplane admin grant-platform-admin you@example.com
 ```
 
-It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first.
+It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first. The grant lands in the audit trail's `platform` stream as `platform_admin.granted`, with `cli` as the actor and the operating system user and host it ran as in the metadata. A second run grants nothing and records nothing.
 
 ## Live deployment state
 
