@@ -202,15 +202,15 @@ func (e *Extension) startKnowledge(ctx context.Context) {
 	e.startReportKnowledge(ctx, eng, warn)
 }
 
-// errSearchNotReady is what the model reads when a knowledge search
-// fails, after cortex's "retrieval failed: ". The most likely reason is
-// the first boot, before the docs job has made the docs collection,
-// which fails every search; whatever it is, the model gets no internal
-// error text, and the log gets the error.
-var errSearchNotReady = errors.New("knowledge search isn't ready yet; answer from your tools")
+// errSearchFailed is what the model reads when a knowledge search fails,
+// after cortex's "retrieval failed: ". The model gets no internal error
+// text, and the log gets the error. A search before the docs or the
+// workspace's collection exist isn't a failure: cortex's weave adapter
+// returns no results for it.
+var errSearchFailed = errors.New("knowledge search failed; answer from your tools")
 
 // quietKnowledge is cortex's knowledge provider with its errors replaced
-// by errSearchNotReady and logged, and with what it finds cut to what the
+// by errSearchFailed and logged, and with what it finds cut to what the
 // run may read (agentknowledge.Readable): a past report only for those
 // who read deployments on its project.
 type quietKnowledge struct {
@@ -225,7 +225,7 @@ func (q quietKnowledge) Retrieve(ctx context.Context, query string, params *know
 	chunks, err := q.Provider.Retrieve(ctx, query, params)
 	if err != nil {
 		q.warn("aiagent: a knowledge search failed", err)
-		return nil, errSearchNotReady
+		return nil, errSearchFailed
 	}
 	var authz agentknowledge.ProjectAuthorizer
 	if q.authz != nil {
@@ -242,7 +242,7 @@ func (q quietKnowledge) ListCollections(ctx context.Context) ([]knowledge.Collec
 	cols, err := q.Provider.ListCollections(ctx)
 	if err != nil {
 		q.warn("aiagent: listing knowledge collections failed", err)
-		return nil, errSearchNotReady
+		return nil, errSearchFailed
 	}
 	return cols, nil
 }
