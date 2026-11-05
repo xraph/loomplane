@@ -15,6 +15,8 @@ import {
   placementSummary,
   compatibleTargets,
   placementSettings,
+  servicesInRepo,
+  withoutServices,
 } from "@/lib/placement"
 
 const graph = {
@@ -398,4 +400,83 @@ it("ticks a service that's new, drifted or behind its repository", () => {
     label: "Turned off",
     changed: false,
   })
+})
+
+it("names each service's repository and says when it was removed", () => {
+  const rows = placementRows(manifest, graph)
+  expect(rows[0]).toMatchObject({ name: "api", repo: "app", repoGone: false })
+  const removed = { ...graph, sources: [], services: [] } as Graph
+  expect(placementRows(manifest, removed)[0]).toMatchObject({
+    name: "api",
+    repo: "app",
+    repoGone: true,
+    kind: "",
+  })
+  // A one-repository project's services can leave repo out.
+  const bare: Manifest = {
+    version: 1,
+    services: { api: { source: "go:cmd/api" } },
+  }
+  expect(placementRows(bare, graph)[0]).toMatchObject({
+    repo: "app",
+    repoGone: false,
+  })
+  expect(placementRows(bare, removed)[0]).toMatchObject({
+    repo: "",
+    repoGone: true,
+  })
+  // A graph from before repositories has none, and matches anywhere, as
+  // the planner's does.
+  const before = { ...graph, sources: [] } as Graph
+  expect(placementRows(bare, before)[0]).toMatchObject({ repoGone: false })
+  // With two repositories, one without repo is ambiguous, not removed.
+  const two = { ...graph, sources: [{ alias: "app" }, { alias: "web" }] }
+  expect(placementRows(bare, two as Graph)[0]).toMatchObject({
+    repoGone: false,
+  })
+})
+
+it("finds the services a repository holds", () => {
+  expect(servicesInRepo(manifest, graph, "app")).toEqual(["api", "worker"])
+  expect(servicesInRepo(manifest, graph, "web")).toEqual([])
+  const bare: Manifest = {
+    version: 1,
+    services: { api: { source: "go:cmd/api" } },
+  }
+  expect(servicesInRepo(bare, graph, "app")).toEqual(["api"])
+})
+
+it("drops services with every need and route that names them", () => {
+  const m: Manifest = {
+    version: 1,
+    services: {
+      api: { repo: "app", source: "go:cmd/api" },
+      web: {
+        repo: "web",
+        source: "apps/web",
+        needs: ["api", "db"],
+        need_options: { api: { path: "/v1" } },
+      },
+    },
+    resources: { db: { kind: "postgres" } },
+    gateways: {
+      edge: {
+        routes: [
+          { path: "/api", to: "api" },
+          { path: "/", to: "web" },
+        ],
+      },
+      internal: { routes: [{ path: "/", to: "api" }] },
+    },
+  }
+  const { manifest: next, gateways } = withoutServices(m, ["api"])
+  expect(Object.keys(next.services!)).toEqual(["web"])
+  expect(next.services!.web).toMatchObject({ needs: ["db"] })
+  expect(next.services!.web.need_options).toBeUndefined()
+  expect(next.gateways!.edge.routes).toEqual([{ path: "/", to: "web" }])
+  // A gateway left with no route can't be saved, so it goes too.
+  expect(next.gateways!.internal).toBeUndefined()
+  expect(gateways).toEqual(["internal"])
+  // The original isn't touched.
+  expect(Object.keys(m.services!)).toEqual(["api", "web"])
 })
