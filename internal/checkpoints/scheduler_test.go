@@ -168,3 +168,41 @@ func TestPollInterval(t *testing.T) {
 		}
 	}
 }
+
+// Run ticks on its own: a stream with events is signed without anyone
+// calling Tick, and Run returns once its context ends.
+func TestRunSignsOnTheTickerAndStopsWithItsContext(t *testing.T) {
+	// Polls at the one-second floor.
+	f := newFixture(t, Policy{EveryEvents: 1, EveryInterval: pollDivisor * pollFloor})
+	f.record(t, "platform", 2)
+	info, err := f.store.GetStreamByScope(t.Context(), "aapp_test", "platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.sched.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(f.sched.PollInterval() * 3)
+	for {
+		cp, cpErr := f.store.LatestCheckpoint(t.Context(), info.ID)
+		if cpErr == nil && cp.ToSeq == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("Run signed nothing within three polls: %+v, %v", cp, cpErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run kept going after its context ended")
+	}
+}

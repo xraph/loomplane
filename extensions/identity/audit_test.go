@@ -9,6 +9,7 @@ import (
 
 	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/authsome/bridge/chronicleadapter"
+	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/audit"
 	"github.com/xraph/chronicle/store"
@@ -16,6 +17,7 @@ import (
 	"github.com/xraph/forge"
 	gulog "github.com/xraph/go-utils/log"
 
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platformadmin"
 )
 
@@ -231,5 +233,69 @@ func TestStaffRoles_countsAndWarnsOnFailures(t *testing.T) {
 	}
 	if n, _ := warns[1].Field("events"); fmt.Sprint(n) != "3" {
 		t.Fatalf("second warning counts %v events, want the 3 since the first", n)
+	}
+}
+
+// brokenPlatformRoles is a Warden that can't be read.
+type brokenPlatformRoles struct{ rbac.Store }
+
+func (brokenPlatformRoles) ListUserRolesForApp(context.Context, string, string) ([]*rbac.Role, error) {
+	return nil, errors.New("warden is down")
+}
+
+// authsome's events go through the bridge the engine is built with, and
+// its staff check reads the actor's platform roles the way IsPlatformAdmin
+// does. A platform admin's event with no organization lands in the
+// platform stream of Loomplane's app; a customer's stays at the app level.
+func TestAuthsomeChronicle_routesByTheActorsPlatformRole(t *testing.T) {
+	ctx := context.Background()
+	mem := memory.New()
+	trail, err := chronicle.New(chronicle.WithStore(store.NewAdapter(mem)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Identity.AppID = "aapp_test"
+	e := New(cfg)
+	e.SetLogger(forge.NewNoopLogger())
+	e.audit = trail
+	e.platformRoles = fakePlatformRoles{held: map[string][]*rbac.Role{
+		"ausr_admin":    {{AppID: cfg.Identity.AppID, Slug: rbac.PlatformAdminSlug}},
+		"ausr_customer": {{AppID: "aapp_other", Slug: rbac.PlatformOwnerSlug}},
+	}}
+	for _, actor := range []string{"ausr_admin", "ausr_customer"} {
+		if admin, _ := e.IsPlatformAdmin(ctx, actor); admin != (actor == "ausr_admin") {
+			t.Fatalf("IsPlatformAdmin(%s) = %v", actor, admin)
+		}
+	}
+
+	bridgeTo := e.authsomeChronicle()
+	for _, ev := range []bridge.AuditEvent{
+		{Action: "admin.signin", Resource: "session", ActorID: "ausr_admin"},
+		{Action: "customer.signin", Resource: "session", ActorID: "ausr_customer"},
+	} {
+		ev.Tenant, ev.Severity = cfg.Identity.AppID, bridge.SeverityInfo
+		if err = bridgeTo.Record(ctx, &ev); err != nil {
+			t.Fatalf("record %s: %v", ev.Action, err)
+		}
+	}
+	if got := streamOf(t, mem, "admin.signin"); got != platformadmin.AuditTenant {
+		t.Errorf("the admin's sign-in is in tenant %q, want %q", got, platformadmin.AuditTenant)
+	}
+	if got := streamOf(t, mem, "customer.signin"); got != "" {
+		t.Errorf("the customer's sign-in is in tenant %q, want the app level", got)
+	}
+	if _, err = mem.GetStreamByScope(ctx, cfg.Identity.AppID, platformadmin.AuditTenant); err != nil {
+		t.Fatalf("no platform stream in %s: %v", cfg.Identity.AppID, err)
+	}
+
+	// With Warden down, the admin's event goes to the app level.
+	e.platformRoles = brokenPlatformRoles{}
+	ev := bridge.AuditEvent{Action: "admin.signin.unread", Resource: "session", ActorID: "ausr_other_admin", Tenant: cfg.Identity.AppID, Severity: bridge.SeverityInfo}
+	if err = e.authsomeChronicle().Record(ctx, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if got := streamOf(t, mem, "admin.signin.unread"); got != "" {
+		t.Errorf("an event whose actor's roles couldn't be read is in tenant %q, want the app level", got)
 	}
 }
