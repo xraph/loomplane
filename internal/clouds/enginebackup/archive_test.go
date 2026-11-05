@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -102,6 +104,98 @@ func TestVerifiedArchiveRejectsExtraPathsAndLinks(t *testing.T) {
 			}
 			if _, err = Verified(t.Context(), store, object, identity); err == nil {
 				t.Fatal("extra archive entry accepted")
+			}
+		})
+	}
+}
+
+func TestVerifiedArchiveRejectsLinksAndTrailingBytesAfterChecksum(t *testing.T) {
+	for _, tc := range []struct {
+		name                                 string
+		manifestType, payloadType, extraType byte
+		trailing                             []byte
+		wantError                            string
+	}{
+		{name: "valid control"},
+		{name: "symlink manifest", manifestType: tar.TypeSymlink, wantError: "invalid native archive manifest"},
+		{name: "hardlink manifest", manifestType: tar.TypeLink, wantError: "invalid native archive manifest"},
+		{name: "symlink payload", payloadType: tar.TypeSymlink, wantError: "invalid native archive payload"},
+		{name: "hardlink payload", payloadType: tar.TypeLink, wantError: "invalid native archive payload"},
+		{name: "extra symlink", extraType: tar.TypeSymlink, wantError: "unexpected native archive entry"},
+		{name: "extra hardlink", extraType: tar.TypeLink, wantError: "unexpected native archive entry"},
+		{name: "trailing byte", trailing: []byte("x"), wantError: "unexpected native archive trailing data"},
+		{name: "trailing zero block", trailing: make([]byte, 512), wantError: "unexpected native archive trailing data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := archiveStore(t)
+			temporary := t.TempDir()
+			t.Setenv("TMPDIR", temporary)
+			identity := testIdentity()
+			manifest, err := json.Marshal(identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw bytes.Buffer
+			writer := tar.NewWriter(&raw)
+			writeEntry := func(name string, kind byte, data []byte) {
+				t.Helper()
+				if kind == 0 {
+					kind = tar.TypeReg
+				}
+				header := &tar.Header{Name: name, Mode: 0o600, Typeflag: kind, Size: int64(len(data))}
+				if kind == tar.TypeSymlink || kind == tar.TypeLink {
+					header.Size, header.Linkname = 0, "../../source-credentials"
+					data = nil
+				}
+				if headerErr := writer.WriteHeader(header); headerErr != nil {
+					t.Fatal(headerErr)
+				}
+				if _, writeErr := writer.Write(data); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			writeEntry("identity.json", tc.manifestType, manifest)
+			writeEntry("payload", tc.payloadType, []byte("native control payload"))
+			if tc.extraType != 0 {
+				writeEntry("credentials", tc.extraType, nil)
+			}
+			if closeErr := writer.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			raw.Write(tc.trailing)
+			encoded := bytes.Clone(raw.Bytes())
+			object, err := store.Put(t.Context(), "org/semantic-envelope", bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256(encoded)
+			if object.Size != int64(len(encoded)) || object.SHA256 != hex.EncodeToString(sum[:]) {
+				t.Fatal("stored checksum does not describe the complete test archive")
+			}
+			var copied bytes.Buffer
+			if copyErr := store.CopyVerified(t.Context(), object, &copied); copyErr != nil || !bytes.Equal(copied.Bytes(), encoded) {
+				t.Fatalf("storage integrity control: %v", copyErr)
+			}
+			file, err := Verified(t.Context(), store, object, identity)
+			if file != nil {
+				payload, readErr := io.ReadAll(file)
+				closeErr := file.Close()
+				removeErr := os.Remove(file.Name())
+				if tc.wantError != "" {
+					t.Fatal("unsafe archive exposed a payload file")
+				}
+				if readErr != nil || closeErr != nil || removeErr != nil || string(payload) != "native control payload" {
+					t.Fatalf("valid payload or cleanup failed: %q, %v, %v, %v", payload, readErr, closeErr, removeErr)
+				}
+			} else if tc.wantError == "" {
+				t.Fatalf("valid archive returned no payload: %v", err)
+			}
+			if tc.wantError == "" && err != nil || tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("verification error = %v, want %q", err, tc.wantError)
+			}
+			entries, err := os.ReadDir(temporary)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("verification left temporary files: %v, %v", entries, err)
 			}
 		})
 	}
