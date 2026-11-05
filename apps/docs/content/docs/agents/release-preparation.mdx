@@ -22,7 +22,7 @@ Or ask the agent in a chat, as in "release checkout-api to production". It start
 
 You need `deployment:create` on the project and `agent:use`. The agent has to be on for the workspace. The project needs a staging environment and a production one.
 
-Only one preparation can run per production environment at a time. If a plan is already waiting for a decision there, the request fails and names it. You can replace that plan by ticking **Replace that plan** in the dashboard or passing `--replace` to `loomctl release prepare`. The agent never replaces someone's open plan for you.
+Only one preparation can run per production environment at a time. If a plan is already waiting for a decision there, the request fails and names it. You can replace that plan by ticking **Replace that plan** in the dashboard or passing `--replace` to `loomctl release prepare`. The agent never replaces someone's open plan for you. A plan the agent left waiting after a review stopped is different: the next preparation for that environment replaces it, unless it can reuse it.
 
 ## What the report holds
 
@@ -47,7 +47,7 @@ Loomplane computes every gate from its own records. The agent can add a reason t
 |---|---|
 | 1. autonomous promotion | The project's autonomous promotion switch is off. The person who asked can't approve production releases in the project. The release was asked for in chat. The release reuses a plan someone else made. |
 | 2. promotes what staging runs | The plan isn't the one this preparation built, it changed since it was read, it isn't a promotion from staging to production, or staging no longer runs the commits the plan pins. |
-| 3. clean plan | The plan isn't ready, has problems or warnings, deletes or replaces anything in production that holds data, sets a default backup schedule, moves production back to older code, promotes an older manifest than the latest, or has a diff Loomplane couldn't read in full. |
+| 3. clean plan | The plan isn't ready, has problems or warnings, deletes or replaces anything in production that holds data, sets a default backup schedule, moves production back to older code, promotes an older manifest than the latest, brings a source production has never run, or has a diff Loomplane couldn't read in full. |
 | 4. staging soak | Staging hasn't run the plan's commits long enough, isn't healthy, can't be judged, or its own last release failed or went unverified. The minimum is the project's setting, or one hour if you haven't set one. |
 | 5. safety net | A changed service has nothing guarding it once live, a data-bearing resource is updated, production's last release is unverified, or a service's last canary failed and no later one promoted. |
 | 6. nothing open on staging | An agent report is still open on staging. |
@@ -61,6 +61,7 @@ Some releases never pass, whatever the gates say about the rest.
 - Services on Kubernetes, a server, Vercel, DigitalOcean, Firecracker or Cloudflare Workers. Loomplane has no canary or watch it can judge there.
 - Updates to anything that holds data, and a production environment moving back to older code.
 - Releases from GitLab or Bitbucket. Loomplane can only compare commits on GitHub for now, so it can't read those diffs.
+- A source's first production release, on any host. Production has never run it, so there's nothing to compare its changes to. Gate 3 names it: "worker has never run in production, so its changes can't be compared".
 - A first production release. Nothing in production has been watched yet, so the evidence isn't there.
 - A failed canary, until a later canary of that service promotes.
 - A plan that promotes an older manifest than the latest.
@@ -71,7 +72,7 @@ When [autonomous promotion](/docs/agents/workspace-settings#autonomy-per-project
 
 ## When a person decides
 
-A release that fails a gate, or that always asks, ends up in **Needs a person** on its report, with the failed gates listed. The approval request goes to the person who asked and the project's team, or the workspace admins if the project has no [responsible team](/docs/concepts/teams). Approve it as you would any plan, in the dashboard or with the line the report prints:
+A release that fails a gate, or that always asks, ends up in **Needs a person** on its report, with the failed gates listed. The approval request goes to the project's team, or the workspace admins if the project has no [responsible team](/docs/concepts/teams). If you asked for the release and you're not on that team, the request doesn't reach you, so keep the report open to follow it. Approve it as you would any plan, in the dashboard or with the line the report prints:
 
 ```bash
 loomctl approve plan_abc123 --revision rev_7
@@ -88,3 +89,5 @@ When you asked from the dashboard or `loomctl`, you can approve production relea
 When a release is promoted, goes stale, stops, is blocked or fails, Loomplane sends a notice to the person who asked and the project's team. If the project has no team, it goes to the workspace admins. Open it to land on the report.
 
 You can stop a preparation that's still going with **Cancel** or `loomctl release cancel`. The person who asked can do it while they hold `agent:use`, and so can anyone who can approve deployments. The plan, if there is one, waits for a person.
+
+Once every gate has held and the agent is promoting, you can't cancel. Its approval may already be landing, and a cancel then would leave a report saying cancelled while production ramps. Read the report again in a moment: it settles as promoted, or as stopped with the plan waiting for a person if the approval didn't go through.
