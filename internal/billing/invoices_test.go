@@ -88,7 +88,7 @@ func TestCloseMonth_BillsBasePlusOverageWithCredit(t *testing.T) {
 	s, _, fs := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 800, at("2026-10-10T10:00:00Z"))) // $8.00 of usage
 	clock = at("2026-11-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
@@ -111,7 +111,7 @@ func TestCloseMonth_UsageUnderCreditPaysBase(t *testing.T) {
 	s, _, fs := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 300, at("2026-10-10T10:00:00Z"))) // $3.00 of usage
 	clock = at("2026-11-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
@@ -135,7 +135,7 @@ func TestCloseMonth_LastHourOnTheInvoice(t *testing.T) {
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("big", 500, at("2026-10-10T10:00:00Z")))
 	clock = at("2026-11-01T00:02:30Z") // the last hour arrives
 	_ = s.Record(ctx, compute("platform:pl_1:1:2026-10-31T23:00:00Z:compute_vcpu_hours", 100, at("2026-10-31T23:00:00Z")))
@@ -342,7 +342,7 @@ func TestCloseMonth_OneWorkspacesStuckUsageHoldsOnlyIt(t *testing.T) {
 	clock := at("2026-10-05T00:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	for _, org := range []string{"org_1", "org_2"} {
 		_ = s.MarkCardReady(ctx, org)
 	}

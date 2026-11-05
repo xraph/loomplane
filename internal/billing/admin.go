@@ -177,6 +177,19 @@ type PlatformInvoice struct {
 	// refund recorded, Stripe's answer pending or not. 0 for an invoice
 	// that isn't paid or was never sent to Stripe.
 	RefundableCents int64
+	// PendingRefunds are the refunds Stripe never confirmed, oldest first.
+	PendingRefunds []PendingRefund
+}
+
+// PendingRefund is a refund recorded and never confirmed by Stripe. One
+// that is Resendable is sent again by a Refund with its key; one that
+// isn't is past Stripe's idempotency window, and someone checks Stripe and
+// settles it by hand.
+type PendingRefund struct {
+	RefundKey  string
+	Cents      int64
+	CreatedAt  time.Time
+	Resendable bool
 }
 
 // PlatformInvoices lists a workspace's invoices, newest first, with what
@@ -229,14 +242,48 @@ func (s *Service) PlatformInvoices(ctx context.Context, orgID string) ([]Platfor
 	if err != nil {
 		return nil, fmt.Errorf("billing: read which invoices of %s Stripe has: %w", orgID, err)
 	}
+	pending, err := s.pendingRefunds(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]PlatformInvoice, 0, len(invs))
 	for _, inv := range invs {
 		r := by[inv.ID]
-		pi := PlatformInvoice{InvoiceSummary: inv, RefundedCents: r.sent}
+		pi := PlatformInvoice{InvoiceSummary: inv, RefundedCents: r.sent, PendingRefunds: pending[inv.ID]}
 		if inv.Status == string(invoice.StatusPaid) && providers[inv.ID] {
 			pi.RefundableCents = max(0, inv.TotalCents-r.recorded)
 		}
 		out = append(out, pi)
+	}
+	return out, nil
+}
+
+// pendingRefunds is the workspace's unconfirmed refunds by invoice. The
+// Stripe invoice behind each is the one Loomplane recorded, as Refund
+// reads it.
+func (s *Service) pendingRefunds(ctx context.Context, orgID string) (map[string][]PendingRefund, error) {
+	rows, err := s.pg.Query(ctx, `SELECT invoice_id, refund_key, COALESCE(cents, 0), created_at FROM loomplane_billing_refunds
+		WHERE org_id = $1 AND sent_at IS NULL ORDER BY created_at, refund_key`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the unconfirmed refunds of %s: %w", orgID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	now := s.now()
+	out := map[string][]PendingRefund{}
+	for rows.Next() {
+		var (
+			invID string
+			p     PendingRefund
+		)
+		if err = rows.Scan(&invID, &p.RefundKey, &p.Cents, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("billing: read the unconfirmed refunds of %s: %w", orgID, err)
+		}
+		p.CreatedAt = p.CreatedAt.UTC()
+		p.Resendable = resendable(p.CreatedAt, now)
+		out[invID] = append(out[invID], p)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("billing: read the unconfirmed refunds of %s: %w", orgID, err)
 	}
 	return out, nil
 }

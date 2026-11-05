@@ -46,7 +46,7 @@ func TestWorkspaces_StatusAndThisMonth(t *testing.T) {
 		}
 	}
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	if err := s.Record(ctx, compute("a", 800, at("2026-10-04T10:00:00Z"))); err != nil { // $8.00 of usage
 		t.Fatal(err)
 	}
@@ -86,5 +86,22 @@ func TestWorkspaces_StatusAndThisMonth(t *testing.T) {
 		if a.Status != by[org].Status || a.AIEnabled != by[org].AIEnabled {
 			t.Errorf("%s: Account %s %v, Workspaces %+v", org, a.Status, a.AIEnabled, by[org])
 		}
+	}
+}
+
+// SetRate says what it replaced, read with the row locked, so the audit of
+// a change names the rate the change took over from.
+func TestSetRate_ReturnsTheRateItReplaced(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, _, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	for _, c := range []struct{ set, want int64 }{{12_345, 0}, {20_000, 12_345}, {0, 20_000}} {
+		prev, err := s.SetRate(ctx, FeatureAIUSD, c.set, "rex")
+		if err != nil || prev != c.want {
+			t.Fatalf("set %d: previous %d %v, want %d", c.set, prev, err, c.want)
+		}
+	}
+	if _, err := s.SetRate(ctx, FeatureAIUSD, MaxRateMicroUSD+1, "rex"); err == nil {
+		t.Fatal("a rate above $1,000 a unit was set")
 	}
 }

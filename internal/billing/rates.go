@@ -75,30 +75,38 @@ func (s *Service) Rates(ctx context.Context) (map[string]int64, error) {
 }
 
 // SetRate sets what one native unit of feature costs, in micro-USD, from
-// now on, from 0 to MaxRateMicroUSD. Usage already recorded keeps the
-// price it was recorded at: each usage row carries its own rate. by names
-// who changed it.
-func (s *Service) SetRate(ctx context.Context, feature string, microUSD int64, by string) error {
-	if err := s.ready(); err != nil {
-		return err
+// now on, from 0 to MaxRateMicroUSD, and returns the rate it replaced.
+// Usage already recorded keeps the price it was recorded at: each usage
+// row carries its own rate. by names who changed it. The old rate is read
+// in the same statement, with the row locked, so two changes at once each
+// return the rate the other one left.
+func (s *Service) SetRate(ctx context.Context, feature string, microUSD int64, by string) (previous int64, err error) {
+	if readyErr := s.ready(); readyErr != nil {
+		return 0, readyErr
 	}
 	if !slices.Contains(Features, feature) {
-		return fmt.Errorf("%w: %q", ErrUnknownFeature, feature)
+		return 0, fmt.Errorf("%w: %q", ErrUnknownFeature, feature)
 	}
 	if microUSD < 0 || microUSD > MaxRateMicroUSD {
-		return fmt.Errorf("billing: the rate for %s must be from 0 to %d micro-USD", feature, MaxRateMicroUSD)
+		return 0, fmt.Errorf("billing: the rate for %s must be from 0 to %d micro-USD", feature, MaxRateMicroUSD)
 	}
 	by = strings.TrimSpace(by)
 	if by == "" {
-		return errors.New("billing: a rate change needs to say who made it")
+		return 0, errors.New("billing: a rate change needs to say who made it")
 	}
-	if _, err := s.pg.Exec(ctx,
-		`INSERT INTO loomplane_billing_rates (feature, micro_usd_per_unit, updated_at, updated_by) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (feature) DO UPDATE SET micro_usd_per_unit=EXCLUDED.micro_usd_per_unit, updated_at=EXCLUDED.updated_at, updated_by=EXCLUDED.updated_by`,
-		feature, microUSD, s.now().UTC(), by); err != nil {
-		return fmt.Errorf("billing: set the rate for %s: %w", feature, err)
+	err = s.pg.QueryRow(ctx, `UPDATE loomplane_billing_rates r
+		SET micro_usd_per_unit = $2, updated_at = $3, updated_by = $4
+		FROM (SELECT feature, micro_usd_per_unit FROM loomplane_billing_rates WHERE feature = $1 FOR UPDATE) old
+		WHERE r.feature = old.feature
+		RETURNING old.micro_usd_per_unit`,
+		feature, microUSD, s.now().UTC(), by).Scan(&previous)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("billing: feature %s has no rate; the billing migration seeds one for every feature", feature)
 	}
-	return nil
+	if err != nil {
+		return 0, fmt.Errorf("billing: set the rate for %s: %w", feature, err)
+	}
+	return previous, nil
 }
 
 // rate is one feature's current rate.

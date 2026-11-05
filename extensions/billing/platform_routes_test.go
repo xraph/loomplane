@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 
@@ -64,12 +65,13 @@ func (f *fakePlatform) Rates(context.Context) (map[string]int64, error) {
 	return out, nil
 }
 
-func (f *fakePlatform) SetRate(_ context.Context, feature string, micro int64, by string) error {
+func (f *fakePlatform) SetRate(_ context.Context, feature string, micro int64, by string) (int64, error) {
 	if err := f.touch(); err != nil {
-		return err
+		return 0, err
 	}
+	prev := f.rates[feature]
 	f.rates[feature], f.rateBy = micro, by
-	return nil
+	return prev, nil
 }
 
 func (f *fakePlatform) Workspaces(context.Context) ([]billing.WorkspaceBilling, error) {
@@ -79,7 +81,9 @@ func (f *fakePlatform) Workspaces(context.Context) ([]billing.WorkspaceBilling, 
 
 func (f *fakePlatform) PlatformInvoices(_ context.Context, org string) ([]billing.PlatformInvoice, error) {
 	return []billing.PlatformInvoice{{InvoiceSummary: billing.InvoiceSummary{ID: "inv_" + org, TotalCents: 500, Status: "paid", Plan: "cloud"},
-		RefundedCents: 300, RefundableCents: 200}}, f.touch()
+		RefundedCents: 300, RefundableCents: 100, PendingRefunds: []billing.PendingRefund{
+			{RefundKey: "rk_pending", Cents: 100, CreatedAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), Resendable: true},
+		}}}, f.touch()
 }
 
 func (f *fakePlatform) GrantCredit(_ context.Context, org string, cents int64, note, by string) error {
@@ -90,12 +94,17 @@ func (f *fakePlatform) GrantCredit(_ context.Context, org string, cents int64, n
 	return nil
 }
 
-func (f *fakePlatform) Refund(_ context.Context, inv string, cents *int64, key, by string) (bool, error) {
+func (f *fakePlatform) Refund(_ context.Context, inv string, cents *int64, key, by string) (billing.RefundResult, error) {
 	if err := f.touch(); err != nil {
-		return false, err
+		return billing.RefundResult{}, err
+	}
+	for _, r := range f.refunds {
+		if r.key == key {
+			return billing.RefundResult{Full: r.cents == nil, Replay: true}, nil
+		}
 	}
 	f.refunds = append(f.refunds, refundCall{invoice: inv, key: key, by: by, cents: cents})
-	return cents == nil, nil
+	return billing.RefundResult{Full: cents == nil}, nil
 }
 
 type auditEvent struct{ action, user, resource, id, outcome string }
@@ -301,8 +310,16 @@ func TestWorkspacesAndInvoices_Shape(t *testing.T) {
 	res = rg.do(t, http.MethodGet, "/api/v1/platform/billing/workspaces/org_9/invoices", "", platformOwner)
 	var invs []map[string]any
 	_ = json.Unmarshal(res.Body.Bytes(), &invs)
-	if len(invs) != 1 || invs[0]["id"] != "inv_org_9" || invs[0]["refunded_cents"] != float64(300) || invs[0]["refundable_cents"] != float64(200) {
+	if len(invs) != 1 || invs[0]["id"] != "inv_org_9" || invs[0]["refunded_cents"] != float64(300) || invs[0]["refundable_cents"] != float64(100) {
 		t.Fatalf("%d %s", res.Code, res.Body)
+	}
+	pending, _ := invs[0]["pending_refunds"].([]any)
+	if len(pending) != 1 {
+		t.Fatalf("pending %s", res.Body)
+	}
+	p, _ := pending[0].(map[string]any)
+	if p["refund_key"] != "rk_pending" || p["cents"] != float64(100) || p["resendable"] != true || p["created_at"] != "2026-11-03T00:00:00Z" {
+		t.Fatalf("pending refund %v", p)
 	}
 }
 
@@ -375,15 +392,32 @@ func TestRefund_Route(t *testing.T) {
 		rg.audit.metas[0]["cents"] != "300" || rg.audit.metas[1]["cents"] != "rest" {
 		t.Fatalf("audit %+v %v", rg.audit.events, rg.audit.metas)
 	}
+	// The same key again is a replay: no new refund, audited as one.
+	res = rg.do(t, http.MethodPost, "/api/v1/platform/billing/invoices/inv_1/refund", `{"usd":null,"refund_key":"k2"}`, platformOwner)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"replay":true`) || len(rg.svc.refunds) != 2 {
+		t.Fatalf("replay: %d %s", res.Code, res.Body)
+	}
+	if last := rg.audit.events[len(rg.audit.events)-1]; last.outcome != outcomeNoChange || rg.audit.metas[len(rg.audit.metas)-1]["replay"] != "true" {
+		t.Fatalf("a replay audited as %+v %v", last, rg.audit.metas[len(rg.audit.metas)-1])
+	}
 	for err, want := range map[error]int{
-		fmt.Errorf("x: %w", billing.ErrRefundTooLarge):  http.StatusUnprocessableEntity,
-		fmt.Errorf("x: %w", billing.ErrNotRefundable):   http.StatusConflict,
-		fmt.Errorf("x: %w", billing.ErrRefundKeyReused): http.StatusConflict,
-		billing.ErrInvoiceNotFound:                      http.StatusNotFound,
+		fmt.Errorf("x: %w", billing.ErrRefundUnconfirmed): http.StatusServiceUnavailable,
+		fmt.Errorf("x: %w", billing.ErrRefundStale):       http.StatusConflict,
+		fmt.Errorf("x: %w", billing.ErrRefundTooLarge):    http.StatusUnprocessableEntity,
+		fmt.Errorf("x: %w", billing.ErrNotRefundable):     http.StatusConflict,
+		fmt.Errorf("x: %w", billing.ErrRefundKeyReused):   http.StatusConflict,
+		billing.ErrInvoiceNotFound:                        http.StatusNotFound,
 	} {
 		rg.svc.err = err
 		if got := rg.do(t, http.MethodPost, "/api/v1/platform/billing/invoices/inv_1/refund", `{"usd":"3.00","refund_key":"k3"}`, platformOwner).Code; got != want {
 			t.Errorf("%v: %d, want %d", err, got, want)
+		}
+		wantOutcome := outcomeFailure
+		if errors.Is(err, billing.ErrRefundUnconfirmed) {
+			wantOutcome = outcomePending
+		}
+		if last := rg.audit.events[len(rg.audit.events)-1]; last.outcome != wantOutcome {
+			t.Errorf("%v audited as %s, want %s", err, last.outcome, wantOutcome)
 		}
 	}
 }

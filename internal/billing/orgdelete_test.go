@@ -54,7 +54,7 @@ func TestOrgDelete_InvoicesBeforeCancel(t *testing.T) {
 	ctx := t.Context()
 	org := authsomeid.NewOrgID().String() // "org_1" isn't an authsome workspace id
 	_ = s.MarkCardReady(ctx, org)
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, usageOf(org, "a", 900, at("2026-11-14T10:00:00Z")))
 	hook := newOrgDeleteHook(s) // what NewOrgDeleteHook wraps
 	if err := hook.OnAfterOrgDelete(ctx, mustOrgID(t, org)); err != nil {
@@ -100,7 +100,7 @@ func TestOrgDelete_RightAfterTheMonthEnds(t *testing.T) {
 	ctx := t.Context()
 	org := authsomeid.NewOrgID().String()
 	_ = s.MarkCardReady(ctx, org)
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, usageOf(org, "october", 800, at("2026-10-10T10:00:00Z")))
 	clock = at("2026-11-01T00:10:00Z")
 	_ = s.Record(ctx, usageOf(org, "november", 700, at("2026-11-01T00:05:00Z")))

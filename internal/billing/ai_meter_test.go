@@ -74,7 +74,7 @@ func TestPriceAI_OnlyClaimedRequestsBill(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_200_000, "rex") // cost plus 20%
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_200_000, "rex") // cost plus 20%
 	tenant, platformReq, ownKeyReq := nexusTenantID(t, s), nexusRequestID(t), nexusRequestID(t)
 	_ = s.Record(ctx, metering.Event{ID: "ai-request:" + platformReq, OrgID: "org_1", Feature: agentsettings.FeatureAIPlatformRequests,
 		ResourceRef: tenant + ":" + platformReq, Quantity: 1, OccurredAt: clock, PlatformOwned: true})
@@ -96,7 +96,7 @@ func TestPriceAI_Idempotent(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, req := nexusTenantID(t, s), nexusRequestID(t)
 	claimAI(t, s, tenant, req, clock)
 	recID := nexusRecord(t, s, tenant, req, "0.25", clock.Add(-2*time.Second))
@@ -144,7 +144,7 @@ func TestPriceAI_ClaimWithNoRecordClosesAfterADay(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, stale, fresh := nexusTenantID(t, s), nexusRequestID(t), nexusRequestID(t)
 	claimAI(t, s, tenant, stale, clock.Add(-25*time.Hour))
 	claimAI(t, s, tenant, fresh, clock.Add(-time.Hour))
@@ -204,7 +204,7 @@ func TestPriceAI_UnpricedRecordAndOtherTenants(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, other, req := nexusTenantID(t, s), nexusTenantID(t, s), nexusRequestID(t)
 	claimAI(t, s, tenant, req, clock)
 	rid, _ := nexusid.ParseRequestID(req)
@@ -243,7 +243,7 @@ func TestPriceAI_ReadsEveryPage(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, req := nexusTenantID(t, s), nexusRequestID(t)
 	claimAI(t, s, tenant, req, clock.Add(-10*time.Minute))
 	// Pages run newest id first, so the claimed record, written first, is
@@ -269,7 +269,7 @@ func TestCloseMonth_PricesAIBeforeThePush(t *testing.T) {
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	if _, err := s.SetAI(ctx, "org_1", true); err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestCloseMonth_HoldsAWorkspaceUntilItsAIIsPriced(t *testing.T) {
 	clock := at("2026-10-05T00:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenants := map[string]string{}
 	for _, org := range []string{"org_1", "org_2"} {
 		_ = s.MarkCardReady(ctx, org)
@@ -369,7 +369,7 @@ func TestPriceAI_SecondRecordForARequestBillsOnce(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, req := nexusTenantID(t, s), nexusRequestID(t)
 	claimAI(t, s, tenant, req, clock)
 	nexusRecord(t, s, tenant, req, "0.40", clock.Add(-time.Second))
@@ -397,7 +397,7 @@ func TestPriceAI_ARecordThatFailsToBillStaysOpen(t *testing.T) {
 	clock := at("2026-11-10T12:00:00Z")
 	s, pg, _ := billingWorld(t, &clock)
 	ctx := t.Context()
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	tenant, req, stale := nexusTenantID(t, s), nexusRequestID(t), nexusRequestID(t)
 	claimAI(t, s, tenant, req, clock.Add(-25*time.Hour))
 	claimAI(t, s, tenant, stale, clock.Add(-25*time.Hour))

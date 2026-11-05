@@ -16,7 +16,7 @@ import (
 func TestPushUsage_CarriesFractionalCents(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex") // 0.4 cents per GB
+	_, _ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex") // 0.4 cents per GB
 	for i, h := range []string{"T01", "T02", "T03"} {
 		_ = s.Record(ctx, metering.Event{ID: fmt.Sprintf("eg%d", i), OrgID: "org_1", Feature: platformcloud.FeatureEgressGB,
 			Quantity: 1, OccurredAt: at("2026-11-09" + h + ":00:00Z"), PlatformOwned: true, ResourceRef: "pl_1"})
@@ -38,7 +38,7 @@ func TestPushUsage_LastHourBillsInItsMonth(t *testing.T) {
 	// Platform Cloud emits October's last hour at about 00:02 on 1 November.
 	s, _ := newTestService(t, at("2026-11-01T00:02:30Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("platform:pl_1:1:2026-10-31T23:00:00Z:compute_vcpu_hours", 3, at("2026-10-31T23:00:00Z")))
 	if _, err := s.PushUsage(ctx); err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestPushUsage_LastHourBillsInItsMonth(t *testing.T) {
 func TestPushUsage_MonthsNeverShareABatch(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-01T00:05:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("oct", 1, at("2026-10-31T23:00:00Z")))
 	_ = s.Record(ctx, compute("nov", 1, at("2026-11-01T00:00:00Z")))
 	_, _ = s.PushUsage(ctx)
@@ -68,7 +68,7 @@ func TestPushUsage_MonthsNeverShareABatch(t *testing.T) {
 func TestPushUsage_RetryAfterCrashCountsOnce(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 5, at("2026-11-09T10:00:00Z")))
 	if _, err := s.PushUsage(ctx); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestPushUsage_RetryAfterCrashCountsOnce(t *testing.T) {
 func TestPushUsage_MonthsKeepTheirOwnPriceAndCarry(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-01T00:05:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 6_000, "rex") // 0.6 cents per GB
+	_, _ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 6_000, "rex") // 0.6 cents per GB
 	_ = s.Record(ctx, metering.Event{ID: "oct", OrgID: "org_1", Feature: platformcloud.FeatureEgressGB, Quantity: 1,
 		OccurredAt: at("2026-10-31T23:00:00Z"), PlatformOwned: true, ResourceRef: "pl_1"})
 	_ = s.Record(ctx, metering.Event{ID: "nov", OrgID: "org_1", Feature: platformcloud.FeatureEgressGB, Quantity: 1,
@@ -114,8 +114,8 @@ func TestPushUsage_MonthsKeepTheirOwnPriceAndCarry(t *testing.T) {
 func TestPushUsage_CarryAddsUpAcrossPushes(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex") // 0.4 cents per GB
-	want := []int64{0, 0, 1, 1, 2}                                  // 0.4, 0.8, 1.2, 1.6, 2.0
+	_, _ = s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex") // 0.4 cents per GB
+	want := []int64{0, 0, 1, 1, 2}                                     // 0.4, 0.8, 1.2, 1.6, 2.0
 	for i, w := range want {
 		_ = s.Record(ctx, metering.Event{ID: fmt.Sprintf("eg%d", i), OrgID: "org_1", Feature: platformcloud.FeatureEgressGB, Quantity: 1,
 			OccurredAt: at(fmt.Sprintf("2026-11-09T%02d:00:00Z", i)), PlatformOwned: true, ResourceRef: "pl_1"})
@@ -136,7 +136,7 @@ func TestPushUsage_CarryAddsUpAcrossPushes(t *testing.T) {
 func TestPushUsage_ReplayedEventAfterAPushCountsOnce(t *testing.T) {
 	s, _ := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	e := compute("platform:pl_1:1:2026-11-09T10:00:00Z:compute_vcpu_hours", 4, at("2026-11-09T10:00:00Z"))
 	for range 3 {
 		if err := s.Record(ctx, e); err != nil {
@@ -173,7 +173,7 @@ func TestPushUsage_AZeroCentPushIsMarkedSentAndSendsNothing(t *testing.T) {
 func TestPushUsage_LedgerEventsCarryTheirMonthAndKey(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 2, at("2026-11-09T10:00:00Z")))
 	_ = s.Record(ctx, compute("b", 2, at("2026-11-09T14:00:00Z")))
 	if _, err := s.PushUsage(ctx); err != nil {
@@ -197,7 +197,7 @@ func TestPushUsage_LedgerEventsCarryTheirMonthAndKey(t *testing.T) {
 func TestPushUsage_LateUsageIsStillSent(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-02T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices (invoice_id, org_id, subscription_id, plan, period_start)
 		VALUES ('inv_1', 'org_1', 'sub_1', 'cloud', '2026-10-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestPushUsage_LateUsageIsStillSent(t *testing.T) {
 func TestPushUsage_ReturnsTheWorkspacesItTouched(t *testing.T) {
 	s, _ := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	for i, org := range []string{"org_b", "org_a", "org_b"} {
 		e := compute(fmt.Sprintf("e%d", i), 1, at("2026-11-09T10:00:00Z"))
 		e.OrgID = org
@@ -235,7 +235,7 @@ func TestPushUsage_ReturnsTheWorkspacesItTouched(t *testing.T) {
 func TestPushUsage_WaitsWhileAnotherReplicaPushes(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 1, at("2026-11-09T10:00:00Z")))
 	tx, err := pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -270,7 +270,7 @@ func metermatch(feature string) meter.QueryOpts { return meter.QueryOpts{Feature
 func TestPushUsage_OneBadGroupDoesntBlockAnotherWorkspace(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
 	// org_a sorts first, so its group is tried before org_b's.
 	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_usage (id, org_id, feature, quantity, rate_micro_usd, micro_usd, occurred_at, resource_ref)
 		VALUES ('bad', 'org_a', 'compute_vcpu_hours', 1, 10000, -1, '2026-11-09T10:00:00Z', 'pl_a')`); err != nil {

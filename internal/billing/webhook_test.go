@@ -599,7 +599,7 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 		t.Fatalf("usage %+v", sum.Usage)
 	}
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, "compute_vcpu_hours", 10_000, "rex")
+	_, _ = s.SetRate(ctx, "compute_vcpu_hours", 10_000, "rex")
 	_ = s.Record(ctx, compute("a", 800, at("2026-11-01T10:00:00Z"))) // $8.00
 	_ = s.Record(ctx, compute("b", 900, at("2026-10-31T23:00:00Z"))) // October: not this month
 	fp.listErr = nil

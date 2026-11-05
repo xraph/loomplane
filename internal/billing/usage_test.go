@@ -33,7 +33,7 @@ func compute(id string, q float64, when time.Time) metering.Event {
 func TestRecord_DuplicateIDCountsOnce(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 20_000, "rex") // 2 cents per vCPU-hour
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 20_000, "rex") // 2 cents per vCPU-hour
 	e := compute("platform:pl_1:1:2026-11-09T10:00:00Z:compute_vcpu_hours", 2, at("2026-11-09T10:00:00Z"))
 	for range 3 {
 		if err := s.Record(ctx, e); err != nil {
@@ -75,10 +75,10 @@ func TestRecord_UnknownFeatureFails(t *testing.T) {
 func TestRecord_RateChangeNotRetroactive(t *testing.T) {
 	s, _ := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex") // 1 cent
-	_ = s.Record(ctx, compute("a", 10, at("2026-11-09T10:00:00Z")))          // 10 cents
-	_ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 30_000, "rex") // 3 cents
-	_ = s.Record(ctx, compute("b", 10, at("2026-11-09T11:00:00Z")))          // 30 cents
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex") // 1 cent
+	_ = s.Record(ctx, compute("a", 10, at("2026-11-09T10:00:00Z")))             // 10 cents
+	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 30_000, "rex") // 3 cents
+	_ = s.Record(ctx, compute("b", 10, at("2026-11-09T11:00:00Z")))             // 30 cents
 	if _, err := s.PushUsage(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +104,13 @@ func ledgerCents(t *testing.T, s *Service, org, feature string, from, to time.Ti
 func TestRecord_RateChangeKeepsTheRecordedPrice(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	if err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Record(ctx, compute("a", 10, at("2026-11-09T10:00:00Z"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 30_000, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 30_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
 	// A replay of the same event after the change keeps the first price.
@@ -129,13 +129,13 @@ func TestRecord_RateChangeKeepsTheRecordedPrice(t *testing.T) {
 func TestRecord_RoundsToTheNearestMicroUSD(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	if err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureEgressGB, 4_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetRate(ctx, platformcloud.FeatureBuildMinutes, 3, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureBuildMinutes, 3, "rex"); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -168,7 +168,7 @@ func TestRecord_RoundsToTheNearestMicroUSD(t *testing.T) {
 func TestRecord_RefusesWhatCantBeUsage(t *testing.T) {
 	s, pg := newTestService(t, at("2026-11-10T00:00:00Z"))
 	ctx := t.Context()
-	if err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
+	if _, err := s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
 	base := compute("bad", 1, at("2026-11-09T10:00:00Z"))
@@ -244,7 +244,7 @@ func TestRates_SeededAtZeroAndSetByRex(t *testing.T) {
 			t.Fatalf("%s rate %d (%v), want 0", f, r, ok)
 		}
 	}
-	if err = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex"); err != nil {
+	if _, err = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex"); err != nil {
 		t.Fatal(err)
 	}
 	var by string
@@ -252,10 +252,14 @@ func TestRates_SeededAtZeroAndSetByRex(t *testing.T) {
 	if rates, _ = s.Rates(ctx); rates[FeatureAIUSD] != 1_000_000 || by != "rex" {
 		t.Fatalf("after SetRate: %v by %q", rates, by)
 	}
+	setErr := func(feature string, micro int64, by string) error {
+		_, err := s.SetRate(ctx, feature, micro, by)
+		return err
+	}
 	for name, err := range map[string]error{
-		"unknown feature": s.SetRate(ctx, "gpu_hours", 1, "rex"),
-		"negative":        s.SetRate(ctx, FeatureAIUSD, -1, "rex"),
-		"nobody":          s.SetRate(ctx, FeatureAIUSD, 1, " "),
+		"unknown feature": setErr("gpu_hours", 1, "rex"),
+		"negative":        setErr(FeatureAIUSD, -1, "rex"),
+		"nobody":          setErr(FeatureAIUSD, 1, " "),
 	} {
 		if err == nil {
 			t.Errorf("%s: accepted", name)

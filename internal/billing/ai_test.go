@@ -146,7 +146,7 @@ func TestSetAI_OffOnSameMonthCreditOnce(t *testing.T) {
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex") // at cost
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex") // at cost
 	for _, on := range []bool{true, false, true, false, true} {
 		if _, err := s.SetAI(ctx, "org_1", on); err != nil {
 			t.Fatal(err)
@@ -184,7 +184,7 @@ func TestSetAI_OffOnAcrossAMonthClose(t *testing.T) {
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	_ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
+	_, _ = s.SetRate(ctx, FeatureAIUSD, 1_000_000, "rex")
 	_, _ = s.SetAI(ctx, "org_1", true)
 	aiUsage(t, s, "ai:oct", 12, at("2026-10-15T00:00:00Z"))
 	clock = at("2026-10-20T00:00:00Z")

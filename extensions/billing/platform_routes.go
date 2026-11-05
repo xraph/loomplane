@@ -32,11 +32,11 @@ const platformBase = "/api/v1/platform/billing"
 type platformService interface {
 	Overview(ctx context.Context) (billing.Overview, error)
 	Rates(ctx context.Context) (map[string]int64, error)
-	SetRate(ctx context.Context, feature string, microUSD int64, by string) error
+	SetRate(ctx context.Context, feature string, microUSD int64, by string) (previous int64, err error)
 	Workspaces(ctx context.Context) ([]billing.WorkspaceBilling, error)
 	PlatformInvoices(ctx context.Context, orgID string) ([]billing.PlatformInvoice, error)
 	GrantCredit(ctx context.Context, orgID string, cents int64, note, by string) error
-	Refund(ctx context.Context, invoiceID string, cents *int64, refundKey, by string) (bool, error)
+	Refund(ctx context.Context, invoiceID string, cents *int64, refundKey, by string) (billing.RefundResult, error)
 }
 
 var _ platformService = (*billing.Service)(nil)
@@ -47,8 +47,10 @@ type auditor interface {
 }
 
 const (
-	outcomeSuccess = "success"
-	outcomeFailure = "failure"
+	outcomeSuccess  = "success"
+	outcomeFailure  = "failure"
+	outcomePending  = "pending"   // recorded, Stripe's answer unknown
+	outcomeNoChange = "no_change" // a replay: nothing was sent
 )
 
 // chronicleAuditor records the platform owner's billing changes in
@@ -169,6 +171,8 @@ const (
 	msgRefundTooBig  = "That's more than is left to refund on this invoice."
 	msgKeyReused     = "That refund key was used for a different refund. Reload the page and try again."
 	msgNoInvoice     = "There's no such invoice."
+	msgUnconfirmed   = "Stripe didn't confirm this refund. Retry this same refund from the invoice: it goes to Stripe under the same key, so it can't be paid twice."
+	msgStale         = "This refund was recorded more than 23 hours ago and Stripe never confirmed it. Check the invoice in Stripe before refunding again."
 )
 
 // platformFail maps a billing error to its response. Billing's, Stripe's
@@ -187,6 +191,12 @@ func platformFail(ctx context.Context, err error) error {
 		return forge.NewHTTPError(http.StatusConflict, msgKeyReused)
 	case errors.Is(err, billing.ErrInvoiceNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, msgNoInvoice)
+	case errors.Is(err, billing.ErrRefundUnconfirmed):
+		slog.ErrorContext(ctx, "platform billing: a refund waits for Stripe's answer", "error", err)
+		return forge.NewHTTPError(http.StatusServiceUnavailable, msgUnconfirmed)
+	case errors.Is(err, billing.ErrRefundStale):
+		slog.ErrorContext(ctx, "platform billing: an unconfirmed refund needs checking in Stripe", "error", err)
+		return forge.NewHTTPError(http.StatusConflict, msgStale)
 	case errors.Is(err, context.DeadlineExceeded):
 		slog.WarnContext(ctx, "platform billing: a request ran out of time", "error", err)
 		return forge.NewHTTPError(http.StatusServiceUnavailable, msgBusy)
@@ -284,16 +294,12 @@ func (r *platformRoutes) setRate(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgRate)
 	}
 	ctx := c.Request().Context()
-	before, err := r.svc.Rates(ctx)
-	if err != nil {
-		return platformFail(ctx, err)
+	previous, err := r.svc.SetRate(ctx, feature, micro, ownerID(c))
+	meta := map[string]string{"feature": feature, "new_micro_usd": strconv.FormatInt(micro, 10)}
+	if err == nil {
+		meta["old_micro_usd"] = strconv.FormatInt(previous, 10)
 	}
-	err = r.svc.SetRate(ctx, feature, micro, ownerID(c))
-	r.audit.Record(ctx, "billing.rate.set", ownerID(c), "billing_rate", feature, outcome(err), map[string]string{
-		"feature":       feature,
-		"old_micro_usd": strconv.FormatInt(before[feature], 10),
-		"new_micro_usd": strconv.FormatInt(micro, 10),
-	})
+	r.audit.Record(ctx, "billing.rate.set", ownerID(c), "billing_rate", feature, outcome(err), meta)
 	if err != nil {
 		return platformFail(ctx, err)
 	}
@@ -332,6 +338,17 @@ type platformInvoiceView struct {
 	Plan            string    `json:"plan"`
 	RefundedCents   int64     `json:"refunded_cents"`
 	RefundableCents int64     `json:"refundable_cents"`
+	// PendingRefunds are refunds Stripe never confirmed. The dashboard
+	// retries a resendable one under its refund_key; one that isn't is
+	// settled in Stripe by hand.
+	PendingRefunds []pendingRefundView `json:"pending_refunds"`
+}
+
+type pendingRefundView struct {
+	RefundKey  string    `json:"refund_key"`
+	Cents      int64     `json:"cents"`
+	CreatedAt  time.Time `json:"created_at"`
+	Resendable bool      `json:"resendable"`
 }
 
 func (r *platformRoutes) invoices(c forge.Context) error {
@@ -342,9 +359,15 @@ func (r *platformRoutes) invoices(c forge.Context) error {
 	}
 	out := make([]platformInvoiceView, 0, len(invs))
 	for _, inv := range invs {
-		out = append(out, platformInvoiceView{ID: inv.ID, PeriodStart: inv.PeriodStart, PeriodEnd: inv.PeriodEnd,
+		v := platformInvoiceView{ID: inv.ID, PeriodStart: inv.PeriodStart, PeriodEnd: inv.PeriodEnd,
 			TotalCents: inv.TotalCents, Status: inv.Status, Plan: inv.Plan,
-			RefundedCents: inv.RefundedCents, RefundableCents: inv.RefundableCents})
+			RefundedCents: inv.RefundedCents, RefundableCents: inv.RefundableCents,
+			PendingRefunds: make([]pendingRefundView, 0, len(inv.PendingRefunds))}
+		for _, p := range inv.PendingRefunds {
+			v.PendingRefunds = append(v.PendingRefunds, pendingRefundView{RefundKey: p.RefundKey, Cents: p.Cents,
+				CreatedAt: p.CreatedAt, Resendable: p.Resendable})
+		}
+		out = append(out, v)
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -395,6 +418,8 @@ type refundBody struct {
 
 type refundView struct {
 	Full bool `json:"full"`
+	// Replay says the refund was made by an earlier call with the key.
+	Replay bool `json:"replay"`
 }
 
 // refund refunds a paid invoice through Stripe, once per refund key. usd
@@ -411,19 +436,28 @@ func (r *platformRoutes) refund(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgRefund)
 	}
 	ctx := c.Request().Context()
-	full, err := r.svc.Refund(ctx, invoiceID, cents, body.RefundKey, ownerID(c))
+	res, err := r.svc.Refund(ctx, invoiceID, cents, body.RefundKey, ownerID(c))
 	amount := "rest"
 	if cents != nil {
 		amount = strconv.FormatInt(*cents, 10)
 	}
-	r.audit.Record(ctx, "billing.invoice.refund", ownerID(c), "invoice", invoiceID, outcome(err), map[string]string{
-		"cents": amount,
-		"full":  strconv.FormatBool(full),
+	result := outcome(err)
+	switch {
+	case errors.Is(err, billing.ErrRefundUnconfirmed):
+		result = outcomePending
+	case err == nil && res.Replay:
+		result = outcomeNoChange
+	}
+	r.audit.Record(ctx, "billing.invoice.refund", ownerID(c), "invoice", invoiceID, result, map[string]string{
+		"cents":  amount,
+		"full":   strconv.FormatBool(res.Full),
+		"replay": strconv.FormatBool(res.Replay),
+		"resent": strconv.FormatBool(res.Resent),
 	})
 	if err != nil {
 		return platformFail(ctx, err)
 	}
-	return c.JSON(http.StatusOK, refundView{Full: full})
+	return c.JSON(http.StatusOK, refundView{Full: res.Full, Replay: res.Replay})
 }
 
 // parseRefund reads a refund's usd: JSON null is the rest of the invoice;
