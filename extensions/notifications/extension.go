@@ -4,6 +4,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/xraph/chronicle"
@@ -43,7 +44,11 @@ func (e *DeliveryExtension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	return forge.ProvideValue(app.Container(), e.svc)
+	return errors.Join(
+		forge.ProvideValue(app.Container(), e.svc),
+		// For readers such as Hallproof's witness.
+		forge.ProvideValue(app.Container(), e.svc.Relay()),
+	)
 }
 func (e *DeliveryExtension) Start(ctx context.Context) error {
 	if err := e.svc.Prepare(ctx); err != nil {

@@ -52,6 +52,8 @@ import (
 	groveext "github.com/xraph/grove/extension"
 	"github.com/xraph/keysmith"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	vaultstore "github.com/xraph/vault/store"
+	vaultpg "github.com/xraph/vault/store/postgres"
 	"github.com/xraph/warden"
 	wardenpg "github.com/xraph/warden/store/postgres"
 
@@ -200,7 +202,10 @@ func (e *Extension) register(fapp forge.App) error {
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
 	e.auditStore = chronpg.New(db)
-	if e.checkpoints, err = e.newAuditCheckpoints(db); err != nil {
+	// Vault's store over Loomplane's database, for the checkpoint key and
+	// for whoever reads Vault from DI.
+	vault := vaultpg.New(db)
+	if e.checkpoints, err = e.newAuditCheckpoints(vault); err != nil {
 		return err
 	}
 	// Digests stay on Chronicle's plain chronicle/v4: Hallproof verifies
@@ -253,6 +258,11 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, PlatformOwner(e.platformOwner)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
+		// The engines and the Vault store, for readers such as Hallproof's
+		// witness. Providing a value starts nothing.
+		forge.ProvideValue(c, e.warden),
+		forge.ProvideValue(c, e.smith),
+		forge.ProvideValue[vaultstore.Store](c, vault),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
 	}

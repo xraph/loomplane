@@ -86,6 +86,10 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
 
+// Relay is the webhook engine, over the store that keeps each endpoint's
+// signing secret encrypted at rest.
+func (s *Service) Relay() *relay.Relay { return s.relay }
+
 // Prepare is called after central migrations and before Authsome starts. It
 // configures exactly one application-owned mail provider (SMTP, Resend or a
 // mail directory) and seeds templates.

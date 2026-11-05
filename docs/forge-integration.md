@@ -57,6 +57,8 @@ Loomplane is one Forge app (`internal/platform`). Library code runs inside Forge
 | `loomplane-infrastructure` | `extensions/infrastructure` | identity, ctrlplane | Ctrl Plane's identity bridge, infrastructure status |
 | `loomplane-web` | `extensions/web` | | Serving the built dashboard |
 
+Most engines Loomplane builds itself are in DI by their own type, so another extension (Hallproof's witness, say) can find them with `forge.InjectType`. Identity provides `*chronicle.Chronicle`, `*authsome.Engine`, `*warden.Engine`, `*keysmith.Engine`, and Vault's `store.Store` over the Postgres store. Notification delivery provides `*relay.Relay`. Relay's store decrypts each endpoint's signing secret on read, so a reader of the engine has to leave that field alone.
+
 The app runs with Forge's central migrations (`forge.WithCentralMigrations`): Forge registers every extension, runs one migration pass over every library's schema, then starts every extension. Every library's own self-migration is turned off. [architecture.md](architecture.md) walks through the lifecycle.
 
 ---

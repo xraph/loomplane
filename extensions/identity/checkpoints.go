@@ -8,10 +8,8 @@ import (
 
 	"github.com/xraph/chronicle/checkpoint"
 	"github.com/xraph/forge"
-	"github.com/xraph/grove"
 	"github.com/xraph/vault/crypto"
 	"github.com/xraph/vault/secret"
-	vaultpg "github.com/xraph/vault/store/postgres"
 
 	"github.com/xraph/loomplane/internal/checkpoints"
 	"github.com/xraph/loomplane/internal/security"
@@ -31,7 +29,7 @@ type auditCheckpoints struct {
 
 // newAuditCheckpoints builds the Vault key provider and the signer. It
 // reads nothing: the key is created or loaded once Start runs.
-func (e *Extension) newAuditCheckpoints(db *grove.DB) (*auditCheckpoints, error) {
+func (e *Extension) newAuditCheckpoints(store secret.Store) (*auditCheckpoints, error) {
 	key, err := security.DeriveKey(e.cfg.SecretKey, checkpoints.KeyLabel)
 	if err != nil {
 		return nil, err
@@ -40,7 +38,7 @@ func (e *Extension) newAuditCheckpoints(db *grove.DB) (*auditCheckpoints, error)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint key encryptor: %w", err)
 	}
-	k := checkpoints.NewKeys(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(checkpoints.VaultAppID)))
+	k := checkpoints.NewKeys(secret.NewService(store, enc, secret.WithAppID(checkpoints.VaultAppID)))
 	return &auditCheckpoints{keys: k, signer: checkpoint.NewEd25519Signer(k)}, nil
 }
 
