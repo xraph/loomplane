@@ -94,7 +94,7 @@ loomplane backup inspect loomplane-backup.tar.gz
 
 shows which Loomplane made a backup, when, and how many rows each table has, without restoring anything.
 
-A backup holds secrets the way the database does: cloud credentials and variables as Vault ciphertext, API keys as hashes. Reading the secrets needs the `secret_key` Loomplane ran with. Keep that key, and keep it somewhere other than beside the backups, or a restored Loomplane will start without being able to deploy.
+A backup holds secrets the way the database does: cloud credentials and variables as Vault ciphertext, API keys as hashes. Reading the secrets needs the `secret_key` Loomplane ran with. Keep that key, and keep it somewhere other than beside the backups. Without it a restored Loomplane can't deploy, and with audit checkpoints on (the default) it won't start at all: the checkpoint signing key in Vault won't decrypt. [Forge integration](forge-integration.md#chronicle) says how to rotate that key if the old `secret_key` is gone for good.
 
 What isn't in a backup: the source tarballs in `storage.url`, which Loomplane fetches again from GitHub when it needs them, and anything in your clouds. A restore brings back Loomplane's record of what runs where; the next drift check compares it with what's live.
 

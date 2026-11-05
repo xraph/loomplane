@@ -39,6 +39,10 @@ const KeyLabel = "chronicle-checkpoint"
 // Vault version of it, so the old ones stay readable for ByID.
 const vaultKey = "ed25519"
 
+// ErrKeyUndecryptable is a checkpoint key in Vault that the key derived
+// from the current secret_key can't decrypt.
+var ErrKeyUndecryptable = errors.New("checkpoint key can't be decrypted")
+
 // keyIDPrefix starts every key ID, so a pinned ID says whose it is.
 const keyIDPrefix = "loomplane-ckpt-"
 
@@ -164,6 +168,13 @@ func (k *Keys) loadLocked(ctx context.Context) error {
 		return fmt.Errorf("%w: no checkpoint key in Vault yet", keys.ErrNoActiveKey)
 	}
 	if err != nil {
+		if undecryptable(ctx, k.svc) {
+			return fmt.Errorf("%w: the checkpoint key in Vault app %s can't be decrypted with the current secret_key, "+
+				"which isn't the one it was stored under. Restore the old secret_key, or rotate the checkpoint key: "+
+				"delete it from Vault (DELETE FROM vault_secret_versions WHERE app_id = '%[2]s'; "+
+				"DELETE FROM vault_secrets WHERE app_id = '%[2]s'), start Loomplane so it creates a new one, "+
+				"and re-pin the new public key it logs in Hallproof (%w)", ErrKeyUndecryptable, VaultAppID, err)
+		}
 		return fmt.Errorf("read the checkpoint key: %w", err)
 	}
 	priv, err := parse(sec.Value)
@@ -172,6 +183,14 @@ func (k *Keys) loadLocked(ctx context.Context) error {
 	}
 	k.remember(priv, true)
 	return nil
+}
+
+// undecryptable reports whether the checkpoint key is in Vault, encrypted,
+// after a read of it failed: the read failed on the decrypt, not on the
+// database, since the row's metadata reads without decrypting anything.
+func undecryptable(ctx context.Context, svc *secret.Service) bool {
+	meta, err := svc.GetMeta(ctx, vaultKey, VaultAppID)
+	return err == nil && meta.EncryptionAlg != ""
 }
 
 // remember caches priv by ID, and as the current key when current. k.mu is

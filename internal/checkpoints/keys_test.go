@@ -23,7 +23,13 @@ const testSecretKey = "bG9vbXBsYW5lLWRldmVsb3BtZW50LXNlY3JldC1rZXk="
 // identity extension encrypts it.
 func vaultService(t *testing.T, store secret.Store) *secret.Service {
 	t.Helper()
-	key, err := security.DeriveKey(testSecretKey, KeyLabel)
+	return vaultServiceUnder(t, store, testSecretKey)
+}
+
+// vaultServiceUnder is vaultService with the key derived from secretKey.
+func vaultServiceUnder(t *testing.T, store secret.Store, secretKey string) *secret.Service {
+	t.Helper()
+	key, err := security.DeriveKey(secretKey, KeyLabel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,5 +177,36 @@ func TestKeysEnsureUnderALockMakesOneKey(t *testing.T) {
 	versions, err := vaultService(t, store).ListVersions(ctx, vaultKey, VaultAppID)
 	if err != nil || len(versions) > 1 {
 		t.Fatalf("Vault holds %d versions (%v), want 1", len(versions), err)
+	}
+}
+
+// A secret_key changed after the checkpoint key was stored can't decrypt
+// it. Every replica fails to start on that, so the error has to say what
+// happened and what to do, and Ensure must not write a new key over the
+// old one.
+func TestKeysUnderAnotherSecretKeySayWhatToDo(t *testing.T) {
+	ctx := context.Background()
+	store := vaultmem.New()
+	if _, err := NewKeys(vaultService(t, store)).Ensure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const otherSecretKey = "YW5vdGhlci1sb29tcGxhbmUtc2VjcmV0LWtleS0wMDE="
+	k := NewKeys(vaultServiceUnder(t, store, otherSecretKey))
+
+	created, err := k.Ensure(ctx)
+	if created || !errors.Is(err, ErrKeyUndecryptable) {
+		t.Fatalf("Ensure under another secret_key = %v, %v; want ErrKeyUndecryptable", created, err)
+	}
+	for _, want := range []string{VaultAppID, "secret_key", "Restore", "rotate", "Hallproof"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error doesn't mention %q: %v", want, err)
+		}
+	}
+	if _, _, err = k.PublicKey(ctx); !errors.Is(err, ErrKeyUndecryptable) {
+		t.Fatalf("PublicKey under another secret_key = %v; want ErrKeyUndecryptable", err)
+	}
+	versions, err := vaultService(t, store).ListVersions(ctx, vaultKey, VaultAppID)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("Vault holds %d versions, %v; want the original key alone", len(versions), err)
 	}
 }

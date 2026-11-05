@@ -157,6 +157,13 @@ Every API replica signs checkpoints over the streams (`internal/checkpoints`, wi
 
 The Ed25519 key lives in Vault under its own app, `loomplane-chronicle-checkpoints`, encrypted with a key derived from `secret_key` (label `chronicle-checkpoint`). The first replica to start creates it under the startup lock. Each start logs `audit checkpoints are signed` with the key ID and the base64 public key, which is what you pin in Hallproof. Mind you, the key sits in the same database as the events it signs: someone with only the database can't forge a checkpoint, but someone with the database and `secret_key` can.
 
+Change `secret_key` and the stored key no longer decrypts. Every API replica then refuses to start with `checkpoint key can't be decrypted`, naming the Vault app. You have two ways out. Put the old `secret_key` back, or rotate the checkpoint key: delete it from Vault, start Loomplane so the first replica creates a new one, and pin the new public key from the `audit checkpoints are signed` line in Hallproof. Checkpoints signed before the rotation still verify against the old public key, so keep that pinned beside the new one if you want to check them.
+
+```sql
+DELETE FROM vault_secret_versions WHERE app_id = 'loomplane-chronicle-checkpoints';
+DELETE FROM vault_secrets WHERE app_id = 'loomplane-chronicle-checkpoints';
+```
+
 Digests stay on Chronicle's default, `chronicle/v4`. Hallproof only verifies that scheme, and Chronicle won't move a stream back from a keyed one, so don't turn keyed digests on.
 
 Limits: no read API or audit screen yet.

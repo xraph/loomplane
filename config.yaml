@@ -17,7 +17,9 @@ http_addr: "${LOOMPLANE_HTTP_ADDR:-}"
 # value for any key named like a URL.)
 public_url: "${LOOMPLANE_PUBLIC_URL:-http://localhost:8780}"
 # 32 random bytes, base64 (openssl rand -base64 32). Authsome's token
-# encryption key is derived from it.
+# encryption key is derived from it, and so is the key the audit checkpoint
+# signing key is encrypted with. Change it and Loomplane refuses to start
+# until you restore it or rotate the checkpoint key (see chronicle below).
 secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 
 database:
@@ -331,7 +333,8 @@ dbgateway:
 # public key and its ID are logged at start ("audit checkpoints are signed"),
 # so you can pin them in Hallproof. A stream is signed once it gains
 # every_events events, or every_interval after its last signature if it
-# gained any.
+# gained any. The key is encrypted under secret_key; after a change of
+# secret_key, docs/forge-integration.md (Chronicle) says how to rotate it.
 chronicle:
   checkpoints:
     enabled: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED:-true}"
