@@ -437,8 +437,7 @@ function Source({ source: s }: { source: SourceDiff }) {
         <Alert>
           <AlertDescription>
             Production has never run this source, so there&apos;s nothing to
-            compare it to. Its first production release always goes to a
-            person.
+            compare it to. Its first production release always goes to a person.
           </AlertDescription>
         </Alert>
       ) : (

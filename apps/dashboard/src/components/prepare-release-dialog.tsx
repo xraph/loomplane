@@ -206,8 +206,7 @@ function PrepareDialog({
               plan, always waits for a person.
             </li>
             <li>
-              A source&apos;s first production release always goes to a
-              person.
+              A source&apos;s first production release always goes to a person.
             </li>
             <li>
               When autonomous promotion is off for this project, the agent still
