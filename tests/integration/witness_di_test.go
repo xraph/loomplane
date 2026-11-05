@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/xraph/forge"
@@ -11,20 +12,21 @@ import (
 	"github.com/xraph/keysmith"
 	"github.com/xraph/relay"
 	"github.com/xraph/relay/endpoint"
-	relaypg "github.com/xraph/relay/store/postgres"
+	relayid "github.com/xraph/relay/id"
 	"github.com/xraph/vault/secret"
 	vaultstore "github.com/xraph/vault/store"
 	"github.com/xraph/warden"
 
 	"github.com/xraph/loomplane/internal/checkpoints"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/platform"
 )
 
 // Hallproof's witness finds each library's engine in DI by its type, so
-// each one has to be there, with Relay's endpoint store unwrapped beside
-// Relay. The Vault store also holds the checkpoint signing key the first
-// start created.
+// each one has to be there, with Relay's endpoint store unwrapped, read
+// only, beside Relay. The Vault store also holds the checkpoint signing key
+// the first start created.
 func TestWitnessDependenciesAreProvided(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
@@ -39,11 +41,16 @@ func TestWitnessDependenciesAreProvided(t *testing.T) {
 	resolves[vaultstore.Store](t, c, "vault store")
 	resolves[endpoint.Store](t, c, "relay endpoint store")
 
-	// The endpoint store is Relay's Postgres store itself, not the wrapper
-	// that decrypts signing secrets.
+	// The endpoint store reads Relay's Postgres store under the wrapper
+	// that decrypts signing secrets, and refuses writes, which would skip
+	// the encryption.
 	if eps, err := forge.InjectType[endpoint.Store](c); err == nil {
-		if _, raw := eps.(*relaypg.Store); !raw {
-			t.Errorf("the relay endpoint store is %T, want the raw *postgres.Store", eps)
+		if _, err = eps.ListEndpoints(t.Context(), "", endpoint.ListOpts{}); err != nil {
+			t.Errorf("list through the relay endpoint store: %v", err)
+		}
+		ep := &endpoint.Endpoint{ID: relayid.NewEndpointID(), TenantID: "aorg_1", URL: "https://example.com/hook", Secret: "whsec_plaintext"}
+		if err = eps.CreateEndpoint(t.Context(), ep); !errors.Is(err, notifications.ErrEndpointsReadOnly) {
+			t.Errorf("create through the relay endpoint store = %v, want ErrEndpointsReadOnly", err)
 		}
 	}
 
