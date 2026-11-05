@@ -3,7 +3,9 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/authsome/bridge/chronicleadapter"
@@ -11,6 +13,8 @@ import (
 	"github.com/xraph/chronicle/audit"
 	"github.com/xraph/chronicle/store"
 	"github.com/xraph/chronicle/store/memory"
+	"github.com/xraph/forge"
+	gulog "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/loomplane/internal/platformadmin"
 )
@@ -126,5 +130,106 @@ func TestStaffStream_routesStaffEventsToThePlatformTenant(t *testing.T) {
 	info, err := mem.GetStreamByScope(ctx, "aapp_test", platformadmin.AuditTenant)
 	if err != nil || info.HeadSeq != 1 {
 		t.Fatalf("platform stream: %+v, %v; want one event", info, err)
+	}
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time      { return c.t }
+func (c *fakeClock) add(d time.Duration) { c.t = c.t.Add(d) }
+func newFakeClock() *fakeClock           { return &fakeClock{t: time.Unix(1_800_000_000, 0)} }
+func testLogger() *gulog.TestLogger      { return gulog.NewTestLogger().(*gulog.TestLogger) }
+func staffReads(reads map[string]int) func(context.Context, string) (bool, error) {
+	return func(_ context.Context, userID string) (bool, error) {
+		reads[userID]++
+		if userID == "ausr_broken" {
+			return false, errors.New("warden is down")
+		}
+		return userID == "ausr_staff", nil
+	}
+}
+
+// Every authsome event with an actor and no organization asks whether the
+// actor is staff. Within the TTL a user's answer comes from the cache, so
+// Warden is read once per user, and again once the answer has expired.
+func TestStaffRoles_cachesEachUsersAnswerForTheTTL(t *testing.T) {
+	ctx := context.Background()
+	clock := newFakeClock()
+	reads := map[string]int{}
+	s := newStaffRoles(staffReads(reads), forge.NewNoopLogger(), nil)
+	s.now = clock.now
+
+	for range 5 {
+		if staff, err := s.isStaff(ctx, "ausr_staff"); err != nil || !staff {
+			t.Fatalf("staff = %v, %v", staff, err)
+		}
+		if staff, err := s.isStaff(ctx, "ausr_customer"); err != nil || staff {
+			t.Fatalf("customer = %v, %v", staff, err)
+		}
+		clock.add(staffRolesTTL / 10)
+	}
+	if reads["ausr_staff"] != 1 || reads["ausr_customer"] != 1 {
+		t.Fatalf("Warden read %v within the TTL, want once per user", reads)
+	}
+	clock.add(staffRolesTTL)
+	if staff, err := s.isStaff(ctx, "ausr_staff"); err != nil || !staff {
+		t.Fatalf("staff after expiry = %v, %v", staff, err)
+	}
+	if reads["ausr_staff"] != 2 {
+		t.Fatalf("Warden read %d times after the TTL, want a second read", reads["ausr_staff"])
+	}
+}
+
+// The cache holds at most staffRolesMax users.
+func TestStaffRoles_staysBounded(t *testing.T) {
+	ctx := context.Background()
+	s := newStaffRoles(staffReads(map[string]int{}), forge.NewNoopLogger(), nil)
+	for i := range staffRolesMax * 2 {
+		if _, err := s.isStaff(ctx, fmt.Sprintf("ausr_%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(s.entries); n > staffRolesMax {
+		t.Fatalf("cache holds %d users, want at most %d", n, staffRolesMax)
+	}
+}
+
+// A failed read isn't cached, so the next event asks again. Each failure
+// is counted, and a warning goes out at most once a minute saying how many
+// events went to the app level since the last one.
+func TestStaffRoles_countsAndWarnsOnFailures(t *testing.T) {
+	ctx := context.Background()
+	clock := newFakeClock()
+	reads := map[string]int{}
+	log := testLogger()
+	s := newStaffRoles(staffReads(reads), log, nil)
+	s.now = clock.now
+
+	for range 3 {
+		if staff, err := s.isStaff(ctx, "ausr_broken"); err == nil || staff {
+			t.Fatalf("a failed read = %v, %v; want an error", staff, err)
+		}
+		clock.add(time.Second)
+	}
+	if reads["ausr_broken"] != 3 {
+		t.Fatalf("Warden read %d times, want every failure retried", reads["ausr_broken"])
+	}
+	if got := s.failures.Load(); got != 3 {
+		t.Fatalf("counted %d failures, want 3", got)
+	}
+	if n := log.CountLogs("WARN"); n != 1 {
+		t.Fatalf("%d warnings within a minute, want one", n)
+	}
+	clock.add(time.Minute)
+	if _, err := s.isStaff(ctx, "ausr_broken"); err == nil {
+		t.Fatal("want an error")
+	}
+	warns := log.GetLogsByLevel("WARN")
+	if len(warns) != 2 {
+		t.Fatalf("%d warnings after a minute, want a second", len(warns))
+	}
+	if n, _ := warns[1].Field("events"); fmt.Sprint(n) != "3" {
+		t.Fatalf("second warning counts %v events, want the 3 since the first", n)
 	}
 }

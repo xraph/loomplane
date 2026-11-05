@@ -30,7 +30,6 @@ import (
 	authsome "github.com/xraph/authsome"
 	"github.com/xraph/authsome/api"
 	"github.com/xraph/authsome/app"
-	"github.com/xraph/authsome/bridge/chronicleadapter"
 	"github.com/xraph/authsome/environment"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
@@ -322,10 +321,7 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
-		authsome.WithChronicle(staffStream{
-			Chronicle: chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory}),
-			isStaff:   e.IsPlatformAdmin,
-		}),
+		authsome.WithChronicle(e.authsomeChronicle()),
 		authsome.WithTokenEncryptor(tokens),
 		authsome.WithRateLimiter(routeLimiter{Limiter: ratelimit.NewKVLimiter(e.store)}),
 		authsome.WithWarden(e.warden),
