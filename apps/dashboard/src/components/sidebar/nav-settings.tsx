@@ -32,6 +32,24 @@ export type SettingsLink = {
 
 export type SettingsGroup = { label: string; items: SettingsLink[] }
 
+/**
+ * mergeSettingsGroups adds another edition's groups to the base's. Groups
+ * with the same label are merged, the extra items going after the base's;
+ * a label the base lacks is added at the end.
+ */
+export function mergeSettingsGroups(
+  base: SettingsGroup[],
+  extra: SettingsGroup[]
+): SettingsGroup[] {
+  const merged = base.map((g) => ({ ...g, items: [...g.items] }))
+  for (const group of extra) {
+    const same = merged.find((g) => g.label === group.label)
+    if (same) same.items.push(...group.items)
+    else merged.push({ ...group, items: [...group.items] })
+  }
+  return merged
+}
+
 export function NavSettings({
   groups,
   className,

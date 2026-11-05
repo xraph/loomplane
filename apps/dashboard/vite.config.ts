@@ -15,6 +15,7 @@ export default defineConfig({
     tanstackRouter({
       target: "react",
       autoCodeSplitting: true,
+      routeFileIgnorePattern: "\\.test\\.",
       quoteStyle: "double",
       semicolons: false,
     }),

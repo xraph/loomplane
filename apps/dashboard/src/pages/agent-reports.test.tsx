@@ -255,6 +255,21 @@ it("shows the budget banner when the watcher is paused", async () => {
   ).toHaveAttribute("href", "/settings/ai")
 })
 
+it("shows the AI add-on banner when billing paused the watcher", async () => {
+  serve([report()], {
+    watcher: {
+      paused: true,
+      paused_reason: "billing",
+      issues: { configured: true, installations: [] },
+    },
+  })
+  showList()
+  expect(
+    await screen.findByText(/the AI add-on isn't covering this workspace/)
+  ).toBeInTheDocument()
+  expect(screen.getByText(/Settings > Billing/)).toBeInTheDocument()
+})
+
 it("leaves the AI settings link to people who manage AI", async () => {
   state.workspace = ["agent:use"]
   serve([report()], {

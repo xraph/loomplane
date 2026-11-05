@@ -41,6 +41,7 @@ import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import {
+  mergeSettingsGroups,
   NavSettings,
   type SettingsGroup,
 } from "@/components/sidebar/nav-settings"
@@ -225,7 +226,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   // Settings sit at the foot of the sidebar, apart from the pages you work
   // in, and open beside it rather than pushing the projects up.
   const at = (p: string) => path.startsWith(p)
-  const cloudGroups = useCloudSettingsGroups()
+  const cloudGroups = useCloudSettingsGroups({ at, can })
   const settings: SettingsGroup[] = [
     {
       label: "Workspace",
@@ -321,7 +322,6 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           ]
         : [],
     },
-    ...cloudGroups,
   ]
 
   return (
@@ -339,7 +339,10 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
-        <NavSettings groups={settings} className="mt-auto" />
+        <NavSettings
+          groups={mergeSettingsGroups(settings, cloudGroups)}
+          className="mt-auto"
+        />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
         <Account />
