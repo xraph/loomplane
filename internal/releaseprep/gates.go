@@ -330,16 +330,24 @@ func cleanPlan(in CheckInput) []string {
 	if ev.BackupSchedule {
 		why = append(why, "it sets a default backup schedule, which a person who manages backups approves")
 	}
-	var unreadable []string
+	// A source production never ran, on any host, has nothing to compare
+	// against: its diff is unread, whatever its Error says.
+	var fresh, unreadable []string
 	for _, d := range ev.Sources {
-		if d.Error != "" {
+		switch {
+		case d.Direction == DirectionNew || (d.ProductionCommit == "" && d.Error == ""):
+			fresh = append(fresh, d.Alias)
+		case d.Error != "":
 			unreadable = append(unreadable, d.Alias)
 		}
+	}
+	for _, alias := range fresh {
+		why = append(why, alias+" has never run in production, so its changes can't be compared")
 	}
 	switch {
 	case len(unreadable) > 0:
 		why = append(why, unread("the diff of "+strings.Join(unreadable, ", ")))
-	case missing(ev, KeyDiff):
+	case len(fresh) == 0 && missing(ev, KeyDiff):
 		why = append(why, unread("the diff"))
 	}
 	return why

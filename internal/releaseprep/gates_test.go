@@ -657,3 +657,25 @@ func TestOnlyPreviewChecksPreviews(t *testing.T) {
 		}
 	}
 }
+
+// A report stored before a new source carried an Error still asks: gate 3
+// reads the direction, not only the Error.
+func TestGateThreeAsksForASourceProductionNeverRan(t *testing.T) {
+	in := green()
+	in.Evidence.Sources = append(in.Evidence.Sources, SourceDiff{
+		SourceID: "src_worker", Alias: "worker", Repository: "gitlab.com/acme/worker", StagingCommit: shaC, Direction: DirectionNew,
+	})
+	checks := Checks(in)
+	if got := failing(checks); !slices.Equal(got, []int{GateCleanPlan}) {
+		t.Fatalf("failing %v", got)
+	}
+	if d := detail(checks, GateCleanPlan); d != "worker has never run in production, so its changes can't be compared" {
+		t.Fatalf("gate 3 says %q", d)
+	}
+
+	// With the Error a new collection sets, it says so once.
+	in.Evidence.Sources[1].Error = "production has never run this source, so there is nothing to compare its changes to"
+	if d := detail(Checks(in), GateCleanPlan); d != "worker has never run in production, so its changes can't be compared" {
+		t.Fatalf("gate 3 says %q", d)
+	}
+}

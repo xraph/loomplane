@@ -137,7 +137,8 @@ func TestBuildDiffDirection(t *testing.T) {
 
 func TestBuildDiffNewSourceAndNoComparison(t *testing.T) {
 	got := releaseprep.BuildDiff(releaseprep.SourceDiff{StagingCommit: "abc"}, nil)
-	if got.Direction != releaseprep.DirectionNew || got.Error != "" {
+	// Production never ran it, so nothing compares it: unread, never "no change".
+	if got.Direction != releaseprep.DirectionNew || got.Error == "" {
 		t.Fatalf("new: %+v", got)
 	}
 	got = releaseprep.BuildDiff(releaseprep.SourceDiff{ProductionCommit: "p", StagingCommit: "abc"}, nil)

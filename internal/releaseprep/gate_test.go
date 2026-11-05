@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/agentauthz"
 	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/releasewatch"
@@ -536,3 +538,41 @@ func TestEvaluateRecordsOnlyLoomplanesWords(t *testing.T) {
 }
 
 var _ agentauthz.PromotionGate = (*Gate)(nil)
+
+// Rex, 2026-11-05: a source production has never run, on any host, is
+// unread evidence. Nothing compares it, so the release asks a person.
+func TestASourceProductionNeverRanAsks(t *testing.T) {
+	const want = "worker has never run in production, so its changes can't be compared"
+	for _, repo := range []string{"acme/worker", "gitlab.com/acme/worker", "bitbucket.org/acme/worker"} {
+		t.Run(repo, func(t *testing.T) {
+			f := newGate(t)
+			f.w.plan.Sources = append(f.w.plan.Sources, planning.PlanSource{
+				SourceID: "src_worker", Alias: "worker", Repository: repo, CommitSHA: shaC, InScope: true,
+			})
+			f.store.byPlan[f.w.plan.ID] = f.w.reportFor()
+			f.w.diffs.calls = nil
+
+			d := f.evaluate(t, f.request())
+			if d.Allowed || !failedGate(d, GateCleanPlan) || !strings.Contains(strings.Join(d.Failed, "\n"), want) {
+				t.Fatalf("decision %+v", d)
+			}
+			for _, c := range f.w.diffs.calls {
+				if c.repository == repo {
+					t.Fatalf("compared a source production never ran: %+v", c)
+				}
+			}
+		})
+	}
+
+	t.Run("an existing GitHub source with a readable diff passes", func(t *testing.T) {
+		f := newGate(t)
+		d := f.evaluate(t, f.request())
+		if !d.Allowed || len(d.Failed) != 0 {
+			t.Fatalf("decision %+v", d)
+		}
+		i := slices.IndexFunc(f.store.evaluations[0].gates, func(c GateCheck) bool { return c.Number == GateCleanPlan })
+		if c := f.store.evaluations[0].gates[i]; !c.Passed || !strings.Contains(c.Detail, "every diff was read") {
+			t.Fatalf("gate 3 %+v", c)
+		}
+	})
+}

@@ -84,10 +84,11 @@ func TestCollectMarksNewAndIdenticalWithoutCompare(t *testing.T) {
 	if d := ev.Sources[0]; d.Alias != "api" || d.Direction != DirectionIdentical || d.Error != "" || d.ProductionCommit != shaA {
 		t.Fatalf("identical %+v", d)
 	}
-	if d := ev.Sources[1]; d.Alias != "jobs" || d.Direction != DirectionNew || d.Error != "" || d.ProductionCommit != "" || d.StagingCommit != shaC {
+	// A source production never ran is unread evidence (Rex, 2026-11-05).
+	if d := ev.Sources[1]; d.Alias != "jobs" || d.Direction != DirectionNew || d.Error != errNeverRan || d.ProductionCommit != "" || d.StagingCommit != shaC {
 		t.Fatalf("new %+v", d)
 	}
-	if _, ok := ev.Unavailable[KeyDiff]; ok {
+	if got := ev.Unavailable[KeyDiff]; got != "jobs: "+errNeverRan {
 		t.Fatalf("unavailable %v", ev.Unavailable)
 	}
 }

@@ -79,13 +79,22 @@ type SourceDiff struct {
 	Error string `json:"error,omitempty"`
 }
 
+// errNeverRan is a new source's Error. Production never ran it, on any
+// host, so nothing compares it: its diff is unread evidence, and the release
+// asks a person.
+const errNeverRan = "production has never run this source, so there is nothing to compare its changes to"
+
 // BuildDiff fills d from a comparison of production's commit (base) to
 // staging's (head). A nil comparison means there was nothing to compare: a
-// source production never ran is DirectionNew, and anything else is unreadable.
+// source production never ran is DirectionNew, and unreadable like anything
+// else.
 func BuildDiff(d SourceDiff, c *repositories.Comparison) SourceDiff {
 	if c == nil {
 		if d.ProductionCommit == "" {
 			d.Direction = DirectionNew
+			if d.Error == "" {
+				d.Error = errNeverRan
+			}
 		} else if d.Error == "" {
 			d.Error = "the comparison couldn't be read"
 		}
