@@ -55,9 +55,10 @@ func TestWitnessConfig(t *testing.T) {
 	if shield := w.Adapters["shield"]; shield["app_id"] != "loomplane" || shield["tenants"] != nil {
 		t.Fatalf("shield %v, want app loomplane and no tenants", shield)
 	}
-	// Resolving their engines would start them a second time.
-	if !slices.Equal(w.Exclude, []string{"cortex", "dispatch"}) {
-		t.Errorf("exclude %v, want cortex and dispatch", w.Exclude)
+	// Every adapter is on: each reads its engine through its library's
+	// extension, so none starts an engine a second time.
+	if len(w.Exclude) != 0 {
+		t.Errorf("exclude %v, want every adapter on", w.Exclude)
 	}
 	// No staff lists until Loomplane names a staff organization.
 	for _, name := range []string{"keysmith", "relay", "cortex", "dispatch"} {

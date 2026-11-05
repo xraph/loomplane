@@ -63,16 +63,13 @@ func TestWitnessFindsLoomplanesLibraries(t *testing.T) {
 			t.Errorf("adapter %s failed to attach; the app log says why", a.Name)
 		}
 	}
-	for _, name := range []string{"chronicle", "authsome", "warden", "keysmith", "vault", "trove", "grove", "relay"} {
+	for _, name := range []string{"chronicle", "authsome", "warden", "keysmith", "vault", "trove", "grove", "relay", "dispatch"} {
 		if !found[name] {
 			t.Errorf("witness didn't find %s", name)
 		}
 	}
-	// Bastion and Sentinel aren't run. Dispatch is, but stays excluded
-	// until its adapter can read the engine without starting it again
-	// (internal/platform/witness.go), which this test's shutdown would
-	// otherwise hang on.
-	for _, name := range []string{"bastion", "sentinel", "dispatch"} {
+	// Bastion and Sentinel aren't run.
+	for _, name := range []string{"bastion", "sentinel"} {
 		if found[name] {
 			t.Errorf("witness attached %s", name)
 		}

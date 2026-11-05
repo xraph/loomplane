@@ -48,16 +48,6 @@ func witnessConfig(cfg config.Config) witnessforge.Config {
 		// all-tenant posture counts and event catalog, and Dispatch only
 		// what needs no org. That's the safe side: none of them falls back
 		// to customers' keys, webhooks, agents or jobs.
-		//
-		// Dispatch and Cortex stay out for now. Their adapters resolve the
-		// engine from the container, and the container starts an engine
-		// provided by a constructor the first time anyone resolves it. Their
-		// extensions start their engines themselves, so that would be a
-		// second Start: a second set of Dispatch workers and cron, and a
-		// LISTEN connection nothing stops, which holds shutdown until its
-		// deadline. Put them back once witness reads those engines without
-		// starting them.
-		Exclude: []string{"cortex", "dispatch"},
 		Adapters: map[string]map[string]any{
 			// The platform's own Vault apps. Every other Vault app holds
 			// customers' credentials and variables.
