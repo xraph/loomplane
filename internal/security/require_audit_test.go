@@ -97,6 +97,8 @@ var workspaceChecks = map[string]int{
 	"extensions/identity/session.go:getSession":                               1,
 	"extensions/identity/members.go:require":                                  1,
 	"extensions/infrastructure/extension.go:status":                           1,
+	// A workspace's billing (cloud edition) is the whole workspace's.
+	"extensions/billing/routes.go:allow": 1,
 	// Endpoint credentials and synced provider resources are the
 	// workspace's, so re-checking an approver's secret:manage on them, and
 	// reading or connecting the inventory, stays at the root. Granting a
@@ -223,8 +225,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 102 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones and the node connection, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 103 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection and billing's, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

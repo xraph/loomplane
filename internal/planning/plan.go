@@ -746,6 +746,19 @@ type Plan struct {
 	DecisionNote string     `json:"decision_note"`
 }
 
+// TeardownOnly reports whether the plan only removes things: every action
+// deletes or keeps. Removing is never gated on billing, so a workspace can
+// always clean up. It fails closed: an op it doesn't know, or an empty one,
+// counts as running something.
+func (p *Plan) TeardownOnly() bool {
+	for _, a := range p.Actions {
+		if a.Op != Delete && a.Op != Keep {
+			return false
+		}
+	}
+	return true
+}
+
 // Open reports whether the plan may still be decided or is still planning.
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 

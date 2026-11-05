@@ -11,11 +11,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -109,6 +111,11 @@ type Service struct {
 	policy policy
 	now    func() time.Time
 
+	// metering gates and claims the calls served on the server's key.
+	metering metering.Late
+	// meteringSet is true once WithMetering has chosen the gate.
+	meteringSet atomic.Bool
+
 	mu        sync.RWMutex
 	gateway   Gateway
 	seeder    Seeder
@@ -130,6 +137,23 @@ func NewService(d Deps) *Service {
 			Configured: d.Config.Knowledge.Configured(), Reason: "Knowledge isn't set up yet on this server",
 		},
 	}
+}
+
+// WithMetering sets the gate and meter for the calls the server's own
+// key serves. Until it is called, they all run and none is claimed.
+func (s *Service) WithMetering(g metering.Gate, m metering.Meter) {
+	s.metering.Set(g, m)
+	s.meteringSet.Store(true)
+}
+
+// canUseServerKey asks the gate whether orgID may use the server's key. In
+// the edition that bills, it refuses until WithMetering has chosen the
+// gate: a call queued before Start never reaches the key ungated.
+func (s *Service) canUseServerKey(ctx context.Context, orgID string) error {
+	if metering.RefuseUnset && !s.meteringSet.Load() {
+		return metering.ErrNotReady
+	}
+	return s.metering.CanRun(ctx, orgID, metering.KindAIPlatform, false)
 }
 
 // BindGateway binds nexus and the guardrail seeder, once the agent's

@@ -140,6 +140,7 @@ func TestFailureReasonsAreClear(t *testing.T) {
 	for in, want := range map[string]string{
 		"llm: complete: nexus: agentsettings: refused a call: couldn't read the agent's provider key: the workspace's AI key couldn't be read: vault: timeout": "the workspace's AI key couldn't be read",
 		"budget: " + "this workspace has used its AI budget for the month; an admin can raise it in AI settings":                                               "this workspace has used its AI budget for the month; an admin can raise it in AI settings",
+		"llm: complete: nexus: provider credentials unavailable: Turn on the AI add-on in Settings > Billing, or add your own model key.":                      "Turn on the AI add-on in Settings > Billing, or add your own model key.",
 		"plain": "plain",
 	} {
 		if got := reason(in); got != want {

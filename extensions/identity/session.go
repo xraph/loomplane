@@ -62,6 +62,12 @@ type PublicConfig struct {
 // gate platform-wide routes. An API key is never a platform user.
 type PlatformUser func(ctx context.Context) (userID string, ok bool)
 
+// PlatformOwner says whether the request is a session whose user holds the
+// platform-owner role, and who that is. An API key is never the owner. A
+// platform admin is a PlatformUser and not a PlatformOwner, so a route
+// gated on it is the owner's alone.
+type PlatformOwner func(ctx context.Context) (userID string, ok bool)
+
 // Features says which optional sections the server runs, so the dashboard
 // shows only those.
 type Features struct {
@@ -155,6 +161,21 @@ func (e *Extension) platformUser(ctx context.Context) (string, bool) {
 	}
 	roles, ok := e.appRoles(ctx, userID.String())
 	if !ok || !platformadmin.Holds(roles, e.cfg.Identity.AppID) {
+		return "", false
+	}
+	return userID.String(), true
+}
+
+// platformOwner is the PlatformOwner other extensions use: platformUser
+// for the platform-owner role alone. A key has no session user, so it is
+// refused before any role is read.
+func (e *Extension) platformOwner(ctx context.Context) (string, bool) {
+	userID, ok := authmw.UserIDFrom(ctx)
+	if !ok {
+		return "", false
+	}
+	roles, ok := e.appRoles(ctx, userID.String())
+	if !ok || !platformadmin.IsOwner(roles, e.cfg.Identity.AppID) {
 		return "", false
 	}
 	return userID.String(), true

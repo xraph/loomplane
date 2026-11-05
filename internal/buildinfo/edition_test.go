@@ -78,10 +78,17 @@ func TestPublicBuildHasNoCloudCode(t *testing.T) {
 }
 
 func TestCloudBuildHasCloudCode(t *testing.T) {
+	linked := map[string]bool{}
 	for _, dependency := range serverDeps(t, "cloud") {
-		if dependency == "github.com/xraph/loomplane/extensions/billing" {
-			return
+		linked[dependency] = true
+	}
+	for _, want := range []string{
+		"github.com/xraph/loomplane/extensions/billing",
+		"github.com/xraph/ledger/provider/stripe",
+		"github.com/xraph/authsome/plugins/subscription",
+	} {
+		if !linked[want] {
+			t.Errorf("cloud build does not link %s", want)
 		}
 	}
-	t.Fatal("cloud build does not link extensions/billing")
 }

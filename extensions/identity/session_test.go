@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	authid "github.com/xraph/authsome/id"
+	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/rbac"
+
 	"github.com/xraph/loomplane/internal/config"
 )
 
@@ -47,5 +51,48 @@ func TestPlatformUserSaysNoWithoutASessionUser(t *testing.T) {
 	}
 	if e.holdsPlatformRole(context.Background()) {
 		t.Fatal("holdsPlatformRole without a session user")
+	}
+}
+
+// fakePlatformRoles is the roles fixture the platform checks read: each
+// user's roles in an app.
+type fakePlatformRoles struct {
+	rbac.Store
+	held map[string][]*rbac.Role
+}
+
+func (f fakePlatformRoles) ListUserRolesForApp(_ context.Context, _, userID string) ([]*rbac.Role, error) {
+	return f.held[userID], nil
+}
+
+// A platform admin is a platform user but never the platform owner; the
+// owner is both; a session with no platform role and an API key (no
+// session user) are neither.
+func TestPlatformOwner_AdminIsNot(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Identity.AppID = "aapp_test"
+	e := New(cfg)
+	owner, admin, member := authid.NewUserID(), authid.NewUserID(), authid.NewUserID()
+	e.platformRoles = fakePlatformRoles{held: map[string][]*rbac.Role{
+		owner.String():  {{AppID: cfg.Identity.AppID, Slug: rbac.PlatformOwnerSlug}},
+		admin.String():  {{AppID: cfg.Identity.AppID, Slug: rbac.PlatformAdminSlug}},
+		member.String(): {{AppID: "aapp_other", Slug: rbac.PlatformOwnerSlug}},
+	}}
+	as := func(u authid.UserID) context.Context { return authmw.WithUserID(context.Background(), u) }
+
+	if id, ok := e.platformOwner(as(owner)); !ok || id != owner.String() {
+		t.Fatalf("the owner: %q %v", id, ok)
+	}
+	if _, ok := e.platformUser(as(admin)); !ok {
+		t.Fatal("the admin isn't a platform user")
+	}
+	if id, ok := e.platformOwner(as(admin)); ok || id != "" {
+		t.Fatalf("the admin passed as the owner: %q", id)
+	}
+	if _, ok := e.platformOwner(as(member)); ok {
+		t.Fatal("another app's owner passed as the owner")
+	}
+	if _, ok := e.platformOwner(context.Background()); ok {
+		t.Fatal("no session user passed as the owner")
 	}
 }

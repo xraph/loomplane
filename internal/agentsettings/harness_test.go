@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsettings/agentsettingstest"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -252,6 +253,7 @@ func newHarness(t *testing.T, change ...func(*agentsettings.Deps)) *harness {
 	}
 	h.deps = d
 	h.svc = agentsettings.NewService(d)
+	h.svc.WithMetering(metering.AllowAll, metering.Discard)
 	h.svc.BindCanceller(h.cancel)
 	return h
 }
@@ -261,6 +263,7 @@ func newHarness(t *testing.T, change ...func(*agentsettings.Deps)) *harness {
 func (h *harness) restart(change func(*agentsettings.Deps)) {
 	change(&h.deps)
 	h.svc = agentsettings.NewService(h.deps)
+	h.svc.WithMetering(metering.AllowAll, metering.Discard)
 	h.svc.BindCanceller(h.cancel)
 }
 

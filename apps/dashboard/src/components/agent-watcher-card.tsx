@@ -47,10 +47,18 @@ function State({ status: s }: { status: AgentwatchStatus }) {
     <>
       <Panel className="gap-2">
         <SettingsCardHead
-          title={s.paused ? "Stopped investigating (budget)" : "Watching"}
+          title={
+            s.paused
+              ? s.pausedReason === "billing"
+                ? "Stopped investigating (AI add-on)"
+                : "Stopped investigating (budget)"
+              : "Watching"
+          }
           description={
             s.paused
-              ? `The workspace used its AI budget for the month${s.pausedAt ? `, ${ago(s.pausedAt, now)}` : ""}. Reports still open and go out as usual.`
+              ? s.pausedReason === "billing"
+                ? `The AI add-on isn't covering this workspace${s.pausedAt ? `, ${ago(s.pausedAt, now)}` : ""}. Turn it on or fix payment in Settings > Billing. Reports still open and go out as usual.`
+                : `The workspace used its AI budget for the month${s.pausedAt ? `, ${ago(s.pausedAt, now)}` : ""}. Reports still open and go out as usual.`
               : "Reports open and the agent looks into them."
           }
         />

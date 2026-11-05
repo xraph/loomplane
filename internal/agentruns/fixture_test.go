@@ -31,6 +31,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentops"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -398,6 +399,8 @@ type fakeSettings struct {
 	mu        sync.Mutex
 	off       map[string]bool
 	exhausted map[string]bool
+	blocked   map[string]string // per workspace; the reason a gate refuses with
+	notReady  map[string]bool   // per workspace; billing is still starting
 }
 
 func (f *fakeSettings) Effective(_ context.Context, orgID string) (*agentsettings.Effective, error) {
@@ -417,6 +420,12 @@ func (f *fakeSettings) RequireBudget(_ context.Context, orgID string) error {
 	defer f.mu.Unlock()
 	if f.exhausted[orgID] {
 		return agentsettings.ErrBudgetExhausted
+	}
+	if why, ok := f.blocked[orgID]; ok {
+		return fmt.Errorf("check the gate: %w", &metering.BlockedError{Reason: why})
+	}
+	if f.notReady[orgID] {
+		return fmt.Errorf("check the gate: %w", metering.ErrNotReady)
 	}
 	return nil
 }

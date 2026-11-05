@@ -8,11 +8,11 @@ import (
 )
 
 func TestAllRunsLibraryGroupsAfterLoomplanes(t *testing.T) {
-	want := []string{
+	want := append([]string{
 		"loomplane", "authsome", "authsome-waitlist", "authsome-oauth2", "warden", "chronicle", "dispatch",
 		"ctrlplane", "loomplane_managed_instances", "vault", "loomplane_native_credentials", "keysmith", "trove", "herald", "relay",
 		"cortex", "nexus", "shield", "weave",
-	}
+	}, editionWantGroups()...)
 	got := make([]string, 0, len(want))
 	seen := map[string]bool{}
 	for _, g := range All() {
@@ -25,8 +25,8 @@ func TestAllRunsLibraryGroupsAfterLoomplanes(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("All() runs\n  %v\nwant\n  %v", got, want)
 	}
-	for _, g := range All()[len(want)-4:] {
-		if len(g.Migrations()) == 0 {
+	for _, g := range All() {
+		if slices.Contains([]string{"cortex", "nexus", "shield", "weave"}, g.Name()) && len(g.Migrations()) == 0 {
 			t.Errorf("library group %s has no migrations", g.Name())
 		}
 	}

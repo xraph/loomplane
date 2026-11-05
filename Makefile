@@ -134,8 +134,9 @@ test: test-go test-dashboard ## Run the Go and dashboard unit tests
 test-go: ## Run the Go unit tests
 	go test ./...
 
-test-cloud: ## Run the Go tests that cover the cloud edition
-	go test -tags cloud ./internal/buildinfo/... ./internal/platform/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
+test-cloud: ## Run the Go tests that cover the cloud edition (the Postgres ones need LOOMPLANE_TEST_DATABASE_URL)
+	go test -timeout 20m -tags cloud ./internal/buildinfo/... ./internal/platform/... ./internal/billing/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
+	go test -timeout 20m -count=1 -tags 'integration cloud' ./database/migrations/ -run 'Billing'
 
 test-dashboard: ## Run the dashboard's unit tests
 	pnpm --dir $(DASHBOARD_DIR) test

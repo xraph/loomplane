@@ -98,3 +98,16 @@ it("says when the watcher stopped investigating for the budget", async () => {
   ).toBeInTheDocument()
   expect(screen.getByText(/3 hours ago/)).toBeInTheDocument()
 })
+
+it("says when the watcher stopped investigating for the AI add-on", async () => {
+  serve({
+    paused: true,
+    paused_reason: "billing",
+    issues: { configured: false, installations: [] },
+  })
+  show()
+  expect(
+    await screen.findByText("Stopped investigating (AI add-on)")
+  ).toBeInTheDocument()
+  expect(screen.getByText(/Settings > Billing/)).toBeInTheDocument()
+})

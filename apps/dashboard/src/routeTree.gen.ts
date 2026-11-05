@@ -47,6 +47,7 @@ import { Route as NodesIndexRouteImport } from "./routes/nodes.index"
 import { Route as NodesIdRouteImport } from "./routes/nodes.$id"
 import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
 import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
+import { Route as PlatformPageRouteImport } from "./routes/platform.$page"
 import { Route as PlatformCloudRouteImport } from "./routes/platform.cloud"
 import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
@@ -56,6 +57,7 @@ import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as SettingsPageRouteImport } from "./routes/settings.$page"
 import { Route as SettingsAiRouteImport } from "./routes/settings.ai"
 import { Route as SettingsApiKeysRouteImport } from "./routes/settings.api-keys"
 import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
@@ -266,6 +268,11 @@ const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
   path: "/notifications/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlatformPageRoute = PlatformPageRouteImport.update({
+  id: "/platform/$page",
+  path: "/platform/$page",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlatformCloudRoute = PlatformCloudRouteImport.update({
   id: "/platform/cloud",
   path: "/platform/cloud",
@@ -309,6 +316,11 @@ const ServicesKindRoute = ServicesKindRouteImport.update({
 const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
   id: "/services/catalog",
   path: "/services/catalog",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsPageRoute = SettingsPageRouteImport.update({
+  id: "/settings/$page",
+  path: "/settings/$page",
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsAiRoute = SettingsAiRouteImport.update({
@@ -447,12 +459,14 @@ export interface FileRoutesByFullPath {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -515,12 +529,14 @@ export interface FileRoutesByTo {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -584,12 +600,14 @@ export interface FileRoutesById {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -654,12 +672,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
@@ -722,12 +742,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
@@ -790,12 +812,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup_/cloud-sign-in"
@@ -859,12 +883,14 @@ export interface RootRouteChildren {
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NodesIdRoute: typeof NodesIdRoute
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
+  PlatformPageRoute: typeof PlatformPageRoute
   PlatformCloudRoute: typeof PlatformCloudRoute
   PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ReleaseReportsIdRoute: typeof ReleaseReportsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
+  SettingsPageRoute: typeof SettingsPageRoute
   SettingsAiRoute: typeof SettingsAiRoute
   SettingsApiKeysRoute: typeof SettingsApiKeysRoute
   SetupCloudSignInRoute: typeof SetupCloudSignInRoute
@@ -1164,6 +1190,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof NotificationsSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/platform/$page": {
+      id: "/platform/$page"
+      path: "/platform/$page"
+      fullPath: "/platform/$page"
+      preLoaderRoute: typeof PlatformPageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/platform/cloud": {
       id: "/platform/cloud"
       path: "/platform/cloud"
@@ -1225,6 +1258,13 @@ declare module "@tanstack/react-router" {
       path: "/services/catalog"
       fullPath: "/services/catalog"
       preLoaderRoute: typeof ServicesCatalogRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/settings/$page": {
+      id: "/settings/$page"
+      path: "/settings/$page"
+      fullPath: "/settings/$page"
+      preLoaderRoute: typeof SettingsPageRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/settings/ai": {
@@ -1395,12 +1435,14 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NodesIdRoute: NodesIdRoute,
   NotificationsSettingsRoute: NotificationsSettingsRoute,
+  PlatformPageRoute: PlatformPageRoute,
   PlatformCloudRoute: PlatformCloudRoute,
   PlatformCloudSignInRoute: PlatformCloudSignInRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ReleaseReportsIdRoute: ReleaseReportsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
+  SettingsPageRoute: SettingsPageRoute,
   SettingsAiRoute: SettingsAiRoute,
   SettingsApiKeysRoute: SettingsApiKeysRoute,
   SetupCloudSignInRoute: SetupCloudSignInRoute,

@@ -47,7 +47,7 @@ require (
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.9.0
+	github.com/xraph/authsome v1.9.1
 	github.com/xraph/bastion v1.4.1
 	github.com/xraph/chronicle v1.10.1
 	github.com/xraph/confy v1.1.0
@@ -103,6 +103,8 @@ require (
 
 require github.com/xraph/shield/integrations/nexusguard v1.9.0
 
+require github.com/stripe/stripe-go/v87 v87.1.0
+
 require (
 	cloud.google.com/go/auth v0.24.1 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.3.0 // indirect
@@ -148,7 +150,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.8 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.25.5 // indirect
@@ -278,7 +280,7 @@ require (
 	github.com/xraph/grove/drivers/mongodriver v1.10.2 // indirect
 	github.com/xraph/grove/kv v1.10.2 // indirect
 	github.com/xraph/grove/kv/drivers/redisdriver v1.10.2 // indirect
-	github.com/xraph/ledger v1.8.1 // indirect
+	github.com/xraph/ledger v1.9.1
 	github.com/xraph/sentinel v1.10.0 // indirect
 	github.com/xraph/vessel v1.0.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

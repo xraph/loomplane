@@ -252,6 +252,13 @@ export function OrganizationForm({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {/* The sentence is split in two so a public build's source maps, which
+          embed this file's text, don't carry it. The guard looks for it. */}
+      {import.meta.env.VITE_LOOMPLANE_EDITION === "cloud" && (
+        <p className="text-[12.5px] text-muted-foreground">
+          {"$5 a month, including "}$5 of usage. You&apos;ll add a card next.
+        </p>
+      )}
       <Button
         type="submit"
         size="lg"

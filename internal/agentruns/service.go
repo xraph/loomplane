@@ -968,6 +968,10 @@ func (s *Service) stopLocal(taskID string) {
 	}
 }
 
+// credentialsUnavailable is how nexus opens the refusal of a call whose
+// credential couldn't be resolved, before the cause.
+const credentialsUnavailable = "provider credentials unavailable: "
+
 // reasons are the failures an admin can act on, which a failed task names
 // as they are instead of the chain of errors around them.
 var reasons = []error{
@@ -981,6 +985,11 @@ func reason(why string) string {
 		if strings.Contains(why, known.Error()) {
 			return known.Error()
 		}
+	}
+	// A gate's refusal in the middle of a run reaches here as text, wrapped
+	// by nexus: what follows nexus's words is the sentence the gate gave.
+	if _, rest, ok := strings.Cut(why, credentialsUnavailable); ok && !strings.HasPrefix(rest, "agentsettings:") && strings.TrimSpace(rest) != "" {
+		return cut(strings.TrimSpace(rest), maxErrorBytes)
 	}
 	return cut(strings.TrimSpace(why), maxErrorBytes)
 }

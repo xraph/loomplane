@@ -71,6 +71,7 @@ import (
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/octopusloom"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/pglock"
@@ -99,6 +100,11 @@ const Name = "loomplane-planning"
 // Extension serves the manifest and plan API.
 type Extension struct {
 	*forge.BaseExtension
+	// container is Register's, kept so Start can pick up the metering gate
+	// and meter an edition that bills provides.
+	container forge.Container
+	// metering is the Gate and Meter handed out before Start chooses them.
+	metering            metering.Late
 	cfg                 config.Config
 	engineOf            func() *engine.Engine
 	ctrlplane           func() *app.CtrlPlane
@@ -165,6 +171,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	c := fapp.Container()
+	e.container = c
 	db, err := forge.InjectType[*grove.DB](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the grove extension: %w", err)
@@ -401,7 +408,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return err
 	}
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey, NodeStreams: e.streams}
+	serverTarget := &deployments.OwnedTarget{Gate: &e.metering, RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey, NodeStreams: e.streams}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)
@@ -414,8 +421,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	managedControllers := kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled)
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey, NodeStreams: e.streams}
-	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore, NodeStreams: e.streams}
+	clusterTarget := &deployments.OwnedTarget{Gate: &e.metering, Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey, NodeStreams: e.streams}
+	firecrackerTarget := &deployments.OwnedTarget{Gate: &e.metering, Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore, NodeStreams: e.streams}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings
@@ -514,6 +521,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	e.plans = planning.NewService(planning.Deps{
+		Gate:             &e.metering,
 		Instances:        instances,
 		ApprovalAdmitter: approvalAdmitter, ApprovalVerifier: approvalVerifier, ApprovalAppID: e.cfg.Identity.AppID,
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
@@ -582,6 +590,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	clusterTarget.Controllers = managedControllers.WithManagedDemandGuard(e.plans.GuardManagedDemandEffect)
 	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal).WithReplicaProof(proofKey), Credentials: clouds, Target: clusterTarget, Routes: routeService}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		Gate:              &e.metering,
 		ManagedCleanup:    cleanupExecution,
 		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,
 		Authz: authz, BackupPolicies: e.backups,
@@ -733,6 +742,11 @@ func databaseGatewayTrust(c forge.Container) func() ([]plane.TrustKey, error) {
 // Start schedules the drift check. Dispatch runs the workflow and the
 // check; the schedule needs the database, which is migrated by now.
 func (e *Extension) Start(ctx context.Context) error {
+	gate, meter, err := metering.Resolve(e.container)
+	if err != nil {
+		return fmt.Errorf("resolve the metering gate: %w", err)
+	}
+	e.metering.Set(gate, meter)
 	if e.restoreTargets != nil {
 		if err := e.restoreTargets(ctx); err != nil {
 			return err

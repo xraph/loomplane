@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
@@ -39,6 +40,7 @@ const (
 	InvestigationCeiling        = time.Hour
 	MaxConcurrentInvestigations = 3
 	PauseBudget                 = "budget"
+	PauseBilling                = "billing"
 	// runTimeout bounds one workspace's pass, well under LeaseTTL, so the
 	// lease never runs out mid-pass.
 	runTimeout = 90 * time.Second
@@ -49,6 +51,7 @@ const (
 // What people read about investigations and the budget.
 const (
 	noteBudget     = "The agent didn't investigate this: the workspace's AI budget for the month is used up."
+	noteBilling    = "The agent didn't investigate this: the workspace needs the AI add-on (Settings > Billing) or its own model key."
 	noteCapped     = "Three investigations were already running."
 	noteUnfinished = "The investigation didn't finish within an hour."
 	// A run that couldn't start or stopped early gets one of these, never
@@ -57,11 +60,13 @@ const (
 	noteNotStarted = "The agent couldn't start looking into this."
 	noteStopped    = "The agent couldn't finish looking into this."
 
-	pausedTitle  = "The agent stopped investigating: this workspace has used its AI budget for the month"
-	pausedBody   = "Loomplane still opens reports from what it sees and sends them as usual. The agent won't investigate them until the budget has room. An admin can raise it in AI settings."
-	resumedTitle = "The agent is investigating again"
-	resumedBody  = "This workspace's AI budget has room again, so the agent is investigating new reports."
-	settingsPath = "/settings/ai"
+	pausedTitle        = "The agent stopped investigating: this workspace has used its AI budget for the month"
+	pausedBody         = "Loomplane still opens reports from what it sees and sends them as usual. The agent won't investigate them until the budget has room. An admin can raise it in AI settings."
+	pausedBillingTitle = "The agent stopped investigating: this workspace needs the AI add-on or its own model key"
+	pausedBillingBody  = "Loomplane still opens reports from what it sees and sends them as usual. The agent won't investigate them until an owner turns on the AI add-on in Settings > Billing, or adds a model key of the workspace's own in AI settings."
+	resumedTitle       = "The agent is investigating again"
+	resumedBody        = "This workspace's AI budget has room again, so the agent is investigating new reports."
+	settingsPath       = "/settings/ai"
 )
 
 // Events reads a workspace's recorded events. *realtime.PgStore is the
@@ -487,8 +492,8 @@ func (p *pass) investigate() error {
 		}
 		if !p.st.Paused && running < MaxConcurrentInvestigations {
 			switch berr := p.w.Budget.RequireBudget(p.ctx, p.org); {
-			case errors.Is(berr, agentsettings.ErrBudgetExhausted):
-				if serr := p.pause(); serr != nil {
+			case errors.Is(berr, agentsettings.ErrBudgetExhausted), errors.Is(berr, metering.ErrBlocked):
+				if serr := p.pause(berr); serr != nil {
 					return serr
 				}
 			case berr != nil:
@@ -499,7 +504,7 @@ func (p *pass) investigate() error {
 		}
 		switch {
 		case p.st.Paused:
-			err = p.move(r, []string{agentreports.InvestigationNone}, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: noteBudget})
+			err = p.move(r, []string{agentreports.InvestigationNone}, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: p.pausedNote()})
 		case running >= MaxConcurrentInvestigations:
 			err = p.move(r, []string{agentreports.InvestigationNone}, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: noteCapped})
 		default:
@@ -548,11 +553,11 @@ func (p *pass) start(r *agentreports.Report) (started bool, err error) {
 		Metadata: map[string]string{agentruns.MetaReportID: r.ID, agentruns.MetaFingerprint: r.Fingerprint},
 	})
 	switch {
-	case errors.Is(err, agentsettings.ErrBudgetExhausted):
-		if serr := p.pause(); serr != nil {
+	case errors.Is(err, agentsettings.ErrBudgetExhausted), errors.Is(err, metering.ErrBlocked):
+		if serr := p.pause(err); serr != nil {
 			return false, serr
 		}
-		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: noteBudget})
+		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationSkipped, Note: p.pausedNote()})
 	case err != nil:
 		p.w.warn("agentwatch: start the investigation of report "+r.ID, err)
 		return false, p.move(r, queued, agentreports.Investigation{Status: agentreports.InvestigationFailed, Note: noteNotStarted})
@@ -642,8 +647,8 @@ func (p *pass) follow() error {
 				return err
 			}
 			// A run that ran out of budget pauses the rest.
-			if berr := p.w.Budget.RequireBudget(p.ctx, p.org); errors.Is(berr, agentsettings.ErrBudgetExhausted) {
-				if err := p.pause(); err != nil {
+			if berr := p.w.Budget.RequireBudget(p.ctx, p.org); errors.Is(berr, agentsettings.ErrBudgetExhausted) || errors.Is(berr, metering.ErrBlocked) {
+				if err := p.pause(berr); err != nil {
 					return err
 				}
 			} else if berr != nil {
@@ -731,13 +736,17 @@ func (p *pass) accepted(repo string, seen map[string]bool) bool {
 
 // pause stops investigations until the budget has room: once, with one
 // notice to the owners and admins saved with the state.
-func (p *pass) pause() error {
+func (p *pass) pause(cause error) error {
 	if p.st.Paused {
 		return nil
 	}
 	now := p.now
-	p.st.Paused, p.st.PausedReason, p.st.PausedAt = true, PauseBudget, &now
-	if err := p.notifyAt("watcher-paused", p.st.PausedAt, pausedTitle, pausedBody); err != nil {
+	reason, title, body := PauseBudget, pausedTitle, pausedBody
+	if errors.Is(cause, metering.ErrBlocked) {
+		reason, title, body = PauseBilling, pausedBillingTitle, pausedBillingBody
+	}
+	p.st.Paused, p.st.PausedReason, p.st.PausedAt = true, reason, &now
+	if err := p.notifyAt("watcher-paused", p.st.PausedAt, title, body); err != nil {
 		return err
 	}
 	// Recorded once the pause is saved, so the audit never says paused
@@ -749,7 +758,7 @@ func (p *pass) pause() error {
 // resume starts investigating again once the budget has room.
 func (p *pass) resume() error {
 	err := p.w.Budget.RequireBudget(p.ctx, p.org)
-	if errors.Is(err, agentsettings.ErrBudgetExhausted) {
+	if errors.Is(err, agentsettings.ErrBudgetExhausted) || errors.Is(err, metering.ErrBlocked) {
 		return nil
 	}
 	if err != nil {
@@ -789,13 +798,29 @@ func (p *pass) notifyAt(subject string, pausedAt *time.Time, title, body string)
 	})
 }
 
+// pausedReason is why the watcher is paused, or was when it resumed.
+func (p *pass) pausedReason() string {
+	if p.st.PausedReason == PauseBilling {
+		return PauseBilling
+	}
+	return PauseBudget
+}
+
+// pausedNote is what a report skipped for the pause reads.
+func (p *pass) pausedNote() string {
+	if p.st.PausedReason == PauseBilling {
+		return noteBilling
+	}
+	return noteBudget
+}
+
 func (p *pass) audit(action string) {
 	if p.w.Audit == nil {
 		return
 	}
 	p.w.Audit.Record(context.WithoutCancel(p.ctx), projects.AuditEvent{
 		Action: action, Severity: "info", Principal: security.AgentPrincipal(p.org, nil),
-		Attributes: map[string]any{"reason": PauseBudget},
+		Attributes: map[string]any{"reason": p.pausedReason()},
 	})
 }
 

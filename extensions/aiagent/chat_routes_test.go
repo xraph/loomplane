@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -400,6 +401,8 @@ func TestRouteErrorStatuses(t *testing.T) {
 		{agentchat.ErrNotFound, http.StatusNotFound, agentchat.ErrNotFound.Error()},
 		{fmt.Errorf("%w: write a message", agentchat.ErrInvalid), http.StatusUnprocessableEntity, "invalid message: write a message"},
 		{wrapped(agentsettings.ErrBudgetExhausted), http.StatusConflict, agentsettings.ErrBudgetExhausted.Error()},
+		{wrapped(&metering.BlockedError{Reason: "Turn on the AI add-on in Settings > Billing, or add your own model key."}), http.StatusPaymentRequired, "Turn on the AI add-on in Settings"},
+		{wrapped(metering.ErrNotReady), http.StatusServiceUnavailable, ""},
 		{wrapped(agentsettings.ErrDisabled), http.StatusConflict, agentsettings.ErrDisabled.Error()},
 		{agentruns.ErrNotFound, http.StatusNotFound, agentruns.ErrNotFound.Error()},
 		{fmt.Errorf("%w: there's no such conversation", agentruns.ErrInvalid), http.StatusUnprocessableEntity, "no such conversation"},
@@ -442,5 +445,18 @@ func TestRouteErrorStatuses(t *testing.T) {
 	}
 	if errors.Is(chatFail(errors.New("boom")), agentruns.ErrNotFound) {
 		t.Fatal("an unknown error mapped to not found")
+	}
+}
+
+func TestABlockedSendAnswersTheReasonAlone(t *testing.T) {
+	r, chat, _ := chatRig(t, true)
+	const why = "Turn on the AI add-on in Settings > Billing, or add your own model key."
+	chat.err = fmt.Errorf("start the turn: %w", &metering.BlockedError{Reason: why})
+	out := serve(t, r, http.MethodPost, "/api/v1/agent/conversations/ses_1/messages", `{"message":"more"}`, asAda())
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil || out.Code != http.StatusPaymentRequired || body.Error != why {
+		t.Fatalf("%d %s, want 402 with only the reason", out.Code, out.Body.String())
 	}
 }

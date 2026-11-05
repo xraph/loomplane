@@ -226,6 +226,17 @@ function Paused() {
   const watcher = useQuery(useAgentWatcherGet)
   const { can } = useOrganization()
   if (!watcher.data?.paused) return null
+  if (watcher.data.pausedReason === "billing") {
+    return (
+      <Alert>
+        <AlertDescription>
+          The agent stopped investigating: the AI add-on isn&apos;t covering
+          this workspace right now. Turn it on, or fix payment, in Settings &gt;
+          Billing. Reports still open and go out as usual.
+        </AlertDescription>
+      </Alert>
+    )
+  }
   return (
     <Alert>
       <AlertDescription>

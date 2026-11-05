@@ -38,7 +38,7 @@ func on(t *testing.T, name, model string, change ...func(*agentsettings.Deps)) (
 		in.Model = ptr(model)
 	}
 	h.mustUpdate(t, in)
-	return h, pipeline.WithTenantID(context.Background(), "tenant_o")
+	return h, pipeline.WithRequestID(pipeline.WithTenantID(context.Background(), "tenant_o"), "req_test")
 }
 
 // refused is a refusal: not ErrCredentialNotFound, which would serve the

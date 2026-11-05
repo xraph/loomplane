@@ -15,7 +15,7 @@ type State struct {
 	// EventCursor is the sequence of the last event the watcher read.
 	EventCursor  int64
 	Paused       bool
-	PausedReason string // PauseBudget
+	PausedReason string // PauseBudget or PauseBilling
 	PausedAt     *time.Time
 	Checks       map[string]Check // by binding ID
 	SweptAt      *time.Time

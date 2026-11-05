@@ -38,6 +38,17 @@ func Holds(roles []*rbac.Role, appID string) bool {
 	return false
 }
 
+// IsOwner reports whether roles include the platform-owner role in app
+// appID. A platform admin is not an owner.
+func IsOwner(roles []*rbac.Role, appID string) bool {
+	for _, r := range roles {
+		if r.AppID == appID && r.Slug == rbac.PlatformOwnerSlug {
+			return true
+		}
+	}
+	return false
+}
+
 // Grant gives the user with email the platform-owner role. It returns false,
 // and changes nothing, when the user already holds a platform role.
 func Grant(ctx context.Context, users UserFinder, roles rbac.Store, appID, email string) (granted bool, err error) {

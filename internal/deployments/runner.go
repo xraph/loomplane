@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -222,6 +223,7 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	gate              metering.Gate
 	instances         planning.InstanceVerifier
 	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
@@ -261,6 +263,9 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	// Gate refuses a deployment the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate              metering.Gate
 	Instances         planning.InstanceVerifier
 	ManagedCleanup    *ManagedCleanupExecution
 	ExistingResources planning.ExistingResourceResolver
@@ -347,7 +352,11 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{instances: d.Instances, managedCleanup: d.ManagedCleanup,
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Runner{gate: gate, instances: d.Instances, managedCleanup: d.ManagedCleanup,
 		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
@@ -402,6 +411,12 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	stale, err := r.staleRollback(ctx, plan)
 	if err != nil {
 		return "", nil, err
+	}
+	// A teardown runs nothing, so it is never refused for billing.
+	if !plan.TeardownOnly() {
+		if gateErr := r.gate.CanRun(ctx, orgID, metering.KindDeploy, false); gateErr != nil {
+			return "", nil, gateErr
+		}
 	}
 	id, err := typeid.Generate("dep")
 	if err != nil {

@@ -5,7 +5,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router"
-import { useCallback, useEffect } from "react"
+import { lazy, Suspense, useCallback, useEffect } from "react"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -27,6 +27,15 @@ import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
+
+// Only the cloud edition gates the shell on a card. The comparison is inline
+// so a public build drops the import and never ships the gate.
+const CardGate =
+  import.meta.env.VITE_LOOMPLANE_EDITION === "cloud"
+    ? lazy(() =>
+        import("@/cloud/card-gate").then((m) => ({ default: m.CardGate }))
+      )
+    : null
 
 const stepPath = "/setup/cloud-sign-in"
 const authPaths = ["/sign-in", "/sign-up"]
@@ -221,7 +230,15 @@ function Shell() {
         <AppSidebar />
         {/* Keyed on the organization, so switching remounts every page. */}
         <SidebarInset key={session.orgId} className="min-w-0">
-          <Outlet />
+          {CardGate ? (
+            <Suspense fallback={<PageLoading />}>
+              <CardGate>
+                <Outlet />
+              </CardGate>
+            </Suspense>
+          ) : (
+            <Outlet />
+          )}
           <AppStatusBar />
         </SidebarInset>
       </SidebarProvider>

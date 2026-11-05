@@ -29,6 +29,15 @@ func TestHoldsIgnoresOtherApps(t *testing.T) {
 	}
 }
 
+func TestIsOwner_AdminIsNot(t *testing.T) {
+	admin := []*rbac.Role{{AppID: "app", Slug: rbac.PlatformAdminSlug}}
+	owner := []*rbac.Role{{AppID: "app", Slug: rbac.PlatformOwnerSlug}}
+	otherApp := []*rbac.Role{{AppID: "other", Slug: rbac.PlatformOwnerSlug}}
+	if IsOwner(admin, "app") || !IsOwner(owner, "app") || IsOwner(otherApp, "app") {
+		t.Fatal("IsOwner")
+	}
+}
+
 type fakeUsers map[string]string
 
 func (f fakeUsers) UserIDByEmail(_ context.Context, email string) (string, error) {

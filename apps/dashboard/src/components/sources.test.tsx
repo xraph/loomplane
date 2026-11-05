@@ -38,7 +38,8 @@ const source: Record<string, unknown> = {
 
 function serve(
   sources: Record<string, unknown>[] = [source],
-  enable?: { status: number; body: unknown }
+  enable?: { status: number; body: unknown },
+  manifest?: Record<string, unknown>
 ) {
   const calls: { method: string; path: string; body?: unknown }[] = []
   vi.stubGlobal(
@@ -56,6 +57,10 @@ function serve(
           headers: { "Content-Type": "application/json" },
         })
       if (method === "DELETE") return new Response(null, { status: 204 })
+      if (url.pathname === "/api/v1/projects/p/manifest")
+        return manifest
+          ? json({ id: "r3", revision: method === "PUT" ? 4 : 3, manifest })
+          : new Response(null, { status: 404 })
       // What a project's page is told: workspace-only permissions such as
       // repository:connect are not in it.
       if (url.pathname === "/api/v1/projects/p/permissions")
@@ -77,6 +82,10 @@ function serve(
         return json({
           project_id: "p",
           excluded: [],
+          graph: {
+            sources: sources.map((s) => ({ alias: s.alias })),
+            services: [],
+          },
           sources: [
             {
               source: { alias: "shop" },
@@ -138,6 +147,78 @@ test("removing a repository asks first, from its menu", async () => {
       path: "/api/v1/projects/p/sources/shop",
     })
   )
+})
+
+// shop holds web, which api in the other repository needs and the edge
+// gateway only routes to.
+const twoRepos = {
+  version: 1,
+  services: {
+    web: { repo: "shop", source: "apps/web" },
+    api: { repo: "backend", source: "cmd/api", needs: ["web"] },
+  },
+  gateways: { edge: { routes: [{ path: "/", to: "web" }] } },
+}
+const backend = { ...source, id: "src_2", alias: "backend" }
+
+async function openRemove() {
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("button", { name: "More actions for shop" })
+  )
+  await user.click(await screen.findByRole("menuitem", { name: "Remove shop" }))
+  return { user, dialog: await screen.findByRole("alertdialog") }
+}
+
+test("removing a repository takes its services out of loomplane.yaml", async () => {
+  const calls = serve([source, backend], undefined, twoRepos)
+  const { user, dialog } = await openRemove()
+  const drop = await within(dialog).findByRole("checkbox", {
+    name: "Also take web out of loomplane.yaml",
+  })
+  expect(drop).toBeChecked()
+  expect(
+    within(dialog).getByText(/The edge gateway only routes to/)
+  ).toBeVisible()
+  expect(
+    within(dialog).getByText(/the next deploy there deletes/)
+  ).toBeVisible()
+  await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+  await vi.waitFor(() =>
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([
+      { method: "DELETE", path: "/api/v1/projects/p/sources/shop" },
+      {
+        method: "PUT",
+        path: "/api/v1/projects/p/manifest",
+        body: {
+          base_revision: 3,
+          manifest: {
+            version: 1,
+            services: { api: { repo: "backend", source: "cmd/api" } },
+            gateways: {},
+          },
+        },
+      },
+    ])
+  )
+})
+
+test("removing a repository can leave its services in loomplane.yaml", async () => {
+  const calls = serve([source, backend], undefined, twoRepos)
+  const { user, dialog } = await openRemove()
+  await user.click(
+    await within(dialog).findByRole("checkbox", {
+      name: "Also take web out of loomplane.yaml",
+    })
+  )
+  await user.click(within(dialog).getByRole("button", { name: "Remove" }))
+  await vi.waitFor(() =>
+    expect(calls).toContainEqual({
+      method: "DELETE",
+      path: "/api/v1/projects/p/sources/shop",
+    })
+  )
+  expect(calls.some((c) => c.method === "PUT")).toBe(false)
 })
 
 test("a viewer can open a repository but not change the list", async () => {
