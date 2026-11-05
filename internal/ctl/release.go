@@ -104,16 +104,20 @@ func (a *App) releasePrepare(ctx cli.CommandContext) error {
 
 // preparingError adds the way forward to a 409: an open plan can be
 // replaced; a preparation already running can only be read or cancelled.
+// Any other 409, such as the agent off for the workspace, passes as it is.
 func preparingError(err error) error {
 	var e *client.Error
 	if !errors.As(err, &e) || e.Status != http.StatusConflict {
 		return releaseError(err)
 	}
 	msg := oneLine(e.Message, 600)
-	if strings.Contains(strings.ToLower(e.Message), "already being prepared") {
+	switch lower := strings.ToLower(e.Message); {
+	case strings.Contains(lower, "already being prepared"):
 		return sentence(msg + "\nRead it with `loomctl release list <project>`, or stop it with `loomctl release cancel <id>`.")
+	case strings.Contains(lower, "waiting for a decision"):
+		return sentence(msg + "\nTo replace that plan with this release, run the command again with --replace.")
 	}
-	return sentence(msg + "\nTo replace that plan with this release, run the command again with --replace.")
+	return err
 }
 
 // releaseSettled is a state to stop waiting at: a final one, or the one
@@ -292,7 +296,8 @@ func (a *App) printReleaseReport(r *client.ReleaseReport) {
 			a.printf("  %s: %s\n", oneLine(k.Kind, 10), quoted(k.Text, 2000))
 		}
 	}
-	if r.State == "waiting_for_person" && r.PlanID != "" && r.PlanRevision != "" {
+	// A stopped review leaves the plan waiting for a person too.
+	if (r.State == "waiting_for_person" || r.State == "stopped") && r.PlanID != "" && r.PlanRevision != "" {
 		a.printf("\napprove with: loomctl approve %s --revision %s\n", oneLine(r.PlanID, 80), oneLine(r.PlanRevision, 128))
 	}
 }

@@ -57,8 +57,8 @@ func (s *releaseCtl) handler() http.HandlerFunc {
 				i = len(s.states) - 1
 			}
 			state := s.states[i]
-			if state == "waiting_for_person" {
-				_, _ = w.Write([]byte(waitingReport))
+			if state == "waiting_for_person" || state == "stopped" {
+				_, _ = w.Write([]byte(strings.Replace(waitingReport, `"state":"waiting_for_person"`, `"state":"`+state+`"`, 1)))
 				return
 			}
 			_, _ = w.Write([]byte(`{"id":"rrep_1","from_environment":"staging","to_environment":"production","state":"` + state + `"}`))
@@ -181,5 +181,32 @@ func TestMCPOffersNoToolThatPreparesARelease(t *testing.T) {
 				t.Errorf("loomctl mcp (%+v) offers %s", opts, name)
 			}
 		}
+	}
+}
+
+// Final review I1: a workspace with its agent off answers every release
+// call with the scope binder's 409. loomctl says so, and never offers
+// --replace for it.
+func TestReleaseWorkspaceAgentOff(t *testing.T) {
+	s := &releaseCtl{code: 409, body: `{"error":"the agent is off for this workspace; an admin can turn it on in AI settings"}`}
+	for _, args := range [][]string{{"release", "prepare", "checkout-api"}, {"release", "list", "checkout-api"}, {"release", "report", "rrep_1"}, {"release", "cancel", "rrep_1"}} {
+		app, _ := agentApp(t, s.handler(), "")
+		err := app.Run(args)
+		if err == nil || !strings.Contains(err.Error(), "agent is off for this workspace") || strings.Contains(err.Error(), "--replace") {
+			t.Errorf("%v: err = %v", args, err)
+		}
+	}
+}
+
+// Final review M3: a stopped report leaves the plan waiting too, so it
+// prints the line to approve it.
+func TestReleaseReportPrintsTheApproveLineWhenStopped(t *testing.T) {
+	s := &releaseCtl{states: []string{"stopped"}}
+	app, out := agentApp(t, s.handler(), "")
+	if err := app.Run([]string{"release", "report", "rrep_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "approve with: loomctl approve plan_9 --revision rev7") {
+		t.Fatalf("output lacks the approve line:\n%s", got)
 	}
 }
