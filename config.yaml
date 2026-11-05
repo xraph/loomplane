@@ -325,3 +325,15 @@ ai:
 # how to rotate. Leave it empty and the gateway endpoints answer 503.
 dbgateway:
   signing_key_file: "${LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE:-}"
+
+# The audit trail. Every API replica signs each stream's new events with an
+# Ed25519 key that Loomplane keeps in Vault and creates on first start. The
+# public key and its ID are logged at start ("audit checkpoints are signed"),
+# so you can pin them in Hallproof. A stream is signed once it gains
+# every_events events, or every_interval after its last signature if it
+# gained any.
+chronicle:
+  checkpoints:
+    enabled: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED:-true}"
+    every_events: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS:-1000}"
+    every_interval: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL:-15m}"

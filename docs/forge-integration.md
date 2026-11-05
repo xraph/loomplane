@@ -147,6 +147,12 @@ Chronicle keeps the audit trail. authsome records sign-ups, sign-ins and organiz
 
 The identity extension builds it with `chronicle.New` over Chronicle's Postgres store. authsome gets it through `chronicleadapter`, wrapped so its events have a category (see Authsome above). Loomplane's events set the category, app and tenant explicitly (`extensions/projects/audit.go`, and `member.invite` in `extensions/identity/members.go`), because Chronicle rejects an event without a category. Recording never fails the change it describes: a failed record is logged.
 
+Every API replica signs checkpoints over the streams (`internal/checkpoints`, wired in `extensions/identity/checkpoints.go`). A checkpoint is Chronicle's signed statement of where a stream stood, so you can prove later that nobody rewrote the events it covers. Chronicle's own scheduler is private to its Forge extension, which Loomplane doesn't run, so Loomplane has a copy of it: a stream is signed once it gains `chronicle.checkpoints.every_events` events (1000), or `every_interval` (15m) after its last checkpoint if it gained any. Replicas racing for the same checkpoint store it once.
+
+The Ed25519 key lives in Vault under its own app, `loomplane-chronicle-checkpoints`, encrypted with a key derived from `secret_key` (label `chronicle-checkpoint`). The first replica to start creates it under the startup lock. Each start logs `audit checkpoints are signed` with the key ID and the base64 public key, which is what you pin in Hallproof. Mind you, the key sits in the same database as the events it signs: someone with only the database can't forge a checkpoint, but someone with the database and `secret_key` can.
+
+Digests stay on Chronicle's default, `chronicle/v4`. Hallproof only verifies that scheme, and Chronicle won't move a stream back from a keyed one, so don't turn keyed digests on.
+
 Limits: no read API or audit screen yet.
 
 ## Vault

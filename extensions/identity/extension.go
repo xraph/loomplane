@@ -104,11 +104,13 @@ type Extension struct {
 	authz      *security.Authorizer
 	audit      *chronicle.Chronicle
 	auditStore chronstore.Store
-	smith      *keysmith.Engine
-	engine     *authsome.Engine
-	keys       *apikeys.Service
-	teams      *teams.Service
-	lockPG     *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	// checkpoints signs auditStore's streams (checkpoints.go).
+	checkpoints *auditCheckpoints
+	smith       *keysmith.Engine
+	engine      *authsome.Engine
+	keys        *apikeys.Service
+	teams       *teams.Service
+	lockPG      *pgdriver.PgDB // the sync lock's own pool (wireTeams)
 	// joined finds the nodes a key's join tokens brought in. The nodes
 	// extension registers after this one, so it is looked up per request.
 	joined        func() JoinedNodes
@@ -198,12 +200,19 @@ func (e *Extension) register(fapp forge.App) error {
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
 	e.auditStore = chronpg.New(db)
+	if e.checkpoints, err = e.newAuditCheckpoints(db); err != nil {
+		return err
+	}
+	// Digests stay on Chronicle's plain chronicle/v4: Hallproof verifies
+	// those and rejects keyed ones, and a stream can't go back once keyed.
 	if e.audit, err = chronicle.New(
 		chronicle.WithStore(chronstore.NewAdapter(e.auditStore)),
 		chronicle.WithLogger(e.Logger()),
+		chronicle.WithCheckpointSigner(e.checkpoints.signer),
 	); err != nil {
 		return fmt.Errorf("chronicle: %w", err)
 	}
+	e.scheduleCheckpoints(fapp)
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
 	if teamsErr := e.wireTeams(); teamsErr != nil {
 		return teamsErr
@@ -340,6 +349,9 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
+	if err := e.startCheckpoints(ctx); err != nil {
+		return err
+	}
 	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
@@ -406,6 +418,7 @@ func (e *Extension) mount(ctx context.Context) error {
 // grove extension.
 func (e *Extension) Stop(ctx context.Context) error {
 	var errs []error
+	e.stopCheckpoints()
 	if e.router != nil {
 		errs = append(errs, e.router.Stop(ctx))
 	}
@@ -528,6 +541,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 		return err
 	}
 	if err := e.verifyPlatformOwners(ctx); err != nil {
+		return err
+	}
+	if err := e.ensureCheckpointKey(ctx); err != nil {
 		return err
 	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {

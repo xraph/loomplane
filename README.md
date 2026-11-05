@@ -149,6 +149,9 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 | `LOOMPLANE_BACKUP_URL` | unset | An independent S3 destination for off-host recovery |
 | `LOOMPLANE_PLANNING_APPROVAL_WINDOW` | `168h` | How long a plan waits for a decision |
 | `LOOMPLANE_DRIFT_INTERVAL` | `30m` | How often deployments are checked for drift; `0` turns it off |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED` | `true` | Signs the audit trail's streams with an Ed25519 key kept in Vault. The public key is logged at start |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS` | `1000` | Signs a stream once it gains this many events |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL` | `15m` | Signs a stream that gained any event at least this often |
 | `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | unset | Ranges an endpoint check from a Kubernetes target never connects to, such as `10.20.0.0/16`. Loomplane's own host, database and API are always refused |
 | `LOOMPLANE_ANALYSIS_CONCURRENCY` | `2` | How many repositories the worker analyzes at once |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | The worker's health checks |
