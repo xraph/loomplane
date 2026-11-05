@@ -679,14 +679,22 @@ func (s *Service) Bindings(ctx context.Context, p security.Principal, projectID,
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	project, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
 	if err != nil {
 		return nil, err
 	}
-	return s.store.ListBindings(ctx, p.OrgID, env.ID)
+	bindings, err := s.store.ListBindings(ctx, p.OrgID, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range bindings {
+		b.SuggestedAlias = SuggestAlias(project.Slug, env.Name, b.Subject, b.Name)
+	}
+	return bindings, nil
 }
 
 // Deployed returns what's deployed of each of a project's live

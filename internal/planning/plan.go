@@ -826,15 +826,21 @@ func (p *Plan) normalize() {
 // or provider resource. Deployments write bindings; planning reads them to
 // know what exists.
 type Binding struct {
-	ID            string          `json:"id" forge:"id"`
-	OrgID         string          `json:"org_id"`
-	ProjectID     string          `json:"project_id"`
-	EnvironmentID string          `json:"environment_id"`
-	Subject       Subject         `json:"subject"`
-	Name          string          `json:"name"`
-	Provider      string          `json:"provider"`
-	Region        string          `json:"region"`
-	Engine        provider.Engine `json:"engine"`
+	ID            string  `json:"id" forge:"id"`
+	OrgID         string  `json:"org_id"`
+	ProjectID     string  `json:"project_id"`
+	EnvironmentID string  `json:"environment_id"`
+	Subject       Subject `json:"subject"`
+	Name          string  `json:"name"`
+	// Alias is the name people gave what the binding runs, or empty. It
+	// names nothing in the cloud, and a redeploy keeps it.
+	Alias string `json:"alias"`
+	// SuggestedAlias is the alias Loomplane proposes while none is set. It
+	// isn't stored.
+	SuggestedAlias string          `json:"suggested_alias,omitempty"`
+	Provider       string          `json:"provider"`
+	Region         string          `json:"region"`
+	Engine         provider.Engine `json:"engine"`
 	// ExternalID is the Ctrl Plane instance's ID, or the provider's ID for
 	// a resource Loomplane manages itself.
 	ExternalID string `json:"external_id"`
@@ -915,6 +921,11 @@ type Store interface {
 	// RecordDrift stores what a drift check found.
 	RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error
 	PutBinding(ctx context.Context, b *Binding) error
+	// GetBinding returns one binding of the organization, or ErrNotFound.
+	GetBinding(ctx context.Context, orgID, id string) (*Binding, error)
+	// SetBindingAlias names what a binding runs; empty clears it. It
+	// returns ErrAliasTaken when another binding of the environment has it.
+	SetBindingAlias(ctx context.Context, orgID, id, alias string) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
 	// SetReplaced records what a binding's action ran as before it moved
 	// and still needs removing, replacing what was recorded.

@@ -1062,6 +1062,24 @@ export class RESTClient extends Client {
       return this.request<types.BindingList>(config);
     },
 
+    /**
+     * Name what a binding runs; the alias changes no cloud resource, and empty clears it
+     */
+    setAlias: async (id: string, binding: string, body: types.BindingAliasInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Binding> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/bindings/${encodeURIComponent(String(binding))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BindingAliasInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Binding"],
+      };
+
+      return this.request<types.Binding>(config);
+    },
+
   };
 
   public readonly bitbucket = {

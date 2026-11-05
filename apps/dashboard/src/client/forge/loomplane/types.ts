@@ -345,6 +345,7 @@ export interface BackupList {
 }
 
 export interface Binding {
+  alias: string;
   commitSha: string;
   config: string;
   connectionId: string;
@@ -366,8 +367,13 @@ export interface Binding {
   region: string;
   revision: string;
   subject: string;
+  suggestedAlias?: string;
   updatedAt: string;
   url: string;
+}
+
+export interface BindingAliasInputBody {
+  alias: string;
 }
 
 export interface BindingList {

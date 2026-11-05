@@ -2324,6 +2324,16 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['BindingList'],
   },
+  'bindings.setAlias': {
+    method: 'PATCH',
+    path: '/api/v1/projects/{id}/bindings/{binding}',
+    entity: 'Binding',
+    rootType: 'Binding',
+    provides: ['Binding:{id}'],
+    invalidates: ['Binding[]'],
+    bodyCodec: CODECS['BindingAliasInputBody'],
+    responseCodec: CODECS['Binding'],
+  },
   'cloudChanges.apply': {
     method: 'POST',
     path: '/api/v1/projects/{id}/cloud-changes/apply',

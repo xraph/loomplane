@@ -9763,6 +9763,58 @@
         }
       }
     },
+    "/api/v1/projects/{id}/bindings/{binding}": {
+      "patch": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Name what a binding runs; the alias changes no cloud resource, and empty clears it",
+        "operationId": "bindings.setAlias",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "binding",
+            "in": "path",
+            "description": "Path parameter: binding",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindingAliasInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Binding"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/cloud-changes/apply": {
       "post": {
         "tags": [
@@ -19004,6 +19056,7 @@
           "environment_id",
           "subject",
           "name",
+          "alias",
           "provider",
           "region",
           "engine",
@@ -19020,6 +19073,9 @@
           "updated_at"
         ],
         "properties": {
+          "alias": {
+            "type": "string"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -19084,6 +19140,9 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          },
+          "suggested_alias": {
             "type": "string"
           },
           "updated_at": {
@@ -41322,6 +41381,17 @@
             "type": "integer"
           },
           "error": {
+            "type": "string"
+          }
+        }
+      },
+      "BindingAliasInputBody": {
+        "type": "object",
+        "required": [
+          "alias"
+        ],
+        "properties": {
+          "alias": {
             "type": "string"
           }
         }
