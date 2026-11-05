@@ -87,8 +87,10 @@ type DeploymentInput struct {
 
 // Decision is an approval or a rejection, as the signal carries it.
 type Decision struct {
-	Actor   *security.Principal `json:"actor,omitempty"`
-	Approve bool                `json:"approve"`
+	RequestID      string              `json:"request_id,omitempty"`
+	GroupAdmission string              `json:"group_admission,omitempty"`
+	Actor          *security.Principal `json:"actor,omitempty"`
+	Approve        bool                `json:"approve"`
 	// Revision is the plan revision the decider reviewed.
 	Revision string `json:"revision"`
 	By       string `json:"by"`
@@ -574,6 +576,9 @@ func (d *Deployments) Start(ctx context.Context, orgID, planID string, window ti
 
 // Decide delivers approval to the build and run stored for this plan.
 func (d *Deployments) Decide(ctx context.Context, planID, requestID string, dec Decision) error {
+	if (dec.RequestID != "" && dec.RequestID != requestID) || (dec.GroupAdmission != "" && dec.RequestID == "") {
+		return errors.New("decision request does not match its durable signal")
+	}
 	e, err := d.planRun(ctx, planID)
 	if errors.Is(err, durable.ErrNotFound) {
 		return ErrNotRunning

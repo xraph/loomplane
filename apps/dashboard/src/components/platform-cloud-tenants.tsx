@@ -10,9 +10,13 @@ import {
 import type { TenantRow } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { LimitsDialog } from "@/components/platform-cloud-limits-dialog"
-import { Confirm, errorOf } from "@/components/platform-cloud-parts"
+import {
+  Confirm,
+  errorOf,
+  PlatformCloudEmpty,
+  PlatformCloudStatus,
+} from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -23,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { statusLabel, suspendMessage, usageRows } from "@/lib/platform-cloud"
+import { suspendMessage, usageRows } from "@/lib/platform-cloud"
 
 const accepted = "Recorded. Running work may take a moment to stop or start."
 
@@ -105,7 +109,9 @@ export function PlatformCloudTenants() {
         <Skeleton className="h-24 w-full rounded-xl" />
       )}
       {tenants.data && tenants.data.tenants.length === 0 && (
-        <p className="text-sm text-muted-foreground">No workspaces yet.</p>
+        <PlatformCloudEmpty title="No workspaces yet.">
+          Workspaces appear here when they are created.
+        </PlatformCloudEmpty>
       )}
       {tenants.data && tenants.data.tenants.length > 0 && (
         <Table>
@@ -133,9 +139,7 @@ export function PlatformCloudTenants() {
                 <TableRow key={row.orgId}>
                   <TableCell className="font-medium">{name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">
-                      {statusLabel("tenant", status)}
-                    </Badge>
+                    <PlatformCloudStatus kind="tenant" status={status} />
                     {message && (
                       <div className="mt-1 text-xs text-muted-foreground">
                         {message}

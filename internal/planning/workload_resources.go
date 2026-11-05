@@ -3,10 +3,77 @@ package planning
 import (
 	"cmp"
 	"math"
+	"reflect"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/fleets"
+	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+func fleetCapacityPlan(plan *Plan) bool {
+	return plan != nil && (plan.Kind == KindInstance || plan.ManagedInstanceID != "" || plan.FleetInput != nil)
+}
+
+func checkFleetCapacityMode(plan *Plan, cfg *ServiceConfig) error {
+	if !fleetCapacityPlan(plan) {
+		return nil
+	}
+	if plan.Kind != KindInstance || plan.ManagedInstanceID == "" || plan.FleetInput == nil || cfg == nil {
+		return ErrInvalid
+	}
+	if cfg.CapacityMode != "" && cfg.CapacityMode != "guaranteed" || cfg.ClusterDemand != nil && cfg.ClusterDemand.Mode != "guaranteed" {
+		return workloadBlock("fleet_capacity_mode_unqualified")
+	}
+	return nil
+}
+
+// managedPlanWorkloadMaximum separates the reservation ceiling from the runtime
+// replica writer. Both review and execution derive it from the sealed snapshot.
+func managedPlanWorkloadMaximum(plan *Plan, service string, cfg *ServiceConfig) (cloudinfra.ClusterWorkloadVector, error) {
+	if plan == nil || cfg == nil {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	if plan.Kind != KindInstance {
+		if plan.ManagedInstanceID != "" {
+			return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+		}
+		return managedWorkloadMaximum(cfg)
+	}
+	in := plan.FleetInput
+	if in == nil || plan.ManagedInstanceID == "" {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	snapshot, authority := in.Snapshot, in.Authority
+	digest, err := fleets.SnapshotDigest(&snapshot)
+	if err != nil || snapshot.Digest == "" || digest != snapshot.Digest || authority.Request.SnapshotDigest != digest || snapshot.InstanceID != plan.ManagedInstanceID || snapshot.EnvironmentID != plan.EnvironmentID || snapshot.FleetID != authority.Scope.FleetID || authority.Scope.OrgID != plan.OrgID || authority.Scope.ProjectID != plan.ProjectID || snapshot.ProfileID != authority.Request.ProfileID || snapshot.ReleaseID != authority.Request.ReleaseID || snapshot.Generation < 1 || snapshot.OwnershipEpoch < 1 {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	profile, ok := snapshot.Template.Profiles[snapshot.ProfileID]
+	if !ok {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	size, ok := profile.Services[service]
+	if !ok || size.MinReplicas < 1 || size.MaxReplicas < size.MinReplicas || size.MaxReplicas > manifest.MaxInstances || cfg.Size == nil || cfg.Size.CPU != float64(size.CPUMillis)/1000 || int64(cfg.Size.Memory) != size.MemoryMiB {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	execution, err := instanceExecutionManifest(snapshot.Manifest)
+	if err != nil {
+		return cloudinfra.ClusterWorkloadVector{}, err
+	}
+	expected, ok := execution.Services[service]
+	if !ok || !reflect.DeepEqual(cfg.Size, expected.Size) || !reflect.DeepEqual(cfg.Scale, expected.Scale) || !reflect.DeepEqual(cfg.PodGroup, expected.PodGroup) {
+		return cloudinfra.ClusterWorkloadVector{}, ErrInvalid
+	}
+	if cfg.GPU != nil || cfg.Size.GPU != nil || cfg.Size.Shm > 0 || cfg.Catalog != nil || cfg.Component != nil {
+		return cloudinfra.ClusterWorkloadVector{}, workloadBlock("workload_constraints_unsupported")
+	}
+	demand, err := cloudinfra.FleetWorkloadDemand([]cloudinfra.FleetWorkload{{CPUMillis: size.CPUMillis, MemoryMiB: size.MemoryMiB, MaxReplicas: int64(size.MaxReplicas), PodGroup: cfg.PodGroup}})
+	if err != nil {
+		return cloudinfra.ClusterWorkloadVector{}, err
+	}
+	return demand.Workload, nil
+}
 
 // OwnedMainResources matches the main container requests sent to the runtime.
 // Memory is in MiB here, matching the runtime service specification.

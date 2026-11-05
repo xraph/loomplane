@@ -64,7 +64,7 @@ func TestCanonicalRejectsUnsupportedPrincipalFields(t *testing.T) {
 }
 
 func TestFenceInventoryAndSchemaQuoting(t *testing.T) {
-	if len(authorityTables) != 13 {
+	if len(authorityTables) != 17 {
 		t.Fatalf("tables=%d", len(authorityTables))
 	}
 	sql := fenceSQL(`quoted"schema`)

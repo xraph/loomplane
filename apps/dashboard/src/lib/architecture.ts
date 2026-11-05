@@ -4,7 +4,7 @@
 
 import type {
   Analysis,
-  Evidence,
+  DiscoveryEvidence as Evidence,
   Graph,
   Package,
   Resource,

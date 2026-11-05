@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "run_id": "fleet-check-001",
+  "target": {
+    "api_url": "http://127.0.0.1:8090",
+    "org_id": "org-fixture",
+    "fleet_id": "fleet-fixture",
+    "stage_id": "stage-fixture",
+    "cloud_id": "cloud-fixture",
+    "region": "region-fixture",
+    "runtime": "kubernetes"
+  },
+  "budget": {
+    "currency": "USD",
+    "max_minor_units": 100
+  },
+  "bounds": {
+    "max_instances": 2,
+    "max_replicas_per_service": 1,
+    "max_cpu_millis": 2000,
+    "max_memory_mib": 640,
+    "max_storage_gib": 2,
+    "max_buckets": 2,
+    "max_duration_seconds": 600
+  },
+  "declared_capabilities": [
+    "namespace_isolation",
+    "pod_groups",
+    "lifecycle_jobs",
+    "database_credentials",
+    "bucket_credentials"
+  ],
+  "cleanup": {
+    "policy": "retain_data",
+    "resource_ids": []
+  }
+}

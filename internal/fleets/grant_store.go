@@ -95,6 +95,16 @@ func (s *PgStore) ReserveAuthority(ctx context.Context, a *OperationAuthority) (
 	}
 	defer func() { err = rollback(tx, err) }()
 	scope := a.Scope
+	// Match identity reservation's parent-first lock order before taking a grant.
+	var fleetStatus string
+	if parentErr := tx.QueryRow(ctx, `SELECT status FROM loomplane_fleets WHERE org_id=$1 AND project_id=$2 AND id=$3 FOR SHARE`, scope.OrgID, scope.ProjectID, scope.FleetID).Scan(&fleetStatus); parentErr != nil {
+		return nil, storeError(parentErr)
+	}
+	var stageRevision int64
+	var cloudAllowed bool
+	if stageErr := tx.QueryRow(ctx, `SELECT s.policy_revision,EXISTS(SELECT 1 FROM loomplane_fleet_stage_clouds c WHERE c.org_id=s.org_id AND c.stage_id=s.id AND c.cloud_id=$5) FROM loomplane_fleet_stages s WHERE s.org_id=$1 AND s.project_id=$2 AND s.fleet_id=$3 AND s.id=$4 FOR SHARE OF s`, scope.OrgID, scope.ProjectID, scope.FleetID, a.Request.StageID, a.Request.CloudID).Scan(&stageRevision, &cloudAllowed); stageErr != nil {
+		return nil, storeError(stageErr)
+	}
 	g, err := scanGrant(tx.QueryRow(ctx, `SELECT `+grantColumns+` FROM loomplane_fleet_grants WHERE org_id=$1 AND project_id=$2 AND fleet_id=$3 AND id=$4 FOR UPDATE`, scope.OrgID, scope.ProjectID, scope.FleetID, a.Request.GrantID))
 	if err != nil {
 		return nil, err
@@ -134,9 +144,17 @@ func (s *PgStore) ReserveAuthority(ctx context.Context, a *OperationAuthority) (
 	if count >= l.MaxInstances || d.CPUMillis > l.CPUMillis-cpu || d.MemoryMiB > l.MemoryMiB-memory || d.StorageGiB > l.StorageGiB-storage || d.HourlyCostMicros > l.HourlyCostMicros-cost {
 		return nil, ErrCapacity
 	}
-	var stageRevision int64
-	if policyErr := tx.QueryRow(ctx, `SELECT s.policy_revision FROM loomplane_fleet_stages s JOIN loomplane_fleets f ON f.org_id=s.org_id AND f.id=s.fleet_id WHERE s.org_id=$1 AND s.project_id=$2 AND s.fleet_id=$3 AND s.id=$4 AND f.status='active' AND EXISTS(SELECT 1 FROM loomplane_fleet_stage_clouds c WHERE c.org_id=s.org_id AND c.stage_id=s.id AND c.cloud_id=$5) FOR SHARE OF s,f`, scope.OrgID, scope.ProjectID, scope.FleetID, a.Request.StageID, a.Request.CloudID).Scan(&stageRevision); policyErr != nil {
-		return nil, storeError(policyErr)
+	if fleetStatus != "active" || !cloudAllowed {
+		return nil, ErrNotFound
+	}
+	// The parent lock can wait behind queued cancellation. Read the target in a
+	// new statement after acquiring that lock so admission sees its committed state.
+	var cancelled bool
+	if targetErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_fleet_instances i WHERE i.org_id=$1 AND i.project_id=$2 AND i.fleet_id=$3 AND i.external_ref=$4 AND (i.status IN ('deleted','retired') OR EXISTS(SELECT 1 FROM loomplane_fleet_operations o WHERE o.org_id=i.org_id AND o.fleet_id=i.fleet_id AND o.instance_id=i.id AND o.kind='create' AND o.generation=i.desired_generation AND o.status IN ('cancelled','failed'))))`, scope.OrgID, scope.ProjectID, scope.FleetID, a.Request.ExternalRef).Scan(&cancelled); targetErr != nil {
+		return nil, targetErr
+	}
+	if cancelled {
+		return nil, ErrConflict
 	}
 	a.StageRevision = stageRevision
 	raw, err := json.Marshal(a)

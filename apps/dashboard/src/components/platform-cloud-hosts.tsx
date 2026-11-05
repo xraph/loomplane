@@ -17,12 +17,13 @@ import {
 } from "@/components/platform-cloud-host-dialogs"
 import {
   Confirm,
+  PlatformCloudEmpty,
+  PlatformCloudStatus,
   errorOf,
   evidenceMaxAgeMs,
   gibOf,
 } from "@/components/platform-cloud-parts"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -33,7 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { hostEvidenceIssues, statusLabel } from "@/lib/platform-cloud"
+import { hostEvidenceIssues } from "@/lib/platform-cloud"
 
 type Dialogue =
   | { kind: "add" }
@@ -125,9 +126,12 @@ export function PlatformCloudHosts() {
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-medium">Hosts</h2>
-        <Button size="sm" onClick={() => setOpen({ kind: "add" })}>
-          Add host
-        </Button>
+        {((hosts.data && hosts.data.hosts.length > 0) ||
+          hosts.status === "error") && (
+          <Button size="sm" onClick={() => setOpen({ kind: "add" })}>
+            Add host
+          </Button>
+        )}
       </div>
       {(error || hosts.status === "error") && (
         <Alert variant="destructive">
@@ -140,7 +144,16 @@ export function PlatformCloudHosts() {
         <Skeleton className="h-24 w-full rounded-xl" />
       )}
       {hosts.data && hosts.data.hosts.length === 0 && (
-        <p className="text-sm text-muted-foreground">No hosts yet.</p>
+        <PlatformCloudEmpty
+          title="No hosts yet."
+          action={
+            <Button size="sm" onClick={() => setOpen({ kind: "add" })}>
+              Add host
+            </Button>
+          }
+        >
+          Add a host to provide capacity for enabled workspaces.
+        </PlatformCloudEmpty>
       )}
       {hosts.data && hosts.data.hosts.length > 0 && (
         <Table>
@@ -171,9 +184,7 @@ export function PlatformCloudHosts() {
                   </TableCell>
                   <TableCell>{regionName(h.regionId)}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">
-                      {statusLabel("host", h.status)}
-                    </Badge>
+                    <PlatformCloudStatus kind="host" status={h.status} />
                     {issues.length > 0 && (
                       <ul className="mt-1 text-xs text-destructive">
                         {issues.map((i) => (

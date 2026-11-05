@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/observability"
+	"github.com/xraph/warden/store"
 
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -88,6 +89,7 @@ type scopeKey struct{}
 type Coordinator struct {
 	mu         sync.Mutex
 	backend    backend
+	reader     store.Store
 	schema     string
 	source     func(context.Context, driver.Tx, Binding) error
 	telemetry  *observability.Telemetry
@@ -100,10 +102,6 @@ type Coordinator struct {
 	profile    *profile
 	now        func() time.Time
 }
-
-// profile is private so callers cannot opt out of installed-profile validation.
-// Its construction belongs to the identity installation checkpoint.
-type profile struct{ _ byte }
 
 // Attempt has no native connection or transaction lifecycle access. You must
 // finish all SQL and stage exactly one record before the callback returns.
@@ -118,6 +116,7 @@ type Attempt struct {
 	phase      phase
 	poison     error
 	pending    int
+	fenced     bool
 	rows       map[*scopedRows]struct{}
 	gate       chan struct{}
 	evaluation bool
@@ -127,11 +126,20 @@ type Attempt struct {
 }
 
 // Decision is bound to one attempt and one operation. Stage consumes it once.
+type decisionKind uint8
+
+const (
+	mechanismDecision decisionKind = iota
+	ordinaryDecision
+)
+
 type Decision struct {
-	attempt *Attempt
-	binding binding
-	at      time.Time
-	used    bool
+	kind     decisionKind
+	ordinary *ordinaryProof
+	attempt  *Attempt
+	binding  binding
+	at       time.Time
+	used     bool
 }
 
 // Tx returns a compatibility handle for existing guards. Commit and Rollback
@@ -217,11 +225,20 @@ func (c *Coordinator) Run(ctx context.Context, b Binding, work func(context.Cont
 	if _, err = a.handle.Exec(a.ctx, fenceSQL(c.schema)); err != nil {
 		return err
 	}
+	c.mu.Lock()
+	a.fenced = true
+	c.mu.Unlock()
 	if workErr := work(a.ctx, a); workErr != nil {
 		return workErr
 	}
 	c.mu.Lock()
 	err = a.validLocked(a.ctx)
+	if err == nil {
+		err = a.profile.verify()
+		if err != nil {
+			a.poison = errors.Join(a.poison, err)
+		}
+	}
 	if err == nil && (a.pending != 0 || a.evaluation || a.staging) {
 		err = ErrPending
 	}

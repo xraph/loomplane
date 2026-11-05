@@ -17,10 +17,16 @@ vi.mock("@/lib/router", () => ({
   }: {
     children: React.ReactNode
     to: string
-    params?: { id?: string }
+    params?: Record<string, string>
     className?: string
   }) => (
-    <a href={to.replace("$id", params?.id ?? "$id")} className={className}>
+    <a
+      href={to.replace(
+        /\$(\w+)/g,
+        (_, key: string) => params?.[key] ?? `$${key}`
+      )}
+      className={className}
+    >
       {children}
     </a>
   ),
@@ -168,4 +174,30 @@ test("a viewer can't add environments", () => {
   expect(
     screen.queryByRole("button", { name: "Add environment" })
   ).not.toBeInTheDocument()
+})
+
+test("managed environments open their instance instead of generic deployment or deletion", async () => {
+  serve([{ ...staging, instanceId: "instance-a" }, production], [waitingPlan])
+  const table = screen.getByRole("table", { name: "Environments" })
+  const [managed, ordinary] = within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => within(row))
+  expect(managed.getByRole("link", { name: "View instance" })).toHaveAttribute(
+    "href",
+    "/projects/p/fleet/instances/instance-a"
+  )
+  expect(managed.queryByRole("link", { name: "Deploy" })).toBeNull()
+  expect(managed.queryByRole("link", { name: "Review" })).toBeNull()
+  expect(ordinary.getByRole("link", { name: "Deploy" })).toBeInTheDocument()
+  await userEvent.click(
+    managed.getByRole("button", { name: "More actions for staging" })
+  )
+  expect(
+    await screen.findByRole("menuitem", { name: "Where services run" })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("menuitem", { name: "Delete environment" })
+  ).toBeNull()
+  expect(screen.queryByRole("menuitem", { name: "Variables" })).toBeNull()
 })

@@ -13,9 +13,26 @@ import (
 // The installed adapter supplies the canonical identity check. The interval
 // guard rejects any persisted authority expiry or activation inside the check.
 func (a *Attempt) Evaluate(ctx context.Context, check func(context.Context) error) (*Decision, error) {
+	if a.profile != nil && a.profile.ordinary != nil {
+		return nil, a.fail(ErrDecision)
+	}
+	return a.evaluate(ctx, check, nil)
+}
+
+func (a *Attempt) evaluate(ctx context.Context, check func(context.Context) error, proof *ordinaryProof) (*Decision, error) {
 	c := a.owner
 	c.mu.Lock()
 	err := a.validLocked(ctx)
+	if err == nil && !a.fenced {
+		err = ErrUnavailable
+		a.poison = errors.Join(a.poison, err)
+	}
+	if err == nil {
+		err = a.profile.verify()
+		if err != nil {
+			a.poison = errors.Join(a.poison, err)
+		}
+	}
 	if err == nil && (a.evaluation || a.staging || a.decision != nil || a.pending != 0 || check == nil) {
 		err = ErrDecision
 		a.poison = errors.Join(a.poison, err)
@@ -31,6 +48,9 @@ func (a *Attempt) Evaluate(ctx context.Context, check func(context.Context) erro
 	at := c.clock()
 	if err == nil && clockChanged(start, at) {
 		err = ErrTemporal
+	}
+	if err == nil && proof != nil {
+		err = proof.facts.validate(a.binding, proof.requireEmail, at)
 	}
 	if err == nil {
 		var crossed bool
@@ -53,6 +73,11 @@ func (a *Attempt) Evaluate(ctx context.Context, check func(context.Context) erro
 		return nil, ErrPending
 	}
 	d := &Decision{attempt: a, binding: a.binding, at: at}
+	if proof != nil {
+		copied := *proof
+		d.kind = ordinaryDecision
+		d.ordinary = &copied
+	}
 	a.decision = d
 	return d, nil
 }
@@ -79,6 +104,11 @@ func (a *Attempt) Stage(ctx context.Context, d *Decision, durable Binding, write
 		if a.phase == evaluating {
 			a.poison = errors.Join(a.poison, err)
 		}
+		c.mu.Unlock()
+		return err
+	}
+	if err = d.validateOrdinary(a); err != nil {
+		a.poison = errors.Join(a.poison, err)
 		c.mu.Unlock()
 		return err
 	}
@@ -122,6 +152,7 @@ func clockChanged(start, end time.Time) bool {
 var authorityTables = [...]string{
 	"authsome_members", "authsome_organizations", "authsome_users",
 	"keysmith_key_scopes", "keysmith_keys", "keysmith_scopes",
+	"loomplane_projects", "loomplane_team_grants", "loomplane_team_members", "loomplane_teams",
 	"warden_assignments", "warden_permissions", "warden_policies",
 	"warden_relations", "warden_resource_types", "warden_role_permissions", "warden_roles",
 }

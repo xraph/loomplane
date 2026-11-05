@@ -223,14 +223,16 @@ func (s *Service) Ingest(ctx context.Context, orgID string, d Document) (Outcome
 	if err != nil {
 		return "", err
 	}
+	// Weave copies a document's metadata onto each of its chunks, which
+	// is what a search hands back, so the kind and project set here are
+	// what agentknowledge.Readable decides on. They're set after the
+	// caller's own keys, so a caller can't name another project.
 	md := make(map[string]string, len(d.Metadata)+5)
 	maps.Copy(md, d.Metadata)
 	md["kind"], md["title"], md["url"], md["project_id"] = d.Kind, d.Title, d.URL, d.ProjectID
 	if d.Untrusted {
 		md["trust"] = TrustUntrusted
 	}
-	// Every chunk carries the kind and project too, for Readable.
-	ctx = withChunkMetadata(ctx, map[string]string{"kind": d.Kind, "project_id": d.ProjectID})
 	return s.ingest(ctx, eng, &weaveengine.IngestInput{
 		CollectionID: col.ID, SourceKey: d.SourceKey, Title: d.Title, Source: d.URL,
 		Content: d.Content, Metadata: md,

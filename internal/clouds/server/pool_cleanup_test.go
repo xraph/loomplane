@@ -21,7 +21,7 @@ func TestPendingCleanupChecksRuntimeReferenceAndRetainsVolumes(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/containers/"+ContainerName(iid)+"/json" && exists:
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "exact-container", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org", owned.LabelProject: "proj", owned.LabelEnvironment: "env", owned.LabelRuntime: reference}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "exact-container", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org", owned.LabelProject: "proj", owned.LabelEnvironment: "env", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: reference}}})
 		case r.Method == http.MethodDelete:
 			if r.URL.Path != "/containers/exact-container" || r.URL.Query().Get("v") != "0" {
 				t.Errorf("unexpected data cleanup: %s", r.URL)
@@ -44,7 +44,8 @@ func TestPendingCleanupChecksRuntimeReferenceAndRetainsVolumes(t *testing.T) {
 			return http.DefaultTransport.RoundTrip(r)
 		})}}, nil
 	}}
-	labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "proj", owned.LabelEnvironment: "env", owned.LabelRuntime: "accepted-operation"}
+	labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "proj", owned.LabelEnvironment: "env", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "accepted-operation"}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	if err = runtime.RemovePending(t.Context(), iid, labels); err == nil || deletes != 0 {
 		t.Fatal("different operation deleted", err)
 	}

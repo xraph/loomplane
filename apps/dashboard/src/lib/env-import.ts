@@ -2,7 +2,11 @@
 // service reading, or the lines of a pasted .env. Each becomes a row
 // someone checks, fills in and sets.
 
-import type { EnvUse, Evidence, Graph } from "@/client/forge/loomplane/types"
+import type {
+  EnvUse,
+  DiscoveryEvidence as Evidence,
+  Graph,
+} from "@/client/forge/loomplane/types"
 import { parseDotenv } from "@/lib/dotenv"
 import { looksSecret } from "@/lib/variables"
 
