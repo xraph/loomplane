@@ -47,6 +47,7 @@ import { dollars, monthDay, parseUSD, shortDate, wireDollars } from "./money"
 
 // The base plan's included usage, in cents.
 const INCLUDED_CENTS = 500
+const AI_INCLUDED_CENTS = 1000
 
 const statusLabel: Record<BillingStatus, string> = {
   pending_payment: "Needs a card",
@@ -142,7 +143,7 @@ export function BillingPage() {
 }
 
 function PlanSection({ account }: { account: Account }) {
-  const used = account.credit_used_cents
+  const used = account.base_credit_used_cents
   return (
     <SettingsSection
       title="Plan"
@@ -240,6 +241,20 @@ function AISection({ account, owner }: { account: Account; owner: boolean }) {
             <Badge variant="outline">{on || ending ? "On" : "Off"}</Badge>
           )}
         </div>
+        {account.ai_enabled && (
+          <>
+            <Progress
+              aria-label="Included AI"
+              value={Math.min(
+                100,
+                (account.ai_credit_used_cents / AI_INCLUDED_CENTS) * 100
+              )}
+            />
+            <p className="font-mono text-[12.5px] tabular-nums">
+              {`Included AI: ${dollars(account.ai_credit_used_cents)} of ${dollars(AI_INCLUDED_CENTS)} used`}
+            </p>
+          </>
+        )}
         <FieldProblem text={problem} />
       </Panel>
     </SettingsSection>

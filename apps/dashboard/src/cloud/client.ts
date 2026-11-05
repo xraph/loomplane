@@ -18,7 +18,10 @@ export type Account = {
   spending_limit_usd: string | null
   period: { start: string; end: string }
   usage: { feature: string; cents: number }[]
-  credit_used_cents: number
+  // Each credit's use on its own: the plan's $5 of base usage, and the AI
+  // add-on's $10 of AI (0 while the add-on doesn't cover the month).
+  base_credit_used_cents: number
+  ai_credit_used_cents: number
   overage_cents: number
   projected_total_cents: number
   payment_methods: {

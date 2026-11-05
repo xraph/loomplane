@@ -66,7 +66,8 @@ function account(over: Partial<Account> = {}) {
     spending_limit_usd: null,
     period: { start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z" },
     usage: [{ feature: "build_minutes", cents: 120 }],
-    credit_used_cents: 0,
+    base_credit_used_cents: 0,
+    ai_credit_used_cents: 0,
     overage_cents: 0,
     projected_total_cents: 500,
     payment_methods: [
@@ -101,7 +102,7 @@ afterEach(() => {
 })
 
 it("shows included usage as dollars of five", async () => {
-  account({ credit_used_cents: 300 })
+  account({ base_credit_used_cents: 300 })
   render(<BillingPage />)
   expect(
     await screen.findByText("Included usage: $3.00 of $5.00 used")
@@ -109,6 +110,32 @@ it("shows included usage as dollars of five", async () => {
   expect(
     screen.getByText("$5 a month, including $5 of usage.")
   ).toBeInTheDocument()
+})
+
+it("shows AI credit against the add-on, never as base usage", async () => {
+  account({
+    ai_enabled: true,
+    base_credit_used_cents: 200,
+    ai_credit_used_cents: 1000,
+  })
+  render(<BillingPage />)
+  expect(
+    await screen.findByText("Included usage: $2.00 of $5.00 used")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText("Included AI: $10.00 of $10.00 used")
+  ).toBeInTheDocument()
+  expect(screen.getByLabelText("Included usage")).toHaveAttribute(
+    "aria-valuenow",
+    "40"
+  )
+})
+
+it("shows no AI credit while the add-on is off", async () => {
+  account()
+  render(<BillingPage />)
+  await screen.findByText("Included usage: $0.00 of $5.00 used")
+  expect(screen.queryByText(/Included AI/)).not.toBeInTheDocument()
 })
 
 it("rejects a limit with three decimals before sending it", async () => {
