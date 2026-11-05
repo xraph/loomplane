@@ -17,7 +17,9 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/environments"
 	domain "github.com/xraph/loomplane/internal/fleets"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/providerresources"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/fleet"
 )
@@ -75,7 +77,7 @@ func (e *Extension) Register(app forge.App) error {
 		return err
 	}
 	pg := pgdriver.Unwrap(db)
-	svc := domain.NewService(domain.Deps{Store: domain.NewPgStore(pg), Projects: projects.NewPgStore(pg), Authz: authz, Keys: keys, Secrets: secrets, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger())})
+	svc := domain.NewService(domain.Deps{Store: domain.NewPgStore(pg), Projects: projects.NewPgStore(pg), Authz: authz, Keys: keys, Secrets: secrets, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()), AdoptionInventory: lazyAdoptionInventory{container: c}})
 	e.svc = svc
 	if provideErr := forge.ProvideValue(c, svc); provideErr != nil {
 		return provideErr
@@ -84,6 +86,19 @@ func (e *Extension) Register(app forge.App) error {
 }
 func (e *Extension) Start(context.Context) error { e.MarkStarted(); return nil }
 func (e *Extension) Stop(context.Context) error  { e.MarkStopped(); return nil }
+
+// Planning registers inventory after the Fleet service. Resolve it at review time.
+type lazyAdoptionInventory struct {
+	container forge.Container
+}
+
+func (r lazyAdoptionInventory) InspectAdoption(ctx context.Context, p security.Principal, scope domain.FleetScope, in fleet.AdoptionInput) (domain.AdoptionInventorySnapshot, error) {
+	resources, err := forge.InjectType[*providerresources.Service](r.container)
+	if err != nil || resources == nil {
+		return domain.AdoptionInventorySnapshot{}, domain.ErrAdoptionInventory
+	}
+	return orchestration.NewFleetAdoptionInventory(resources, nil).InspectAdoption(ctx, p, scope, in)
+}
 
 func fail(err error) error {
 	switch {
