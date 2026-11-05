@@ -109,9 +109,21 @@ var (
 	ErrAmbiguous    = errors.New("this project has more than one environment of that kind; name it")
 	ErrInvalid      = errors.New("invalid release preparation")
 	ErrNotYourTask  = errors.New("only the release preparation that built this report can add concerns to it")
-	// ErrNotCancelable is a report that has already finished.
+	// ErrNotCancelable is a report that has already finished, or one the
+	// agent is promoting (ErrPromoting).
 	ErrNotCancelable = errors.New("the release preparation has already finished")
+	// ErrPromoting is an ErrNotCancelable: the gate let the agent promote
+	// and its approval may be landing, so a cancel can't stop it.
+	ErrPromoting error = promoting{}
 )
+
+type promoting struct{}
+
+func (promoting) Error() string {
+	return "the agent is approving this release, so it can't be cancelled; read the report again in a moment"
+}
+
+func (promoting) Is(target error) bool { return target == ErrNotCancelable }
 
 // Bounds of a request.
 const (
@@ -151,9 +163,10 @@ func NewService(d Deps) *Service {
 	}
 }
 
-// SetSources replaces what the Service and its Gate read. The extension
-// sets the real sources and integration tests swap fakes in, before
-// anything is served.
+// SetSources replaces what the Service and its Gate read. It is for tests
+// only, which swap fakes in before anything runs: production sets the
+// sources once, at construction. It isn't synchronized with the Gate's
+// reads, so never call it while the Service is serving.
 func (s *Service) SetSources(src Sources) { s.collector.Sources = src }
 
 // Collector is the evidence collector, shared with the Gate.
@@ -655,6 +668,9 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (
 		}
 	}
 	if errors.Is(err, ErrMovedOn) {
+		if r.Decision == DecisionPromote {
+			return nil, ErrPromoting
+		}
 		return nil, ErrNotCancelable
 	}
 	if err != nil {
@@ -699,7 +715,9 @@ func (s *Service) mayCancel(ctx context.Context, p security.Principal, r *Releas
 }
 
 // finalOutcome refuses to cancel a report that isn't under way, or whose
-// derived state is already final; the latter is settled as it is first.
+// derived state is already final; the latter is settled as it is first. It
+// refuses a report the gate let the agent promote too (ErrPromoting): the
+// approval may be landing, and the report settles from the plan either way.
 func (s *Service) finalOutcome(ctx context.Context, r *ReleaseReport) error {
 	if r.Status != StatusPlanning && r.Status != StatusReviewing {
 		return ErrNotCancelable
@@ -710,6 +728,9 @@ func (s *Service) finalOutcome(ctx context.Context, r *ReleaseReport) error {
 		return err
 	}
 	if !Terminal(o.state) {
+		if o.state == StatePromoting || r.Decision == DecisionPromote {
+			return ErrPromoting
+		}
 		return nil
 	}
 	if ferr := s.finish(ctx, r, o, sw); ferr != nil {

@@ -37,6 +37,16 @@ func TestDeriveState(t *testing.T) {
 		tk.ReleasePlanID, tk.ReleaseRevision = "", ""
 		return tk
 	}
+	fromChat := func() *ReleaseReport {
+		r := reviewing(DecisionNone)
+		r.Via = ViaChat
+		return r
+	}
+	reusedPlan := func() *ReleaseReport {
+		r := reviewing(DecisionNone)
+		r.ReusedPlan = true
+		return r
+	}
 	withStatus := func(status, reason string) *ReleaseReport {
 		r := reviewing(DecisionNone)
 		r.Status, r.State, r.StateReason = status, status, reason
@@ -106,6 +116,12 @@ func TestDeriveState(t *testing.T) {
 		// Owner Q1: a requester who can't approve production gets the
 		// review, and the plan waits for someone who can.
 		{"ready, requester can't approve", reviewing(DecisionNone), plan(planning.StatusReady, ""), noRelease(agentruns.StatusCompleted), StateStopped, reasonCantApprove},
+		// Final review M2: chat and a reused plan start the run without the
+		// release fields too, and their reason says why, not "can't approve".
+		{"ready, prepared from chat", fromChat(), plan(planning.StatusReady, ""), noRelease(agentruns.StatusCompleted), StateStopped,
+			"the agent reviewed it; a release prepared from chat waits for a person in Needs approval"},
+		{"ready, reused someone else's plan", reusedPlan(), plan(planning.StatusReady, ""), noRelease(agentruns.StatusCompleted), StateStopped,
+			"the agent reviewed it; a release that reuses someone else's plan waits for a person in Needs approval"},
 		{"ready, requester can't approve, still running", reviewing(DecisionNone), plan(planning.StatusReady, ""), noRelease(agentruns.StatusRunning), StateReviewing, ""},
 		{"done keeps deriving from the plan", &ReleaseReport{Status: StatusDone, State: StateStopped, OrgID: "org_a", PlanID: "plan_a", Decision: DecisionAsk}, plan(planning.StatusApproved, "usr_ada"), nil, StateApproved, "approved by usr_ada"},
 	}

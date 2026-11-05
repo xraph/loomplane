@@ -56,7 +56,8 @@ type Store interface {
 	// failed or cancelled) and a state. It writes only while the report is
 	// in from and not yet settled (status planning or reviewing, or a state
 	// that isn't Terminal); otherwise ErrMovedOn. A settled report never
-	// moves again and never takes back its environment.
+	// moves again and never takes back its environment. It never cancels a
+	// report whose decision is promote: the agent's approval may be landing.
 	Settle(ctx context.Context, orgID, id, from, status, state, reason, errText string, at time.Time) error
 	// Finish is Settle with its notice: in one transaction it moves the
 	// report from state from to the final status and state, records the

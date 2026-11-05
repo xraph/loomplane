@@ -192,6 +192,11 @@ type memStore struct {
 	// beforeFinish, when set, runs as Finish starts, before its
 	// compare-and-set: tests land a cancel there.
 	beforeFinish func()
+	// beforeSettle, when set, runs as Settle starts, before its lock.
+	beforeSettle func()
+	// whileLocked, when set, runs as Finish takes the report and again as
+	// it lets go: what happens between is under the report's row lock.
+	whileLocked func(locked bool)
 }
 
 func newMemStore() *memStore {
@@ -376,6 +381,9 @@ func (m *memStore) AddConcern(_ context.Context, orgID, id string, c Concern) er
 }
 
 func (m *memStore) Settle(_ context.Context, orgID, id, from, status, state, reason, errText string, at time.Time) error {
+	if hook := m.beforeSettle; hook != nil {
+		hook()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, err := m.get(orgID, id)
@@ -385,7 +393,7 @@ func (m *memStore) Settle(_ context.Context, orgID, id, from, status, state, rea
 	if status != StatusDone && status != StatusFailed && status != StatusCancelled {
 		return fmt.Errorf("memStore: can't settle as %q", status)
 	}
-	if r.State != from || !unsettledReport(r) {
+	if r.State != from || !unsettledReport(r) || (status == StatusCancelled && r.Decision == DecisionPromote) {
 		return ErrMovedOn
 	}
 	m.settles++
@@ -412,6 +420,10 @@ func (m *memStore) Finish(ctx context.Context, orgID, id, from, status, state, r
 	}
 	if r.State != from || !unsettledReport(r) {
 		return ErrMovedOn
+	}
+	if m.whileLocked != nil {
+		m.whileLocked(true)
+		defer m.whileLocked(false)
 	}
 	before := cloneReport(r)
 	m.settles++

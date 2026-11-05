@@ -969,3 +969,24 @@ func TestStoreKeepsTimesAndIDsHonest(t *testing.T) {
 		t.Fatalf("updated_at %v went back from %v (evaluated %v)", got.UpdatedAt, before, got.EvaluatedAt)
 	}
 }
+
+// Final review I3: once the gate recorded promote, the agent's approval may
+// be landing, so a cancel never settles the report. The sweep still can.
+func TestSettleNeverCancelsAPromote(t *testing.T) {
+	s, _ := openPg(t)
+	ctx := context.Background()
+	r := reviewingReport(t, s, "env_prod")
+	if err := s.RecordEvaluation(ctx, "org_a", r.ID, []GateCheck{}, DecisionPromote, nil, t0); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Settle(ctx, "org_a", r.ID, StateReviewing, StatusCancelled, StateCancelled, "cancelled by usr_dev", "", t0)
+	if !errors.Is(err, ErrMovedOn) || mustGet(t, s, r.ID).Status != StatusReviewing {
+		t.Fatalf("%v, status %s", err, mustGet(t, s, r.ID).Status)
+	}
+	if err = s.Settle(ctx, "org_a", r.ID, StateReviewing, StatusDone, StatePromoted, "", "", t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustGet(t, s, r.ID); got.State != StatePromoted {
+		t.Fatalf("state %s", got.State)
+	}
+}

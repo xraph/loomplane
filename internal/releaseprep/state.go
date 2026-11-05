@@ -32,7 +32,11 @@ const (
 	// production (owner Q1): the job starts their run without the release
 	// fields, so the agent can review but never approve.
 	reasonCantApprove = "the agent reviewed it; it waits for someone who can approve production in Needs approval"
-	reasonFailed      = "the release preparation failed"
+	// reasonFromChat and reasonReused end a review whose run started
+	// without the release fields for the other two reasons.
+	reasonFromChat = "the agent reviewed it; a release prepared from chat waits for a person in Needs approval"
+	reasonReused   = "the agent reviewed it; a release that reuses someone else's plan waits for a person in Needs approval"
+	reasonFailed   = "the release preparation failed"
 	// reasonJobNeverRan stops a report the prepare job never moved on.
 	reasonJobNeverRan   = "the preparation job never ran"
 	reasonCancelled     = "the release preparation was cancelled"
@@ -94,14 +98,14 @@ func DeriveState(r *ReleaseReport, plan *planning.Plan, task *agentruns.Task) (s
 	case planning.StatusPlanning:
 		return StatePlanning, ""
 	case planning.StatusReady:
-		return fromTask(r, task)
+		return fromTask(r, plan, task)
 	}
 	return StateFailed, reasonUnknownPlan
 }
 
 // fromTask is the state of a report whose plan is ready: what the agent's
 // task is doing.
-func fromTask(r *ReleaseReport, task *agentruns.Task) (state, reason string) {
+func fromTask(r *ReleaseReport, plan *planning.Plan, task *agentruns.Task) (state, reason string) {
 	switch {
 	case task == nil, task.Status == agentruns.StatusQueued, task.Status == agentruns.StatusRunning:
 		if r.Decision == DecisionPromote {
@@ -111,14 +115,14 @@ func fromTask(r *ReleaseReport, task *agentruns.Task) (state, reason string) {
 	case task.Status == agentruns.StatusWaiting:
 		return StateWaiting, reasonWaiting
 	case agentruns.Terminal(task.Status):
-		return StateStopped, stopped(r, task)
+		return StateStopped, stopped(r, plan, task)
 	}
 	// A task status Loomplane doesn't know settles nothing.
 	return StateReviewing, ""
 }
 
 // stopped says why a run ended with the plan still ready.
-func stopped(r *ReleaseReport, task *agentruns.Task) string {
+func stopped(r *ReleaseReport, plan *planning.Plan, task *agentruns.Task) string {
 	why := cause(task.Error)
 	switch {
 	case r.Decision == DecisionPromote && why != "":
@@ -131,6 +135,10 @@ func stopped(r *ReleaseReport, task *agentruns.Task) string {
 		return reasonRunCancelled
 	case task.Status == agentruns.StatusFailed:
 		return reasonRunFailed
+	case task.ReleasePlanID == "" && r.Via == ViaChat:
+		return reasonFromChat
+	case task.ReleasePlanID == "" && r.ReusedPlan && plan.CreatedBy != r.RequestedBy:
+		return reasonReused
 	case task.ReleasePlanID == "":
 		return reasonCantApprove
 	}

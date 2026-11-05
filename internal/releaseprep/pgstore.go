@@ -428,7 +428,8 @@ func (s *PgStore) Settle(ctx context.Context, orgID, id, from, status, state, re
 	at = stored(at)
 	return s.mustChange(ctx, orgID, id, `UPDATE loomplane_release_reports
 		SET status = $4, state = $5, state_reason = $6, error = $7, updated_at = $8, finished_at = COALESCE(finished_at, $8)
-		WHERE org_id = $1 AND id = $2 AND state = $3 AND `+unsettled,
+		WHERE org_id = $1 AND id = $2 AND state = $3 AND `+unsettled+`
+			AND NOT ($4 = 'cancelled' AND decision = 'promote')`,
 		orgID, id, from, status, state, reason, errText, at)
 }
 

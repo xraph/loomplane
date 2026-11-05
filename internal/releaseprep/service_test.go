@@ -1163,3 +1163,91 @@ func TestSettleStopsAPreparationWhoseJobNeverRan(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Final review I3: the gate recorded promote and the run is still going,
+// so the agent's approval may be landing. A cancel then is refused: the
+// report settles promoted, and the promoted notice goes out.
+func TestCancelRefusesAReleaseThatIsPromoting(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusRunning, DecisionPromote)
+	if got, err := r.svc.Get(context.Background(), dev, rep.ID); err != nil || got.State != StatePromoting {
+		t.Fatalf("%+v %v, want promoting", got, err)
+	}
+
+	_, err := r.svc.Cancel(context.Background(), dev, rep.ID)
+	if !errors.Is(err, ErrNotCancelable) || !strings.Contains(err.Error(), "approving") {
+		t.Fatalf("%v, want ErrNotCancelable saying the agent is approving", err)
+	}
+	if s := r.store.stored(t, rep.ID); s.Status != StatusReviewing {
+		t.Fatalf("report %s/%s, want it still under way", s.Status, s.State)
+	}
+	if len(r.runs.cancels)+len(r.runs.cancelTasks) != 0 || len(r.audit.named("release.cancel")) != 0 {
+		t.Fatalf("cancelled %v %v", r.runs.cancels, r.runs.cancelTasks)
+	}
+
+	// The approval lands and the run ends.
+	for _, p := range []*planning.Plan{r.planStore.plans["plan_a"], r.w.plans.byID["plan_a"]} {
+		p.Status, p.DecidedBy = planning.StatusApproved, security.AgentSubject("org_a")
+	}
+	r.runs.byRun["arun_1"].Status = agentruns.StatusCompleted
+	if err = r.svc.Settle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.store.stored(t, rep.ID); s.Status != StatusDone || s.State != StatePromoted {
+		t.Fatalf("report %s/%s, want done/promoted", s.Status, s.State)
+	}
+	if n := r.notices.all(); len(n) != 1 || n[0].SubjectID != rep.ID+":"+StatePromoted {
+		t.Fatalf("notices %+v", n)
+	}
+}
+
+// Final review I3, the window: the gate records promote after Cancel read
+// the report and before it wrote. The cancel still loses.
+func TestCancelLosesToAPromoteRecordedMeanwhile(t *testing.T) {
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusRunning, DecisionNone)
+	r.store.beforeSettle = func() {
+		r.store.beforeSettle = nil
+		if err := r.store.RecordEvaluation(context.Background(), "org_a", rep.ID, []GateCheck{}, DecisionPromote, nil, rigNow); err != nil {
+			t.Error(err)
+		}
+	}
+	_, err := r.svc.Cancel(context.Background(), dev, rep.ID)
+	if !errors.Is(err, ErrNotCancelable) || !strings.Contains(err.Error(), "approving") {
+		t.Fatalf("%v, want ErrNotCancelable saying the agent is approving", err)
+	}
+	if s := r.store.stored(t, rep.ID); s.Status != StatusReviewing || s.Decision != DecisionPromote {
+		t.Fatalf("report %s/%s decision %q", s.Status, s.State, s.Decision)
+	}
+	if len(r.runs.cancels)+len(r.runs.cancelTasks) != 0 {
+		t.Fatalf("cancelled %v %v", r.runs.cancels, r.runs.cancelTasks)
+	}
+}
+
+// Final review M8: the notice's outbound scan runs before Finish takes the
+// report's row lock, so a slow scan never holds a cancel waiting.
+func TestSettleScansTheNoticeBeforeItLocksTheReport(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	rep := r.reviewing(t, agentruns.StatusCompleted, DecisionAsk)
+	_ = r.store.AddConcern(ctx, "org_a", rep.ID, Concern{Kind: ConcernAsk, Text: "The migration drops users.email.", RunID: "arun_1", At: rigNow})
+	var at int
+	scannedWhileLocked := false
+	r.store.whileLocked = func(locked bool) {
+		if locked {
+			at = len(r.shield.scanned())
+		} else if len(r.shield.scanned()) != at {
+			scannedWhileLocked = true
+		}
+	}
+	if err := r.svc.Settle(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n := r.notices.all()
+	if len(n) != 1 || !strings.Contains(n[0].Body, "The migration drops users.email.") {
+		t.Fatalf("notices %+v", n)
+	}
+	if scannedWhileLocked {
+		t.Fatal("the notice was scanned while the report was locked")
+	}
+}

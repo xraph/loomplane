@@ -168,12 +168,14 @@ func (s *Service) gone(ctx context.Context, r *ReleaseReport, sw *sweep) (string
 func (s *Service) finish(ctx context.Context, r *ReleaseReport, o outcome, sw *sweep) error {
 	var send func(ctx context.Context, tx NoticeTx) error
 	if _, ok := noticeWords[o.state]; ok {
+		// Built before Finish locks the report: the body's outbound scan
+		// can be slow, and a cancel waits on that lock.
+		n := s.notice(ctx, r, o.state, o.reason, sw)
 		send = func(ctx context.Context, tx NoticeTx) error {
 			recipients, err := s.recipients(ctx, tx, r)
 			if err != nil {
 				return err
 			}
-			n := s.notice(ctx, r, o.state, o.reason, sw)
 			n.Recipients = recipients
 			return s.send(ctx, tx, n)
 		}
