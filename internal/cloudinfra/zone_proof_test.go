@@ -218,6 +218,9 @@ func newProofEnv(t *testing.T, cloud string) *proofEnv {
 	}
 	env.svc = NewService(Deps{Domains: env.store, Authz: cleanupTestAuth{}, Connections: routeDNSCredentials{cloud}, Adapters: registry, Resolver: env.resolver})
 	env.svc.now = func() time.Time { return env.now }
+	// Start on the fixture clock. The wall clock would make every verified
+	// zone look checked before the start once real time passes env.now.
+	env.svc.started = env.now
 	return env
 }
 
