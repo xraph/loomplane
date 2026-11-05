@@ -18,7 +18,7 @@ func TestClientReleaseRoutes(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].ID != "rrep_1" {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
-	if _, err := c.ReleaseReports(ctx, "proj_1", 0); err != nil {
+	if _, err = c.ReleaseReports(ctx, "proj_1", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -27,10 +27,10 @@ func TestClientReleaseRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c2.ReleaseReport(ctx, "rrep_1"); err != nil {
+	if _, err = c2.ReleaseReport(ctx, "rrep_1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c2.CancelReleaseReport(ctx, "rrep_1"); err != nil {
+	if _, err = c2.CancelReleaseReport(ctx, "rrep_1"); err != nil {
 		t.Fatal(err)
 	}
 
