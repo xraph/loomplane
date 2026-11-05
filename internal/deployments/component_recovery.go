@@ -151,9 +151,6 @@ func (e *OwnedTarget) restoreComponent(ctx context.Context, p security.Principal
 	if err != nil {
 		return "", err
 	}
-	if checkErr := e.Secrets.Put(ctx, ref, runtimeValues); checkErr != nil {
-		return "", checkErr
-	}
 	created := false
 	defer func() {
 		if err == nil {
@@ -167,6 +164,9 @@ func (e *OwnedTarget) restoreComponent(ctx context.Context, p security.Principal
 		}
 		err = errors.Join(err, e.Secrets.Delete(cleanup, ref+runtimeFilesSuffix), e.deleteRuntime(cleanup, b.OrgID, b.EnvironmentID, name, ref))
 	}()
+	if checkErr := e.Secrets.Put(ctx, ref, runtimeValues); checkErr != nil {
+		return "", checkErr
+	}
 	if checkErr := e.keepRuntimeFiles(ctx, ref, rendered); checkErr != nil {
 		return "", checkErr
 	}
