@@ -178,7 +178,7 @@ func TestKeyAuditor_instanceEdgeTokensGoToThePlatformStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	type row struct{ action, scope, tenant, org string }
-	var got []row
+	got := make([]row, 0, len(res.Events))
 	for _, ev := range res.Events {
 		got = append(got, row{ev.Action, fmt.Sprint(ev.Metadata["edge_scope"]), ev.TenantID, fmt.Sprint(ev.Metadata["org_id"])})
 	}

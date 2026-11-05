@@ -21,7 +21,7 @@ func TestRawEndpointsOnlyReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Service{relayStore: &encryptedRelayStore{Store: mem}}
-	var raw endpoint.Store = s.RawEndpoints()
+	raw := s.RawEndpoints()
 
 	plain := &endpoint.Endpoint{ID: id.NewEndpointID(), TenantID: "aorg_1", URL: "https://example.com/other", Secret: "whsec_plaintext", Enabled: true}
 	for name, err := range map[string]error{
