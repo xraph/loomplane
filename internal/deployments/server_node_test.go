@@ -119,6 +119,7 @@ func TestServerSessionNodeMarker(t *testing.T) {
 	iid := id.New(id.PrefixInstance)
 	var mu sync.Mutex
 	created, started := false, false
+	volumes := map[string]map[string]any{}
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -135,6 +136,20 @@ func TestServerSessionNodeMarker(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Image": "sha256:" + strings.Repeat("a", 64), "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": started, "Status": "running"}})
 		case r.URL.Path == "/networks/"+server.NetworkName("org_fixture", "env_fixture"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/volumes/"):
+			volume, ok := volumes[strings.TrimPrefix(r.URL.Path, "/volumes/")]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(volume)
+		case r.Method == http.MethodPost && r.URL.Path == "/volumes/create":
+			var volume map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&volume)
+			volume["CreatedAt"] = "2026-11-05T00:00:00Z"
+			volumes[volume["Name"].(string)] = volume
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(volume)
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
 			created = true
 			w.WriteHeader(http.StatusCreated)
