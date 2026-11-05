@@ -55,7 +55,7 @@ func (f *fakeBilling) Summary(_ context.Context, org string) (billing.Summary, e
 		PaymentMethods: []provider.PaymentMethod{
 			{ID: "pm_1", Brand: "visa", Last4: "4242", ExpiryMonth: 12, ExpiryYear: 2030, IsDefault: true, ProviderID: "pm_1"},
 		},
-		CreditUsedCents: 120, ProjectedTotalCents: 500,
+		BaseCreditUsedCents: 120, AICreditUsedCents: 340, ProjectedTotalCents: 500,
 	}, nil
 }
 
@@ -247,10 +247,16 @@ func TestAccount_Shape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"status", "ai_enabled", "ai_ends_at", "spending_limit_usd", "period", "usage",
-		"credit_used_cents", "overage_cents", "projected_total_cents", "payment_methods"} {
+		"base_credit_used_cents", "ai_credit_used_cents", "overage_cents", "projected_total_cents", "payment_methods"} {
 		if _, ok := v[k]; !ok {
 			t.Errorf("the account has no %s: %s", k, res.Body)
 		}
+	}
+	if v["base_credit_used_cents"] != float64(120) || v["ai_credit_used_cents"] != float64(340) {
+		t.Errorf("credit used: base %v ai %v", v["base_credit_used_cents"], v["ai_credit_used_cents"])
+	}
+	if _, ok := v["credit_used_cents"]; ok {
+		t.Errorf("the account still sends one credit for both: %s", res.Body)
 	}
 	if v["spending_limit_usd"] != "25.00" || v["ai_ends_at"] != nil {
 		t.Errorf("limit %v ai_ends_at %v", v["spending_limit_usd"], v["ai_ends_at"])
@@ -451,7 +457,7 @@ func TestErrorsNeverCarryInternalText(t *testing.T) {
 		t.Errorf("setup: %d %s", res.Code, res.Body)
 	}
 	// A gate refusal says its own sentence and nothing else.
-	rg.svc.err = fmt.Errorf("billing: something: %w", &metering.Blocked{Reason: "Add a card in Settings > Billing."})
+	rg.svc.err = fmt.Errorf("billing: something: %w", &metering.BlockedError{Reason: "Add a card in Settings > Billing."})
 	res = rg.do(t, http.MethodGet, "/api/v1/billing/status", "", developer)
 	var body struct{ Error string }
 	_ = json.Unmarshal(res.Body.Bytes(), &body)
@@ -470,6 +476,7 @@ func TestWebhook_Statuses(t *testing.T) {
 		{nil, http.StatusOK},
 		{fmt.Errorf("%w: stripe: verify webhook: no valid signature", billing.ErrBadSignature), http.StatusBadRequest},
 		{fmt.Errorf("%w: bad json", billing.ErrBadEvent), http.StatusBadRequest},
+		{fmt.Errorf("%w: the event is on %q", billing.ErrAPIVersion, "2025-03-31.basil"), http.StatusBadRequest},
 		// MarkCardReady or the database failed: Stripe must send it again.
 		{errors.New("billing: save the card of org_1: connection refused"), http.StatusInternalServerError},
 	} {
@@ -480,6 +487,12 @@ func TestWebhook_Statuses(t *testing.T) {
 		}
 		if strings.Contains(res.Body.String(), "connection refused") || strings.Contains(res.Body.String(), "no valid signature") {
 			t.Errorf("%v: the body carries the error: %s", c.err, res.Body)
+		}
+		// A version refusal reads apart from a bad signature and names the
+		// version to set.
+		if errors.Is(c.err, billing.ErrAPIVersion) &&
+			(!strings.Contains(res.Body.String(), billing.StripeAPIVersion) || strings.Contains(res.Body.String(), "signature")) {
+			t.Errorf("version refusal: %s", res.Body)
 		}
 	}
 	if string(rg.svc.payload) != body || rg.svc.signature != "t=1,v1=abc" {

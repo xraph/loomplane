@@ -536,7 +536,7 @@ func TestEvaluate_LimitedDropsTheCachedAIAnswer(t *testing.T) {
 	}
 	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
-	var blocked *metering.Blocked
+	var blocked *metering.BlockedError
 	if err := s.Gate().CanRun(ctx, "org_1", metering.KindAIPlatform, false); !errors.As(err, &blocked) {
 		t.Fatalf("right after the limit: %v, want the cache dropped", err)
 	}

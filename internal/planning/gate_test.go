@@ -17,7 +17,7 @@ func (g *switchGate) CanRun(context.Context, string, metering.Kind, bool) error 
 func TestApproveRefusedByTheGateLeavesThePlanReady(t *testing.T) {
 	store := &unpinnedStore{plan: &Plan{ID: "plan", OrgID: "org", ProjectID: "project", Status: StatusReady, Revision: "revision", Actions: []Action{{Op: Create}}}}
 	workflow := &recordingWorkflow{}
-	gate := &switchGate{err: &metering.Blocked{Reason: "Add a card in Settings > Billing to start running anything on Loomplane Cloud."}}
+	gate := &switchGate{err: &metering.BlockedError{Reason: "Add a card in Settings > Billing to start running anything on Loomplane Cloud."}}
 	s := NewService(Deps{Store: store, Authz: allowAll{}, Workflow: workflow, Gate: gate})
 	p := security.Principal{OrgID: "org", UserID: "owner"}
 	if _, err := s.Approve(t.Context(), p, "plan", DecideInput{Revision: "revision"}); !errors.Is(err, metering.ErrBlocked) {
@@ -37,14 +37,14 @@ func TestApproveRefusedByTheGateLeavesThePlanReady(t *testing.T) {
 
 func TestRejectIsNeverGated(t *testing.T) {
 	store := &unpinnedStore{plan: &Plan{ID: "plan", OrgID: "org", ProjectID: "project", Status: StatusReady, Revision: "revision"}}
-	s := NewService(Deps{Store: store, Authz: allowAll{}, Workflow: &recordingWorkflow{}, Gate: &switchGate{err: &metering.Blocked{Reason: "no"}}})
+	s := NewService(Deps{Store: store, Authz: allowAll{}, Workflow: &recordingWorkflow{}, Gate: &switchGate{err: &metering.BlockedError{Reason: "no"}}})
 	if _, err := s.Reject(t.Context(), security.Principal{OrgID: "org", UserID: "owner"}, "plan", DecideInput{}); errors.Is(err, metering.ErrBlocked) {
 		t.Fatal("reject was gated")
 	}
 }
 
 func TestTeardownOnlyPlanIsApprovedWhileTheGateRefuses(t *testing.T) {
-	gate := &switchGate{err: &metering.Blocked{Reason: "Add a card"}}
+	gate := &switchGate{err: &metering.BlockedError{Reason: "Add a card"}}
 	p := security.Principal{OrgID: "org", UserID: "owner"}
 	for name, tc := range map[string]struct {
 		actions []Action
@@ -59,6 +59,27 @@ func TestTeardownOnlyPlanIsApprovedWhileTheGateRefuses(t *testing.T) {
 		_, err := s.Approve(t.Context(), p, "plan", DecideInput{Revision: "revision"})
 		if got := errors.Is(err, metering.ErrBlocked); got != tc.blocked {
 			t.Errorf("%s: blocked=%v err=%v", name, got, err)
+		}
+	}
+}
+
+func TestTeardownOnlyFailsClosed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ops  []Op
+		want bool
+	}{
+		"no actions":      {nil, true},
+		"delete and keep": {[]Op{Delete, Keep}, true},
+		"replace":         {[]Op{Delete, Replace}, false},
+		"empty op":        {[]Op{Delete, ""}, false},
+		"unknown op":      {[]Op{Keep, "migrate"}, false},
+	} {
+		p := &Plan{}
+		for _, op := range tc.ops {
+			p.Actions = append(p.Actions, Action{Op: op})
+		}
+		if got := p.TeardownOnly(); got != tc.want {
+			t.Errorf("%s: TeardownOnly = %v, want %v", name, got, tc.want)
 		}
 	}
 }

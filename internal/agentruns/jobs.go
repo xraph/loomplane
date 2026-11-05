@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/xraph/loomplane/internal/metering"
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/metering"
 
 	"github.com/xraph/cortex"
 	cortexagent "github.com/xraph/cortex/agent"
@@ -320,7 +321,7 @@ func (s *Service) unbound(ctx context.Context, t *Task, err error) error {
 // refused fails the task for a setting that refuses it now (the agent off,
 // the budget spent) and retries anything else.
 func (s *Service) refused(ctx context.Context, t *Task, err error) error {
-	var blocked *metering.Blocked
+	var blocked *metering.BlockedError
 	switch {
 	case errors.As(err, &blocked):
 		s.fail(ctx, t, blocked.Reason)

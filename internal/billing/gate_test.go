@@ -38,7 +38,7 @@ func TestGate_Matrix(t *testing.T) {
 			return Account{OrgID: "org", Status: c.status, AIEnabled: c.ai}, nil
 		}, now: time.Now}
 		err := g.CanRun(t.Context(), "org", c.kind, c.owned)
-		var b *metering.Blocked
+		var b *metering.BlockedError
 		switch {
 		case c.reason == "" && err != nil:
 			t.Errorf("%s %s owned=%v: refused %v", c.status, c.kind, c.owned, err)
@@ -77,7 +77,7 @@ func TestGate_EveryStatusAndKind(t *testing.T) {
 					}, now: time.Now}
 					err := g.CanRun(t.Context(), "org", kind, owned)
 					reason := want(s, kind, owned, ai)
-					var b *metering.Blocked
+					var b *metering.BlockedError
 					switch {
 					case reason == "" && err != nil:
 						t.Errorf("%s %s owned=%v ai=%v: refused %v", s, kind, owned, ai, err)
@@ -308,13 +308,13 @@ func TestGate_WorkWaitingForACardRunsOnceItLands(t *testing.T) {
 		{metering.KindBuild, false}, {metering.KindBuild, true},
 	}
 	for _, w := range waiting {
-		var b *metering.Blocked
+		var b *metering.BlockedError
 		if err := g.CanRun(ctx, "org_1", w.kind, w.owned); !errors.As(err, &b) || b.Reason != reasonPending {
 			t.Fatalf("%s owned=%v before the card: %v", w.kind, w.owned, err)
 		}
 	}
 	// An AI check before the card puts pending in this replica's cache.
-	var b *metering.Blocked
+	var b *metering.BlockedError
 	if err := g.CanRun(ctx, "org_1", metering.KindAIPlatform, false); !errors.As(err, &b) || b.Reason != reasonPending {
 		t.Fatalf("ai before the card: %v", err)
 	}

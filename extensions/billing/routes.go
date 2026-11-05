@@ -134,7 +134,7 @@ func (r *routes) allowOwner(c forge.Context) (security.Principal, error) {
 // sentence reaches the caller; billing's, Stripe's and the database's
 // errors are logged and never sent.
 func fail(ctx context.Context, org string, err error) error {
-	var blocked *metering.Blocked
+	var blocked *metering.BlockedError
 	switch {
 	case errors.As(err, &blocked):
 		return forge.NewHTTPError(http.StatusPaymentRequired, blocked.Reason)
@@ -197,7 +197,8 @@ type accountView struct {
 	SpendingLimitUSD    *string             `json:"spending_limit_usd"`
 	Period              periodView          `json:"period"`
 	Usage               []usageView         `json:"usage"`
-	CreditUsedCents     int64               `json:"credit_used_cents"`
+	BaseCreditUsedCents int64               `json:"base_credit_used_cents"`
+	AICreditUsedCents   int64               `json:"ai_credit_used_cents"`
 	OverageCents        int64               `json:"overage_cents"`
 	ProjectedTotalCents int64               `json:"projected_total_cents"`
 	PaymentMethods      []paymentMethodView `json:"payment_methods"`
@@ -215,10 +216,11 @@ func (r *routes) account(c forge.Context) error {
 	}
 	v := accountView{
 		Status: sum.Account.Status, AIEnabled: sum.Account.AIEnabled, AIEndsAt: sum.Account.AIEndsAt,
-		SpendingLimitUSD: dollars(sum.Account.SpendingLimitCents),
-		Period:           periodView{Start: sum.PeriodStart, End: sum.PeriodEnd},
-		Usage:            make([]usageView, 0, len(sum.Usage)),
-		CreditUsedCents:  sum.CreditUsedCents, OverageCents: sum.OverageCents, ProjectedTotalCents: sum.ProjectedTotalCents,
+		SpendingLimitUSD:    dollars(sum.Account.SpendingLimitCents),
+		Period:              periodView{Start: sum.PeriodStart, End: sum.PeriodEnd},
+		Usage:               make([]usageView, 0, len(sum.Usage)),
+		BaseCreditUsedCents: sum.BaseCreditUsedCents, AICreditUsedCents: sum.AICreditUsedCents,
+		OverageCents: sum.OverageCents, ProjectedTotalCents: sum.ProjectedTotalCents,
 		PaymentMethods: make([]paymentMethodView, 0, len(sum.PaymentMethods)),
 	}
 	for _, u := range sum.Usage {

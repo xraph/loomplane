@@ -35,6 +35,14 @@ func mountWebhook(router forge.Router, svc billingService) error {
 		switch {
 		case err == nil:
 			return c.JSON(http.StatusOK, map[string]bool{"received": true})
+		case errors.Is(err, billing.ErrAPIVersion):
+			// Every event fails this way until the endpoint's version in
+			// Stripe is changed, and Stripe disables an endpoint that keeps
+			// failing, so it is an error and names the version to set.
+			slog.ErrorContext(ctx, "billing: refused a Stripe event on another API version; set the webhook endpoint in Stripe to the expected version",
+				"expected_api_version", billing.StripeAPIVersion, "error", err)
+			return forge.NewHTTPError(http.StatusBadRequest,
+				"The event's Stripe API version isn't the one Loomplane reads. Set the webhook endpoint to "+billing.StripeAPIVersion+".")
 		case errors.Is(err, billing.ErrBadSignature):
 			slog.WarnContext(ctx, "billing: refused a Stripe event with a bad signature", "error", err)
 			return forge.NewHTTPError(http.StatusBadRequest, "The signature doesn't match.")

@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -99,6 +100,31 @@ func TestAGateRefusalAtStartFailsTheTaskOnceWithItsReason(t *testing.T) {
 	got := w.store.task(t, task.ID)
 	if got.Status != StatusFailed || got.Error != why {
 		t.Fatalf("task %s %q, want failed with the reason", got.Status, got.Error)
+	}
+}
+
+// Billing still starting after a deploy refuses no one: the task's job is
+// tried again and the task stays open.
+func TestBillingNotReadyAtStartIsRetried(t *testing.T) {
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	w.settings.mu.Lock()
+	w.settings.notReady = map[string]bool{orgA: true}
+	w.settings.mu.Unlock()
+	if err := w.runStart(t, task); !errors.Is(err, metering.ErrNotReady) {
+		t.Fatalf("billing not ready: %v, want the job retried with ErrNotReady", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status == StatusFailed {
+		t.Fatalf("task failed with %q while billing was starting", got.Error)
+	}
+	w.settings.mu.Lock()
+	w.settings.notReady = nil
+	w.settings.mu.Unlock()
+	if err := w.runStart(t, task); err != nil {
+		t.Fatalf("the retry once billing is ready: %v", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status == StatusFailed {
+		t.Fatalf("the retry failed the task: %q", got.Error)
 	}
 }
 

@@ -28,10 +28,13 @@ type Summary struct {
 	// Usage has every billed feature, in display order, then any other
 	// feature with usage.
 	Usage []FeatureUsage
-	// CreditUsedCents is the included usage spent: up to $5.00 of base
-	// usage, and up to $10.00 of AI while the add-on covers the month.
-	CreditUsedCents int64
-	OverageCents    int64
+	// BaseCreditUsedCents is the plan's included usage spent: up to $5.00
+	// of base usage. AICreditUsedCents is the add-on's: up to $10.00 of AI
+	// while the add-on covers the month, else 0. Each is shown against its
+	// own credit.
+	BaseCreditUsedCents int64
+	AICreditUsedCents   int64
+	OverageCents        int64
 	// ProjectedTotalCents is this month's invoice if the month closed now:
 	// the plan fees plus the overage.
 	ProjectedTotalCents int64
@@ -54,12 +57,12 @@ func (s *Service) Summary(ctx context.Context, orgID string) (Summary, error) {
 	sp := spendOf(usage, aiOn)
 	sum := Summary{
 		Account: a, PeriodStart: start, PeriodEnd: start.AddDate(0, 1, 0),
-		Usage:           orderedUsage(usage),
-		CreditUsedCents: min(sp.BaseUsageCents, baseCreditCents),
-		OverageCents:    sp.OverageCents,
+		Usage:               orderedUsage(usage),
+		BaseCreditUsedCents: min(sp.BaseUsageCents, baseCreditCents),
+		OverageCents:        sp.OverageCents,
 	}
 	if aiOn {
-		sum.CreditUsedCents += min(sp.AIUsageCents, aiCreditCents)
+		sum.AICreditUsedCents = min(sp.AIUsageCents, aiCreditCents)
 	}
 	// A workspace with no card has no subscription yet, so nothing is due.
 	if a.CloudSubscription != "" {

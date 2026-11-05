@@ -53,14 +53,20 @@ func (s *Service) enqueue(ctx context.Context, n notifications.Notice) error {
 // sendNotice queues one notice to the workspace's admins. A notice that can't be
 // queued is logged and never undoes the change it tells of.
 func (s *Service) sendNotice(ctx context.Context, orgID, kind, subject, title, body string) {
-	if s.notify == nil {
-		return
-	}
-	err := s.notify(ctx, notifications.Notice{Kind: kind, OrgID: orgID, SubjectID: subject,
-		Title: title, Body: body, Path: noticePath})
-	if err != nil {
+	if err := s.queueNotice(ctx, orgID, kind, subject, title, body); err != nil {
 		slog.ErrorContext(ctx, "billing could not queue a notice", "org", orgID, "kind", kind, "error", err)
 	}
+}
+
+// queueNotice queues one notice and says whether it was queued, for a
+// caller that must try again when it wasn't. The subject makes a notice
+// queued twice reach the admins once.
+func (s *Service) queueNotice(ctx context.Context, orgID, kind, subject, title, body string) error {
+	if s.notify == nil {
+		return nil
+	}
+	return s.notify(ctx, notifications.Notice{Kind: kind, OrgID: orgID, SubjectID: subject,
+		Title: title, Body: body, Path: noticePath})
 }
 
 // periodKey is a month as notice subjects name it: 2026-11.

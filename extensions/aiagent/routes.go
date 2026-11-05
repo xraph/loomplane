@@ -111,7 +111,7 @@ func (h handlers) setAutonomy(c forge.Context) error {
 
 // fail maps the agent's errors to a status, as planning's routes do:
 // not found 404, invalid 422, forbidden 403, the agent off or out of
-// budget 409.
+// budget 409, a billing refusal 402, billing still starting 503.
 func fail(err error) error {
 	switch {
 	case errors.Is(err, projects.ErrNotFound), errors.Is(err, agentsettings.ErrNotFound):
@@ -121,9 +121,13 @@ func fail(err error) error {
 	case errors.Is(err, agentsettings.ErrDisabled), errors.Is(err, agentsettings.ErrBudgetExhausted):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	}
-	var blocked *metering.Blocked
+	var blocked *metering.BlockedError
 	if errors.As(err, &blocked) {
 		return forge.NewHTTPError(http.StatusPaymentRequired, blocked.Reason)
+	}
+	if errors.Is(err, metering.ErrNotReady) {
+		// Forge sends a 5xx without its text; the status says try again.
+		return forge.NewHTTPError(http.StatusServiceUnavailable, "Not ready yet. Try again in a moment.")
 	}
 	if status := security.StatusFor(err); status != http.StatusInternalServerError {
 		return forge.NewHTTPError(status, err.Error())

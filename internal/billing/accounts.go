@@ -71,7 +71,7 @@ func (s *Service) Account(ctx context.Context, orgID string) (Account, error) {
 			a.ai_ends_at, a.spending_limit_cents, a.limited_period,
 			EXISTS (SELECT 1 FROM loomplane_billing_invoices i
 				WHERE i.org_id = a.org_id AND i.paid_at IS NULL AND i.payment_failed_at IS NOT NULL
-					AND i.payment_failed_at <= $2)
+					AND i.voided_at IS NULL AND i.payment_failed_at <= $2)
 		FROM loomplane_billing_accounts a WHERE a.org_id = $1`,
 		orgID, now.Add(-pastDueAfter),
 	).Scan(&a.CardReady, &a.CustomerID, &a.CloudSubscription, &a.AISubscription,

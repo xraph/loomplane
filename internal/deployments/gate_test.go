@@ -19,7 +19,7 @@ func (g *refuseGate) CanRun(_ context.Context, _ string, k metering.Kind, owned 
 	if owned {
 		return errors.New("platform work reached a customer gate")
 	}
-	return &metering.Blocked{Reason: "Add a card"}
+	return &metering.BlockedError{Reason: "Add a card"}
 }
 
 func TestRunnerStartRefusedByTheGateRecordsNothing(t *testing.T) {

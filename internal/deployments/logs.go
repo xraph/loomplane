@@ -165,7 +165,7 @@ func (c *Collector) safeError(err error) error {
 	}
 	if errors.Is(err, metering.ErrBlocked) {
 		// A gate's refusal keeps its type, so the API answers 402.
-		return &metering.Blocked{Reason: message}
+		return &metering.BlockedError{Reason: message}
 	}
 	return errors.New(message)
 }

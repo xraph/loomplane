@@ -4,6 +4,7 @@ package billing
 
 import (
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/platformcloud"
 )
@@ -103,5 +104,46 @@ func TestSetRate_ReturnsTheRateItReplaced(t *testing.T) {
 	}
 	if _, err := s.SetRate(ctx, FeatureAIUSD, MaxRateMicroUSD+1, "rex"); err == nil {
 		t.Fatal("a rate above $1,000 a unit was set")
+	}
+}
+
+// A voided invoice whose payment had failed no longer holds the workspace
+// past due, for the gate and the platform admin alike.
+func TestPastDue_IgnoresAVoidedInvoice(t *testing.T) {
+	clock := at("2026-11-02T10:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices(invoice_id, org_id, subscription_id, plan, period_start, payment_failed_at)
+		VALUES ('inv_1','org_1','sub_1','cloud','2026-10-01T00:00:00Z', $1)`, clock); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(73 * time.Hour)
+	status := func() (Status, Status) {
+		t.Helper()
+		a, err := s.Account(ctx, "org_1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws, err := s.Workspaces(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range ws {
+			if w.OrgID == "org_1" {
+				return a.Status, w.Status
+			}
+		}
+		t.Fatal("org_1 isn't listed")
+		return "", ""
+	}
+	if a, w := status(); a != StatusPastDue || w != StatusPastDue {
+		t.Fatalf("before the void: Account %s, Workspaces %s", a, w)
+	}
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_billing_invoices SET voided_at = $1 WHERE invoice_id = 'inv_1'`, clock); err != nil {
+		t.Fatal(err)
+	}
+	if a, w := status(); a != StatusActive || w != StatusActive {
+		t.Fatalf("after the void: Account %s, Workspaces %s", a, w)
 	}
 }

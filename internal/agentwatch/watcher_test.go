@@ -285,6 +285,7 @@ type fakeBudget struct {
 	enabled   map[string]bool
 	exhausted bool
 	blocked   bool
+	notReady  bool // billing is still starting
 }
 
 func (b *fakeBudget) EnabledOrgs(context.Context) ([]string, error) {
@@ -313,7 +314,10 @@ func (b *fakeBudget) RequireBudget(context.Context, string) error {
 		return agentsettings.ErrBudgetExhausted
 	}
 	if b.blocked {
-		return &metering.Blocked{Reason: "Turn on the AI add-on"}
+		return &metering.BlockedError{Reason: "Turn on the AI add-on"}
+	}
+	if b.notReady {
+		return metering.ErrNotReady
 	}
 	return nil
 }
@@ -719,6 +723,34 @@ func TestBlockedByTheGatePausesWithItsOwnNotice(t *testing.T) {
 	sent := r.notices.sent()
 	if len(sent) != len(admins) || sent[0].Title != pausedBillingTitle || sent[0].Body != pausedBillingBody {
 		t.Fatalf("notices %+v", sent)
+	}
+}
+
+// Billing still starting after a deploy is no billing refusal: the watcher
+// doesn't pause or tell anyone, and investigates once billing is up.
+func TestBillingNotReadyDoesntPause(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	r.budget.mu.Lock()
+	r.budget.notReady = true
+	r.budget.mu.Unlock()
+	r.fail("dep_1", "service:api", t0.Add(5*time.Minute))
+	r.run()
+	if st := r.state(); st.Paused {
+		t.Fatalf("state %+v, want not paused", st)
+	}
+	if sent := r.notices.sent(); len(sent) != 0 {
+		t.Fatalf("notices %+v while billing was starting", sent)
+	}
+	r.budget.mu.Lock()
+	r.budget.notReady = false
+	r.budget.mu.Unlock()
+	r.run()
+	if st := r.state(); st.Paused {
+		t.Fatalf("state %+v after billing started", st)
+	}
+	if rep := r.only(); rep.Investigation == agentreports.InvestigationSkipped {
+		t.Fatalf("report skipped: %q", rep.InvestigationNote)
 	}
 }
 

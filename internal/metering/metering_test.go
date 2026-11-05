@@ -26,10 +26,10 @@ func TestNoopsAllowAndDiscard(t *testing.T) {
 }
 
 func TestBlockedMatchesErrBlockedAndReadsAsItsReason(t *testing.T) {
-	var err error = &Blocked{Reason: "Add a card in Settings > Billing to start running anything on Loomplane Cloud."}
+	var err error = &BlockedError{Reason: "Add a card in Settings > Billing to start running anything on Loomplane Cloud."}
 	wrapped := fmt.Errorf("Loomplane Cloud can't start this for the workspace: %w", err)
 	if !errors.Is(wrapped, ErrBlocked) {
-		t.Fatal("a wrapped Blocked doesn't match ErrBlocked")
+		t.Fatal("a wrapped BlockedError doesn't match ErrBlocked")
 	}
 	if err.Error() != "Add a card in Settings > Billing to start running anything on Loomplane Cloud." {
 		t.Fatalf("Error() = %q", err.Error())
@@ -40,7 +40,7 @@ type refuse struct{ calls int }
 
 func (r *refuse) CanRun(context.Context, string, Kind, bool) error {
 	r.calls++
-	return &Blocked{Reason: "no"}
+	return &BlockedError{Reason: "no"}
 }
 
 type count struct{ n int }

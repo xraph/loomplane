@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -175,6 +176,10 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := scheduleJobs(ctx, e.engine); err != nil {
 		return fmt.Errorf("billing: %w", err)
 	}
+	// Stripe's webhook endpoint must send events in this version; any other
+	// release train is refused with a 400 that names it.
+	slog.InfoContext(ctx, "billing: Stripe events are read in one API version",
+		"stripe_api_version", billing.StripeAPIVersion, "webhook_path", webhookPath)
 	e.MarkStarted()
 	return nil
 }

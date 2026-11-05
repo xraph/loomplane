@@ -52,7 +52,7 @@ type cachedAccount struct {
 
 var _ metering.Gate = (*gate)(nil)
 
-// CanRun says whether the workspace may run work of this kind. A Blocked
+// CanRun says whether the workspace may run work of this kind. A BlockedError
 // refusal carries the sentence the person reads; any other error (the
 // account couldn't be read) refuses too.
 //
@@ -88,20 +88,20 @@ func decide(a Account, kind metering.Kind, platformOwned bool) error {
 	spends := platformOwned || kind == metering.KindAIPlatform
 	switch a.Status {
 	case StatusPendingPayment:
-		return &metering.Blocked{Reason: reasonPending}
+		return &metering.BlockedError{Reason: reasonPending}
 	case StatusPastDue:
 		if spends {
-			return &metering.Blocked{Reason: reasonPastDue}
+			return &metering.BlockedError{Reason: reasonPastDue}
 		}
 		return nil
 	case StatusLimited:
 		if spends {
-			return &metering.Blocked{Reason: reasonLimited}
+			return &metering.BlockedError{Reason: reasonLimited}
 		}
 		return nil
 	case StatusActive:
 		if kind == metering.KindAIPlatform && !a.AIEnabled {
-			return &metering.Blocked{Reason: reasonNoAddOn}
+			return &metering.BlockedError{Reason: reasonNoAddOn}
 		}
 		return nil
 	default:

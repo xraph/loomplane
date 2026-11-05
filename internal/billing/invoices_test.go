@@ -539,7 +539,7 @@ func TestRollOverAI_OnlyOnceInvoiced(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock = at("2026-11-01T01:15:00Z")
-	if err = s.rollOverAI(ctx, clock, map[string]bool{}); err != nil {
+	if err = s.rollOverAI(ctx, clock); err != nil {
 		t.Fatal(err)
 	}
 	if a, _ := s.Account(ctx, "org_1"); a.AISubscription != aiSub {
@@ -732,5 +732,240 @@ func TestCloseMonthIfOpen_ClosesAMonthHeldPastTheNextFirst(t *testing.T) {
 	}
 	if !closed(t, pg, "2026-10-01") || !closed(t, pg, "2026-11-01") {
 		t.Fatal("the catch-up left a month open")
+	}
+}
+
+// aiInvoicesByMonth counts the invoices of the ai subscription by month.
+func aiInvoicesByMonth(t *testing.T, s *Service, org, aiSub string) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for _, inv := range invoicesFor(t, s, org) {
+		if inv.SubscriptionID.String() == aiSub {
+			out[inv.PeriodStart.UTC().Format("2006-01")]++
+		}
+	}
+	return out
+}
+
+// An add-on turned off in October whose October invoice fails while
+// November closes: November bills no AI, the add-on isn't rolled over
+// until October's AI is invoiced, and the catch-up then invoices it once.
+func TestCloseMonth_OlderMonthOpenKeepsTheEndedAddOnForIt(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	if _, err := s.SetAI(ctx, "org_1", true); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Account(ctx, "org_1")
+	aiSub := a.AISubscription
+	clock = at("2026-10-20T00:00:00Z")
+	if _, err := s.SetAI(ctx, "org_1", false); err != nil { // on until 1 November
+		t.Fatal(err)
+	}
+	// October's AI invoice can't be made: a broken record stands in for a
+	// ledger error that only that month hits.
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices (invoice_id, org_id, subscription_id, plan, period_start)
+		VALUES ('broken', 'org_1', $1, 'ai', '2026-10-01T00:00:00Z')`, aiSub); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2026-11-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err == nil {
+		t.Fatal("October's close hid the failed AI invoice")
+	}
+	clock = at("2026-12-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err == nil {
+		t.Fatal("December's close hid October's failed AI invoice")
+	}
+	if got := aiInvoicesByMonth(t, s, "org_1", aiSub); got["2026-11"] != 0 {
+		t.Fatalf("November billed the add-on turned off in October: %v", got)
+	}
+	if a, _ = s.Account(ctx, "org_1"); a.AISubscription != aiSub {
+		t.Fatalf("rolled over with October's AI not invoiced: %+v", a)
+	}
+	if closed(t, pg, "2026-10-01") || !closed(t, pg, "2026-11-01") {
+		t.Fatalf("October closed %v, November closed %v", closed(t, pg, "2026-10-01"), closed(t, pg, "2026-11-01"))
+	}
+
+	// The record is put right; the next hour's catch-up finishes October.
+	_, _ = pg.Exec(ctx, `DELETE FROM loomplane_billing_invoices WHERE invoice_id = 'broken'`)
+	clock = at("2026-12-01T02:00:00Z")
+	if err := s.CloseMonthIfOpen(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := aiInvoicesByMonth(t, s, "org_1", aiSub); len(got) != 1 || got["2026-10"] != 1 {
+		t.Fatalf("AI invoices %v, want October's once", got)
+	}
+	if a, _ = s.Account(ctx, "org_1"); a.AISubscription != "" || a.AIEndsAt != nil {
+		t.Fatalf("not rolled over after October's AI was invoiced: %+v", a)
+	}
+	sid, _ := id.ParseSubscriptionID(aiSub)
+	if sub, _ := s.l.GetSubscription(ctx, sid); sub == nil || sub.CanceledAt == nil {
+		t.Fatalf("the ai subscription isn't canceled in ledger: %+v", sub)
+	}
+	if !closed(t, pg, "2026-10-01") {
+		t.Fatal("October still open")
+	}
+}
+
+// The close cron finishes an older month still open before the month just
+// ended, so a hold that cleared before the cron fired doesn't wait for the
+// hourly catch-up.
+func TestCloseMonth_ClosesAnOlderOpenMonthFirst(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	if _, err := s.SetAI(ctx, "org_1", true); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.Account(ctx, "org_1")
+	aiSub := a.AISubscription
+	clock = at("2026-10-20T00:00:00Z")
+	_, _ = s.SetAI(ctx, "org_1", false)
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices (invoice_id, org_id, subscription_id, plan, period_start)
+		VALUES ('broken', 'org_1', $1, 'ai', '2026-10-01T00:00:00Z')`, aiSub); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2026-11-01T01:15:00Z")
+	_ = s.CloseMonth(ctx)
+	_, _ = pg.Exec(ctx, `DELETE FROM loomplane_billing_invoices WHERE invoice_id = 'broken'`)
+	clock = at("2026-12-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !closed(t, pg, "2026-10-01") || !closed(t, pg, "2026-11-01") {
+		t.Fatalf("October closed %v, November closed %v", closed(t, pg, "2026-10-01"), closed(t, pg, "2026-11-01"))
+	}
+	if got := aiInvoicesByMonth(t, s, "org_1", aiSub); len(got) != 1 || got["2026-10"] != 1 {
+		t.Fatalf("AI invoices %v, want October's once", got)
+	}
+}
+
+// markedForVoided leaves the state a crash inside deleteCredit leaves, for
+// an October invoice that is then voided: credit lpc_kept is marked for the
+// invoice with its coupon still applied, and lpc_gone is marked with its
+// coupon already deleted. finalized says whether the invoice was finalized
+// before the void. It returns the voided invoice.
+func markedForVoided(t *testing.T, s *Service, pg *pgdriver.PgDB, clock *time.Time, finalized bool) *invoice.Invoice {
+	t.Helper()
+	ctx := t.Context()
+	_ = s.MarkCardReady(ctx, "org_1")
+	a, _ := s.Account(ctx, "org_1")
+	grantCredit(t, s, pg, a.CloudSubscription, "lpc_kept", 300)
+	gone := grantCredit(t, s, pg, a.CloudSubscription, "lpc_gone", 100)
+	*clock = at("2026-11-01T01:15:00Z")
+	sid, _ := id.ParseSubscriptionID(a.CloudSubscription)
+	if _, err := s.l.Advance(ctx, *clock); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := s.l.GenerateInvoice(ctx, sid, ledger.ForPeriod(at("2026-10-01T00:00:00Z"), at("2026-11-01T00:00:00Z")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fin *time.Time
+	if finalized {
+		fin = clock
+	}
+	if _, err = pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices (invoice_id, org_id, subscription_id, plan, period_start, finalized_at)
+		VALUES ($1, 'org_1', $2, 'cloud', $3, $4)`, inv.ID.String(), a.CloudSubscription, inv.PeriodStart, fin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pg.Exec(ctx, `UPDATE loomplane_billing_credits SET invoice_id = $1`, inv.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.l.Store().GetCoupon(ctx, gone, testAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.l.DeleteCoupon(ctx, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.l.MarkInvoiceVoided(ctx, inv.ID, "by hand"); err != nil {
+		t.Fatal(err)
+	}
+	return inv
+}
+
+// creditRow is a credit's invoice id ("" when none) and whether it is
+// recorded deleted.
+func creditRow(t *testing.T, pg *pgdriver.PgDB, creditID string) (invID string, deleted bool) {
+	t.Helper()
+	var inv *string
+	if err := pg.QueryRow(t.Context(), `SELECT invoice_id, deleted_at IS NOT NULL FROM loomplane_billing_credits WHERE id = $1`, creditID).
+		Scan(&inv, &deleted); err != nil {
+		t.Fatal(err)
+	}
+	if inv != nil {
+		invID = *inv
+	}
+	return invID, deleted
+}
+
+// The close that finds its invoice voided gives the credits marked for it
+// back: one whose coupon is still applied discounts the next invoice and
+// goes with it, one whose coupon is gone is recorded deleted.
+func TestCloseMonth_VoidedInvoiceReleasesItsCredits(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, _ := billingWorld(t, &clock)
+	ctx := t.Context()
+	voided := markedForVoided(t, s, pg, &clock, false)
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if inv, deleted := creditRow(t, pg, "lpc_kept"); inv != "" || deleted {
+		t.Fatalf("lpc_kept: invoice %q deleted %v, want given back", inv, deleted)
+	}
+	if inv, deleted := creditRow(t, pg, "lpc_gone"); inv != voided.ID.String() || !deleted {
+		t.Fatalf("lpc_gone: invoice %q deleted %v, want deleted against the voided invoice", inv, deleted)
+	}
+
+	// November's invoice takes the credit given back, once.
+	clock = at("2026-12-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	clock = at("2027-01-01T01:15:00Z")
+	if err := s.CloseMonth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	totals := map[string]types.Money{}
+	var november string
+	for _, inv := range invoicesFor(t, s, "org_1") {
+		if inv.Status == invoice.StatusVoided {
+			continue
+		}
+		month := inv.PeriodStart.UTC().Format("2006-01")
+		totals[month] = inv.Total
+		if month == "2026-11" {
+			november = inv.ID.String()
+		}
+	}
+	if totals["2026-11"] != types.USD(200) || totals["2026-12"] != types.USD(500) {
+		t.Fatalf("totals %v: November $5 - $3, December $5", totals)
+	}
+	if inv, deleted := creditRow(t, pg, "lpc_kept"); inv != november || !deleted {
+		t.Fatalf("lpc_kept after November: invoice %q deleted %v", inv, deleted)
+	}
+}
+
+// The sync that finds a finalized invoice voided gives its credits back
+// the same way.
+func TestSyncInvoices_VoidedInvoiceReleasesItsCredits(t *testing.T) {
+	clock := at("2026-10-05T00:00:00Z")
+	s, pg, fs := billingWorld(t, &clock)
+	voided := markedForVoided(t, s, pg, &clock, true)
+	if err := s.SyncInvoices(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fs.sent()); n != 0 {
+		t.Fatalf("a voided invoice was sent %d times", n)
+	}
+	if inv, deleted := creditRow(t, pg, "lpc_kept"); inv != "" || deleted {
+		t.Fatalf("lpc_kept: invoice %q deleted %v, want given back", inv, deleted)
+	}
+	if inv, deleted := creditRow(t, pg, "lpc_gone"); inv != voided.ID.String() || !deleted {
+		t.Fatalf("lpc_gone: invoice %q deleted %v, want deleted against the voided invoice", inv, deleted)
 	}
 }

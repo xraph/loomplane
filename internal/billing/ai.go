@@ -153,11 +153,12 @@ func (s *Service) aiOff(ctx context.Context, orgID string) error {
 }
 
 // rollOverAI cancels, in ledger, each ai subscription whose add-on was
-// turned off and ended by cutoff, the end of the month just invoiced, then
-// clears it from the account. Only workspaces in invoiced are rolled over:
-// an add-on whose last month isn't invoiced yet stays, so the next close
-// still invoices it.
-func (s *Service) rollOverAI(ctx context.Context, cutoff time.Time, invoiced map[string]bool) error {
+// turned off and ended by cutoff, the end of the month just closed, then
+// clears it from the account. An add-on is rolled over only once its last
+// month (the one ending at ai_ends_at) has a recorded invoice that is final
+// or voided, whichever close made it: one whose last month isn't invoiced
+// yet stays, so the close of that month still invoices it, however late.
+func (s *Service) rollOverAI(ctx context.Context, cutoff time.Time) error {
 	rows, err := s.pg.Query(ctx, `SELECT org_id, ai_subscription_id FROM loomplane_billing_accounts
 		WHERE ai_subscription_id <> '' AND ai_ends_at IS NOT NULL AND ai_ends_at <= $1 ORDER BY org_id`, cutoff)
 	if err != nil {
@@ -181,9 +182,6 @@ func (s *Service) rollOverAI(ctx context.Context, cutoff time.Time, invoiced map
 
 	var errs []error
 	for _, e := range due {
-		if !invoiced[e.org] {
-			continue
-		}
 		if rollErr := s.endAI(ctx, e.org, e.sub, cutoff); rollErr != nil {
 			slog.ErrorContext(ctx, "billing: rolling the AI add-on over failed", "org", e.org, "error", rollErr)
 			errs = append(errs, fmt.Errorf("billing: roll over the AI add-on of %s: %w", e.org, rollErr))
@@ -195,7 +193,8 @@ func (s *Service) rollOverAI(ctx context.Context, cutoff time.Time, invoiced map
 // endAI cancels one ai subscription now and clears it from the account. The
 // account row is locked first and read again, so an add-on turned back on
 // since the list was read (ai_ends_at cleared) or moved to another
-// subscription is left running.
+// subscription is left running. So is one whose last month has no final
+// invoice yet.
 func (s *Service) endAI(ctx context.Context, org, subID string, cutoff time.Time) error {
 	sid, err := id.ParseSubscriptionID(subID)
 	if err != nil {
@@ -207,14 +206,29 @@ func (s *Service) endAI(ctx context.Context, org, subID string, cutoff time.Time
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op after commit
-	var due bool
-	err = tx.QueryRow(ctx, `SELECT ai_subscription_id = $2 AND ai_ends_at IS NOT NULL AND ai_ends_at <= $3
-		FROM loomplane_billing_accounts WHERE org_id = $1 FOR UPDATE`, org, subID, cutoff).Scan(&due)
+	var (
+		due    bool
+		endsAt *time.Time
+	)
+	err = tx.QueryRow(ctx, `SELECT ai_subscription_id = $2 AND ai_ends_at IS NOT NULL AND ai_ends_at <= $3, ai_ends_at
+		FROM loomplane_billing_accounts WHERE org_id = $1 FOR UPDATE`, org, subID, cutoff).Scan(&due, &endsAt)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !due) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	last := monthStart(endsAt.UTC().Add(-time.Nanosecond))
+	var invoiced bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loomplane_billing_invoices
+		WHERE subscription_id = $1 AND period_start = $2 AND (finalized_at IS NOT NULL OR voided_at IS NOT NULL))`,
+		subID, last).Scan(&invoiced); err != nil {
+		return fmt.Errorf("find the invoice for the add-on's last month: %w", err)
+	}
+	if !invoiced {
+		slog.InfoContext(ctx, "billing: the AI add-on's last month isn't invoiced yet; it rolls over after",
+			"org", org, "subscription", subID, "month", periodKey(last))
+		return nil
 	}
 	err = s.l.CancelSubscription(ctx, sid, true)
 	if err != nil && !errors.Is(err, ledger.ErrSubscriptionCanceled) && !errors.Is(err, ledger.ErrSubscriptionExpired) {

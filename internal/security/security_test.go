@@ -139,7 +139,7 @@ func TestStatusFor(t *testing.T) {
 }
 
 func TestStatusForBlockedIsPaymentRequired(t *testing.T) {
-	err := fmt.Errorf("approve: %w", &metering.Blocked{Reason: "Add a card"})
+	err := fmt.Errorf("approve: %w", &metering.BlockedError{Reason: "Add a card"})
 	if got := StatusFor(err); got != http.StatusPaymentRequired {
 		t.Fatalf("StatusFor(blocked) = %d", got)
 	}

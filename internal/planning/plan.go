@@ -106,19 +106,6 @@ const (
 )
 
 // Action is one step of a plan.
-// TeardownOnly reports whether the plan only removes things: no action
-// creates, updates or replaces anything that runs. Removing is never gated
-// on billing, so a workspace can always clean up.
-func (p *Plan) TeardownOnly() bool {
-	for _, a := range p.Actions {
-		switch a.Op {
-		case Create, Update, Replace:
-			return false
-		}
-	}
-	return true
-}
-
 type Action struct {
 	CleanupTargets []ManagedCleanupTarget `json:"cleanup_targets,omitempty"`
 	// BackupEveryHours is a reviewed default for a newly provisioned resource.
@@ -757,6 +744,19 @@ type Plan struct {
 	DecidedBy    string     `json:"decided_by"`
 	DecidedAt    *time.Time `json:"decided_at"`
 	DecisionNote string     `json:"decision_note"`
+}
+
+// TeardownOnly reports whether the plan only removes things: every action
+// deletes or keeps. Removing is never gated on billing, so a workspace can
+// always clean up. It fails closed: an op it doesn't know, or an empty one,
+// counts as running something.
+func (p *Plan) TeardownOnly() bool {
+	for _, a := range p.Actions {
+		if a.Op != Delete && a.Op != Keep {
+			return false
+		}
+	}
+	return true
 }
 
 // Open reports whether the plan may still be decided or is still planning.

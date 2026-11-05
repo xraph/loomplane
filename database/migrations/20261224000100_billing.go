@@ -49,8 +49,8 @@ func billingGroup() *migrate.Group {
 // loomplane_billing_refunds record the invoices sent, the credits granted
 // and the refunds made. A refund's sent_at is set once Stripe made it; one
 // without is sent again, under its own key, when it is asked for again.
-// Unpaid invoices whose payment failed are indexed by workspace, for the
-// gate's past-due check. voided_at marks an invoice voided in ledger,
+// Unpaid, unvoided invoices whose payment failed are indexed by workspace,
+// for the gate's past-due check. voided_at marks an invoice voided in ledger,
 // which is never sent and never made again.
 //
 // loomplane_billing_closes is one row per month whose close finished, so a
@@ -92,6 +92,8 @@ func init() {
  recorded_at timestamptz NOT NULL DEFAULT now())`,
 				`CREATE INDEX IF NOT EXISTS loomplane_billing_usage_unpushed ON loomplane_billing_usage (org_id, feature) WHERE push_id IS NULL`,
 				`CREATE INDEX IF NOT EXISTS loomplane_billing_usage_period ON loomplane_billing_usage (org_id, occurred_at)`,
+				// The platform admin adds up every workspace's usage since a time.
+				`CREATE INDEX IF NOT EXISTS loomplane_billing_usage_occurred ON loomplane_billing_usage (occurred_at)`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_pushes (
  id text PRIMARY KEY,
  org_id text NOT NULL,
@@ -129,7 +131,9 @@ func init() {
 				// The billing gate asks on every deploy and build whether a workspace
 				// has an unpaid invoice whose payment failed; this answers it.
 				`CREATE INDEX IF NOT EXISTS loomplane_billing_invoices_unpaid_failed ON loomplane_billing_invoices (org_id)
- WHERE paid_at IS NULL AND payment_failed_at IS NOT NULL`,
+ WHERE paid_at IS NULL AND payment_failed_at IS NOT NULL AND voided_at IS NULL`,
+				// Each push with cents looks for the workspace's invoice of its month.
+				`CREATE INDEX IF NOT EXISTS loomplane_billing_invoices_period ON loomplane_billing_invoices (org_id, period_start)`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_credits (
  id text PRIMARY KEY,
  org_id text NOT NULL,
@@ -141,6 +145,9 @@ func init() {
  created_at timestamptz NOT NULL DEFAULT now(),
  invoice_id text NULL,
  deleted_at timestamptz NULL)`,
+				// Invoicing reads a workspace's live credits on its subscription.
+				`CREATE INDEX IF NOT EXISTS loomplane_billing_credits_live ON loomplane_billing_credits (org_id, subscription_id)
+ WHERE deleted_at IS NULL`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_refunds (
  refund_key text PRIMARY KEY CHECK (length(refund_key) BETWEEN 1 AND 200),
  invoice_id text NOT NULL,
@@ -150,6 +157,8 @@ func init() {
  refunded_by text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(),
  sent_at timestamptz NULL)`,
+				// What is refunded of an invoice is summed by invoice.
+				`CREATE INDEX IF NOT EXISTS loomplane_billing_refunds_invoice ON loomplane_billing_refunds (invoice_id)`,
 				`CREATE TABLE IF NOT EXISTS loomplane_billing_closes (
  period date PRIMARY KEY,
  closed_at timestamptz NOT NULL)`,

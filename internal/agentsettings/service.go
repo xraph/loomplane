@@ -151,7 +151,7 @@ func (s *Service) WithMetering(g metering.Gate, m metering.Meter) {
 // gate: a call queued before Start never reaches the key ungated.
 func (s *Service) canUseServerKey(ctx context.Context, orgID string) error {
 	if metering.RefuseUnset && !s.meteringSet.Load() {
-		return &metering.Blocked{Reason: "Billing isn't ready yet. Try again in a moment."}
+		return metering.ErrNotReady
 	}
 	return s.metering.CanRun(ctx, orgID, metering.KindAIPlatform, false)
 }

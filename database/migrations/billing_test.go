@@ -24,6 +24,15 @@ var billingTables = []string{
 	"loomplane_billing_usage",
 }
 
+// billingIndexes are the lookup indexes beside the past-due one, by name,
+// with the part of each definition that says what it covers.
+var billingIndexes = map[string]string{
+	"loomplane_billing_invoices_period": "(org_id, period_start)",
+	"loomplane_billing_refunds_invoice": "(invoice_id)",
+	"loomplane_billing_credits_live":    "(org_id, subscription_id) WHERE (deleted_at IS NULL)",
+	"loomplane_billing_usage_occurred":  "(occurred_at)",
+}
+
 // billingMigration is the billing group's one migration.
 func billingMigration(t *testing.T) *migrate.Migration {
 	t.Helper()
@@ -58,16 +67,24 @@ func TestBillingMigrationCreatesTablesAndSeedsZeroRates(t *testing.T) {
 	// query (internal/billing/accounts.go) uses it.
 	const unpaidIndex = `SELECT indexdef FROM pg_indexes WHERE indexname='loomplane_billing_invoices_unpaid_failed'`
 	if got := strs(t, conn, unpaidIndex); len(got) != 1 ||
-		!strings.Contains(got[0], "(org_id) WHERE ((paid_at IS NULL) AND (payment_failed_at IS NOT NULL))") {
+		!strings.Contains(got[0], "(org_id) WHERE ((paid_at IS NULL) AND (payment_failed_at IS NOT NULL) AND (voided_at IS NULL))") {
 		t.Fatalf("unpaid invoice index %v", got)
 	}
 	exec(t, conn, `SET enable_seqscan = off`)
 	plan := strings.Join(strs(t, conn, `EXPLAIN SELECT EXISTS (SELECT 1 FROM loomplane_billing_invoices i
 		WHERE i.org_id = 'org_1' AND i.paid_at IS NULL AND i.payment_failed_at IS NOT NULL
-			AND i.payment_failed_at <= now() - interval '72 hours')`), "\n")
+			AND i.voided_at IS NULL AND i.payment_failed_at <= now() - interval '72 hours')`), "\n")
 	exec(t, conn, `RESET enable_seqscan`)
 	if !strings.Contains(plan, "loomplane_billing_invoices_unpaid_failed") {
 		t.Fatalf("the past-due check doesn't use the index:\n%s", plan)
+	}
+
+	// The lookups the push, the credits, the refunds and the platform admin
+	// make each have an index.
+	for name, def := range billingIndexes {
+		if got := strs(t, conn, `SELECT indexdef FROM pg_indexes WHERE indexname = '`+name+`'`); len(got) != 1 || !strings.Contains(got[0], def) {
+			t.Fatalf("index %s: %v, want %q", name, got, def)
+		}
 	}
 
 	// A second run changes nothing, and keeps a rate that was set.
@@ -88,6 +105,9 @@ func TestBillingMigrationCreatesTablesAndSeedsZeroRates(t *testing.T) {
 	}
 	if got := strs(t, conn, unpaidIndex); len(got) != 0 {
 		t.Fatalf("down left the unpaid invoice index: %v", got)
+	}
+	if got := strs(t, conn, `SELECT indexname::text FROM pg_indexes WHERE indexname LIKE 'loomplane\_billing\_%'`); len(got) != 0 {
+		t.Fatalf("down left indexes %v", got)
 	}
 	if got := strs(t, conn, `SELECT to_regclass('ledger_plans')::text`); !slices.Equal(got, []string{"ledger_plans"}) {
 		t.Fatalf("down touched ledger's tables: %v", got)

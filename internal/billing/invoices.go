@@ -55,7 +55,7 @@ type billedAccount struct {
 //     record it, FinalizeInvoice; for the cloud subscription, delete the
 //     coupons of credits granted before generation;
 //  4. roll the AI add-on over: cancel each ai subscription whose ai_ends_at
-//     has passed, once its month is invoiced;
+//     has passed, once its last month is invoiced;
 //  5. SyncInvoices.
 //
 // Every step is safe to run again: ErrAlreadyExists and ErrInvoiceFinalized
@@ -65,14 +65,17 @@ type billedAccount struct {
 // over, the month is recorded as closed; until then CloseMonthIfOpen runs
 // the close again every hour. A replica that finds another closing returns
 // at once.
+//
+// Like CloseMonthIfOpen, it closes every open month of the last three,
+// oldest first, so a month still open from before is finished (and its AI
+// add-on invoiced) before the next one is.
 func (s *Service) CloseMonth(ctx context.Context) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
 	now := s.now().UTC()
-	month := subscription.Period{Start: monthStart(now).AddDate(0, -1, 0), End: monthStart(now)}
 	ran, err := pglock.Try(ctx, s.pg, closeLock, func(ctx context.Context) error {
-		return s.closeMonth(ctx, now, month)
+		return s.closeOpenMonths(ctx, now)
 	})
 	if err == nil && !ran {
 		slog.InfoContext(ctx, "billing: another replica is closing the month")
@@ -95,37 +98,47 @@ func (s *Service) CloseMonthIfOpen(ctx context.Context) error {
 	if now.Before(current.Add(closeAfter)) {
 		return nil // this month's close cron hasn't fired yet
 	}
-	oldest := current.AddDate(0, -closeLookBack, 0)
 	_, err := pglock.Try(ctx, s.pg, closeLock, func(ctx context.Context) error {
-		var stale bool
-		if err := s.pg.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM generate_series(
-				(SELECT min(period) FROM loomplane_billing_closes)::timestamp, ($1::date - interval '1 month')::timestamp, interval '1 month') AS m
-			WHERE NOT EXISTS (SELECT 1 FROM loomplane_billing_closes c WHERE c.period = m::date))`, oldest).Scan(&stale); err != nil {
-			return fmt.Errorf("billing: look for months left open: %w", err)
-		}
-		if stale {
-			slog.ErrorContext(ctx, "billing: a month older than the catch-up looks back is still open; close it by hand",
-				"before", periodKey(oldest))
-		}
-		var errs []error
-		for start := oldest; start.Before(current); start = start.AddDate(0, 1, 0) {
-			var closed bool
-			if err := s.pg.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loomplane_billing_closes WHERE period = $1)`, start).
-				Scan(&closed); err != nil {
-				errs = append(errs, fmt.Errorf("billing: read whether %s is closed: %w", periodKey(start), err))
-				continue
-			}
-			if closed {
-				continue
-			}
-			slog.WarnContext(ctx, "billing: closing a month whose close hasn't finished", "month", periodKey(start))
-			// Each month on its own: one that stays open doesn't hold the
-			// later ones back.
-			errs = append(errs, s.closeMonth(ctx, now, subscription.Period{Start: start, End: start.AddDate(0, 1, 0)}))
-		}
-		return errors.Join(errs...)
+		return s.closeOpenMonths(ctx, now)
 	})
 	return err
+}
+
+// closeOpenMonths closes, oldest first, each of the three months before
+// now's that has no record of its close, under the close lock.
+func (s *Service) closeOpenMonths(ctx context.Context, now time.Time) error {
+	current := monthStart(now)
+	oldest := current.AddDate(0, -closeLookBack, 0)
+	var stale bool
+	if err := s.pg.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM generate_series(
+			(SELECT min(period) FROM loomplane_billing_closes)::timestamp, ($1::date - interval '1 month')::timestamp, interval '1 month') AS m
+		WHERE NOT EXISTS (SELECT 1 FROM loomplane_billing_closes c WHERE c.period = m::date))`, oldest).Scan(&stale); err != nil {
+		return fmt.Errorf("billing: look for months left open: %w", err)
+	}
+	if stale {
+		slog.ErrorContext(ctx, "billing: a month older than the catch-up looks back is still open; close it by hand",
+			"before", periodKey(oldest))
+	}
+	last := current.AddDate(0, -1, 0)
+	var errs []error
+	for start := oldest; start.Before(current); start = start.AddDate(0, 1, 0) {
+		var closed bool
+		if err := s.pg.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loomplane_billing_closes WHERE period = $1)`, start).
+			Scan(&closed); err != nil {
+			errs = append(errs, fmt.Errorf("billing: read whether %s is closed: %w", periodKey(start), err))
+			continue
+		}
+		if closed {
+			continue
+		}
+		if !start.Equal(last) {
+			slog.WarnContext(ctx, "billing: closing a month whose close hasn't finished", "month", periodKey(start))
+		}
+		// Each month on its own: one that stays open doesn't hold the
+		// later ones back.
+		errs = append(errs, s.closeMonth(ctx, now, subscription.Period{Start: start, End: start.AddDate(0, 1, 0)}))
+	}
+	return errors.Join(errs...)
 }
 
 // closeMonth closes month as of now, under the close lock.
@@ -163,7 +176,6 @@ func (s *Service) closeMonth(ctx context.Context, now time.Time, month subscript
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
-	invoiced := map[string]bool{}
 	for _, a := range accounts {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			open = append(open, ctxErr)
@@ -179,14 +191,11 @@ func (s *Service) closeMonth(ctx context.Context, now time.Time, month subscript
 		if invErr := s.invoiceAccount(ctx, a, &month); invErr != nil {
 			slog.ErrorContext(ctx, "billing: invoicing a workspace failed", "org", a.org, "month", periodKey(month.Start), "error", invErr)
 			open = append(open, invErr)
-			continue
 		}
-		invoiced[a.org] = true
 	}
 
-	// 4. The AI add-on rolls over, only where its last month is the one
-	// just invoiced.
-	if rollErr := s.rollOverAI(ctx, month.End, invoiced); rollErr != nil {
+	// 4. The AI add-on rolls over, only where its last month is invoiced.
+	if rollErr := s.rollOverAI(ctx, month.End); rollErr != nil {
 		open = append(open, rollErr)
 	}
 
@@ -261,11 +270,17 @@ func (s *Service) billedAccounts(ctx context.Context, org string) ([]billedAccou
 // invoiceAccount invoices the workspace's cloud subscription, then its ai
 // subscription, for month, or for each one's current period when month is
 // nil, under the workspace's credits lock. Both are tried; the errors come
-// back together.
+// back together. An add-on turned off that ended by the month's start isn't
+// invoiced for it: its subscription is still live only because its own last
+// month isn't closed yet.
 func (s *Service) invoiceAccount(ctx context.Context, a billedAccount, month *subscription.Period) error {
+	aiSub := a.aiSub
+	if month != nil && a.aiEndsAt != nil && !a.aiEndsAt.After(month.Start) {
+		aiSub = ""
+	}
 	return pglock.Do(ctx, s.pg, creditsLock+a.org, func(ctx context.Context) error {
 		var errs []error
-		for _, sub := range []struct{ id, plan string }{{a.cloudSub, PlanCloud}, {a.aiSub, PlanAI}} {
+		for _, sub := range []struct{ id, plan string }{{a.cloudSub, PlanCloud}, {aiSub, PlanAI}} {
 			if sub.id == "" {
 				continue
 			}
@@ -302,14 +317,21 @@ func (s *Service) invoiceSubscription(ctx context.Context, org, subID, planSlug 
 	}
 
 	// A recorded invoice is resumed; a voided one is left alone, never made
-	// again.
-	inv, voided, err := s.recordedInvoice(ctx, sid, start)
-	if err != nil || voided {
-		return err // a voided one was said when it was found
+	// again, and the credits marked for it go back to the next invoice.
+	inv, voidedID, err := s.recordedInvoice(ctx, sid, start)
+	if err != nil {
+		return err
+	}
+	if voidedID != "" {
+		// Said when it was found; a release a crash cut short finishes.
+		return s.releaseVoidedCredits(ctx, voidedID)
 	}
 	if inv != nil && inv.Status == invoice.StatusVoided {
 		slog.WarnContext(ctx, "billing: the invoice for this period was voided; it isn't made again",
 			"org", org, "subscription", subID, "period_start", start.Format(time.RFC3339), "invoice", inv.ID.String())
+		if relErr := s.releaseVoidedCredits(ctx, inv.ID.String()); relErr != nil {
+			return relErr
+		}
 		return s.recordVoided(ctx, inv.ID.String())
 	}
 	// The credits a new invoice uses are the coupons applied now, under
@@ -388,27 +410,99 @@ func billsIn(sub *subscription.Subscription, month subscription.Period) bool {
 
 // recordedInvoice is the invoice Loomplane recorded for the subscription's
 // period from start, as ledger has it now, or nil when there is none.
-// voided says Loomplane already recorded it as voided.
-func (s *Service) recordedInvoice(ctx context.Context, sid id.SubscriptionID, start time.Time) (inv *invoice.Invoice, voided bool, err error) {
-	var invID string
+// voidedID is its id when Loomplane already recorded it as voided; inv is
+// nil then.
+func (s *Service) recordedInvoice(ctx context.Context, sid id.SubscriptionID, start time.Time) (inv *invoice.Invoice, voidedID string, err error) {
+	var (
+		invID  string
+		voided bool
+	)
 	err = s.pg.QueryRow(ctx, `SELECT invoice_id, voided_at IS NOT NULL FROM loomplane_billing_invoices
 		WHERE subscription_id = $1 AND period_start = $2`, sid.String(), start).Scan(&invID, &voided)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return nil, false, nil
+		return nil, "", nil
 	case err != nil:
-		return nil, false, fmt.Errorf("find the recorded invoice: %w", err)
+		return nil, "", fmt.Errorf("find the recorded invoice: %w", err)
 	case voided:
-		return nil, true, nil
+		return nil, invID, nil
 	}
 	iid, err := id.ParseInvoiceID(invID)
 	if err != nil {
-		return nil, false, fmt.Errorf("read invoice id %q: %w", invID, err)
+		return nil, "", fmt.Errorf("read invoice id %q: %w", invID, err)
 	}
 	if inv, err = s.l.Store().GetInvoice(ctx, iid); err != nil {
-		return nil, false, fmt.Errorf("read invoice %s: %w", invID, err)
+		return nil, "", fmt.Errorf("read invoice %s: %w", invID, err)
 	}
-	return inv, false, nil
+	return inv, "", nil
+}
+
+// releaseVoidedCredits gives back the credits marked for a voided invoice
+// and not yet deleted, the remains of a run that stopped part way through
+// deleteCredit. A credit whose coupon is still applied is unmarked, so the
+// next invoice uses it and deletes it; one whose coupon is gone is recorded
+// deleted, and logged so a person can grant it again. The caller holds the
+// workspace's credits lock.
+func (s *Service) releaseVoidedCredits(ctx context.Context, invID string) error {
+	rows, err := s.pg.Query(ctx, `SELECT id, org_id, subscription_id, coupon_id FROM loomplane_billing_credits
+		WHERE invoice_id = $1 AND deleted_at IS NULL ORDER BY created_at, id`, invID)
+	if err != nil {
+		return fmt.Errorf("list the credits voided invoice %s used: %w", invID, err)
+	}
+	type marked struct{ id, org, sub, coupon string }
+	var credits []marked
+	for rows.Next() {
+		var c marked
+		if err = rows.Scan(&c.id, &c.org, &c.sub, &c.coupon); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("list the credits voided invoice %s used: %w", invID, err)
+		}
+		credits = append(credits, c)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return fmt.Errorf("list the credits voided invoice %s used: %w", invID, err)
+	}
+
+	applied := map[string]map[string]bool{} // subscription: coupon ids
+	var errs []error
+	for _, c := range credits {
+		if applied[c.sub] == nil {
+			sid, parseErr := id.ParseSubscriptionID(c.sub)
+			if parseErr != nil {
+				errs = append(errs, fmt.Errorf("read subscription id %q: %w", c.sub, parseErr))
+				continue
+			}
+			coupons, listErr := s.l.ListAppliedCoupons(ctx, sid)
+			if listErr != nil {
+				errs = append(errs, fmt.Errorf("list the coupons applied to %s: %w", c.sub, listErr))
+				continue
+			}
+			applied[c.sub] = map[string]bool{}
+			for _, cp := range coupons {
+				applied[c.sub][cp.ID.String()] = true
+			}
+		}
+		if applied[c.sub][c.coupon] {
+			if _, err = s.pg.Exec(ctx, `UPDATE loomplane_billing_credits SET invoice_id = NULL WHERE id = $1 AND invoice_id = $2 AND deleted_at IS NULL`,
+				c.id, invID); err != nil {
+				errs = append(errs, fmt.Errorf("give credit %s back: %w", c.id, err))
+				continue
+			}
+			slog.WarnContext(ctx, "billing: a credit marked for a voided invoice goes to the next invoice",
+				"org", c.org, "credit", c.id, "coupon", c.coupon, "invoice", invID)
+			continue
+		}
+		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_billing_credits SET deleted_at = $3 WHERE id = $1 AND invoice_id = $2 AND deleted_at IS NULL`,
+			c.id, invID, s.now().UTC()); err != nil {
+			errs = append(errs, fmt.Errorf("record credit %s deleted: %w", c.id, err))
+			continue
+		}
+		slog.ErrorContext(ctx, "billing: a credit was used up by an invoice that was voided; grant it again if the workspace should keep it",
+			"org", c.org, "credit", c.id, "coupon", c.coupon, "invoice", invID)
+	}
+	return errors.Join(errs...)
 }
 
 // ledgerInvoice is the live invoice ledger holds for the subscription's
@@ -580,11 +674,11 @@ func (s *Service) SyncInvoices(ctx context.Context) error {
 // syncInvoice sends one invoice, under its sync lock.
 func (s *Service) syncInvoice(ctx context.Context, invID string) error {
 	var (
-		providerID       string
+		org, providerID  string
 		paidAt, voidedAt *time.Time
 	)
-	if err := s.pg.QueryRow(ctx, `SELECT provider_id, paid_at, voided_at FROM loomplane_billing_invoices WHERE invoice_id = $1`, invID).
-		Scan(&providerID, &paidAt, &voidedAt); err != nil {
+	if err := s.pg.QueryRow(ctx, `SELECT org_id, provider_id, paid_at, voided_at FROM loomplane_billing_invoices WHERE invoice_id = $1`, invID).
+		Scan(&org, &providerID, &paidAt, &voidedAt); err != nil {
 		return err
 	}
 	if providerID != "" || paidAt != nil || voidedAt != nil {
@@ -611,7 +705,14 @@ func (s *Service) syncInvoice(ctx context.Context, invID string) error {
 		return s.recordPaid(ctx, invID, at)
 	case inv.Status == invoice.StatusVoided:
 		// Recorded, so the next sync leaves it out and this is said once.
+		// The credits marked for it go back first, under the lock invoices
+		// take, so a failed release is tried again by the next sync.
 		slog.WarnContext(ctx, "billing: a voided invoice is never sent", "invoice", invID)
+		if relErr := pglock.Do(ctx, s.pg, creditsLock+org, func(ctx context.Context) error {
+			return s.releaseVoidedCredits(ctx, invID)
+		}); relErr != nil {
+			return relErr
+		}
 		return s.recordVoided(ctx, invID)
 	}
 	res, err := s.l.SyncInvoiceToProvider(ctx, iid)

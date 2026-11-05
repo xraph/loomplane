@@ -401,7 +401,8 @@ func TestRouteErrorStatuses(t *testing.T) {
 		{agentchat.ErrNotFound, http.StatusNotFound, agentchat.ErrNotFound.Error()},
 		{fmt.Errorf("%w: write a message", agentchat.ErrInvalid), http.StatusUnprocessableEntity, "invalid message: write a message"},
 		{wrapped(agentsettings.ErrBudgetExhausted), http.StatusConflict, agentsettings.ErrBudgetExhausted.Error()},
-		{wrapped(&metering.Blocked{Reason: "Turn on the AI add-on in Settings > Billing, or add your own model key."}), http.StatusPaymentRequired, "Turn on the AI add-on in Settings"},
+		{wrapped(&metering.BlockedError{Reason: "Turn on the AI add-on in Settings > Billing, or add your own model key."}), http.StatusPaymentRequired, "Turn on the AI add-on in Settings"},
+		{wrapped(metering.ErrNotReady), http.StatusServiceUnavailable, ""},
 		{wrapped(agentsettings.ErrDisabled), http.StatusConflict, agentsettings.ErrDisabled.Error()},
 		{agentruns.ErrNotFound, http.StatusNotFound, agentruns.ErrNotFound.Error()},
 		{fmt.Errorf("%w: there's no such conversation", agentruns.ErrInvalid), http.StatusUnprocessableEntity, "no such conversation"},
@@ -450,7 +451,7 @@ func TestRouteErrorStatuses(t *testing.T) {
 func TestABlockedSendAnswersTheReasonAlone(t *testing.T) {
 	r, chat, _ := chatRig(t, true)
 	const why = "Turn on the AI add-on in Settings > Billing, or add your own model key."
-	chat.err = fmt.Errorf("start the turn: %w", &metering.Blocked{Reason: why})
+	chat.err = fmt.Errorf("start the turn: %w", &metering.BlockedError{Reason: why})
 	out := serve(t, r, http.MethodPost, "/api/v1/agent/conversations/ses_1/messages", `{"message":"more"}`, asAda())
 	var body struct {
 		Error string `json:"error"`

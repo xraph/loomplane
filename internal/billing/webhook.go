@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	stripego "github.com/stripe/stripe-go/v87"
+	"github.com/stripe/stripe-go/v87/webhook"
 	"github.com/xraph/ledger"
 	"github.com/xraph/ledger/id"
 	"github.com/xraph/ledger/invoice"
@@ -23,7 +25,12 @@ import (
 // providerStripe is the name ledger knows the Stripe provider by.
 const providerStripe = "stripe"
 
-// What HandleStripeWebhook refuses before anything is applied. Both are a
+// StripeAPIVersion is the Stripe API version Loomplane reads events in:
+// stripe-go's own. The webhook endpoint in Stripe must be set to it, or one
+// on its release train; every event on another is refused.
+const StripeAPIVersion = stripego.APIVersion
+
+// What HandleStripeWebhook refuses before anything is applied. Each is a
 // 400: Stripe resending the same bytes can't make them pass.
 var (
 	// ErrBadSignature is an event whose Stripe-Signature doesn't match the
@@ -31,12 +38,17 @@ var (
 	ErrBadSignature = errors.New("billing: the Stripe signature doesn't match")
 	// ErrBadEvent is a signed event Loomplane can't read.
 	ErrBadEvent = errors.New("billing: the Stripe event can't be read")
+	// ErrAPIVersion is a signed event on a Stripe API version Loomplane
+	// doesn't read: the webhook endpoint is set to another version than
+	// StripeAPIVersion. Every event fails the same way until it is changed.
+	ErrAPIVersion = errors.New("billing: the Stripe event is on another API version")
 )
 
 // HandleStripeWebhook verifies the signature, lets ledger map the event,
 // and applies what it means for the workspace. A bad signature is
-// ErrBadSignature (400). An event for a workspace or invoice Loomplane
-// doesn't know is logged and applied as nothing (200).
+// ErrBadSignature (400), and a good one on an event in another Stripe API
+// version is ErrAPIVersion (400). An event for a workspace or invoice
+// Loomplane doesn't know is logged and applied as nothing (200).
 //
 // Any other error means the event wasn't applied, and the route answers
 // 500 so Stripe sends it again. Every event is safe to apply twice.
@@ -48,7 +60,7 @@ func (s *Service) HandleStripeWebhook(ctx context.Context, payload []byte, signa
 		return errors.New("billing: nothing to verify Stripe events with")
 	}
 	if err := s.payments.Verify(payload, signature); err != nil {
-		return fmt.Errorf("%w: %w", ErrBadSignature, err)
+		return s.verifyFailed(payload, signature, err)
 	}
 	res, err := s.l.HandleWebhook(ctx, providerStripe, payload)
 	if err != nil {
@@ -61,6 +73,34 @@ func (s *Service) HandleStripeWebhook(ctx context.Context, payload []byte, signa
 		return nil
 	}
 	return s.applyWebhook(ctx, res)
+}
+
+// verifyFailed says why Verify refused an event. stripe-go refuses an event
+// on another API version as it refuses a bad signature, so the signature is
+// checked again on its own: when it holds, the event's version is compared
+// with StripeAPIVersion's release train the way stripe-go does.
+func (s *Service) verifyFailed(payload []byte, signature string, err error) error {
+	if s.cfg.StripeWebhookSecret == "" || webhook.ValidatePayload(payload, signature, s.cfg.StripeWebhookSecret) != nil {
+		return fmt.Errorf("%w: %w", ErrBadSignature, err)
+	}
+	var e struct {
+		APIVersion string `json:"api_version"`
+	}
+	if jsonErr := json.Unmarshal(payload, &e); jsonErr != nil {
+		return fmt.Errorf("%w: %w", ErrBadEvent, jsonErr)
+	}
+	if !sameReleaseTrain(e.APIVersion, StripeAPIVersion) {
+		return fmt.Errorf("%w: the event is on %q and Loomplane reads %q", ErrAPIVersion, e.APIVersion, StripeAPIVersion)
+	}
+	return fmt.Errorf("%w: %w", ErrBadEvent, err)
+}
+
+// sameReleaseTrain says whether two Stripe API versions, yyyy-mm-dd.train,
+// are on one release train. A version from before trains has none.
+func sameReleaseTrain(a, b string) bool {
+	_, trainA, okA := strings.Cut(a, ".")
+	_, trainB, okB := strings.Cut(b, ".")
+	return okA && okB && trainA == trainB
 }
 
 // unreadable says whether the provider failed because the event itself is
@@ -145,8 +185,11 @@ func (s *Service) invoicePaid(ctx context.Context, invID, stripeID string, at ti
 		failedAt *time.Time
 		paidAt   time.Time
 	)
-	err = s.pg.QueryRow(ctx, `UPDATE loomplane_billing_invoices SET paid_at = COALESCE(paid_at, $2)
-		WHERE invoice_id = $1 RETURNING org_id, payment_failed_at, paid_at`, invID, at).Scan(&orgID, &failedAt, &paidAt)
+	// A sync that stopped before it recorded the Stripe id leaves it empty;
+	// the event names it, so refunds and the invoice link still work.
+	err = s.pg.QueryRow(ctx, `UPDATE loomplane_billing_invoices SET paid_at = COALESCE(paid_at, $2),
+			provider_id = COALESCE(NULLIF(provider_id, ''), $3)
+		WHERE invoice_id = $1 RETURNING org_id, payment_failed_at, paid_at`, invID, at, stripeID).Scan(&orgID, &failedAt, &paidAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			slog.WarnContext(ctx, "billing: Stripe paid an invoice Loomplane never recorded; only ledger changes", "invoice", invID)
@@ -228,8 +271,13 @@ func (s *Service) paymentFailed(ctx context.Context, invID string, at time.Time)
 		return fmt.Errorf("billing: record that invoice %s failed to charge: %w", invID, err)
 	}
 	s.forget(orgID)
-	s.sendNotice(ctx, orgID, NoticePaymentFailed, "payment_failed:"+invID,
+	// The owner's only warning before work stops: a notice that isn't
+	// queued fails the event, so Stripe sends it again. Its subject makes
+	// it once.
+	if err = s.queueNotice(ctx, orgID, NoticePaymentFailed, "payment_failed:"+invID,
 		"A payment for Loomplane Cloud failed",
-		"Stripe couldn't charge the card for this workspace's invoice. Update the card in Settings > Billing. If the invoice is still unpaid in 3 days, Loomplane Cloud work and AI on Loomplane's model keys stop.")
+		"Stripe couldn't charge the card for this workspace's invoice. Update the card in Settings > Billing. If the invoice is still unpaid in 3 days, Loomplane Cloud work and AI on Loomplane's model keys stop."); err != nil {
+		return fmt.Errorf("billing: queue the payment failed notice for invoice %s: %w", invID, err)
+	}
 	return nil
 }

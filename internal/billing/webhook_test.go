@@ -5,6 +5,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,7 +49,8 @@ func webhookService(t *testing.T) *Service {
 	if err = SeedCatalog(t.Context(), l, testAppID); err != nil {
 		t.Fatal(err)
 	}
-	s := New(Deps{DB: db, Ledger: l, AppID: testAppID, Payments: p, Suspender: &suspenderSpy{}})
+	s := New(Deps{DB: db, Ledger: l, AppID: testAppID, Payments: p, Suspender: &suspenderSpy{},
+		Config: Config{StripeWebhookSecret: testWebhookSecret}})
 	s.notify = func(context.Context, notifications.Notice) error { return nil }
 	return s
 }
@@ -608,8 +610,9 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.CreditUsedCents != 500 || sum.OverageCents != 300 || sum.ProjectedTotalCents != 800 {
-		t.Fatalf("credit %d overage %d projected %d, want 500, 300 and $5 + $3", sum.CreditUsedCents, sum.OverageCents, sum.ProjectedTotalCents)
+	if sum.BaseCreditUsedCents != 500 || sum.AICreditUsedCents != 0 || sum.OverageCents != 300 || sum.ProjectedTotalCents != 800 {
+		t.Fatalf("credit %d + %d overage %d projected %d, want 500, 0, 300 and $5 + $3",
+			sum.BaseCreditUsedCents, sum.AICreditUsedCents, sum.OverageCents, sum.ProjectedTotalCents)
 	}
 	if !sum.PeriodStart.Equal(at("2026-11-01T00:00:00Z")) || !sum.PeriodEnd.Equal(at("2026-12-01T00:00:00Z")) {
 		t.Fatalf("period %s to %s", sum.PeriodStart, sum.PeriodEnd)
@@ -622,6 +625,22 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 	}
 	if vcpu != 800 || len(sum.PaymentMethods) != 1 {
 		t.Fatalf("usage %+v cards %+v", sum.Usage, sum.PaymentMethods)
+	}
+	// With the add-on, AI's credit is its own: $12 of AI uses all $10 of
+	// it and none of the plan's $5, which base usage used already.
+	if _, err = s.SetAI(ctx, "org_1", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pg.Exec(ctx, `INSERT INTO loomplane_billing_usage (id, org_id, feature, quantity, rate_micro_usd, micro_usd, occurred_at, resource_ref)
+		VALUES ('ai_1', 'org_1', 'ai_usd', 12, 1000000, 12000000, '2026-11-01T11:00:00Z', 'tenant_1:req_1')`); err != nil {
+		t.Fatal(err)
+	}
+	if sum, err = s.Summary(ctx, "org_1"); err != nil {
+		t.Fatal(err)
+	}
+	if sum.BaseCreditUsedCents != 500 || sum.AICreditUsedCents != 1000 || sum.OverageCents != 500 || sum.ProjectedTotalCents != 2000 {
+		t.Fatalf("with AI: credit %d + %d overage %d projected %d, want 500, 1000, $3 + $2 and $5 + $10 + $5",
+			sum.BaseCreditUsedCents, sum.AICreditUsedCents, sum.OverageCents, sum.ProjectedTotalCents)
 	}
 	// Stripe failing is an error, not an empty list.
 	fp.listErr = errors.New("stripe: down")
@@ -686,5 +705,89 @@ func TestInvoices_NewestFirstWithThePlan(t *testing.T) {
 	}
 	if other, _ := s.Invoices(t.Context(), "org_2"); len(other) != 0 {
 		t.Fatalf("org_2 sees %+v", other)
+	}
+}
+
+// An endpoint on another Stripe API version is told apart from a bad
+// signature, and names the version to set; one on stripe-go's release
+// train passes.
+func TestWebhook_AnotherAPIVersionIsNotABadSignature(t *testing.T) {
+	s := webhookService(t)
+	for _, version := range []string{"2025-03-31.basil", "2024-06-20", ""} {
+		body := `{"id":"evt_1","object":"event","type":"invoice.paid","api_version":"` + version + `","created":1767225600,"data":{"object":{}}}`
+		payload, header := signed(t, body)
+		err := s.HandleStripeWebhook(t.Context(), payload, header)
+		if !errors.Is(err, ErrAPIVersion) || errors.Is(err, ErrBadSignature) {
+			t.Fatalf("%q: %v, want ErrAPIVersion alone", version, err)
+		}
+		if !strings.Contains(err.Error(), StripeAPIVersion) {
+			t.Fatalf("%q: %v doesn't name %s", version, err, StripeAPIVersion)
+		}
+		// The same body with a bad signature is still a bad signature.
+		if err = s.HandleStripeWebhook(t.Context(), payload, "t=1,v1=bad"); !errors.Is(err, ErrBadSignature) {
+			t.Fatalf("%q, bad signature: %v", version, err)
+		}
+	}
+	_, train, _ := strings.Cut(StripeAPIVersion, ".")
+	sameTrain := "2099-01-01." + train
+	payload, header := signed(t, `{"id":"evt_1","object":"event","type":"customer.created","api_version":"`+sameTrain+`","created":1767225600,"data":{"object":{"id":"cus_1","object":"customer"}}}`)
+	if err := s.HandleStripeWebhook(t.Context(), payload, header); errors.Is(err, ErrAPIVersion) || errors.Is(err, ErrBadSignature) {
+		t.Fatalf("an event on %s: %v", sameTrain, err)
+	}
+}
+
+// A paid event for an invoice whose sync stopped before it recorded the
+// Stripe id records it, and never replaces one already recorded.
+func TestWebhook_PaidRecordsAMissingProviderID(t *testing.T) {
+	s, pg, invID := webhookWorldWithInvoice(t)
+	var sent string
+	_ = pg.QueryRow(t.Context(), `SELECT provider_id FROM loomplane_billing_invoices WHERE invoice_id=$1`, invID).Scan(&sent)
+	if _, err := pg.Exec(t.Context(), `UPDATE loomplane_billing_invoices SET provider_id = '' WHERE invoice_id=$1`, invID); err != nil {
+		t.Fatal(err)
+	}
+	paid := &provider.WebhookResult{EventType: "invoice.paid", EntityType: "invoice", EntityID: invID, ProviderID: sent, Handled: true, Timestamp: at("2026-11-02T10:00:00Z")}
+	if err := s.applyWebhook(t.Context(), paid); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	_ = pg.QueryRow(t.Context(), `SELECT provider_id FROM loomplane_billing_invoices WHERE invoice_id=$1`, invID).Scan(&got)
+	if got != sent {
+		t.Fatalf("provider id %q, want %q", got, sent)
+	}
+	other := *paid
+	other.ProviderID = "in_other"
+	if err := s.applyWebhook(t.Context(), &other); err != nil {
+		t.Fatal(err)
+	}
+	_ = pg.QueryRow(t.Context(), `SELECT provider_id FROM loomplane_billing_invoices WHERE invoice_id=$1`, invID).Scan(&got)
+	if got != sent {
+		t.Fatalf("a later event replaced the provider id with %q", got)
+	}
+}
+
+// The payment failed notice is the owner's only warning: one that can't be
+// queued fails the event, so Stripe sends it again, and the failure is
+// still recorded once.
+func TestWebhook_FailedNoticeNotQueuedFailsTheEvent(t *testing.T) {
+	s, pg, invID := webhookWorldWithInvoice(t)
+	s.notify = func(context.Context, notifications.Notice) error { return errors.New("outbox down") }
+	failed := &provider.WebhookResult{EventType: "invoice.payment_failed", EntityType: "invoice", EntityID: invID, Handled: true, Timestamp: at("2026-11-02T10:00:00Z")}
+	if err := s.applyWebhook(t.Context(), failed); err == nil {
+		t.Fatal("a notice that wasn't queued answered 200")
+	}
+	sent := &notices{}
+	s.notify = sent.record
+	retry := *failed
+	retry.Timestamp = at("2026-11-02T11:00:00Z")
+	if err := s.applyWebhook(t.Context(), &retry); err != nil {
+		t.Fatal(err)
+	}
+	if k := sent.kinds(); len(k) != 1 || k[0] != NoticePaymentFailed+" payment_failed:"+invID {
+		t.Fatalf("notices on the redelivery %v", k)
+	}
+	var failedAt time.Time
+	_ = pg.QueryRow(t.Context(), `SELECT payment_failed_at FROM loomplane_billing_invoices WHERE invoice_id=$1`, invID).Scan(&failedAt)
+	if !failedAt.Equal(at("2026-11-02T10:00:00Z")) {
+		t.Fatalf("failed_at %s, want the first delivery's", failedAt)
 	}
 }

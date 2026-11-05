@@ -100,7 +100,7 @@ func (s *Service) Workspaces(ctx context.Context) ([]WorkspaceBilling, error) {
 			a.ai_ends_at, a.limited_period,
 			EXISTS (SELECT 1 FROM loomplane_billing_invoices i
 				WHERE i.org_id = a.org_id AND i.paid_at IS NULL AND i.payment_failed_at IS NOT NULL
-					AND i.payment_failed_at <= $2)
+					AND i.voided_at IS NULL AND i.payment_failed_at <= $2)
 		FROM (SELECT id, name FROM authsome_organizations WHERE app_id = $1) o
 		FULL OUTER JOIN loomplane_billing_accounts a ON a.org_id = o.id
 		ORDER BY 2, 1`, s.appID, now.Add(-pastDueAfter))

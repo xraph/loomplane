@@ -400,6 +400,7 @@ type fakeSettings struct {
 	off       map[string]bool
 	exhausted map[string]bool
 	blocked   map[string]string // per workspace; the reason a gate refuses with
+	notReady  map[string]bool   // per workspace; billing is still starting
 }
 
 func (f *fakeSettings) Effective(_ context.Context, orgID string) (*agentsettings.Effective, error) {
@@ -421,7 +422,10 @@ func (f *fakeSettings) RequireBudget(_ context.Context, orgID string) error {
 		return agentsettings.ErrBudgetExhausted
 	}
 	if why, ok := f.blocked[orgID]; ok {
-		return fmt.Errorf("check the gate: %w", &metering.Blocked{Reason: why})
+		return fmt.Errorf("check the gate: %w", &metering.BlockedError{Reason: why})
+	}
+	if f.notReady[orgID] {
+		return fmt.Errorf("check the gate: %w", metering.ErrNotReady)
 	}
 	return nil
 }
