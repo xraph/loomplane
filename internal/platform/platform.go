@@ -18,6 +18,7 @@ import (
 	"os"
 	"time"
 
+	witnessforge "github.com/hallproof/witness/forge"
 	cpext "github.com/xraph/ctrlplane/extension"
 	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
@@ -208,6 +209,12 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// after the sections it builds on and before the console, which depends
 	// on every extension before it.
 	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
+	// Hallproof's witness, only with hallproof.endpoint set. It finds each
+	// library once every extension has started, so its place only matters
+	// for the console, which depends on it like on every other.
+	if cfg.Hallproof.Enabled() {
+		exts = append(exts, witnessforge.New(witnessforge.WithConfig(witnessConfig(cfg))))
+	}
 	exts = append(exts, console(exts))
 	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/"))
 }
