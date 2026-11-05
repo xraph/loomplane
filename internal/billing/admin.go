@@ -183,8 +183,8 @@ type PlatformInvoice struct {
 
 // PendingRefund is a refund recorded and never confirmed by Stripe. One
 // that is Resendable is sent again by a Refund with its key; one that
-// isn't is past Stripe's idempotency window, and someone checks Stripe and
-// settles it by hand.
+// isn't is past Stripe's idempotency window and needs settling: someone
+// checks Stripe, then SettleRefund records what they found.
 type PendingRefund struct {
 	RefundKey  string
 	Cents      int64

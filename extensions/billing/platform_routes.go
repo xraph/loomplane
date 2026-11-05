@@ -37,6 +37,7 @@ type platformService interface {
 	PlatformInvoices(ctx context.Context, orgID string) ([]billing.PlatformInvoice, error)
 	GrantCredit(ctx context.Context, orgID string, cents int64, note, by string) error
 	Refund(ctx context.Context, invoiceID string, cents *int64, refundKey, by string) (billing.RefundResult, error)
+	SettleRefund(ctx context.Context, invoiceID, refundKey string, made bool, stripeRefundID, by string) error
 }
 
 var _ platformService = (*billing.Service)(nil)
@@ -98,6 +99,7 @@ func mountPlatformRoutes(router forge.Router, guard identity.Guard, isOwner iden
 		{http.MethodGet, "/workspaces/:org/invoices", "platformBilling.invoices", r.invoices},
 		{http.MethodPost, "/workspaces/:org/credit", "platformBilling.credit", r.credit},
 		{http.MethodPost, "/invoices/:id/refund", "platformBilling.refund", r.refund},
+		{http.MethodPost, "/invoices/:id/refunds/:key/settle", "platformBilling.settleRefund", r.settleRefund},
 	} {
 		var err error
 		switch rt.method {
@@ -172,7 +174,9 @@ const (
 	msgKeyReused     = "That refund key was used for a different refund. Reload the page and try again."
 	msgNoInvoice     = "There's no such invoice."
 	msgUnconfirmed   = "Stripe didn't confirm this refund. Retry this same refund from the invoice: it goes to Stripe under the same key, so it can't be paid twice."
-	msgStale         = "This refund was recorded more than 23 hours ago and Stripe never confirmed it. Check the invoice in Stripe before refunding again."
+	msgStale         = "This refund was recorded more than 23 hours ago and Stripe never confirmed it. Check the invoice in Stripe, then settle it as made or dropped."
+	msgNoRefund      = "There's no such refund on this invoice."
+	msgSettled       = "Stripe already confirmed this refund, so there's nothing to settle."
 )
 
 // platformFail maps a billing error to its response. Billing's, Stripe's
@@ -194,6 +198,10 @@ func platformFail(ctx context.Context, err error) error {
 	case errors.Is(err, billing.ErrRefundUnconfirmed):
 		slog.ErrorContext(ctx, "platform billing: a refund waits for Stripe's answer", "error", err)
 		return forge.NewHTTPError(http.StatusServiceUnavailable, msgUnconfirmed)
+	case errors.Is(err, billing.ErrRefundNotFound):
+		return forge.NewHTTPError(http.StatusNotFound, msgNoRefund)
+	case errors.Is(err, billing.ErrRefundSettled):
+		return forge.NewHTTPError(http.StatusConflict, msgSettled)
 	case errors.Is(err, billing.ErrRefundStale):
 		slog.ErrorContext(ctx, "platform billing: an unconfirmed refund needs checking in Stripe", "error", err)
 		return forge.NewHTTPError(http.StatusConflict, msgStale)
@@ -349,6 +357,9 @@ type pendingRefundView struct {
 	Cents      int64     `json:"cents"`
 	CreatedAt  time.Time `json:"created_at"`
 	Resendable bool      `json:"resendable"`
+	// NeedsSettlement says it is past Stripe's idempotency window: someone
+	// checks Stripe and settles it as made or dropped.
+	NeedsSettlement bool `json:"needs_settlement"`
 }
 
 func (r *platformRoutes) invoices(c forge.Context) error {
@@ -365,7 +376,7 @@ func (r *platformRoutes) invoices(c forge.Context) error {
 			PendingRefunds: make([]pendingRefundView, 0, len(inv.PendingRefunds))}
 		for _, p := range inv.PendingRefunds {
 			v.PendingRefunds = append(v.PendingRefunds, pendingRefundView{RefundKey: p.RefundKey, Cents: p.Cents,
-				CreatedAt: p.CreatedAt, Resendable: p.Resendable})
+				CreatedAt: p.CreatedAt, Resendable: p.Resendable, NeedsSettlement: !p.Resendable})
 		}
 		out = append(out, v)
 	}
@@ -458,6 +469,46 @@ func (r *platformRoutes) refund(c forge.Context) error {
 		return platformFail(ctx, err)
 	}
 	return c.JSON(http.StatusOK, refundView{Full: res.Full, Replay: res.Replay})
+}
+
+const msgSettle = `Send outcome "made" with stripe_refund_id (the re_... id from Stripe), or outcome "dropped" when Stripe has no such refund.`
+
+type settleBody struct {
+	Outcome        string `json:"outcome"`
+	StripeRefundID string `json:"stripe_refund_id"`
+}
+
+// settleRefund settles a refund Stripe never confirmed, once the owner
+// checked Stripe: made counts it as refunded, dropped deletes it and frees
+// its amount.
+func (r *platformRoutes) settleRefund(c forge.Context) error {
+	invoiceID, key := c.Param("id"), c.Param("key")
+	var body settleBody
+	if err := json.NewDecoder(io.LimitReader(c.Request().Body, 4<<10)).Decode(&body); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `The body must be JSON: {"outcome": "made", "stripe_refund_id": "re_..."}`)
+	}
+	var made bool
+	switch {
+	case body.Outcome == "made" && billing.StripeRefundIDPattern.MatchString(body.StripeRefundID):
+		made = true
+	case body.Outcome == "dropped" && body.StripeRefundID == "":
+	default:
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgSettle)
+	}
+	if !billing.RefundKeyPattern.MatchString(key) {
+		return forge.NewHTTPError(http.StatusNotFound, msgNoRefund)
+	}
+	ctx := c.Request().Context()
+	err := r.svc.SettleRefund(ctx, invoiceID, key, made, body.StripeRefundID, ownerID(c))
+	r.audit.Record(ctx, "billing.refund.settle", ownerID(c), "invoice", invoiceID, outcome(err), map[string]string{
+		"refund_key":       key,
+		"settled_as":       body.Outcome,
+		"stripe_refund_id": body.StripeRefundID,
+	})
+	if err != nil {
+		return platformFail(ctx, err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 // parseRefund reads a refund's usd: JSON null is the rest of the invoice;

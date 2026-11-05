@@ -261,12 +261,14 @@ func TestRefund_DefinitiveFailuresDeleteAmbiguousOnesStay(t *testing.T) {
 		"403":                     {apiErr(http.StatusForbidden), true, false},
 		"404":                     {apiErr(http.StatusNotFound), true, false},
 		"409 key in use":          {apiErr(http.StatusConflict), false, false},
-		"429":                     {apiErr(http.StatusTooManyRequests), false, false},
-		"500":                     {apiErr(http.StatusInternalServerError), false, false},
-		"no answer":               {fmt.Errorf("stripe: refund invoice %s: %w", inv, errors.New("read tcp: connection reset by peer")), false, false},
-		"timeout":                 {fmt.Errorf("stripe: refund invoice %s: %w", inv, context.DeadlineExceeded), false, false},
-		"canceled":                {fmt.Errorf("stripe: refund invoice %s: %w", inv, context.Canceled), false, false},
-		"after Create":            {fmt.Errorf("stripe: refund invoice %s: refund re_1 names no charge", inv), false, false},
+		"400 idempotency_error": {fmt.Errorf("stripe: refund invoice %s: %w", inv,
+			&stripego.Error{HTTPStatusCode: http.StatusBadRequest, Type: stripego.ErrorTypeIdempotency, Msg: "Keys for idempotent requests can only be used with the same parameters"}), false, false},
+		"429":          {apiErr(http.StatusTooManyRequests), false, false},
+		"500":          {apiErr(http.StatusInternalServerError), false, false},
+		"no answer":    {fmt.Errorf("stripe: refund invoice %s: %w", inv, errors.New("read tcp: connection reset by peer")), false, false},
+		"timeout":      {fmt.Errorf("stripe: refund invoice %s: %w", inv, context.DeadlineExceeded), false, false},
+		"canceled":     {fmt.Errorf("stripe: refund invoice %s: %w", inv, context.Canceled), false, false},
+		"after Create": {fmt.Errorf("stripe: refund invoice %s: refund re_1 names no charge", inv), false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := refundRefused(c.err); got != c.refused {
@@ -409,5 +411,85 @@ func TestRefund_UnsentIsSentAgain(t *testing.T) {
 	_ = pg.QueryRow(ctx, `SELECT sent_at IS NOT NULL AND full_refund FROM loomplane_billing_refunds WHERE refund_key = 'rk_1'`).Scan(&sent)
 	if !sent {
 		t.Fatal("the refund isn't recorded as made")
+	}
+}
+
+// Stripe made the refund and recording that failed: the refund stays
+// unconfirmed (never deleted, never freed), and the same key records it.
+func TestRefund_RecordingFailureAfterStripeIsUnconfirmed(t *testing.T) {
+	s, pg, invID := paidInvoiceWorld(t)
+	ctx := t.Context()
+	spy := &refundSpy{during: func(context.Context) {
+		// The update that records the refund as made now fails.
+		if _, err := pg.Exec(ctx, `ALTER TABLE loomplane_billing_refunds ADD CONSTRAINT never_sent CHECK (sent_at IS NULL) NOT VALID`); err != nil {
+			t.Error(err)
+		}
+	}}
+	s.payments = spy
+	if _, err := s.Refund(ctx, invID, nil, "rk_1", "rex"); !errors.Is(err, ErrRefundUnconfirmed) {
+		t.Fatalf("a failed record after Stripe refunded: %v", err)
+	}
+	if all, unsent := refundRows(t, pg); all != 1 || unsent != 1 {
+		t.Fatalf("%d rows, %d unsent; want the refund kept, unsent", all, unsent)
+	}
+	spy.during = nil
+	if _, err := pg.Exec(ctx, `ALTER TABLE loomplane_billing_refunds DROP CONSTRAINT never_sent`); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := s.Refund(ctx, invID, nil, "rk_1", "rex"); err != nil || !res.Resent || !res.Full {
+		t.Fatalf("the same key: %+v %v", res, err)
+	}
+	if spy.calls != 2 || spy.keys[1] != "rk_1" {
+		t.Fatalf("Stripe got %v", spy.keys)
+	}
+}
+
+// A refund past the window is settled by hand: made counts it as
+// refunded, dropped frees its amount, and one Stripe confirmed can't be
+// settled.
+func TestSettleRefund_MadeDroppedAndRefused(t *testing.T) {
+	s, pg, invID := paidInvoiceWorld(t)
+	spy := &refundSpy{}
+	s.payments = spy
+	ctx := t.Context()
+	old := s.now().Add(-48 * time.Hour)
+	for _, key := range []string{"rk_made", "rk_dropped"} {
+		if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_refunds (refund_key, invoice_id, org_id, cents, full_refund, refunded_by, created_at)
+			VALUES ($1, $2, 'org_1', 200, false, 'rex', $3)`, key, invID, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pis, _ := s.PlatformInvoices(ctx, "org_1")
+	if len(pis[0].PendingRefunds) != 2 || pis[0].PendingRefunds[0].Resendable || pis[0].RefundableCents != 100 {
+		t.Fatalf("before settling: %+v", pis[0])
+	}
+	if err := s.SettleRefund(ctx, invID, "rk_made", true, "", "rex"); err == nil {
+		t.Fatal("settled as made with no Stripe refund id")
+	}
+	if err := s.SettleRefund(ctx, invID, "rk_nope", false, "", "rex"); !errors.Is(err, ErrRefundNotFound) {
+		t.Fatalf("unknown key: %v", err)
+	}
+	if err := s.SettleRefund(ctx, "inv_other", "rk_made", false, "", "rex"); !errors.Is(err, ErrRefundNotFound) {
+		t.Fatalf("another invoice's key: %v", err)
+	}
+	if err := s.SettleRefund(ctx, invID, "rk_made", true, "re_3Abc", "rex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleRefund(ctx, invID, "rk_dropped", false, "", "rex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleRefund(ctx, invID, "rk_made", false, "", "rex"); !errors.Is(err, ErrRefundSettled) {
+		t.Fatalf("settling a confirmed refund: %v", err)
+	}
+	pis, _ = s.PlatformInvoices(ctx, "org_1")
+	if len(pis[0].PendingRefunds) != 0 || pis[0].RefundedCents != 200 || pis[0].RefundableCents != 300 {
+		t.Fatalf("after settling: %+v", pis[0])
+	}
+	// The made one is a replay now; the dropped one's amount refunds again.
+	if res, err := s.Refund(ctx, invID, nil, "rk_made", "rex"); err != nil || !res.Replay {
+		t.Fatalf("the made refund's key: %+v %v", res, err)
+	}
+	if res, err := s.Refund(ctx, invID, nil, "rk_new", "rex"); err != nil || spy.calls != 1 || spy.amounts[0] != 300 {
+		t.Fatalf("the rest after settling: %+v %v, Stripe got %v", res, err, spy.amounts)
 	}
 }

@@ -44,7 +44,17 @@ var (
 	// idempotency key for 24 hours, so sending it again could refund twice:
 	// someone checks Stripe first.
 	ErrRefundStale = errors.New("billing: the refund was recorded too long ago to send again safely; check Stripe before refunding again")
+	// ErrRefundNotFound is SettleRefund's error for a refund key that isn't
+	// recorded for the invoice.
+	ErrRefundNotFound = errors.New("billing: there's no such refund on this invoice")
+	// ErrRefundSettled is SettleRefund's error for a refund Stripe already
+	// confirmed: there is nothing to settle.
+	ErrRefundSettled = errors.New("billing: Stripe already confirmed this refund")
 )
+
+// StripeRefundIDPattern is a Stripe refund id, as the owner copies it from
+// Stripe's dashboard to settle a refund by hand.
+var StripeRefundIDPattern = regexp.MustCompile(`^(re|pyr)_[A-Za-z0-9]{1,250}$`)
 
 // refundResendWindow is how long after it was recorded an unconfirmed
 // refund is sent again under its key: under Stripe's 24 hours of
@@ -244,9 +254,12 @@ func (s *Service) sendRefund(ctx context.Context, r storedRefund, providerID, re
 	}
 	if _, err = s.pg.Exec(context.WithoutCancel(ctx), `UPDATE loomplane_billing_refunds SET full_refund = $2, sent_at = $3 WHERE refund_key = $1`,
 		refundKey, full, s.now().UTC()); err != nil {
-		// Stripe refunded; a repeat of the key sends it again, and Stripe's
+		// Stripe refunded and the record doesn't say so yet: it stays
+		// unsent, and a repeat of the key sends it again, which Stripe's
 		// idempotency answers with this refund.
-		return false, fmt.Errorf("billing: record that Stripe refunded invoice %s: %w", r.invoiceID, err)
+		slog.ErrorContext(ctx, "billing: Stripe made a refund that couldn't be recorded as made; the same key records it",
+			"invoice", r.invoiceID, "org", r.orgID, "error", err)
+		return false, fmt.Errorf("%w: Stripe refunded invoice %s and recording it failed: %w", ErrRefundUnconfirmed, r.invoiceID, err)
 	}
 	return full, nil
 }
@@ -309,7 +322,8 @@ func (s *Service) refundableInvoice(ctx context.Context, invoiceID string) (orgI
 // provider/stripe/invoices.go, RefundInvoice and paidPayment) returns
 // before it asks Stripe for a refund: its own checks and the listing of
 // the invoice's payments. None of them made a refund, so the record can
-// go. The wording is ledger's; TestRefundRefused pins it.
+// go. The wording is ledger's; TestRefund_DefinitiveFailuresDeleteAmbiguousOnesStay
+// pins it.
 var ledgerPreflightFailures = []string{
 	"stripe: list payments for invoice ",
 	"it has more than one paid payment",
@@ -325,7 +339,10 @@ var ledgerPreflightFailures = []string{
 // ledger refused it before asking Stripe (no paid payment, its own checks,
 // listing the payments failed), or Stripe answered 400, 401, 402, 403 or
 // 404. Anything else (no answer, a cancellation or timeout, 409, 429, a
-// 5xx, or a failure after Stripe made it) leaves the outcome unknown.
+// 5xx, or a failure after Stripe made it) leaves the outcome unknown. So
+// does an idempotency_error, whatever its status: Stripe saw the key
+// before with another request body (a ledger or stripe-go upgrade can
+// change it), and that first request may have made the refund.
 func refundRefused(err error) bool {
 	if errors.Is(err, stripe.ErrNotPaid) {
 		return true
@@ -341,10 +358,76 @@ func refundRefused(err error) bool {
 	}
 	var se *stripego.Error
 	if errors.As(err, &se) {
+		if se.Type == stripego.ErrorTypeIdempotency {
+			return false
+		}
 		switch se.HTTPStatusCode {
 		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusNotFound:
 			return true
 		}
 	}
 	return false
+}
+
+// SettleRefund settles, by hand, a refund Stripe never confirmed, once
+// someone checked the invoice in Stripe: made says Stripe has the refund
+// (stripeRefundID names it), so it counts as refunded from now on; dropped
+// says Stripe has none, so it is deleted and its amount can be refunded
+// again. It is for a refund past refundResendWindow, which Refund no
+// longer sends, though any unconfirmed refund can be settled. A refund
+// Stripe confirmed is ErrRefundSettled; an unknown key is
+// ErrRefundNotFound. It runs under the invoice's refund lock. by names who
+// settled it.
+func (s *Service) SettleRefund(ctx context.Context, invoiceID, refundKey string, made bool, stripeRefundID, by string) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	by = strings.TrimSpace(by)
+	switch {
+	case invoiceID == "" || !RefundKeyPattern.MatchString(refundKey):
+		return ErrRefundNotFound
+	case by == "":
+		return errors.New("billing: settling a refund needs to say who did it")
+	case made && !StripeRefundIDPattern.MatchString(stripeRefundID):
+		return errors.New("billing: a refund settled as made needs the id Stripe gave it")
+	}
+	return pglock.Do(ctx, s.pg, refundLock+invoiceID, func(ctx context.Context) error {
+		prev, found, err := s.storedRefund(ctx, refundKey)
+		switch {
+		case err != nil:
+			return err
+		case !found || prev.invoiceID != invoiceID:
+			return ErrRefundNotFound
+		case prev.sent:
+			return ErrRefundSettled
+		}
+		if !made {
+			if _, err = s.pg.Exec(ctx, `DELETE FROM loomplane_billing_refunds WHERE refund_key = $1 AND sent_at IS NULL`, refundKey); err != nil {
+				return fmt.Errorf("billing: drop refund %s of invoice %s: %w", refundKey, invoiceID, err)
+			}
+			slog.WarnContext(ctx, "billing: an unconfirmed refund was settled as never made", "invoice", invoiceID, "org", prev.orgID, "by", by)
+			return nil
+		}
+		iid, err := id.ParseInvoiceID(invoiceID)
+		if err != nil {
+			return ErrRefundNotFound
+		}
+		inv, err := s.l.Store().GetInvoice(ctx, iid)
+		if err != nil {
+			return fmt.Errorf("billing: read invoice %s: %w", invoiceID, err)
+		}
+		var confirmed int64
+		if err = s.pg.QueryRow(ctx, `SELECT COALESCE(sum(cents), 0)::bigint FROM loomplane_billing_refunds
+			WHERE invoice_id = $1 AND sent_at IS NOT NULL`, invoiceID).Scan(&confirmed); err != nil {
+			return fmt.Errorf("billing: read the refunds of invoice %s: %w", invoiceID, err)
+		}
+		full := confirmed+prev.cents >= inv.Total.Amount
+		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_billing_refunds SET sent_at = $2, full_refund = $3 WHERE refund_key = $1 AND sent_at IS NULL`,
+			refundKey, s.now().UTC(), full); err != nil {
+			return fmt.Errorf("billing: settle refund %s of invoice %s: %w", refundKey, invoiceID, err)
+		}
+		slog.WarnContext(ctx, "billing: an unconfirmed refund was settled as made", "invoice", invoiceID, "org", prev.orgID,
+			"stripe_refund", stripeRefundID, "by", by)
+		return nil
+	})
 }

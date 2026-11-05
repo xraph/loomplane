@@ -27,6 +27,7 @@ type fakePlatform struct {
 	rateBy  string
 	credits []grantCall
 	refunds []refundCall
+	settles []settleCall
 	calls   int   // every call, reads included
 	err     error // returned by every call when set
 }
@@ -107,6 +108,19 @@ func (f *fakePlatform) Refund(_ context.Context, inv string, cents *int64, key, 
 	return billing.RefundResult{Full: cents == nil}, nil
 }
 
+type settleCall struct {
+	invoice, key, stripeID, by string
+	made                       bool
+}
+
+func (f *fakePlatform) SettleRefund(_ context.Context, inv, key string, made bool, stripeID, by string) error {
+	if err := f.touch(); err != nil {
+		return err
+	}
+	f.settles = append(f.settles, settleCall{invoice: inv, key: key, stripeID: stripeID, by: by, made: made})
+	return nil
+}
+
 type auditEvent struct{ action, user, resource, id, outcome string }
 
 type memAudit struct {
@@ -171,6 +185,7 @@ var platformRoutesList = []struct{ method, path, body string }{
 	{http.MethodGet, "/api/v1/platform/billing/workspaces/org_1/invoices", ""},
 	{http.MethodPost, "/api/v1/platform/billing/workspaces/org_1/credit", `{"usd":"5.00","note":"sorry"}`},
 	{http.MethodPost, "/api/v1/platform/billing/invoices/inv_1/refund", `{"usd":null,"refund_key":"b8f0c1d2-3e4f-4a5b-8c6d-7e8f9a0b1c2d"}`},
+	{http.MethodPost, "/api/v1/platform/billing/invoices/inv_1/refunds/rk_1/settle", `{"outcome":"dropped"}`},
 }
 
 func TestPlatformBilling_OnlyTheOwner(t *testing.T) {
@@ -318,7 +333,8 @@ func TestWorkspacesAndInvoices_Shape(t *testing.T) {
 		t.Fatalf("pending %s", res.Body)
 	}
 	p, _ := pending[0].(map[string]any)
-	if p["refund_key"] != "rk_pending" || p["cents"] != float64(100) || p["resendable"] != true || p["created_at"] != "2026-11-03T00:00:00Z" {
+	if p["refund_key"] != "rk_pending" || p["cents"] != float64(100) || p["resendable"] != true || p["needs_settlement"] != false ||
+		p["created_at"] != "2026-11-03T00:00:00Z" {
 		t.Fatalf("pending refund %v", p)
 	}
 }
@@ -454,6 +470,43 @@ func TestParseFixedAndMicroDollars(t *testing.T) {
 		}
 		if got := microDollars(want); got != map[int64]string{0: "0.000000", 1: "0.000001", 12_345: "0.012345", 1_000_000: "1.000000", 1_000_000_000: "1000.000000"}[want] {
 			t.Errorf("%d: %s", want, got)
+		}
+	}
+}
+
+func TestSettleRefund_Route(t *testing.T) {
+	rg := newPlatformRig(t)
+	const path = "/api/v1/platform/billing/invoices/inv_1/refunds/rk_1/settle"
+	for body, want := range map[string]int{
+		`{"outcome":"made"}`: http.StatusUnprocessableEntity, `{"outcome":"made","stripe_refund_id":"ch_1"}`: http.StatusUnprocessableEntity,
+		`{"outcome":"dropped","stripe_refund_id":"re_1"}`: http.StatusUnprocessableEntity, `{"outcome":"maybe"}`: http.StatusUnprocessableEntity,
+		`{}`: http.StatusUnprocessableEntity, `nope`: http.StatusBadRequest,
+	} {
+		if got := rg.do(t, http.MethodPost, path, body, platformOwner).Code; got != want {
+			t.Errorf("%s: %d, want %d", body, got, want)
+		}
+	}
+	if len(rg.svc.settles) != 0 || len(rg.audit.events) != 0 {
+		t.Fatalf("a refused settle reached billing: %+v", rg.svc.settles)
+	}
+	if got := rg.do(t, http.MethodPost, path, `{"outcome":"made","stripe_refund_id":"re_3Abc"}`, platformOwner).Code; got != http.StatusNoContent {
+		t.Fatalf("made: %d", got)
+	}
+	if got := rg.do(t, http.MethodPost, path, `{"outcome":"dropped"}`, platformOwner).Code; got != http.StatusNoContent {
+		t.Fatalf("dropped: %d", got)
+	}
+	if len(rg.svc.settles) != 2 || rg.svc.settles[0] != (settleCall{invoice: "inv_1", key: "rk_1", stripeID: "re_3Abc", by: "platform_owner", made: true}) ||
+		rg.svc.settles[1].made {
+		t.Fatalf("settles %+v", rg.svc.settles)
+	}
+	if len(rg.audit.events) != 2 || rg.audit.events[0] != (auditEvent{"billing.refund.settle", "platform_owner", "invoice", "inv_1", outcomeSuccess}) ||
+		rg.audit.metas[0]["settled_as"] != "made" || rg.audit.metas[0]["stripe_refund_id"] != "re_3Abc" || rg.audit.metas[1]["settled_as"] != "dropped" {
+		t.Fatalf("audit %+v %v", rg.audit.events, rg.audit.metas)
+	}
+	for err, want := range map[error]int{billing.ErrRefundSettled: http.StatusConflict, billing.ErrRefundNotFound: http.StatusNotFound} {
+		rg.svc.err = err
+		if got := rg.do(t, http.MethodPost, path, `{"outcome":"dropped"}`, platformOwner).Code; got != want {
+			t.Errorf("%v: %d, want %d", err, got, want)
 		}
 	}
 }
