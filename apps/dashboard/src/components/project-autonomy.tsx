@@ -135,7 +135,8 @@ export function ProjectAutonomy({ project }: { project: Project }) {
         <p className="max-w-[56ch] text-[12.5px] leading-normal text-muted-foreground">
           Kubernetes, server, Vercel, DigitalOcean, Firecracker and Cloudflare
           Workers releases always go to a person. So does a release prepared
-          from chat, or one that reuses someone else&apos;s plan.
+          from chat, one that reuses someone else&apos;s plan, and a
+          source&apos;s first production release.
         </p>
       </div>
       <div className="grid gap-1.5">

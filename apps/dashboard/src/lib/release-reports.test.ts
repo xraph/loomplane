@@ -64,6 +64,14 @@ test("an approver or the requester holding agent:use may cancel", () => {
     mayCancelReport(active, { userId: "usr_2", can: held("agent:use") })
   ).toBe(false)
   expect(mayCancelReport(active, { userId: "usr_1", can: held() })).toBe(false)
+  // While the agent is promoting, its approval may be landing: the server
+  // refuses a cancel, so nobody is offered one.
+  expect(
+    mayCancelReport(
+      { state: "promoting", requestedBy: "usr_1" },
+      { userId: "usr_1", can: held("deployment:approve", "agent:use") }
+    )
+  ).toBe(false)
   // A finished report has nothing to cancel.
   expect(
     mayCancelReport(

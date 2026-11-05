@@ -8,6 +8,10 @@ import { ReleaseReportPage } from "./release-report"
 
 const state = vi.hoisted(() => ({
   ai: true,
+  agent: true,
+  // The server's answer for the report: the report, or the scope binder's
+  // 409 once the workspace's agent is off.
+  agentOffOnServer: false,
   runs: [] as { id: string; status: string; plan: { id: string } }[],
   // The workspace's permissions; null holds every one.
   workspace: null as string[] | null,
@@ -24,7 +28,7 @@ vi.mock("@/lib/organization", () => ({
 vi.mock("@/lib/features", () => ({
   useFeatures: () => ({ ai: state.ai }),
   useAgent: () => ({
-    enabled: true,
+    enabled: state.agent,
     knowledge: false,
     loading: false,
     pending: 0,
@@ -63,6 +67,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   state.ai = true
+  state.agent = true
+  state.agentOffOnServer = false
   state.runs = []
   state.workspace = null
   state.project = ["deployment:read"]
@@ -245,7 +251,15 @@ function serve(r: Row) {
     const url = new URL(String(input), "http://localhost")
     reads.push(url.pathname)
     if (url.pathname === "/api/v1/release-reports/rrep_1")
-      return Response.json(r)
+      return state.agentOffOnServer
+        ? Response.json(
+            {
+              message:
+                "the agent is off for this workspace; an admin can turn it on in AI settings",
+            },
+            { status: 409 }
+          )
+        : Response.json(r)
     if (url.pathname === "/api/v1/agent/requests")
       return Response.json({ requests: [] })
     if (url.pathname === "/api/v1/agent/requests/areq_1")
@@ -456,4 +470,69 @@ it("shows nothing and asks for nothing when the server runs no agent", () => {
   const { container } = show()
   expect(container.querySelector("h1")).toBeNull()
   expect(dev.reads).toEqual([])
+})
+
+it("says the agent is off, and asks for nothing, while the workspace has it off", async () => {
+  state.agent = false
+  state.agentOffOnServer = true
+  const dev = serve(report())
+  show()
+  expect(
+    await screen.findByText(
+      /The agent is off for this workspace, so its release reports can't be read/
+    )
+  ).toBeInTheDocument()
+  await new Promise((r) => setTimeout(r, 50))
+  expect(dev.reads).not.toContain("/api/v1/release-reports/rrep_1")
+  expect(screen.queryByRole("alert")).toBeNull()
+})
+
+it("says the agent is off when it turns off while the page is open", async () => {
+  // The status still says on; the server already says off.
+  state.agentOffOnServer = true
+  serve(report())
+  show()
+  expect(
+    await screen.findByText(
+      /The agent is off for this workspace, so its release reports can't be read/
+    )
+  ).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).toBeNull()
+})
+
+it("never offers Cancel while the agent is promoting", async () => {
+  state.project = ["deployment:read", "deployment:approve", "agent:use"]
+  serve(report({ state: "promoting", decision: "promote" }))
+  show()
+  await screen.findByRole("region", { name: "The seven gates" })
+  expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+})
+
+it("says a source production never ran goes to a person", async () => {
+  const fresh = {
+    ...evidence.sources[0],
+    alias: "worker",
+    production_commit: "",
+    direction: "new",
+    total_commits: 0,
+    commits: [],
+    migrations: [],
+    error:
+      "production has never run this source, so there is nothing to compare its changes to",
+  }
+  serve(report({ evidence: { ...evidence, sources: [fresh] } }))
+  show()
+  const source = await screen.findByRole("region", { name: "worker" })
+  expect(
+    within(source).getByText(
+      /Production has never run this source, so there's nothing to compare it to. Its first production release always goes to a person./
+    )
+  ).toBeInTheDocument()
+  expect(within(source).queryByText(/The source said/)).toBeNull()
+  const decision = screen.getByRole("region", { name: "Decision" })
+  expect(
+    within(decision).getByText(
+      /A source's first production release always goes to a person/
+    )
+  ).toBeInTheDocument()
 })

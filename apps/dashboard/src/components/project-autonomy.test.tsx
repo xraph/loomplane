@@ -92,6 +92,9 @@ test("starts at ask first and needs approve permission", async () => {
     screen.getByText(/Kubernetes, server, Vercel, DigitalOcean, Firecracker/)
   ).toBeInTheDocument()
   expect(
+    screen.getByText(/a source's first production release/)
+  ).toBeInTheDocument()
+  expect(
     screen.getByText(/With it off, the agent still asks/)
   ).toBeInTheDocument()
   expect(screen.queryByText(/takes effect when the promotion/)).toBeNull()

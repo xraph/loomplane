@@ -132,12 +132,20 @@ function PrepareDialog({
       })
     } catch (err) {
       const message = messageOf(err, "The release couldn't be prepared.")
-      if (statusOf(err) === 409) {
+      // Only an open plan can be replaced, and only a preparation under way
+      // has a report to open. Any other 409, such as the agent turned off,
+      // is just an error.
+      const kind =
+        statusOf(err) !== 409
+          ? null
+          : /already being prepared/i.test(message)
+            ? "running"
+            : /waiting for a decision/i.test(message)
+              ? "plan"
+              : null
+      if (kind) {
         setReplace(false)
-        setConflict({
-          kind: /already being prepared/i.test(message) ? "running" : "plan",
-          message,
-        })
+        setConflict({ kind, message })
       } else {
         setConflict(null)
         setError(message)
@@ -196,6 +204,10 @@ function PrepareDialog({
             <li>
               A release prepared from chat, or one reusing someone else&apos;s
               plan, always waits for a person.
+            </li>
+            <li>
+              A source&apos;s first production release always goes to a
+              person.
             </li>
             <li>
               When autonomous promotion is off for this project, the agent still

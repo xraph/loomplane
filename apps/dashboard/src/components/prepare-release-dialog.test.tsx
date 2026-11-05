@@ -117,6 +117,11 @@ it("posts the chosen environments and scope", async () => {
   expect(
     within(dialog).getByText(/still asks before production/)
   ).toBeInTheDocument()
+  expect(
+    within(dialog).getByText(
+      /A source's first production release always goes to a person/
+    )
+  ).toBeInTheDocument()
   await userEvent.click(within(dialog).getByRole("checkbox", { name: "web" }))
   await userEvent.click(
     within(dialog).getByRole("button", { name: "Prepare release" })
@@ -197,6 +202,31 @@ it("links to the running report on an in-progress conflict", async () => {
   ).toBeNull()
 })
 
+// Final review M6: only an open plan offers Replace. The agent turned off
+// while the dialog was open is a 409 too, and Replace would only repeat it.
+it("offers no Replace for a 409 that isn't an open plan", async () => {
+  serve(() =>
+    Response.json(
+      {
+        message:
+          "the agent is off for this workspace; an admin can turn it on in AI settings",
+      },
+      { status: 409 }
+    )
+  )
+  show()
+  const dialog = await open()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Prepare release" })
+  )
+  expect(
+    await within(dialog).findByText(/the agent is off for this workspace/i)
+  ).toBeInTheDocument()
+  expect(
+    within(dialog).queryByRole("checkbox", { name: "Replace that plan" })
+  ).toBeNull()
+})
+
 it("hides the action when the server runs no agent", () => {
   state.ai = false
   const dev = serve(() => created())
@@ -211,6 +241,8 @@ it("hides the action from someone who may not prepare, or with the agent off", (
   expect(screen.queryByRole("button", { name: "Prepare release" })).toBeNull()
   view.unmount()
   state.agent = false
+  const dev = serve(() => created())
   show()
   expect(screen.queryByRole("button", { name: "Prepare release" })).toBeNull()
+  expect(dev.reads).toEqual([])
 })

@@ -13,7 +13,7 @@ import {
 import type { ReactNode } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
+import { messageOf, statusOf } from "@/client/errors"
 import {
   useAgentRequestsGet,
   useProjectsList,
@@ -44,7 +44,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { useFeatures } from "@/lib/features"
+import { useAgent, useFeatures } from "@/lib/features"
 import { duration } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
@@ -77,9 +77,27 @@ export function ReleaseReportPage({ id }: { id: string }) {
     <>
       <SiteHeader crumbs={[{ label: "Release report" }]} />
       <Page className="max-w-[880px]">
-        {features.ai ? <Loaded id={id} /> : null}
+        {features.ai ? <WithAgent id={id} /> : null}
       </Page>
     </>
+  )
+}
+
+// WithAgent reads the report only while the workspace has the agent on:
+// the server refuses it otherwise.
+function WithAgent({ id }: { id: string }) {
+  const agent = useAgent()
+  if (agent.loading) return <Skeleton className="h-64 w-full rounded-[14px]" />
+  if (!agent.enabled) return <AgentOff />
+  return <Loaded id={id} />
+}
+
+function AgentOff() {
+  return (
+    <p className="max-w-[64ch] text-[13px] text-muted-foreground">
+      The agent is off for this workspace, so its release reports can&apos;t be
+      read. An admin can turn it on in AI settings.
+    </p>
   )
 }
 
@@ -92,6 +110,9 @@ function Loaded({ id }: { id: string }) {
     report.refetch,
     5000
   )
+  // The agent turned off since its status was read.
+  if (report.status === "error" && statusOf(report.error) === 409)
+    return <AgentOff />
   if (report.status === "error")
     return (
       <QueryError
@@ -213,6 +234,10 @@ function Decision({ report: r }: { report: ReleaseReport }) {
         <li>
           A release prepared from chat, or one reusing someone else&apos;s plan,
           always waits for a person.
+        </li>
+        <li>
+          A source&apos;s first production release always goes to a person:
+          there&apos;s nothing in production to compare it to.
         </li>
         <li>
           When autonomous promotion is off for the project, the agent still asks
@@ -408,13 +433,23 @@ function Source({ source: s }: { source: SourceDiff }) {
           {s.stagingCommit && ` · staging ${s.stagingCommit.slice(0, 7)}`}
         </span>
       </p>
-      {(s.truncated || s.error) && (
+      {s.direction === "new" ? (
         <Alert>
           <AlertDescription>
-            This diff wasn&apos;t read in full, so the release asks a person.
-            {s.error && <> The source said: {s.error}</>}
+            Production has never run this source, so there&apos;s nothing to
+            compare it to. Its first production release always goes to a
+            person.
           </AlertDescription>
         </Alert>
+      ) : (
+        (s.truncated || s.error) && (
+          <Alert>
+            <AlertDescription>
+              This diff wasn&apos;t read in full, so the release asks a person.
+              {s.error && <> The source said: {s.error}</>}
+            </AlertDescription>
+          </Alert>
+        )
       )}
       {s.migrations.length > 0 && (
         <div className="grid gap-2">

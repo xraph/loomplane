@@ -82,13 +82,14 @@ export function isActive(state: string): boolean {
 /**
  * mayCancelReport is the server's rule for who stops a preparation: someone
  * who may approve the project's deployments, or the person who asked while
- * they hold agent:use. The server checks again.
+ * they hold agent:use. A report the agent is promoting can't be cancelled:
+ * its approval may be landing. The server checks again.
  */
 export function mayCancelReport(
   r: Pick<ReleaseReport, "state" | "requestedBy">,
   who: { userId: string; can: (permission: string) => boolean }
 ): boolean {
-  if (!isActive(r.state)) return false
+  if (!isActive(r.state) || r.state === "promoting") return false
   return (
     who.can("deployment:approve") ||
     (r.requestedBy === who.userId && who.can("agent:use"))

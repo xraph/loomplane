@@ -1,5 +1,7 @@
 // A project's latest release preparations, with how each stands. It shows
-// only while the server runs the agent.
+// only while the server runs the agent and the workspace has it on: the
+// reports can't be read otherwise.
+import { statusOf } from "@/client/errors"
 import { useReleaseReportsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import { Panel, PanelHead } from "@/components/panel"
@@ -28,21 +30,22 @@ const toneOf: Record<StateTone, Tone> = {
 /** ReleaseReportsCard lists a project's five newest release reports. */
 export function ReleaseReportsCard({ projectId }: { projectId: string }) {
   const features = useFeatures()
-  if (!features.ai) return null
+  const agent = useAgent()
+  if (!features.ai || !agent.enabled) return null
   return <Reports projectId={projectId} />
 }
 
 function Reports({ projectId }: { projectId: string }) {
   useReleaseReportEvents()
-  const agent = useAgent()
   const now = useNow(30_000)
   const list = useQuery(useReleaseReportsList, {
     path: { id: projectId },
     query: { limit: 5 },
   })
   const reports = (list.data?.reports ?? []).flatMap((r) => (r ? [r] : []))
-  // With the agent off and nothing prepared before, there's nothing to show.
-  if (list.data && reports.length === 0 && !agent.enabled) return null
+  // A 409 is the agent turned off since the status was read: nothing to
+  // show, as when it was off all along.
+  if (list.status === "error" && statusOf(list.error) === 409) return null
   return (
     <Panel aria-label="Release reports" className="gap-3">
       <PanelHead title="Release reports" aside="Latest five" />
