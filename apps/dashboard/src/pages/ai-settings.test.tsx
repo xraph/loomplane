@@ -524,3 +524,54 @@ it("tells you what's left before the agent asks for more", async () => {
   expect(budget.closest("[data-slot=field]")).toContainElement(alert)
   expect(writes).toEqual([])
 })
+
+it("gives the agent what's left of the workspace's budget in one click", async () => {
+  stub({
+    "GET /api/v1/ai/settings": () =>
+      Response.json(
+        view({ monthly_budget_usd: "50.00", unallocated_usd: "50.00" })
+      ),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(
+    await within(section).findByText("The agent's share of the AI budget")
+  ).toBeInTheDocument()
+
+  await userEvent.click(
+    within(section).getByRole("button", { name: "Use all $50.00" })
+  )
+  expect(within(section).getByLabelText("Monthly budget (USD)")).toHaveValue(
+    "50.00"
+  )
+  // Filled, so there's nothing left to offer.
+  expect(
+    within(section).queryByRole("button", { name: /^Use all/ })
+  ).not.toBeInTheDocument()
+})
+
+it("points at the workspace's budget when there's none to share", async () => {
+  stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () => Response.json(agent()),
+  })
+  render(
+    <Wrapped>
+      <AISettings />
+    </Wrapped>
+  )
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  expect(
+    await within(section).findByText(
+      "Set the workspace's AI budget above first. The agent's comes out of it."
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(section).queryByRole("button", { name: /^Use all/ })
+  ).not.toBeInTheDocument()
+})
