@@ -47,14 +47,14 @@ require (
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.9.1
+	github.com/xraph/authsome v1.9.2
 	github.com/xraph/bastion v1.4.1
-	github.com/xraph/chronicle v1.10.1
+	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/cortex v1.10.4
 	github.com/xraph/cortex/extension v1.10.4
 	github.com/xraph/ctrlplane v1.8.1
-	github.com/xraph/dispatch v1.9.3
+	github.com/xraph/dispatch v1.9.4
 	github.com/xraph/forge v1.13.2
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
@@ -62,7 +62,7 @@ require (
 	github.com/xraph/grove/drivers/pgdriver v1.10.2
 	github.com/xraph/grove/drivers/sqlitedriver v1.10.2
 	github.com/xraph/grove/extension v1.10.2
-	github.com/xraph/herald v1.10.0
+	github.com/xraph/herald v1.10.2
 	github.com/xraph/herald/drivers/apns v1.10.0
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/nexus v1.9.2
@@ -73,7 +73,7 @@ require (
 	github.com/xraph/shield v1.10.0
 	github.com/xraph/trove v1.8.1
 	github.com/xraph/trove/drivers/s3driver v1.8.1
-	github.com/xraph/trove/extension v1.8.1
+	github.com/xraph/trove/extension v1.8.2
 	github.com/xraph/vault v1.8.1
 	github.com/xraph/warden v1.8.1
 	github.com/xraph/weave v1.9.3
@@ -103,7 +103,11 @@ require (
 
 require github.com/xraph/shield/integrations/nexusguard v1.9.0
 
-require github.com/stripe/stripe-go/v87 v87.1.0
+require (
+	github.com/stripe/stripe-go/v87 v87.1.0
+	github.com/xraph/chronicle/extension v1.11.0
+	github.com/xraph/chronicle/store/postgres v1.11.0
+)
 
 require (
 	cloud.google.com/go/auth v0.24.1 // indirect
