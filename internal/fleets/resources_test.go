@@ -7,7 +7,7 @@ import (
 
 func resourceAccessFixture() (ResourceBinding, ResourceAccessObservation) {
 	b := ResourceBinding{PrincipalID: "instance-role", AccessScope: "instance-database/instance-schema", ID: "binding", Scope: FleetScope{OrgID: "org", ProjectID: "project", FleetID: "fleet"}, InstanceID: "instance", EnvironmentID: "env", Name: "database", Ownership: "owned", Generation: 1, OwnershipEpoch: 1, ResourceID: "resource", Incarnation: "physical-1", Provider: "provider", ConnectionID: "connection", ConnectionGeneration: 1, Credential: ResourceCredentialRef{EndpointID: "endpoint", Version: 1}}
-	o := ResourceAccessObservation{ResourceID: b.ResourceID, Incarnation: b.Incarnation, ConnectionGeneration: 1, Credential: b.Credential, InstanceID: b.InstanceID, CheckedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute), Protocol: "postgres-role-v1", PrincipalID: "instance-role", ScopeID: "instance-database/instance-schema", Database: &DatabaseAccessScope{Database: "instance-database", Schema: "instance-schema", Login: true, CanRead: true, CanWrite: true}}
+	o := ResourceAccessObservation{ResourceID: b.ResourceID, Incarnation: b.Incarnation, ConnectionGeneration: 1, Credential: b.Credential, InstanceID: b.InstanceID, CheckedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute), Protocol: "postgres-role-v2", PrincipalID: "instance-role", ScopeID: "instance-database/instance-schema", Database: &DatabaseAccessScope{Database: "instance-database", Schema: "instance-schema", Login: true, CanRead: true, CanWrite: true}}
 	return b, o
 }
 
@@ -20,6 +20,9 @@ func TestInstanceResourceCredentialsScoped(t *testing.T) {
 		"superuser":          func(o *ResourceAccessObservation) { o.Database.Superuser = true },
 		"create role":        func(o *ResourceAccessObservation) { o.Database.CreateRole = true },
 		"create database":    func(o *ResourceAccessObservation) { o.Database.CreateDatabase = true },
+		"create schemas":     func(o *ResourceAccessObservation) { o.Database.CreateSchemas = true },
+		"indirect objects":   func(o *ResourceAccessObservation) { o.Database.IndirectObjects = true },
+		"foreign server":     func(o *ResourceAccessObservation) { o.Database.ForeignServerAccess = true },
 		"replication":        func(o *ResourceAccessObservation) { o.Database.Replication = true },
 		"bypass RLS":         func(o *ResourceAccessObservation) { o.Database.BypassRLS = true },
 		"inherited role":     func(o *ResourceAccessObservation) { o.Database.OtherRoles = []string{"admin"} },
@@ -76,5 +79,13 @@ func TestInstanceAttachedResourceRetained(t *testing.T) {
 	b.Ownership = "owned"
 	if b.PhysicalDeletionAllowed("neighbor", 1) || b.PhysicalDeletionAllowed("instance", 2) {
 		t.Fatal("stale owner can delete resource")
+	}
+}
+
+func TestInstanceResourceRejectsLegacyPostgresEvidence(t *testing.T) {
+	binding, observation := resourceAccessFixture()
+	observation.Protocol = "postgres-role-v1"
+	if err := validateResourceAccess(binding, observation, time.Now()); err == nil {
+		t.Fatal("legacy evidence omitted required scope checks")
 	}
 }

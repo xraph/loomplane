@@ -32,6 +32,7 @@ import {
 } from "@/components/cloud-detail/data"
 import { UseInEnvironment } from "@/components/cloud-detail/environments"
 import { Overview, type CloudTab } from "@/components/cloud-detail/overview"
+import { PlatformCloudUsage } from "@/components/platform-cloud-usage"
 import { Projects } from "@/components/cloud-detail/projects"
 import { Settings } from "@/components/cloud-detail/settings"
 import { Targets } from "@/components/cloud-detail/targets"
@@ -397,6 +398,10 @@ function CloudPage({
 }) {
   const { cloud, project } = scope
   const { can } = useOrganization()
+  // The instance owner runs a platform Cloud, so a workspace never edits it.
+  const edit = manage && !cloud.platformOwned
+  // Its servers, clusters and pools are the owner's too, so they stay hidden.
+  const infra = !project && !cloud.platformOwned
   const [place, go] = usePlace(wanted)
   const [using, setUsing] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -482,8 +487,8 @@ function CloudPage({
         count: grants?.length,
         show: !project,
       },
-      { id: "infrastructure", label: "Infrastructure", show: !project },
-      { id: "capacity", label: "Capacity", show: !project },
+      { id: "infrastructure", label: "Infrastructure", show: infra },
+      { id: "capacity", label: "Capacity", show: infra },
       {
         id: "changes",
         label: "Changes",
@@ -491,7 +496,7 @@ function CloudPage({
         count: open(syncs.list.filter(movingSync).length),
         show: true,
       },
-      { id: "settings", label: "Settings", show: manage },
+      { id: "settings", label: "Settings", show: edit },
     ]
   const tab = tabs.some((t) => t.id === place.tab && t.show)
     ? place.tab
@@ -511,7 +516,7 @@ function CloudPage({
 
   // A cluster and a cluster operation are pages of their own, under the
   // Cloud's Infrastructure tab.
-  if (!project && (place.cluster || place.clusterOperation))
+  if (infra && (place.cluster || place.clusterOperation))
     return (
       <>
         <SiteHeader
@@ -584,7 +589,7 @@ function CloudPage({
                 </Button>
               )}
               <PageMenu label="More Cloud actions">
-                {manage && (
+                {edit && (
                   <DropdownMenuItem onClick={() => go({ tab: "settings" })}>
                     Rename
                   </DropdownMenuItem>
@@ -604,7 +609,7 @@ function CloudPage({
                 >
                   {copied ? "Cloud ID copied" : "Copy Cloud ID"}
                 </DropdownMenuItem>
-                {manage && (
+                {edit && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -629,6 +634,13 @@ function CloudPage({
               setUsing(false)
               refresh()
             }}
+          />
+        )}
+        {cloud.platformOwned && (
+          <PlatformCloudUsage
+            project={project}
+            projects={projectList}
+            environments={usage.data?.environments}
           />
         )}
         {failed ? (
@@ -684,7 +696,7 @@ function CloudPage({
                 connections={accounts}
                 pools={pools}
                 usage={usage.data}
-                manage={manage}
+                manage={edit}
                 onSaved={refresh}
               />
             </TabsContent>
@@ -710,7 +722,7 @@ function CloudPage({
                 )}
               </TabsContent>
             )}
-            {!project && (
+            {infra && (
               <TabsContent value="infrastructure">
                 <CloudInfrastructure
                   cloud={cloud}
@@ -725,7 +737,7 @@ function CloudPage({
                 />
               </TabsContent>
             )}
-            {!project && (
+            {infra && (
               <TabsContent value="capacity">
                 <Capacity
                   cloudId={cloud.id}
@@ -743,7 +755,7 @@ function CloudPage({
                 onChanged={refresh}
               />
             </TabsContent>
-            {manage && (
+            {edit && (
               <TabsContent value="settings">
                 <Settings
                   cloud={cloud}

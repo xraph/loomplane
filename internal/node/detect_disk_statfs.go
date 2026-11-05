@@ -9,5 +9,5 @@ func diskGiB() int64 {
 	if err := syscall.Statfs("/", &st); err != nil {
 		return 0
 	}
-	return int64(st.Blocks) * int64(st.Bsize) / (1 << 30) //nolint:gosec // disk sizes fit int64
+	return int64(st.Blocks*uint64(st.Bsize)) / (1 << 30) //nolint:gosec // disk sizes fit int64
 }

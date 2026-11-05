@@ -2,11 +2,13 @@ package planning
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -158,5 +160,59 @@ func TestAppliedCloudPlanRecordsTheCloudServer(t *testing.T) {
 	w := findCode(result.Warnings, "cloud-server-ambiguous")
 	if a := result.Actions[0]; a.Service.CloudPlacement.ServerID != "" || w == nil || w.Name != "web" || w.Path != "services.web" || !strings.Contains(w.Message, "target frontend") {
 		t.Fatalf("two servers: %+v %+v", a.Service.CloudPlacement, result.Warnings)
+	}
+}
+
+// A Loomplane Cloud target takes its own branch in Cloud sync: it's
+// validated without a connection lookup, and no target can be changed into
+// one.
+func TestCloudSyncPlatformTarget(t *testing.T) {
+	target := platformAssignment().Targets[0]
+	s := NewService(Deps{Providers: providers.Registry(), Platform: &fakePlacer{}})
+	if err := s.validateSyncTarget(t.Context(), target, nil); err != nil {
+		t.Fatalf("platform target: %v", err)
+	}
+	broken := target
+	broken.ConnectionID = "conn"
+	if err := s.validateSyncTarget(t.Context(), broken, nil); !errors.Is(err, cloudprofiles.ErrInvalid) {
+		t.Fatalf("platform target with a connection: %v", err)
+	}
+	s.platform = nil
+	if err := s.validateSyncTarget(t.Context(), target, nil); err == nil || err.Error() != platformUnavailable {
+		t.Fatalf("platform target without a placer: %v", err)
+	}
+
+	mine := cloudprofiles.Target{ID: "t", Runtime: "managed", Provider: "vercel", ConnectionID: "a"}
+	if _, err := changedSyncTarget(mine, cloudprofiles.ChangeInput{Runtime: "platform", Provider: "platform"}); !errors.Is(err, cloudprofiles.ErrPlatformOwned) {
+		t.Fatalf("changing a target into a Loomplane Cloud target: %v", err)
+	}
+	if _, err := changedSyncTarget(target, cloudprofiles.ChangeInput{Provider: "vercel", ConnectionID: "a"}); !errors.Is(err, cloudprofiles.ErrPlatformOwned) {
+		t.Fatalf("changing a Loomplane Cloud target: %v", err)
+	}
+}
+
+// Moving an environment onto Loomplane Cloud previews room for each applied
+// service its targets will run, with the applied size.
+func TestCloudSyncPreviewsPlatformPlacements(t *testing.T) {
+	placer := &fakePlacer{}
+	s := NewService(Deps{Providers: providers.Registry(), Platform: placer})
+	var cfg ServiceConfig
+	back := platformBinding(t)
+	_ = json.Unmarshal(back.Config, &cfg)
+	cfg.Size = &manifest.Size{CPU: 0.5, Memory: 2048}
+	cfg.CloudPlacement = &CloudPlacement{CloudID: "cloud", TargetID: "target_mine", TargetName: "fra", Provider: "vercel", ConnectionID: "new"}
+	back.Config, _ = json.Marshal(cfg)
+	plan := &Plan{OrgID: "org", ProjectID: "project", EnvironmentID: "env"}
+	pins, err := s.syncPlatformPlacements(t.Context(), plan, []*Binding{back, appliedTestBinding(t, "api", "commit")}, platformAssignment(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, ok := pins["web"]
+	if len(pins) != 1 || !ok || pin.Platform == nil || pin.TargetID != "target_fra" || pin.ConnectionID != "" || len(placer.requests) != 1 || placer.requests[0].VCPUs != 1 || placer.requests[0].MemoryMiB != 2048 || placer.requests[0].Resource != "web" {
+		t.Fatalf("pins %+v, requests %+v", pins, placer.requests)
+	}
+	placer.err = errors.New("no room for this in Frankfurt right now")
+	if _, err = s.syncPlatformPlacements(t.Context(), plan, []*Binding{back}, platformAssignment(), ""); err == nil || !strings.Contains(err.Error(), "web: no room for this in Frankfurt") {
+		t.Fatalf("refusal: %v", err)
 	}
 }

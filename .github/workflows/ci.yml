@@ -74,6 +74,33 @@ jobs:
           version: v2.12.2
           args: --build-tags=cloud --timeout=10m ./extensions/billing/... ./internal/platform/... ./database/migrations/... ./extensions/identity/...
 
+  cloud-image:
+    name: Cloud image
+    # Builds the private Cloud image the way publish-cloud.yml does, so a
+    # change that breaks only the cloud edition fails here and not on the
+    # day someone publishes. Nothing is pushed or uploaded; publishing stays
+    # a manual run of publish-cloud.yml.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          push: false
+          build-args: |
+            VERSION=ci
+            GO_TAGS=cloud
+            LOOMPLANE_EDITION=cloud
+          # The cache publish-cloud.yml uses. Main keeps it warm; a pull
+          # request only reads it, so it can't change what a publish starts
+          # from.
+          cache-from: type=gha,scope=cloud
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=cloud' || '' }}
+
   windows-build:
     name: Cross-build for Windows
     runs-on: ubuntu-24.04

@@ -135,7 +135,7 @@ func result(c forge.Context, status int, value any, err error) error {
 	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift), errors.Is(err, projects.ErrFleetManaged):
 		code = http.StatusConflict
 	// A key whose saved authority can't act for capacity is refused, not a server error.
-	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected):
+	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected), errors.Is(err, cloudprofiles.ErrPlatformOwned):
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
 		code = http.StatusUnprocessableEntity

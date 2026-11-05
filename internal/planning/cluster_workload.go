@@ -45,8 +45,18 @@ func workloadBlock(reason string) error {
 // PrepareClusterWorkloadDemands pins server-derived requests and observation
 // identity before approval. Historical plans without this field stay immutable.
 func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan, result *Result) error {
+	for _, action := range result.Actions {
+		if managedClusterAction(action) {
+			if err := checkFleetCapacityMode(plan, action.Service); err != nil {
+				return err
+			}
+		}
+	}
 	st, ok := s.store.(*PgStore)
 	if !ok {
+		if fleetCapacityPlan(plan) {
+			return ErrUnavailable
+		}
 		return nil
 	}
 	for i := range result.Actions {
@@ -60,7 +70,7 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			return ErrUnavailable
 		}
 		if !authority.ClusterWorkloadCapacityEnabled() {
-			if cfg.CapacityMode != "" || cfg.ClusterDemand != nil {
+			if fleetCapacityPlan(plan) || cfg.CapacityMode != "" || cfg.ClusterDemand != nil {
 				return workloadBlock("cluster_capacity_disabled")
 			}
 			continue
@@ -102,7 +112,7 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			if cfg.GPU != nil || cfg.Size != nil && (cfg.Size.GPU != nil || cfg.Size.Shm > 0) || cfg.Catalog != nil || cfg.Component != nil {
 				return workloadBlock("workload_constraints_unsupported")
 			}
-			d.Input.Maximum, err = managedWorkloadMaximum(cfg)
+			d.Input.Maximum, err = managedPlanWorkloadMaximum(plan, a.Name, cfg)
 			if err != nil {
 				return err
 			}
@@ -177,7 +187,19 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 }
 
 func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan *Plan, a Action) (err error) {
+	if checkErr := checkFleetCapacityMode(plan, a.Service); checkErr != nil {
+		return checkErr
+	}
 	d := a.Service.ClusterDemand
+	if fleetCapacityPlan(plan) {
+		maximum, checkErr := managedPlanWorkloadMaximum(plan, a.Name, a.Service)
+		if checkErr != nil {
+			return checkErr
+		}
+		if d == nil || d.Input.Maximum != maximum {
+			return ErrConflict
+		}
+	}
 	authority, ok := s.capacity.(clusterWorkloadAuthority)
 	if !ok {
 		return ErrUnavailable
@@ -271,7 +293,7 @@ func (s *Service) resolveClusterWorkload(ctx context.Context, st *PgStore, plan 
 		if a.Service.GPU != nil || a.Service.Size != nil && (a.Service.Size.GPU != nil || a.Service.Size.Shm > 0) || a.Service.Catalog != nil || a.Service.Component != nil {
 			return workloadBlock("workload_constraints_unsupported")
 		}
-		maximum, e := managedWorkloadMaximum(a.Service)
+		maximum, e := managedPlanWorkloadMaximum(plan, a.Name, a.Service)
 		if e != nil {
 			return e
 		}

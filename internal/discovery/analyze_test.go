@@ -224,7 +224,7 @@ func TestAnalyze_goServicesGetOnlyTheEnvTheirMainReaches(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, s := range graph.Build(r).Services {
-		var names []string
+		names := make([]string, 0, len(s.Env))
 		for _, v := range s.Env {
 			names = append(names, v.Name)
 		}

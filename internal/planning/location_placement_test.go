@@ -491,3 +491,43 @@ func TestLocationPlacementMixedMovePreservesAppliedInputs(t *testing.T) {
 func (s locationComputeStore) LocationMoveReviewed(context.Context, *Plan, string, *CloudPlacement, string) (bool, error) {
 	return s.moveReviewed, nil
 }
+
+// Location policy doesn't apply to Loomplane Cloud targets. Evaluation skips
+// them without asking for their evidence, a candidate that is one is
+// refused, and their evidence is never read from a connection.
+func TestLocationPlacementSkipsPlatformTargets(t *testing.T) {
+	in := locationFixture()
+	for i := range in.Candidates {
+		in.Candidates[i].Provider = "vercel"
+		in.Candidates[i].Runtime = "managed"
+	}
+	// The store has no candidate for the platform target, so asking for
+	// one fails the selection.
+	store := locationTestStore{candidates: in.Candidates, policy: cloudprofiles.LocationPolicy{Revision: 3}}
+	s := NewService(Deps{Store: store, Providers: providers.Registry()})
+	s.now = func() time.Time { return in.Now }
+	plan := &Plan{OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+	assignment := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{
+		{ID: "fra", Name: "fra", Provider: "platform", Runtime: "platform", Region: "fra"},
+		{ID: "a", Name: "a", Provider: "vercel", Runtime: "managed", LocationID: "la"},
+	}}
+	set := manifest.Settings{Placement: &manifest.PlacementConstraints{}}
+	target, _, err := s.selectLocation(t.Context(), plan, assignment, set, "api", nil, nil, nil, "", nil, nil, locationRequirements{Workload: provider.WebApp})
+	if err != nil || target.ID != "a" {
+		t.Fatalf("platform target evaluated: %+v %v", target, err)
+	}
+
+	platform := in.Candidates[0]
+	platform.TargetID, platform.Runtime, platform.Provider = "fra", "platform", "platform"
+	in.Candidates = []PlacementCandidate{platform}
+	d, err := EvaluateLocations(in)
+	if err != nil || d.TargetID != "" || !slices.Contains(d.Blockers, LocationRuntimeUnsupported) {
+		t.Fatalf("platform candidate placed: %+v %v", d, err)
+	}
+
+	// PgStore with no database: reading a connection would panic.
+	c, err := (&PgStore{}).LocationCandidate(t.Context(), plan, assignment, assignment.Targets[0], set, cloudinfra.PlacementRequest{}, cloudinfra.ClusterWorkloadVector{})
+	if err != nil || c.RuntimeQualified || !slices.Contains(c.Rejections, LocationRuntimeUnsupported) || c.RuntimeConnectionID != "" {
+		t.Fatalf("platform evidence: %+v %v", c, err)
+	}
+}

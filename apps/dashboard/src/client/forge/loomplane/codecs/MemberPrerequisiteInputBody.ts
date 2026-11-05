@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_MemberPrerequisiteInputBody_drain_policy } from './MemberPrerequisiteInputBody.drain_policy';
+
+export const codec_MemberPrerequisiteInputBody: Codec = {"kind": "object", "fields": {"attachment_id": {"ts": "attachmentId"}, "drain_policy": {"ts": "drainPolicy", "codec": () => codec_MemberPrerequisiteInputBody_drain_policy}, "expected_renewal_authority_generation": {"ts": "expectedRenewalAuthorityGeneration"}, "expected_revision": {"ts": "expectedRevision"}, "expected_tls_secret_uid": {"ts": "expectedTlsSecretUid"}, "id": {"ts": "id"}, "renewal_authority_id": {"ts": "renewalAuthorityId"}, "tls_secret_name": {"ts": "tlsSecretName"}}, "required": ["attachment_id", "drain_policy", "expected_renewal_authority_generation", "expected_revision", "expected_tls_secret_uid", "renewal_authority_id", "tls_secret_name"]};

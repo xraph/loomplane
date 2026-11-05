@@ -95,3 +95,82 @@ The review file is created owner-only and won't overwrite an existing file. Keep
 <Callout type="warn">
   Native copy API, CLI and worker checks ran against a real local control plane database with controlled Google endpoints. Live Cloud SQL restore, IAM and TLS, privilege authority and cost aren't qualified, browser rendering of the native-copy UI and credential access for a verified copy are unfinished, and live AWS snapshot recovery is pending. RDS native restore and point-in-time recovery aren't available in Loomplane.
 </Callout>
+
+## DuckDB checkpoints and host recovery
+
+DuckDB recovery is available only for explicitly configured Docker images. Its standalone catalog entry stays unavailable until the qualified wrapper image is published. Kubernetes recovery is unsupported.
+
+A checkpoint briefly stops the database. Loomplane requires a clean exit and confirms that `/data/analytics.db.wal` is absent before copying `analytics.db`. If either check fails, the backup fails and cleanup attempts to resume the exact source container. The reservation stays held when restart or native authentication fails, so you can investigate without another deployment changing the database underneath you.
+
+Recovery copies get fresh credentials and CA material. The serving container mounts `/data` read-only and opens DuckDB in native read-only mode. A temporary helper initializes a new empty volume or imports the verified checkpoint while the copy is stopped. It uses the serving image's exact local ID, has no credentials or network, and must be removed before that same copy can start. Loomplane checks for other volume attachments before serving or releasing the reservation.
+
+The recovery listener also disables external file access and locks its configuration before it starts. Its empty temporary-directory setting prevents disk spilling, so a query that exceeds available memory can fail. These controls don't make arbitrary SQL a sandbox.
+
+Native archives have a 10 GiB payload limit, and Loomplane verifies their checksum and recorded source, recipe, image and architecture before import. A completed failed import can discard its checked private destination. An archive error after upload may have begun has an unknown outcome: Loomplane keeps the reservation, stopped copy and any helper evidence for host reconciliation. It won't restart, discard or retry writes over that copy.
+
+Recovery needs the reviewed revision 3 image. Revision 2 copies remain stoppable and removable, but can't start or pass recovery verification under this contract. Recreate the service with the qualified runtime before requesting a new recovery copy. Revision 2 archives don't silently migrate to a different image or recipe revision.
+
+### Upgrade and retain instance classification
+
+Before upgrading a Docker target to this lifecycle protocol, stop and drain every Loomplane API, scheduler and worker that can mutate that daemon, including workers on other machines. Prevent older versions from reconnecting. You must complete this step before the new workers adopt existing containers because the daemon cannot tell Loomplane that another old worker has drained.
+
+Each instance has a permanent, unmounted local volume named `<runtime-name>-class`. Its dedicated `loomplane.instance-class.*` labels record schema `1`, class (`ordinary` or `duckdb`), org, project, environment, connection, instance, resource and recovery scope. It contains no database files or credentials. The physical name depends only on the instance's runtime name, so connection aliases cannot create independent locks for the same instance.
+
+Loomplane creates the anchor for an empty new instance or an unambiguous existing current container with matching persisted ownership and engine metadata. A missing anchor with previous containers, checkpoint or mutation reservations, unknown identity, or data-only residue needs host reconciliation. Keep workers drained while you resolve it. Verify the current and both previous names, the old `<runtime-name>-checkpoint` and new `<runtime-name>-mutation` reservations, and the data volume against the saved service and recovery records. Conflicting evidence stays unresolved.
+
+Exclude these class volumes from housekeeping and unused-volume pruning. They are unmounted, so Docker pruning can delete them. Normal removal and recovery purge retain the anchor, and you cannot reuse an instance ID for another checkpoint class. If an anchor is lost, drain workers and reconcile the saved instance and every remaining container and volume before adoption. Do not relabel an anchor to make a failed check pass.
+
+### Recover an interrupted operation
+
+A worker crash or an uncertain runtime mutation can leave a stopped container named `<runtime-name>-mutation`. It reserves the instance across backup, restore, deployment, start, stop, removal and recovery purge. It has no expiry. Retrying a job won't clear it.
+
+You need host access. Stop and drain all relevant workers as described above, then check the host effect-fence journal. A dirty journal means an earlier mutation has an unknown outcome. Keep the reservation and investigate that mutation separately; removing this container does not repair the journal.
+
+Inspect the reservation named in the failed operation:
+
+```bash
+docker inspect RESERVATION_NAME
+```
+
+Record its full Docker ID and exact labels. Require `loomplane.duckdb-mutation=1`, a nonempty owner in `loomplane.duckdb-mutation.record`, schema version `1`, and the expected action, operation, org, project, environment, connection, instance and resource. Its name must be the instance's mutation name. The container must be stopped, have no mounts or published ports, use network `none` and a read-only root filesystem, and have only its two dedicated reservation labels.
+
+Check the class anchor too. Require its exact name, local driver, empty options and matching dedicated scope and class labels. If either previous-container name or the old checkpoint reservation exists, keep the reservation. Do not delete an uncertain previous incarnation as part of this procedure.
+
+Check `<runtime-name>-readonly-stage` and list **all** containers attached to the recorded data volume, including stopped or renamed containers. A staging helper has only `loomplane.duckdb-readonly-stage` and `loomplane.duckdb-readonly-stage.record` labels. Compare its exact Docker ID, original reservation ID and owner record, clone ID, local image ID, volume creation time, ownership labels, fixed command and single `/data` mount with the saved operation. The helper must have no credentials, ports or network, a read-only root filesystem and restart policy `no`. Its temporary `/data` mount is writable; that attachment must not survive reconciliation.
+
+If create, start, upload, wait or delete lost its response, keep the reservation until you have established that the earlier daemon operation has finished. Cancellation or an absent helper alone does not prove completion. Keep the copy stopped. Once the exact helper is quiescent and its identity is established, remove only that helper ID and repeat the full attachment census. Investigate an unknown attachment rather than deleting it. A serving recovery copy must be the sole remaining attachment, with `/data` inspected as `RW=false`, before you start it or clear its reservation. Cleanup of a stopped legacy copy can retain its own old writable mount until that exact copy is removed.
+
+Removing only the reservation while a helper or another writable attachment remains is unsafe. Do not clear it to bypass these checks.
+
+For a backup, inspect the recorded `SourceID` and the current runtime name. Both must identify the same container, with `SourceImage`, `SourceRevision`, the recorded local `SourceDockerImage` ID and every recorded `SourceLabels` value unchanged. Verify the `/data` mount, and require the recorded `Volume`, `VolumeCreated` and org/project/environment/connection/instance/data-role labels to match its local data volume.
+
+Settle the stop using that exact source ID, then start it and run the native authenticated check:
+
+```bash
+docker stop --time 25 SOURCE_CONTAINER_ID
+docker inspect SOURCE_CONTAINER_ID
+docker start SOURCE_CONTAINER_ID
+docker exec SOURCE_CONTAINER_ID /loomplane-duckdb check
+```
+
+Wait for stop to finish and confirm that the container is stopped before you start it. Allow at most 30 seconds for native health. If authentication or restart fails, keep the reservation and diagnose the source. Leave its database and WAL intact.
+
+Before releasing other actions, check their physical terminal state:
+
+| Action | What you must verify |
+| --- | --- |
+| `set-running` | The exact recorded source has `DesiredRunning`. Require native health when it is running, or confirm it is stopped when `false`. |
+| `apply` | The current container has `DesiredImage`, `DesiredRevision` and matching scope, is running, and passes native health. It either has the recorded `SourceID` for an idempotent apply, or that old ID is absent everywhere on the daemon. Both previous names must be absent. A verified rollback must instead match the exact old ID, image, revision and `SourceRunning`, with health if running. |
+| `remove` | The source ID and all current/previous names are absent. Retain the recorded data volume with its original identity. If the source still exists, verify its recorded identity before stopping and removing that exact container without `-v`. |
+| `restore` or `purge` | Discard only the recorded private copy. Verify its recovery operation, private labels, source ID and data-volume identity before stopping and removing that exact destination without `-v`. Remove only the recorded volume with `docker volume rm EXACT_VOLUME_NAME`, then confirm the source ID, current/previous names and volume are absent. Never delete a replacement volume or the original service's volume. |
+
+An abandoned first Apply has no recorded source. Its staging descriptor separately pins the new candidate and volume; don't rewrite the reservation's original absence record. You may clear its reservation only after checking that no current, previous or staging container remains and reconciling any created storage and all volume attachments against the saved deployment. An old source renamed outside the known previous names still needs investigation. Keep the reservation until you can account for it.
+
+After the terminal checks pass, reinspect the exact reservation ID. Require its original name, owner record, labels and stopped state, then remove only that ID:
+
+```bash
+docker inspect RESERVATION_CONTAINER_ID
+docker rm RESERVATION_CONTAINER_ID
+```
+
+Keep the class anchor. Resume workers and retry the failed backup or deployment. Clearing a reservation doesn't certify a partial backup or import. After discarding a private copy, run `loomctl restores delete RESTORE_ID --yes` to finish saved record and secret cleanup, then request a new restore.

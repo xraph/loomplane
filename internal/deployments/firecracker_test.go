@@ -35,3 +35,14 @@ func TestFirecrackerSpecRoundsUpCPUAndPinsPublishedPort(t *testing.T) {
 		t.Fatal(spec, err)
 	}
 }
+
+// A service's port comes from spec() as "http" and a component's as "tcp";
+// the VM serves either over TCP. Anything else is refused.
+func TestFirecrackerSpecPortProtocols(t *testing.T) {
+	for protocol, ok := range map[string]bool{"": true, "tcp": true, "http": true, "udp": false} {
+		spec, err := firecrackerSpec(cpprovider.ServiceSpec{Resources: cpprovider.ResourceSpec{CPUMillis: 500, MemoryMB: 256}, Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: protocol}}}, map[string]string{owned.LabelPublic: "false"})
+		if (err == nil) != ok || (ok && spec.Port != 8080) {
+			t.Errorf("%q: %+v %v", protocol, spec, err)
+		}
+	}
+}

@@ -4,6 +4,7 @@ package deployments
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -108,8 +109,10 @@ func TestQualifyAuthenticatedEngineRuntimes(t *testing.T) {
 				return out
 			}
 			t.Cleanup(func() {
+				cleanup, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancelCleanup()
 				for _, args := range [][]string{{"rm", "-f", name}, {"volume", "rm", volume}, {"network", "rm", network}} {
-					_ = exec.Command("docker", args...).Run()
+					_ = exec.CommandContext(cleanup, "docker", args...).Run()
 				}
 			})
 			must("", "network", "create", "--internal", "--label", "loomplane.qualification=standalone-fabriq-engines", network)

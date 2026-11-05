@@ -47,6 +47,7 @@ func (b ResourceBinding) PhysicalDeletionAllowed(instance string, epoch int64) b
 // DatabaseAccessScope is a provider-observed role and privilege inventory.
 // The first protocol supports one private database/schema, not row filtering.
 type DatabaseAccessScope struct {
+	CreateSchemas, ForeignServerAccess, IndirectObjects           bool
 	Database, Schema                                              string
 	Login, CanRead, CanWrite                                      bool
 	Superuser, CreateRole, CreateDatabase, Replication, BypassRLS bool
@@ -88,9 +89,9 @@ func validateResourceAccess(b ResourceBinding, o ResourceAccessObservation, now 
 		return ErrInvalid
 	}
 	switch o.Protocol {
-	case "postgres-role-v1":
+	case "postgres-role-v2":
 		d := o.Database
-		if d == nil || o.Bucket != nil || d.Database == "" || d.Schema == "" || o.ScopeID != d.Database+"/"+d.Schema || !d.Login || !d.CanRead || !d.CanWrite || d.Superuser || d.CreateRole || d.CreateDatabase || d.Replication || d.BypassRLS || len(d.OtherRoles) > 0 || len(d.OtherDatabases) > 0 || len(d.OtherSchemas) > 0 || d.PrivilegedFunctions {
+		if d == nil || o.Bucket != nil || d.Database == "" || d.Schema == "" || o.ScopeID != d.Database+"/"+d.Schema || !d.Login || !d.CanRead || !d.CanWrite || d.Superuser || d.CreateRole || d.CreateDatabase || d.CreateSchemas || d.ForeignServerAccess || d.IndirectObjects || d.Replication || d.BypassRLS || len(d.OtherRoles) > 0 || len(d.OtherDatabases) > 0 || len(d.OtherSchemas) > 0 || d.PrivilegedFunctions {
 			return ErrInvalid
 		}
 	case "bucket-policy-v1":

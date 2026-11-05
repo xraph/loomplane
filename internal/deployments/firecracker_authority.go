@@ -31,7 +31,8 @@ func firecrackerDigest(v any) string {
 func (s *PgStore) IssueFirecracker(ctx context.Context, scope fc.Scope, operation, digest string) (fc.Authority, error) {
 	a, ok := cloudinfra.WorkloadAttemptFrom(ctx)
 	manual, manualOK := ctx.Value(firecrackerManualKey{}).(firecrackerManual)
-	if (!ok && !manualOK) || (ok && (a.Org != scope.Org || a.Project != scope.Project || a.Environment != scope.Environment)) || !scope.Valid() || operation == "" || len(digest) != 64 {
+	maintenance := !ok && !manualOK && platformMaintenanceFrom(ctx)
+	if (!ok && !manualOK && !maintenance) || (ok && (a.Org != scope.Org || a.Project != scope.Project || a.Environment != scope.Environment)) || !scope.Valid() || operation == "" || len(digest) != 64 {
 		return fc.Authority{}, fc.ErrConflict
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -42,7 +43,13 @@ func (s *PgStore) IssueFirecracker(ctx context.Context, scope fc.Scope, operatio
 	if lockErr := cloudprofiles.LockOrganization(ctx, tx, scope.Org); lockErr != nil {
 		return fc.Authority{}, lockErr
 	}
-	if ok {
+	switch {
+	case maintenance:
+		if maintErr := platformMaintenanceAllowed(ctx, tx, scope, operation); maintErr != nil {
+			return fc.Authority{}, maintErr
+		}
+		a.Deployment = "platform-maintenance/" + time.Now().UTC().Format(time.RFC3339Nano)
+	case ok:
 		if guardErr := cloudinfra.GuardWorkloadWrite(ctx, tx); guardErr != nil {
 			return fc.Authority{}, guardErr
 		}
@@ -54,7 +61,7 @@ func (s *PgStore) IssueFirecracker(ctx context.Context, scope fc.Scope, operatio
 		if status != "running" {
 			return fc.Authority{}, fc.ErrConflict
 		}
-	} else {
+	default:
 		claims := cpauth.ClaimsFrom(ctx)
 		if claims == nil || claims.TenantID != scope.Org || claims.SubjectID == "" {
 			return fc.Authority{}, fc.ErrConflict

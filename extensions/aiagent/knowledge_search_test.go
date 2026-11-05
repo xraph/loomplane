@@ -10,28 +10,34 @@ import (
 	"github.com/xraph/cortex"
 	cortexengine "github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/knowledge"
+	cortexweave "github.com/xraph/cortex/knowledge/weave"
+	"github.com/xraph/weave/chunker"
+	"github.com/xraph/weave/embedder"
+	weaveengine "github.com/xraph/weave/engine"
+	weavememory "github.com/xraph/weave/store/memory"
+	vectormemory "github.com/xraph/weave/vectorstore/memory"
 
 	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// failingKnowledge fails every call the way cortex's weave adapter does
-// before the docs collection exists.
+// failingKnowledge fails every call the way a weave adapter does when
+// its database can't be reached.
 type failingKnowledge struct{ fail bool }
 
-var errNoDocs = errors.New(`weave: resolve shared collection "loomplane-docs": collection not found: secret-host:5432`)
+var errUnreachable = errors.New(`weave: retrieve: dial tcp secret-host:5432: connection refused`)
 
 func (f failingKnowledge) Retrieve(context.Context, string, *knowledge.RetrieveParams) ([]knowledge.ScoredChunk, error) {
 	if f.fail {
-		return nil, errNoDocs
+		return nil, errUnreachable
 	}
 	return []knowledge.ScoredChunk{{Content: "docs"}}, nil
 }
 
 func (f failingKnowledge) ListCollections(context.Context) ([]knowledge.CollectionInfo, error) {
 	if f.fail {
-		return nil, errNoDocs
+		return nil, errUnreachable
 	}
 	return []knowledge.CollectionInfo{{Name: "loomplane-docs"}}, nil
 }
@@ -46,13 +52,13 @@ func TestKnowledgeSearchErrorsAreQuiet(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = eng.Knowledge().Retrieve(t.Context(), "canary thresholds", nil)
-	if !errors.Is(err, errSearchNotReady) || strings.Contains(err.Error(), "secret-host") || strings.Contains(err.Error(), "weave") {
+	if !errors.Is(err, errSearchFailed) || strings.Contains(err.Error(), "secret-host") || strings.Contains(err.Error(), "weave") {
 		t.Fatalf("Retrieve: %v", err)
 	}
-	if _, err = eng.Knowledge().ListCollections(t.Context()); !errors.Is(err, errSearchNotReady) {
+	if _, err = eng.Knowledge().ListCollections(t.Context()); !errors.Is(err, errSearchFailed) {
 		t.Fatalf("ListCollections: %v", err)
 	}
-	if len(logged) != 2 || !errors.Is(logged[0], errNoDocs) {
+	if len(logged) != 2 || !errors.Is(logged[0], errUnreachable) {
 		t.Fatalf("logged %v", logged)
 	}
 
@@ -68,6 +74,52 @@ func TestKnowledgeSearchErrorsAreQuiet(t *testing.T) {
 	// No knowledge, nothing to wrap.
 	if eng, err = cortexengine.New(quietKnowledgeOption(warn, nil)); err != nil || eng.Knowledge() != nil {
 		t.Fatalf("without knowledge: %v, %v", eng.Knowledge(), err)
+	}
+}
+
+// zeroEmbedder embeds every text as the same small vector.
+type zeroEmbedder struct{}
+
+func (zeroEmbedder) Embed(_ context.Context, texts []string) ([]embedder.EmbedResult, error) {
+	out := make([]embedder.EmbedResult, len(texts))
+	for i := range texts {
+		out[i] = embedder.EmbedResult{Vector: []float32{1, 0, 0, 0}, TokenCount: 1}
+	}
+	return out, nil
+}
+
+func (zeroEmbedder) Dimensions() int { return 4 }
+
+// A search before the docs job has made the docs collection, or before
+// the workspace has a collection of its own, finds nothing and fails
+// nothing: cortex's weave adapter, as the agent configures it, returns no
+// results, so the model reads an empty search and the log stays quiet.
+// Naming the docs collection, or listing collections, is the same.
+func TestKnowledgeSearchBeforeAnyDocsFindsNothing(t *testing.T) {
+	var logged []error
+	warn := func(_ string, err error) { logged = append(logged, err) }
+	w, err := weaveengine.New(weaveengine.WithStore(weavememory.New()), weaveengine.WithVectorStore(vectormemory.New()),
+		weaveengine.WithEmbedder(zeroEmbedder{}), weaveengine.WithChunker(chunker.NewRecursiveChunker()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := cortexengine.New(cortexengine.WithKnowledge(cortexweave.New(w, knowledgeOptions()...)), quietKnowledgeOption(warn, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := cortex.WithScope(t.Context(), agentscope.Scope{OrgID: "aorg_1"}.Cortex())
+	for _, params := range []*knowledge.RetrieveParams{nil, {Collection: agentknowledge.DocsCollection}, {Collection: agentknowledge.WorkspaceCollection}} {
+		chunks, rerr := eng.Knowledge().Retrieve(ctx, "canary thresholds", params)
+		if rerr != nil || len(chunks) != 0 {
+			t.Fatalf("Retrieve(%+v) = %v, %v; want no results and no error", params, chunks, rerr)
+		}
+	}
+	cols, err := eng.Knowledge().ListCollections(ctx)
+	if err != nil || len(cols) != 0 {
+		t.Fatalf("ListCollections = %v, %v", cols, err)
+	}
+	if len(logged) != 0 {
+		t.Fatalf("logged %v", logged)
 	}
 }
 

@@ -351,7 +351,21 @@ function EnvironmentRow({
               : ""}
       </Cell>
       <ActionsCell>
-        {waiting[0] ? (
+        {environment.instanceId ? (
+          <Button
+            size="sm"
+            variant="outline"
+            nativeButton={false}
+            render={
+              <Link
+                to="/projects/$id/fleet/instances/$instanceId"
+                params={{ id: project.id, instanceId: environment.instanceId }}
+              />
+            }
+          >
+            View instance
+          </Button>
+        ) : waiting[0] ? (
           <Button
             size="sm"
             nativeButton={false}
@@ -388,12 +402,14 @@ function EnvironmentRow({
           >
             Where services run
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => onOpen("variables", environment.name)}
-          >
-            Variables
-          </DropdownMenuItem>
-          {mayManage && (
+          {!environment.instanceId && (
+            <DropdownMenuItem
+              onClick={() => onOpen("variables", environment.name)}
+            >
+              Variables
+            </DropdownMenuItem>
+          )}
+          {mayManage && !environment.instanceId && (
             <>
               <DropdownMenuSeparator />
               {/* A project needs at least one environment. */}

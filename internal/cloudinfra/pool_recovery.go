@@ -31,7 +31,7 @@ type RecoveryInput struct {
 }
 
 func (s *Service) PreviewReservationRecovery(ctx context.Context, p security.Principal, cloud string, in RecoveryInput) (*ReservationRecovery, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	st, ok := s.Store.(*PgStore)
@@ -60,7 +60,7 @@ func (s *Service) RecoverReservation(ctx context.Context, p security.Principal, 
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	st, ok := s.Store.(*PgStore)

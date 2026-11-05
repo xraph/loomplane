@@ -45,6 +45,10 @@ const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
 const labelImage = owned.LabelImage
 
+// labelPlatformRegistry marks a service whose image Loomplane Cloud built,
+// pulled from the platform registry rather than a workspace connection.
+const labelPlatformRegistry = "loomplane.registry.platform"
+
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
@@ -109,6 +113,13 @@ type OwnedTarget struct {
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
+	// providerKey, when set, is the one Ctrl Plane provider key this
+	// target registers, whatever the connection: a Loomplane Cloud region's.
+	providerKey string
+	// platformRegistry is the Loomplane Cloud registry an image built there
+	// is pulled from, in the workspace's own repository. Nil refuses such
+	// an image.
+	platformRegistry func(ctx context.Context, orgID string) (*registry.Config, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -283,6 +294,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 	}
 	connection := labels[labelRegistry]
 	if connection == "" {
+		if labels[labelPlatformRegistry] == "true" {
+			return e.platformPull(ctx, labels, values)
+		}
 		return values, nil
 	}
 	if e.Credentials == nil {
@@ -336,6 +350,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 // Register restores a connection-specific provider without opening credentials.
 func (e *OwnedTarget) Register(org, connection string) string {
 	key := e.Cloud + "." + connection
+	if e.providerKey != "" {
+		key = e.providerKey
+	}
 	if _, err := e.Ctrl.Providers.Get(key); err == nil {
 		return key
 	}
@@ -346,7 +363,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Cloud == connections.Server:
 		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	case e.Cloud == connections.Firecracker:
-		backend = &firecrackerBackend{target: e, org: org, connection: connection}
+		backend = e.orgFirecracker(org, connection)
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -695,7 +712,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker") && cfg.Component == nil {
+	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker" || job.Action.Provider == platformProvider) && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -752,6 +769,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[labelRegistry] = cfg.BuildTarget.Registry
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
+		if platformSourceBuild(cfg.BuildTarget) {
+			labels[labelPlatformRegistry] = "true"
+		}
 	}
 	if len(job.files) > 0 {
 		// The rendered bytes are part of the revision, so a changed file

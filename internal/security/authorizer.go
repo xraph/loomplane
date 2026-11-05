@@ -225,17 +225,7 @@ func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, re
 	// A check on a project runs at the project's namespace, so a team's
 	// grant there counts; root assignments still reach it as an ancestor.
 	// Any other resource ID (an org, a connection) checks at the root.
-	ns := rootNamespace
-	if projectNS, ok := ProjectNamespace(resourceID); ok {
-		ns = projectNS
-	}
-	res, err := a.engine.Check(ctx, &warden.CheckRequest{
-		Subject:       subjectFor(p),
-		Action:        warden.Action{Name: perm.Action},
-		Resource:      warden.Resource{Type: perm.Resource, ID: resourceID},
-		TenantID:      p.OrgID,
-		NamespacePath: ns,
-	})
+	res, err := a.engine.Check(ctx, checkRequest(p, perm, resourceID))
 	if err != nil {
 		return nil, fmt.Errorf("authorize %s: %w", perm.Name(), err)
 	}

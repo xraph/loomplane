@@ -589,6 +589,9 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
+	if IsInstanceConnection(c) {
+		return nil, nil, ErrChanged
+	}
 	if c.Cloud == Kubernetes && c.Details["registry_hostname"] != "" {
 		if registry, ok := s.store.(interface {
 			RegistryAccessAllowed(context.Context, string, string) error
@@ -636,7 +639,7 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
-	if current.Message == replacementInProgressMessage || current.Generation != c.Generation || current.Status != c.Status {
+	if IsInstanceConnection(current) || current.Message == replacementInProgressMessage || current.Generation != c.Generation || current.Status != c.Status {
 		return nil, nil, ErrChanged
 	}
 	return c, cred, nil

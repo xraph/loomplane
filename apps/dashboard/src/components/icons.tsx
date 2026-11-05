@@ -34,4 +34,5 @@ export {
   UsersThreeIcon as TeamsIcon,
   SparkleIcon as AISettingsIcon,
   SignInIcon as CloudSignInIcon,
+  CloudArrowUpIcon as PlatformCloudIcon,
 } from "@phosphor-icons/react"

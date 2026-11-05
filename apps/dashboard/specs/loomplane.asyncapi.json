@@ -5,6 +5,42 @@
     "version": "0.1.0-dev"
   },
   "channels": {
+    "api-v1-agent-tasks-:id-stream": {
+      "address": "/api/v1/agent/tasks/:id/stream",
+      "messages": {
+        "agent.end": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEnd"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.end",
+          "title": "agent.end event",
+          "summary": "SSE event: agent.end"
+        },
+        "agent.event": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.event",
+          "title": "agent.event event",
+          "summary": "SSE event: agent.event"
+        }
+      },
+      "title": "Follow a task's events as they happen",
+      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+      "tags": [
+        {
+          "name": "Agent"
+        }
+      ],
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "bindingVersion": "latest"
+        }
+      }
+    },
     "api-v1-realtime-events": {
       "address": "/api/v1/realtime/events",
       "bindings": {
@@ -14,6 +50,60 @@
         }
       },
       "messages": {
+        "agent_report.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.deleted",
+          "title": "agent_report.deleted event",
+          "summary": "SSE event: agent_report.deleted"
+        },
+        "agent_report.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.updated",
+          "title": "agent_report.updated event",
+          "summary": "SSE event: agent_report.updated"
+        },
+        "agent_request.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.deleted",
+          "title": "agent_request.deleted event",
+          "summary": "SSE event: agent_request.deleted"
+        },
+        "agent_request.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.updated",
+          "title": "agent_request.updated event",
+          "summary": "SSE event: agent_request.updated"
+        },
+        "agent_task.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.deleted",
+          "title": "agent_task.deleted event",
+          "summary": "SSE event: agent_task.deleted"
+        },
+        "agent_task.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.updated",
+          "title": "agent_task.updated event",
+          "summary": "SSE event: agent_task.updated"
+        },
         "analysis.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Analysis"
@@ -248,6 +338,15 @@
           "title": "manifest.updated event",
           "summary": "SSE event: manifest.updated"
         },
+        "node.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Node"
+          },
+          "contentType": "text/event-stream",
+          "name": "node.updated",
+          "title": "node.updated event",
+          "summary": "SSE event: node.updated"
+        },
         "notification.created": {
           "payload": {
             "$ref": "#/components/schemas/NotificationCreated"
@@ -364,69 +463,6 @@
           "name": "source.updated",
           "title": "source.updated event",
           "summary": "SSE event: source.updated"
-        },
-        "agent_request.updated": {
-          "payload": {
-            "$ref": "#/components/schemas/RequestEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_request.updated",
-          "title": "agent_request.updated event",
-          "summary": "SSE event: agent_request.updated"
-        },
-        "agent_request.deleted": {
-          "payload": {
-            "$ref": "#/components/schemas/RequestEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_request.deleted",
-          "title": "agent_request.deleted event",
-          "summary": "SSE event: agent_request.deleted"
-        },
-        "agent_task.updated": {
-          "payload": {
-            "$ref": "#/components/schemas/TaskEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_task.updated",
-          "title": "agent_task.updated event",
-          "summary": "SSE event: agent_task.updated"
-        },
-        "agent_task.deleted": {
-          "payload": {
-            "$ref": "#/components/schemas/TaskEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_task.deleted",
-          "title": "agent_task.deleted event",
-          "summary": "SSE event: agent_task.deleted"
-        },
-        "node.updated": {
-          "payload": {
-            "$ref": "#/components/schemas/Node"
-          },
-          "contentType": "text/event-stream",
-          "name": "node.updated",
-          "title": "node.updated event",
-          "summary": "SSE event: node.updated"
-        },
-        "agent_report.updated": {
-          "payload": {
-            "$ref": "#/components/schemas/Report"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_report.updated",
-          "title": "agent_report.updated event",
-          "summary": "SSE event: agent_report.updated"
-        },
-        "agent_report.deleted": {
-          "payload": {
-            "$ref": "#/components/schemas/Report"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent_report.deleted",
-          "title": "agent_report.deleted event",
-          "summary": "SSE event: agent_report.deleted"
         }
       },
       "tags": [
@@ -739,24 +775,6 @@
           "type": "github.com/xraph/loomplane/internal/nodes.Node"
         },
         {
-          "entityType": "Log",
-          "intent": "upsert",
-          "invalidates": [
-            "Log[]"
-          ],
-          "message": "build.log",
-          "type": "github.com/xraph/loomplane/internal/realtime.Log"
-        },
-        {
-          "entityType": "Collection",
-          "intent": "upsert",
-          "invalidates": [
-            "Collection[]"
-          ],
-          "message": "build.collection",
-          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
-        },
-        {
           "entityType": "TaskEvent",
           "intent": "upsert",
           "invalidates": [
@@ -774,6 +792,25 @@
           ],
           "message": "agent_task.deleted",
           "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "Report",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentReport",
+            "AgentReport[]"
+          ],
+          "message": "agent_report.updated",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "Report",
+          "intent": "evict",
+          "invalidates": [
+            "Report[]"
+          ],
+          "message": "agent_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
         },
         {
           "entityType": "RequestEvent",
@@ -815,23 +852,22 @@
           "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
         },
         {
-          "entityType": "Report",
+          "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
-            "AgentReport",
-            "AgentReport[]"
+            "Log[]"
           ],
-          "message": "agent_report.updated",
-          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+          "message": "build.log",
+          "type": "github.com/xraph/loomplane/internal/realtime.Log"
         },
         {
-          "entityType": "Report",
-          "intent": "evict",
+          "entityType": "Collection",
+          "intent": "upsert",
           "invalidates": [
-            "Report[]"
+            "Collection[]"
           ],
-          "message": "agent_report.deleted",
-          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+          "message": "build.collection",
+          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
         }
       ]
     },
@@ -1173,22 +1209,23 @@
           "type": "github.com/xraph/loomplane/internal/nodes.Node"
         },
         {
-          "entityType": "Log",
+          "entityType": "TaskEvent",
           "intent": "upsert",
           "invalidates": [
-            "Log[]"
+            "AgentTask",
+            "AgentTask[]"
           ],
-          "message": "build.log",
-          "type": "github.com/xraph/loomplane/internal/realtime.Log"
+          "message": "agent_task.updated",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
         },
         {
-          "entityType": "Collection",
-          "intent": "upsert",
+          "entityType": "TaskEvent",
+          "intent": "evict",
           "invalidates": [
-            "Collection[]"
+            "TaskEvent[]"
           ],
-          "message": "build.collection",
-          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
+          "message": "agent_task.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
         },
         {
           "entityType": "Report",
@@ -1210,6 +1247,25 @@
           "type": "github.com/xraph/loomplane/internal/agentreports.Report"
         },
         {
+          "entityType": "RequestEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentRequest",
+            "AgentRequest[]"
+          ],
+          "message": "agent_request.updated",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "evict",
+          "invalidates": [
+            "RequestEvent[]"
+          ],
+          "message": "agent_request.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
           "entityType": "ReleaseReportEvent",
           "intent": "upsert",
           "invalidates": [
@@ -1228,47 +1284,51 @@
           ],
           "message": "release_report.deleted",
           "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
+          "entityType": "Log",
+          "intent": "upsert",
+          "invalidates": [
+            "Log[]"
+          ],
+          "message": "build.log",
+          "type": "github.com/xraph/loomplane/internal/realtime.Log"
+        },
+        {
+          "entityType": "Collection",
+          "intent": "upsert",
+          "invalidates": [
+            "Collection[]"
+          ],
+          "message": "build.collection",
+          "type": "github.com/xraph/loomplane/internal/realtime.Collection"
         }
       ]
-    },
-    "api-v1-agent-tasks-:id-stream": {
-      "address": "/api/v1/agent/tasks/:id/stream",
-      "messages": {
-        "agent.end": {
-          "payload": {
-            "$ref": "#/components/schemas/RealtimeAgentEnd"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent.end",
-          "title": "agent.end event",
-          "summary": "SSE event: agent.end"
-        },
-        "agent.event": {
-          "payload": {
-            "$ref": "#/components/schemas/RealtimeAgentEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "agent.event",
-          "title": "agent.event event",
-          "summary": "SSE event: agent.event"
-        }
+    }
+  },
+  "operations": {
+    "agentTasks.stream": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/api-v1-agent-tasks-:id-stream"
       },
-      "title": "Follow a task's events as they happen",
+      "title": "Receive SSE events",
+      "summary": "Receive Server-Sent Events from /api/v1/agent/tasks/:id/stream",
       "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
       "tags": [
         {
           "name": "Agent"
         }
       ],
-      "bindings": {
-        "http": {
-          "method": "GET",
-          "bindingVersion": "latest"
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.end"
+        },
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.event"
         }
-      }
-    }
-  },
-  "operations": {
+      ]
+    },
     "realtime.events": {
       "action": "receive",
       "channel": {
@@ -1282,6 +1342,24 @@
         }
       ],
       "messages": [
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_request.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_request.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_task.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_task.updated"
+        },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/analysis.deleted"
         },
@@ -1401,12 +1479,6 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/source.updated"
-        },
-        {
-          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.updated"
-        },
-        {
-          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.deleted"
         }
       ]
     },
@@ -1443,28 +1515,6 @@
       "messages": [
         {
           "$ref": "#/channels/api-v1-realtime-ws/messages/send"
-        }
-      ]
-    },
-    "agentTasks.stream": {
-      "action": "receive",
-      "channel": {
-        "$ref": "#/channels/api-v1-agent-tasks-:id-stream"
-      },
-      "title": "Receive SSE events",
-      "summary": "Receive Server-Sent Events from /api/v1/agent/tasks/:id/stream",
-      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
-      "tags": [
-        {
-          "name": "Agent"
-        }
-      ],
-      "messages": [
-        {
-          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.end"
-        },
-        {
-          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.event"
         }
       ]
     }
@@ -1561,6 +1611,36 @@
             "type": "string"
           }
         }
+      },
+      "AgentreportsEvidence": {
+        "properties": {
+          "analysis_id": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "source_alias": {
+            "type": "string"
+          },
+          "verdict_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "watch_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
       },
       "ArtifactChoice": {
         "type": "object",
@@ -2471,6 +2551,43 @@
           }
         }
       },
+      "DiscoveryEvidence": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "detail"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/discovery.Evidence"
+      },
+      "DurableObjectClass": {
+        "type": "object",
+        "required": [
+          "name",
+          "class_name"
+        ],
+        "properties": {
+          "class_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "Endpoint": {
         "type": "object",
         "properties": {
@@ -2610,27 +2727,6 @@
           }
         }
       },
-      "Evidence": {
-        "type": "object",
-        "required": [
-          "path",
-          "detail"
-        ],
-        "properties": {
-          "detail": {
-            "type": "string"
-          },
-          "line": {
-            "type": "integer"
-          },
-          "path": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string"
-          }
-        }
-      },
       "Exclusion": {
         "type": "object",
         "required": [
@@ -2701,6 +2797,27 @@
           }
         }
       },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "untrusted": {
+            "type": "boolean"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "FarpConfig": {
         "type": "object",
         "required": [
@@ -2735,6 +2852,10 @@
             "type": "object",
             "additionalProperties": true
           },
+          "placement_groups": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "placements": {
             "type": "object",
             "additionalProperties": true
@@ -2751,6 +2872,9 @@
           "path"
         ],
         "properties": {
+          "certificate_secret": {
+            "type": "string"
+          },
           "mode": {
             "type": "integer"
           },
@@ -2772,7 +2896,7 @@
           "evidence": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Evidence"
+              "$ref": "#/components/schemas/DiscoveryEvidence"
             }
           },
           "message": {
@@ -2786,6 +2910,37 @@
           },
           "subject": {
             "type": "string"
+          }
+        }
+      },
+      "Findings": {
+        "type": "object",
+        "required": [
+          "summary",
+          "likely_cause",
+          "suggestions",
+          "confidence",
+          "written_at"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -2894,6 +3049,9 @@
           "encoding": {
             "type": "string"
           },
+          "generator": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -2937,6 +3095,9 @@
           "path"
         ],
         "properties": {
+          "checker": {
+            "type": "string"
+          },
           "path": {
             "type": "string"
           },
@@ -3012,6 +3173,87 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "Inventory": {
+        "type": "object",
+        "required": [
+          "os",
+          "kernel",
+          "arch",
+          "cpus",
+          "memory_mib",
+          "disk_gib"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "cpus": {
+            "type": "integer"
+          },
+          "disk_gib": {
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeprotoGPU"
+            }
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "ports_80_443": {
+            "type": "string"
+          },
+          "public_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -3229,6 +3471,26 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
       },
+      "NodeprotoGPU": {
+        "properties": {
+          "memory_mib": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor",
+          "model",
+          "memory_mib"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/nodeproto.GPU"
+      },
       "Output": {
         "type": "object",
         "required": [
@@ -3248,6 +3510,9 @@
           "per_consumer": {
             "type": "boolean"
           },
+          "public_ca": {
+            "type": "string"
+          },
           "requires": {
             "type": "string"
           },
@@ -3255,6 +3520,71 @@
             "type": "boolean"
           },
           "template": {
+            "type": "string"
+          }
+        }
+      },
+      "PlacementGroupMemberReview": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "replicas"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "replicas": {
+            "type": "integer"
+          }
+        }
+      },
+      "PlacementGroupReview": {
+        "type": "object",
+        "required": [
+          "group_id",
+          "generation",
+          "revision",
+          "name",
+          "service",
+          "image",
+          "min_ready",
+          "routing_mode",
+          "hostname",
+          "members"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementGroupMemberReview"
+            }
+          },
+          "min_ready": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "routing_mode": {
+            "type": "string"
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -3437,6 +3767,20 @@
           },
           "routable": {
             "type": "boolean"
+          }
+        }
+      },
+      "PushState": {
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
           }
         }
       },
@@ -3667,6 +4011,10 @@
           "composition": {
             "$ref": "#/components/schemas/CompositionConfig"
           },
+          "endpoint_pins": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "existing_resource": {
             "$ref": "#/components/schemas/ExistingResourceConfig"
           },
@@ -3687,6 +4035,10 @@
             "items": {
               "type": "integer"
             }
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           },
           "target": {
             "type": "string"
@@ -3987,6 +4339,21 @@
           }
         }
       },
+      "Runtime": {
+        "type": "object",
+        "required": [
+          "socket",
+          "version"
+        ],
+        "properties": {
+          "socket": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "Scale": {
         "type": "object",
         "required": [
@@ -4134,6 +4501,9 @@
           "target_settings": {
             "type": "object",
             "additionalProperties": true
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerSettings"
           },
           "workload": {
             "type": "string"
@@ -4437,6 +4807,334 @@
           },
           "size_setting": {
             "type": "string"
+          }
+        }
+      },
+      "WorkerSettings": {
+        "type": "object",
+        "required": [
+          "main",
+          "compatibility_date"
+        ],
+        "properties": {
+          "compatibility_date": {
+            "type": "string"
+          },
+          "compatibility_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "durable_objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DurableObjectClass"
+            }
+          },
+          "main": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeAgentEnd": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeAgentEvent": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "seq",
+          "kind",
+          "data",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "signal",
+          "component",
+          "fingerprint",
+          "status",
+          "severity",
+          "title",
+          "facts",
+          "evidence",
+          "repository",
+          "occurrences",
+          "first_seen_at",
+          "last_seen_at",
+          "closed_by",
+          "resolution",
+          "taken_by",
+          "investigation",
+          "investigation_note",
+          "task_id",
+          "issue",
+          "revision",
+          "opened_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "closed_by": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentreportsEvidence"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "investigation": {
+            "type": "string"
+          },
+          "investigation_note": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrences": {
+            "type": "integer"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string"
+          },
+          "taken_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RequestEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "kind",
+          "status",
+          "team_id",
+          "team_name",
+          "route_source",
+          "asked_for",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "asked_for": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "route_source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "kind",
+          "run_id",
+          "status",
+          "requested_by",
+          "event_seq",
+          "tokens",
+          "max_tokens",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -4819,6 +5517,7 @@
           "project_id",
           "name",
           "default_placement",
+          "platform_owned",
           "revision",
           "created_at",
           "updated_at"
@@ -4851,6 +5550,9 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "platform_owned": {
+            "type": "boolean"
           },
           "project_id": {
             "type": "string"
@@ -5235,6 +5937,9 @@
             "type": "string",
             "x-forge-id": true
           },
+          "instance_id": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -5347,6 +6052,117 @@
             "type": "integer"
           },
           "yaml": {
+            "type": "string"
+          }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "key_fingerprint",
+          "identity_generation",
+          "status",
+          "endpoints",
+          "ingress_mode",
+          "role",
+          "edge_scope",
+          "labels",
+          "version",
+          "protocol_version",
+          "inventory",
+          "joined_by",
+          "joined_by_key_id",
+          "revoked_by",
+          "created_at",
+          "updated_at",
+          "public_address",
+          "ingress_applied",
+          "ingress_detail"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "identity_generation": {
+            "type": "integer"
+          },
+          "ingress_applied": {
+            "type": "string"
+          },
+          "ingress_detail": {
+            "type": "string"
+          },
+          "ingress_mode": {
+            "type": "string"
+          },
+          "inventory": {
+            "$ref": "#/components/schemas/Inventory"
+          },
+          "joined_by": {
+            "type": "string"
+          },
+          "joined_by_key_id": {
+            "type": "string"
+          },
+          "key_fingerprint": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer"
+          },
+          "public_address": {
+            "type": "string"
+          },
+          "public_address_confirmed_at": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "revoked_by": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
             "type": "string"
           }
         }
@@ -5479,6 +6295,12 @@
           "org_id": {
             "type": "string"
           },
+          "placement_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementGroupReview"
+            }
+          },
           "planned_at": {
             "type": "string"
           },
@@ -5499,6 +6321,12 @@
           },
           "rollback": {
             "$ref": "#/components/schemas/Rollback"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "sources": {
             "type": "array",
@@ -5523,6 +6351,7 @@
       "Project": {
         "type": "object",
         "required": [
+          "deployment_mode",
           "id",
           "org_id",
           "name",
@@ -5532,12 +6361,18 @@
           "color",
           "repositories",
           "exclusions",
+          "autonomous_promotion",
+          "min_staging_soak_seconds",
+          "responsible_team_id",
           "status",
           "created_by",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
           "color": {
             "type": "string"
           },
@@ -5546,6 +6381,9 @@
             "format": "date-time"
           },
           "created_by": {
+            "type": "string"
+          },
+          "deployment_mode": {
             "type": "string"
           },
           "description": {
@@ -5564,6 +6402,9 @@
             "type": "string",
             "x-forge-id": true
           },
+          "min_staging_soak_seconds": {
+            "type": "integer"
+          },
           "name": {
             "type": "string"
           },
@@ -5575,6 +6416,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "responsible_team_id": {
+            "type": "string"
           },
           "slug": {
             "type": "string"
@@ -5898,6 +6742,9 @@
           "project_id": {
             "type": "string"
           },
+          "push": {
+            "$ref": "#/components/schemas/PushState"
+          },
           "ref": {
             "type": "string"
           },
@@ -5966,619 +6813,617 @@
             }
           }
         }
-      },
-      "RequestEvent": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "kind",
-          "status",
-          "team_id",
-          "team_name",
-          "route_source",
-          "asked_for",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "asked_for": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "kind": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "route_source": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "team_id": {
-            "type": "string"
-          },
-          "team_name": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "TaskEvent": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "environment_id",
-          "kind",
-          "run_id",
-          "status",
-          "requested_by",
-          "event_seq",
-          "tokens",
-          "max_tokens",
-          "error",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "error": {
-            "type": "string"
-          },
-          "event_seq": {
-            "type": "integer"
-          },
-          "finished_at": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "kind": {
-            "type": "string"
-          },
-          "max_tokens": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "requested_by": {
-            "type": "string"
-          },
-          "run_id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "tokens": {
-            "type": "integer"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "Node": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "name",
-          "key_fingerprint",
-          "identity_generation",
-          "status",
-          "endpoints",
-          "ingress_mode",
-          "role",
-          "edge_scope",
-          "labels",
-          "version",
-          "protocol_version",
-          "inventory",
-          "joined_by",
-          "joined_by_key_id",
-          "revoked_by",
-          "created_at",
-          "updated_at",
-          "public_address",
-          "ingress_applied",
-          "ingress_detail"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "edge_scope": {
-            "type": "string"
-          },
-          "endpoints": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "identity_generation": {
-            "type": "integer"
-          },
-          "ingress_applied": {
-            "type": "string"
-          },
-          "ingress_detail": {
-            "type": "string"
-          },
-          "ingress_mode": {
-            "type": "string"
-          },
-          "inventory": {
-            "$ref": "#/components/schemas/Inventory"
-          },
-          "joined_by": {
-            "type": "string"
-          },
-          "joined_by_key_id": {
-            "type": "string"
-          },
-          "key_fingerprint": {
-            "type": "string"
-          },
-          "labels": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "last_seen_at": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "protocol_version": {
-            "type": "integer"
-          },
-          "public_address": {
-            "type": "string"
-          },
-          "public_address_confirmed_at": {
-            "type": "string"
-          },
-          "revoked_at": {
-            "type": "string"
-          },
-          "revoked_by": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
-      "Inventory": {
-        "type": "object",
-        "required": [
-          "os",
-          "kernel",
-          "arch",
-          "cpus",
-          "memory_mib",
-          "disk_gib"
-        ],
-        "properties": {
-          "arch": {
-            "type": "string"
-          },
-          "cpus": {
-            "type": "integer"
-          },
-          "disk_gib": {
-            "type": "integer"
-          },
-          "docker": {
-            "$ref": "#/components/schemas/Runtime"
-          },
-          "endpoints": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "gpus": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodeprotoGPU"
-            }
-          },
-          "hostname": {
-            "type": "string"
-          },
-          "kernel": {
-            "type": "string"
-          },
-          "memory_mib": {
-            "type": "integer"
-          },
-          "os": {
-            "type": "string"
-          },
-          "podman": {
-            "$ref": "#/components/schemas/Runtime"
-          },
-          "ports_80_443": {
-            "type": "string"
-          },
-          "public_addresses": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "Runtime": {
-        "type": "object",
-        "required": [
-          "socket",
-          "version"
-        ],
-        "properties": {
-          "socket": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
-      "NodeprotoGPU": {
-        "properties": {
-          "memory_mib": {
-            "type": "integer"
-          },
-          "model": {
-            "type": "string"
-          },
-          "vendor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "vendor",
-          "model",
-          "memory_mib"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/pkg/nodeproto.GPU"
-      },
-      "RealtimeAgentEnd": {
-        "type": "object",
-        "required": [
-          "status"
-        ],
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
-      "RealtimeAgentEvent": {
-        "type": "object",
-        "required": [
-          "task_id",
-          "seq",
-          "kind",
-          "data",
-          "at"
-        ],
-        "properties": {
-          "at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "data": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "seq": {
-            "type": "integer"
-          },
-          "task_id": {
-            "type": "string"
-          }
-        }
-      },
-      "AgentreportsEvidence": {
-        "properties": {
-          "analysis_id": {
-            "type": "string"
-          },
-          "binding_id": {
-            "type": "string"
-          },
-          "deployment_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "source_alias": {
-            "type": "string"
-          },
-          "verdict_ids": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "watch_id": {
-            "type": "string"
-          }
-        },
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
-      },
-      "Issue": {
-        "type": "object",
-        "required": [
-          "state"
-        ],
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "number": {
-            "type": "integer"
-          },
-          "state": {
-            "type": "string"
-          },
-          "url": {
-            "type": "string"
-          }
-        }
-      },
-      "Report": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "environment_id",
-          "environment",
-          "signal",
-          "component",
-          "fingerprint",
-          "status",
-          "severity",
-          "title",
-          "facts",
-          "evidence",
-          "repository",
-          "occurrences",
-          "first_seen_at",
-          "last_seen_at",
-          "closed_by",
-          "resolution",
-          "taken_by",
-          "investigation",
-          "investigation_note",
-          "task_id",
-          "issue",
-          "revision",
-          "opened_by",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "closed_by": {
-            "type": "string"
-          },
-          "component": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "environment": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "evidence": {
-            "$ref": "#/components/schemas/AgentreportsEvidence"
-          },
-          "facts": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Fact"
-            }
-          },
-          "findings": {
-            "$ref": "#/components/schemas/Findings"
-          },
-          "fingerprint": {
-            "type": "string"
-          },
-          "first_seen_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "investigation": {
-            "type": "string"
-          },
-          "investigation_note": {
-            "type": "string"
-          },
-          "issue": {
-            "$ref": "#/components/schemas/Issue"
-          },
-          "last_seen_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "occurrences": {
-            "type": "integer"
-          },
-          "opened_by": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "resolution": {
-            "type": "string"
-          },
-          "resolved_at": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "severity": {
-            "type": "string"
-          },
-          "signal": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "taken_at": {
-            "type": "string"
-          },
-          "taken_by": {
-            "type": "string"
-          },
-          "task_id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "Findings": {
-        "type": "object",
-        "required": [
-          "summary",
-          "likely_cause",
-          "suggestions",
-          "confidence",
-          "written_at"
-        ],
-        "properties": {
-          "confidence": {
-            "type": "string"
-          },
-          "likely_cause": {
-            "type": "string"
-          },
-          "suggestions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "summary": {
-            "type": "string"
-          },
-          "written_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "Fact": {
-        "type": "object",
-        "required": [
-          "label",
-          "value"
-        ],
-        "properties": {
-          "label": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "untrusted": {
-            "type": "boolean"
-          },
-          "value": {
-            "type": "string"
-          }
-        }
       }
     },
     "messages": {
+      "api-v1-agent-tasks-:id-streamagent.end": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent.end",
+        "title": "agent.end event",
+        "summary": "SSE event: agent.end"
+      },
+      "api-v1-agent-tasks-:id-streamagent.event": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "task_id",
+            "seq",
+            "kind",
+            "data",
+            "at"
+          ],
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "data": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent.event",
+        "title": "agent.event event",
+        "summary": "SSE event: agent.event"
+      },
+      "api-v1-realtime-eventsagent_report.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "signal",
+            "component",
+            "fingerprint",
+            "status",
+            "severity",
+            "title",
+            "facts",
+            "evidence",
+            "repository",
+            "occurrences",
+            "first_seen_at",
+            "last_seen_at",
+            "closed_by",
+            "resolution",
+            "taken_by",
+            "investigation",
+            "investigation_note",
+            "task_id",
+            "issue",
+            "revision",
+            "opened_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "closed_by": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "$ref": "#/components/schemas/AgentreportsEvidence"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Fact"
+              }
+            },
+            "findings": {
+              "$ref": "#/components/schemas/Findings"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "first_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "investigation": {
+              "type": "string"
+            },
+            "investigation_note": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "occurrences": {
+              "type": "integer"
+            },
+            "opened_by": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "resolution": {
+              "type": "string"
+            },
+            "resolved_at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "taken_at": {
+              "type": "string"
+            },
+            "taken_by": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_report.deleted",
+        "title": "agent_report.deleted event",
+        "summary": "SSE event: agent_report.deleted"
+      },
+      "api-v1-realtime-eventsagent_report.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "signal",
+            "component",
+            "fingerprint",
+            "status",
+            "severity",
+            "title",
+            "facts",
+            "evidence",
+            "repository",
+            "occurrences",
+            "first_seen_at",
+            "last_seen_at",
+            "closed_by",
+            "resolution",
+            "taken_by",
+            "investigation",
+            "investigation_note",
+            "task_id",
+            "issue",
+            "revision",
+            "opened_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "closed_by": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "$ref": "#/components/schemas/AgentreportsEvidence"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Fact"
+              }
+            },
+            "findings": {
+              "$ref": "#/components/schemas/Findings"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "first_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "investigation": {
+              "type": "string"
+            },
+            "investigation_note": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "occurrences": {
+              "type": "integer"
+            },
+            "opened_by": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "resolution": {
+              "type": "string"
+            },
+            "resolved_at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "taken_at": {
+              "type": "string"
+            },
+            "taken_by": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_report.updated",
+        "title": "agent_report.updated event",
+        "summary": "SSE event: agent_report.updated"
+      },
+      "api-v1-realtime-eventsagent_request.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "kind",
+            "status",
+            "team_id",
+            "team_name",
+            "route_source",
+            "asked_for",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "asked_for": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "route_source": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "team_id": {
+              "type": "string"
+            },
+            "team_name": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_request.deleted",
+        "title": "agent_request.deleted event",
+        "summary": "SSE event: agent_request.deleted"
+      },
+      "api-v1-realtime-eventsagent_request.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "kind",
+            "status",
+            "team_id",
+            "team_name",
+            "route_source",
+            "asked_for",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "asked_for": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "route_source": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "team_id": {
+              "type": "string"
+            },
+            "team_name": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_request.updated",
+        "title": "agent_request.updated event",
+        "summary": "SSE event: agent_request.updated"
+      },
+      "api-v1-realtime-eventsagent_task.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "kind",
+            "run_id",
+            "status",
+            "requested_by",
+            "event_seq",
+            "tokens",
+            "max_tokens",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "event_seq": {
+              "type": "integer"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tokens": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_task.deleted",
+        "title": "agent_task.deleted event",
+        "summary": "SSE event: agent_task.deleted"
+      },
+      "api-v1-realtime-eventsagent_task.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "kind",
+            "run_id",
+            "status",
+            "requested_by",
+            "event_seq",
+            "tokens",
+            "max_tokens",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "event_seq": {
+              "type": "integer"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tokens": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_task.updated",
+        "title": "agent_task.updated event",
+        "summary": "SSE event: agent_task.updated"
+      },
       "api-v1-realtime-eventsanalysis.deleted": {
         "payload": {
           "type": "object",
@@ -7264,6 +8109,7 @@
             "project_id",
             "name",
             "default_placement",
+            "platform_owned",
             "revision",
             "created_at",
             "updated_at"
@@ -7296,6 +8142,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "platform_owned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -7323,6 +8172,7 @@
             "project_id",
             "name",
             "default_placement",
+            "platform_owned",
             "revision",
             "created_at",
             "updated_at"
@@ -7355,6 +8205,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "platform_owned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -7863,6 +8716,9 @@
             "canary": {
               "$ref": "#/components/schemas/Canary"
             },
+            "cancel_requested_at": {
+              "type": "string"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -7949,6 +8805,9 @@
             "canary": {
               "$ref": "#/components/schemas/Canary"
             },
+            "cancel_requested_at": {
+              "type": "string"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -8033,6 +8892,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "instance_id": {
+              "type": "string"
+            },
             "kind": {
               "type": "string"
             },
@@ -8076,6 +8938,9 @@
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "instance_id": {
+              "type": "string"
             },
             "kind": {
               "type": "string"
@@ -8524,6 +9389,12 @@
             "org_id": {
               "type": "string"
             },
+            "placement_groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlacementGroupReview"
+              }
+            },
             "planned_at": {
               "type": "string"
             },
@@ -8544,6 +9415,12 @@
             },
             "rollback": {
               "$ref": "#/components/schemas/Rollback"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "sources": {
               "type": "array",
@@ -8684,6 +9561,12 @@
             "org_id": {
               "type": "string"
             },
+            "placement_groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlacementGroupReview"
+              }
+            },
             "planned_at": {
               "type": "string"
             },
@@ -8704,6 +9587,12 @@
             },
             "rollback": {
               "$ref": "#/components/schemas/Rollback"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "sources": {
               "type": "array",
@@ -8734,6 +9623,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "deployment_mode",
             "id",
             "org_id",
             "name",
@@ -8743,12 +9633,18 @@
             "color",
             "repositories",
             "exclusions",
+            "autonomous_promotion",
+            "min_staging_soak_seconds",
+            "responsible_team_id",
             "status",
             "created_by",
             "created_at",
             "updated_at"
           ],
           "properties": {
+            "autonomous_promotion": {
+              "type": "boolean"
+            },
             "color": {
               "type": "string"
             },
@@ -8757,6 +9653,9 @@
               "format": "date-time"
             },
             "created_by": {
+              "type": "string"
+            },
+            "deployment_mode": {
               "type": "string"
             },
             "description": {
@@ -8775,6 +9674,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "min_staging_soak_seconds": {
+              "type": "integer"
+            },
             "name": {
               "type": "string"
             },
@@ -8786,6 +9688,9 @@
               "items": {
                 "type": "string"
               }
+            },
+            "responsible_team_id": {
+              "type": "string"
             },
             "slug": {
               "type": "string"
@@ -8808,6 +9713,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "deployment_mode",
             "id",
             "org_id",
             "name",
@@ -8817,12 +9723,18 @@
             "color",
             "repositories",
             "exclusions",
+            "autonomous_promotion",
+            "min_staging_soak_seconds",
+            "responsible_team_id",
             "status",
             "created_by",
             "created_at",
             "updated_at"
           ],
           "properties": {
+            "autonomous_promotion": {
+              "type": "boolean"
+            },
             "color": {
               "type": "string"
             },
@@ -8831,6 +9743,9 @@
               "format": "date-time"
             },
             "created_by": {
+              "type": "string"
+            },
+            "deployment_mode": {
               "type": "string"
             },
             "description": {
@@ -8849,6 +9764,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "min_staging_soak_seconds": {
+              "type": "integer"
+            },
             "name": {
               "type": "string"
             },
@@ -8860,6 +9778,9 @@
               "items": {
                 "type": "string"
               }
+            },
+            "responsible_team_id": {
+              "type": "string"
             },
             "slug": {
               "type": "string"
@@ -9214,6 +10135,9 @@
             "project_id": {
               "type": "string"
             },
+            "push": {
+              "$ref": "#/components/schemas/PushState"
+            },
             "ref": {
               "type": "string"
             },
@@ -9272,6 +10196,9 @@
             },
             "project_id": {
               "type": "string"
+            },
+            "push": {
+              "$ref": "#/components/schemas/PushState"
             },
             "ref": {
               "type": "string"

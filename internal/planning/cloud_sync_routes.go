@@ -14,6 +14,10 @@ import (
 
 func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput) (cloudprofiles.Target, error) {
 	after := before
+	if before.Runtime == platformRuntime {
+		// Loomplane Cloud's targets are the platform's to change.
+		return after, cloudprofiles.ErrPlatformOwned
+	}
 	if in.Provider != "" {
 		after.Provider = in.Provider
 	}
@@ -42,6 +46,10 @@ func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput
 		if after.ConnectionID == "" {
 			return after, errors.New("managed targets require a connection")
 		}
+	case platformRuntime:
+		// Only the platform makes a Loomplane Cloud target, and only on
+		// its own Cloud: no target becomes one.
+		return after, cloudprofiles.ErrPlatformOwned
 	default:
 		return after, errors.New("runtime must be managed or server")
 	}

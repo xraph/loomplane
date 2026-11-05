@@ -416,22 +416,12 @@ func waitForDocs(t *testing.T, dsn, query string, want int64) {
 }
 
 // checkEmbedded fails the test unless requests embedded each of documents
-// once: one request per document, every chunk of a page in one batch.
-//
-// A retried docs job may embed one page again: grove's pgdriver names a
-// transaction's prepared statements after the transaction's address and
-// never deallocates them, so a later transaction at the same address on
-// the same connection can fail with 42P05 at the page's swap, after its
-// embed. The job's retry embeds that page again. Each retry may account
-// for one request more, never two.
+// once: one request per document, every chunk of a page in one batch. A page
+// embedded twice means a docs job ran again after its swap failed.
 func checkEmbedded(t *testing.T, dsn string, requests, documents int64) {
 	t.Helper()
-	retries := dbValue[int64](t, dsn, `SELECT coalesce(sum(retry_count), 0) FROM dispatch_jobs WHERE name = 'loomplane.agent.knowledge.docs'`)
-	if requests < documents || requests > documents+retries {
-		t.Fatalf("%d embedding requests for %d documents (%d job retries): a page was embedded twice; docs jobs: %s", requests, documents, retries, docsJobs(t, dsn))
-	}
-	if retries > 0 {
-		t.Logf("docs jobs retried %d times: %s", retries, docsJobs(t, dsn))
+	if requests != documents {
+		t.Fatalf("%d embedding requests for %d documents: a page was embedded twice; docs jobs: %s", requests, documents, docsJobs(t, dsn))
 	}
 }
 

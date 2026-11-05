@@ -214,6 +214,9 @@ type Deps struct {
 	// ACMEDirectory is where Kubernetes routes order certificates. Empty
 	// means Let's Encrypt's production directory.
 	ACMEDirectory string
+	// PlatformRoutes opens the Loomplane Cloud hosts platform services run
+	// on. Nil refuses routes to them.
+	PlatformRoutes PlatformRouteHosts
 }
 
 type Service struct {
@@ -279,6 +282,20 @@ func (s *Service) authorize(ctx context.Context, p security.Principal, cloud str
 		return nil, err
 	}
 	return s.Clouds.GetProfile(ctx, p.OrgID, "", cloud)
+}
+
+// authorizeChange is authorize for a path that attaches organization
+// configuration to the Cloud: servers, pools, clusters or capacity policy.
+// The platform-owned Loomplane Cloud takes none of these.
+func (s *Service) authorizeChange(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {
+	profile, err := s.authorize(ctx, p, cloud)
+	if err != nil {
+		return nil, err
+	}
+	if profile.PlatformOwned {
+		return nil, cloudprofiles.ErrPlatformOwned
+	}
+	return profile, nil
 }
 func (s *Service) ListServers(ctx context.Context, p security.Principal, cloud string) ([]*Server, error) {
 	if _, err := s.authorize(ctx, p, cloud); err != nil {

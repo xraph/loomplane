@@ -28,7 +28,7 @@ func (r *Runtime) withRabbitMQ(ctx context.Context, iid id.ID, labels map[string
 		return err
 	}
 	defer c.Close()
-	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+	info, err := r.ordinaryEngineSource(ctx, c, iid, labels)
 	if err != nil {
 		return err
 	}

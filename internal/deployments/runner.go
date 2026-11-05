@@ -1035,27 +1035,39 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if deleting && current == nil {
 		return nil
 	}
-	connID := planConnection(plan, a, prov.Cloud)
-	if deleting && current.ConnectionID != "" {
-		// What's deleted goes through the connection that deployed it,
-		// which needn't be the one the environment deploys with now. Only
-		// a binding from before bindings recorded their connection is
-		// taken to be on the plan's.
-		connID = current.ConnectionID
-	}
-	if connID == "" {
-		if deleting {
-			return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
-				a.Name, prov.Cloud, d.Environment)
+	var connID string
+	var conn *connections.Connection
+	var cred []byte
+	var unreachable bool
+	if prov.Cloud == platformProvider {
+		// Loomplane Cloud runs on the platform's own hosts, through no
+		// connection of the organization's.
+		if a.ConnectionID != "" || deleting && current.ConnectionID != "" {
+			return fmt.Errorf("%s runs on Loomplane Cloud, which deploys through no connection; plan again", a.Name)
 		}
-		return fmt.Errorf("the plan names no %s connection", prov.Cloud)
-	}
-	conn, cred, err := r.credentials.Credential(ctx, d.OrgID, connID)
-	// A delete whose connection is gone can't reach what it deletes. That
-	// fails nothing: deleteBound stops tracking it and says so.
-	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
-	if err != nil && !unreachable {
-		return err
+	} else {
+		connID = planConnection(plan, a, prov.Cloud)
+		if deleting && current.ConnectionID != "" {
+			// What's deleted goes through the connection that deployed it,
+			// which needn't be the one the environment deploys with now. Only
+			// a binding from before bindings recorded their connection is
+			// taken to be on the plan's.
+			connID = current.ConnectionID
+		}
+		if connID == "" {
+			if deleting {
+				return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
+					a.Name, prov.Cloud, d.Environment)
+			}
+			return fmt.Errorf("the plan names no %s connection", prov.Cloud)
+		}
+		conn, cred, err = r.credentials.Credential(ctx, d.OrgID, connID)
+		// A delete whose connection is gone can't reach what it deletes. That
+		// fails nothing: deleteBound stops tracking it and says so.
+		unreachable = deleting && errors.Is(err, connections.ErrNotFound)
+		if err != nil && !unreachable {
+			return err
+		}
 	}
 	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
 		return targetErr
@@ -1691,8 +1703,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if !ok {
 		return false, notYet(fmt.Errorf("%w: %s, which ran %s before it moved", ErrNoExecutor, old.Provider, a.Name))
 	}
+	// Loomplane Cloud ran it on the platform's own hosts, through no
+	// connection of the organization's.
+	onPlatform := old.Provider == platformProvider && old.ConnectionID == ""
 	oldConnID := old.ConnectionID
-	if oldConnID == "" {
+	if oldConnID == "" && !onPlatform {
 		// A binding from before bindings recorded their connection was
 		// deployed with the plan's connection to its cloud.
 		prov, perr := r.providers.Get(old.Provider)
@@ -1703,7 +1718,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 			return false, notYet(fmt.Errorf("the plan names no %s connection, which %s ran on before it moved", prov.Cloud, a.Name))
 		}
 	}
-	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	var conn *connections.Connection
+	var cred []byte
+	if !onPlatform {
+		conn, cred, err = r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	}
 	if errors.Is(err, connections.ErrNotFound) && (job.Plan.CloudSyncID != "" || poolBinding(old)) {
 		return false, err
 	}
@@ -1720,7 +1739,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if err != nil {
 		return false, err
 	}
-	if job.Plan.CloudSyncID != "" {
+	if job.Plan.CloudSyncID != "" && !onPlatform {
 		var cfg planning.ServiceConfig
 		if err := json.Unmarshal(old.Config, &cfg); err != nil {
 			return false, err

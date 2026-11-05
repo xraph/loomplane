@@ -40,7 +40,7 @@ var _ ScalingPoolStore = (*PgStore)(nil)
 // zero under an enabled policy. SavePool refuses an empty new pool because no
 // policy can name a pool before it exists; this saves both at once.
 func (s *Service) CreateScalingPool(ctx context.Context, p security.Principal, cloudID string, in ScalingPoolInput) (*ScalingPool, error) {
-	if _, err := s.authorize(ctx, p, cloudID); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloudID); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {

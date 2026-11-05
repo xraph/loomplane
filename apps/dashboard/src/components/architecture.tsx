@@ -23,7 +23,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type {
   Analysis,
-  Evidence,
+  DiscoveryEvidence as Evidence,
   Graph,
   Project,
   Resource,

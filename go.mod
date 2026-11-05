@@ -32,7 +32,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/yamux v0.1.2
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mdlayher/vsock v1.2.1
 	github.com/miekg/dns v1.1.72
@@ -49,35 +49,35 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	github.com/xraph/authsome v1.9.0
 	github.com/xraph/bastion v1.4.1
-	github.com/xraph/chronicle v1.9.1
+	github.com/xraph/chronicle v1.10.1
 	github.com/xraph/confy v1.1.0
-	github.com/xraph/cortex v1.10.3
-	github.com/xraph/cortex/extension v1.10.3
+	github.com/xraph/cortex v1.10.4
+	github.com/xraph/cortex/extension v1.10.4
 	github.com/xraph/ctrlplane v1.8.1
 	github.com/xraph/dispatch v1.9.3
 	github.com/xraph/forge v1.13.2
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
-	github.com/xraph/grove v1.10.1
-	github.com/xraph/grove/drivers/pgdriver v1.10.1
-	github.com/xraph/grove/drivers/sqlitedriver v1.10.1
-	github.com/xraph/grove/extension v1.10.0
+	github.com/xraph/grove v1.10.2
+	github.com/xraph/grove/drivers/pgdriver v1.10.2
+	github.com/xraph/grove/drivers/sqlitedriver v1.10.2
+	github.com/xraph/grove/extension v1.10.2
 	github.com/xraph/herald v1.10.0
 	github.com/xraph/herald/drivers/apns v1.10.0
 	github.com/xraph/keysmith v1.8.1
-	github.com/xraph/nexus v1.9.1
+	github.com/xraph/nexus v1.9.2
 	github.com/xraph/nexus/providers/anthropic v1.9.1
 	github.com/xraph/nexus/providers/openai v1.9.1
 	github.com/xraph/nexus/providers/opencompat v1.9.1
 	github.com/xraph/relay v1.8.1
-	github.com/xraph/shield v1.9.1
+	github.com/xraph/shield v1.10.0
 	github.com/xraph/trove v1.8.1
 	github.com/xraph/trove/drivers/s3driver v1.8.1
 	github.com/xraph/trove/extension v1.8.1
 	github.com/xraph/vault v1.8.1
 	github.com/xraph/warden v1.8.1
-	github.com/xraph/weave v1.9.2
-	github.com/xraph/weave/embedder/nexus v1.9.2
+	github.com/xraph/weave v1.9.3
+	github.com/xraph/weave/embedder/nexus v1.9.3
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
@@ -101,7 +101,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
-require github.com/xraph/shield/integrations/nexusguard v1.9.0 // indirect
+require github.com/xraph/shield/integrations/nexusguard v1.9.0
 
 require (
 	cloud.google.com/go/auth v0.24.1 // indirect
@@ -239,7 +239,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.61.0 // indirect
 	github.com/quic-go/webtransport-go v0.12.0 // indirect
-	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	github.com/redis/go-redis/v9 v9.23.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/sassoftware/relic v7.2.1+incompatible // indirect
@@ -269,25 +269,25 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
-	github.com/xraph/cortex/optimization v1.10.3 // indirect
-	github.com/xraph/cortex/sentinel v1.10.3 // indirect
+	github.com/xraph/cortex/optimization v1.10.4 // indirect
+	github.com/xraph/cortex/sentinel v1.10.4 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
-	github.com/xraph/forge/extensions/auth v1.13.0 // indirect
+	github.com/xraph/forge/extensions/auth v1.13.2 // indirect
 	github.com/xraph/forge/extensions/discovery v1.13.0 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.10.1 // indirect
-	github.com/xraph/grove/kv v1.9.1 // indirect
-	github.com/xraph/grove/kv/drivers/redisdriver v1.9.1 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.10.2 // indirect
+	github.com/xraph/grove/kv v1.10.2 // indirect
+	github.com/xraph/grove/kv/drivers/redisdriver v1.10.2 // indirect
 	github.com/xraph/ledger v1.8.1 // indirect
 	github.com/xraph/sentinel v1.10.0 // indirect
-	github.com/xraph/vessel v1.0.4 // indirect
+	github.com/xraph/vessel v1.0.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.8 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.6.8 // indirect
 	go.etcd.io/etcd/client/v3 v3.6.8 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.9.1 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.9.2 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 // indirect
@@ -301,7 +301,7 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.21.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/atomic v1.12.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect

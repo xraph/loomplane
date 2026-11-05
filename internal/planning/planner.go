@@ -139,7 +139,7 @@ type ConnectionHost struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry", platformRuntime: "Loomplane Cloud"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -359,7 +359,9 @@ func servicePath(a *Action) string {
 func (p *planner) connect() map[string]string {
 	out := map[string]string{}
 	for _, cloud := range slices.Sorted(maps.Keys(p.clouds)) {
-		if p.allCloudActionsPinned(cloud) {
+		// Loomplane Cloud runs on hosts this Loomplane holds, never through
+		// one of the organization's connections.
+		if cloud == platformRuntime || p.allCloudActionsPinned(cloud) {
 			continue
 		}
 		title := cloudTitle(cloud)
@@ -472,13 +474,27 @@ func couldUse(ps []*provider.Provider) string {
 	}
 	names := make([]string, 0, len(ps))
 	for _, p := range ps {
-		names = append(names, p.Name)
+		// An unlisted target, such as Loomplane Cloud, is never suggested.
+		if !p.Unlisted {
+			names = append(names, p.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "No provider Loomplane knows can."
 	}
 	return "These can: " + strings.Join(names, ", ") + "."
 }
 
 // place settles the region, warning about one the provider doesn't list.
 func (p *planner) place(subject Subject, name, path string, prov *provider.Provider, region string) string {
+	// Loomplane Cloud's regions are its targets', so a service runs in the
+	// region its target previewed.
+	if prov.Cloud == platformRuntime {
+		if pin, ok := p.in.CloudPlacements[name]; ok && pin.Platform != nil && subject == ServiceSubject {
+			return pin.Platform.Region
+		}
+		return ""
+	}
 	if !prov.Placed() {
 		if region != "" {
 			p.warn(Finding{

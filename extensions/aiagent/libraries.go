@@ -13,9 +13,7 @@ import (
 	shieldsafety "github.com/xraph/cortex/safety/shield"
 	"github.com/xraph/forge"
 	groveext "github.com/xraph/grove/extension"
-	"github.com/xraph/nexus"
 	nexusext "github.com/xraph/nexus/extension"
-	nexusstore "github.com/xraph/nexus/store"
 	shieldext "github.com/xraph/shield/extension"
 	weaveext "github.com/xraph/weave/extension"
 
@@ -33,7 +31,7 @@ const suspensionTTL = 24 * time.Hour
 // database it finds in the container, and cortex for the nexus, shield
 // and weave it builds its adapters from.
 func (e *Extension) buildLibraries() {
-	e.nexus = &nexusExtension{Extension: nexusext.New(e.nexusOptions()...)}
+	e.nexus = nexusext.New(e.nexusOptions()...)
 	e.nexus.SetDependencies([]string{groveext.ExtensionName})
 
 	e.shield = shieldext.New(shieldext.WithDisableRoutes(), shieldext.WithDisableMigrate())
@@ -49,33 +47,6 @@ func (e *Extension) buildLibraries() {
 	e.cortex = cortexext.New(e.cortexOptions()...)
 	e.cortex.SetDependencies(cortexDeps)
 }
-
-// nexusExtension is nexus's extension, with the store it finds in the
-// container kept open when it stops. Nexus's Shutdown closes its store,
-// and the store it builds from the container wraps Loomplane's own
-// database, which the rest of the app still uses while it stops; grove
-// closes it last.
-type nexusExtension struct {
-	*nexusext.Extension
-}
-
-// Register registers nexus, then gives its gateway, which hasn't started,
-// the same store behind a Close that does nothing.
-func (n *nexusExtension) Register(app forge.App) error {
-	if err := n.Extension.Register(app); err != nil {
-		return err
-	}
-	if gw := n.Gateway(); gw != nil && gw.Store() != nil {
-		nexus.WithDatabase(borrowedStore{Store: gw.Store()})(gw)
-	}
-	return nil
-}
-
-// borrowedStore is a nexus store over a database nexus doesn't own.
-type borrowedStore struct{ nexusstore.Store }
-
-// Close leaves the database open for its owner.
-func (borrowedStore) Close() error { return nil }
 
 // LibraryExtensions are nexus, shield, weave (only when knowledge is
 // configured) and cortex, in that order, for the platform to register

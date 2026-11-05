@@ -35,6 +35,11 @@ var errKubernetesHandoff = &provider.UnsupportedCapabilityError{Provider: "kuber
 // Nor can a platform route move between apps yet.
 var errPlatformHandoff = fmt.Errorf("%w: %s", ErrInvalid, platformHandoff)
 
+// errPlatformCloudHandoff refuses moving a route to or from a service on
+// Loomplane Cloud, whose hosts take a name only for the service it was
+// reviewed for.
+var errPlatformCloudHandoff = fmt.Errorf("%w: a route to a Loomplane Cloud service can't be handed to another backend or from one; remove it and add it again", ErrInvalid)
+
 // PrepareRouteHandoff runs after the destination binding is committed, while
 // the deployment runner retains the previous instance in Replaced.
 func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal, project, id string, in HandoffInput) (*RouteOperation, error) {
@@ -58,6 +63,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if source.Binding.BackendName() == RouteBackendPlatform {
 		return nil, errPlatformHandoff
 	}
+	if isPlatformCloud(source.Binding) {
+		return nil, errPlatformCloudHandoff
+	}
 	if source.Revision != in.Revision || (source.Status != "ready" && source.Status != RouteRoutingPending) {
 		return nil, ErrConflict
 	}
@@ -72,6 +80,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	}
 	if binding.BackendName() == RouteBackendPlatform {
 		return nil, errPlatformHandoff
+	}
+	if isPlatformCloud(binding) {
+		return nil, errPlatformCloudHandoff
 	}
 	if reflect.DeepEqual(binding, source.Binding) {
 		return nil, ErrInvalid

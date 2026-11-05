@@ -310,8 +310,9 @@ func (r *shutdownRecorder) OnShutdown(context.Context) error {
 }
 
 // The libraries borrow Loomplane's database from the container. Stopping
-// them must leave it open: the rest of the app still stops after them,
-// and grove closes it last. Weave's engine stops for real, recovery loop
+// them must leave it open and usable: the rest of the app still stops
+// after them, and grove closes it last. Nexus leaves a store it didn't
+// build alone since v1.9.2. Weave's engine stops for real, recovery loop
 // and plugins included.
 func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	ctx := context.Background()
@@ -352,13 +353,17 @@ func TestLibrariesLeaveTheDatabaseOpen(t *testing.T) {
 	if err = db.Ping(ctx); err != nil {
 		t.Fatalf("a library closed the shared database: %v", err)
 	}
+	if _, err = drv.NewRaw("CREATE TABLE after_stop (id INTEGER)").Exec(ctx); err != nil {
+		t.Fatalf("the shared database isn't usable after the libraries stopped: %v", err)
+	}
 	if !shutdown.stopped.Load() {
 		t.Fatal("weave's engine didn't stop: its plugins never heard")
 	}
 	if ext.weave.IsStarted() {
 		t.Fatal("weave still reads as started")
 	}
-	// Weave's extension sets no chunker of its own, and ingest needs one.
+	// Ingest needs a chunker, and weave's extension has defaulted to the
+	// recursive one since v1.9.3.
 	if c := ext.weave.Engine().Components().Chunker; !c.Configured {
 		t.Fatalf("weave has no chunker: %+v", c)
 	}

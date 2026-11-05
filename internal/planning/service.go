@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -22,6 +23,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -110,6 +112,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	approvalAdmitter    approvaladmission.Admitter
+	approvalVerifier    approvaladmission.Verification
+	approvalAppID       string
 	memberPrerequisites *MemberPrerequisiteService
 	instanceRuntime     InstanceRuntimeQualifier
 	instances           InstanceVerifier
@@ -146,10 +151,14 @@ type Service struct {
 	dialer            TargetDialer
 	features          map[string]bool
 	inputs            CatalogInputMap
+	platform          platformPlacer
 }
 
 // Deps are what a Service needs.
 type Deps struct {
+	ApprovalAdmitter  approvaladmission.Admitter
+	ApprovalVerifier  approvaladmission.Verification
+	ApprovalAppID     string
 	InstanceRuntime   InstanceRuntimeQualifier
 	Instances         InstanceVerifier
 	CapacityTemplates CapacityTemplateValidator
@@ -202,6 +211,10 @@ type Deps struct {
 	// CatalogInputs digest what kinds render from outside the manifest,
 	// by kind. The map may gain entries after NewService, during Register.
 	CatalogInputs CatalogInputMap
+	// Platform previews room on Loomplane Cloud for services planned onto
+	// its targets. Nil means this instance has no Loomplane Cloud, so a
+	// plan that names one of its targets is refused.
+	Platform platformPlacer
 }
 
 // NewService returns a Service.
@@ -216,6 +229,7 @@ func NewService(d Deps) *Service {
 		warn = func(string, error) {}
 	}
 	return &Service{instanceRuntime: d.InstanceRuntime,
+		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
@@ -223,7 +237,7 @@ func NewService(d Deps) *Service {
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
-		features: d.Features, inputs: d.CatalogInputs,
+		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform,
 	}
 }
 
@@ -611,6 +625,18 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	if !approve {
 		dec.Revision = plan.Revision
 	}
+	if approve && len(plan.PlacementGroups) > 0 {
+		request, admitErr := groupApprovalRequest(plan, p, reqID.String(), dec.Note)
+		if admitErr != nil || s.approvalAdmitter == nil {
+			return nil, ErrUnavailable
+		}
+		envelope, admitErr := s.approvalAdmitter.AdmitPlanApproval(ctx, request)
+		if admitErr != nil {
+			return nil, ErrUnavailable
+		}
+		dec.RequestID = reqID.String()
+		dec.GroupAdmission = string(envelope)
+	}
 	err = s.workflow.Decide(ctx, plan.ID, reqID.String(), dec)
 	if errors.Is(err, orchestration.ErrNotRunning) {
 		return nil, ErrNotReady
@@ -826,10 +852,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		} else {
 			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
 		}
+		var platform map[string]*platformcloud.Ref
+		if poolErr == nil {
+			platform, poolErr = s.resolvePlatform(ctx, plan, resolutionManifest, assignment, needs.Held)
+		}
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, platform, needs.Held, intents)
 		}
 	}
 	for name, selection := range locationSelections {
@@ -1223,6 +1253,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if plan.Status != StatusReady {
 		return plan.Status, nil
 	}
+	// Fleet decisions require the operation's typed authority and transaction.
+	// A generic Dispatch decision cannot approve or reject managed work.
+	if plan.Kind == KindInstance || plan.ManagedInstanceID != "" {
+		return "", security.ErrForbidden
+	}
 	// Loomplane automation decides only the rollbacks it started.
 	if systemDecision(d) && !automaticRollback(plan) {
 		return "", security.ErrForbidden
@@ -1235,6 +1270,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// The API checks this before it signals, so this is a decision on
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
+	}
+	if len(plan.PlacementGroups) > 0 {
+		if verifyErr := s.verifyGroupApproval(plan, d); verifyErr != nil {
+			return "", verifyErr
+		}
 	}
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
@@ -1266,6 +1306,10 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 			return "", security.ErrForbidden
 		}
 		ctx = security.WithPrincipal(ctx, *d.Actor)
+	}
+	if len(plan.PlacementGroups) > 0 {
+		// Source provenance alone cannot install or bypass group acceptance.
+		return "", ErrUnavailable
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }

@@ -37,10 +37,12 @@ import (
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	"github.com/xraph/loomplane/internal/activity"
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/artifacts"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/catalogproxy"
@@ -64,13 +66,16 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/fleets"
 	"github.com/xraph/loomplane/internal/gpus"
+	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/octopusloom"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providerinventory"
@@ -149,7 +154,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 // plan is made from.
 func (e *Extension) Dependencies() []string {
 	return []string{
-		identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
+		fleetext.Name, identity.Name, dispatchext.ExtensionName, cpext.ExtensionName, projectsext.Name, discoveryext.Name,
 		cloudinfraext.Name, connectionsext.Name, environmentsext.Name, realtimeext.Name, troveext.ExtensionName,
 	}
 }
@@ -171,6 +176,18 @@ func (e *Extension) Register(fapp forge.App) error {
 	authz, err := forge.InjectType[*security.Authorizer](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the identity extension: %w", err)
+	}
+	instances, err := forge.InjectType[*fleets.Service](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the fleet service: %w", err)
+	}
+	approvalAdmitter, err := forge.InjectType[approvaladmission.Admitter](c)
+	if err != nil {
+		return fmt.Errorf("planning needs group approval source: %w", err)
+	}
+	approvalVerifier, err := forge.InjectType[approvaladmission.Verification](c)
+	if err != nil {
+		return fmt.Errorf("planning needs group approval verifier: %w", err)
 	}
 	guard, err := forge.InjectType[identity.Guard](c)
 	if err != nil {
@@ -344,6 +361,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Reader:    inventoryClients,
 		Endpoints: e.endpoints, Authorizer: authz, Organizations: providerResourceOrganizations(pg), Usage: providerResourceUsage(pg, clouds),
 	})
+	if provideErr := forge.ProvideValue(c, e.providerResources); provideErr != nil {
+		return provideErr
+	}
 	e.resourceRefresh = newProviderResourceRefresh(e.providerResources, clouds, inventoryClients.Supports, func(err error) { log.Warn("refresh provider resource inventory", forge.F("error", err.Error())) })
 	clouds.Checked = e.resourceRefresh.checked
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
@@ -400,6 +420,25 @@ func (e *Extension) Register(fapp forge.App) error {
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings
 	executors[connections.Firecracker] = firecrackerTarget
+	// Loomplane Cloud runs services on the platform's own Firecracker
+	// hosts, through no connection of the organization's. It refuses an
+	// organization it isn't enabled for, which is every organization on an
+	// instance with no platform hosts.
+	platformCloud := platformcloud.NewService(platformcloud.NewPgStore(pg), instance.New(pg), nil).WithDNS(cloudinfra.PlatformDNS{Adapters: routeService.Adapters})
+	// Custom domains on Loomplane Cloud services reach the platform host
+	// each one runs on.
+	routeService.PlatformRoutes = platformCloud
+	platformTarget := &deployments.PlatformTarget{Ctrl: ctrl, Platform: platformCloud, Credentials: clouds, Authority: deployStore, Secrets: resourceSecrets, RouteGuard: routeService, Bindings: planStore.ListBindings}
+	executors[platformcloud.RuntimePlatform] = platformTarget
+	// The platform Cloud extension gives this same service its credentials,
+	// organization list, instance control and metering, and stops, starts
+	// and removes platform VMs through the same target.
+	if err := forge.ProvideValue(c, platformCloud); err != nil {
+		return fmt.Errorf("provide the platform Cloud service: %w", err)
+	}
+	if err := forge.ProvideValue(c, platformTarget); err != nil {
+		return fmt.Errorf("provide the platform Cloud target: %w", err)
+	}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, guard: dialGuard, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
@@ -475,6 +514,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	e.plans = planning.NewService(planning.Deps{
+		Instances:        instances,
+		ApprovalAdmitter: approvalAdmitter, ApprovalVerifier: approvalVerifier, ApprovalAppID: e.cfg.Identity.AppID,
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
 		History:       history,
@@ -487,6 +528,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Dialer:            dialer,
 		Features:          e.features,
 		CatalogInputs:     catalogInputs,
+		// Loomplane Cloud previews room for services on its targets with
+		// the service that places them.
+		Platform: platformCloud,
 	})
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
@@ -617,6 +661,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Telemetry: metrics,
 	})
+	if provideErr := forge.ProvideValue(c, readings); provideErr != nil {
+		return provideErr
+	}
 	if err := e.usageRoutes(fapp.Router(), guard, readings); err != nil {
 		return err
 	}
@@ -815,6 +862,8 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrManagedFailedCleanupUnavailable), errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, cloudprofiles.ErrPlatformOwned):
+		return forge.NewHTTPError(http.StatusForbidden, err.Error())
 	}
 	if status := security.StatusFor(err); status != http.StatusInternalServerError {
 		return forge.NewHTTPError(status, err.Error())

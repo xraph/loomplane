@@ -41,7 +41,7 @@ func (d *linuxDriver) installMeter(ctx context.Context, vm VM, r runtimeReceipt)
 	}
 	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(policy)
-	if err = cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(id), nil

@@ -1,0 +1,124 @@
+---
+title: Instance fleets
+description: Validate a synthetic Fleet workload and understand the current qualification limits.
+---
+
+Use the Fleet acceptance harness to check your qualification inputs before you
+connect a deployment target. You can validate resource limits and run the
+synthetic workload locally. Live provisioning through the harness is blocked.
+
+## Run the dry check
+
+From the repository root, run:
+
+```sh
+python3 -m unittest discover -s tests/acceptance/fleets -p 'test_*.py'
+python3 tests/acceptance/fleets/run.py \
+  --config tests/acceptance/fleets/config.example.json \
+  --dry-run
+```
+
+The example contains synthetic identifiers and a loopback API address. The runner
+doesn't contact that address. You can also supply the configuration path through
+`LOOMPLANE_FLEET_ACCEPTANCE_CONFIG`.
+
+Set an explicit organization, fleet, stage, Cloud, region and runtime. Your
+configuration must include a positive budget in currency minor units, a duration
+limit, and limits for instances, replicas, CPU, memory, storage and buckets. The
+runner rejects missing limits, mixed organizations, duplicate instances and
+unsupported capabilities. Unknown fields fail validation, which helps catch a
+misspelled limit.
+
+The workload contains a shared control service and two independent instances.
+Each instance has an API, sidecar, worker, bootstrap job, database adapter and
+bucket adapter. Resource demand includes every component, including bootstrap
+jobs and the shared control service. The example requests 2,000 CPU millicores,
+640 MiB of memory, 2 GiB of database storage and two buckets.
+
+A valid report records `dry_run_validated`. Cost estimates and observed cost stay
+`unknown`, and each live check stays `not_run`. The declared budget is a required
+input; this offline harness cannot enforce a provider billing cap or establish
+that the target has the capabilities you declared.
+
+## Run the synthetic workload
+
+The fixture uses Python's standard library. SQLite stands in for the database and
+bucket adapters, with a separate file for each instance. These adapters let you
+exercise bootstrap, per-instance reads and writes, queue limits and retries
+without connecting a managed data service.
+
+Create a local state directory, print its path, then bootstrap both instances:
+
+```sh
+FLEET_FIXTURE_DIR=$(mktemp -d)
+printf '%s\n' "$FLEET_FIXTURE_DIR"
+python3 tests/acceptance/fleets/fixture.py --role bootstrap \
+  --instance instance-a --state-dir "$FLEET_FIXTURE_DIR"
+python3 tests/acceptance/fleets/fixture.py --role bootstrap \
+  --instance instance-b --state-dir "$FLEET_FIXTURE_DIR"
+```
+
+Supply a distinct synthetic token for each instance through
+`LOOMPLANE_FLEET_FIXTURE_TOKEN`. Start the API for one instance in a separate
+terminal. Set `FLEET_FIXTURE_DIR` in that terminal to the exact path printed
+above. Shell variables do not carry into an independently opened terminal:
+
+```sh
+printf 'Fixture directory printed earlier: '
+read -r FLEET_FIXTURE_DIR
+LOOMPLANE_FLEET_FIXTURE_TOKEN=synthetic-instance-a \
+python3 tests/acceptance/fleets/fixture.py --role api \
+  --instance instance-a --state-dir "$FLEET_FIXTURE_DIR" --port 8081
+```
+
+The server binds to loopback, allows at most eight concurrent handlers, and
+closes connections after two seconds without socket activity. You can read `GET /health`, write JSON
+`{"value":"sample"}` to `PUT /data/sample` or `PUT /bucket/sample`, and read each
+value back with `GET`. Every request requires `Authorization: Bearer` followed by
+that instance's token.
+
+Submit work with `PUT /jobs/job-001` and the same JSON body. Run the worker once
+to process queued work from the original terminal, where `FLEET_FIXTURE_DIR`
+is already set:
+
+```sh
+python3 tests/acceptance/fleets/fixture.py --role worker \
+  --instance instance-a --state-dir "$FLEET_FIXTURE_DIR"
+```
+
+A repeated job ID with the same value replays safely. A changed value fails.
+The fixture retains at most 32 jobs and hashes each payload 1,000 times to produce
+a bounded CPU signal. Each value is limited to 4,096 bytes, and the data and bucket
+adapters together retain at most 64 values per instance.
+
+The `sidecar` role exposes `/health` and `/metrics` using the same instance state.
+The `control` role exposes `/health` and a synthetic `/instances` inventory. Both
+require a token and reject data writes. Choose a separate port for each process.
+These are workload fixture endpoints, not Loomplane's Fleet API.
+
+## Cleanup and evidence
+
+Dry runs create no provider resources. You can inspect a recorded resource list
+with `--cleanup-receipt PATH` alongside `--dry-run`. The receipt must match the
+configuration's run ID and complete target identity. Every resource must have an
+exact ID, matching organization and run ID, and recorded creation ownership.
+The runner refuses an unrecorded cleanup ID or a changed target.
+
+Cleanup inspection deletes nothing. Its report lists all residual resource IDs,
+identifies retained databases, buckets and volumes, and records
+`live_cleanup_adapter_unavailable`. Keep attached data until you have a separately
+reviewed retention and recovery decision. Local fixture files remain in your
+chosen state directory after the processes stop.
+
+| Check                                          | Evidence available here           |
+| ---------------------------------------------- | --------------------------------- |
+| Configuration and resource bounds              | Offline validation and unit tests |
+| Bootstrap and job replay                       | Local SQLite fixture tests        |
+| Neighbor credential denial                     | Local HTTP fixture tests          |
+| Namespace and managed data isolation           | No live evidence                  |
+| Fleet lifecycle, scaling and release execution | No live harness adapter           |
+| Metadata scale at 10, 100 and 1,000 instances  | Not measured                      |
+
+The runner returns exit code `0` for a valid dry run, `1` for rejected inputs, and
+`2` when valid inputs request unavailable live execution. You still need separate
+live qualification before using these results to make a rollout decision.

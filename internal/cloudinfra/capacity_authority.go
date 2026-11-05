@@ -19,3 +19,16 @@ func (s *Service) authorizeCapacityPrincipal(ctx context.Context, p security.Pri
 	}
 	return s.authorize(ctx, p, cloud)
 }
+
+// authorizeCapacityChange is authorizeCapacityPrincipal for a path that
+// changes the Cloud's capacity, which the platform-owned Cloud never takes.
+func (s *Service) authorizeCapacityChange(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {
+	profile, err := s.authorizeCapacityPrincipal(ctx, p, cloud)
+	if err != nil {
+		return nil, err
+	}
+	if profile.PlatformOwned {
+		return nil, cloudprofiles.ErrPlatformOwned
+	}
+	return profile, nil
+}

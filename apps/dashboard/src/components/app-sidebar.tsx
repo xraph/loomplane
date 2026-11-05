@@ -30,6 +30,7 @@ import {
   NodesIcon,
   NotificationsIcon,
   OverviewIcon,
+  PlatformCloudIcon,
   ProjectsIcon,
   ServicesIcon,
   TeamsIcon,
@@ -310,6 +311,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               icon: <CloudSignInIcon />,
               link: <Link to="/platform/cloud-sign-in" />,
               isActive: at("/platform/cloud-sign-in"),
+            },
+            {
+              title: "Platform Cloud",
+              icon: <PlatformCloudIcon />,
+              link: <Link to="/platform/cloud" />,
+              isActive: path === "/platform/cloud" || at("/platform/cloud/"),
             },
           ]
         : [],

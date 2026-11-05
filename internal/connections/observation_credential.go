@@ -23,6 +23,9 @@ func (s *Service) ObservationCredential(ctx context.Context, org, id string) (*C
 	if err != nil {
 		return nil, nil, err
 	}
+	if IsInstanceConnection(c) {
+		return nil, nil, ErrChanged
+	}
 	if c.OrgID != org || c.Cloud != Kubernetes || c.Status != StatusReady || c.Message == replacementInProgressMessage {
 		return nil, nil, ErrNotReady
 	}
@@ -47,7 +50,7 @@ func (s *Service) ObservationCredential(ctx context.Context, org, id string) (*C
 	if err != nil {
 		return nil, nil, err
 	}
-	if current.Status != c.Status || current.Generation != c.Generation || current.Message == replacementInProgressMessage || !reflect.DeepEqual(current.Details, c.Details) {
+	if IsInstanceConnection(current) || current.Status != c.Status || current.Generation != c.Generation || current.Message == replacementInProgressMessage || !reflect.DeepEqual(current.Details, c.Details) {
 		return nil, nil, ErrChanged
 	}
 	return current, credential.Kubeconfig, nil

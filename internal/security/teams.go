@@ -248,14 +248,19 @@ type wantedRole struct {
 // the person's team grants. A project entry at or below the root role is
 // dropped: the root row already reaches the project.
 func (a *Authorizer) wantedRoles(ctx context.Context, orgID, userID, memberRole string) (map[string]*wantedRole, error) {
+	var grants []ScopedRole
+	if a.teamGrants != nil {
+		var err error
+		grants, err = a.teamGrants(ctx, orgID, userID)
+		if err != nil {
+			return nil, fmt.Errorf("list team grants of %s: %w", userID, err)
+		}
+	}
+	return reduceRoles(ctx, orgID, userID, memberRole, grants), nil
+}
+
+func reduceRoles(ctx context.Context, orgID, userID, memberRole string, grants []ScopedRole) map[string]*wantedRole {
 	want := map[string]*wantedRole{rootNamespace: {role: memberRole, sources: []string{"member"}}}
-	if a.teamGrants == nil {
-		return want, nil
-	}
-	grants, err := a.teamGrants(ctx, orgID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list team grants of %s: %w", userID, err)
-	}
 	for _, g := range grants {
 		// A bad row is skipped, never fatal: failing the whole sync would
 		// also block a demotion of the member role. Skipping only takes
@@ -288,7 +293,7 @@ func (a *Authorizer) wantedRoles(ctx context.Context, orgID, userID, memberRole 
 			delete(want, ns)
 		}
 	}
-	return want, nil
+	return want
 }
 
 // writeRoles makes the person's rows match want. It deletes every row

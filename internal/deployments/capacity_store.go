@@ -232,8 +232,8 @@ func (s *PgStore) CancelDeployment(ctx context.Context, org, id string, at time.
 		return nil, requestErr
 	}
 	if requested == nil {
-		if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET cancel_requested_at=$3 WHERE org_id=$1 AND id=$2`, org, id, d.CancelRequestedAt); err != nil {
-			return nil, err
+		if readErr := tx.QueryRow(ctx, `UPDATE loomplane_deployments SET cancel_requested_at=$3 WHERE org_id=$1 AND id=$2 RETURNING cancel_requested_at`, org, id, d.CancelRequestedAt).Scan(d.CancelRequestedAt); readErr != nil {
+			return nil, readErr
 		}
 	}
 	return d, tx.Commit()

@@ -277,7 +277,8 @@ func imageService(img discovery.Image) Service {
 // no main reaches is linked into none of them, and goes by directory to
 // the other services only when one holds it.
 func assignEnv(services []Service, reach []map[string]bool, vars []discovery.EnvUse) {
-	var all, plain []int // plain are the services that aren't Go mains
+	all := make([]int, 0, len(services))
+	var plain []int // plain are the services that aren't Go mains
 	for i := range services {
 		all = append(all, i)
 		if reach[i] == nil {
@@ -436,7 +437,9 @@ func holding(services []Service, candidates []int, file string, dirOf func(Servi
 		}
 		switch n := len(d); {
 		case n > best:
-			best, out = n, []int{i}
+			best = n
+			out = make([]int, 1, len(candidates))
+			out[0] = i
 		case n == best:
 			out = append(out, i)
 		}
