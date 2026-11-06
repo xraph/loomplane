@@ -31,6 +31,8 @@ type fakeRenderAPI struct {
 	// envDeleteFailures is how many environment DELETEs fail with a 502
 	// before one succeeds.
 	envDeleteFailures int
+	// projectDeleteStatus, when set, is how Render answers a project DELETE.
+	projectDeleteStatus int
 	created           int
 }
 
@@ -144,6 +146,10 @@ func (f *fakeRenderAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(f.envs, parts[1])
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && len(parts) == 2 && parts[0] == "projects":
+		if f.projectDeleteStatus != 0 {
+			fail(f.projectDeleteStatus, "project still has resources")
+			return
+		}
 		for name, id := range f.projects {
 			if id == parts[1] {
 				delete(f.projects, name)
@@ -638,5 +644,33 @@ func TestRenderRefusalOnNativeEnvironmentFailsInsteadOfFallingBack(t *testing.T)
 	}
 	if h.api.called("POST /services") || h.api.called("DELETE /projects/prj_1") || h.notify.calls != 0 {
 		t.Fatalf("calls = %v, want no standalone service and nothing deleted", h.api.calls)
+	}
+}
+
+// TestRenderRemoveKeepsProjectOnConflict: Render answers 409 to deleting a
+// project while any of its environments still holds resources. Loomplane
+// records none of them, so the project stays, the step warns, and the
+// record goes, so the remove doesn't fail on every retry.
+func TestRenderRemoveKeepsProjectOnConflict(t *testing.T) {
+	h := newRenderHarness(t, true)
+	var warnings []error
+	h.job.warn = func(err error) { warnings = append(warnings, err) }
+	h.api.projectDeleteStatus = http.StatusConflict
+	h.api.projects["loomplane-x"] = "prj_1"
+	h.api.envs["evm_1"] = &renderTestEnv{id: "evm_1", name: "staging", project: "prj_1"}
+	h.api.resources["srv_1"] = map[string]string{"name": "web", "environmentId": "evm_1", "kind": "service"}
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "render", ConnectionID: "conn", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "evm_1"})
+
+	if err := h.exec.Remove(t.Context(), h.job, nativeRenderBinding(t, h, "srv_1")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !h.api.called("DELETE /projects/prj_1") || h.api.projects["loomplane-x"] != "prj_1" {
+		t.Fatalf("calls = %v, want the project asked for and kept", h.api.calls)
+	}
+	if h.row() != nil {
+		t.Fatal("the record was kept")
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "prj_1") {
+		t.Fatalf("warnings = %v, want one naming prj_1", warnings)
 	}
 }

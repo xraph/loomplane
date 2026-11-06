@@ -600,7 +600,14 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 		return fmt.Errorf("check who uses the render project: %w", err)
 	}
 	if !others && rec.ProjectRef != "" {
-		if delErr := r.Client.DeleteProject(ctx, key, rec.ProjectRef); delErr != nil {
+		delErr := r.Client.DeleteProject(ctx, key, rec.ProjectRef)
+		switch {
+		case render.IsConflict(delErr):
+			// Something Loomplane didn't put there still sits in one of
+			// the project's environments. Waiting won't empty it, so the
+			// project stays and the record goes.
+			job.Warn(fmt.Errorf("render kept the project %s, since one of its environments still holds services or datastores Loomplane didn't put there. Loomplane no longer tracks it; delete it in Render once it's empty", rec.ProjectRef))
+		case delErr != nil:
 			return fmt.Errorf("remove the unused render project: %w", delErr)
 		}
 	}

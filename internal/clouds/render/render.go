@@ -91,6 +91,13 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
 }
 
+// IsConflict reports whether err is Render's 409, which it answers to
+// deleting a project while any of its environments still holds resources.
+func IsConflict(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusConflict
+}
+
 func (c *Client) do(ctx context.Context, key Key, method, path string, query url.Values, in, out any) error {
 	var body io.Reader
 	if in != nil {
