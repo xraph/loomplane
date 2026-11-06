@@ -103,10 +103,14 @@ type Flag struct {
 // conversation's turns is ErrNotFound, and an answer the agent hasn't
 // finished is ErrUnfinished. Flagging the same answer again changes the
 // reason and note of p's one flag on it, and opens it again if it was
-// dismissed.
+// dismissed. A flag is a write, so read-only access gets
+// security.ErrForbidden, the way agent:use refuses it on Start and Send.
 func (s *Service) Flag(ctx context.Context, p security.Principal, conversationID, taskID string, in FlagInput) (*Flag, error) {
 	if err := requirePerson(p); err != nil {
 		return nil, err
+	}
+	if p.ReadOnly {
+		return nil, fmt.Errorf("%w: read-only access can't report an answer", security.ErrForbidden)
 	}
 	reason, note, err := flagInput(in)
 	if err != nil {

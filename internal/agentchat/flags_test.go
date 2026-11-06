@@ -204,6 +204,27 @@ func TestFlagRefusedForThoseWhoCannotRead(t *testing.T) {
 	}
 }
 
+// A flag is a write, so read-only access can't make one, not even on the
+// starter's own conversation, and nothing is kept or audited.
+func TestFlagRefusedForReadOnly(t *testing.T) {
+	w := newWorld(t)
+	c := w.open(t, ada, "hello", "")
+	w.answered(c.LastTaskID, "Hi.")
+	for _, user := range []string{ada, al} {
+		ro := person(orgA, user)
+		ro.ReadOnly = true
+		if _, err := w.svc.Flag(t.Context(), ro, c.ID, c.LastTaskID, FlagInput{Reason: FlagHarmful}); !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("%s read-only: %v", user, err)
+		}
+	}
+	if all, _ := w.svc.Flags(t.Context(), FlagsAll); len(all) != 0 {
+		t.Fatalf("kept %+v", all)
+	}
+	if n := len(w.audit.recorded()); n != 0 {
+		t.Fatalf("audited %d", n)
+	}
+}
+
 // An answer the agent is still writing, or waiting on a person for, isn't
 // one to report yet.
 func TestFlagRefusedWhileAnswering(t *testing.T) {
