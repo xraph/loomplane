@@ -12,6 +12,10 @@
 // loomplane_agent_conversations: the title they gave it, when they pinned
 // it, and when they deleted it. A conversation with no row there has none
 // of those.
+//
+// A person may flag one of the agent's answers for whoever runs the
+// server. The flag keeps the question and the answer as they were, in
+// loomplane_agent_answer_flags, and only the server's owner reads it.
 package agentchat
 
 import (
@@ -172,6 +176,21 @@ type Store interface {
 	// Delete marks the conversation deleted at at. Its tasks stay.
 	// Conversation, List and Turns never read a deleted one again.
 	Delete(ctx context.Context, orgID, id string, at time.Time) error
+	// Turn reads one turn of the conversation by its task, or
+	// ErrNotFound when the task isn't one of its chat tasks or the
+	// conversation was deleted.
+	Turn(ctx context.Context, orgID, id, taskID string) (*TurnRow, error)
+	// SaveFlag keeps f, or when its reporter flagged its task before,
+	// changes that flag's reason and note to f's, sets its updated_at and
+	// opens it again. It returns the flag as kept.
+	SaveFlag(ctx context.Context, f Flag) (*Flag, error)
+	// Flags reads up to limit flags of every workspace with status
+	// FlagsOpen, FlagsDismissed or FlagsAll, the newest first.
+	Flags(ctx context.Context, status string, limit int) ([]Flag, error)
+	// DismissFlag marks the flag dismissed by by at at, unless it was
+	// dismissed already, and returns it; ErrFlagNotFound when there's
+	// none.
+	DismissFlag(ctx context.Context, id, by string, at time.Time) (*Flag, error)
 }
 
 // Runs is what the service asks of agentruns. *agentruns.Service is the

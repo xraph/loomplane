@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agenttest"
 	"github.com/xraph/loomplane/internal/pglock"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -353,5 +354,151 @@ func TestASendBurstLeavesThePoolWorking(t *testing.T) {
 	}
 	if got := runs.starts.Load(); got != n {
 		t.Fatalf("started %d turns, want %d", got, n)
+	}
+}
+
+// A flag is one per turn per person: flagging again changes the reason and
+// note and opens it again, and keeps the snapshot. Turn reads only the
+// conversation's own chat tasks, and none once it's deleted.
+func TestFlagStore(t *testing.T) {
+	ctx := context.Background()
+	pg := openDB(t)
+	st := agentchat.NewPgStore(pg)
+	base := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+	at := func(m int) time.Time { return base.Add(time.Duration(m) * time.Minute) }
+	for _, tk := range []task{
+		{"atask_1", "o", "proj_1", "chat", "s1", "completed", "usr_ada", "Why did it fail?", at(1)},
+		{"atask_2", "o", "", "chat", "s2", "running", "usr_ada", "Other", at(2)},
+		{"atask_3", "o", "proj_1", "investigation", "s1", "completed", "", "Not a turn", at(3)},
+		{"atask_4", "o2", "", "chat", "s1", "completed", "usr_bob", "Another workspace", at(4)},
+	} {
+		insert(t, pg, tk)
+	}
+
+	turn, err := st.Turn(ctx, "o", "s1", "atask_1")
+	if err != nil || turn.TaskID != "atask_1" || turn.Input != "Why did it fail?" || turn.Status != "completed" {
+		t.Fatalf("turn %+v, %v", turn, err)
+	}
+	for _, tc := range []struct{ org, session, task string }{
+		{"o", "s1", "atask_2"}, {"o", "s1", "atask_3"}, {"o2", "s1", "atask_1"}, {"o", "s1", "atask_4"}, {"o", "s1", ""},
+	} {
+		if _, err = st.Turn(ctx, tc.org, tc.session, tc.task); !errors.Is(err, agentchat.ErrNotFound) {
+			t.Errorf("%+v: %v, want ErrNotFound", tc, err)
+		}
+	}
+
+	first, err := st.SaveFlag(ctx, agentchat.Flag{ID: "aflag_1", OrgID: "o", ProjectID: "proj_1", ConversationID: "s1",
+		TaskID: "atask_1", ReportedBy: "usr_ada", Reason: "inaccurate", Note: "wrong", Question: "Why did it fail?",
+		Answer: "Memory.", CreatedAt: at(10), UpdatedAt: at(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != "aflag_1" || first.ConversationID != "s1" || first.Answer != "Memory." || !first.CreatedAt.Equal(at(10)) ||
+		!first.UpdatedAt.Equal(at(10)) || first.DismissedAt != nil || first.DismissedBy != "" {
+		t.Fatalf("first %+v", first)
+	}
+	other, err := st.SaveFlag(ctx, agentchat.Flag{ID: "aflag_2", OrgID: "o", ConversationID: "s1", TaskID: "atask_1",
+		ReportedBy: "usr_al", Reason: "other", Question: "q", Answer: "a", CreatedAt: at(11), UpdatedAt: at(11)})
+	if err != nil || other.ID != "aflag_2" {
+		t.Fatalf("Al's flag %+v, %v", other, err)
+	}
+
+	dismissed, err := st.DismissFlag(ctx, "aflag_1", "usr_owner", at(12))
+	if err != nil || dismissed.DismissedBy != "usr_owner" || !dismissed.DismissedAt.Equal(at(12)) || !dismissed.UpdatedAt.Equal(at(12)) {
+		t.Fatalf("dismissed %+v, %v", dismissed, err)
+	}
+	again, err := st.DismissFlag(ctx, "aflag_1", "usr_other", at(13))
+	if err != nil || again.DismissedBy != "usr_owner" || !again.DismissedAt.Equal(at(12)) || !again.UpdatedAt.Equal(at(12)) {
+		t.Fatalf("dismissed again %+v, %v", again, err)
+	}
+	if _, err = st.DismissFlag(ctx, "aflag_nope", "usr_owner", at(13)); !errors.Is(err, agentchat.ErrFlagNotFound) {
+		t.Fatalf("an unknown flag: %v", err)
+	}
+
+	list := func(status string) []string {
+		t.Helper()
+		flags, lerr := st.Flags(ctx, status, 10)
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		ids := make([]string, 0, len(flags))
+		for _, f := range flags {
+			ids = append(ids, f.ID)
+		}
+		return ids
+	}
+	if got := list("open"); len(got) != 1 || got[0] != "aflag_2" {
+		t.Fatalf("open %v", got)
+	}
+	if got := list("dismissed"); len(got) != 1 || got[0] != "aflag_1" {
+		t.Fatalf("dismissed %v", got)
+	}
+	if got := list("all"); len(got) != 2 || got[0] != "aflag_2" || got[1] != "aflag_1" {
+		t.Fatalf("all %v", got)
+	}
+	if flags, lerr := st.Flags(ctx, "all", 1); lerr != nil || len(flags) != 1 || flags[0].ID != "aflag_2" {
+		t.Fatalf("limit 1 %+v, %v", flags, lerr)
+	}
+
+	// Flagging again keeps the ID, the snapshot and created_at, changes
+	// the reason and note, and opens it again.
+	reflag, err := st.SaveFlag(ctx, agentchat.Flag{ID: "aflag_new", OrgID: "o", ProjectID: "proj_1", ConversationID: "s1",
+		TaskID: "atask_1", ReportedBy: "usr_ada", Reason: "harmful", Question: "changed", Answer: "changed",
+		CreatedAt: at(20), UpdatedAt: at(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflag.ID != "aflag_1" || reflag.Reason != "harmful" || reflag.Note != "" || reflag.Question != "Why did it fail?" ||
+		reflag.Answer != "Memory." || !reflag.CreatedAt.Equal(at(10)) || !reflag.UpdatedAt.Equal(at(20)) ||
+		reflag.DismissedAt != nil || reflag.DismissedBy != "" {
+		t.Fatalf("flagged again %+v", reflag)
+	}
+	if got := list("all"); len(got) != 2 {
+		t.Fatalf("all after flagging again %v", got)
+	}
+
+	if err = st.Delete(ctx, "o", "s1", at(30)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Turn(ctx, "o", "s1", "atask_1"); !errors.Is(err, agentchat.ErrNotFound) {
+		t.Fatalf("a deleted conversation's turn: %v", err)
+	}
+}
+
+// auditLog is the audit trail in memory.
+type auditLog struct {
+	mu     sync.Mutex
+	events []projects.AuditEvent
+}
+
+func (a *auditLog) Record(_ context.Context, e projects.AuditEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, e)
+}
+
+// Over Postgres, which keeps microseconds, the first dismissal is audited
+// and a second one isn't.
+func TestFlagAndDismissOverPostgres(t *testing.T) {
+	ctx := context.Background()
+	pg := openDB(t)
+	insert(t, pg, task{"atask_1", "o", "", "chat", "s1", "completed", "usr_ada", "hello", time.Now().UTC().Add(-time.Minute)})
+	audit := &auditLog{}
+	svc := agentchat.NewService(agentchat.Deps{Store: agentchat.NewPgStore(pg), Runs: &sqlRuns{pg: pg}, Audit: audit})
+	ada := security.Principal{Kind: security.KindUser, UserID: "usr_ada", OrgID: "o"}
+	f, err := svc.Flag(ctx, ada, "s1", "atask_1", agentchat.FlagInput{Reason: agentchat.FlagOther, Note: "hm"})
+	if err != nil || f.Question != "hello" || f.Answer != "" || f.Note != "hm" {
+		t.Fatalf("flag %+v, %v", f, err)
+	}
+	if _, err = svc.DismissFlag(ctx, f.ID, "usr_owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.DismissFlag(ctx, f.ID, "usr_owner"); err != nil {
+		t.Fatal(err)
+	}
+	audit.mu.Lock()
+	defer audit.mu.Unlock()
+	if len(audit.events) != 2 || audit.events[0].Action != "agent.answer.flag" || audit.events[1].Action != "agent.answer.flag.dismiss" {
+		t.Fatalf("audited %+v", audit.events)
 	}
 }
