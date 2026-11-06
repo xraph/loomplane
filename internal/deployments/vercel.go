@@ -391,14 +391,11 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 	}
 	if s.CreatedProject {
 		job := d.job
-		sharing, err := v.Environments.Store.SharingProject(ctx, job.Deployment.OrgID, "vercel", job.Connection.ID, s.ProjectID)
+		others, err := v.otherNativeUsers(ctx, job.Deployment.OrgID, job.Connection.ID, s.ProjectID, job.Deployment.EnvironmentID, job.Action.Name)
 		if err != nil {
 			return fmt.Errorf("check who uses the vercel project: %w", err)
 		}
-		others := slices.DeleteFunc(sharing, func(pe *ProviderEnvironment) bool {
-			return pe.EnvironmentID == job.Deployment.EnvironmentID && pe.Scope == job.Action.Name
-		})
-		if len(others) == 0 {
+		if !others {
 			if err := v.Client.DeleteProject(ctx, tok, s.ProjectID); err != nil {
 				return fmt.Errorf("remove the unused vercel project: %w", err)
 			}
@@ -407,6 +404,19 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 		d.save()
 	}
 	return nil
+}
+
+// otherNativeUsers reports whether another environment or service records
+// or claims a native deploy on the project, leaving out the row of the
+// environment and scope doing the asking.
+func (v *Vercel) otherNativeUsers(ctx context.Context, orgID, connectionID, projectID, environmentID, scope string) (bool, error) {
+	sharing, err := v.Environments.Store.SharingProject(ctx, orgID, "vercel", connectionID, projectID)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(sharing, func(pe *ProviderEnvironment) bool {
+		return pe.EnvironmentID != environmentID || pe.Scope != scope
+	}), nil
 }
 
 // deploy uploads the commit and starts a deployment of it to target.
@@ -516,8 +526,14 @@ func (v *Vercel) upload(ctx context.Context, tok vercel.Token, job *Job) ([]File
 // File is one file of a deployment.
 type File = vercel.File
 
+// removePasses bounds how often Remove lists a target's deployments and
+// deletes them, since a deployment can be started while it works.
+const removePasses = 5
+
 // Remove implements Executor: it deletes the Vercel project, and with it
-// its deployments.
+// its deployments. A native service removes only its own environment:
+// the deployments, variables and custom environment of its target, and
+// the project too once no other environment uses it.
 func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	if b.Subject == planning.ResourceSubject || job.Action.Resource != nil {
 		return v.removeResource(ctx, job, b)
@@ -525,7 +541,81 @@ func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 	if b.ExternalID == "" {
 		return nil
 	}
-	return v.Client.DeleteProject(ctx, token(job), b.ExternalID)
+	projectID, ref, native := planning.ParseVercelRef(b.ExternalID)
+	if !native {
+		return v.Client.DeleteProject(ctx, token(job), b.ExternalID)
+	}
+	return v.removeNative(ctx, job, b, projectID, refTarget(ref))
+}
+
+func (v *Vercel) removeNative(ctx context.Context, job *Job, b *planning.Binding, projectID string, target vercel.Target) error {
+	tok := token(job)
+	drained := false
+	for range removePasses {
+		deployments, err := v.Client.TargetDeployments(ctx, tok, projectID, target)
+		if vercel.IsNotFound(err) {
+			return v.forgetNative(ctx, job, b, projectID, false)
+		}
+		if err != nil {
+			return err
+		}
+		if len(deployments) == 0 {
+			drained = true
+			break
+		}
+		for _, d := range deployments {
+			if err := v.Client.DeleteDeployment(ctx, tok, d.ID); err != nil {
+				return fmt.Errorf("delete the vercel deployment %s: %w", d.ID, err)
+			}
+		}
+	}
+	if !drained {
+		left, err := v.Client.TargetDeployments(ctx, tok, projectID, target)
+		if err != nil {
+			return err
+		}
+		if len(left) > 0 {
+			return fmt.Errorf("the vercel environment still has %d deployments after %d passes", len(left), removePasses)
+		}
+	}
+	if err := v.Client.DeleteEnv(ctx, tok, projectID, target); err != nil {
+		return fmt.Errorf("remove the vercel environment's variables: %w", err)
+	}
+	if target.CustomID != "" {
+		if err := v.Client.DeleteCustomEnvironment(ctx, tok, projectID, target.CustomID); err != nil {
+			return fmt.Errorf("remove the vercel custom environment: %w", err)
+		}
+	}
+	return v.forgetNative(ctx, job, b, projectID, true)
+}
+
+// forgetNative deletes the binding's record and, when no other environment
+// uses the project, the project. Without Environments nothing says who
+// shares the project, so it stays.
+func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding, projectID string, projectExists bool) error {
+	if v.Environments == nil {
+		return nil
+	}
+	envID := b.EnvironmentID
+	if envID == "" {
+		envID = job.Deployment.EnvironmentID
+	}
+	connID := b.ConnectionID
+	if connID == "" && job.Connection != nil {
+		connID = job.Connection.ID
+	}
+	others, err := v.otherNativeUsers(ctx, b.OrgID, connID, projectID, envID, b.Name)
+	if err != nil {
+		return fmt.Errorf("check who uses the vercel project: %w", err)
+	}
+	row := &ProviderEnvironment{OrgID: b.OrgID, EnvironmentID: envID, Provider: "vercel", ConnectionID: connID, Scope: b.Name}
+	if err := v.Environments.Store.DeleteProviderEnvironment(ctx, row); err != nil {
+		return fmt.Errorf("forget the native vercel environment: %w", err)
+	}
+	if others || !projectExists {
+		return nil
+	}
+	return v.Client.DeleteProject(ctx, token(job), projectID)
 }
 
 // Observe implements Executor: the project, and which deployment its
@@ -538,6 +628,9 @@ func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, cred
 	if conn != nil {
 		tok.TeamID = conn.Details["team_id"]
 	}
+	if projectID, ref, native := planning.ParseVercelRef(b.ExternalID); native {
+		return v.observeNative(ctx, tok, projectID, refTarget(ref))
+	}
 	p, err := v.Client.GetProject(ctx, tok, b.ExternalID)
 	if vercel.IsNotFound(err) {
 		return &Observation{}, nil
@@ -546,4 +639,32 @@ func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, cred
 		return nil, err
 	}
 	return &Observation{Exists: true, Revision: p.Production()}, nil
+}
+
+// observeNative reads the project's one environment: the newest deployment
+// of its target, not the project's production.
+func (v *Vercel) observeNative(ctx context.Context, tok vercel.Token, projectID string, target vercel.Target) (*Observation, error) {
+	if _, err := v.Client.GetProject(ctx, tok, projectID); err != nil {
+		if vercel.IsNotFound(err) {
+			return &Observation{}, nil
+		}
+		return nil, err
+	}
+	if target.CustomID != "" {
+		if _, err := v.Client.GetCustomEnvironment(ctx, tok, projectID, target.CustomID); err != nil {
+			if vercel.IsNotFound(err) {
+				return &Observation{}, nil
+			}
+			return nil, err
+		}
+	}
+	deployments, err := v.Client.TargetDeployments(ctx, tok, projectID, target)
+	if err != nil {
+		return nil, err
+	}
+	obs := &Observation{Exists: true}
+	if len(deployments) > 0 {
+		obs.Revision = deployments[0].ID
+	}
+	return obs, nil
 }

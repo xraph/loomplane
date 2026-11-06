@@ -20,11 +20,35 @@ func (v *Vercel) FrontendAbsent(ctx context.Context, job *Job, b *planning.Bindi
 	if b.ExternalID == "" {
 		return false, errors.New("frontend project identity is missing")
 	}
+	if projectID, ref, native := planning.ParseVercelRef(b.ExternalID); native {
+		return v.nativeAbsent(ctx, token(job), projectID, refTarget(ref))
+	}
 	_, err := v.Client.GetProject(ctx, token(job), b.ExternalID)
 	if vercel.IsNotFound(err) {
 		return true, nil
 	}
 	return false, err
+}
+
+// nativeAbsent: the project is gone, or its one environment is: a custom
+// one that 404s, or a built-in one with no deployments.
+func (v *Vercel) nativeAbsent(ctx context.Context, tok vercel.Token, projectID string, target vercel.Target) (bool, error) {
+	if _, err := v.Client.GetProject(ctx, tok, projectID); err != nil {
+		return vercel.IsNotFound(err), ignoreNotFound(err)
+	}
+	if target.CustomID != "" {
+		_, err := v.Client.GetCustomEnvironment(ctx, tok, projectID, target.CustomID)
+		return vercel.IsNotFound(err), ignoreNotFound(err)
+	}
+	deployments, err := v.Client.TargetDeployments(ctx, tok, projectID, target)
+	return err == nil && len(deployments) == 0, err
+}
+
+func ignoreNotFound(err error) error {
+	if vercel.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *Runner) confirmFrontendRemoval(ctx context.Context, exec Executor, job *Job, b *planning.Binding) error {
