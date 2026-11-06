@@ -34,6 +34,7 @@ vi.mock("@/lib/router", () => ({
 }))
 
 afterEach(() => {
+  calls.length = 0
   vi.unstubAllGlobals()
   forgeClient.clear()
 })
@@ -59,21 +60,46 @@ const api = {
   config: {},
 }
 
+const calls: string[] = []
+
 function serve(
   environments: Environment[] | undefined,
   runs: Run[] = [],
-  props: { mayManage?: boolean; onOpen?: () => void } = {}
+  props: {
+    mayManage?: boolean
+    onOpen?: () => void
+    fallbacks?: Record<string, unknown>[]
+    stagingBindings?: Record<string, unknown>[]
+  } = {}
 ) {
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const url = new URL(String(input), "http://localhost")
-    const environment = url.searchParams.get("environment") ?? ""
-    const body = url.pathname.endsWith("/bindings")
-      ? { bindings: environment === "production" ? [api] : [] }
-      : { members: [] }
-    return new Response(JSON.stringify(body), {
-      headers: { "Content-Type": "application/json" },
-    })
-  })
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost")
+      const environment = url.searchParams.get("environment") ?? ""
+      if (url.pathname.endsWith("/provider-environments/retry")) {
+        calls.push(`${init?.method} ${url.pathname}`)
+        return new Response(JSON.stringify({ id: "plan_new" }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      const body = url.pathname.endsWith("/provider-environments")
+        ? { provider_environments: props.fallbacks ?? [] }
+        : url.pathname.endsWith("/bindings")
+          ? {
+              bindings:
+                environment === "production"
+                  ? [api]
+                  : environment === "staging"
+                    ? (props.stagingBindings ?? [])
+                    : [],
+            }
+          : { members: [] }
+      return new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+  )
   render(
     <ClientProvider client={forgeClient}>
       <Environments
@@ -200,4 +226,91 @@ test("managed environments open their instance instead of generic deployment or 
     screen.queryByRole("menuitem", { name: "Delete environment" })
   ).toBeNull()
   expect(screen.queryByRole("menuitem", { name: "Variables" })).toBeNull()
+})
+
+const vercelService = (id: string) => ({
+  id,
+  name: id,
+  subject: "service",
+  provider: "vercel",
+  drift: "",
+  config: {},
+})
+
+const fallback = (over: Record<string, unknown> = {}) => ({
+  environment_id: "env_stage",
+  provider: "vercel",
+  scope: "web",
+  mode: "fallback",
+  permanent: false,
+  reason: "Vercel needs a paid plan for custom environments",
+  created_at: "2026-11-05T00:00:00Z",
+  ...over,
+})
+
+test("shows a separate project note with the reason", async () => {
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web")],
+  })
+  const note = await screen.findByText("Separate project")
+  expect(note).toHaveAttribute(
+    "title",
+    "web: Vercel needs a paid plan for custom environments"
+  )
+})
+
+test("counts services on separate projects when mixed", async () => {
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web"), vercelService("docs")],
+  })
+  expect(
+    await screen.findByText("1 of 2 services on separate projects")
+  ).toBeInTheDocument()
+})
+
+test("hides try again when every fallback is permanent", async () => {
+  const user = userEvent.setup()
+  const onOpen = vi.fn()
+  serve([production, staging], [], {
+    fallbacks: [fallback({ permanent: true })],
+    stagingBindings: [vercelService("web")],
+    onOpen,
+  })
+  await screen.findByText("Separate project")
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await screen.findByRole("menuitem", { name: "Variables" })
+  expect(
+    screen.queryByRole("menuitem", { name: "Try native environment again" })
+  ).toBeNull()
+})
+
+test("try again plans a move back to native and opens deployments", async () => {
+  const user = userEvent.setup()
+  const onOpen = vi.fn()
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web")],
+    onOpen,
+  })
+  await screen.findByText("Separate project")
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", {
+      name: "Try native environment again",
+    })
+  )
+  await vi.waitFor(() =>
+    expect(calls).toContain(
+      "POST /api/v1/projects/p/environments/env_stage/provider-environments/retry"
+    )
+  )
+  await vi.waitFor(() =>
+    expect(onOpen).toHaveBeenCalledWith("deployments", "staging")
+  )
 })

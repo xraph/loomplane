@@ -7,9 +7,15 @@ import {
   useEnvironmentsCreate,
   useEnvironmentsDelete,
   useEnvironmentsList,
+  useProviderEnvironmentsList,
+  useProviderEnvironmentsRetry,
   useVariablesResolve,
 } from "@/client/forge/loomplane/hooks"
-import type { Environment, Project } from "@/client/forge/loomplane/types"
+import type {
+  Environment,
+  Project,
+  ProviderEnvironment,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { providerName } from "@/components/cloud-detail/clusters"
 import {
@@ -210,6 +216,12 @@ export function Environments({
   ) => void
 }) {
   const now = useNow(30_000)
+  const providerEnvironments = useQuery(useProviderEnvironmentsList, {
+    path: { id: project.id },
+  })
+  const fallbacks = (
+    providerEnvironments.data?.providerEnvironments ?? []
+  ).filter((p) => p.mode === "fallback")
   const [deleting, setDeleting] = useState<Environment | null>(null)
   const list = environments ?? []
   return (
@@ -255,6 +267,7 @@ export function Environments({
               mayManage={mayManage}
               mayDeploy={mayDeploy}
               mayClouds={mayClouds}
+              fallbacks={fallbacks.filter((f) => f.environmentId === env.id)}
               last={list.length === 1}
               onOpen={onOpen}
               onDelete={() => setDeleting(env)}
@@ -279,6 +292,7 @@ function EnvironmentRow({
   mayManage,
   mayDeploy,
   mayClouds,
+  fallbacks,
   last,
   onOpen,
   onDelete,
@@ -291,6 +305,8 @@ function EnvironmentRow({
   mayManage: boolean
   mayDeploy: boolean
   mayClouds: boolean
+  /** This environment's provider environments that fell back. */
+  fallbacks: ProviderEnvironment[]
   last: boolean
   onOpen: (
     tab: "deployments" | "variables" | "cloud",
@@ -299,6 +315,7 @@ function EnvironmentRow({
   onDelete: () => void
 }) {
   const people = usePeople()
+  const moveToNative = useMutation(useProviderEnvironmentsRetry)
   const bindings = useQuery(useBindingsList, {
     path: { id: project.id },
     query: { environment: environment.name },
@@ -330,6 +347,33 @@ function EnvironmentRow({
     return <StatusPill tone="quiet">Not deployed</StatusPill>
   })()
 
+  const vercelServices = services.filter((b) => b.provider === "vercel").length
+  const vercelFallbacks = fallbacks.filter(
+    (f) => f.provider === "vercel"
+  ).length
+  const separate =
+    fallbacks.length === 0
+      ? ""
+      : vercelFallbacks < fallbacks.length || vercelFallbacks >= vercelServices
+        ? "Separate project"
+        : `${vercelFallbacks} of ${vercelServices} services on separate projects`
+  const fallbackReasons = fallbacks
+    .map((f) => `${f.scope || f.provider}: ${f.reason}`)
+    .join("\n")
+  const retryable = fallbacks.some((f) => !f.permanent)
+
+  const tryNativeAgain = async () => {
+    try {
+      await moveToNative.mutateAsync({
+        path: { id: project.id, environmentId: environment.id },
+      })
+      toast.success(`A plan to move ${environment.name} is ready to review`)
+      onOpen("deployments", environment.name)
+    } catch (err) {
+      toast.error(messageOf(err, "The environment wasn't planned again."))
+    }
+  }
+
   const lastDeploy = waiting.length
     ? `${waiting.length} ${waiting.length === 1 ? "plan" : "plans"} to approve · planned ${relative(Date.parse(waiting[0].createdAt), now)}`
     : latest
@@ -339,7 +383,17 @@ function EnvironmentRow({
   return (
     <CloudTableRow>
       <NameCell name={environment.name} meta={kind} mono />
-      <Cell>{state}</Cell>
+      <Cell className="flex-wrap gap-x-2">
+        {state}
+        {separate && (
+          <span
+            title={fallbackReasons}
+            className="truncate text-xs text-muted-foreground"
+          >
+            {separate}
+          </span>
+        )}
+      </Cell>
       <Cell className="truncate text-muted-foreground">
         {latest ? (
           <Link
@@ -424,6 +478,11 @@ function EnvironmentRow({
           {mayClouds && !environment.instanceId && (
             <DropdownMenuItem onClick={() => onOpen("cloud", environment.name)}>
               Cloud
+            </DropdownMenuItem>
+          )}
+          {mayDeploy && retryable && (
+            <DropdownMenuItem onClick={() => void tryNativeAgain()}>
+              Try native environment again
             </DropdownMenuItem>
           )}
           {mayManage && !environment.instanceId && (
