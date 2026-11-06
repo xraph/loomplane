@@ -35,7 +35,7 @@ type ProviderEnvironmentStore interface {
 	ProviderEnvironment(ctx context.Context, orgID, environmentID, provider, connectionID, scope string) (*ProviderEnvironment, error)
 	SaveProviderEnvironment(ctx context.Context, pe *ProviderEnvironment) error
 	ProviderEnvironments(ctx context.Context, orgID, projectID string) ([]*ProviderEnvironment, error)
-	SharingProject(ctx context.Context, orgID, provider, connectionID, projectRef string) ([]*ProviderEnvironment, error)
+	SharingProject(ctx context.Context, orgID, provider, projectRef string) ([]*ProviderEnvironment, error)
 	ClaimFallbackNotice(ctx context.Context, pe *ProviderEnvironment, at time.Time) (bool, error)
 	ResetFallbacks(ctx context.Context, orgID, environmentID string) (reset int, permanent int, err error)
 	DeleteProviderEnvironment(ctx context.Context, pe *ProviderEnvironment) error
@@ -103,9 +103,11 @@ func (s *PgStore) ProviderEnvironments(ctx context.Context, orgID, projectID str
 	return s.listProviderEnvironments(ctx, `org_id=$1 AND project_id=$2`, orgID, projectID)
 }
 
-// SharingProject lists the native records that sit on one provider project.
-func (s *PgStore) SharingProject(ctx context.Context, orgID, provider, connectionID, projectRef string) ([]*ProviderEnvironment, error) {
-	return s.listProviderEnvironments(ctx, `org_id=$1 AND provider=$2 AND connection_id=$3 AND project_ref=$4 AND mode='native'`, orgID, provider, connectionID, projectRef)
+// SharingProject lists the native records that sit on one provider project,
+// through any connection: a provider's project ids are unique, and two
+// connections to one Vercel team or Render workspace reach the same project.
+func (s *PgStore) SharingProject(ctx context.Context, orgID, provider, projectRef string) ([]*ProviderEnvironment, error) {
+	return s.listProviderEnvironments(ctx, `org_id=$1 AND provider=$2 AND project_ref=$3 AND mode='native'`, orgID, provider, projectRef)
 }
 
 // ClaimFallbackNotice is true for the first caller on a row, so the owner is

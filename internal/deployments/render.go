@@ -281,7 +281,7 @@ func (r *Render) undoNative(ctx context.Context, job *Job, key render.Key, state
 		return nil
 	}
 	d := job.Deployment
-	others, err := otherNativeUsers(ctx, r.Environments.Store, "render", d.OrgID, job.Connection.ID, state.ProjectID, d.EnvironmentID, "")
+	others, err := otherNativeUsers(ctx, r.Environments.Store, "render", d.OrgID, state.ProjectID, d.EnvironmentID, "")
 	if err != nil {
 		return fmt.Errorf("check who uses the render project: %w", err)
 	}
@@ -595,7 +595,7 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 	if delErr := r.Client.DeleteEnvironment(ctx, key, envID); delErr != nil {
 		return fmt.Errorf("remove the empty render environment: %w", delErr)
 	}
-	others, err := otherNativeUsers(ctx, store, "render", b.OrgID, connID, rec.ProjectRef, environmentID, "")
+	others, err := otherNativeUsers(ctx, store, "render", b.OrgID, rec.ProjectRef, environmentID, "")
 	if err != nil {
 		return fmt.Errorf("check who uses the render project: %w", err)
 	}

@@ -104,11 +104,11 @@ func (n *NativeEnvironments) FallBack(ctx context.Context, job *Job, provider, s
 }
 
 // otherNativeUsers reports whether another environment (or, on Vercel,
-// another service) of the connection records or claims a native deploy on
-// the provider project, leaving out the row of the environment and scope
-// doing the asking.
-func otherNativeUsers(ctx context.Context, store ProviderEnvironmentStore, provider, orgID, connectionID, projectID, environmentID, scope string) (bool, error) {
-	sharing, err := store.SharingProject(ctx, orgID, provider, connectionID, projectID)
+// another service), through any connection, records or claims a native
+// deploy on the provider project, leaving out the row of the environment
+// and scope doing the asking.
+func otherNativeUsers(ctx context.Context, store ProviderEnvironmentStore, provider, orgID, projectID, environmentID, scope string) (bool, error) {
+	sharing, err := store.SharingProject(ctx, orgID, provider, projectID)
 	if err != nil {
 		return false, err
 	}

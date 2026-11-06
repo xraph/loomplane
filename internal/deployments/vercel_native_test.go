@@ -28,10 +28,10 @@ func (s *roleStore) EnvironmentRole(context.Context, string, string, string) (st
 	return s.kind, s.name, s.first, nil
 }
 
-func (s *roleStore) SharingProject(_ context.Context, org, provider, conn, projectRef string) ([]*ProviderEnvironment, error) {
+func (s *roleStore) SharingProject(_ context.Context, org, provider, projectRef string) ([]*ProviderEnvironment, error) {
 	var out []*ProviderEnvironment
 	for _, pe := range s.rows {
-		if pe.OrgID == org && pe.Provider == provider && pe.ConnectionID == conn && pe.ProjectRef == projectRef && pe.Mode == ModeNative {
+		if pe.OrgID == org && pe.Provider == provider && pe.ProjectRef == projectRef && pe.Mode == ModeNative {
 			out = append(out, pe)
 		}
 	}

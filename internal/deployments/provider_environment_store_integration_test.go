@@ -102,15 +102,20 @@ func TestResetFallbacksSkipsPermanent(t *testing.T) {
 	}
 }
 
+// TestSharingProjectListsNativeOnly also lists a native row deployed
+// through another connection: two connections to one Vercel team share the
+// project, and its id is the same through either.
 func TestSharingProjectListsNativeOnly(t *testing.T) {
 	store := providerEnvFixture(t)
-	for _, pe := range []*ProviderEnvironment{providerEnv("env", "web", ModeNative), providerEnv("env_stg", "web", ModeNative), providerEnv("env_prev", "web", ModeFallback)} {
+	otherConnection := providerEnv("env_prod2", "web", ModeNative)
+	otherConnection.ConnectionID = "conn_b"
+	for _, pe := range []*ProviderEnvironment{providerEnv("env", "web", ModeNative), providerEnv("env_stg", "web", ModeNative), providerEnv("env_prev", "web", ModeFallback), otherConnection} {
 		if err := store.SaveProviderEnvironment(t.Context(), pe); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := store.SharingProject(t.Context(), "org", "vercel", "conn", "prj_1")
-	if err != nil || len(got) != 2 {
+	got, err := store.SharingProject(t.Context(), "org", "vercel", "prj_1")
+	if err != nil || len(got) != 3 {
 		t.Fatalf("got %v %v", got, err)
 	}
 	for _, pe := range got {

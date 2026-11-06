@@ -257,3 +257,21 @@ func TestFrontendAbsentNative(t *testing.T) {
 		})
 	}
 }
+
+// TestVercelNativeRemoveKeepsProjectSharedThroughAnotherConnection:
+// production deployed web through a second connection to the same Vercel
+// team, so the project is the same one, and removing staging leaves it.
+func TestVercelNativeRemoveKeepsProjectSharedThroughAnotherConnection(t *testing.T) {
+	prod := productionRow()
+	prod.ConnectionID = "conn_b"
+	h := newRemoveHarness(t, "prj_1#env_9", prod)
+	if err := h.exec.Remove(t.Context(), h.job, h.b); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if h.api.called("DELETE /v9/projects/prj_1") {
+		t.Fatal("deleted a project production uses through another connection")
+	}
+	if len(h.store.rows) != 1 || h.store.rows[peKey(prod)] == nil {
+		t.Fatalf("rows = %v, want only production's", h.store.rows)
+	}
+}

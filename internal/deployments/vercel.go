@@ -464,7 +464,7 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 	}
 	if s.CreatedProject {
 		job := d.job
-		others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", job.Deployment.OrgID, job.Connection.ID, s.ProjectID, job.Deployment.EnvironmentID, job.Action.Name)
+		others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", job.Deployment.OrgID, s.ProjectID, job.Deployment.EnvironmentID, job.Action.Name)
 		if err != nil {
 			return fmt.Errorf("check who uses the vercel project: %w", err)
 		}
@@ -664,7 +664,7 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 	if connID == "" && job.Connection != nil {
 		connID = job.Connection.ID
 	}
-	others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", b.OrgID, connID, projectID, envID, b.Name)
+	others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", b.OrgID, projectID, envID, b.Name)
 	if err != nil {
 		return fmt.Errorf("check who uses the vercel project: %w", err)
 	}
