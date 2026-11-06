@@ -173,6 +173,23 @@ func TestCredentialsVaultErrorRefusesWithoutFallback(t *testing.T) {
 	refused(t, err)
 }
 
+// The refusal goes to nexus and, through cortex's publication checks, to
+// the run's error. Vault's cause names the secret's path, two IDs that
+// shield's secret detector can read as a token, so the refusal leaves it out.
+func TestCredentialsKeyErrorLeavesOutTheVaultPath(t *testing.T) {
+	h, ctx := on(t, "claude", "")
+	const path = "aorg_01m6qga6qjekebxjj7xd6vddcc/provider-keys/aikey_01m6qga6vbety8msvyw5x7phde"
+	h.keys.SetFail(fmt.Errorf("read credential: secret: decrypt %q: crypto: ciphertext too short", path))
+	_, err := h.svc.Credentials().ResolveCredential(ctx, "anthropic")
+	refused(t, err)
+	if !errors.Is(err, agentsettings.ErrKeyUnavailable) {
+		t.Fatalf("vault error: %v", err)
+	}
+	if strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "decrypt") {
+		t.Fatalf("the refusal carries the cause: %v", err)
+	}
+}
+
 func TestCredentialsRefuseWhenTheAgentIsOff(t *testing.T) {
 	h, ctx := on(t, "claude", "")
 	h.mustUpdate(t, agentsettings.AgentUpdateInput{Enabled: ptr(false)})
