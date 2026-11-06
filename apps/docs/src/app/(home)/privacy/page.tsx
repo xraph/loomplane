@@ -22,7 +22,7 @@ export default function PrivacyPage() {
           removed.
         </>
       }
-      updated="October 29, 2026"
+      updated="November 5, 2026"
     >
       <h2>Who this covers</h2>
       <p>
@@ -79,7 +79,10 @@ export default function PrivacyPage() {
         The app talks to the Loomplane server you choose, over HTTPS (plain HTTP
         only for a server on your own network). It sends your sign-in details
         and session token, and the actions you take, like approving a plan or
-        marking a notification read. It shows you what that server sends back.
+        marking a notification read. If your workspace has the agent on, it also
+        sends what you type to the agent, your answers to its questions and any
+        secret it asks you for, the same way the dashboard does. It shows you
+        what that server sends back.
       </p>
       <p>
         The first time it opens, the app downloads its typeface, Geist, from
@@ -179,6 +182,56 @@ export default function PrivacyPage() {
         <Link href="/security">security page</Link> explains how.
       </p>
 
+      <h2>The agent and other AI features</h2>
+      <p>
+        Loomplane has an optional agent that reads your projects, plans and
+        deployments and can work on them for you. It's off until an admin of
+        your workspace turns it on, and while it's off nothing goes to an AI
+        provider. The same goes for knowledge search, which needs its own
+        switch.
+      </p>
+      <p>
+        With the agent on, what you ask it and what it reads to answer you go to
+        the AI model provider your workspace uses. That can include deployment
+        logs, plans, manifests, commit messages and the names of your services
+        and variables. Your workspace's AI settings page shows which provider
+        that is: the server's default, or a key from Anthropic, OpenAI or
+        another OpenAI-compatible service that an admin added. On{" "}
+        <code>app.loomplane.com</code> the server's default runs on our account
+        with that provider, so it processes the data for us. A key your
+        workspace adds is your own account, under that provider's own terms.
+        Before anything reaches the model, Loomplane scans it for secrets, and
+        it scans the answer before you see it.
+      </p>
+      <p>
+        A secret the agent asks you for never goes to the model. You type it
+        into Loomplane, it's stored encrypted like any other secret, and the
+        agent only learns that it was set. Provider API keys and a Hugging Face
+        token are stored encrypted too, and nobody can read them back, you
+        included.
+      </p>
+      <p>
+        Your conversations with the agent (your messages, its answers and the
+        steps it took) stay on the server until you delete them, or until the
+        workspace is deleted. Only you can add to or delete a conversation you
+        started. Admins of the workspace can read it. The questions the agent
+        asks people, their answers, and the reports it opens about problems in
+        production stay with the workspace like the rest of its history. The
+        audit trail records each step the agent takes, but never a secret value,
+        a question's text or an answer.
+      </p>
+      <p>
+        With knowledge on, the agent can search your workspace's documents, such
+        as its reports. To do that the server sends those documents to an
+        embedding provider, which turns them into vectors the server stores. If
+        your workspace has connected GitHub, a report can also open an issue in
+        the repository it's about, through your workspace's GitHub App.
+      </p>
+      <p>
+        On a server you or your company run, whoever runs it picks the
+        providers, and their policy covers what's sent.
+      </p>
+
       <h2>How we use it</h2>
       <p>
         To run the service you asked for: sign you in, show you your projects,
@@ -192,7 +245,9 @@ export default function PrivacyPage() {
       <p>
         We use a small number of providers to run the hosted service, such as
         the cloud company that hosts it and the service that delivers its email.
-        They process data only to provide those services to us.
+        If your workspace uses the agent on our default provider, that AI
+        provider is one of them. They process data only to provide those
+        services to us.
       </p>
       <p>
         When you connect a cloud account, a repository host or another
