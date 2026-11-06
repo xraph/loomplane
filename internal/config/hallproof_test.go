@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	authid "github.com/xraph/authsome/id"
 )
 
 func TestHallproofOffByDefault(t *testing.T) {
@@ -13,25 +17,27 @@ func TestHallproofOffByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Hallproof != (HallproofConfig{}) || c.Hallproof.Enabled() {
+	if !reflect.DeepEqual(c.Hallproof, HallproofConfig{}) || c.Hallproof.Enabled() {
 		t.Fatalf("hallproof %+v, want off with nothing set", c.Hallproof)
 	}
 }
 
 func TestHallproofFromConfigYAML(t *testing.T) {
+	staffA, staffB := authid.NewOrgID().String(), authid.NewOrgID().String()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	keyFile := filepath.Join(t.TempDir(), "ingest-key")
 	for _, tt := range []struct {
-		name                   string
-		endpoint, key, keyFile string
-		want                   HallproofConfig
+		name                              string
+		endpoint, key, keyFile, staffOrgs string
+		want                              HallproofConfig
 	}{
-		{"unset", "", "", "", HallproofConfig{}},
-		{"key", "https://hallproof.example.com", "hpk_live", "", HallproofConfig{Endpoint: "https://hallproof.example.com", IngestKey: "hpk_live"}},
-		{"key file", "https://hallproof.example.com", "", keyFile, HallproofConfig{Endpoint: "https://hallproof.example.com", IngestKeyFile: keyFile}},
+		{"unset", "", "", "", "", HallproofConfig{}},
+		{"key", "https://hallproof.example.com", "hpk_live", "", "", HallproofConfig{Endpoint: "https://hallproof.example.com", IngestKey: "hpk_live"}},
+		{"key file", "https://hallproof.example.com", "", keyFile, "", HallproofConfig{Endpoint: "https://hallproof.example.com", IngestKeyFile: keyFile}},
+		{"staff orgs", "https://hallproof.example.com", "hpk_live", "", staffA + ", " + staffB, HallproofConfig{Endpoint: "https://hallproof.example.com", IngestKey: "hpk_live", StaffOrgs: []string{staffA, staffB}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -42,11 +48,12 @@ func TestHallproofFromConfigYAML(t *testing.T) {
 			t.Setenv("LOOMPLANE_HALLPROOF_ENDPOINT", tt.endpoint)
 			t.Setenv("LOOMPLANE_HALLPROOF_INGEST_KEY", tt.key)
 			t.Setenv("LOOMPLANE_HALLPROOF_INGEST_KEY_FILE", tt.keyFile)
+			t.Setenv("LOOMPLANE_HALLPROOF_STAFF_ORGS", tt.staffOrgs)
 			c, err := Load(dir)
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if c.Hallproof != tt.want {
+			if !reflect.DeepEqual(c.Hallproof, tt.want) {
 				t.Fatalf("hallproof %+v, want %+v", c.Hallproof, tt.want)
 			}
 		})
@@ -113,5 +120,56 @@ func TestHallproofHidesTheKey(t *testing.T) {
 		if strings.Contains(s, "hpk_secret_canary") {
 			t.Fatalf("the ingest key is printed: %s", s)
 		}
+	}
+}
+
+func TestHallproofStaffOrgs(t *testing.T) {
+	a, b, c := authid.NewOrgID().String(), authid.NewOrgID().String(), authid.NewOrgID().String()
+	on := func(staff any) mapGetter {
+		return mapGetter{"database.url": testDSN, "hallproof.endpoint": "https://hallproof.example.com", "hallproof.ingest_key": "hpk_test", "hallproof.staff_orgs": staff}
+	}
+	for _, tt := range []struct {
+		name  string
+		staff any
+		want  []string
+	}{
+		{"unset", nil, nil},
+		{"empty", "", nil},
+		{"blank", " , ,", nil},
+		{"one", a, []string{a}},
+		{"several", a + "," + b + "," + c, []string{a, b, c}},
+		{"blanks around and between", " " + a + " ,, " + b + " ,", []string{a, b}},
+		{"a yaml list", []any{a, " " + b, ""}, []string{a, b}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := FromSource(on(tt.staff))
+			if err != nil {
+				t.Fatalf("FromSource: %v", err)
+			}
+			if !slices.Equal(got.Hallproof.StaffOrgs, tt.want) {
+				t.Fatalf("staff orgs %q, want %q", got.Hallproof.StaffOrgs, tt.want)
+			}
+		})
+	}
+	for _, tt := range []struct {
+		name  string
+		staff any
+		want  string
+	}{
+		{"not an org ID", "xraph", `hallproof.staff_orgs: "xraph" isn't an organization ID`},
+		{"a user ID", authid.NewUserID().String(), "isn't an organization ID"},
+		{"twice", a + "," + b + "," + a, "hallproof.staff_orgs names " + a + " twice"},
+		{"a number", 3, "hallproof.staff_orgs must be a list of names"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := FromSource(on(tt.staff))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FromSource = %v, want an error mentioning %q", err, tt.want)
+			}
+		})
+	}
+	// Off, the list isn't used, so it isn't judged.
+	if _, err := FromSource(mapGetter{"database.url": testDSN, "hallproof.staff_orgs": "xraph"}); err != nil {
+		t.Fatalf("off with a bad staff org: %v", err)
 	}
 }

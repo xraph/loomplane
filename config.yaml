@@ -346,8 +346,13 @@ chronicle:
 # Hallproof, never a customer's. Leave it empty and nothing of Hallproof's
 # runs. The endpoint is https, or http on this machine. Give the ingest key
 # from Hallproof as ingest_key or, for a mounted secret, ingest_key_file,
-# not both.
+# not both. staff_orgs lists the organization IDs (aorg_...) that are your
+# own staff's, comma-separated. Their API keys, webhooks, agents, jobs and
+# agent safety settings count as staff evidence. Every other organization
+# is a customer's, and so is every one while the list is empty, which is
+# the default.
 hallproof:
   endpoint: "${LOOMPLANE_HALLPROOF_ENDPOINT:-}"
   ingest_key: "${LOOMPLANE_HALLPROOF_INGEST_KEY:-}"
   ingest_key_file: "${LOOMPLANE_HALLPROOF_INGEST_KEY_FILE:-}"
+  staff_orgs: "${LOOMPLANE_HALLPROOF_STAFF_ORGS:-}"

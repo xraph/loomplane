@@ -666,6 +666,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Hallproof.Endpoint, "hallproof.endpoint")
 	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
 	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
+	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err

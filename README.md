@@ -154,6 +154,7 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 | `LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL` | `15m` | Signs a stream that gained any event at least this often |
 | `LOOMPLANE_HALLPROOF_ENDPOINT` | unset | Your Hallproof's URL. Set it and Loomplane pushes compliance evidence about its own staff and platform there; unset, nothing is sent |
 | `LOOMPLANE_HALLPROOF_INGEST_KEY` | unset | The ingest key Hallproof gave this system. Or set `LOOMPLANE_HALLPROOF_INGEST_KEY_FILE` to a file holding it, not both |
+| `LOOMPLANE_HALLPROOF_STAFF_ORGS` | unset | The IDs of your own organizations (`aorg_...`), comma-separated. Their API keys, webhooks, agents, jobs and agent safety settings go to Hallproof as staff evidence. Unset, every organization is a customer's and nothing one owns is sent |
 | `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | unset | Ranges an endpoint check from a Kubernetes target never connects to, such as `10.20.0.0/16`. Loomplane's own host, database and API are always refused |
 | `LOOMPLANE_ANALYSIS_CONCURRENCY` | `2` | How many repositories the worker analyzes at once |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | The worker's health checks |
