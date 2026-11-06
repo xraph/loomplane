@@ -115,7 +115,7 @@ func TestBuiltinRiskTable(t *testing.T) {
 		"github_status": agentRead, "list_repositories": agentRead, "deployed": agentRead,
 		"deployment_logs": agentRead, "drift": agentRead, "binding_metrics": agentRead,
 		"canary_report": agentRead, "recent_canaries": agentRead, "rollback_target": agentRead,
-		"list_teams": agentRead,
+		"list_teams": agentRead, "get_repository_state": agentRead,
 
 		"create_project": agentChange, "create_environment": agentChange, "add_source": agentChange,
 

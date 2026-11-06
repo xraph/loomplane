@@ -35,6 +35,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	pkgdiscovery "github.com/xraph/loomplane/pkg/discovery"
 )
@@ -140,6 +141,7 @@ type rtWorld struct {
 	deps   *rtDeployments
 	logs   *rtLogs
 	disco  *rtDiscovery
+	repos  *rtRepos
 	audit  *rtAudit
 }
 
@@ -172,13 +174,14 @@ func newRTWorld(t *testing.T) *rtWorld {
 	w.deps = &rtDeployments{authz: authz, deps: map[string]*deployments.Deployment{}}
 	w.logs = &rtLogs{lines: map[string][]string{}}
 	w.disco = &rtDiscovery{authz: authz}
+	w.repos = &rtRepos{}
 	w.safety = &agentsafety.Scanner{Engine: rtShield(t)}
 
 	w.reg = agentops.NewRegistry()
 	d := &agentops.Deps{
 		Projects: prj, Environments: &rtVariables{authz: authz, writes: writes}, Discovery: w.disco,
 		Manifests: &rtManifests{authz: authz, writes: writes}, Plans: w.plans, Deployments: w.deps,
-		Logs: w.logs, Authz: authz, Safety: w.safety, Audit: w.audit,
+		Logs: w.logs, Authz: authz, Safety: w.safety, Audit: w.audit, Repositories: w.repos,
 	}
 	agentops.Builtins(w.reg, d)
 	a := &agentauthz.Authorizer{Registry: w.reg, Plans: w.plans, Projects: prj, Authz: authz, ApprovalWindow: 72 * time.Hour}
@@ -293,6 +296,14 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 					t.Fatalf("deployed doesn't name the commit: %s", res)
 				}
 				markerOnlyQuoted(t, "deployed", res, f.Marker)
+				// The head commit's message and author, and the latest
+				// release's name and tag, as the Git host gives them.
+				w.repos.text = f.Text
+				res = w.read("get_repository_state", map[string]string{"project": "api"})
+				if !strings.Contains(res, rtCommitSHA) || !strings.Contains(res, "/deployments/"+rtCommitPlan) {
+					t.Fatalf("get_repository_state doesn't name the commit: %s", res)
+				}
+				markerOnlyQuoted(t, "get_repository_state", res, f.Marker)
 			case redteam.SourceLogLine:
 				w.deps.add(&deployments.Deployment{
 					ID: rtDeployment, OrgID: rtOrg, ProjectID: rtProject, EnvironmentID: rtProject + "_staging", Environment: "staging",
@@ -839,8 +850,31 @@ func (f *rtDiscovery) Get(ctx context.Context, p security.Principal, _ string) (
 	return f.analysis(rtProject), nil
 }
 
+func (f *rtDiscovery) Sources(ctx context.Context, p security.Principal, projectID string) ([]*discovery.Source, error) {
+	if err := f.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
+		return nil, err
+	}
+	return []*discovery.Source{{ID: "src_api", OrgID: rtOrg, ProjectID: projectID, Alias: "api", Repository: "acme/api"}}, nil
+}
+
 func (f *rtDiscovery) AddSource(context.Context, security.Principal, string, discovery.AddSourceInput) (*discovery.Source, error) {
 	return nil, discovery.ErrInvalid
+}
+
+// rtRepos is a Git host whose every commit message, author, release name
+// and tag is text.
+type rtRepos struct{ text string }
+
+func (f *rtRepos) HeadCommit(_ context.Context, _ repositories.Repository, _, _ string) (repositories.Commit, error) {
+	return repositories.Commit{SHA: rtCommitSHA, Ref: "main", Message: f.text, Author: f.text, URL: "https://github.com/acme/api/commit/" + rtCommitSHA}, nil
+}
+
+func (f *rtRepos) LatestRelease(context.Context, repositories.Repository, string) (*repositories.Release, error) {
+	return &repositories.Release{Name: f.text, Tag: f.text, Kind: repositories.ReleaseKindRelease, URL: "https://github.com/acme/api/releases"}, nil
+}
+
+func (f *rtRepos) RepositoryURL(_ context.Context, repo repositories.Repository) string {
+	return repo.URL()
 }
 
 // rtManifests records every save.

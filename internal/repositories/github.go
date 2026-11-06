@@ -60,6 +60,9 @@ func IsCommitSHA(ref string) bool { return shaPattern.MatchString(ref) }
 type GitHub struct {
 	// APIURL is the REST API's base URL, DefaultAPIURL for github.com.
 	APIURL string
+	// WebURL is where GitHub serves its pages, which commit and release
+	// links point at. Empty is DefaultGitHubWebURL.
+	WebURL string
 	HTTP   *http.Client
 
 	MaxArchiveBytes int64
@@ -89,13 +92,11 @@ func (g *GitHub) limits() Limits {
 // ref is empty. token may be empty for a public repository.
 func (g *GitHub) Resolve(ctx context.Context, repo Repository, ref, token string) (string, error) {
 	if ref == "" {
-		var info struct {
-			DefaultBranch string `json:"default_branch"`
-		}
-		if err := g.getJSON(ctx, "/repos/"+repo.FullName(), token, &info); err != nil {
+		branch, err := g.defaultBranch(ctx, repo, token)
+		if err != nil {
 			return "", err
 		}
-		ref = info.DefaultBranch
+		ref = branch
 	}
 	if !ValidRef(ref) {
 		return "", fmt.Errorf("%w: %q isn't a valid ref", ErrNotFound, ref)

@@ -21,7 +21,7 @@ var investigationTools = []string{
 	"whoami", "list_projects", "get_manifest", "list_plans", "get_plan", "list_deployments", "get_deployment",
 	"deployment_for_plan", "status", "list_variables", "deployed", "deployment_logs", "drift", "binding_metrics",
 	"canary_report", "recent_canaries", "rollback_target", "get_release_watch", "github_status", "list_repositories",
-	"list_reports", "get_report", "update_report",
+	"get_repository_state", "list_reports", "get_report", "update_report",
 }
 
 // InvestigationSpec is how the agent investigates a report: alone, with

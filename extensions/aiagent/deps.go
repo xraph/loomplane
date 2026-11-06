@@ -7,6 +7,7 @@ import (
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
 
+	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
@@ -52,6 +53,29 @@ func (e *Extension) fillDeps(c forge.Container, projectSvc *projects.Service) er
 	resolve("the planning store", func() (err error) { d.Bindings, err = forge.InjectType[*planning.PgStore](c); return })
 	resolve("the release watches", func() (err error) { d.Watches, err = forge.InjectType[*releasewatch.Service](c); return })
 	resolve("the teams service", func() (err error) { d.Teams, err = forge.InjectType[*teams.Service](c); return })
+	resolve("the Git host readers", func() error {
+		github, err := forge.InjectType[*repositories.Connections](c)
+		if err != nil {
+			return err
+		}
+		bitbucket, err := forge.InjectType[*repositories.BitbucketConnections](c)
+		if err != nil {
+			return err
+		}
+		gitlab, err := forge.InjectType[*repositories.GitLabConnections](c)
+		if err != nil {
+			return err
+		}
+		hosts, err := forge.InjectType[*repositories.GitLabRegistry](c)
+		if err != nil {
+			return err
+		}
+		// The same readers and tokens analyses and deployments use, so the
+		// agent reads exactly the repositories they can.
+		d.Repositories = discoveryext.SourceReaders(e.cfg, hosts)
+		d.RepositoryTokens = discoveryext.SourceTokens(github, bitbucket, gitlab)
+		return nil
+	})
 	d.Safety = e.scanner
 	return errors.Join(errs...)
 }

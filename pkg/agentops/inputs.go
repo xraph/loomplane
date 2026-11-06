@@ -112,6 +112,13 @@ type DriftInput struct {
 	Environment string `json:"environment,omitempty" jsonschema:"one environment; every environment if empty"`
 }
 
+// RepositoryStateInput is get_repository_state's input: a project, and one
+// environment or all.
+type RepositoryStateInput struct {
+	Project     string `json:"project" jsonschema:"the project's slug, name or ID"`
+	Environment string `json:"environment,omitempty" jsonschema:"one environment whose deployed commits to compare; every environment if empty"`
+}
+
 // DeploymentLogsInput is deployment_logs's input.
 type DeploymentLogsInput struct {
 	DeploymentID string `json:"deployment_id" jsonschema:"the deployment's ID"`

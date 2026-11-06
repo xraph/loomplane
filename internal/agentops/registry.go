@@ -502,6 +502,14 @@ type Deps struct {
 	Watches  WatchService
 	// Teams lists the workspace's teams for list_teams: *teams.Service.
 	Teams TeamService
+	// Repositories reads a repository's head commit and latest release
+	// from its Git host for get_repository_state: repositories.Readers.
+	// Nil reads nothing, and each repository says so.
+	Repositories RepositoryReader
+	// RepositoryTokens mints the token a private repository is read with,
+	// from the organization's connected accounts: repositories.Tokens. Nil
+	// reads anonymously.
+	RepositoryTokens repositories.TokenSource
 	// People names a person by user ID, for approve_plan's report of a
 	// plan someone decided: agentrequests.PgPeople. Nil names nobody.
 	People PersonNamer
@@ -567,6 +575,7 @@ type DiscoveryService interface {
 	Start(ctx context.Context, p security.Principal, projectID string, in discovery.StartAnalysisInput) ([]*discovery.Analysis, error)
 	Get(ctx context.Context, p security.Principal, id string) (*discovery.Analysis, error)
 	AddSource(ctx context.Context, p security.Principal, projectID string, in discovery.AddSourceInput) (*discovery.Source, error)
+	Sources(ctx context.Context, p security.Principal, projectID string) ([]*discovery.Source, error)
 }
 
 // GitHubService is *repositories.Connections.

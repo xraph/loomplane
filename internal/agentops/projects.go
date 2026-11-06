@@ -119,7 +119,13 @@ type (
 		Permissions []string `json:"permissions"`
 	}
 	projectsOutput struct {
-		Projects []projects.Project `json:"projects"`
+		Projects []listedProject `json:"projects"`
+	}
+	// listedProject is a project with its page in the dashboard, relative
+	// to the workspace.
+	listedProject struct {
+		projects.Project
+		Path string `json:"path"`
 	}
 	statusOutput struct {
 		Environments []environmentStatus `json:"environments"`
@@ -155,10 +161,10 @@ func registerProjects(r *Registry, d *Deps) {
 		if err != nil {
 			return projectsOutput{}, err
 		}
-		out := projectsOutput{Projects: make([]projects.Project, 0, len(list))}
+		out := projectsOutput{Projects: make([]listedProject, 0, len(list))}
 		for _, p := range list {
 			if call.Scope.ProjectID == "" || p.ID == call.Scope.ProjectID {
-				out.Projects = append(out.Projects, *p)
+				out.Projects = append(out.Projects, listedProject{Project: *p, Path: projectPath(p.ID)})
 			}
 		}
 		return out, nil
