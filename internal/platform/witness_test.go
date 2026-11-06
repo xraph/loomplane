@@ -7,6 +7,7 @@ import (
 	"github.com/hallproof/witness/adapter"
 	witnessforge "github.com/hallproof/witness/forge"
 
+	"github.com/xraph/loomplane/extensions/aiagent"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platformadmin"
 )
@@ -60,11 +61,75 @@ func TestWitnessConfig(t *testing.T) {
 	if len(w.Exclude) != 0 {
 		t.Errorf("exclude %v, want every adapter on", w.Exclude)
 	}
-	// No staff lists until Loomplane names a staff organization.
-	for _, name := range []string{"keysmith", "relay", "cortex", "dispatch"} {
+	// With no staff orgs there are no staff lists, so nothing an
+	// organization owns is collected.
+	for _, name := range []string{"keysmith", "relay", "cortex", "dispatch", "nexus"} {
 		if _, ok := w.Adapters[name]; ok {
 			t.Errorf("%s has config: %v", name, w.Adapters[name])
 		}
+	}
+}
+
+func TestWitnessConfigStaffOrgs(t *testing.T) {
+	const a, b = "aorg_01jbxk1v7wf8sr6ka9w5gq0z2c", "aorg_01jbxk2m3ne4ytr8p0d6hv1c5x"
+	for _, tt := range []struct {
+		name  string
+		staff []string
+		orgs  []string // cortex's orgs after its org
+	}{
+		{"one", []string{a}, nil},
+		{"two", []string{a, b}, []string{b}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := hallproofOn()
+			cfg.Hallproof.StaffOrgs = tt.staff
+			w := witnessConfig(cfg)
+			list := func(adapter, key string) []string {
+				t.Helper()
+				v, _ := w.Adapters[adapter][key].([]string)
+				return v
+			}
+			for _, at := range []struct{ adapter, key string }{
+				{"keysmith", "staff_tenants"},
+				{"relay", "staff_tenants"},
+				{"dispatch", "staff_orgs"},
+				{"shield", "tenants"},
+			} {
+				if got := list(at.adapter, at.key); !slices.Equal(got, tt.staff) {
+					t.Errorf("%s %s = %v, want %v", at.adapter, at.key, got, tt.staff)
+				}
+			}
+			if shield := w.Adapters["shield"]; shield["app_id"] != "loomplane" {
+				t.Errorf("shield app_id %v, want loomplane", shield["app_id"])
+			}
+			cortex := w.Adapters["cortex"]
+			if cortex["org"] != tt.staff[0] || cortex["scope_key"] != "org" || !slices.Equal(list("cortex", "orgs"), tt.orgs) {
+				t.Errorf("cortex %v, want org %s, scope_key org and orgs %v", cortex, tt.staff[0], tt.orgs)
+			}
+			// Nexus names each staff org's agent tenant by its slug.
+			want := make([]string, 0, len(tt.staff))
+			for _, org := range tt.staff {
+				want = append(want, aiagent.TenantSlug(org))
+			}
+			if got := list("nexus", "tenants"); !slices.Equal(got, want) {
+				t.Errorf("nexus tenants %v, want %v", got, want)
+			}
+			// Nothing widens past the staff orgs.
+			for name, section := range w.Adapters {
+				if _, ok := section["all_tenants"]; ok {
+					t.Errorf("%s sets all_tenants", name)
+				}
+			}
+			// The adapters get their own copy, so one can't change another's.
+			keys, hooks := list("keysmith", "staff_tenants"), list("relay", "staff_tenants")
+			if len(keys) == 0 || len(hooks) == 0 {
+				return
+			}
+			keys[0] = "changed"
+			if cfg.Hallproof.StaffOrgs[0] != tt.staff[0] || hooks[0] != tt.staff[0] {
+				t.Error("the adapters share the staff list")
+			}
+		})
 	}
 }
 

@@ -180,7 +180,7 @@ func TestEmbeddingsNameTheirProvider(t *testing.T) {
 	emb := &fakeProvider{name: agentsettings.EmbeddingsProvider, models: priced}
 	gw := gateway(t, ai, chat, emb)
 	ctx := context.Background()
-	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: tenantSlug("org_1")})
+	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: TenantSlug("org_1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestOpenAIEmbeddingsArePricedFromTheCatalog(t *testing.T) {
 	if got.Provider != agentsettings.EmbeddingsProvider || got.Model != "text-embedding-3-small" {
 		t.Fatalf("override is for %s/%s", got.Provider, got.Model)
 	}
-	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: tenantSlug("org_1")})
+	tn, err := gw.Tenants().Create(ctx, &tenant.CreateInput{Name: "Engines", Slug: TenantSlug("org_1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestUnpricedEmbeddingsAreReported(t *testing.T) {
 }
 
 func TestTenantSlug(t *testing.T) {
-	if got := tenantSlug("aorg_01HX_Z"); got != "loomplane-aorg-01hx-z" {
+	if got := TenantSlug("aorg_01HX_Z"); got != "loomplane-aorg-01hx-z" {
 		t.Fatalf("slug %q", got)
 	}
 }
@@ -454,7 +454,7 @@ func TestSystemTenant(t *testing.T) {
 	if len(g.calls) != 1 || g.calls[0] != [2]string{agentknowledge.SystemOrg, "12.50"} {
 		t.Fatalf("EnsureTenant calls %v", g.calls)
 	}
-	if got := tenantSlug(agentknowledge.SystemOrg); got != "loomplane-system" {
+	if got := TenantSlug(agentknowledge.SystemOrg); got != "loomplane-system" {
 		t.Fatalf("slug %q", got)
 	}
 	g = &tenantGateway{}

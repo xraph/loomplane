@@ -12,7 +12,10 @@ import (
 	"github.com/hallproof/witness"
 	witnessforge "github.com/hallproof/witness/forge"
 	"github.com/hallproof/witness/ingesttest"
+	witnesskeysmith "github.com/hallproof/witness/keysmith"
 	"github.com/hallproof/witness/push"
+	witnessrelay "github.com/hallproof/witness/relay"
+	authid "github.com/xraph/authsome/id"
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -35,8 +38,9 @@ type witnessCoverage struct {
 
 // With hallproof.endpoint set, Loomplane runs witness, and witness finds the
 // libraries Loomplane runs. Bastion and Sentinel aren't imported, so they
-// can't be found. Takes up to 30 seconds after boot, for the first run,
-// and then the app has to stop in time.
+// can't be found. With a staff org named, Keysmith and Relay register
+// their key and endpoint populations. Takes up to 30 seconds after boot,
+// for the first run, and then the app has to stop in time.
 func TestWitnessFindsLoomplanesLibraries(t *testing.T) {
 	s := ingesttest.New(t)
 	s.Know(push.KindHeartbeat)
@@ -45,7 +49,7 @@ func TestWitnessFindsLoomplanesLibraries(t *testing.T) {
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Storage.URL = "file://" + t.TempDir()
 	cfg.Dashboard.Dir = t.TempDir()
-	cfg.Hallproof = config.HallproofConfig{Endpoint: s.URL, IngestKey: s.Key}
+	cfg.Hallproof = config.HallproofConfig{Endpoint: s.URL, IngestKey: s.Key, StaffOrgs: []string{authid.NewOrgID().String()}}
 	booted := time.Now()
 	r := start(t, cfg)
 	defer r.stop()
@@ -74,6 +78,9 @@ func TestWitnessFindsLoomplanesLibraries(t *testing.T) {
 			t.Errorf("witness attached %s", name)
 		}
 	}
+
+	// A staff org turns on the populations that need one.
+	waitForEvidence(t, s, witnesskeysmith.KeyAPIKeys, witnessrelay.KeyEndpoints)
 
 	// Witness is in the container once the app has started.
 	if _, err := forge.InjectType[*witness.Witness](r.app.(forge.App).Container()); err != nil {
@@ -119,6 +126,34 @@ func TestWitnessOffWithoutEndpoint(t *testing.T) {
 	}
 	if _, err := forge.InjectType[*witness.Witness](app.Container()); err == nil {
 		t.Error("*witness.Witness is provided with no hallproof.endpoint")
+	}
+}
+
+// waitForEvidence waits, at most coverageWait, until something has been
+// stored under each collector key.
+func waitForEvidence(t *testing.T, s *ingesttest.Server, keys ...string) {
+	t.Helper()
+	deadline := time.Now().Add(coverageWait)
+	for {
+		got := map[string]bool{}
+		for _, m := range s.Stored() {
+			k, _, _ := strings.Cut(m.ID, ":")
+			got[k] = true
+		}
+		var missing []string
+		for _, k := range keys {
+			if !got[k] {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("no evidence from %v within %s", missing, coverageWait)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
