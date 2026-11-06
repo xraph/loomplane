@@ -32,6 +32,9 @@ type removeAPI struct {
 	states      map[string]string
 	noProject   bool
 	noCustomEnv bool
+	// customEnvs are the project's custom environments, and left the
+	// deployments a project-wide listing finds.
+	customEnvs, left []string
 }
 
 func (a *removeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +47,18 @@ func (a *removeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"error":{"code":"not_found","message":"missing"}}`)
 	}
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v7/deployments" && r.URL.Query().Get("limit") == "1":
+		items := make([]string, 0, len(a.left))
+		for _, id := range a.left {
+			items = append(items, fmt.Sprintf(`{"uid":%q,"readyState":"READY"}`, id))
+		}
+		_, _ = fmt.Fprintf(w, `{"deployments":[%s]}`, strings.Join(items, ","))
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/custom-environments"):
+		items := make([]string, 0, len(a.customEnvs))
+		for _, id := range a.customEnvs {
+			items = append(items, fmt.Sprintf(`{"id":%q,"slug":"staging"}`, id))
+		}
+		_, _ = fmt.Fprintf(w, `{"environments":[%s]}`, strings.Join(items, ","))
 	case r.Method == http.MethodGet && r.URL.Path == "/v7/deployments":
 		ids := []string{}
 		if len(a.listings) > 0 {
@@ -171,6 +186,37 @@ func TestVercelNativeRemoveLastDeletesProject(t *testing.T) {
 	}
 	if len(h.store.rows) != 0 {
 		t.Fatalf("rows = %v, want none", h.store.rows)
+	}
+}
+
+// A kept staging service's record went with its environment, so no
+// record says it still uses the project. Vercel still lists its custom
+// environment and deployments, so removing production's keeps the project.
+func TestVercelNativeRemoveKeepsProjectVercelStillUses(t *testing.T) {
+	for name, api := range map[string]*removeAPI{
+		"custom environment": {customEnvs: []string{"env_9"}},
+		"deployment":         {left: []string{"dpl_staging"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRemoveHarness(t, "prj_1#production")
+			h.store.rows = map[string]*ProviderEnvironment{peKey(productionRow()): productionRow()}
+			h.api.customEnvs, h.api.left = api.customEnvs, api.left
+			h.job.Deployment.EnvironmentID, h.b.EnvironmentID = "env_prod", "env_prod"
+			var warned []error
+			h.job.warn = func(err error) { warned = append(warned, err) }
+			if err := h.exec.Remove(t.Context(), h.job, h.b); err != nil {
+				t.Fatalf("Remove: %v", err)
+			}
+			if h.api.called("DELETE /v9/projects/prj_1") {
+				t.Fatal("deleted a project Vercel says is still in use")
+			}
+			if len(h.store.rows) != 0 {
+				t.Fatalf("rows = %v, want production's forgotten", h.store.rows)
+			}
+			if len(warned) != 1 || !strings.Contains(warned[0].Error(), "prj_1") {
+				t.Fatalf("warned %v", warned)
+			}
+		})
 	}
 }
 

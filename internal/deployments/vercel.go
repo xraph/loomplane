@@ -731,7 +731,10 @@ func (v *Vercel) forgetFallback(ctx context.Context, job *Job, b *planning.Bindi
 
 // forgetNative deletes the binding's record and, when no other environment
 // uses the project, the project. Without Environments nothing says who
-// shares the project, so it stays.
+// shares the project, so it stays. Vercel has the last word: a project
+// that still holds a custom environment or a deployment stays, such as one
+// a kept service of a deleted environment runs in, whose record went with
+// the environment.
 func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding, projectID string, projectExists bool) error {
 	if v.Environments == nil {
 		return nil
@@ -742,10 +745,18 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 		return fmt.Errorf("check who uses the vercel project: %w", err)
 	}
 	row := &ProviderEnvironment{OrgID: b.OrgID, EnvironmentID: envID, Provider: "vercel", ConnectionID: connID, Scope: b.Name}
-	if err := v.Environments.Store.DeleteProviderEnvironment(ctx, row); err != nil {
-		return fmt.Errorf("forget the native vercel environment: %w", err)
+	if forgetErr := v.Environments.Store.DeleteProviderEnvironment(ctx, row); forgetErr != nil {
+		return fmt.Errorf("forget the native vercel environment: %w", forgetErr)
 	}
 	if others || !projectExists {
+		return nil
+	}
+	inUse, err := v.Client.ProjectInUse(ctx, token(job), projectID)
+	if err != nil {
+		return fmt.Errorf("check what the vercel project still holds: %w", err)
+	}
+	if inUse {
+		job.Warn(fmt.Errorf("vercel kept the project %s, since it still holds deployments or custom environments no other Loomplane environment records. Loomplane no longer tracks it; delete it in Vercel once it's empty", projectID))
 		return nil
 	}
 	return v.Client.DeleteProject(ctx, token(job), projectID)
