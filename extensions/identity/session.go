@@ -52,6 +52,10 @@ type PublicConfig struct {
 	// PlatformAdmin is true for a session holding a platform role. It
 	// decides whether the dashboard shows the platform's own settings.
 	PlatformAdmin bool `json:"platform_admin,omitempty"`
+	// PlatformOwner is true for a session holding the platform-owner role,
+	// not for a platform admin who isn't the owner. It decides whether the
+	// dashboard shows what only the owner may read.
+	PlatformOwner bool `json:"platform_owner,omitempty"`
 	// CloudSignInOffer is true for a platform user while the instance
 	// still offers to set up cloud sign-in, until the owner ends it.
 	CloudSignInOffer bool `json:"cloud_sign_in_offer,omitempty"`
@@ -141,9 +145,16 @@ func (e *Extension) publicConfig(c forge.Context) error {
 		out.PlatformAdmin = true
 		out.CloudSignInOffer = e.cloudSignInOffer(ctx)
 	}
+	e.markOwner(ctx, &out)
 	// The answer changes with setup, the waitlist and who asks.
 	c.Response().Header().Set("Cache-Control", "no-store")
 	return c.JSON(http.StatusOK, out)
+}
+
+// markOwner sets PlatformOwner for a session that is the platform owner,
+// by the same check the owner-only routes make.
+func (e *Extension) markOwner(ctx context.Context, out *PublicConfig) {
+	_, out.PlatformOwner = e.platformOwner(ctx)
 }
 
 // holdsPlatformRole reports whether the request's session belongs to a

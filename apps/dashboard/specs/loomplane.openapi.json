@@ -34857,6 +34857,9 @@
           "platform_admin": {
             "type": "boolean"
           },
+          "platform_owner": {
+            "type": "boolean"
+          },
           "publishable_key": {
             "type": "string"
           },

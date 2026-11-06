@@ -4735,6 +4735,7 @@ export interface PublicConfig {
   consolePath?: string;
   features: Features;
   platformAdmin?: boolean;
+  platformOwner?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;
