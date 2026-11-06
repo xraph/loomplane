@@ -2,6 +2,7 @@ package projects
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/xraph/forge"
 
@@ -326,7 +327,16 @@ func (e *Extension) deleteEnvironment(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	opts := projects.DeleteEnvironmentOptions{Keep: c.Request().URL.Query()["keep"]}
+	// Each keep is one binding, or several joined with commas, as the
+	// generated REST client sends a list.
+	var opts projects.DeleteEnvironmentOptions
+	for _, v := range c.Request().URL.Query()["keep"] {
+		for id := range strings.SplitSeq(v, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				opts.Keep = append(opts.Keep, id)
+			}
+		}
+	}
 	if err := e.svc.DeleteEnvironment(c.Request().Context(), p, c.Param("id"), c.Param("envId"), opts); err != nil {
 		return fail(err)
 	}

@@ -58,15 +58,16 @@ func (pr *ProviderEnvironmentReaper) Removes(b *planning.Binding) bool {
 
 // Reap implements projects.Reaper: it removes everything, keeping nothing.
 func (pr *ProviderEnvironmentReaper) Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
-	return pr.ReapWithOptions(ctx, orgID, projectID, environmentID, projects.DeleteEnvironmentOptions{})
+	return pr.ReapWithOptions(ctx, orgID, projectID, environmentID, projects.DeleteEnvironmentOptions{}).Cleanup
 }
 
 // ReapWithOptions implements projects.ReaperWithOptions. It reads the
 // environment's Vercel and Render bindings and records, and returns what
-// removes each binding opts doesn't keep.
-func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID, projectID, environmentID string, opts projects.DeleteEnvironmentOptions) func(context.Context) {
+// removes each binding opts doesn't keep, with the IDs of those it removes
+// and keeps.
+func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID, projectID, environmentID string, opts projects.DeleteEnvironmentOptions) projects.Reaped {
 	if environmentID == "" {
-		return nil
+		return projects.Reaped{}
 	}
 	name := environmentID
 	envs, err := pr.Environments.ListEnvironments(ctx, orgID, projectID)
@@ -81,7 +82,7 @@ func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID,
 	bindings, err := pr.Bindings.ListBindings(ctx, orgID, environmentID)
 	if err != nil {
 		pr.warn(fmt.Sprintf("read what's deployed in the environment %s being deleted, so what it runs on Vercel and Render keeps running", name), err)
-		return nil
+		return projects.Reaped{}
 	}
 	var owned []*planning.Binding
 	for _, b := range bindings {
@@ -90,7 +91,7 @@ func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID,
 		}
 	}
 	if len(owned) == 0 {
-		return nil
+		return projects.Reaped{}
 	}
 	// A service goes before the databases it may use.
 	service := func(b *planning.Binding) int {
@@ -114,8 +115,16 @@ func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID,
 	for _, id := range opts.Keep {
 		keep[id] = true
 	}
+	var out projects.Reaped
+	for _, b := range owned {
+		if keep[b.ID] {
+			out.Keeps = append(out.Keeps, b.ID)
+		} else {
+			out.Removes = append(out.Removes, b.ID)
+		}
+	}
 	d := &Deployment{OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, Environment: name}
-	return func(ctx context.Context) {
+	out.Cleanup = func(ctx context.Context) {
 		for _, b := range owned {
 			if keep[b.ID] {
 				reportLeft(pr.warn, pr.Executors, b, name, append([]planning.Binding{*b}, b.Replaced...))
@@ -130,6 +139,7 @@ func (pr *ProviderEnvironmentReaper) ReapWithOptions(ctx context.Context, orgID,
 			reportLeft(pr.warn, pr.Executors, b, name, b.Replaced)
 		}
 	}
+	return out
 }
 
 // remove removes what b names through the executor and connection that

@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -113,9 +114,10 @@ func newProviderReapHarness(t *testing.T) *providerReapHarness {
 
 // deleteStaging deletes the environment staging the way the projects
 // service does: read, cascade, then clean up.
-func (h *providerReapHarness) deleteStaging(t *testing.T, keep ...string) {
+func (h *providerReapHarness) deleteStaging(t *testing.T, keep ...string) projects.Reaped {
 	t.Helper()
-	finish := h.reaper.ReapWithOptions(t.Context(), "org", "proj", "env_staging", projects.DeleteEnvironmentOptions{Keep: keep})
+	reaped := h.reaper.ReapWithOptions(t.Context(), "org", "proj", "env_staging", projects.DeleteEnvironmentOptions{Keep: keep})
+	finish := reaped.Cleanup
 	if finish == nil {
 		t.Fatal("an environment with Vercel and Render deployments had nothing to clean up")
 	}
@@ -124,6 +126,7 @@ func (h *providerReapHarness) deleteStaging(t *testing.T, keep ...string) {
 	}
 	h.store.cascade("env_staging")
 	finish(t.Context())
+	return reaped
 }
 
 func TestProviderEnvironmentReaperRemovesWhatLoomplaneCreated(t *testing.T) {
@@ -152,7 +155,10 @@ func TestProviderEnvironmentReaperRemovesWhatLoomplaneCreated(t *testing.T) {
 
 func TestProviderEnvironmentReaperKeepsTickedResources(t *testing.T) {
 	h := newProviderReapHarness(t)
-	h.deleteStaging(t, "bnd_db", "bnd_unknown")
+	reaped := h.deleteStaging(t, "bnd_db", "bnd_unknown")
+	if !slices.Equal(reaped.Removes, []string{"bnd_web", "bnd_api"}) || !slices.Equal(reaped.Keeps, []string{"bnd_db"}) {
+		t.Fatalf("removes %v and keeps %v", reaped.Removes, reaped.Keeps)
+	}
 	if h.renderAPI.called("DELETE /postgres/dpg_1") {
 		t.Fatal("the kept database was deleted")
 	}
@@ -197,7 +203,7 @@ func TestProviderEnvironmentReaperLeavesOtherProviders(t *testing.T) {
 	if h.reaper.Removes(cloudRun) {
 		t.Fatal("the reaper claims a Cloud Run binding")
 	}
-	if finish := h.reaper.ReapWithOptions(t.Context(), "org", "proj", "env_staging", projects.DeleteEnvironmentOptions{}); finish != nil {
+	if finish := h.reaper.ReapWithOptions(t.Context(), "org", "proj", "env_staging", projects.DeleteEnvironmentOptions{}).Cleanup; finish != nil {
 		h.store.cascade("env_staging")
 		finish(t.Context())
 	}
