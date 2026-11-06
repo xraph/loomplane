@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
@@ -186,6 +187,11 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
 		if !errors.As(err, &refusal) {
 			return out, err
 		}
+		if state.DeploymentID != "" {
+			// The environment already has a deployment of this job in it;
+			// falling back would remove the environment under it.
+			return nil, refusal.err
+		}
 		if err := d.undoNative(ctx); err != nil {
 			return nil, err
 		}
@@ -206,6 +212,8 @@ type vercelDeploy struct {
 	settings vercel.ProjectSettings
 	state    *vercelState
 	save     func()
+	// record is the environment's native record when it had one.
+	record *ProviderEnvironment
 }
 
 // native says whether the deploy goes into a native environment. Not when
@@ -220,6 +228,7 @@ func (d *vercelDeploy) native(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if rec == nil || rec.Mode != ModeFallback {
+		d.record = rec
 		return true, nil
 	}
 	// Anything checkpointed belongs to the shared project, not the
@@ -252,6 +261,14 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 	if native && created {
 		state.CreatedProject = true
 		d.save()
+	}
+	if native && (d.record == nil || d.record.ProjectRef != project.ID) {
+		// Claim the project before writing to it, so another
+		// environment's fallback never removes it while this deploys.
+		if claimErr := v.Environments.Native(ctx, job, "vercel", job.Action.Name, project.ID, ""); claimErr != nil {
+			return nil, fmt.Errorf("claim the vercel project: %w", claimErr)
+		}
+		d.record = &ProviderEnvironment{Mode: ModeNative, ProjectRef: project.ID}
 	}
 	if checkpointErr := checkpointCloudIdentity(job, *state); checkpointErr != nil {
 		return nil, checkpointErr
@@ -355,7 +372,8 @@ func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project
 
 // undoNative removes what this job made on Vercel for the native deploy
 // Vercel then refused: the custom environment with its variables, and the
-// shared project when no environment records a native deploy on it.
+// shared project when no other environment records or claims a native
+// deploy on it.
 // Nothing that existed before the job is touched. Each step is
 // checkpointed, so a retry picks up where this left off.
 func (d *vercelDeploy) undoNative(ctx context.Context) error {
@@ -377,7 +395,10 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("check who uses the vercel project: %w", err)
 		}
-		if len(sharing) == 0 {
+		others := slices.DeleteFunc(sharing, func(pe *ProviderEnvironment) bool {
+			return pe.EnvironmentID == job.Deployment.EnvironmentID && pe.Scope == job.Action.Name
+		})
+		if len(others) == 0 {
 			if err := v.Client.DeleteProject(ctx, tok, s.ProjectID); err != nil {
 				return fmt.Errorf("remove the unused vercel project: %w", err)
 			}

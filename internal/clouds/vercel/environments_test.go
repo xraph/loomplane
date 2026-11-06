@@ -109,7 +109,7 @@ func TestEnsureCustomEnvironmentReadsBackOnConflict(t *testing.T) {
 			fmt.Fprint(w, `{"id":"env_9","slug":"staging"}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v9/projects/prj_1/custom-environments":
 			var b map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&b) //nolint:errcheck // asserted below
+			_ = json.NewDecoder(r.Body).Decode(&b)
 			if b["slug"] != "staging" {
 				t.Errorf("body: %v", b)
 			}

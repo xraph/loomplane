@@ -52,6 +52,8 @@ type fakeVercelAPI struct {
 	// a custom environment.
 	customVarStatus int
 	created         int
+	// onCustomEnvironment runs when a custom environment is asked for.
+	onCustomEnvironment func()
 }
 
 func newFakeVercelAPI() *fakeVercelAPI {
@@ -105,6 +107,9 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{}`)
 	case len(parts) >= 4 && parts[0] == "v9" && parts[3] == "custom-environments":
 		project := parts[2]
+		if f.onCustomEnvironment != nil {
+			f.onCustomEnvironment()
+		}
 		if r.Method == http.MethodDelete {
 			for key, id := range f.envs {
 				if strings.HasPrefix(key, project+"/") && id == parts[4] {
@@ -149,6 +154,16 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		_, _ = io.WriteString(w, `{}`)
 	}
+}
+
+// calledExactly reports whether this exact request was made.
+func (f *fakeVercelAPI) calledExactly(call string) bool {
+	for _, c := range f.callLog() {
+		if c == call {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeVercelAPI) called(prefix string) bool {
@@ -388,8 +403,10 @@ func TestVercelTransientErrorDoesNotFallBack(t *testing.T) {
 	if _, err := h.exec.Apply(t.Context(), h.job); err == nil {
 		t.Fatal("a 503 deployed anyway")
 	}
-	if len(h.store.rows) != 0 {
-		t.Fatalf("rows = %v, want none", h.store.rows)
+	// Only the claim on the shared project is recorded; a transient error
+	// never records a fallback.
+	if row := h.row(); len(h.store.rows) != 1 || row == nil || row.Mode != ModeNative || row.EnvironmentRef != "" {
+		t.Fatalf("rows = %v, want only staging's native claim", h.store.rows)
 	}
 	if len(h.api.deploys) != 0 {
 		t.Fatalf("deploys = %v, want none", h.api.deploys)
@@ -460,7 +477,7 @@ func TestVercelFallbackCleansUpWhatItCreated(t *testing.T) {
 	if !h.api.called("DELETE /v9/projects/prj_1/custom-environments/env_9") || len(h.api.envs) != 0 {
 		t.Fatalf("the custom environment this job made is still there: %v", h.api.callLog())
 	}
-	if !h.api.called("DELETE /v9/projects/prj_1") || h.api.projects["web-abc12345"] != "" {
+	if !h.api.calledExactly("DELETE /v9/projects/prj_1") || h.api.projects["web-abc12345"] != "" {
 		t.Fatalf("the shared project this job made is still there: %v", h.api.callLog())
 	}
 	id := h.api.projects["web-staging-abc12345"]
@@ -481,7 +498,7 @@ func TestVercelFallbackRetryCleansUpWhatItCreatedEarlier(t *testing.T) {
 	h.job.Resume = []byte(`{"project_id":"prj_1","target":"env_9","mode":"native","created_project":true,"created_environment":"env_9"}`)
 	h.apply(t)
 
-	if !h.api.called("DELETE /v9/projects/prj_1/custom-environments/env_9") || !h.api.called("DELETE /v9/projects/prj_1") {
+	if !h.api.called("DELETE /v9/projects/prj_1/custom-environments/env_9") || !h.api.calledExactly("DELETE /v9/projects/prj_1") {
 		t.Fatalf("the retry left what the first attempt made: %v", h.api.callLog())
 	}
 }
@@ -522,5 +539,58 @@ func TestVercelFallbackKeepsSharedProject(t *testing.T) {
 				t.Fatalf("projects = %v, want the separate project", h.api.projects)
 			}
 		})
+	}
+}
+
+func TestVercelFallbackKeepsProjectClaimedByConcurrentDeploy(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	// Production found the project staging made and is deploying into it:
+	// its claim has no environment ref yet.
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_production", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1"})
+	h.api.customStatus = http.StatusPaymentRequired
+	h.apply(t)
+
+	if h.api.calledExactly("DELETE /v9/projects/prj_1") || h.api.projects["web-abc12345"] != "prj_1" {
+		t.Fatalf("deleted a project production is deploying into: %v", h.api.callLog())
+	}
+	if row := h.row(); row == nil || row.Mode != ModeFallback || row.ProjectRef != "" {
+		t.Fatalf("row = %+v, want staging's claim replaced by a fallback", row)
+	}
+}
+
+func TestVercelNativeClaimsProjectBeforeWriting(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	var claimed *ProviderEnvironment
+	h.api.onCustomEnvironment = func() { claimed = h.row() }
+	h.apply(t)
+
+	if claimed == nil || claimed.Mode != ModeNative || claimed.ProjectRef != "prj_1" || claimed.EnvironmentRef != "" {
+		t.Fatalf("row before the custom environment = %+v, want a native claim on prj_1", claimed)
+	}
+	if row := h.row(); row.EnvironmentRef != "env_9" {
+		t.Fatalf("row after = %+v, want env_9", row)
+	}
+}
+
+func TestVercelRefusalAfterDeployDoesNotFallBack(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.api.projects["web-abc12345"] = "prj_1"
+	h.api.envs["prj_1/staging"] = "env_9"
+	h.api.created = 1
+	h.api.customVarStatus = http.StatusPaymentRequired
+	h.job.Resume = []byte(`{"project_id":"prj_1","deployment_id":"dpl_1","target":"env_9","mode":"native","created_project":true,"created_environment":"env_9"}`)
+	if _, err := h.exec.Apply(t.Context(), h.job); err == nil {
+		t.Fatal("a refusal after the deployment started fell back")
+	}
+	for _, c := range h.api.callLog() {
+		if strings.HasPrefix(c, "DELETE ") {
+			t.Fatalf("deleted the live deployment's environment or project: %s", c)
+		}
+	}
+	if row := h.row(); row != nil && row.Mode == ModeFallback {
+		t.Fatalf("row = %+v, want no fallback", row)
+	}
+	if h.api.projects["web-staging-abc12345"] != "" {
+		t.Fatal("deployed to a separate project")
 	}
 }
