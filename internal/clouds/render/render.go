@@ -85,10 +85,30 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("render answered %d: %s", e.Status, e.Message)
 }
 
+// RejectedError is Render refusing the key: 401 for a key it doesn't
+// accept, 403 for one without access to what was asked. It matches
+// ErrRejected.
+type RejectedError struct {
+	Status  int
+	Message string
+}
+
+func (e *RejectedError) Error() string { return ErrRejected.Error() + ": " + e.Message }
+
+// Is makes a rejection match ErrRejected.
+func (e *RejectedError) Is(target error) bool { return target == ErrRejected }
+
 // IsNotFound reports whether err is Render's 404.
 func IsNotFound(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
+}
+
+// IsConflict reports whether err is Render's 409, which it answers to
+// deleting a project while any of its environments still holds resources.
+func IsConflict(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusConflict
 }
 
 func (c *Client) do(ctx context.Context, key Key, method, path string, query url.Values, in, out any) error {
@@ -131,7 +151,7 @@ func (c *Client) do(ctx context.Context, key Key, method, path string, query url
 			ae.Message = e.Message
 		}
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: %s", ErrRejected, ae.Message)
+			return &RejectedError{Status: res.StatusCode, Message: ae.Message}
 		}
 		return ae
 	}
@@ -194,6 +214,8 @@ type ServiceSpec struct {
 	Region      string
 	Instances   int
 	Env         map[string]string
+	// EnvironmentID, when set, puts the service in that environment.
+	EnvironmentID string
 }
 
 // Service is a Render service.
@@ -203,6 +225,7 @@ type Service struct {
 	Slug           string `json:"slug"`
 	Type           string `json:"type"`
 	Repo           string `json:"repo"`
+	EnvironmentID  string `json:"environmentId"`
 	Suspended      string `json:"suspended"`
 	ServiceDetails struct {
 		URL string `json:"url"`
@@ -268,6 +291,9 @@ func (c *Client) EnsureService(ctx context.Context, key Key, spec ServiceSpec) (
 			"autoDeploy": "no", "rootDir": spec.RootDir, "envVars": envVars(spec.Env),
 			"serviceDetails": spec.details(),
 		}
+		if spec.EnvironmentID != "" {
+			body["environmentId"] = spec.EnvironmentID
+		}
 		var created struct {
 			Service  Service `json:"service"`
 			DeployID string  `json:"deployId"`
@@ -285,6 +311,11 @@ func (c *Client) EnsureService(ctx context.Context, key Key, spec ServiceSpec) (
 			}
 		}
 		return &created.Service, nil
+	}
+	if spec.EnvironmentID != "" && s.EnvironmentID != spec.EnvironmentID {
+		if err := c.AddToEnvironment(ctx, key, spec.EnvironmentID, []string{s.ID}); err != nil {
+			return nil, err
+		}
 	}
 	body := map[string]any{"rootDir": spec.RootDir, "serviceDetails": spec.details(), "autoDeploy": "no"}
 	var updated Service
@@ -401,13 +432,16 @@ type DatastoreSpec struct {
 	Plan    string
 	Region  string
 	Version string // Postgres only
+	// EnvironmentID, when set, puts the datastore in that environment.
+	EnvironmentID string
 }
 
 // Datastore is a Postgres database or Key Value instance.
 type Datastore struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	EnvironmentID string `json:"environmentId"`
 }
 
 // FindDatastore finds the workspace's datastore of kind called name.
@@ -434,15 +468,25 @@ func (c *Client) EnsureDatastore(ctx context.Context, key Key, spec DatastoreSpe
 	if err != nil {
 		return nil, err
 	}
+	found := d != nil
 	if d == nil {
 		body := map[string]any{"name": spec.Name, "ownerId": key.OwnerID, "plan": spec.Plan, "region": spec.Region}
 		if spec.Kind == Postgres && spec.Version != "" {
 			body["version"] = spec.Version
 		}
+		if spec.EnvironmentID != "" {
+			body["environmentId"] = spec.EnvironmentID
+		}
 		d = &Datastore{}
 		if err := c.do(ctx, key, http.MethodPost, "/"+spec.Kind, nil, body, d); err != nil {
 			return nil, err
 		}
+	}
+	if found && spec.EnvironmentID != "" && d.EnvironmentID != spec.EnvironmentID {
+		if err := c.AddToEnvironment(ctx, key, spec.EnvironmentID, []string{d.ID}); err != nil {
+			return nil, err
+		}
+		d.EnvironmentID = spec.EnvironmentID
 	}
 	for d.Status != resourceAvailable {
 		progress.Report(ctx, "Waiting for Render to make "+spec.Name+" ("+d.Status+")")

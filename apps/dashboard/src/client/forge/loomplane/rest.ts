@@ -3991,8 +3991,16 @@ export class RESTClient extends Client {
     /**
      * Delete an environment and the variables set on it. A project's last environment can't be deleted.
      */
-    delete: async (id: string, envId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+    delete: async (id: string, envId: string, keep?: string[] | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(envId))}`;
+      const queryParams: Record<string, any> = {};
+      if (keep !== undefined) {
+        queryParams['keep'] = keep;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'DELETE',
         url: __path,
@@ -6926,6 +6934,41 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Project>(config);
+    },
+
+  };
+
+  public readonly providerEnvironments = {
+    /**
+     * Which of the project's environments deploy to a provider's own environments, and which fell back to a project of their own, with why
+     */
+    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderEnvironmentList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/provider-environments`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderEnvironmentList"],
+      };
+
+      return this.request<types.ProviderEnvironmentList>(config);
+    },
+
+    /**
+     * Try the provider's own environment again for an environment that fell back: clears the fallbacks the provider might lift and plans the move back, which a person approves
+     */
+    retry: async (id: string, environmentId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environmentId))}/provider-environments/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
     },
 
   };

@@ -8,6 +8,9 @@ import { forgeClient } from "@/client/runtime"
 import { Environments } from "@/components/environment-manager"
 import type { Run } from "@/lib/runs"
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+vi.mock("sonner", () => ({ toast: toasts }))
+
 vi.mock("@/lib/router", () => ({
   Link: ({
     children,
@@ -34,7 +37,9 @@ vi.mock("@/lib/router", () => ({
 }))
 
 afterEach(() => {
+  calls.length = 0
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
   forgeClient.clear()
 })
 
@@ -59,21 +64,76 @@ const api = {
   config: {},
 }
 
+const calls: string[] = []
+
 function serve(
   environments: Environment[] | undefined,
   runs: Run[] = [],
-  props: { mayManage?: boolean; onOpen?: () => void } = {}
+  props: {
+    mayManage?: boolean
+    onOpen?: () => void
+    fallbacks?: Record<string, unknown>[]
+    stagingBindings?: Record<string, unknown>[]
+    /** How staging's bindings answer: never, or with an error status. */
+    stagingBindingsAnswer?: "never" | number
+    /** How the delete answers: an error status, or a timeout. */
+    deleteAnswer?: number | "timeout"
+  } = {}
 ) {
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const url = new URL(String(input), "http://localhost")
-    const environment = url.searchParams.get("environment") ?? ""
-    const body = url.pathname.endsWith("/bindings")
-      ? { bindings: environment === "production" ? [api] : [] }
-      : { members: [] }
-    return new Response(JSON.stringify(body), {
-      headers: { "Content-Type": "application/json" },
-    })
-  })
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost")
+      const environment = url.searchParams.get("environment") ?? ""
+      if (init?.method === "DELETE") {
+        calls.push(`DELETE ${url.pathname}${url.search}`)
+        if (props.deleteAnswer === "timeout")
+          throw new TypeError("The request timed out")
+        if (props.deleteAnswer)
+          return Response.json(
+            {
+              message:
+                "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself.",
+            },
+            { status: props.deleteAnswer }
+          )
+        return new Response(null, { status: 204 })
+      }
+      if (url.pathname.endsWith("/bindings") && environment === "staging") {
+        if (props.stagingBindingsAnswer === "never")
+          return new Promise<Response>(() => undefined)
+        if (props.stagingBindingsAnswer)
+          return Response.json(
+            { message: "" },
+            { status: props.stagingBindingsAnswer }
+          )
+      }
+      if (url.pathname.endsWith("/provider-environments/retry")) {
+        calls.push(`${init?.method} ${url.pathname}`)
+        return new Response(JSON.stringify({ id: "plan_new" }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.pathname.endsWith("/provider-environments")) {
+        calls.push(`${init?.method ?? "GET"} ${url.pathname}`)
+      }
+      const body = url.pathname.endsWith("/provider-environments")
+        ? { provider_environments: props.fallbacks ?? [] }
+        : url.pathname.endsWith("/bindings")
+          ? {
+              bindings:
+                environment === "production"
+                  ? [api]
+                  : environment === "staging"
+                    ? (props.stagingBindings ?? [])
+                    : [],
+            }
+          : { members: [] }
+      return new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+  )
   render(
     <ClientProvider client={forgeClient}>
       <Environments
@@ -143,9 +203,12 @@ test("deleting an environment asks first", async () => {
   )
   const dialog = await screen.findByRole("alertdialog")
   expect(within(dialog).getByText("Delete staging?")).toBeInTheDocument()
-  expect(
-    within(dialog).getByRole("button", { name: "Delete environment" })
-  ).toBeEnabled()
+  // It's on once Loomplane knows what runs there.
+  await vi.waitFor(() =>
+    expect(
+      within(dialog).getByRole("button", { name: "Delete environment" })
+    ).toBeEnabled()
+  )
 })
 
 test("the only environment can't be deleted", async () => {
@@ -200,4 +263,271 @@ test("managed environments open their instance instead of generic deployment or 
     screen.queryByRole("menuitem", { name: "Delete environment" })
   ).toBeNull()
   expect(screen.queryByRole("menuitem", { name: "Variables" })).toBeNull()
+})
+
+const vercelService = (id: string) => ({
+  id,
+  name: id,
+  subject: "service",
+  provider: "vercel",
+  drift: "",
+  config: {},
+})
+
+const fallback = (over: Record<string, unknown> = {}) => ({
+  environment_id: "env_stage",
+  provider: "vercel",
+  scope: "web",
+  mode: "fallback",
+  permanent: false,
+  reason: "Vercel needs a paid plan for custom environments",
+  created_at: "2026-11-05T00:00:00Z",
+  ...over,
+})
+
+test("shows a separate project note with the reason", async () => {
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web")],
+  })
+  const note = await screen.findByText("Separate project")
+  expect(note).toHaveAttribute(
+    "title",
+    "web: Vercel needs a paid plan for custom environments"
+  )
+})
+
+test("counts services on separate projects when mixed", async () => {
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web"), vercelService("docs")],
+  })
+  expect(
+    await screen.findByText("1 of 2 services on separate projects")
+  ).toBeInTheDocument()
+})
+
+test("hides try again when every fallback is permanent", async () => {
+  const user = userEvent.setup()
+  const onOpen = vi.fn()
+  serve([production, staging], [], {
+    fallbacks: [fallback({ permanent: true })],
+    stagingBindings: [vercelService("web")],
+    onOpen,
+  })
+  await screen.findByText("Separate project")
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await screen.findByRole("menuitem", { name: "Variables" })
+  expect(
+    screen.queryByRole("menuitem", { name: "Try native environment again" })
+  ).toBeNull()
+})
+
+const listFallbacks = "GET /api/v1/projects/p/provider-environments"
+
+test("try again plans a move back to native and opens deployments", async () => {
+  const user = userEvent.setup()
+  const onOpen = vi.fn()
+  serve([production, staging], [], {
+    fallbacks: [fallback()],
+    stagingBindings: [vercelService("web")],
+    onOpen,
+  })
+  await screen.findByText("Separate project")
+  const listedBefore = calls.filter((c) => c === listFallbacks).length
+  expect(listedBefore).toBeGreaterThan(0)
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", {
+      name: "Try native environment again",
+    })
+  )
+  await vi.waitFor(() =>
+    expect(calls).toContain(
+      "POST /api/v1/projects/p/environments/env_stage/provider-environments/retry"
+    )
+  )
+  await vi.waitFor(() =>
+    expect(onOpen).toHaveBeenCalledWith("deployments", "staging")
+  )
+  // The cleared fallbacks are read again, so the row's note goes.
+  await vi.waitFor(() =>
+    expect(calls.filter((c) => c === listFallbacks).length).toBeGreaterThan(
+      listedBefore
+    )
+  )
+})
+
+const renderBinding = (
+  id: string,
+  name: string,
+  subject: "service" | "resource",
+  alias = ""
+) => ({
+  id,
+  name,
+  alias,
+  subject,
+  provider: "render",
+  drift: "",
+  config: {},
+})
+
+const nativeStaging = [
+  vercelService("web"),
+  renderBinding("bnd_api", "api", "service", "shop-api-staging"),
+  renderBinding("bnd_db", "db", "resource"),
+]
+
+async function openDelete() {
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  return { user, dialog: await screen.findByRole("alertdialog") }
+}
+
+test("deleting an environment on Vercel and Render lists what to keep", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { dialog } = await openDelete()
+  const keep = within(dialog)
+  for (const name of ["Keep web", "Keep shop-api-staging", "Keep db"]) {
+    expect(await keep.findByRole("checkbox", { name })).not.toBeChecked()
+  }
+  // The alias leads, with the manifest name beside it.
+  expect(keep.getByText("api")).toBeInTheDocument()
+  expect(
+    keep.getByText(
+      "Unticked databases are deleted with their data. Kept resources keep running and are listed as left behind."
+    )
+  ).toBeInTheDocument()
+})
+
+test("keep all databases ticks the data resources only", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { user, dialog } = await openDelete()
+  const keep = within(dialog)
+  await user.click(
+    await keep.findByRole("button", { name: "Keep all databases" })
+  )
+  expect(keep.getByRole("checkbox", { name: "Keep db" })).toBeChecked()
+  expect(keep.getByRole("checkbox", { name: "Keep web" })).not.toBeChecked()
+  expect(
+    keep.getByRole("checkbox", { name: "Keep shop-api-staging" })
+  ).not.toBeChecked()
+})
+
+test("the delete asks to keep what's ticked", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { user, dialog } = await openDelete()
+  const keep = within(dialog)
+  await user.click(await keep.findByRole("checkbox", { name: "Keep db" }))
+  await user.click(keep.getByRole("checkbox", { name: "Keep web" }))
+  await user.click(keep.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(calls).toContain(
+      "DELETE /api/v1/projects/p/environments/env_stage?keep=bnd_db&keep=web"
+    )
+  )
+})
+
+test("an environment with nothing on Vercel or Render deletes as before", async () => {
+  serve([production, staging], [], {
+    stagingBindings: [{ ...api, id: "bnd_do" }],
+  })
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  const dialog = within(await screen.findByRole("alertdialog"))
+  await vi.waitFor(() =>
+    expect(
+      dialog.getByRole("button", { name: "Delete environment" })
+    ).toBeEnabled()
+  )
+  expect(
+    dialog.getByText(/What runs there keeps running until you remove it/)
+  ).toBeInTheDocument()
+  expect(dialog.queryByRole("checkbox")).toBeNull()
+  expect(dialog.queryByText(/Unticked databases/)).toBeNull()
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(calls).toContain("DELETE /api/v1/projects/p/environments/env_stage")
+  )
+})
+
+async function openStagingDelete() {
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  return { user, dialog: within(await screen.findByRole("alertdialog")) }
+}
+
+test("delete waits until it knows what runs there", async () => {
+  serve([production, staging], [], { stagingBindingsAnswer: "never" })
+  const { dialog } = await openStagingDelete()
+  expect(
+    dialog.getByRole("button", { name: "Delete environment" })
+  ).toBeDisabled()
+  // Nor does it say what keeps running before it knows.
+  expect(dialog.queryByText(/keeps running/)).toBeNull()
+})
+
+test("delete stays off while what runs there can't be read", async () => {
+  serve([production, staging], [], { stagingBindingsAnswer: 500 })
+  const { dialog } = await openStagingDelete()
+  expect(
+    await dialog.findByText(
+      "Loomplane couldn't finish that. Try again in a moment."
+    )
+  ).toBeInTheDocument()
+  expect(dialog.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  expect(
+    dialog.getByRole("button", { name: "Delete environment" })
+  ).toBeDisabled()
+})
+
+test("a refused delete says why and stays open", async () => {
+  serve([production, staging], [], {
+    stagingBindings: nativeStaging,
+    deleteAnswer: 403,
+  })
+  const { user, dialog } = await openStagingDelete()
+  await dialog.findByRole("checkbox", { name: "Keep db" })
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  expect(
+    await dialog.findByText(
+      "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+})
+
+test("a delete that times out may still be going", async () => {
+  serve([production, staging], [], {
+    stagingBindings: nativeStaging,
+    deleteAnswer: "timeout",
+  })
+  const { user, dialog } = await openStagingDelete()
+  await dialog.findByRole("checkbox", { name: "Keep db" })
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(toasts.error).toHaveBeenCalledWith(
+      "Deleting staging may still be in progress. Refresh in a moment to see whether it went."
+    )
+  )
 })

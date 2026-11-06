@@ -27,8 +27,18 @@ const APIKey = "test"
 
 // ToolUse is one tool call a scripted turn makes.
 type ToolUse struct {
-	Name  string
+	Name string
+	// Input is the call's arguments. One that is a Pending holds the turn
+	// until it is ready.
 	Input any
+}
+
+// Pending is a tool input a test fills in once it knows it, such as an ID
+// the run creates. The fake serves a turn only once each of its Pending
+// inputs is ready, so a run that asks early waits for the input instead of
+// getting a null one.
+type Pending interface {
+	Ready() <-chan struct{}
 }
 
 // Turn is one scripted answer: text, tool calls or both, and the usage it
@@ -163,6 +173,15 @@ func (f *FakeAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 		case <-turn.Wait:
 		case <-r.Context().Done():
 			return
+		}
+	}
+	for _, use := range turn.ToolUses {
+		if p, ok := use.Input.(Pending); ok {
+			select {
+			case <-p.Ready():
+			case <-r.Context().Done():
+				return
+			}
 		}
 	}
 	blocks, err := turn.blocks(n)

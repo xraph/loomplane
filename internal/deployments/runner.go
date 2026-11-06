@@ -138,6 +138,11 @@ type Job struct {
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
+	// record is the provider environment record of a binding whose
+	// environment has been deleted, read before the deletion's cascade
+	// took it. Render's Remove reads it in place of the store's. It's nil
+	// otherwise.
+	record *ProviderEnvironment
 	// warn adds a warning to the step, or is nil.
 	warn func(error)
 }
@@ -1166,7 +1171,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
 		return routeErr
 	}
-	moving := moves(current, a, connID) || len(a.Routes) > 0
+	// A native move deploys into the shared Vercel project, on the same
+	// provider, region and connection, so only the plan says it moves.
+	moving := moves(current, a, connID) || len(a.Routes) > 0 || a.NativeMove
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something

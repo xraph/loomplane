@@ -51,7 +51,10 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 	source, sourceHost := ingressFixture(t)
 	destination, destHost := ingressFixture(t)
 	network := fmt.Sprintf("lp-acme-%d", time.Now().UnixNano())
-	ingressDocker(t, "network", "create", network)
+	// Docker gives a fixed --ip only on a network with its own subnet, and
+	// one from its default pools can clash with a network inside a fixture
+	// host, which then can't join it.
+	ingressDocker(t, "network", "create", "--subnet", "10.213.1.0/24", network)
 	t.Cleanup(func() {
 		_ = exec.CommandContext(context.Background(), "docker", "network", "disconnect", "-f", network, sourceHost).Run()
 		_ = exec.CommandContext(context.Background(), "docker", "network", "disconnect", "-f", network, destHost).Run()
@@ -240,7 +243,8 @@ func TestWildcardCertificateThroughDNSChallenge(t *testing.T) {
 	}
 	image := testIngressImage(t, "")
 	network := fmt.Sprintf("lp-dns01-%d", time.Now().UnixNano())
-	ingressDocker(t, "network", "create", network)
+	// A subnet of its own, so Docker accepts the fixed addresses below.
+	ingressDocker(t, "network", "create", "--subnet", "10.213.2.0/24", network)
 	cfName, pebbleName, proxyName := network+"-cf", network+"-ca", network+"-proxy"
 	t.Cleanup(func() {
 		for _, name := range []string{proxyName, pebbleName, cfName} {

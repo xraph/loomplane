@@ -290,6 +290,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	vercelResourcesClient := vercel.New(e.cfg.Clouds.VercelEndpoint)
 	cloudflareResourcesClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, false)
 	cloudflareExecutor := &deployments.Cloudflare{Client: cloudflareResourcesClient}
+	// Vercel and Render deploy each environment to the provider's own
+	// environment, and tell the admins when one falls back.
+	nativeEnvironments := &deployments.NativeEnvironments{Store: deployStore, Notify: &deployments.FallbackNotice{DB: pg}, Now: time.Now}
 	executors := map[string]deployments.Executor{
 		"cloudflare-workers": cloudflareExecutor,
 		"cloud-run": &deployments.CloudRun{
@@ -297,8 +300,8 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":               &deployments.Vercel{Client: vercelResourcesClient},
-		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		"vercel":               &deployments.Vercel{Client: vercelResourcesClient, Environments: nativeEnvironments},
+		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint), Environments: nativeEnvironments},
 		"digitalocean":         &deployments.DigitalOcean{Client: appPlatform},
 		"azure-container-apps": &deployments.Azure{Client: azureClient()},
 		"azure-database":       &deployments.AzureDatabase{Client: azureClient()},
@@ -539,6 +542,10 @@ func (e *Extension) Register(fapp forge.App) error {
 		// Loomplane Cloud previews room for services on its targets with
 		// the service that places them.
 		Platform: platformCloud,
+		// A Vercel service on a project of its own with no fallback record
+		// is planned as a move into its shared project, and standalone
+		// Render resources with no record as a move into their environment.
+		NativeFallbacks: deployStore,
 	})
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
@@ -628,12 +635,19 @@ func (e *Extension) Register(fapp forge.App) error {
 		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
 		Warn: reapWarn,
 	})
+	// Deleting an environment deletes what Loomplane made for it on Vercel
+	// and Render, except what the caller keeps, and reports what stays.
+	providerReaper := &deployments.ProviderEnvironmentReaper{
+		Bindings: planStore, Environments: prj, Records: deployStore, Credentials: clouds, Executors: executors,
+		Warn: reapWarn,
+	}
+	projectSvc.AddReaper(providerReaper)
 	// It takes every other service and resource's binding too, and this
 	// deletes everything the environment kept in Vault and warns about each
-	// one still running in a cloud.
+	// one still running in a cloud, but the ones providerReaper removes.
 	projectSvc.AddReaper(&deployments.BindingReaper{
 		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
-		Warn: reapWarn,
+		Removal: providerReaper, Warn: reapWarn,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
@@ -709,6 +723,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	if err := soakRoutes(fapp.Router(), guard, watches); err != nil {
+		return err
+	}
+	if err := providerEnvironmentRoutes(fapp.Router(), guard, providerEnvironmentDeps{Store: deployStore, Environments: prj, Authz: authz, Plans: e.plans}); err != nil {
 		return err
 	}
 	if err := forge.ProvideValue(c, targets); err != nil {

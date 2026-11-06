@@ -292,6 +292,43 @@ func TestRunner_aMoveThatKeepsTheOldOneRemovesNothing(t *testing.T) {
 	}
 }
 
+// TestRunnerKeepsReplacedBindingWhenMoveLandsOnSameProject: a move into
+// api's shared Vercel project that Vercel refuses again falls back in the
+// same job, onto the project api already ran on. Removing what it replaced
+// would delete the project that now serves it.
+func TestRunnerKeepsReplacedBindingWhenMoveLandsOnSameProject(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "vercel", log: log, url: answering(t, http.StatusOK), externalID: "prj_old"}
+	plan := webAndAPI()
+	plan.Actions = []planning.Action{
+		{ID: "service:api", Op: planning.Replace, NativeMove: true, Subject: planning.ServiceSubject, Name: "api", Provider: "vercel", Step: 1,
+			Service: &planning.ServiceConfig{Provider: "vercel", Service: "svc:go:services/api", Public: true}},
+	}
+	legacy := &planning.Binding{
+		ID: "bind_api", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Subject: planning.ServiceSubject,
+		Name: "api", Provider: "vercel", ExternalID: "prj_old", URL: "https://old.example", ConnectionID: "conn_v",
+	}
+	r, store, plans, _ := moveRunner(t, plan, legacy, map[string]Executor{"vercel": exec})
+
+	id, err := runAll(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("deployment %s: %s", d.Status, d.Error)
+	}
+	// It deployed as a move: nothing bound, the legacy project to replace.
+	if apply := exec.applies[0]; apply.Binding != nil || apply.Replaces == nil || apply.Replaces.ExternalID != "prj_old" {
+		t.Fatalf("applied with binding %+v, replacing %+v", apply.Binding, apply.Replaces)
+	}
+	if got := log.list(); !slices.Equal(got, []string{"apply vercel"}) {
+		t.Fatalf("events %v", got)
+	}
+	if b := plans.bindings["service:api"]; b.ExternalID != "prj_old" || b.ConnectionID != "conn_v" || len(b.Replaced) != 0 {
+		t.Fatalf("binding %+v", b)
+	}
+}
+
 func TestReadReplaceCheckpoint(t *testing.T) {
 	rc := readReplaceCheckpoint([]byte("op-1"))
 	if string(rc.Apply) != "op-1" || rc.Remove != nil {

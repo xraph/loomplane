@@ -78,16 +78,26 @@ func (k *Keys) Info(ctx context.Context, orgID, name string) (*Key, error) {
 	}, nil
 }
 
+// unavailable is Reveal's error for a key it couldn't read. It names the
+// key and nothing else, and the cause goes to the log. The error reaches
+// nexus and, through cortex's publication checks, the run's error, and a
+// cause such as Vault's names the secret's path: two IDs that shield's
+// secret detector can take for a token, which then blocks the run.
+func unavailable(ctx context.Context, orgID, name string, cause error) error {
+	slog.WarnContext(ctx, "agentsettings: reading a provider key failed", "org", orgID, "key", name, "error", cause)
+	return fmt.Errorf("%w: provider key %q", ErrKeyUnavailable, name)
+}
+
 // Reveal returns the key called name with its API key. Every error wraps
 // ErrKeyUnavailable and none carries a value.
 func (k *Keys) Reveal(ctx context.Context, orgID, name string) (*Key, error) {
 	key, err := k.Info(ctx, orgID, name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: provider key %q: %v", ErrKeyUnavailable, name, err) //nolint:errorlint // %v on purpose: nothing it wraps may reach nexus
+		return nil, unavailable(ctx, orgID, name, err)
 	}
 	g, err := k.src.RevealKey(ctx, orgID, name)
 	if err != nil {
-		return nil, fmt.Errorf("%w: provider key %q: %v", ErrKeyUnavailable, name, err) //nolint:errorlint // as above
+		return nil, unavailable(ctx, orgID, name, err)
 	}
 	if g.Type != key.Type {
 		return nil, fmt.Errorf("%w: provider key %q changed while it was read", ErrKeyUnavailable, name)

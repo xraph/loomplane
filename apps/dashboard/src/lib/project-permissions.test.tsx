@@ -15,6 +15,7 @@ vi.mock("@/lib/organization", () => ({
 afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
+  workspace.held = ["deployment:approve"]
 })
 
 function Probe() {
@@ -46,6 +47,33 @@ test("answers for the project once loaded", async () => {
   expect(await screen.findByText("update true")).toBeInTheDocument()
   expect(screen.getByText("approve false")).toBeInTheDocument()
   expect(paths).toEqual(["/api/v1/projects/proj_1/permissions"])
+})
+
+test("asks the workspace for what a project never answers", async () => {
+  workspace.held = ["repository:connect", "agent:use"]
+  vi.stubGlobal("fetch", async () =>
+    Response.json({ permissions: ["project:update"] })
+  )
+  function Outside() {
+    const can = useProjectCan("proj_1")
+    return (
+      <ul>
+        <li>update {String(can("project:update"))}</li>
+        <li>connect {String(can("repository:connect"))}</li>
+        <li>agent {String(can("agent:use"))}</li>
+      </ul>
+    )
+  }
+  render(
+    <ClientProvider client={forgeClient}>
+      <Outside />
+    </ClientProvider>
+  )
+  // The project's list only covers project permissions, so its silence on
+  // the rest isn't a no.
+  expect(await screen.findByText("update true")).toBeInTheDocument()
+  expect(screen.getByText("connect true")).toBeInTheDocument()
+  expect(screen.getByText("agent true")).toBeInTheDocument()
 })
 
 test("falls back to the workspace while loading", async () => {

@@ -4529,6 +4529,20 @@ export interface Provider {
   workloads?: WorkloadCapabilities;
 }
 
+export interface ProviderEnvironment {
+  createdAt: string;
+  environmentId: string;
+  mode: string;
+  permanent: boolean;
+  provider: string;
+  reason: string;
+  scope: string;
+}
+
+export interface ProviderEnvironmentList {
+  providerEnvironments: ProviderEnvironment[];
+}
+
 export interface ProviderKey {
   createdAt: string;
   createdBy: string;

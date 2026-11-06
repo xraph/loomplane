@@ -82,6 +82,7 @@ type Config struct {
 	Nodes         NodesConfig
 	Chronicle     ChronicleConfig
 	Hallproof     HallproofConfig
+	Mobile        MobileConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -486,6 +487,10 @@ func Defaults() Config {
 			EveryEvents:   DefaultCheckpointEveryEvents,
 			EveryInterval: DefaultCheckpointEveryInterval,
 		}},
+		Mobile: MobileConfig{
+			AndroidPackage:          DefaultAndroidPackage,
+			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
+		},
 	}
 }
 
@@ -667,6 +672,14 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
 	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
 	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
+	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
+	// A list read appends, so a set value replaces the store app's keys
+	// rather than joining them.
+	var fingerprints []string
+	r.names(&fingerprints, "mobile.android_cert_fingerprints")
+	if len(fingerprints) > 0 {
+		c.Mobile.AndroidCertFingerprints = fingerprints
+	}
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -687,6 +700,7 @@ func FromSource(src Getter) (Config, error) {
 func (c *Config) Validate() error {
 	var errs []error
 	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Chronicle.Checkpoints.Validate(), c.Hallproof.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Mobile.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}

@@ -178,6 +178,10 @@ notification notification.mappings.list@1 query read open
 notification notification.templates.detail@1 query read open
 notification notification.templates.list@1 query read open
 notification notification.templates.preview@1 query read open
+oauth2provider oauth2.clients.detail@1 query read open
+oauth2provider oauth2.clients.list@1 query read open
+oauth2provider oauth2.issuer.info@1 query read open
+oauth2provider oauth2.keys.list@1 query read open
 organization orgs.detail@1 query read open
 organization orgs.invitations@1 query read open
 organization orgs.list@1 query read open

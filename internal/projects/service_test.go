@@ -858,6 +858,137 @@ func TestService_reapersRunAroundDeletion(t *testing.T) {
 	}
 }
 
+// optionsReaper is a ReaperWithOptions that records the options each
+// deletion asked for, and fails the test if it's reaped without them.
+type optionsReaper struct {
+	t    *testing.T
+	keep [][]string
+}
+
+func (r *optionsReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	r.t.Error("a reaper that reads options was reaped without them")
+	return nil
+}
+
+func (r *optionsReaper) ReapWithOptions(_ context.Context, _, _, _ string, opts DeleteEnvironmentOptions) Reaped {
+	r.keep = append(r.keep, opts.Keep)
+	return Reaped{}
+}
+
+// providerReaper is a ReaperWithOptions with resources in a provider
+// account that it removes, unless they're kept.
+type providerReaper struct {
+	resources []string
+	cleaned   int
+}
+
+func (r *providerReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	return nil
+}
+
+func (r *providerReaper) ReapWithOptions(_ context.Context, _, _, _ string, opts DeleteEnvironmentOptions) Reaped {
+	var out Reaped
+	for _, id := range r.resources {
+		if slices.Contains(opts.Keep, id) {
+			out.Keeps = append(out.Keeps, id)
+		} else {
+			out.Removes = append(out.Removes, id)
+		}
+	}
+	out.Cleanup = func(context.Context) { r.cleaned++ }
+	return out
+}
+
+func TestService_removingProviderResourcesNeedsAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	reaper := &providerReaper{resources: []string{"bnd_web", "bnd_db"}}
+	f.svc.AddReaper(reaper)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"qa", "demo"} {
+		if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) != 4 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+
+	// A developer may not delete what runs in a provider account.
+	err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}})
+	if !errors.Is(err, security.ErrForbidden) || !strings.Contains(err.Error(), "An admin must delete this environment") {
+		t.Fatalf("a developer removing provider resources: %v", err)
+	}
+	if _, gerr := f.store.GetEnvironment(ctx, org, p.ID, envs[0].ID); gerr != nil || reaper.cleaned != 0 {
+		t.Fatalf("a refused deletion deleted something: %v, cleaned %d", gerr, reaper.cleaned)
+	}
+
+	// Keeping everything removes nothing there, so a developer may.
+	f.audit.events = nil
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_web", "bnd_db"}}); err != nil {
+		t.Fatalf("a developer keeping everything: %v", err)
+	}
+	if got := f.audit.events[0].Attributes; !slices.Equal(got["kept"].([]string), []string{"bnd_web", "bnd_db"}) || got["removed"] != nil {
+		t.Fatalf("audited %v", got)
+	}
+
+	// An admin may remove them, and the audit says what went and stayed.
+	f.audit.events = nil
+	if err = f.svc.DeleteEnvironment(ctx, admin, p.ID, envs[1].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}}); err != nil {
+		t.Fatalf("an admin removing provider resources: %v", err)
+	}
+	got := f.audit.events[0].Attributes
+	if !slices.Equal(got["removed"].([]string), []string{"bnd_web"}) || !slices.Equal(got["kept"].([]string), []string{"bnd_db"}) {
+		t.Fatalf("audited %v", got)
+	}
+
+	// Nothing in a provider account is what deleting always was.
+	reaper.resources = nil
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[2].ID); err != nil {
+		t.Fatalf("a developer deleting an environment with nothing on a provider: %v", err)
+	}
+}
+
+func TestService_deleteEnvironmentPassesItsOptionsOn(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	plain, withOptions := &reapRecorder{}, &optionsReaper{t: t}
+	f.svc.AddReaper(plain)
+	f.svc.AddReaper(withOptions)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: "qa"}); err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) < 3 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Without options nothing is kept.
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(withOptions.keep) != 2 || !slices.Equal(withOptions.keep[0], []string{"bnd_db"}) || len(withOptions.keep[1]) != 0 {
+		t.Fatalf("the reaper was asked to keep %v", withOptions.keep)
+	}
+	// A reaper that doesn't read options is reaped as it always was.
+	if len(plain.reaped) != 2 || len(plain.finished) != 2 {
+		t.Fatalf("the plain reaper: reaped %v, finished %v", plain.reaped, plain.finished)
+	}
+}
+
 // checkRecorder is an Authorizer that records every check as
 // "permission resource" and allows them all, unless deny is set.
 type checkRecorder struct {

@@ -171,3 +171,17 @@ func TestRevertCleanupProtectsServingAccountAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderPendingCleanupCopesWithADatastoreCheckpoint(t *testing.T) {
+	// A datastore job checkpoints its environment but never a service, so
+	// there is nothing to clean up by identity: say so, delete nothing.
+	r := &Render{}
+	id, err := r.PendingCloudResource(t.Context(), &Job{Resume: []byte(`{"mode":"native","project_id":"prj-1","environment_id":"evm-1","created_project":true}`)})
+	if err == nil || id != "" {
+		t.Fatalf("a datastore checkpoint named %q (err %v)", id, err)
+	}
+	id, err = r.PendingCloudResource(t.Context(), &Job{Resume: []byte(`{"service_id":"srv-1","mode":"native","project_id":"prj-1"}`)})
+	if err != nil || id != "srv-1" {
+		t.Fatalf("a service checkpoint named %q (err %v)", id, err)
+	}
+}

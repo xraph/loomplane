@@ -55,7 +55,7 @@ require (
 	github.com/xraph/cortex/extension v1.10.4
 	github.com/xraph/ctrlplane v1.8.1
 	github.com/xraph/dispatch v1.9.4
-	github.com/xraph/forge v1.13.2
+	github.com/xraph/forge v1.13.4
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
 	github.com/xraph/grove v1.10.2

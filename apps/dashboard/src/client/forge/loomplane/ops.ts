@@ -2631,6 +2631,15 @@ export const ops = {
     bodyCodec: CODECS['EnvironmentCloudInputBody'],
     responseCodec: CODECS['Preview'],
   },
+  'providerEnvironments.retry': {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/environments/{environmentId}/provider-environments/retry',
+    entity: 'Plan',
+    rootType: 'Plan',
+    provides: ['Plan:{id}'],
+    invalidates: ['Plan[]'],
+    responseCodec: CODECS['Plan'],
+  },
   'environmentConnections.get': {
     method: 'GET',
     path: '/api/v1/projects/{id}/environments/{environment}/connections',
@@ -2823,6 +2832,13 @@ export const ops = {
     invalidates: ['Plan[]'],
     bodyCodec: CODECS['CreatePlanInputBody'],
     responseCodec: CODECS['Plan'],
+  },
+  'providerEnvironments.list': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/provider-environments',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['ProviderEnvironmentList'],
   },
   'releaseReports.list': {
     method: 'GET',

@@ -217,7 +217,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 		exts = append(exts, witnessforge.New(witnessforge.WithConfig(witnessConfig(cfg))))
 	}
 	exts = append(exts, console(exts))
-	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/"))
+	site := web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/").
+		WithAndroidApp(cfg.Mobile.AndroidPackage, cfg.Mobile.AndroidCertFingerprints)
+	return append(exts, site)
 }
 
 // queues are the Dispatch queues this process works: the default and

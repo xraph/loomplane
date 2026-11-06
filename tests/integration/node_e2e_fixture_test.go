@@ -105,7 +105,15 @@ func (f *e2eFixture) network(suffix, subnet string) e2eNet {
 	name := f.prefix + "-" + suffix
 	args := []string{"network", "create", "--label", "loomplane.test=node-e2e"}
 	if subnet != "" {
-		args = append(args, "--subnet", subnet)
+		// Docker reports no gateway for a subnet given without one, and the
+		// control plane is reached through ctl's.
+		_, cidr, err := net.ParseCIDR(subnet)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		gateway := cidr.IP.To4()
+		gateway[3]++
+		args = append(args, "--subnet", subnet, "--gateway", gateway.String())
 	}
 	f.docker(append(args, name)...)
 	f.t.Cleanup(func() {
@@ -168,7 +176,9 @@ func (f *e2eFixture) copyFixture(container string, files map[string]fixtureFile)
 func newE2EFixture(t *testing.T) *e2eFixture {
 	t.Helper()
 	f := &e2eFixture{t: t, prefix: "lp-node-e2e-" + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 10), self: os.Getenv(e2eSelfEnv)}
-	f.ctl = f.network("ctl", "")
+	// Docker gives a fixed --ip only on a network with its own subnet. This
+	// one is private and outside Docker's default pools.
+	f.ctl = f.network("ctl", "10.213.3.0/24")
 	// TEST-NET-3 and TEST-NET-2 are global unicast and not private, so
 	// Loomplane treats them as public addresses.
 	f.pubA = f.network("pub-a", "203.0.113.0/24")
