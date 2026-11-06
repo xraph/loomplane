@@ -616,8 +616,10 @@ type fakeVercelDeploys struct {
 	files    map[string]int
 	projects map[string]map[string]any
 	env      map[string]any
-	deployed []map[string]any
-	polls    int
+	// customEnvs are the project's custom environments, by slug.
+	customEnvs map[string]bool
+	deployed   []map[string]any
+	polls      int
 	// buildFails ends every build in ERROR, and dropPolls closes the
 	// connection on every status read, the way a lost answer looks.
 	buildFails, dropPolls bool
@@ -625,7 +627,7 @@ type fakeVercelDeploys struct {
 
 func newFakeVercelDeploys(t *testing.T, token string) *fakeVercelDeploys {
 	t.Helper()
-	f := &fakeVercelDeploys{token: token, files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}}
+	f := &fakeVercelDeploys{token: token, files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}, customEnvs: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -671,6 +673,30 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 		for _, v := range vars {
 			f.env[v["key"].(string)] = v["value"]
 		}
+		reply(200, map[string]any{})
+	case r.Method == http.MethodGet && p == "/v10/projects/prj_web/env":
+		// Removing an environment lists its variables to delete them. The
+		// fake keeps values by name only, so there are no rows to delete.
+		reply(200, map[string]any{"envs": []any{}})
+	case r.Method == http.MethodGet && p == "/v7/deployments":
+		// A native environment lists its target's deployments before it
+		// removes anything. This fake keeps none past the build.
+		reply(200, map[string]any{"deployments": []any{}})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/prj_web/custom-environments/"):
+		slug := strings.TrimPrefix(p, "/v9/projects/prj_web/custom-environments/")
+		if _, ok := f.customEnvs[slug]; !ok {
+			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Environment not found"}})
+			return
+		}
+		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
+	case r.Method == http.MethodPost && p == "/v9/projects/prj_web/custom-environments":
+		var e map[string]any
+		_ = json.Unmarshal(body, &e)
+		slug, _ := e["slug"].(string)
+		f.customEnvs[slug] = true
+		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
+	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v9/projects/prj_web/custom-environments/"):
+		delete(f.customEnvs, strings.TrimPrefix(p, "/v9/projects/prj_web/custom-environments/"))
 		reply(200, map[string]any{})
 	case r.Method == http.MethodPost && p == "/v2/files":
 		sum := sha1.Sum(body)

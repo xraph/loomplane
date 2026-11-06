@@ -290,6 +290,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	vercelResourcesClient := vercel.New(e.cfg.Clouds.VercelEndpoint)
 	cloudflareResourcesClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, false)
 	cloudflareExecutor := &deployments.Cloudflare{Client: cloudflareResourcesClient}
+	// Vercel and Render deploy each environment to the provider's own
+	// environment, and tell the admins when one falls back.
+	nativeEnvironments := &deployments.NativeEnvironments{Store: deployStore, Notify: &deployments.FallbackNotice{DB: pg}, Now: time.Now}
 	executors := map[string]deployments.Executor{
 		"cloudflare-workers": cloudflareExecutor,
 		"cloud-run": &deployments.CloudRun{
@@ -297,8 +300,8 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":               &deployments.Vercel{Client: vercelResourcesClient},
-		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
+		"vercel":               &deployments.Vercel{Client: vercelResourcesClient, Environments: nativeEnvironments},
+		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint), Environments: nativeEnvironments},
 		"digitalocean":         &deployments.DigitalOcean{Client: appPlatform},
 		"azure-container-apps": &deployments.Azure{Client: azureClient()},
 		"azure-database":       &deployments.AzureDatabase{Client: azureClient()},
