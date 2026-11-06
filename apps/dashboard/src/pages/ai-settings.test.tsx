@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
+import { useAgentStatusGet } from "@/client/forge/loomplane/hooks"
+import { useQuery } from "@/client/hooks"
 import { forgeClient } from "@/client/runtime"
 import { setFeatures } from "@/lib/features"
 import { createDashboardRouter } from "@/router"
@@ -574,4 +576,36 @@ it("points at the workspace's budget when there's none to share", async () => {
   expect(
     within(section).queryByRole("button", { name: /^Use all/ })
   ).not.toBeInTheDocument()
+})
+
+it("tells the rest of the dashboard when the agent goes on", async () => {
+  let on = false
+  stub({
+    "GET /api/v1/ai/settings": () => Response.json(view()),
+    "GET /api/v1/ai/settings/agent": () =>
+      Response.json(agent({ enabled: on, revision: on ? 4 : 3 })),
+    "GET /api/v1/agent/status": () =>
+      Response.json({ enabled: on, knowledge: false, server: true }),
+    "PATCH /api/v1/ai/settings/agent": () => {
+      on = true
+      return Response.json(agent({ enabled: true, revision: 4 }))
+    },
+  })
+  // What the sidebar and the dock read to know the agent is on.
+  function Status() {
+    const status = useQuery(useAgentStatusGet)
+    return <p>agent {status.data?.enabled ? "on" : "off"}</p>
+  }
+  render(
+    <Wrapped>
+      <Status />
+      <AISettings />
+    </Wrapped>
+  )
+  expect(await screen.findByText("agent off")).toBeInTheDocument()
+  const section = await screen.findByRole("region", { name: "AI agent" })
+  await userEvent.click(
+    await within(section).findByRole("switch", { name: "Turn the agent on" })
+  )
+  expect(await screen.findByText("agent on")).toBeInTheDocument()
 })

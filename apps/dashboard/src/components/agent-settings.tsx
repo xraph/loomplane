@@ -8,6 +8,7 @@ import { type FormEvent, type ReactNode, useId, useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useAgentStatusGet,
   useAiSettingsDeleteProviderKey,
   useAiSettingsGet,
   useAiSettingsGetAgent,
@@ -176,10 +177,12 @@ function AgentForm({
     setProblems({ [where]: message })
   }
 
-  // Reads the settings again, so the form starts over from what's saved.
+  // Reads the settings again, so the form starts over from what's saved,
+  // and the agent's status, so the sidebar and the dock follow the switch.
   const refresh = async () => {
     await reload()
     invalidate(useAiSettingsGetAgent)
+    invalidate(useAgentStatusGet)
   }
 
   const toggle = async (key: "enabled" | "knowledge", value: boolean) => {
