@@ -12,6 +12,7 @@ const projectTabs: ProjectTab[] = [
   "services",
   "deployments",
   "variables",
+  "cloud",
   "analyses",
   "backups",
   "settings",

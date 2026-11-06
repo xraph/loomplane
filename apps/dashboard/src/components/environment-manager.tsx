@@ -188,6 +188,7 @@ export function Environments({
   retry,
   mayManage,
   mayDeploy,
+  mayClouds = false,
   runs = [],
   onOpen,
 }: {
@@ -198,10 +199,15 @@ export function Environments({
   retry: () => Promise<unknown>
   mayManage: boolean
   mayDeploy: boolean
+  /** Whether the row menu offers the environment's Cloud. */
+  mayClouds?: boolean
   /** The project's runs, newest first. */
   runs?: Run[]
   /** Opens another tab of the project page on one environment. */
-  onOpen: (tab: "deployments" | "variables", environment: string) => void
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
 }) {
   const now = useNow(30_000)
   const [deleting, setDeleting] = useState<Environment | null>(null)
@@ -248,6 +254,7 @@ export function Environments({
               now={now}
               mayManage={mayManage}
               mayDeploy={mayDeploy}
+              mayClouds={mayClouds}
               last={list.length === 1}
               onOpen={onOpen}
               onDelete={() => setDeleting(env)}
@@ -271,6 +278,7 @@ function EnvironmentRow({
   now,
   mayManage,
   mayDeploy,
+  mayClouds,
   last,
   onOpen,
   onDelete,
@@ -282,8 +290,12 @@ function EnvironmentRow({
   now: number
   mayManage: boolean
   mayDeploy: boolean
+  mayClouds: boolean
   last: boolean
-  onOpen: (tab: "deployments" | "variables", environment: string) => void
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
   onDelete: () => void
 }) {
   const people = usePeople()
@@ -407,6 +419,11 @@ function EnvironmentRow({
               onClick={() => onOpen("variables", environment.name)}
             >
               Variables
+            </DropdownMenuItem>
+          )}
+          {mayClouds && !environment.instanceId && (
+            <DropdownMenuItem onClick={() => onOpen("cloud", environment.name)}>
+              Cloud
             </DropdownMenuItem>
           )}
           {mayManage && !environment.instanceId && (

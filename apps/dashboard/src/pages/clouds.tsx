@@ -714,105 +714,26 @@ function NewCloudDialog({
 }
 
 /**
- * CloudsWorkspace is the full Cloud workspace for one project: pick an
- * environment and a Cloud, edit targets, review assignments and syncs.
- * A Cloud's page opens it on that Cloud.
+ * CloudsWorkspace is a project's Cloud tab: pick one of its environments and
+ * a Cloud, edit targets, review assignments and syncs. Environments belong to
+ * a project, so this is the one place an environment takes a Cloud.
  */
 export function CloudsWorkspace({
   projectId,
-  cloudId,
+  environment,
 }: {
-  projectId?: string
-  cloudId?: string
-} = {}) {
-  const { session, can } = useOrganization()
-  return (
-    <WorkspaceScope
-      key={session.orgId}
-      organizationId={session.orgId}
-      allowed={can("cloud_account:read")}
-      projectId={projectId}
-      cloudId={cloudId}
-    />
-  )
-}
-
-function WorkspaceScope({
-  allowed,
-  organizationId,
-  projectId,
-  cloudId,
-}: {
-  allowed: boolean
-  organizationId: string
-  projectId?: string
-  cloudId?: string
+  projectId: string
+  /** The environment to open on by name, from ?environment=. */
+  environment?: string
 }) {
-  const projects = useQuery(api.useProjectsList)
-  const preference = `loomplane.clouds.project.${organizationId}`
-  const [selected, setSelected] = useState(
-    () => projectId ?? window.localStorage.getItem(preference) ?? ""
-  )
-  const project =
-    projects.data?.projects.find((p) => p.id === selected) ??
-    projects.data?.projects[0]
-  return !allowed ? (
+  const { can } = useOrganization()
+  return can("cloud_account:read") ? (
+    <CloudWorkspace projectId={projectId} environment={environment} />
+  ) : (
     <EmptyClouds
       kind="notice"
       title="Cloud access is restricted"
       description="Ask your workspace owner for permission to view Cloud accounts."
-    />
-  ) : projects.status === "error" ? (
-    <QueryError
-      error={projects.error}
-      fallback="Projects couldn't be loaded."
-      retry={projects.refetch}
-    />
-  ) : !projects.data ? (
-    <Skeleton className="h-24" />
-  ) : !project ? (
-    <EmptyClouds
-      kind="notice"
-      title="Create a project first"
-      description="Your workspace manager can create Clouds before projects exist. Create a project to use granted targets."
-    >
-      <Link to="/projects">
-        <Button>
-          <PlusIcon />
-          Projects
-        </Button>
-      </Link>
-    </EmptyClouds>
-  ) : (
-    <CloudWorkspace
-      key={project.id}
-      projectId={project.id}
-      cloudId={project.id === projectId ? cloudId : undefined}
-      projectControl={
-        <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-          <FieldLabel className="contents">
-            Project
-            <Select
-              value={project.id}
-              onValueChange={(e) => {
-                setSelected(e ?? "")
-                window.localStorage.setItem(preference, e ?? "")
-              }}
-            >
-              <SelectTrigger aria-label="Project" className={"w-full min-w-0"}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.data.projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FieldLabel>
-        </FormField>
-      }
     />
   )
 }

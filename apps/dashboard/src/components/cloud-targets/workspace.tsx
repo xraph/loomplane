@@ -84,11 +84,12 @@ export function EmptyClouds({
 }
 export function CloudWorkspace({
   projectId,
-  projectControl,
+  environment: wanted,
   cloudId,
 }: {
   projectId: string
-  projectControl?: ReactNode
+  /** The environment to open on by name, such as one a Cloud's page links to. */
+  environment?: string
   /** The Cloud to open on, such as the one a Cloud's own page is about. */
   cloudId?: string
 }) {
@@ -97,75 +98,65 @@ export function CloudWorkspace({
   })
   const { session } = useOrganization()
   const preference = `loomplane.clouds.environment.${session.orgId}.${projectId}`
-  const [chosen, setChosen] = useState(
-    () => window.localStorage.getItem(preference) ?? ""
-  )
+  // A pick made here wins over the linked environment, which wins over the
+  // last one picked on this device.
+  const [chosen, setChosen] = useState("")
+  const [stored] = useState(() => window.localStorage.getItem(preference) ?? "")
+  const list = environments.data?.environments ?? []
   const environment =
-    environments.data?.environments.find((e) => e.id === chosen) ??
-    environments.data?.environments[0]
-  const content =
-    environments.status === "error" ? (
-      <QueryError
-        error={environments.error}
-        fallback="Environments couldn't be loaded."
-        retry={environments.refetch}
-      />
-    ) : !environments.data ? (
-      <Skeleton className="h-32" />
-    ) : !environment ? (
-      <EmptyClouds
-        title="No environments yet"
-        description="Add an environment in your project before assigning a Cloud."
-      />
-    ) : (
-      <EnvironmentWorkspace
-        key={environment.id}
-        projectId={projectId}
-        cloudId={cloudId}
-        environment={environment}
-        environments={environments.data.environments}
-        scopeControls={
-          <>
-            {projectControl}
-            <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-              <FieldLabel className="contents">
-                Environment
-                <Select
-                  value={environment.id}
-                  onValueChange={(e) => {
-                    setChosen(e ?? "")
-                    window.localStorage.setItem(preference, e ?? "")
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label="Environment"
-                    className={"w-full min-w-0"}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {environments.data.environments.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {e.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FieldLabel>
-            </FormField>
-          </>
-        }
-      />
-    )
-  return (
-    <>
-      {(environments.status === "error" || !environment) && (
-        <section className="flex flex-wrap items-end gap-2">
-          {projectControl}
-        </section>
-      )}
-      {content}
-    </>
+    list.find((e) => e.id === chosen) ??
+    list.find((e) => e.name === wanted) ??
+    list.find((e) => e.id === stored) ??
+    list[0]
+  return environments.status === "error" ? (
+    <QueryError
+      error={environments.error}
+      fallback="Environments couldn't be loaded."
+      retry={environments.refetch}
+    />
+  ) : !environments.data ? (
+    <Skeleton className="h-32" />
+  ) : !environment ? (
+    <EmptyClouds
+      title="No environments yet"
+      description="Add an environment in your project before assigning a Cloud."
+    />
+  ) : (
+    <EnvironmentWorkspace
+      key={environment.id}
+      projectId={projectId}
+      cloudId={cloudId}
+      environment={environment}
+      environments={environments.data.environments}
+      scopeControls={
+        <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+          <FieldLabel className="contents">
+            Environment
+            <Select
+              value={environment.id}
+              onValueChange={(e) => {
+                setChosen(e ?? "")
+                window.localStorage.setItem(preference, e ?? "")
+              }}
+            >
+              <SelectTrigger
+                aria-label="Environment"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {environments.data.environments.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
+      }
+    />
   )
 }
 function EnvironmentWorkspace({

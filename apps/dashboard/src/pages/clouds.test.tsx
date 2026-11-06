@@ -207,13 +207,13 @@ const show = (children: React.ReactNode) =>
 it("keeps denied access distinct and does not fetch Cloud data", async () => {
   denied = true
   const { reads } = fixture()
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   expect(screen.getByText("Cloud access is restricted")).toBeInTheDocument()
   expect(reads.some((r) => r.endsWith("/clouds"))).toBe(false)
 })
 it("shows a Cloud spread over several accounts of one provider", async () => {
   fixture({ spread: true })
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   expect(
     await screen.findByText("3 targets across 3 accounts on 2 providers")
   ).toBeInTheDocument()
@@ -222,10 +222,10 @@ it("shows a Cloud spread over several accounts of one provider", async () => {
   expect(screen.getByText("2 accounts")).toBeInTheDocument()
   expect(screen.getByText("ams3")).toBeInTheDocument()
 })
-it("distinguishes filtered targets, clears the filter and discards old project/environment scope", async () => {
+it("distinguishes filtered targets, clears the filter and discards old environment scope", async () => {
   const user = userEvent.setup()
   const { reads } = fixture()
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   await screen.findByText("Frontend")
   await user.type(
     screen.getByRole("textbox", { name: "Filter targets" }),
@@ -241,19 +241,40 @@ it("distinguishes filtered targets, clears the filter and discards old project/e
       true
     )
   )
-  await user.click(screen.getByRole("combobox", { name: "Project" }))
-  await user.click(await screen.findByRole("option", { name: /Other/ }))
-  await waitFor(() =>
-    expect(reads.some((r) => r.includes("/projects/other/clouds"))).toBe(true)
-  )
   expect(screen.getByRole("textbox", { name: "Filter targets" })).toHaveValue(
     ""
+  )
+})
+it("asks for no project, since the tab is already in one", async () => {
+  fixture()
+  show(<CloudsWorkspace projectId="p" />)
+  await screen.findByText("Frontend")
+  expect(
+    screen.queryByRole("combobox", { name: "Project" })
+  ).not.toBeInTheDocument()
+})
+it("opens on the environment a link names, then follows a pick", async () => {
+  const user = userEvent.setup()
+  const { reads } = fixture()
+  show(<CloudsWorkspace projectId="p" environment="staging" />)
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Environment" })
+    ).toHaveTextContent("staging")
+  )
+  expect(reads.some((r) => r.includes("/environments/stage/cloud"))).toBe(true)
+  await user.click(screen.getByRole("combobox", { name: "Environment" }))
+  await user.click(await screen.findByRole("option", { name: /production/ }))
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Environment" })
+    ).toHaveTextContent("production")
   )
 })
 it("creates a Cloud and refreshes the generated list", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noClouds: true })
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   await screen.findByText("Create your first Cloud")
   await user.click(screen.getAllByRole("button", { name: "New Cloud" })[0])
   await user.type(
@@ -270,7 +291,7 @@ it("creates a Cloud and refreshes the generated list", async () => {
 })
 it("shows read errors without presenting an empty Cloud result", async () => {
   fixture({ failure: "list" })
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   await screen.findByText("Cloud read failed.")
   expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
 })
@@ -600,32 +621,19 @@ it("requires routing evidence and sends it for the selected environment", async 
   )
 })
 
-it.each(["empty", "environments", "list"])(
-  "keeps project selection available when selected scope is %s",
-  async (state) => {
-    const user = userEvent.setup()
-    const { reads } = fixture({
-      noEnvironments: state === "empty",
-      failure: state === "empty" ? undefined : state,
-    })
-    show(<CloudsWorkspace />)
-    if (state === "empty") await screen.findByText("No environments yet")
-    else if (state === "environments")
-      await screen.findByText("Environment read failed.")
-    else await screen.findByText("Cloud read failed.")
-    await user.click(screen.getByRole("combobox", { name: "Project" }))
-    await user.click(await screen.findByRole("option", { name: /Other/ }))
-    await waitFor(() =>
-      expect(
-        reads.some((url) => url.includes("/projects/other/environments"))
-      ).toBe(true)
-    )
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent(
-      "Other project"
-    )
-    await screen.findByText("Frontend")
-  }
-)
+it.each([
+  ["empty", "No environments yet"],
+  ["environments", "Environment read failed."],
+  ["list", "Cloud read failed."],
+])("says so when the environment scope is %s", async (state, message) => {
+  fixture({
+    noEnvironments: state === "empty",
+    failure: state === "empty" ? undefined : state,
+  })
+  show(<CloudsWorkspace projectId="p" />)
+  await screen.findByText(message)
+  expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
+})
 
 it("keeps blocked previews distinct from environments without deployed services", async () => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) =>
@@ -739,7 +747,7 @@ it.each([false, true])(
 it("explains retained preview protection when deleting an unassigned Cloud", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ failure: "delete" })
-  show(<CloudsWorkspace />)
+  show(<CloudsWorkspace projectId="p" />)
   await user.click(await screen.findByRole("button", { name: "Manage Cloud" }))
   await user.click(screen.getByRole("button", { name: "Delete Cloud" }))
   await user.click(screen.getByRole("button", { name: "Confirm delete Cloud" }))

@@ -109,12 +109,14 @@ import {
   parseResourceConfig,
 } from "@/lib/catalog-kinds"
 import { formatDate, relative } from "@/lib/format"
+import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
 import { projectStyle } from "@/lib/project-style"
 import { isReady } from "@/lib/projects"
 import { Link, useNavigate } from "@/lib/router"
 import { useUrlTab } from "@/lib/use-url-tab"
 import { useNow, useRuns } from "@/lib/use-runs"
+import { CloudsWorkspace } from "@/pages/clouds"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
 /** The project page's tabs, in order. Overview is the default. */
@@ -123,6 +125,7 @@ export type ProjectTab =
   | "services"
   | "deployments"
   | "variables"
+  | "cloud"
   | "analyses"
   | "backups"
   | "settings"
@@ -321,6 +324,7 @@ function Body({
   const mayRun = can("analysis:run")
   const mayEdit = can("project:update")
   const mayBackups = can("service_backup:read")
+  const mayClouds = useOrganization().can("cloud_account:read")
   const hasRepositories = project.repositories.length > 0
   const analyze = useAnalyze(project, analyses.running)
   const graph = view?.graph ?? null
@@ -370,6 +374,7 @@ function Body({
       count: variables.data?.variables.length,
       show: true,
     },
+    { id: "cloud", label: "Cloud", show: mayClouds },
     {
       id: "analyses",
       label: "Analyses",
@@ -609,6 +614,7 @@ function Body({
             retry={environments.refetch}
             mayManage={can("environment:manage")}
             mayDeploy={can("deployment:create")}
+            mayClouds={mayClouds}
             runs={ownRuns}
             onOpen={(next, env) => openOn(next, env)}
           />
@@ -710,6 +716,16 @@ function Body({
             />
           )}
         </TabsContent>
+
+        {mayClouds && (
+          <TabsContent value="cloud" className="grid gap-4">
+            <CloudsWorkspace
+              key={wantedEnvironment}
+              projectId={project.id}
+              environment={wantedEnvironment}
+            />
+          </TabsContent>
+        )}
 
         <TabsContent value="analyses">
           <section aria-label="Analyses" className="grid gap-2.5">

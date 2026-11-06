@@ -350,6 +350,21 @@ it("shows where services go and how many run on each target", async () => {
   expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
 })
 
+it("sends environment changes to the environment's own project", async () => {
+  fixture({ granted: true })
+  show()
+  const envs = await screen.findByRole("region", {
+    name: "Environments on this Cloud",
+  })
+  await waitFor(() => expect(envs).toHaveTextContent("production"))
+  expect(
+    within(envs).getByRole("link", { name: "Open in project" })
+  ).toHaveAttribute("href", "/projects/web?tab=cloud&environment=production")
+  expect(
+    screen.queryByRole("button", { name: "Use in an environment" })
+  ).not.toBeInTheDocument()
+})
+
 it("names each change in words and shows what moved", async () => {
   fixture({
     syncs: [

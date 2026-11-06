@@ -30,7 +30,6 @@ import {
   useScopedUsage,
   type CloudScope,
 } from "@/components/cloud-detail/data"
-import { UseInEnvironment } from "@/components/cloud-detail/environments"
 import { Overview, type CloudTab } from "@/components/cloud-detail/overview"
 import { PlatformCloudUsage } from "@/components/platform-cloud-usage"
 import { Projects } from "@/components/cloud-detail/projects"
@@ -397,13 +396,11 @@ function CloudPage({
   onChanged: () => void
 }) {
   const { cloud, project } = scope
-  const { can } = useOrganization()
   // The instance owner runs a platform Cloud, so a workspace never edits it.
   const edit = manage && !cloud.platformOwned
   // Its servers, clusters and pools are the owner's too, so they stay hidden.
   const infra = !project && !cloud.platformOwned
   const [place, go] = usePlace(wanted)
-  const [using, setUsing] = useState(false)
   const [copied, setCopied] = useState(false)
   const targets = useScopedTargets(scope)
   const usage = useScopedUsage(scope)
@@ -457,15 +454,6 @@ function CloudPage({
         grants && plural(grants.length, "project"),
         environments !== undefined && plural(environments, "environment"),
       ]
-
-  // Who may put the Cloud to use in an environment, and where.
-  const mayUse = can("cloud_account:manage") && can("deployment:approve")
-  const useChoices = grants
-    ? projectList.filter((p) => grants.some((g) => g.projectId === p.id))
-    : projectList.filter((p) => p.id === project)
-  const taken = (usage.data?.environments ?? [])
-    .filter((e) => e.assigned)
-    .map((e) => e.environmentId)
 
   const failed =
     targets.status === "error" ||
@@ -583,11 +571,6 @@ function CloudPage({
           meta={summary.filter(Boolean).join(" · ")}
           actions={
             <>
-              {mayUse && useChoices.length > 0 && (
-                <Button variant="outline" onClick={() => setUsing(true)}>
-                  Use in an environment
-                </Button>
-              )}
               <PageMenu label="More Cloud actions">
                 {edit && (
                   <DropdownMenuItem onClick={() => go({ tab: "settings" })}>
@@ -624,18 +607,6 @@ function CloudPage({
             </>
           }
         />
-        {using && (
-          <UseInEnvironment
-            scope={scope}
-            projects={useChoices}
-            taken={taken}
-            onClose={() => setUsing(false)}
-            onApplied={() => {
-              setUsing(false)
-              refresh()
-            }}
-          />
-        )}
         {cloud.platformOwned && (
           <PlatformCloudUsage
             project={project}
@@ -686,7 +657,6 @@ function CloudPage({
                 grants={grants}
                 projects={projectList}
                 onTab={(t) => go({ tab: t })}
-                onChanged={refresh}
               />
             </TabsContent>
             <TabsContent value="targets">
