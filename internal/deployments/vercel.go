@@ -607,7 +607,10 @@ func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 	}
 	projectID, ref, native := planning.ParseVercelRef(b.ExternalID)
 	if !native {
-		return v.Client.DeleteProject(ctx, token(job), b.ExternalID)
+		if err := v.Client.DeleteProject(ctx, token(job), b.ExternalID); err != nil {
+			return err
+		}
+		return v.forgetFallback(ctx, job, b)
 	}
 	target, err := refTarget(ref)
 	if err != nil {
@@ -657,6 +660,40 @@ func (v *Vercel) removeNative(ctx context.Context, job *Job, b *planning.Binding
 	return v.forgetNative(ctx, job, b, projectID, true)
 }
 
+// recordKey is the environment and connection of the record a binding
+// was deployed under.
+func recordKey(job *Job, b *planning.Binding) (environmentID, connectionID string) {
+	environmentID, connectionID = b.EnvironmentID, b.ConnectionID
+	if environmentID == "" {
+		environmentID = job.Deployment.EnvironmentID
+	}
+	if connectionID == "" && job.Connection != nil {
+		connectionID = job.Connection.ID
+	}
+	return environmentID, connectionID
+}
+
+// forgetFallback deletes the fallback record that kept the service on the
+// project of its own just removed. A native record at the same key stays:
+// that's where a move into the shared project left the service.
+func (v *Vercel) forgetFallback(ctx context.Context, job *Job, b *planning.Binding) error {
+	if v.Environments == nil {
+		return nil
+	}
+	envID, connID := recordKey(job, b)
+	rec, err := v.Environments.Store.ProviderEnvironment(ctx, b.OrgID, envID, "vercel", connID, b.Name)
+	if err != nil {
+		return fmt.Errorf("read the vercel fallback record: %w", err)
+	}
+	if rec == nil || rec.Mode != ModeFallback {
+		return nil
+	}
+	if err := v.Environments.Store.DeleteProviderEnvironment(ctx, rec); err != nil {
+		return fmt.Errorf("forget the vercel fallback: %w", err)
+	}
+	return nil
+}
+
 // forgetNative deletes the binding's record and, when no other environment
 // uses the project, the project. Without Environments nothing says who
 // shares the project, so it stays.
@@ -664,14 +701,7 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 	if v.Environments == nil {
 		return nil
 	}
-	envID := b.EnvironmentID
-	if envID == "" {
-		envID = job.Deployment.EnvironmentID
-	}
-	connID := b.ConnectionID
-	if connID == "" && job.Connection != nil {
-		connID = job.Connection.ID
-	}
+	envID, connID := recordKey(job, b)
 	others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", b.OrgID, projectID, envID, b.Name)
 	if err != nil {
 		return fmt.Errorf("check who uses the vercel project: %w", err)
@@ -684,6 +714,27 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 		return nil
 	}
 	return v.Client.DeleteProject(ctx, token(job), projectID)
+}
+
+// Locate implements Locator. What a native binding names is one
+// environment of a project other environments share, so it says to delete
+// only that environment.
+func (v *Vercel) Locate(b *planning.Binding) string {
+	if b.Subject != planning.ServiceSubject || b.ExternalID == "" {
+		return ""
+	}
+	projectID, ref, native := planning.ParseVercelRef(b.ExternalID)
+	if !native {
+		return "the Vercel project " + projectID
+	}
+	target, err := refTarget(ref)
+	if err != nil {
+		return ""
+	}
+	if target.CustomID != "" {
+		return fmt.Sprintf("the custom environment %s of the Vercel project %s (other environments share the project, so delete only that environment, not the project)", target.CustomID, projectID)
+	}
+	return fmt.Sprintf("the %s environment of the Vercel project %s (other environments share the project, so delete only its %s deployments, not the project)", target.Builtin, projectID, target.Builtin)
 }
 
 // Observe implements Executor: the project, and which deployment its
@@ -713,8 +764,9 @@ func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, cred
 	return &Observation{Exists: true, Revision: p.Production()}, nil
 }
 
-// observeNative reads the project's one environment: the newest deployment
-// of its target, not the project's production.
+// observeNative reads the project's one environment: the newest READY
+// deployment of its target, which is what serves it, not the project's
+// production.
 func (v *Vercel) observeNative(ctx context.Context, tok vercel.Token, projectID string, target vercel.Target) (*Observation, error) {
 	if _, err := v.Client.GetProject(ctx, tok, projectID); err != nil {
 		if vercel.IsNotFound(err) {
@@ -735,8 +787,11 @@ func (v *Vercel) observeNative(ctx context.Context, tok vercel.Token, projectID 
 		return nil, err
 	}
 	obs := &Observation{Exists: true}
-	if len(deployments) > 0 {
-		obs.Revision = deployments[0].ID
+	for _, d := range deployments {
+		if d.ReadyState == "READY" {
+			obs.Revision = d.ID
+			break
+		}
 	}
 	return obs, nil
 }

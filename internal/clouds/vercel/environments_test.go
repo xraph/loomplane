@@ -205,7 +205,8 @@ func TestFallbackReason(t *testing.T) {
 		permanent bool
 		ok        bool
 	}{
-		{"paid plan", &APIError{Status: 402, Message: "pay"}, "Vercel says this needs a paid plan", false, true},
+		{"paid plan", &APIError{Status: 402, Message: "Custom environments need a Pro plan"}, "Vercel says this needs a paid plan: Custom environments need a Pro plan", false, true},
+		{"paid plan, no message", &APIError{Status: 402}, "Vercel says this needs a paid plan", false, true},
 		{"forbidden", fmt.Errorf("%w: %w", ErrRejected, &APIError{Status: 403, Message: "no custom environments"}), "Vercel refused: no custom environments", false, true},
 		{"reserved slug", &APIError{Status: 400, Message: "The slug \"production\" is reserved"}, "Vercel reserves that environment name: The slug \"production\" is reserved", true, true},
 		{"other 400", &APIError{Status: 400, Message: "bad body"}, "", false, false},

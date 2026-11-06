@@ -28,6 +28,8 @@ type removeAPI struct {
 	calls       []string
 	listings    [][]string // deployment ids per list call; the last repeats
 	listed      int
+	// states are deployments' readyState by id; READY when missing.
+	states      map[string]string
 	noProject   bool
 	noCustomEnv bool
 }
@@ -50,7 +52,11 @@ func (a *removeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.listed++
 		var items []string
 		for _, id := range ids {
-			items = append(items, fmt.Sprintf(`{"uid":%q,"customEnvironment":{"id":"env_9"}}`, id))
+			state := "READY"
+			if s, ok := a.states[id]; ok {
+				state = s
+			}
+			items = append(items, fmt.Sprintf(`{"uid":%q,"readyState":%q,"customEnvironment":{"id":"env_9"}}`, id, state))
 		}
 		_, _ = fmt.Fprintf(w, `{"deployments":[%s]}`, strings.Join(items, ","))
 	case r.Method == http.MethodGet && r.URL.Path == "/v9/projects/prj_1":
@@ -297,4 +303,72 @@ func TestVercelNativeRefRejectsEmptyTarget(t *testing.T) {
 	if len(h.store.rows) != 1 {
 		t.Fatalf("rows = %v, want staging's kept", h.store.rows)
 	}
+}
+
+// TestVercelNativeObserveReadsNewestReady: the newest deployment of the
+// target is still building, and an older one failed, so what serves is
+// the newest READY one.
+func TestVercelNativeObserveReadsNewestReady(t *testing.T) {
+	h := newRemoveHarness(t, "prj_1#env_9")
+	h.api.listings = [][]string{{"dpl_building", "dpl_failed", "dpl_live", "dpl_old"}}
+	h.api.states = map[string]string{"dpl_building": "BUILDING", "dpl_failed": "ERROR"}
+	obs, err := h.exec.Observe(t.Context(), h.job.Connection, h.job.Credential, h.b)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if !obs.Exists || obs.Revision != "dpl_live" {
+		t.Fatalf("observation = %+v, want dpl_live", obs)
+	}
+}
+
+// TestVercelLocateNamesTheEnvironment: what a deleted environment leaves
+// on a shared project is its environment there, not the project, which
+// other environments still deploy to.
+func TestVercelLocateNamesTheEnvironment(t *testing.T) {
+	v := &Vercel{}
+	for ref, want := range map[string]string{
+		"prj_1#env_9":      "the custom environment env_9 of the Vercel project prj_1 (other environments share the project, so delete only that environment, not the project)",
+		"prj_1#production": "the production environment of the Vercel project prj_1 (other environments share the project, so delete only its production deployments, not the project)",
+		"prj_1#preview":    "the preview environment of the Vercel project prj_1 (other environments share the project, so delete only its preview deployments, not the project)",
+		"prj_old":          "the Vercel project prj_old",
+		"":                 "",
+	} {
+		b := &planning.Binding{Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: ref}
+		if got := v.Locate(b); got != want {
+			t.Errorf("Locate(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
+// TestVercelLegacyRemoveForgetsTheFallback: removing web from the project
+// of its own it fell back to deletes that project and staging's fallback
+// record for web, and nothing else. A native record at the same key, as
+// after a move into the shared project, stays.
+func TestVercelLegacyRemoveForgetsTheFallback(t *testing.T) {
+	fallback := &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeFallback, Reason: "plan"}
+	api := &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "vercel", ConnectionID: "conn", Scope: "api", Mode: ModeFallback, Reason: "plan"}
+
+	t.Run("fallback", func(t *testing.T) {
+		h := newRemoveHarness(t, "prj_old", api)
+		h.store.rows[peKey(fallback)] = fallback
+		if err := h.exec.Remove(t.Context(), h.job, h.b); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if !h.api.called("DELETE /v9/projects/prj_old") {
+			t.Fatalf("calls = %v, want the separate project deleted", h.api.calls)
+		}
+		if len(h.store.rows) != 1 || h.store.rows[peKey(api)] == nil {
+			t.Fatalf("rows = %v, want only api's", h.store.rows)
+		}
+	})
+
+	t.Run("native at the same key", func(t *testing.T) {
+		h := newRemoveHarness(t, "prj_old")
+		if err := h.exec.Remove(t.Context(), h.job, h.b); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if row := h.store.rows["org|env_staging|vercel|conn|web"]; row == nil || row.Mode != ModeNative {
+			t.Fatalf("rows = %v, want staging's native record kept", h.store.rows)
+		}
+	})
 }

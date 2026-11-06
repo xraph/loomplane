@@ -245,6 +245,9 @@ func FallbackReason(err error) (reason string, permanent, ok bool) {
 	}
 	switch {
 	case ae.Status == http.StatusPaymentRequired:
+		if msg := strings.TrimSpace(ae.Message); msg != "" {
+			return "Vercel says this needs a paid plan: " + msg, false, true
+		}
 		return "Vercel says this needs a paid plan", false, true
 	case ae.Status == http.StatusForbidden:
 		return "Vercel refused: " + ae.Message, false, true
