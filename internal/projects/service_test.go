@@ -858,6 +858,57 @@ func TestService_reapersRunAroundDeletion(t *testing.T) {
 	}
 }
 
+// optionsReaper is a ReaperWithOptions that records the options each
+// deletion asked for, and fails the test if it's reaped without them.
+type optionsReaper struct {
+	t    *testing.T
+	keep [][]string
+}
+
+func (r *optionsReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	r.t.Error("a reaper that reads options was reaped without them")
+	return nil
+}
+
+func (r *optionsReaper) ReapWithOptions(_ context.Context, _, _, _ string, opts DeleteEnvironmentOptions) func(context.Context) {
+	r.keep = append(r.keep, opts.Keep)
+	return nil
+}
+
+func TestService_deleteEnvironmentPassesItsOptionsOn(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	plain, withOptions := &reapRecorder{}, &optionsReaper{t: t}
+	f.svc.AddReaper(plain)
+	f.svc.AddReaper(withOptions)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: "qa"}); err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) < 3 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Without options nothing is kept.
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(withOptions.keep) != 2 || !slices.Equal(withOptions.keep[0], []string{"bnd_db"}) || len(withOptions.keep[1]) != 0 {
+		t.Fatalf("the reaper was asked to keep %v", withOptions.keep)
+	}
+	// A reaper that doesn't read options is reaped as it always was.
+	if len(plain.reaped) != 2 || len(plain.finished) != 2 {
+		t.Fatalf("the plain reaper: reaped %v, finished %v", plain.reaped, plain.finished)
+	}
+}
+
 // checkRecorder is an Authorizer that records every check as
 // "permission resource" and allows them all, unless deny is set.
 type checkRecorder struct {

@@ -138,6 +138,11 @@ type Job struct {
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
+	// record is the provider environment record of a binding whose
+	// environment has been deleted, read before the deletion's cascade
+	// took it. Render's Remove reads it in place of the store's. It's nil
+	// otherwise.
+	record *ProviderEnvironment
 	// warn adds a warning to the step, or is nil.
 	warn func(error)
 }

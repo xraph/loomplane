@@ -561,7 +561,8 @@ func (r *Render) resourceEnvironment(ctx context.Context, key render.Key, extern
 // gone, as on a retry, and the record says which environment it was in.
 // An environment Loomplane didn't record for the binding's environment is
 // never touched, and the record goes last so a retry still knows the
-// project.
+// project. When the binding's environment has been deleted, taking the
+// record with it, the job carries the record read before.
 func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key, b *planning.Binding, envID string) error {
 	environmentID := b.EnvironmentID
 	if environmentID == "" {
@@ -572,9 +573,12 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 		connID = job.Connection.ID
 	}
 	store := r.Environments.Store
-	rec, err := store.ProviderEnvironment(ctx, b.OrgID, environmentID, "render", connID, "")
-	if err != nil {
-		return err
+	rec := job.record
+	if rec == nil {
+		var err error
+		if rec, err = store.ProviderEnvironment(ctx, b.OrgID, environmentID, "render", connID, ""); err != nil {
+			return err
+		}
 	}
 	if rec == nil || rec.Mode != ModeNative {
 		return nil

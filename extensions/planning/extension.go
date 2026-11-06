@@ -635,12 +635,19 @@ func (e *Extension) Register(fapp forge.App) error {
 		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
 		Warn: reapWarn,
 	})
+	// Deleting an environment deletes what Loomplane made for it on Vercel
+	// and Render, except what the caller keeps, and reports what stays.
+	providerReaper := &deployments.ProviderEnvironmentReaper{
+		Bindings: planStore, Environments: prj, Records: deployStore, Credentials: clouds, Executors: executors,
+		Warn: reapWarn,
+	}
+	projectSvc.AddReaper(providerReaper)
 	// It takes every other service and resource's binding too, and this
 	// deletes everything the environment kept in Vault and warns about each
-	// one still running in a cloud.
+	// one still running in a cloud, but the ones providerReaper removes.
 	projectSvc.AddReaper(&deployments.BindingReaper{
 		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
-		Warn: reapWarn,
+		Removal: providerReaper, Warn: reapWarn,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
