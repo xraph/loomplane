@@ -51,7 +51,12 @@ type fakeVercelAPI struct {
 	// customVarStatus, when set, is how Vercel answers a variable POST for
 	// a custom environment.
 	customVarStatus int
-	created         int
+	// getStatus, when set, is how Vercel answers a custom environment GET
+	// that finds nothing.
+	getStatus int
+	// createdID, when set, is the id a created custom environment gets.
+	createdID string
+	created   int
 	// onCustomEnvironment runs when a custom environment is asked for.
 	onCustomEnvironment func()
 }
@@ -124,6 +129,16 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				_, _ = fmt.Fprintf(w, `{"id":%q,"slug":%q}`, id, parts[4])
 				return
 			}
+			for key, id := range f.envs {
+				if strings.HasPrefix(key, project+"/") && id == parts[4] {
+					_, _ = fmt.Fprintf(w, `{"id":%q,"slug":%q}`, id, strings.TrimPrefix(key, project+"/"))
+					return
+				}
+			}
+			if f.getStatus != 0 {
+				fail(f.getStatus, "unavailable")
+				return
+			}
 			fail(http.StatusNotFound, "missing")
 			return
 		}
@@ -133,8 +148,12 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var body struct{ Slug string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		f.envs[project+"/"+body.Slug] = "env_9"
-		_, _ = fmt.Fprintf(w, `{"id":"env_9","slug":%q}`, body.Slug)
+		id := "env_9"
+		if f.createdID != "" {
+			id = f.createdID
+		}
+		f.envs[project+"/"+body.Slug] = id
+		_, _ = fmt.Fprintf(w, `{"id":%q,"slug":%q}`, id, body.Slug)
 	case r.Method == http.MethodPost && len(parts) == 4 && parts[0] == "v10" && parts[3] == "env":
 		var items []map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&items)
@@ -416,6 +435,7 @@ func TestVercelTransientErrorDoesNotFallBack(t *testing.T) {
 func TestVercelNativeRetryReusesCustomEnvironment(t *testing.T) {
 	h := newNativeHarness(t, "staging", "staging", true)
 	h.api.projects["web-abc12345"] = "prj_1"
+	h.api.envs["prj_1/staging"] = "env_9"
 	h.job.Resume = []byte(`{"project_id":"prj_1","target":"env_9","mode":"native"}`)
 	out := h.apply(t)
 
@@ -730,5 +750,68 @@ func TestVercelRefusalOnNativeEnvironmentFailsInsteadOfFallingBack(t *testing.T)
 				t.Fatalf("deployed to a separate project: %v", h.api.projects)
 			}
 		})
+	}
+}
+
+// TestVercelRecreatesDeletedCustomEnvironment: staging's custom
+// environment was deleted on Vercel, but the record and binding still name
+// it. The deploy makes it again and records the new id.
+func TestVercelRecreatesDeletedCustomEnvironment(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.api.projects["web-abc12345"] = "prj_1"
+	h.api.created = 1
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_staging", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "env_X"})
+	h.job.Binding = &planning.Binding{ID: "bind_web", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: "prj_1#env_X", ConnectionID: "conn", Drift: planning.DriftMissing}
+	h.api.createdID = "env_Y"
+	out := h.apply(t)
+
+	for _, call := range []string{"GET /v9/projects/prj_1/custom-environments/env_X", "GET /v9/projects/prj_1/custom-environments/staging", "POST /v9/projects/prj_1/custom-environments"} {
+		if !h.api.calledExactly(call) {
+			t.Fatalf("missing call %q in %v", call, h.api.callLog())
+		}
+	}
+	if len(h.api.envPosts) == 0 {
+		t.Fatal("no variables were written")
+	}
+	for _, post := range h.api.envPosts {
+		for _, item := range post {
+			ids, _ := item["customEnvironmentIds"].([]any)
+			if len(ids) != 1 || ids[0] != "env_Y" || item["target"] != nil {
+				t.Fatalf("variable %v isn't scoped to env_Y alone", item)
+			}
+		}
+	}
+	if len(h.api.deploys) != 1 || h.api.deploys[0]["customEnvironmentSlugOrId"] != "env_Y" {
+		t.Fatalf("deploy body = %v, want env_Y", h.api.deploys)
+	}
+	if out.ExternalID != "prj_1#env_Y" {
+		t.Fatalf("ExternalID = %q, want prj_1#env_Y", out.ExternalID)
+	}
+	if row := h.row(); row == nil || row.EnvironmentRef != "env_Y" {
+		t.Fatalf("row = %+v, want env_Y", row)
+	}
+}
+
+// TestVercelSavedCustomTargetCheckErrorFails: Vercel failing to say
+// whether the saved environment exists fails the deploy, with no fallback,
+// no new environment and no deployment.
+func TestVercelSavedCustomTargetCheckErrorFails(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.api.projects["web-abc12345"] = "prj_1"
+	h.api.created = 1
+	h.api.getStatus = http.StatusServiceUnavailable
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_staging", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "env_X"})
+
+	if _, err := h.exec.Apply(t.Context(), h.job); err == nil {
+		t.Fatal("a failed check deployed anyway")
+	}
+	if h.api.called("POST /v9/projects/prj_1/custom-environments") {
+		t.Fatal("made a custom environment")
+	}
+	if row := h.row(); row == nil || row.Mode != ModeNative || row.EnvironmentRef != "env_X" {
+		t.Fatalf("row = %+v, want the native record untouched", row)
+	}
+	if len(h.api.deploys) != 0 || h.notify.calls != 0 {
+		t.Fatalf("deploys = %v, notifications = %d", h.api.deploys, h.notify.calls)
 	}
 }

@@ -400,12 +400,29 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 // project, or on a first deploy production, Preview or a custom
 // environment named after it, created when it's missing.
 func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project) (vercel.Target, error) {
-	if d.state.Target != "" {
-		return refTarget(d.state.Target)
+	ref := d.state.Target
+	if ref == "" {
+		ref = d.savedTarget(project.ID)
 	}
-	if ref := d.savedTarget(project.ID); ref != "" {
-		d.state.Target = ref
-		return refTarget(ref)
+	if ref != "" {
+		t, err := refTarget(ref)
+		if err != nil {
+			return vercel.Target{}, err
+		}
+		gone, err := d.customEnvironmentGone(ctx, project.ID, t)
+		if err != nil {
+			return vercel.Target{}, err
+		}
+		if !gone {
+			d.state.Target = ref
+			return t, nil
+		}
+		// Someone deleted it on Vercel: carry on as a first deploy, which
+		// makes the environment again under the same name.
+		d.state.Target = ""
+		if d.state.CreatedEnvironment == ref {
+			d.state.CreatedEnvironment = ""
+		}
 	}
 	et, err := d.v.Environments.Target(ctx, d.job)
 	if err != nil {
@@ -424,6 +441,24 @@ func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project
 	}
 	d.state.Target = targetRef(t)
 	return t, nil
+}
+
+// customEnvironmentGone says whether a custom environment target no longer
+// exists on the project. Built-in targets always do. Any other error,
+// including a refusal, is returned as it is: it says nothing about whether
+// the environment exists, so the deploy fails and a retry checks again.
+func (d *vercelDeploy) customEnvironmentGone(ctx context.Context, projectID string, t vercel.Target) (bool, error) {
+	if t.Builtin != "" {
+		return false, nil
+	}
+	_, err := d.v.Client.GetCustomEnvironment(ctx, d.tok, projectID, t.CustomID)
+	switch {
+	case err == nil:
+		return false, nil
+	case vercel.IsNotFound(err):
+		return true, nil
+	}
+	return false, fmt.Errorf("read the vercel custom environment: %w", err)
 }
 
 // savedTarget is the Vercel environment the job's environment already
