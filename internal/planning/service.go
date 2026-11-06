@@ -154,6 +154,7 @@ type Service struct {
 	features          map[string]bool
 	inputs            CatalogInputMap
 	platform          platformPlacer
+	nativeFallbacks   NativeFallbacks
 }
 
 // Deps are what a Service needs.
@@ -220,6 +221,10 @@ type Deps struct {
 	// Gate refuses an approval the workspace may not run yet. Nil means
 	// metering.AllowAll.
 	Gate metering.Gate
+	// NativeFallbacks reads the fallback records, so a Vercel service on a
+	// project of its own with none is planned as a move into its shared
+	// project. Nil plans no such move.
+	NativeFallbacks NativeFallbacks
 }
 
 // NewService returns a Service.
@@ -246,7 +251,7 @@ func NewService(d Deps) *Service {
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
-		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform,
+		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform, nativeFallbacks: d.NativeFallbacks,
 	}
 }
 
@@ -946,6 +951,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		if len(locationSelections) > 0 {
 			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
 		}
+		native, nativeErr := nativeMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
+		if nativeErr != nil {
+			return nil, "", nativeErr
+		}
 		result = Compute(Input{
 			appliedMoves: moves, appliedMoveProblems: moveProblems,
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
@@ -957,6 +966,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Connections: options, Chosen: chosen, Held: held, Excluded: excluded, Only: loaded.only,
 			Kinds: s.kinds, Endpoints: endpointChecks,
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
+			NativeMoves: native,
 		})
 	}
 	if resolutionErr == nil && len(locationSelections) == 0 && poolRelocation(bindings, placements) {

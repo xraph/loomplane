@@ -118,6 +118,9 @@ type Action struct {
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
 	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`
 	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`
+	// NativeMove is a replacement that moves a Vercel service off the
+	// project of its own it runs on, into the shared project's environment.
+	NativeMove bool `json:"nativeMove,omitempty"`
 	// ID is stable for a subject: "service:api", "resource:db".
 	ID       string  `json:"id"`
 	Op       Op      `json:"op"`

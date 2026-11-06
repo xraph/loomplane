@@ -1166,7 +1166,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
 		return routeErr
 	}
-	moving := moves(current, a, connID) || len(a.Routes) > 0
+	// A native move deploys into the shared Vercel project, on the same
+	// provider, region and connection, so only the plan says it moves.
+	moving := moves(current, a, connID) || len(a.Routes) > 0 || a.NativeMove
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something

@@ -542,6 +542,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		// Loomplane Cloud previews room for services on its targets with
 		// the service that places them.
 		Platform: platformCloud,
+		// A Vercel service on a project of its own with no fallback record
+		// is planned as a move into its shared project.
+		NativeFallbacks: deployStore,
 	})
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
@@ -712,6 +715,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	if err := soakRoutes(fapp.Router(), guard, watches); err != nil {
+		return err
+	}
+	if err := providerEnvironmentRoutes(fapp.Router(), guard, providerEnvironmentDeps{Store: deployStore, Environments: prj, Authz: authz, Plans: e.plans}); err != nil {
 		return err
 	}
 	if err := forge.ProvideValue(c, targets); err != nil {

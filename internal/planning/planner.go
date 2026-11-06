@@ -96,6 +96,10 @@ type Input struct {
 	// outside the manifest, by resource and then component. Each lands on
 	// its component's ComponentConfig, so a change plans an update.
 	Inputs map[string]map[string]string
+	// NativeMoves are the Vercel services, by action ID, that run on a
+	// project of their own with no fallback record keeping them there.
+	// Each is replaced by a deploy into its shared Vercel project.
+	NativeMoves map[string]bool
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -2181,6 +2185,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		a.Reason = fmt.Sprintf("%s moves from %s to %s. A region can't change in place, so the new one starts there first, and the old one is removed once it's up.", a.Name, b.Region, region)
 	default:
 		p.connectionMoves(a, b, providerName)
+		p.nativeMove(a, b, providerName)
 	}
 	if a.Op == Replace {
 		if a.Subject == ResourceSubject {

@@ -11282,6 +11282,47 @@
         }
       }
     },
+    "/api/v1/projects/{id}/environments/{environmentId}/provider-environments/retry": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Try the provider's own environment again for an environment that fell back: clears the fallbacks the provider might lift and plans the move back, which a person approves",
+        "operationId": "providerEnvironments.retry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/environments/{environment}/connections": {
       "get": {
         "tags": [
@@ -12239,6 +12280,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/provider-environments": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Which of the project's environments deploy to a provider's own environments, and which fell back to a project of their own, with why",
+        "operationId": "providerEnvironments.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider environments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderEnvironmentList"
                 }
               }
             }
@@ -33824,6 +33897,56 @@
           },
           "workloads": {
             "$ref": "#/components/schemas/WorkloadCapabilities"
+          }
+        }
+      },
+      "ProviderEnvironment": {
+        "type": "object",
+        "required": [
+          "environmentId",
+          "provider",
+          "scope",
+          "mode",
+          "permanent",
+          "reason",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environmentId": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "permanent": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderEnvironmentList": {
+        "type": "object",
+        "required": [
+          "providerEnvironments"
+        ],
+        "properties": {
+          "providerEnvironments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderEnvironment"
+            }
           }
         }
       },
