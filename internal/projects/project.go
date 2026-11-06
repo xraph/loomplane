@@ -42,6 +42,7 @@ var (
 	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
 	ErrRepository          = errors.New("the repository couldn't be attached")
 	ErrTeamNotFound        = errors.New("that team isn't in this workspace")
+	ErrHistoryRetained     = errors.New("a deployment of this project has cleanup history that has to be kept, so it can't be deleted: finish or cancel the cleanup of its abandoned deployments first, or keep the project")
 )
 
 // Project is an application an organization deploys with Loomplane. Its

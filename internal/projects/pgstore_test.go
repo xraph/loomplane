@@ -21,3 +21,14 @@ func TestTeamWriteErrorMapsAForeignKeyViolation(t *testing.T) {
 		t.Fatalf("nil: %v", err)
 	}
 }
+
+func TestIsRetainedMatchesWhatKeepsHistory(t *testing.T) {
+	for code, want := range map[string]bool{"23503": true, "23514": true, "23505": false, "40001": false} {
+		if got := isRetained(fmt.Errorf("exec: %w", &pgconn.PgError{Code: code})); got != want {
+			t.Errorf("%s: %v, want %v", code, got, want)
+		}
+	}
+	if isRetained(nil) || isRetained(errors.New("boom")) {
+		t.Fatal("a non-database error isn't retained history")
+	}
+}

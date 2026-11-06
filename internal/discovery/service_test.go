@@ -190,7 +190,7 @@ func (m *memStore) CreateSource(_ context.Context, s *Source) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, x := range m.sources {
-		if x.ProjectID == s.ProjectID && x.Alias == s.Alias {
+		if x.ProjectID == s.ProjectID && x.Alias == s.Alias && x.RemovedAt == nil {
 			return ErrAliasTaken
 		}
 	}
@@ -200,12 +200,16 @@ func (m *memStore) CreateSource(_ context.Context, s *Source) error {
 }
 
 func (m *memStore) findSource(orgID, projectID, alias string, live bool) *Source {
+	var found *Source
 	for _, x := range m.sources {
-		if x.OrgID == orgID && x.ProjectID == projectID && x.Alias == alias && (!live || x.RemovedAt == nil) {
-			return x
+		if x.OrgID != orgID || x.ProjectID != projectID || x.Alias != alias || (live && x.RemovedAt != nil) {
+			continue
+		}
+		if found == nil || (found.RemovedAt != nil && x.RemovedAt == nil) || (found.RemovedAt != nil == (x.RemovedAt != nil) && x.CreatedAt.After(found.CreatedAt)) {
+			found = x
 		}
 	}
-	return nil
+	return found
 }
 
 func (m *memStore) GetSource(_ context.Context, orgID, projectID, alias string) (*Source, error) {
@@ -647,15 +651,28 @@ func TestSources_lifecycle(t *testing.T) {
 	if len(list) != 1 || list[0].Alias != "web" {
 		t.Fatalf("after removing mono: %+v", list)
 	}
-	// An alias is never reused, so an old plan's "mono" still means acme/mono.
+	// An alias never moves to another repository, so an old plan's "mono"
+	// still means acme/mono.
 	if _, err = f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/other", Alias: "mono"}); !errors.Is(err, ErrAliasTaken) {
-		t.Fatalf("re-adding a removed alias: %v", err)
+		t.Fatalf("another repository taking a removed alias: %v", err)
+	}
+	// The same repository can come back under it, and the live source wins the lookup.
+	again, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "mono"})
+	if err != nil {
+		t.Fatalf("re-adding a removed source: %v", err)
+	}
+	got, err := f.svc.store.GetSource(ctx, dev.OrgID, "proj_bare", "mono")
+	if err != nil || got.ID != again.ID {
+		t.Fatalf("GetSource after re-adding: %v, %+v", err, got)
+	}
+	if _, err = f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "mono"}); !errors.Is(err, ErrAliasTaken) {
+		t.Fatalf("taking a live alias: %v", err)
 	}
 	actions := make([]string, 0, len(f.audit.events))
 	for _, e := range f.audit.events {
 		actions = append(actions, e.Action)
 	}
-	if !slices.Equal(actions, []string{"source.add", "source.add", "source.update", "source.remove"}) {
+	if !slices.Equal(actions, []string{"source.add", "source.add", "source.update", "source.remove", "source.add"}) {
 		t.Fatalf("audit %v", actions)
 	}
 }

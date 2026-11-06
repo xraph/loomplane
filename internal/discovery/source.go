@@ -15,8 +15,10 @@ import (
 
 // Source is a repository, or a subtree of one, that a project builds from.
 // A project has any number. Its alias names it in graph IDs, the manifest
-// and variables, so an alias never changes and is never reused, even after
-// the source is removed: an old plan's "web" always means the same thing.
+// and variables, so an alias never changes and never moves to another
+// repository, even after the source is removed: an old plan's "web" always
+// means the same thing. Removing a source frees its alias for the same
+// repository to be added again.
 type Source struct {
 	ID        string `json:"id" forge:"id"`
 	OrgID     string `json:"org_id"`
@@ -55,7 +57,7 @@ var (
 	ErrSourceNotFound     = errors.New("source not found")
 	ErrInvalidSource      = errors.New("invalid source")
 	ErrNoSources          = errors.New("this project has no repositories; add one first")
-	ErrAliasTaken         = errors.New("this project has already used that alias, and an alias is never reused")
+	ErrAliasTaken         = errors.New("this project already uses that alias, or used it for a different repository")
 	ErrAliasReserved      = errors.New("that alias is an ecosystem name; pick another")
 	ErrRootsOverlap       = errors.New("this repository is already attached at a directory that contains this one, or sits inside it")
 	ErrSourceInaccessible = errors.New("that repository or branch can't be read by Loomplane; a private repository needs a connected account that can see it")
