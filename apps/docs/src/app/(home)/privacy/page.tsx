@@ -22,7 +22,7 @@ export default function PrivacyPage() {
           removed.
         </>
       }
-      updated="November 5, 2026"
+      updated="November 6, 2026"
     >
       <h2>Who this covers</h2>
       <p>
@@ -219,6 +219,12 @@ export default function PrivacyPage() {
         production stay with the workspace like the rest of its history. The
         audit trail records each step the agent takes, but never a secret value,
         a question's text or an answer.
+      </p>
+      <p>
+        If you report an answer, your question, the answer and your note go to
+        whoever runs the server, so they can review it. On{" "}
+        <code>app.loomplane.com</code> that's us. The audit trail records the
+        report with its ids and reason, not the text.
       </p>
       <p>
         With knowledge on, the agent can search your workspace's documents, such
