@@ -610,12 +610,14 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 // hasn't got, builds once, then is ready, aliased to a path on itself so
 // the health check reaches it.
 type fakeVercelDeploys struct {
-	mu       sync.Mutex
-	srv      *httptest.Server
-	token    string
-	files    map[string]int
-	projects map[string]map[string]any
-	env      map[string]any
+	mu    sync.Mutex
+	srv   *httptest.Server
+	token string
+	// projectID is the id every project made in this account gets.
+	projectID string
+	files     map[string]int
+	projects  map[string]map[string]any
+	env       map[string]any
 	// customEnvs are the project's custom environments, by slug.
 	customEnvs map[string]bool
 	deployed   []map[string]any
@@ -627,7 +629,7 @@ type fakeVercelDeploys struct {
 
 func newFakeVercelDeploys(t *testing.T, token string) *fakeVercelDeploys {
 	t.Helper()
-	f := &fakeVercelDeploys{token: token, files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}, customEnvs: map[string]bool{}}
+	f := &fakeVercelDeploys{token: token, projectID: "prj_web", files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}, customEnvs: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -664,17 +666,17 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && p == "/v10/projects":
 		var prj map[string]any
 		_ = json.Unmarshal(body, &prj)
-		prj["id"] = "prj_web"
-		f.projects[prj["name"].(string)], f.projects["prj_web"] = prj, prj
+		prj["id"] = f.projectID
+		f.projects[prj["name"].(string)], f.projects[f.projectID] = prj, prj
 		reply(200, prj)
-	case r.Method == http.MethodPost && p == "/v10/projects/prj_web/env":
+	case r.Method == http.MethodPost && p == "/v10/projects/"+f.projectID+"/env":
 		var vars []map[string]any
 		_ = json.Unmarshal(body, &vars)
 		for _, v := range vars {
 			f.env[v["key"].(string)] = v["value"]
 		}
 		reply(200, map[string]any{})
-	case r.Method == http.MethodGet && p == "/v10/projects/prj_web/env":
+	case r.Method == http.MethodGet && p == "/v10/projects/"+f.projectID+"/env":
 		// Removing an environment lists its variables to delete them. The
 		// fake keeps values by name only, so there are no rows to delete.
 		reply(200, map[string]any{"envs": []any{}})
@@ -682,21 +684,21 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 		// A native environment lists its target's deployments before it
 		// removes anything. This fake keeps none past the build.
 		reply(200, map[string]any{"deployments": []any{}})
-	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/prj_web/custom-environments/"):
-		slug := strings.TrimPrefix(p, "/v9/projects/prj_web/custom-environments/")
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"):
+		slug := strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/")
 		if _, ok := f.customEnvs[slug]; !ok {
 			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Environment not found"}})
 			return
 		}
 		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
-	case r.Method == http.MethodPost && p == "/v9/projects/prj_web/custom-environments":
+	case r.Method == http.MethodPost && p == "/v9/projects/"+f.projectID+"/custom-environments":
 		var e map[string]any
 		_ = json.Unmarshal(body, &e)
 		slug, _ := e["slug"].(string)
 		f.customEnvs[slug] = true
 		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
-	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v9/projects/prj_web/custom-environments/"):
-		delete(f.customEnvs, strings.TrimPrefix(p, "/v9/projects/prj_web/custom-environments/"))
+	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"):
+		delete(f.customEnvs, strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"))
 		reply(200, map[string]any{})
 	case r.Method == http.MethodPost && p == "/v2/files":
 		sum := sha1.Sum(body)

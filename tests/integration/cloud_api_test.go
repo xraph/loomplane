@@ -42,6 +42,11 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 	for _, token := range []string{"old-token-0123456789", "new-token-0123456789", "docs-token-0123456789"} {
 		f.accounts[token] = newFakeVercelDeploys(t, token)
 	}
+	// Each account mints its own project ids, as Vercel's are unique: a
+	// project id another connection recorded is the same project, which
+	// stays while that connection still deploys to it.
+	f.accounts["new-token-0123456789"].projectID = "prj_web_replacement"
+	f.accounts["docs-token-0123456789"].projectID = "prj_web_docs"
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		account := f.accounts[token]
@@ -94,8 +99,7 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// Keep the same account-scoped project ID in each account. Cleanup
-		// must use the original connection even when the strings collide.
+		// Cleanup must use the original connection's account.
 		account.serve(w, r)
 	}))
 	t.Cleanup(f.srv.Close)
