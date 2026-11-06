@@ -147,7 +147,7 @@ func (s *Service) runStart(ctx context.Context, in JobPayload) error {
 		}
 	}
 	err = s.drive(runCtx, t, func(ctx context.Context, events chan<- engine.StreamEvent) error {
-		return eng.StreamAgent(ctx, spec.Agent, rec.Input, overrides, events)
+		return eng.StreamAgent(ctx, spec.Agent, rec.ModelInput(), overrides, events)
 	})
 	switch {
 	case err == nil:

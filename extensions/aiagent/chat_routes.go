@@ -24,6 +24,8 @@ type chatAPI interface {
 	Send(ctx context.Context, p security.Principal, id string, in agentchat.SendInput) (*agentchat.Sent, error)
 	List(ctx context.Context, p security.Principal, f agentchat.ListFilter) (*agentchat.ConversationList, error)
 	History(ctx context.Context, p security.Principal, id string, q agentchat.HistoryQuery) (*agentchat.History, error)
+	Update(ctx context.Context, p security.Principal, id string, in agentchat.ConversationUpdate) (*agentchat.Conversation, error)
+	Delete(ctx context.Context, p security.Principal, id string) error
 }
 
 // tasksAPI is what the task routes ask of the run driver.
@@ -115,7 +117,8 @@ func mountChatRoutes(r forge.Router, guard identity.Guard, binder *agentscope.Bi
 		g.POST("/agent/conversations", h.start,
 			forge.WithName("agentConversations.start"),
 			forge.WithSummary("Start a conversation with the agent"),
-			forge.WithDescription("The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream."),
+			forge.WithDescription("The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream. "+
+				"context, when given, says where in the dashboard you sent it from: the agent reads that page first."),
 			forge.WithRequestSchema(agentchat.StartInput{}),
 			sent("The conversation and its first task"),
 		),
@@ -127,10 +130,29 @@ func mountChatRoutes(r forge.Router, guard identity.Guard, binder *agentscope.Bi
 			forge.WithQuerySchema(HistoryQuery{}),
 			forge.WithResponseSchema(http.StatusOK, "The conversation's turns, oldest first", agentchat.History{}),
 		),
+		g.PATCH("/agent/conversations/:id", h.update,
+			forge.WithName("agentConversations.update"),
+			forge.WithSummary("Rename, pin or unpin your conversation"),
+			forge.WithDescription("Only the person who started the conversation changes it. "+
+				"A title you give is 1 to 120 characters and stays: no automatic title replaces it. "+
+				"Leave out what you don't change."),
+			forge.WithRequestSchema(agentchat.ConversationUpdate{}),
+			forge.WithResponseSchema(http.StatusOK, "The conversation", agentchat.Conversation{}),
+		),
+		g.DELETE("/agent/conversations/:id", h.remove,
+			forge.WithName("agentConversations.delete"),
+			forge.WithSummary("Delete your conversation"),
+			forge.WithDescription("Only the person who started the conversation deletes it. It leaves your list, "+
+				"reads as not found and takes no more messages. When the agent is still on its last message, "+
+				"that task is stopped first. Its tasks, their events and requests are kept."),
+			forge.WithNoContentResponse(),
+			forge.WithInvalidates("Conversation[]"),
+		),
 		g.POST("/agent/conversations/:id/messages", h.send,
 			forge.WithName("agentConversations.send"),
 			forge.WithSummary("Add a message to your conversation"),
-			forge.WithDescription("Only the person who started the conversation adds to it, once the agent has finished the last message."),
+			forge.WithDescription("Only the person who started the conversation adds to it, once the agent has finished the last message. "+
+				"context, when given, says where in the dashboard you sent it from."),
 			forge.WithRequestSchema(agentchat.SendInput{}),
 			sent("The conversation and the task the message started"),
 		),
@@ -236,6 +258,33 @@ func (h chatHandlers) send(c forge.Context) error {
 		return chatFail(err)
 	}
 	return c.JSON(http.StatusCreated, sent)
+}
+
+func (h chatHandlers) update(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in agentchat.ConversationUpdate
+	if berr := c.BindJSON(&in); berr != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"title": "a new name", "pinned": true}`)
+	}
+	conv, err := h.chat.Update(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return chatFail(err)
+	}
+	return c.JSON(http.StatusOK, conv)
+}
+
+func (h chatHandlers) remove(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err = h.chat.Delete(c.Request().Context(), p, c.Param("id")); err != nil {
+		return chatFail(err)
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h chatHandlers) getTask(c forge.Context) error {
@@ -388,10 +437,10 @@ func limitOf(c forge.Context, msg string) (int, error) {
 }
 
 // chatFail maps the conversations' and the tasks' errors to a status: not
-// found 404, invalid 422, someone else's conversation 403, and busy, the
-// agent off, out of budget or a task already finished 409, each with its
-// own message. The agent's other errors and the permission errors go
-// through fail.
+// found 404, an invalid message 422, an invalid change 400, someone else's
+// conversation 403, and busy, sending, the agent off, out of budget or a
+// task already finished 409, each with its own message. The agent's other
+// errors and the permission errors go through fail.
 func chatFail(err error) error {
 	for _, m := range []struct {
 		target error
@@ -400,7 +449,9 @@ func chatFail(err error) error {
 		{agentchat.ErrNotFound, http.StatusNotFound},
 		{agentruns.ErrNotFound, http.StatusNotFound},
 		{agentchat.ErrNotYours, http.StatusForbidden},
+		{agentchat.ErrNotYoursToChange, http.StatusForbidden},
 		{agentchat.ErrBusy, http.StatusConflict},
+		{agentchat.ErrSending, http.StatusConflict},
 		{agentsettings.ErrDisabled, http.StatusConflict},
 		{agentsettings.ErrBudgetExhausted, http.StatusConflict},
 		{agentruns.ErrNotCancelable, http.StatusConflict},
@@ -408,6 +459,10 @@ func chatFail(err error) error {
 		if errors.Is(err, m.target) {
 			return forge.NewHTTPError(m.status, m.target.Error())
 		}
+	}
+	if errors.Is(err, agentchat.ErrBadChange) {
+		// The wrapped text says what to fix.
+		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if errors.Is(err, agentchat.ErrInvalid) || errors.Is(err, agentruns.ErrInvalid) {
 		// The wrapped text says what's wrong with it.

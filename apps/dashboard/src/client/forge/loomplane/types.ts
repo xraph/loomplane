@@ -1667,6 +1667,8 @@ export interface Conversation {
   id: string;
   lastTaskId: string;
   orgId: string;
+  pinned: boolean;
+  pinnedAt?: string;
   projectId: string;
   startedBy: string;
   status: string;
@@ -1677,6 +1679,11 @@ export interface Conversation {
 
 export interface ConversationList {
   conversations: Conversation[];
+}
+
+export interface ConversationUpdateBody {
+  pinned?: boolean;
+  title?: string;
 }
 
 export interface Cost {
@@ -4073,6 +4080,16 @@ export interface Package {
   source?: string;
 }
 
+export interface PageContext {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
+}
+
 export interface PendingNodeJoinToken {
   cloudId?: string;
   createdAt: string;
@@ -5741,6 +5758,15 @@ export interface SecretInputBody {
 }
 
 export interface SendInputBody {
+  context?: {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
+};
   message: string;
 }
 
@@ -6219,6 +6245,15 @@ export interface StartGitLabSignInInputBody {
 }
 
 export interface StartInputBody {
+  context?: {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
+};
   message: string;
   projectId?: string;
 }
@@ -6492,6 +6527,7 @@ export interface TrafficReport {
 }
 
 export interface Turn {
+  context?: PageContext;
   createdAt: string;
   error: string;
   eventSeq: number;

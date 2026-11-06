@@ -186,6 +186,53 @@ func TestPgStoreEventsWakeTheWorkspace(t *testing.T) {
 	}
 }
 
+// A chat message's preface and page context are kept beside its input and
+// read back with the record; a task without them stores NULL and "". The
+// realtime event carries neither.
+func TestPgStoreKeepsThePrefaceAndPageContext(t *testing.T) {
+	ctx := context.Background()
+	st, pg := pgStore(t)
+	with := newTask("o", "atask_p", "arun_p", time.Now().UTC())
+	if err := st.Create(ctx, with, agentruns.Record{Principal: []byte(`{}`), Input: "Why is this slow?",
+		Preface: "where: secret page", PageContext: json.RawMessage(`{"path":"/projects/secret_page"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.Record(ctx, "o", with.ID)
+	if err != nil || rec.Input != "Why is this slow?" || rec.Preface != "where: secret page" ||
+		!strings.Contains(string(rec.PageContext), `"/projects/secret_page"`) {
+		t.Fatalf("record %+v, %v", rec, err)
+	}
+	without := newTask("o", "atask_q", "arun_q", time.Now().UTC())
+	if err = st.Create(ctx, without, agentruns.Record{Principal: []byte(`{}`), Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err = st.Record(ctx, "o", without.ID); err != nil || rec.Preface != "" || rec.PageContext != nil {
+		t.Fatalf("record %+v, %v", rec, err)
+	}
+	var stored *string
+	if err = pg.QueryRow(ctx, `SELECT page_context::text FROM loomplane_agent_tasks WHERE id = 'atask_q'`).Scan(&stored); err != nil || stored != nil {
+		t.Fatalf("page_context %v, %v", stored, err)
+	}
+	var payloads []string
+	rows, err := pg.Query(ctx, `SELECT data::text FROM loomplane_events WHERE org_id = 'o' AND type LIKE 'agent_task.%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err = rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, p)
+	}
+	for _, p := range payloads {
+		if strings.Contains(p, "secret page") || strings.Contains(p, "secret_page") {
+			t.Fatalf("an event carries the context: %s", p)
+		}
+	}
+}
+
 // A safety stop withholds the text of the step it stopped, and only that
 // step's, in the write that records the stop, and only in its workspace.
 func TestPgStoreWithholdsTheStoppedStep(t *testing.T) {

@@ -46,7 +46,11 @@ func (a *App) agentConversationsCommand() cli.Command {
 		cli.WithUsage("agent conversations [--project <ref>] [--json]"),
 		cli.WithFlags(
 			cli.NewStringFlag("project", "", "Only conversations about this project", ""),
-			jsonFlag))
+			jsonFlag),
+		cli.WithSubcommand(cli.NewCommand("rename", "Give a conversation you started a title of your own", a.agentRename,
+			cli.WithUsage("agent conversations rename <id> <title...>"))),
+		cli.WithSubcommand(cli.NewCommand("delete", "Delete a conversation you started; a turn still running is stopped", a.agentDeleteConversation,
+			cli.WithUsage("agent conversations delete <id>"))))
 }
 
 // ExitError helpers.
@@ -678,5 +682,51 @@ func (a *App) agentConversations(ctx cli.CommandContext) error {
 		rows = append(rows, []string{cv.ID, proj, orDash(oneLine(cv.Title, 50)), cv.Status, age(now, cv.UpdatedAt)})
 	}
 	a.table([]string{"ID", "PROJECT", "TITLE", "STATUS", "UPDATED"}, rows)
+	return nil
+}
+
+// conversationID is the conversation a subcommand names first.
+func conversationID(ctx cli.CommandContext) (string, error) {
+	id := ctx.Arg(0)
+	if id == "" {
+		return "", errors.New("name the conversation: its ID, from `loomctl agent conversations`")
+	}
+	return id, nil
+}
+
+func (a *App) agentRename(ctx cli.CommandContext) error {
+	id, err := conversationID(ctx)
+	if err != nil {
+		return err
+	}
+	title := strings.TrimSpace(strings.Join(ctx.Args()[1:], " "))
+	if title == "" {
+		return errors.New("write the new title after the conversation's ID")
+	}
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	cv, err := c.UpdateConversation(ctxOf(ctx), id, client.ConversationUpdate{Title: &title})
+	if err != nil {
+		return agentError(err)
+	}
+	a.printf("Renamed %s to %q.\n", cv.ID, cv.Title)
+	return nil
+}
+
+func (a *App) agentDeleteConversation(ctx cli.CommandContext) error {
+	id, err := conversationID(ctx)
+	if err != nil {
+		return err
+	}
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	if err = c.DeleteConversation(ctxOf(ctx), id); err != nil {
+		return agentError(err)
+	}
+	a.printf("Deleted %s.\n", id)
 	return nil
 }

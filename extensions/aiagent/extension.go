@@ -260,7 +260,7 @@ func (e *Extension) registerChat(c forge.Container) (*agentchat.Service, error) 
 	}
 	pg := pgdriver.Unwrap(e.db)
 	chat := agentchat.NewService(agentchat.Deps{
-		Store: agentchat.NewPgStore(pg), Runs: e.runs, Authz: authz, TryLock: pglock.TryFor(pg),
+		Store: agentchat.NewPgStore(pg), Runs: e.runs, Authz: authz, TryLock: pglock.TryFor(pg), Safety: e.scanner,
 	})
 	if err = forge.ProvideValue(c, chat); err != nil {
 		return nil, fmt.Errorf("provide the agent's conversations: %w", err)

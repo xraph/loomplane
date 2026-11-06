@@ -7,6 +7,11 @@
 // the latest its status, last task and last update. Only the person who
 // started it adds to it, one turn at a time; people who manage the
 // workspace's AI may read it.
+//
+// What the starter changes about a conversation lives beside its tasks, in
+// loomplane_agent_conversations: the title they gave it, when they pinned
+// it, and when they deleted it. A conversation with no row there has none
+// of those.
 package agentchat
 
 import (
@@ -25,20 +30,26 @@ const (
 	// TitleLen is the most runes of a conversation's title, cut at the
 	// last space before it.
 	TitleLen = 80
+	// MaxTitle is the most characters of a title the person gives.
+	MaxTitle = 120
 )
 
 // Conversation is one person's thread of chat tasks.
 type Conversation struct {
-	ID         string    `json:"id" forge:"id"` // the cortex session ID
-	OrgID      string    `json:"org_id"`
-	ProjectID  string    `json:"project_id"` // "" for the whole workspace
-	Title      string    `json:"title"`
-	StartedBy  string    `json:"started_by"`
-	Status     string    `json:"status"` // the latest turn's task status
-	LastTaskID string    `json:"last_task_id"`
-	Turns      int       `json:"turns"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        string `json:"id" forge:"id"` // the cortex session ID
+	OrgID     string `json:"org_id"`
+	ProjectID string `json:"project_id"` // "" for the whole workspace
+	// Title is the one the person gave it, or else the start of its first
+	// message.
+	Title      string     `json:"title"`
+	StartedBy  string     `json:"started_by"`
+	Status     string     `json:"status"` // the latest turn's task status
+	LastTaskID string     `json:"last_task_id"`
+	Turns      int        `json:"turns"`
+	Pinned     bool       `json:"pinned"`
+	PinnedAt   *time.Time `json:"pinned_at"` // nil when it isn't pinned
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // Turn is one message and the agent's run on it.
@@ -51,6 +62,9 @@ type Turn struct {
 	EventSeq   int64             `json:"event_seq"` // the last seq in Events; stream with after=EventSeq
 	CreatedAt  time.Time         `json:"created_at"`
 	FinishedAt *time.Time        `json:"finished_at"`
+	// Context is where in the dashboard the person sent the message from,
+	// when the dashboard said.
+	Context *PageContext `json:"context,omitempty"`
 }
 
 // History is a page of a conversation's turns.
@@ -62,13 +76,24 @@ type History struct {
 
 // StartInput is a conversation's first message.
 type StartInput struct {
-	Message   string `json:"message"`
-	ProjectID string `json:"project_id,omitempty"`
+	Message   string       `json:"message"`
+	ProjectID string       `json:"project_id,omitempty"`
+	Context   *PageContext `json:"context,omitempty"`
 }
 
 // SendInput is a conversation's next message.
 type SendInput struct {
-	Message string `json:"message"`
+	Message string       `json:"message"`
+	Context *PageContext `json:"context,omitempty"`
+}
+
+// ConversationUpdate changes a conversation. A field left out stays as it is.
+type ConversationUpdate struct {
+	// Title replaces the conversation's title: 1 to MaxTitle characters on
+	// one line. No automatic title replaces it afterwards.
+	Title *string `json:"title,omitempty"`
+	// Pinned pins the conversation (pinned_at is when) or unpins it.
+	Pinned *bool `json:"pinned,omitempty"`
 }
 
 // Sent is the conversation a message went to and the task it started.
@@ -102,6 +127,14 @@ var (
 	ErrInvalid  = errors.New("invalid message")
 	ErrBusy     = errors.New("The agent is still on your last message. Wait for it to finish, answer what it asked, or stop it.") //nolint:staticcheck,revive // ST1005: a sentence people read as is
 	ErrNotYours = errors.New("only the person who started this conversation can add to it")
+	// ErrNotYoursToChange is someone who may read a conversation but didn't
+	// start it, renaming, pinning or deleting it.
+	ErrNotYoursToChange = errors.New("only the person who started this conversation can rename, pin or delete it")
+	// ErrBadChange wraps what's wrong with a ConversationUpdate.
+	ErrBadChange = errors.New("invalid change")
+	// ErrSending is a delete that found a message on its way into the
+	// conversation.
+	ErrSending = errors.New("A message is on its way into this conversation. Try again in a moment.") //nolint:staticcheck,revive // ST1005: a sentence people read as is
 )
 
 // TurnRow is one chat task as the store reads it.
@@ -110,6 +143,15 @@ type TurnRow struct {
 	EventSeq                     int64
 	CreatedAt                    time.Time
 	FinishedAt                   *time.Time
+	// Context is the turn's page context as stored, or nil.
+	Context []byte
+}
+
+// Change is what Store.Update writes. A nil field stays as it is.
+type Change struct {
+	Title  *string
+	Pinned *bool
+	At     time.Time
 }
 
 // Store reads conversations from the agent's task table. Every method
@@ -124,6 +166,12 @@ type Store interface {
 	// Turns reads up to limit turns, newest first, from before the task
 	// before ("" for the newest), and reports whether older ones exist.
 	Turns(ctx context.Context, orgID, id, before string, limit int) ([]TurnRow, bool, error)
+	// Update writes the person's title or pin. A deleted conversation
+	// stays as it is.
+	Update(ctx context.Context, orgID, id string, c Change) error
+	// Delete marks the conversation deleted at at. Its tasks stay.
+	// Conversation, List and Turns never read a deleted one again.
+	Delete(ctx context.Context, orgID, id string, at time.Time) error
 }
 
 // Runs is what the service asks of agentruns. *agentruns.Service is the
@@ -131,6 +179,13 @@ type Store interface {
 type Runs interface {
 	Start(ctx context.Context, in agentruns.StartInput) (*agentruns.Task, error)
 	Events(ctx context.Context, p security.Principal, id string, after int64, limit int) ([]agentruns.Event, error)
+	Cancel(ctx context.Context, p security.Principal, taskID string) error
+}
+
+// Quoter quotes text from outside Loomplane for the model.
+// *agentsafety.Scanner is the real one.
+type Quoter interface {
+	Untrusted(ctx context.Context, source, text string) string
 }
 
 var _ Runs = (*agentruns.Service)(nil)

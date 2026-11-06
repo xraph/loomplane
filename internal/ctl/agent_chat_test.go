@@ -95,6 +95,19 @@ func (f *fakeAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/v1/agent/conversations":
 		_, _ = w.Write([]byte(`{"conversations":[{"id":"c1","project_id":"proj_api","title":"Why did checkout fail?","status":"completed","turns":2,"updated_at":"` +
 			time.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339) + `"},{"id":"c2","project_id":"","title":"","status":"waiting","turns":1}]}`))
+	case strings.HasPrefix(path, "/api/v1/agent/conversations/") && r.Method == http.MethodPatch:
+		var in struct {
+			Title string `json:"title"`
+		}
+		_ = json.Unmarshal(b, &in)
+		_, _ = fmt.Fprintf(w, `{"id":%q,"title":%q}`, strings.Split(path, "/")[5], in.Title)
+	case strings.HasPrefix(path, "/api/v1/agent/conversations/") && r.Method == http.MethodDelete:
+		if f.history == "" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"conversation not found"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(path, "/api/v1/agent/conversations/"):
 		if f.history == "" {
 			w.WriteHeader(http.StatusNotFound)
@@ -571,5 +584,40 @@ func TestAgentContinueUnknownConversation(t *testing.T) {
 	r := f.run(t, "", "agent", "--conversation", "nope")
 	if r.err == nil || r.err.Error() != "conversation not found" {
 		t.Fatalf("err = %v", r.err)
+	}
+}
+
+func TestAgentConversationsRenameAndDelete(t *testing.T) {
+	f := &fakeAgent{history: `{}`}
+	r := f.run(t, "", "agent", "conversations", "rename", "c1", "Checkout", "failures")
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !strings.Contains(r.out.String(), `Renamed c1 to "Checkout failures".`) {
+		t.Fatalf("out = %q", r.out.String())
+	}
+	if got := f.called(`PATCH /api/v1/agent/conversations/c1 {"title":"Checkout failures"}`); len(got) != 1 {
+		t.Fatalf("calls = %q", f.calls)
+	}
+	r = f.run(t, "", "agent", "conversations", "delete", "c1")
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !strings.Contains(r.out.String(), "Deleted c1.") || len(f.called("DELETE /api/v1/agent/conversations/c1")) != 1 {
+		t.Fatalf("out = %q, calls = %q", r.out.String(), f.calls)
+	}
+
+	for _, args := range [][]string{
+		{"agent", "conversations", "rename"},
+		{"agent", "conversations", "rename", "c1"},
+		{"agent", "conversations", "delete"},
+	} {
+		if r = f.run(t, "", args...); r.err == nil {
+			t.Errorf("%v: no error", args)
+		}
+	}
+	f.history = ""
+	if r = f.run(t, "", "agent", "conversations", "delete", "nope"); r.err == nil || r.err.Error() != "conversation not found" {
+		t.Fatalf("an unknown conversation: %v", r.err)
 	}
 }

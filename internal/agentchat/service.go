@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xraph/loomplane/internal/agentruns"
@@ -48,6 +50,11 @@ type Deps struct {
 	// database, so replicas take turns too. A send that finds it held
 	// gets ErrBusy at once, since the holder is already starting a turn.
 	TryLock TryLockFunc
+	// Safety quotes a page context's label for the model: the agent's
+	// agentsafety.Scanner. Without it the label is withheld.
+	Safety Quoter
+	// Now is the clock; nil is time.Now.
+	Now func() time.Time
 }
 
 // Service keeps people's conversations with the agent.
@@ -56,14 +63,23 @@ type Service struct {
 	runs  Runs
 	authz *security.Authorizer
 	lock  TryLockFunc
+	quote Quoter
+	now   func() time.Time
 	// slots bounds the sends holding the lock (maxLockedSends).
 	slots chan struct{}
 }
 
 // NewService returns a Service over d.
 func NewService(d Deps) *Service {
-	return &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.TryLock,
+	s := &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.TryLock, now: d.Now,
 		slots: make(chan struct{}, maxLockedSends)}
+	if d.Safety != nil {
+		s.quote = d.Safety
+	}
+	if s.now == nil {
+		s.now = time.Now
+	}
+	return s
 }
 
 // requirePerson refuses anyone but a person of a workspace: the agent never
@@ -115,12 +131,20 @@ func (s *Service) Start(ctx context.Context, p security.Principal, in StartInput
 	if err != nil {
 		return nil, err
 	}
+	pc, err := pageContext(in.Context)
+	if err != nil {
+		return nil, err
+	}
 	title := titleOf(msg)
 	who := p
-	task, err := s.runs.Start(ctx, agentruns.StartInput{
+	start := agentruns.StartInput{
 		Kind: agentruns.KindChat, OrgID: p.OrgID, OnBehalfOf: &who, ProjectID: in.ProjectID, Input: msg,
 		Metadata: map[string]string{agentruns.MetaTitle: title},
-	})
+	}
+	if cerr := s.withContext(ctx, p, &start, pc); cerr != nil {
+		return nil, cerr
+	}
+	task, err := s.runs.Start(ctx, start)
 	if err != nil {
 		return nil, err
 	}
@@ -146,31 +170,26 @@ func (s *Service) Send(ctx context.Context, p security.Principal, id string, in 
 	if err != nil {
 		return nil, err
 	}
+	pc, err := pageContext(in.Context)
+	if err != nil {
+		return nil, err
+	}
 	c, err := s.store.Conversation(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
 	}
-	if c.StartedBy != p.UserID {
-		admin, aerr := s.manages(ctx, p)
-		if aerr != nil {
-			return nil, aerr
-		}
-		if admin {
-			return nil, ErrNotYours
-		}
-		return nil, ErrNotFound
+	if merr := s.mine(ctx, p, c, ErrNotYours); merr != nil {
+		return nil, merr
 	}
-	if s.lock == nil {
-		return nil, errors.New("agentchat: no lock is configured")
-	}
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	// The context is worked out before the lock, which holds a pooled
+	// connection: a conversation's project never changes, so c's is the
+	// next turn's too.
+	where := agentruns.StartInput{ProjectID: c.ProjectID}
+	if cerr := s.withContext(ctx, p, &where, pc); cerr != nil {
+		return nil, cerr
 	}
 	var sent *Sent
-	ran, err := s.lock(ctx, lockPrefix+id, func(ctx context.Context) error {
+	ran, err := s.locked(ctx, id, func(ctx context.Context) error {
 		// Read again under the lock: a send that held it before us has
 		// written its task by now.
 		latest, lerr := s.store.Conversation(ctx, p.OrgID, id)
@@ -184,6 +203,7 @@ func (s *Service) Send(ctx context.Context, p security.Principal, id string, in 
 		task, serr := s.runs.Start(ctx, agentruns.StartInput{
 			Kind: agentruns.KindChat, OrgID: p.OrgID, OnBehalfOf: &who, ProjectID: latest.ProjectID, Input: msg,
 			SessionID: latest.ID, Metadata: map[string]string{agentruns.MetaTitle: latest.Title},
+			Preface: where.Preface, PageContext: where.PageContext,
 		})
 		if serr != nil {
 			return serr
@@ -270,7 +290,7 @@ func (s *Service) History(ctx context.Context, p security.Principal, id string, 
 			return nil, eerr
 		}
 		turn := Turn{TaskID: r.TaskID, Message: r.Input, Status: r.Status, Error: r.Error, Events: events,
-			CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt}
+			CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, Context: storedContext(r.Context)}
 		if n := len(events); n > 0 {
 			turn.EventSeq = events[n-1].Seq
 		}
@@ -298,4 +318,155 @@ func (s *Service) events(ctx context.Context, p security.Principal, taskID strin
 		}
 		after = page[len(page)-1].Seq
 	}
+}
+
+// locked runs fn while holding the conversation's lock, in one of the
+// slots, and reports whether it ran: false when someone else holds the
+// lock.
+func (s *Service) locked(ctx context.Context, id string, fn func(context.Context) error) (bool, error) {
+	if s.lock == nil {
+		return false, errors.New("agentchat: no lock is configured")
+	}
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	return s.lock(ctx, lockPrefix+id, fn)
+}
+
+// mine checks p started c. Someone who manages the workspace's AI may read
+// it, so they get notYours; anyone else ErrNotFound, so IDs don't leak.
+func (s *Service) mine(ctx context.Context, p security.Principal, c *Conversation, notYours error) error {
+	if c.StartedBy == p.UserID {
+		return nil
+	}
+	admin, err := s.manages(ctx, p)
+	if err != nil {
+		return err
+	}
+	if admin {
+		return notYours
+	}
+	return ErrNotFound
+}
+
+// changeable checks p may rename, pin or delete c: they started it, and
+// may still use the agent where it runs, as stopping one of its tasks
+// asks. Managing the workspace's AI doesn't let anyone change someone
+// else's.
+func (s *Service) changeable(ctx context.Context, p security.Principal, c *Conversation) error {
+	if err := s.mine(ctx, p, c, ErrNotYoursToChange); err != nil {
+		return err
+	}
+	if s.authz == nil {
+		return errors.New("agentchat: no authorizer is configured")
+	}
+	err := s.authz.Require(ctx, p, security.AgentUse, c.ProjectID)
+	if errors.Is(err, security.ErrNotMember) || errors.Is(err, security.ErrUnauthenticated) {
+		return fmt.Errorf("%w: %w", security.ErrForbidden, err)
+	}
+	return err
+}
+
+// withContext puts pc on start, once it's scoped to start's project: on
+// the turn as it is, and before the message as the preface the model
+// reads. The message itself stays what the person typed.
+func (s *Service) withContext(ctx context.Context, p security.Principal, start *agentruns.StartInput, pc *PageContext) error {
+	pc, err := s.scoped(ctx, p, start.ProjectID, pc)
+	if err != nil || pc == nil {
+		return err
+	}
+	raw, err := contextJSON(pc)
+	if err != nil {
+		return err
+	}
+	start.PageContext, start.Preface = raw, s.preface(ctx, pc)
+	return nil
+}
+
+// change checks in and returns what it writes.
+func change(in ConversationUpdate) (Change, error) {
+	if in.Title == nil && in.Pinned == nil {
+		return Change{}, fmt.Errorf("%w: say what to change: a title, pinned, or both", ErrBadChange)
+	}
+	out := Change{Pinned: in.Pinned}
+	if in.Title != nil {
+		title := strings.Join(strings.Fields(*in.Title), " ")
+		switch {
+		case title == "":
+			return Change{}, fmt.Errorf("%w: a conversation needs a title. Write one of up to %d characters", ErrBadChange, MaxTitle)
+		case !utf8.ValidString(title) || strings.ContainsFunc(title, unicode.IsControl):
+			return Change{}, fmt.Errorf("%w: a title is plain text on one line", ErrBadChange)
+		case utf8.RuneCountInString(title) > MaxTitle:
+			return Change{}, fmt.Errorf("%w: a title is up to %d characters", ErrBadChange, MaxTitle)
+		}
+		out.Title = &title
+	}
+	return out, nil
+}
+
+// Update renames, pins or unpins a conversation p started. The title they
+// give is the conversation's from then on: nothing titles it again.
+func (s *Service) Update(ctx context.Context, p security.Principal, id string, in ConversationUpdate) (*Conversation, error) {
+	if err := requirePerson(p); err != nil {
+		return nil, err
+	}
+	ch, err := change(in)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.store.Conversation(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if cerr := s.changeable(ctx, p, c); cerr != nil {
+		return nil, cerr
+	}
+	ch.At = s.now().UTC()
+	if uerr := s.store.Update(ctx, p.OrgID, id, ch); uerr != nil {
+		return nil, uerr
+	}
+	return s.store.Conversation(ctx, p.OrgID, id)
+}
+
+// Delete deletes a conversation p started: it leaves their list, reads as
+// not found, and takes no more messages. Its tasks, their events and
+// requests stay. When the agent is still on its last message, that task is
+// cancelled first, as stopping it would; a delete that finds a message on
+// its way in is ErrSending.
+func (s *Service) Delete(ctx context.Context, p security.Principal, id string) error {
+	if err := requirePerson(p); err != nil {
+		return err
+	}
+	c, err := s.store.Conversation(ctx, p.OrgID, id)
+	if err != nil {
+		return err
+	}
+	if cerr := s.changeable(ctx, p, c); cerr != nil {
+		return cerr
+	}
+	ran, err := s.locked(ctx, id, func(ctx context.Context) error {
+		// Read again under the lock: a send that held it before us has
+		// written its task by now.
+		latest, lerr := s.store.Conversation(ctx, p.OrgID, id)
+		if lerr != nil {
+			return lerr
+		}
+		if !agentruns.Terminal(latest.Status) {
+			cerr := s.runs.Cancel(ctx, p, latest.LastTaskID)
+			if cerr != nil && !errors.Is(cerr, agentruns.ErrNotCancelable) {
+				return cerr
+			}
+		}
+		return s.store.Delete(ctx, p.OrgID, id, s.now().UTC())
+	})
+	if err != nil {
+		return err
+	}
+	if !ran {
+		return ErrSending
+	}
+	return nil
 }

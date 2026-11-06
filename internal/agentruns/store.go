@@ -7,10 +7,28 @@ import (
 )
 
 // Record is what a task keeps that only its jobs read: the principal the
-// codec encoded and the input the run starts from.
+// codec encoded and the input the run starts from, after its preface. The
+// page context is written with it and read only by agentchat.
 type Record struct {
-	Principal []byte
-	Input     string
+	Principal   []byte
+	Input       string
+	Preface     string
+	PageContext json.RawMessage
+}
+
+// ModelInput is what the model reads to start the task's run: the input,
+// after the preface and a blank line when there is one.
+func (r Record) ModelInput() string {
+	if r.Preface == "" {
+		return r.Input
+	}
+	return r.Preface + "\n\n" + r.Input
+}
+
+// jsonObject reports whether raw is one JSON object.
+func jsonObject(raw json.RawMessage) bool {
+	var m map[string]any
+	return json.Unmarshal(raw, &m) == nil && m != nil
 }
 
 // Transition moves a task to Status, but only from one of From.

@@ -27,6 +27,10 @@ func TestConversationRoutes(t *testing.T) {
 			_, _ = w.Write([]byte(`{"conversations":[{"id":"c1","project_id":"p1","title":"Hi","status":"completed","turns":2}]}`))
 		case r.Method == http.MethodGet:
 			_, _ = w.Write([]byte(`{"conversation":{"id":"c1"},"turns":[{"task_id":"t1","message":"hello","status":"completed","event_seq":2,"events":[{"task_id":"t1","seq":1,"kind":"token","data":{"text":"Hi"}}]}],"more":true}`))
+		case r.Method == http.MethodPatch:
+			_, _ = w.Write([]byte(`{"id":"c1","title":"Checkout","pinned":true,"pinned_at":"2026-11-05T10:00:00Z"}`))
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(r.URL.Path, "/cancel"):
 			_, _ = w.Write([]byte(`{"id":"t1","status":"cancelled"}`))
 		default:
@@ -59,6 +63,14 @@ func TestConversationRoutes(t *testing.T) {
 	if err != nil || task.Status != "cancelled" {
 		t.Fatalf("CancelAgentTask = %+v, %v", task, err)
 	}
+	title, pin := "Checkout", true
+	cv, err := c.UpdateConversation(ctx, "c1", ConversationUpdate{Title: &title, Pinned: &pin})
+	if err != nil || cv.Title != "Checkout" || !cv.Pinned || cv.PinnedAt == nil {
+		t.Fatalf("UpdateConversation = %+v, %v", cv, err)
+	}
+	if err = c.DeleteConversation(ctx, "c1"); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
 	want := []string{
 		`POST /api/v1/agent/conversations {"message":"hello","project_id":"p1"} auth=Bearer lp_key`,
 		`POST /api/v1/agent/conversations/c1/messages {"message":"more"} auth=Bearer lp_key`,
@@ -66,6 +78,8 @@ func TestConversationRoutes(t *testing.T) {
 		`GET /api/v1/agent/conversations  auth=Bearer lp_key`,
 		`GET /api/v1/agent/conversations/c1  auth=Bearer lp_key`,
 		`POST /api/v1/agent/tasks/t1/cancel  auth=Bearer lp_key`,
+		`PATCH /api/v1/agent/conversations/c1 {"title":"Checkout","pinned":true} auth=Bearer lp_key`,
+		`DELETE /api/v1/agent/conversations/c1  auth=Bearer lp_key`,
 	}
 	mu.Lock()
 	defer mu.Unlock()

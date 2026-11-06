@@ -93,7 +93,7 @@
           "Agent"
         ],
         "summary": "Start a conversation with the agent",
-        "description": "The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.",
+        "description": "The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream. context, when given, says where in the dashboard you sent it from: the agent reads that page first.",
         "operationId": "agentConversations.start",
         "requestBody": {
           "description": "Request body",
@@ -165,6 +165,75 @@
             }
           }
         }
+      },
+      "delete": {
+        "description": "Only the person who started the conversation deletes it. It leaves your list, reads as not found and takes no more messages. When the agent is still on its last message, that task is stopped first. Its tasks, their events and requests are kept.",
+        "operationId": "agentConversations.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Delete your conversation",
+        "tags": [
+          "Agent"
+        ],
+        "x-forge-invalidates": [
+          "Conversation[]"
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Rename, pin or unpin your conversation",
+        "description": "Only the person who started the conversation changes it. A title you give is 1 to 120 characters and stays: no automatic title replaces it. Leave out what you don't change.",
+        "operationId": "agentConversations.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationUpdateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/agent/conversations/{id}/messages": {
@@ -173,7 +242,7 @@
           "Agent"
         ],
         "summary": "Add a message to your conversation",
-        "description": "Only the person who started the conversation adds to it, once the agent has finished the last message.",
+        "description": "Only the person who started the conversation adds to it, once the agent has finished the last message. context, when given, says where in the dashboard you sent it from.",
         "operationId": "agentConversations.send",
         "parameters": [
           {
@@ -23620,6 +23689,7 @@
           "status",
           "last_task_id",
           "turns",
+          "pinned",
           "created_at",
           "updated_at"
         ],
@@ -23636,6 +23706,12 @@
             "type": "string"
           },
           "org_id": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "pinned_at": {
             "type": "string"
           },
           "project_id": {
@@ -23670,6 +23746,17 @@
             "items": {
               "$ref": "#/components/schemas/Conversation"
             }
+          }
+        }
+      },
+      "ConversationUpdateBody": {
+        "type": "object",
+        "properties": {
+          "pinned": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },
@@ -32073,6 +32160,36 @@
           }
         }
       },
+      "PageContext": {
+        "type": "object",
+        "required": [
+          "path",
+          "label"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
       "PendingNodeJoinToken": {
         "type": "object",
         "required": [
@@ -37835,6 +37952,36 @@
           "message"
         ],
         "properties": {
+          "context": {
+            "type": "object",
+            "required": [
+              "path",
+              "label"
+            ],
+            "properties": {
+              "environment": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              }
+            }
+          },
           "message": {
             "type": "string"
           }
@@ -39434,6 +39581,36 @@
           "message"
         ],
         "properties": {
+          "context": {
+            "type": "object",
+            "required": [
+              "path",
+              "label"
+            ],
+            "properties": {
+              "environment": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              }
+            }
+          },
           "message": {
             "type": "string"
           },
@@ -40289,6 +40466,9 @@
           "created_at"
         ],
         "properties": {
+          "context": {
+            "$ref": "#/components/schemas/PageContext"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"

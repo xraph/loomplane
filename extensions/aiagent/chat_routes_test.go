@@ -29,6 +29,8 @@ type fakeChat struct {
 	calls  []string
 	filter agentchat.ListFilter
 	query  agentchat.HistoryQuery
+	update agentchat.ConversationUpdate
+	start  agentchat.StartInput
 }
 
 func (f *fakeChat) record(call string) error {
@@ -52,6 +54,9 @@ func sentTo(id string) *agentchat.Sent {
 }
 
 func (f *fakeChat) Start(_ context.Context, _ security.Principal, in agentchat.StartInput) (*agentchat.Sent, error) {
+	f.mu.Lock()
+	f.start = in
+	f.mu.Unlock()
 	if err := f.record("start " + in.Message + " " + in.ProjectID); err != nil {
 		return nil, err
 	}
@@ -63,6 +68,20 @@ func (f *fakeChat) Send(_ context.Context, _ security.Principal, id string, in a
 		return nil, err
 	}
 	return sentTo(id), nil
+}
+
+func (f *fakeChat) Update(_ context.Context, _ security.Principal, id string, in agentchat.ConversationUpdate) (*agentchat.Conversation, error) {
+	f.mu.Lock()
+	f.update = in
+	f.mu.Unlock()
+	if err := f.record("update " + id); err != nil {
+		return nil, err
+	}
+	return &agentchat.Conversation{ID: id, Title: "Renamed"}, nil
+}
+
+func (f *fakeChat) Delete(_ context.Context, _ security.Principal, id string) error {
+	return f.record("delete " + id)
 }
 
 func (f *fakeChat) List(_ context.Context, _ security.Principal, lf agentchat.ListFilter) (*agentchat.ConversationList, error) {
@@ -321,6 +340,8 @@ func TestChatRoutesCallTheServices(t *testing.T) {
 		{http.MethodPost, "/api/v1/agent/conversations", `{"message":"hi","project_id":"proj_1"}`, http.StatusCreated, "start hi proj_1"},
 		{http.MethodPost, "/api/v1/agent/conversations/ses_1/messages", `{"message":"more"}`, http.StatusCreated, "send ses_1 more"},
 		{http.MethodGet, "/api/v1/agent/conversations/ses_1?before=atask_9&limit=5", "", http.StatusOK, "history ses_1"},
+		{http.MethodPatch, "/api/v1/agent/conversations/ses_1", `{"title":"Renamed","pinned":true}`, http.StatusOK, "update ses_1"},
+		{http.MethodDelete, "/api/v1/agent/conversations/ses_1", "", http.StatusNoContent, "delete ses_1"},
 	} {
 		out := serve(t, r, c.method, c.path, c.body, asAda())
 		if out.Code != c.status || chat.last() != c.call {
@@ -329,6 +350,26 @@ func TestChatRoutesCallTheServices(t *testing.T) {
 	}
 	if chat.query != (agentchat.HistoryQuery{Before: "atask_9", Limit: 5}) {
 		t.Fatalf("history query %+v", chat.query)
+	}
+	if u := chat.update; u.Title == nil || *u.Title != "Renamed" || u.Pinned == nil || !*u.Pinned {
+		t.Fatalf("update %+v", u)
+	}
+	if out := serve(t, r, http.MethodPatch, "/api/v1/agent/conversations/ses_1", `{"pinned":false}`, asAda()); out.Code != http.StatusOK ||
+		chat.update.Title != nil || chat.update.Pinned == nil || *chat.update.Pinned {
+		t.Fatalf("unpin: %d %+v", out.Code, chat.update)
+	}
+	if out := serve(t, r, http.MethodPatch, "/api/v1/agent/conversations/ses_1", `{"title":`, asAda()); out.Code != http.StatusBadRequest {
+		t.Fatalf("bad update body: %d", out.Code)
+	}
+	ctxBody := `{"message":"hi","context":{"path":"/projects/proj_1/services/web?environment=production",` +
+		`"label":"Service web in production","project_id":"proj_1","service":"web","environment":"production","plan_id":"plan_42","kind":"service"}}`
+	if out := serve(t, r, http.MethodPost, "/api/v1/agent/conversations", ctxBody, asAda()); out.Code != http.StatusCreated {
+		t.Fatalf("start with a context: %d", out.Code)
+	}
+	want := agentchat.PageContext{Path: "/projects/proj_1/services/web?environment=production", Label: "Service web in production",
+		ProjectID: "proj_1", Service: "web", Environment: "production", PlanID: "plan_42", Kind: "service"}
+	if chat.start.Context == nil || *chat.start.Context != want {
+		t.Fatalf("start context %+v", chat.start.Context)
 	}
 	var sent agentchat.Sent
 	out := serve(t, r, http.MethodPost, "/api/v1/agent/conversations", `{"message":"hi"}`, asAda())
@@ -372,6 +413,8 @@ func TestChatRoutesNeedTheAgentOn(t *testing.T) {
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/agent/conversations", ""},
 		{http.MethodPost, "/api/v1/agent/conversations", `{"message":"hi"}`},
+		{http.MethodPatch, "/api/v1/agent/conversations/ses_1", `{"pinned":true}`},
+		{http.MethodDelete, "/api/v1/agent/conversations/ses_1", ""},
 		{http.MethodGet, "/api/v1/agent/tasks/atask_1/stream", ""},
 		{http.MethodPost, "/api/v1/agent/tasks/atask_1/cancel", ""},
 	} {
@@ -398,6 +441,9 @@ func TestRouteErrorStatuses(t *testing.T) {
 	}{
 		{agentchat.ErrBusy, http.StatusConflict, agentchat.ErrBusy.Error()},
 		{agentchat.ErrNotYours, http.StatusForbidden, agentchat.ErrNotYours.Error()},
+		{agentchat.ErrNotYoursToChange, http.StatusForbidden, agentchat.ErrNotYoursToChange.Error()},
+		{agentchat.ErrSending, http.StatusConflict, agentchat.ErrSending.Error()},
+		{fmt.Errorf("%w: a conversation needs a title", agentchat.ErrBadChange), http.StatusBadRequest, "a conversation needs a title"},
 		{agentchat.ErrNotFound, http.StatusNotFound, agentchat.ErrNotFound.Error()},
 		{fmt.Errorf("%w: write a message", agentchat.ErrInvalid), http.StatusUnprocessableEntity, "invalid message: write a message"},
 		{wrapped(agentsettings.ErrBudgetExhausted), http.StatusConflict, agentsettings.ErrBudgetExhausted.Error()},

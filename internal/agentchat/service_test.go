@@ -70,21 +70,80 @@ func newAuthz(t *testing.T) *security.Authorizer {
 
 // row is a chat task as the fake store keeps it.
 type row struct {
-	task  agentruns.Task
-	input string
+	task    agentruns.Task
+	input   string
+	context []byte
+}
+
+// changed is a conversation's row of the person's changes.
+type changed struct {
+	title               *string
+	pinnedAt, deletedAt *time.Time
 }
 
 // memStore is the Store over a slice of chat tasks, worked out the way
 // PgStore's SQL does.
 type memStore struct {
-	mu   sync.Mutex
-	rows []row
+	mu      sync.Mutex
+	rows    []row
+	changes map[string]*changed // by org/session
 }
 
-func (m *memStore) add(t agentruns.Task, input string) {
+func (m *memStore) add(t agentruns.Task, input string, context []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows = append(m.rows, row{task: t, input: input})
+	m.rows = append(m.rows, row{task: t, input: input, context: context})
+}
+
+// changesOf is the conversation's changes, nil without any.
+func (m *memStore) changesOf(orgID, id string) *changed {
+	return m.changes[orgID+"/"+id]
+}
+
+func (m *memStore) Update(_ context.Context, orgID, id string, c Change) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.changes == nil {
+		m.changes = map[string]*changed{}
+	}
+	ch := m.changes[orgID+"/"+id]
+	if ch == nil {
+		ch = &changed{}
+		m.changes[orgID+"/"+id] = ch
+	}
+	if ch.deletedAt != nil {
+		return nil
+	}
+	if c.Title != nil {
+		title := *c.Title
+		ch.title = &title
+	}
+	switch {
+	case c.Pinned == nil:
+	case !*c.Pinned:
+		ch.pinnedAt = nil
+	case ch.pinnedAt == nil:
+		at := c.At
+		ch.pinnedAt = &at
+	}
+	return nil
+}
+
+func (m *memStore) Delete(_ context.Context, orgID, id string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.changes == nil {
+		m.changes = map[string]*changed{}
+	}
+	ch := m.changes[orgID+"/"+id]
+	if ch == nil {
+		ch = &changed{}
+		m.changes[orgID+"/"+id] = ch
+	}
+	if ch.deletedAt == nil {
+		ch.deletedAt = &at
+	}
+	return nil
 }
 
 func (m *memStore) setStatus(taskID, status string) {
@@ -109,23 +168,36 @@ func (m *memStore) session(orgID, id string) []row {
 	return out
 }
 
-func fold(rows []row) Conversation {
+func fold(rows []row, ch *changed) Conversation {
 	first, last := rows[0].task, rows[len(rows)-1].task
-	return Conversation{
+	c := Conversation{
 		ID: first.SessionID, OrgID: first.OrgID, ProjectID: first.ProjectID, Title: titleOf(rows[0].input),
 		StartedBy: first.RequestedBy, Status: last.Status, LastTaskID: last.ID, Turns: len(rows),
 		CreatedAt: first.CreatedAt, UpdatedAt: last.UpdatedAt,
 	}
+	if ch != nil {
+		if ch.title != nil {
+			c.Title = *ch.title
+		}
+		c.PinnedAt, c.Pinned = ch.pinnedAt, ch.pinnedAt != nil
+	}
+	return c
+}
+
+// deleted reports whether the conversation was deleted.
+func (m *memStore) deleted(orgID, id string) bool {
+	ch := m.changesOf(orgID, id)
+	return ch != nil && ch.deletedAt != nil
 }
 
 func (m *memStore) Conversation(_ context.Context, orgID, id string) (*Conversation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rows := m.session(orgID, id)
-	if len(rows) == 0 {
+	if len(rows) == 0 || m.deleted(orgID, id) {
 		return nil, ErrNotFound
 	}
-	c := fold(rows)
+	c := fold(rows, m.changesOf(orgID, id))
 	return &c, nil
 }
 
@@ -135,11 +207,11 @@ func (m *memStore) List(_ context.Context, orgID, startedBy string, f ListFilter
 	seen := map[string]bool{}
 	var out []Conversation
 	for _, r := range m.rows {
-		if r.task.OrgID != orgID || seen[r.task.SessionID] {
+		if r.task.OrgID != orgID || seen[r.task.SessionID] || m.deleted(orgID, r.task.SessionID) {
 			continue
 		}
 		seen[r.task.SessionID] = true
-		c := fold(m.session(orgID, r.task.SessionID))
+		c := fold(m.session(orgID, r.task.SessionID), m.changesOf(orgID, r.task.SessionID))
 		if (startedBy != "" && c.StartedBy != startedBy) || (f.ProjectID != "" && c.ProjectID != f.ProjectID) ||
 			(!f.Before.IsZero() && !c.UpdatedAt.Before(f.Before)) {
 			continue
@@ -157,6 +229,9 @@ func (m *memStore) Turns(_ context.Context, orgID, id, before string, limit int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rows := m.session(orgID, id)
+	if m.deleted(orgID, id) {
+		rows = nil
+	}
 	if before != "" {
 		i := slices.IndexFunc(rows, func(r row) bool { return r.task.ID == before })
 		if i < 0 {
@@ -168,7 +243,7 @@ func (m *memStore) Turns(_ context.Context, orgID, id, before string, limit int)
 	for i := len(rows) - 1; i >= 0 && len(out) < limit; i-- {
 		t := rows[i].task
 		out = append(out, TurnRow{TaskID: t.ID, Input: rows[i].input, Status: t.Status, Error: t.Error,
-			EventSeq: t.EventSeq, CreatedAt: t.CreatedAt, FinishedAt: t.FinishedAt})
+			EventSeq: t.EventSeq, CreatedAt: t.CreatedAt, FinishedAt: t.FinishedAt, Context: rows[i].context})
 	}
 	return out, len(rows) > limit, nil
 }
@@ -194,6 +269,9 @@ type fakeRuns struct {
 	events  map[string][]agentruns.Event
 	reads   []eventsCall
 	next    int
+	// cancels is each Cancel call, "<user> <task>".
+	cancels   []string
+	cancelErr error
 }
 
 func (f *fakeRuns) Start(_ context.Context, in agentruns.StartInput) (*agentruns.Task, error) {
@@ -222,8 +300,33 @@ func (f *fakeRuns) Start(_ context.Context, in agentruns.StartInput) (*agentruns
 		ID: fmt.Sprintf("atask_%03d", n), OrgID: in.OrgID, ProjectID: in.ProjectID, Kind: in.Kind, SessionID: session,
 		Status: status, RequestedBy: in.OnBehalfOf.UserID, Metadata: in.Metadata, CreatedAt: now, UpdatedAt: now,
 	}
-	f.store.add(t, in.Input)
+	f.store.add(t, in.Input, in.PageContext)
 	return &t, nil
+}
+
+// Cancel cancels the task as agentruns does for its requester: a finished
+// one is ErrNotCancelable.
+func (f *fakeRuns) Cancel(_ context.Context, p security.Principal, taskID string) error {
+	f.mu.Lock()
+	f.cancels = append(f.cancels, p.UserID+" "+taskID)
+	err := f.cancelErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+	for i := range f.store.rows {
+		t := &f.store.rows[i].task
+		if t.ID == taskID {
+			if agentruns.Terminal(t.Status) {
+				return agentruns.ErrNotCancelable
+			}
+			t.Status = agentruns.StatusCancelled
+			return nil
+		}
+	}
+	return agentruns.ErrNotFound
 }
 
 func (f *fakeRuns) Events(_ context.Context, p security.Principal, taskID string, after int64, limit int) ([]agentruns.Event, error) {
@@ -258,6 +361,13 @@ func (c *clock) tick() time.Time {
 	defer c.mu.Unlock()
 	c.now = c.now.Add(time.Second)
 	return c.now
+}
+
+// quoter quotes text the way shield does, with its source.
+type quoter struct{}
+
+func (quoter) Untrusted(_ context.Context, source, text string) string {
+	return `<untrusted_content source="` + source + `">` + text + `</untrusted_content>`
 }
 
 // memLock is pglock.TryFor in memory: one holder per name, and a caller
@@ -308,7 +418,8 @@ func newWorld(t *testing.T) *world {
 	c := &clock{now: time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)}
 	runs := &fakeRuns{store: st, clock: c, events: map[string][]agentruns.Event{}}
 	lock := &memLock{}
-	svc := NewService(Deps{Store: st, Runs: runs, Authz: newAuthz(t), TryLock: lock.Try})
+	svc := NewService(Deps{Store: st, Runs: runs, Authz: newAuthz(t), TryLock: lock.Try, Safety: quoter{},
+		Now: func() time.Time { return c.tick() }})
 	return &world{svc: svc, store: st, runs: runs, lock: lock, clock: c}
 }
 

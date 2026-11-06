@@ -111,6 +111,22 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['History'],
   },
+  'agentConversations.update': {
+    method: 'PATCH',
+    path: '/api/v1/agent/conversations/{id}',
+    entity: 'Conversation',
+    rootType: 'Conversation',
+    provides: ['Conversation:{id}'],
+    invalidates: ['Conversation[]'],
+    bodyCodec: CODECS['ConversationUpdateBody'],
+    responseCodec: CODECS['Conversation'],
+  },
+  'agentConversations.delete': {
+    method: 'DELETE',
+    path: '/api/v1/agent/conversations/{id}',
+    provides: [],
+    invalidates: ['Conversation[]'],
+  },
   'agentConversations.send': {
     method: 'POST',
     path: '/api/v1/agent/conversations/{id}/messages',

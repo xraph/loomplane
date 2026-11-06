@@ -41,6 +41,9 @@ const (
 	// SourceTeamDescription is a team's description, which any member
 	// who manages teams can type.
 	SourceTeamDescription = "team_description"
+	// SourcePageLabel is how the dashboard names the page a person sent a
+	// chat message from, which carries names other people typed.
+	SourcePageLabel = "page_label"
 )
 
 // Withheld stands in for untrusted text that failed its scan, or couldn't

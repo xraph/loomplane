@@ -33,6 +33,23 @@ export class RESTClient extends Client {
 
   public readonly agentConversations = {
     /**
+     * Delete your conversation
+     * Only the person who started the conversation deletes it. It leaves your list, reads as not found and takes no more messages. When the agent is still on its last message, that task is stopped first. Its tasks, their events and requests are kept.
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
      * A page of a conversation's turns, each with its run's events
      * The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.
      */
@@ -96,7 +113,7 @@ export class RESTClient extends Client {
 
     /**
      * Add a message to your conversation
-     * Only the person who started the conversation adds to it, once the agent has finished the last message.
+     * Only the person who started the conversation adds to it, once the agent has finished the last message. context, when given, says where in the dashboard you sent it from.
      */
     send: async (id: string, body: types.SendInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
       let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}/messages`;
@@ -115,7 +132,7 @@ export class RESTClient extends Client {
 
     /**
      * Start a conversation with the agent
-     * The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream.
+     * The message starts the conversation's first task. Follow it on GET /agent/tasks/{id}/stream. context, when given, says where in the dashboard you sent it from: the agent reads that page first.
      */
     start: async (body: types.StartInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Sent> => {
       let __path = `/api/v1/agent/conversations`;
@@ -130,6 +147,25 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Sent>(config);
+    },
+
+    /**
+     * Rename, pin or unpin your conversation
+     * Only the person who started the conversation changes it. A title you give is 1 to 120 characters and stays: no automatic title replaces it. Leave out what you don't change.
+     */
+    update: async (id: string, body: types.ConversationUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Conversation> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ConversationUpdateBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Conversation"],
+      };
+
+      return this.request<types.Conversation>(config);
     },
 
   };

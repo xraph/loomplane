@@ -2,6 +2,7 @@ package agentruns
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -45,6 +46,8 @@ const (
 	jobRetries    = 5
 	// maxInputBytes bounds what a task starts from.
 	maxInputBytes = 64 << 10
+	// maxPrefaceBytes bounds a task's preface and its page context each.
+	maxPrefaceBytes = 4 << 10
 	// maxErrorBytes bounds the reason a failed task shows.
 	maxErrorBytes = 500
 	// startGiveUp is how long the sweep keeps queueing a start that never
@@ -72,6 +75,15 @@ type StartInput struct {
 	// refused.
 	MaxTokens int
 	Metadata  map[string]string
+	// Preface is what the model reads before Input, such as where in the
+	// dashboard a person sent a chat message from. It's kept apart from
+	// Input, which stays what the person typed: a conversation's history
+	// shows Input alone.
+	Preface string
+	// PageContext is where in the dashboard a person sent a chat message
+	// from, a JSON object agentchat writes and reads. The task stores it
+	// as it is and never reads it.
+	PageContext json.RawMessage
 	// ReleasePlanID names the plan the person asks the agent to release,
 	// at ReleaseRevision, the revision they saw. Only a route the person
 	// calls sets it: starting a release task for a plan, or confirming a
@@ -285,6 +297,14 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 		return nil, invalid("a task needs something to do")
 	case len(in.Input) > maxInputBytes:
 		return nil, invalid("a task's input is up to %d KiB", maxInputBytes>>10)
+	case len(in.Preface) > maxPrefaceBytes:
+		return nil, invalid("a task's preface is up to %d KiB", maxPrefaceBytes>>10)
+	case len(in.PageContext) > maxPrefaceBytes:
+		return nil, invalid("a task's page context is up to %d KiB", maxPrefaceBytes>>10)
+	case len(in.PageContext) > 0 && !jsonObject(in.PageContext):
+		return nil, invalid("a task's page context is a JSON object")
+	case (in.Preface != "" || len(in.PageContext) > 0) && (in.Kind != KindChat || in.OnBehalfOf == nil):
+		return nil, invalid("only a person's chat message has a preface or a page context")
 	}
 	for _, key := range []string{metaReleasePlan, metaReleaseRevision} {
 		if _, reserved := in.Metadata[key]; reserved {
@@ -367,7 +387,8 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 		MaxTokens: maxTokens, Metadata: metadata, ReleasePlanID: in.ReleasePlanID, ReleaseRevision: in.ReleaseRevision,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if cerr := s.store.Create(ctx, task, Record{Principal: encoded, Input: in.Input}); cerr != nil {
+	rec := Record{Principal: encoded, Input: in.Input, Preface: in.Preface, PageContext: in.PageContext}
+	if cerr := s.store.Create(ctx, task, rec); cerr != nil {
 		return nil, cerr
 	}
 	if err = s.enqueue(ctx, JobStart, task); err != nil {

@@ -139,6 +139,96 @@ func TestConversationStoreOverTasks(t *testing.T) {
 	}
 }
 
+// The person's title wins over the first message's, pinning keeps when it
+// was first pinned, a turn's page context reads back, and a deleted
+// conversation is gone from every read while its tasks stay.
+func TestConversationStoreChanges(t *testing.T) {
+	ctx := context.Background()
+	pg := openDB(t)
+	st := agentchat.NewPgStore(pg)
+	base := time.Now().UTC().Truncate(time.Millisecond).Add(-time.Hour)
+	at := func(m int) time.Time { return base.Add(time.Duration(m) * time.Minute) }
+	for _, tk := range []task{
+		{"atask_1", "o", "", "chat", "s1", "completed", "usr_ada", "What is deployed?", at(1)},
+		{"atask_2", "o", "", "chat", "s1", "completed", "usr_ada", "And staging?", at(2)},
+		{"atask_3", "o", "", "chat", "s2", "completed", "usr_ada", "Hello", at(3)},
+	} {
+		insert(t, pg, tk)
+	}
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_agent_tasks SET page_context = '{"path": "/projects/proj_1", "label": "Project api", "kind": "project"}'
+		WHERE id = 'atask_2'`); err != nil {
+		t.Fatal(err)
+	}
+
+	title := "Deploy check"
+	pin := true
+	if err := st.Update(ctx, "o", "s1", agentchat.Change{Title: &title, Pinned: &pin, At: at(10)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Conversation(ctx, "o", "s1")
+	if err != nil || got.Title != "Deploy check" || !got.Pinned || got.PinnedAt == nil || !got.PinnedAt.Equal(at(10)) ||
+		!got.UpdatedAt.Equal(at(2)) {
+		t.Fatalf("after the rename %+v, %v", got, err)
+	}
+	// Pinning again keeps the first time; a change without a title keeps it.
+	if err = st.Update(ctx, "o", "s1", agentchat.Change{Pinned: &pin, At: at(11)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = st.Conversation(ctx, "o", "s1"); err != nil || !got.PinnedAt.Equal(at(10)) || got.Title != "Deploy check" {
+		t.Fatalf("pinned again %+v, %v", got, err)
+	}
+	unpin := false
+	if err = st.Update(ctx, "o", "s1", agentchat.Change{Pinned: &unpin, At: at(12)}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := st.List(ctx, "o", "usr_ada", agentchat.ListFilter{Limit: 30})
+	if err != nil || len(list) != 2 || list[0].ID != "s2" || list[1].ID != "s1" || list[1].Title != "Deploy check" ||
+		list[1].Pinned || list[1].PinnedAt != nil || list[0].Title != "Hello" || list[0].Pinned {
+		t.Fatalf("list %+v, %v", list, err)
+	}
+	// The other workspace's same session ID is untouched.
+	if err = st.Update(ctx, "o2", "s1", agentchat.Change{Title: &title, At: at(13)}); err != nil {
+		t.Fatal(err)
+	}
+
+	turns, _, err := st.Turns(ctx, "o", "s1", "", 10)
+	if err != nil || len(turns) != 2 || turns[1].Context != nil ||
+		!strings.Contains(string(turns[0].Context), `"label": "Project api"`) {
+		t.Fatalf("turns %+v, %v", turns, err)
+	}
+
+	if err = st.Delete(ctx, "o", "s1", at(20)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.Conversation(ctx, "o", "s1"); !errors.Is(err, agentchat.ErrNotFound) {
+		t.Fatalf("a deleted conversation: %v", err)
+	}
+	if list, err = st.List(ctx, "o", "", agentchat.ListFilter{Limit: 30}); err != nil || len(list) != 1 || list[0].ID != "s2" {
+		t.Fatalf("list after the delete %+v, %v", list, err)
+	}
+	if turns, _, err = st.Turns(ctx, "o", "s1", "", 10); err != nil || len(turns) != 0 {
+		t.Fatalf("a deleted conversation's turns %+v, %v", turns, err)
+	}
+	// A change after the delete changes nothing, and deleting again keeps
+	// when it was deleted.
+	if err = st.Update(ctx, "o", "s1", agentchat.Change{Pinned: &pin, At: at(21)}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.Delete(ctx, "o", "s1", at(22)); err != nil {
+		t.Fatal(err)
+	}
+	var deleted time.Time
+	var pinnedAt *time.Time
+	if err = pg.QueryRow(ctx, `SELECT deleted_at, pinned_at FROM loomplane_agent_conversations WHERE org_id = 'o' AND session_id = 's1'`).
+		Scan(&deleted, &pinnedAt); err != nil || !deleted.Equal(at(20)) || pinnedAt != nil {
+		t.Fatalf("deleted at %v, pinned at %v, %v", deleted, pinnedAt, err)
+	}
+	var tasks int
+	if err = pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_agent_tasks WHERE session_id = 's1'`).Scan(&tasks); err != nil || tasks != 2 {
+		t.Fatalf("%d tasks left, %v", tasks, err)
+	}
+}
+
 // The migration's partial indexes exist, and running every migration
 // again changes nothing.
 func TestConversationIndexesExist(t *testing.T) {
@@ -188,6 +278,8 @@ func (r *sqlRuns) Start(ctx context.Context, in agentruns.StartInput) (*agentrun
 	return &agentruns.Task{ID: id, OrgID: in.OrgID, SessionID: in.SessionID, Status: agentruns.StatusQueued,
 		Kind: agentruns.KindChat, CreatedAt: now, UpdatedAt: now}, nil
 }
+
+func (*sqlRuns) Cancel(context.Context, security.Principal, string) error { return nil }
 
 func (*sqlRuns) Events(context.Context, security.Principal, string, int64, int) ([]agentruns.Event, error) {
 	return nil, nil

@@ -26,11 +26,14 @@ type Conversation struct {
 	StartedBy string `json:"started_by"`
 	// Status is the latest message's task status: queued, running, waiting,
 	// completed, failed or cancelled.
-	Status     string    `json:"status"`
-	LastTaskID string    `json:"last_task_id"`
-	Turns      int       `json:"turns"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Status     string `json:"status"`
+	LastTaskID string `json:"last_task_id"`
+	Turns      int    `json:"turns"`
+	// Pinned says you pinned it, at PinnedAt.
+	Pinned    bool       `json:"pinned"`
+	PinnedAt  *time.Time `json:"pinned_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // ConversationTurn is one message and the agent's answer to it, with the
@@ -163,6 +166,30 @@ func (c *Client) Conversation(ctx context.Context, id string) (*ConversationHist
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ConversationUpdate is what UpdateConversation changes. A nil field stays
+// as it is.
+type ConversationUpdate struct {
+	// Title is 1 to 120 characters. Once you give one, no automatic title
+	// replaces it.
+	Title  *string `json:"title,omitempty"`
+	Pinned *bool   `json:"pinned,omitempty"`
+}
+
+// UpdateConversation renames, pins or unpins a conversation you started.
+func (c *Client) UpdateConversation(ctx context.Context, id string, in ConversationUpdate) (*Conversation, error) {
+	var out Conversation
+	if err := c.do(ctx, http.MethodPatch, "/api/v1/agent/conversations/"+url.PathEscape(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteConversation deletes a conversation you started. When the agent is
+// still on its last message, that task is stopped first.
+func (c *Client) DeleteConversation(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/agent/conversations/"+url.PathEscape(id), nil, nil)
 }
 
 // CancelAgentTask stops one of the agent's tasks.
