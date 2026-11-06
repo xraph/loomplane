@@ -153,9 +153,10 @@ func (t Target) includes(target, custom stringList) bool {
 	return slices.Contains(target, t.Builtin)
 }
 
-// without is the scope a shared row keeps once t is taken out of it. Only
-// the list t is in is sent, so the row's other environments stay as they
-// are.
+// without is the scope a shared row keeps once t is taken out of it. Both
+// lists are always sent, as listed less t: Vercel doesn't say whether a
+// list left out of an update is kept or cleared, and clearing one would
+// take the variable from another environment.
 func (t Target) without(target, custom stringList) map[string]any {
 	drop := func(l stringList, x string) []string {
 		out := []string{}
@@ -167,9 +168,9 @@ func (t Target) without(target, custom stringList) map[string]any {
 		return out
 	}
 	if t.CustomID != "" {
-		return map[string]any{"customEnvironmentIds": drop(custom, t.CustomID)}
+		return map[string]any{"target": drop(target, ""), "customEnvironmentIds": drop(custom, t.CustomID)}
 	}
-	return map[string]any{"target": drop(target, t.Builtin)}
+	return map[string]any{"target": drop(target, t.Builtin), "customEnvironmentIds": drop(custom, "")}
 }
 
 // envRow is one of a project's variables as Vercel lists it, without its
@@ -188,30 +189,46 @@ const maxEnvPages = 20
 
 func envPath(projectID string) string { return "/projects/" + url.PathEscape(projectID) + "/env" }
 
+// errEnvListTruncated is a listing that ran past maxEnvPages with more
+// to come. Acting on part of it could miss a row that matters.
+var errEnvListTruncated = fmt.Errorf("vercel: the project has more than %d pages of variables", maxEnvPages)
+
 // listEnv lists the project's variables matching q, every page of them,
-// never asking Vercel to decrypt a value.
+// never asking Vercel to decrypt a value. A row listed twice is returned
+// once.
 func (c *Client) listEnv(ctx context.Context, tok Token, projectID string, q url.Values) ([]envRow, error) {
 	q.Set("decrypt", "false")
 	var all []envRow
+	seen := map[string]bool{}
 	var last *int64
-	for range maxEnvPages {
-		var page struct {
+	for page := 1; ; page++ {
+		var res struct {
 			Envs       []envRow `json:"envs"`
 			Pagination *struct {
 				Next *int64 `json:"next"`
 			} `json:"pagination"`
 		}
-		if err := c.json(ctx, tok, http.MethodGet, "/v10"+envPath(projectID), q, nil, &page); err != nil {
+		if err := c.json(ctx, tok, http.MethodGet, "/v10"+envPath(projectID), q, nil, &res); err != nil {
 			return nil, err
 		}
-		all = append(all, page.Envs...)
-		if page.Pagination == nil || page.Pagination.Next == nil || len(page.Envs) == 0 || (last != nil && *last == *page.Pagination.Next) {
-			break
+		for _, r := range res.Envs {
+			if r.ID != "" {
+				if seen[r.ID] {
+					continue
+				}
+				seen[r.ID] = true
+			}
+			all = append(all, r)
 		}
-		last = page.Pagination.Next
+		if res.Pagination == nil || res.Pagination.Next == nil || len(res.Envs) == 0 || (last != nil && *last == *res.Pagination.Next) {
+			return all, nil
+		}
+		if page == maxEnvPages {
+			return nil, errEnvListTruncated
+		}
+		last = res.Pagination.Next
 		q.Set("until", fmt.Sprint(*last))
 	}
-	return all, nil
 }
 
 // deleteEnvRow deletes one variable. One that's already gone is not an
@@ -259,6 +276,9 @@ func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, t Targ
 		}
 	}
 	base := "/v9" + envPath(projectID)
+	// creates are the new rows for keys t had no row for. A key whose row
+	// was narrowed or deleted gets its new row at once instead, so a later
+	// key's failure never leaves t without it.
 	creates := make([]map[string]any, 0, len(env))
 	for _, k := range slices.Sorted(maps.Keys(env)) {
 		kind := "encrypted"
@@ -267,10 +287,12 @@ func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, t Targ
 		}
 		item := t.envScope()
 		item["value"], item["type"] = env[k], kind
+		took := false
 		for _, s := range shared[k] {
 			if err := c.json(ctx, tok, http.MethodPatch, base+"/"+url.PathEscape(s.ID), nil, t.without(s.Target, s.CustomEnvironmentIDs), nil); err != nil {
 				return fmt.Errorf("take %s out of a shared project variable: %w", k, err)
 			}
+			took = true
 		}
 		if row, ok := own[k]; ok {
 			// A secret's value is never sent to a row that isn't
@@ -290,33 +312,51 @@ func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, t Targ
 			if err := c.deleteEnvRow(ctx, tok, projectID, row.ID); err != nil {
 				return fmt.Errorf("replace the project variable %s: %w", k, err)
 			}
+			took = true
 		}
 		item["key"] = k
+		if took {
+			if err := c.createEnv(ctx, tok, projectID, []map[string]any{item}); err != nil {
+				return err
+			}
+			continue
+		}
 		creates = append(creates, item)
 	}
 	if len(creates) == 0 {
 		return nil
 	}
+	return c.createEnv(ctx, tok, projectID, creates)
+}
+
+// createEnv creates rows in one request, without upsert. Vercel answers
+// 201 even when some weren't created, listing those as failed.
+func (c *Client) createEnv(ctx context.Context, tok Token, projectID string, items []map[string]any) error {
 	var out struct {
 		Failed []struct {
 			Error struct {
-				Code    string `json:"code"`
-				Key     string `json:"key"`
-				Message string `json:"message"`
+				Code      string `json:"code"`
+				Key       string `json:"key"`
+				EnvVarKey string `json:"envVarKey"`
+				Message   string `json:"message"`
 			} `json:"error"`
 		} `json:"failed"`
 	}
-	if err := c.json(ctx, tok, http.MethodPost, "/v10"+envPath(projectID), nil, creates, &out); err != nil {
+	if err := c.json(ctx, tok, http.MethodPost, "/v10"+envPath(projectID), nil, items, &out); err != nil {
 		return fmt.Errorf("set the project's variables: %w", err)
 	}
-	if len(out.Failed) > 0 {
-		msgs := make([]string, 0, len(out.Failed))
-		for _, f := range out.Failed {
-			msgs = append(msgs, fmt.Sprintf("%s: %s (%s)", f.Error.Key, f.Error.Message, f.Error.Code))
-		}
-		return fmt.Errorf("set the project's variables: vercel didn't create %s", strings.Join(msgs, "; "))
+	if len(out.Failed) == 0 {
+		return nil
 	}
-	return nil
+	msgs := make([]string, 0, len(out.Failed))
+	for _, f := range out.Failed {
+		key := f.Error.Key
+		if key == "" {
+			key = f.Error.EnvVarKey
+		}
+		msgs = append(msgs, fmt.Sprintf("%s: %s (%s)", key, f.Error.Message, f.Error.Code))
+	}
+	return fmt.Errorf("set the project's variables: vercel didn't create %s", strings.Join(msgs, "; "))
 }
 
 // DeleteEnv deletes the project's variables that belong to t alone.

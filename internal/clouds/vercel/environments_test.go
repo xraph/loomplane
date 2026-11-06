@@ -251,8 +251,9 @@ func TestSetEnvSplitsASharedRow(t *testing.T) {
 		t.Fatalf("updates: %v", patches)
 	}
 	body := object(t, patches[0].Body)
-	if !reflect.DeepEqual(body, map[string]any{"target": []any{"production"}}) {
-		t.Errorf("shared row update = %v, want only target [production]", body)
+	// Both lists are sent, so neither is left for Vercel to guess at.
+	if want := map[string]any{"target": []any{"production"}, "customEnvironmentIds": []any{}}; !reflect.DeepEqual(body, want) {
+		t.Errorf("shared row update = %v, want %v", body, want)
 	}
 	posts := a.only(http.MethodPost)
 	if len(posts) != 1 {
@@ -292,8 +293,8 @@ func TestSetEnvSplitsACustomEnvironmentOutOfASharedRow(t *testing.T) {
 	if len(patches) != 1 || patches[0].Path != "/v9/projects/prj/env/s2" {
 		t.Fatalf("updates: %v", patches)
 	}
-	if body := object(t, patches[0].Body); !reflect.DeepEqual(body, map[string]any{"customEnvironmentIds": []any{"env_8"}}) {
-		t.Errorf("shared row update = %v", body)
+	if body, want := object(t, patches[0].Body), map[string]any{"target": []any{"production"}, "customEnvironmentIds": []any{"env_8"}}; !reflect.DeepEqual(body, want) {
+		t.Errorf("shared row update = %v, want %v", body, want)
 	}
 	if posts := a.only(http.MethodPost); len(posts) != 1 {
 		t.Fatalf("creates: %v", posts)
@@ -390,6 +391,150 @@ func TestSetEnvReportsFailedCreates(t *testing.T) {
 	err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "1"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("SetEnv = %v, want the failed variable reported", err)
+	}
+}
+
+// TestSetEnvCreatesARowAsSoonAsItTookOneAway: A's shared row is narrowed,
+// then B's update fails. A must already have its own row by then, or the
+// failure leaves A's target with no row at all.
+func TestSetEnvCreatesARowAsSoonAsItTookOneAway(t *testing.T) {
+	a := &envAPI{
+		list: `{"envs":[
+			{"id":"s1","key":"A","type":"encrypted","target":["production","preview"]},
+			{"id":"b1","key":"B","type":"encrypted","target":["preview"]}]}`,
+		patch: func(w http.ResponseWriter, r *http.Request) bool {
+			if !strings.HasSuffix(r.URL.Path, "/b1") {
+				return false
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":{"code":"internal","message":"try again"}}`)
+			return true
+		},
+	}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "a", "B": "b"}, nil)
+	if err == nil {
+		t.Fatal("SetEnv hid B's failed update")
+	}
+	var order []string
+	for _, c := range a.calls {
+		if c.Method == http.MethodGet {
+			continue
+		}
+		order = append(order, c.String())
+		if c.Method == http.MethodPost {
+			got := items(t, c.Body)
+			if len(got) != 1 || got[0]["key"] != "A" || !reflect.DeepEqual(got[0]["target"], []any{"preview"}) {
+				t.Errorf("created %v, want A for preview alone", got)
+			}
+		}
+	}
+	want := []string{"PATCH /v9/projects/prj/env/s1", "POST /v10/projects/prj/env", "PATCH /v9/projects/prj/env/b1"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("calls %v, want %v", order, want)
+	}
+}
+
+// TestSetEnvCreatesARowAsSoonAsItDeletedOne: a deleted row is made again
+// before the next key is touched.
+func TestSetEnvCreatesARowAsSoonAsItDeletedOne(t *testing.T) {
+	a := &envAPI{
+		list: `{"envs":[
+			{"id":"a1","key":"A","type":"encrypted","target":["preview"]},
+			{"id":"b1","key":"B","type":"encrypted","target":["preview"]}]}`,
+		patch: func(w http.ResponseWriter, _ *http.Request) bool {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":{"code":"forbidden","message":"no"}}`)
+			return true
+		},
+	}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview,
+		map[string]string{"A": "secret", "B": "b"}, map[string]bool{"A": true})
+	if err == nil {
+		t.Fatal("SetEnv hid B's refused update")
+	}
+	var order []string
+	for _, c := range a.calls {
+		if c.Method != http.MethodGet {
+			order = append(order, c.String())
+		}
+	}
+	want := []string{"DELETE /v9/projects/prj/env/a1", "POST /v10/projects/prj/env", "PATCH /v9/projects/prj/env/b1"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("calls %v, want %v", order, want)
+	}
+}
+
+// TestSetEnvReportsFailedCreatesByEnvVarKey: some failures name the
+// variable in envVarKey, not key.
+func TestSetEnvReportsFailedCreatesByEnvVarKey(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			fmt.Fprint(w, `{"envs":[]}`)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"created":[],"failed":[{"error":{"code":"ENV_CONFLICT","message":"conflict","envVarKey":"DATABASE_URL"}}]}`)
+	}))
+	defer api.Close()
+	err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"DATABASE_URL": "x"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL: conflict") {
+		t.Fatalf("SetEnv = %v, want the variable named", err)
+	}
+}
+
+// TestEnvListingSkipsRepeatedRows: a row listed on two pages is acted on
+// once.
+func TestEnvListingSkipsRepeatedRows(t *testing.T) {
+	var patches int
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			if r.URL.Query().Get("until") == "" {
+				fmt.Fprint(w, `{"envs":[{"id":"s1","key":"A","type":"encrypted","target":["production","preview"]}],"pagination":{"count":1,"next":42,"prev":null}}`)
+				return
+			}
+			fmt.Fprint(w, `{"envs":[{"id":"s1","key":"A","type":"encrypted","target":["production","preview"]}],"pagination":{"count":1,"next":null,"prev":42}}`)
+		case http.MethodPatch:
+			patches++
+			fmt.Fprint(w, `{}`)
+		default:
+			fmt.Fprint(w, `{"created":[],"failed":[]}`)
+		}
+	}))
+	defer api.Close()
+	if err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if patches != 1 {
+		t.Fatalf("%d updates of one row", patches)
+	}
+}
+
+// TestEnvListingRefusesATruncatedList: when the listing runs past the page
+// cap with more to come, neither SetEnv nor DeleteEnv acts on what it has.
+func TestEnvListingRefusesATruncatedList(t *testing.T) {
+	var gets, writes int
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writes++
+			fmt.Fprint(w, `{}`)
+			return
+		}
+		gets++
+		fmt.Fprintf(w, `{"envs":[{"id":"r%d","key":"K%d","type":"encrypted","target":["preview"]}],"pagination":{"count":1,"next":%d,"prev":null}}`, gets, gets, 1000-gets)
+	}))
+	defer api.Close()
+	c := New(api.URL)
+	if err := c.SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "1"}, nil); err == nil {
+		t.Error("SetEnv wrote from a truncated listing")
+	}
+	if err := c.DeleteEnv(t.Context(), Token{Value: "t"}, "prj", Preview); err == nil {
+		t.Error("DeleteEnv deleted from a truncated listing")
+	}
+	if writes != 0 {
+		t.Fatalf("%d writes from a truncated listing", writes)
 	}
 }
 
