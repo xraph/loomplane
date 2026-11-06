@@ -11172,6 +11172,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "keep",
+            "in": "query",
+            "description": "Keep names, by binding ID, what stays running when the environment goes, repeated once per binding. Everything else Loomplane made on Vercel and Render for the environment is deleted.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {

@@ -77,6 +77,10 @@ function serve(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost")
       const environment = url.searchParams.get("environment") ?? ""
+      if (init?.method === "DELETE") {
+        calls.push(`DELETE ${url.pathname}${url.search}`)
+        return new Response(null, { status: 204 })
+      }
       if (url.pathname.endsWith("/provider-environments/retry")) {
         calls.push(`${init?.method} ${url.pathname}`)
         return new Response(JSON.stringify({ id: "plan_new" }), {
@@ -325,5 +329,104 @@ test("try again plans a move back to native and opens deployments", async () => 
     expect(calls.filter((c) => c === listFallbacks).length).toBeGreaterThan(
       listedBefore
     )
+  )
+})
+
+const renderBinding = (
+  id: string,
+  name: string,
+  subject: "service" | "resource",
+  alias = ""
+) => ({
+  id,
+  name,
+  alias,
+  subject,
+  provider: "render",
+  drift: "",
+  config: {},
+})
+
+const nativeStaging = [
+  vercelService("web"),
+  renderBinding("bnd_api", "api", "service", "shop-api-staging"),
+  renderBinding("bnd_db", "db", "resource"),
+]
+
+async function openDelete() {
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  return { user, dialog: await screen.findByRole("alertdialog") }
+}
+
+test("deleting an environment on Vercel and Render lists what to keep", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { dialog } = await openDelete()
+  const keep = within(dialog)
+  for (const name of ["Keep web", "Keep shop-api-staging", "Keep db"]) {
+    expect(await keep.findByRole("checkbox", { name })).not.toBeChecked()
+  }
+  // The alias leads, with the manifest name beside it.
+  expect(keep.getByText("api")).toBeInTheDocument()
+  expect(
+    keep.getByText(
+      "Unticked databases are deleted with their data. Kept resources keep running and are listed as left behind."
+    )
+  ).toBeInTheDocument()
+})
+
+test("keep all databases ticks the data resources only", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { user, dialog } = await openDelete()
+  const keep = within(dialog)
+  await user.click(
+    await keep.findByRole("button", { name: "Keep all databases" })
+  )
+  expect(keep.getByRole("checkbox", { name: "Keep db" })).toBeChecked()
+  expect(keep.getByRole("checkbox", { name: "Keep web" })).not.toBeChecked()
+  expect(
+    keep.getByRole("checkbox", { name: "Keep shop-api-staging" })
+  ).not.toBeChecked()
+})
+
+test("the delete asks to keep what's ticked", async () => {
+  serve([production, staging], [], { stagingBindings: nativeStaging })
+  const { user, dialog } = await openDelete()
+  const keep = within(dialog)
+  await user.click(await keep.findByRole("checkbox", { name: "Keep db" }))
+  await user.click(keep.getByRole("checkbox", { name: "Keep web" }))
+  await user.click(keep.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(calls).toContain(
+      "DELETE /api/v1/projects/p/environments/env_stage?keep=bnd_db&keep=web"
+    )
+  )
+})
+
+test("an environment with nothing on Vercel or Render deletes as before", async () => {
+  serve([production, staging], [], {
+    stagingBindings: [{ ...api, id: "bnd_do" }],
+  })
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  const dialog = within(await screen.findByRole("alertdialog"))
+  expect(
+    dialog.getByText(/What runs there keeps running until you remove it/)
+  ).toBeInTheDocument()
+  expect(dialog.queryByRole("checkbox")).toBeNull()
+  expect(dialog.queryByText(/Unticked databases/)).toBeNull()
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(calls).toContain("DELETE /api/v1/projects/p/environments/env_stage")
   )
 })

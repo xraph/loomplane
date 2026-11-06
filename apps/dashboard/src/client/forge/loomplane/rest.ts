@@ -3991,8 +3991,16 @@ export class RESTClient extends Client {
     /**
      * Delete an environment and the variables set on it. A project's last environment can't be deleted.
      */
-    delete: async (id: string, envId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+    delete: async (id: string, envId: string, keep?: string[] | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(envId))}`;
+      const queryParams: Record<string, any> = {};
+      if (keep !== undefined) {
+        queryParams['keep'] = keep;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'DELETE',
         url: __path,

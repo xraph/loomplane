@@ -441,11 +441,14 @@ export function CloudConfirm({
   onConfirm,
   pending,
   error,
+  details,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   title: ReactNode
   children: ReactNode
+  /** What goes below the description, such as a list to choose from. */
+  details?: ReactNode
   confirmLabel: string
   /** The name a person types to confirm a delete. */
   typeToConfirm?: string
@@ -468,6 +471,7 @@ export function CloudConfirm({
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{children}</AlertDialogDescription>
         </AlertDialogHeader>
+        {details}
         {typeToConfirm && (
           <label className="grid gap-1.5 text-[12.5px] text-muted-foreground">
             <span>

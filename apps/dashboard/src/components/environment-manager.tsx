@@ -12,11 +12,13 @@ import {
   useVariablesResolve,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  Binding,
   Environment,
   Project,
   ProviderEnvironment,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { aliasOf } from "@/components/binding-alias"
 import { providerName } from "@/components/cloud-detail/clusters"
 import {
   ActionsCell,
@@ -36,6 +38,7 @@ import { QueryError } from "@/components/query-error"
 import { StatusPill, toneOf } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -509,6 +512,24 @@ function EnvironmentRow({
   )
 }
 
+/** Whether Loomplane deletes what a binding runs with its environment. */
+function removedWithEnvironment(b: Binding): boolean {
+  if (b.provider !== "vercel" && b.provider !== "render") return false
+  // A database gateway has its own clean up, and an existing resource
+  // isn't Loomplane's to delete.
+  const config: unknown = b.config
+  return !(
+    typeof config === "object" &&
+    config !== null &&
+    ("database_gateway" in config || "existing_resource" in config)
+  )
+}
+
+/**
+ * DeleteEnvironment asks before an environment goes. It stays mounted
+ * once opened, on the last environment asked about, so it can close
+ * without losing its contents.
+ */
 function DeleteEnvironment({
   project,
   environment,
@@ -518,20 +539,63 @@ function DeleteEnvironment({
   environment: Environment | null
   onDone: () => void
 }) {
+  const [shown, setShown] = useState(environment)
+  if (environment && environment.id !== shown?.id) setShown(environment)
+  if (!shown) return null
+  return (
+    <ConfirmDeleteEnvironment
+      project={project}
+      environment={shown}
+      open={!!environment}
+      onDone={onDone}
+    />
+  )
+}
+
+function ConfirmDeleteEnvironment({
+  project,
+  environment,
+  open,
+  onDone,
+}: {
+  project: Project
+  environment: Environment
+  open: boolean
+  onDone: () => void
+}) {
   const remove = useMutation(useEnvironmentsDelete)
   const invalidate = useInvalidate()
+  const bindings = useQuery(useBindingsList, {
+    path: { id: project.id },
+    query: { environment: environment.name },
+  })
+  const removable = (bindings.data?.bindings ?? []).filter(
+    removedWithEnvironment
+  )
+  const [keep, setKeep] = useState<string[]>([])
+  const kept = (id: string) => keep.includes(id)
+  const toggle = (id: string, on: boolean) =>
+    setKeep((ids) => (on ? [...ids, id] : ids.filter((k) => k !== id)))
+  const databases = removable.filter((b) => b.subject === "resource")
+
+  const close = () => {
+    setKeep([])
+    onDone()
+  }
 
   const confirm = async () => {
-    if (!environment) return
     try {
       await remove.mutateAsync({
         path: { id: project.id, envId: environment.id },
+        query: {
+          keep: keep.filter((id) => removable.some((b) => b.id === id)),
+        },
       })
       toast.success(`Deleted ${environment.name}`)
     } catch (err) {
       toast.error(messageOf(err, "The environment wasn't deleted."))
     } finally {
-      onDone()
+      close()
       invalidate(useEnvironmentsList)
       invalidate(useVariablesResolve)
     }
@@ -539,16 +603,67 @@ function DeleteEnvironment({
 
   return (
     <CloudConfirm
-      open={!!environment}
-      onOpenChange={(open) => !open && onDone()}
-      title={`Delete ${environment?.name ?? "environment"}?`}
+      open={open}
+      onOpenChange={(next) => !next && close()}
+      title={`Delete ${environment.name}?`}
       confirmLabel="Delete environment"
       pending={remove.isPending}
       onConfirm={() => void confirm()}
+      details={
+        removable.length > 0 && (
+          <div className="grid gap-2.5 text-[12.5px]">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium">Keep running</span>
+              {databases.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setKeep((ids) => [
+                      ...new Set([...ids, ...databases.map((b) => b.id)]),
+                    ])
+                  }
+                >
+                  Keep all databases
+                </Button>
+              )}
+            </div>
+            <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-lg border p-2.5">
+              {removable.map((b) => (
+                <li key={b.id} className="flex min-w-0 items-center gap-2.5">
+                  <Checkbox
+                    aria-label={`Keep ${aliasOf(b)}`}
+                    checked={kept(b.id)}
+                    onCheckedChange={(on) => toggle(b.id, on)}
+                  />
+                  <span className="truncate">{aliasOf(b)}</span>
+                  {b.alias && (
+                    <span className="truncate font-mono text-muted-foreground">
+                      {b.name}
+                    </span>
+                  )}
+                  <span className="ml-auto shrink-0 text-muted-foreground">
+                    {providerName(b.provider)}{" "}
+                    {b.subject === "resource" ? "database" : "service"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <Alert variant="destructive">
+              <AlertDescription>
+                Unticked databases are deleted with their data. Kept resources
+                keep running and are listed as left behind.
+              </AlertDescription>
+            </Alert>
+          </div>
+        )
+      }
     >
       The variables set on it for {project.name} go with it, secrets included.
-      Workspace-wide variables for {environment?.name} stay, for other projects.
-      What runs there keeps running until you remove it in its account.
+      Workspace-wide variables for {environment.name} stay, for other projects.
+      {removable.length > 0
+        ? " What Loomplane made for it on Vercel and Render is deleted too, unless you keep it below. Anything else that runs there keeps running until you remove it in its account."
+        : " What runs there keeps running until you remove it in its account."}
     </CloudConfirm>
   )
 }
