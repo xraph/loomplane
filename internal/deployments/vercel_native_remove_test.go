@@ -66,7 +66,7 @@ func (a *removeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = fmt.Fprint(w, `{"id":"env_9","slug":"staging"}`)
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/env"):
-		_, _ = fmt.Fprint(w, `{"envs":[]}`)
+		_, _ = fmt.Fprint(w, `{"envs":[{"id":"var_staging","customEnvironmentIds":["env_9"]},{"id":"var_prod","target":["production"]}]}`)
 	default:
 		_, _ = fmt.Fprint(w, `{}`)
 	}
@@ -143,6 +143,12 @@ func TestVercelNativeRemoveKeepsSharedProject(t *testing.T) {
 	}
 	if h.api.called("DELETE /v9/projects/prj_1") {
 		t.Fatal("deleted a project another environment uses")
+	}
+	if !h.api.called("DELETE /v9/projects/prj_1/env/var_staging") {
+		t.Errorf("staging's variable wasn't deleted: %v", h.api.calls)
+	}
+	if h.api.called("DELETE /v9/projects/prj_1/env/var_prod") {
+		t.Error("deleted production's variable")
 	}
 	if len(h.store.rows) != 1 || h.store.rows[peKey(productionRow())] == nil {
 		t.Fatalf("rows = %v, want only production's", h.store.rows)
