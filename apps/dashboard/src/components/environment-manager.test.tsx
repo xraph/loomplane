@@ -8,6 +8,9 @@ import { forgeClient } from "@/client/runtime"
 import { Environments } from "@/components/environment-manager"
 import type { Run } from "@/lib/runs"
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+vi.mock("sonner", () => ({ toast: toasts }))
+
 vi.mock("@/lib/router", () => ({
   Link: ({
     children,
@@ -36,6 +39,7 @@ vi.mock("@/lib/router", () => ({
 afterEach(() => {
   calls.length = 0
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
   forgeClient.clear()
 })
 
@@ -70,6 +74,10 @@ function serve(
     onOpen?: () => void
     fallbacks?: Record<string, unknown>[]
     stagingBindings?: Record<string, unknown>[]
+    /** How staging's bindings answer: never, or with an error status. */
+    stagingBindingsAnswer?: "never" | number
+    /** How the delete answers: an error status, or a timeout. */
+    deleteAnswer?: number | "timeout"
   } = {}
 ) {
   vi.stubGlobal(
@@ -79,7 +87,26 @@ function serve(
       const environment = url.searchParams.get("environment") ?? ""
       if (init?.method === "DELETE") {
         calls.push(`DELETE ${url.pathname}${url.search}`)
+        if (props.deleteAnswer === "timeout")
+          throw new TypeError("The request timed out")
+        if (props.deleteAnswer)
+          return Response.json(
+            {
+              message:
+                "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself.",
+            },
+            { status: props.deleteAnswer }
+          )
         return new Response(null, { status: 204 })
+      }
+      if (url.pathname.endsWith("/bindings") && environment === "staging") {
+        if (props.stagingBindingsAnswer === "never")
+          return new Promise<Response>(() => undefined)
+        if (props.stagingBindingsAnswer)
+          return Response.json(
+            { message: "" },
+            { status: props.stagingBindingsAnswer }
+          )
       }
       if (url.pathname.endsWith("/provider-environments/retry")) {
         calls.push(`${init?.method} ${url.pathname}`)
@@ -176,9 +203,12 @@ test("deleting an environment asks first", async () => {
   )
   const dialog = await screen.findByRole("alertdialog")
   expect(within(dialog).getByText("Delete staging?")).toBeInTheDocument()
-  expect(
-    within(dialog).getByRole("button", { name: "Delete environment" })
-  ).toBeEnabled()
+  // It's on once Loomplane knows what runs there.
+  await vi.waitFor(() =>
+    expect(
+      within(dialog).getByRole("button", { name: "Delete environment" })
+    ).toBeEnabled()
+  )
 })
 
 test("the only environment can't be deleted", async () => {
@@ -420,6 +450,11 @@ test("an environment with nothing on Vercel or Render deletes as before", async 
     await screen.findByRole("menuitem", { name: "Delete environment" })
   )
   const dialog = within(await screen.findByRole("alertdialog"))
+  await vi.waitFor(() =>
+    expect(
+      dialog.getByRole("button", { name: "Delete environment" })
+    ).toBeEnabled()
+  )
   expect(
     dialog.getByText(/What runs there keeps running until you remove it/)
   ).toBeInTheDocument()
@@ -428,5 +463,71 @@ test("an environment with nothing on Vercel or Render deletes as before", async 
   await user.click(dialog.getByRole("button", { name: "Delete environment" }))
   await vi.waitFor(() =>
     expect(calls).toContain("DELETE /api/v1/projects/p/environments/env_stage")
+  )
+})
+
+async function openStagingDelete() {
+  const user = userEvent.setup()
+  await user.click(
+    screen.getByRole("button", { name: "More actions for staging" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete environment" })
+  )
+  return { user, dialog: within(await screen.findByRole("alertdialog")) }
+}
+
+test("delete waits until it knows what runs there", async () => {
+  serve([production, staging], [], { stagingBindingsAnswer: "never" })
+  const { dialog } = await openStagingDelete()
+  expect(
+    dialog.getByRole("button", { name: "Delete environment" })
+  ).toBeDisabled()
+  // Nor does it say what keeps running before it knows.
+  expect(dialog.queryByText(/keeps running/)).toBeNull()
+})
+
+test("delete stays off while what runs there can't be read", async () => {
+  serve([production, staging], [], { stagingBindingsAnswer: 500 })
+  const { dialog } = await openStagingDelete()
+  expect(
+    await dialog.findByText(
+      "Loomplane couldn't finish that. Try again in a moment."
+    )
+  ).toBeInTheDocument()
+  expect(dialog.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  expect(
+    dialog.getByRole("button", { name: "Delete environment" })
+  ).toBeDisabled()
+})
+
+test("a refused delete says why and stays open", async () => {
+  serve([production, staging], [], {
+    stagingBindings: nativeStaging,
+    deleteAnswer: 403,
+  })
+  const { user, dialog } = await openStagingDelete()
+  await dialog.findByRole("checkbox", { name: "Keep db" })
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  expect(
+    await dialog.findByText(
+      "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+})
+
+test("a delete that times out may still be going", async () => {
+  serve([production, staging], [], {
+    stagingBindings: nativeStaging,
+    deleteAnswer: "timeout",
+  })
+  const { user, dialog } = await openStagingDelete()
+  await dialog.findByRole("checkbox", { name: "Keep db" })
+  await user.click(dialog.getByRole("button", { name: "Delete environment" }))
+  await vi.waitFor(() =>
+    expect(toasts.error).toHaveBeenCalledWith(
+      "Deleting staging may still be in progress. Refresh in a moment to see whether it went."
+    )
   )
 })

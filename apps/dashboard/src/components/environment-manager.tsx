@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
+import { messageOf, statusOf } from "@/client/errors"
 import {
   useBindingsList,
   useEnvironmentsCreate,
@@ -572,7 +572,11 @@ function ConfirmDeleteEnvironment({
   const removable = (bindings.data?.bindings ?? []).filter(
     removedWithEnvironment
   )
+  // Deleting removes what Loomplane made on Vercel and Render, so it waits
+  // until the list of what can be kept has loaded.
+  const unread = !bindings.data
   const [keep, setKeep] = useState<string[]>([])
+  const [error, setError] = useState("")
   const kept = (id: string) => keep.includes(id)
   const toggle = (id: string, on: boolean) =>
     setKeep((ids) => (on ? [...ids, id] : ids.filter((k) => k !== id)))
@@ -580,10 +584,12 @@ function ConfirmDeleteEnvironment({
 
   const close = () => {
     setKeep([])
+    setError("")
     onDone()
   }
 
   const confirm = async () => {
+    setError("")
     try {
       await remove.mutateAsync({
         path: { id: project.id, envId: environment.id },
@@ -592,10 +598,20 @@ function ConfirmDeleteEnvironment({
         },
       })
       toast.success(`Deleted ${environment.name}`)
-    } catch (err) {
-      toast.error(messageOf(err, "The environment wasn't deleted."))
-    } finally {
       close()
+    } catch (err) {
+      if (statusOf(err) !== 0) {
+        // Refused, such as when only an admin may delete what it runs:
+        // the dialog stays, so you can keep more or ask an admin.
+        setError(messageOf(err, "The environment wasn't deleted."))
+        return
+      }
+      // No answer: the server may still be deleting what it runs.
+      toast.error(
+        `Deleting ${environment.name} may still be in progress. Refresh in a moment to see whether it went.`
+      )
+      close()
+    } finally {
       invalidate(useEnvironmentsList)
       invalidate(useVariablesResolve)
     }
@@ -608,62 +624,80 @@ function ConfirmDeleteEnvironment({
       title={`Delete ${environment.name}?`}
       confirmLabel="Delete environment"
       pending={remove.isPending}
+      disabled={unread}
       onConfirm={() => void confirm()}
+      error={
+        error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )
+      }
       details={
-        removable.length > 0 && (
-          <div className="grid gap-2.5 text-[12.5px]">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-medium">Keep running</span>
-              {databases.length > 0 && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setKeep((ids) => [
-                      ...new Set([...ids, ...databases.map((b) => b.id)]),
-                    ])
-                  }
-                >
-                  Keep all databases
-                </Button>
-              )}
-            </div>
-            <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-lg border p-2.5">
-              {removable.map((b) => (
-                <li key={b.id} className="flex min-w-0 items-center gap-2.5">
-                  <Checkbox
-                    aria-label={`Keep ${aliasOf(b)}`}
-                    checked={kept(b.id)}
-                    onCheckedChange={(on) => toggle(b.id, on)}
-                  />
-                  <span className="truncate">{aliasOf(b)}</span>
-                  {b.alias && (
-                    <span className="truncate font-mono text-muted-foreground">
-                      {b.name}
+        bindings.status === "error" && unread ? (
+          <QueryError
+            error={bindings.error}
+            fallback={`What runs in ${environment.name} couldn't be read, so it can't be deleted yet.`}
+            retry={bindings.refetch}
+          />
+        ) : (
+          removable.length > 0 && (
+            <div className="grid gap-2.5 text-[12.5px]">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">Keep running</span>
+                {databases.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setKeep((ids) => [
+                        ...new Set([...ids, ...databases.map((b) => b.id)]),
+                      ])
+                    }
+                  >
+                    Keep all databases
+                  </Button>
+                )}
+              </div>
+              <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-lg border p-2.5">
+                {removable.map((b) => (
+                  <li key={b.id} className="flex min-w-0 items-center gap-2.5">
+                    <Checkbox
+                      aria-label={`Keep ${aliasOf(b)}`}
+                      checked={kept(b.id)}
+                      onCheckedChange={(on) => toggle(b.id, on)}
+                    />
+                    <span className="truncate">{aliasOf(b)}</span>
+                    {b.alias && (
+                      <span className="truncate font-mono text-muted-foreground">
+                        {b.name}
+                      </span>
+                    )}
+                    <span className="ml-auto shrink-0 text-muted-foreground">
+                      {providerName(b.provider)}{" "}
+                      {b.subject === "resource" ? "database" : "service"}
                     </span>
-                  )}
-                  <span className="ml-auto shrink-0 text-muted-foreground">
-                    {providerName(b.provider)}{" "}
-                    {b.subject === "resource" ? "database" : "service"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <Alert variant="destructive">
-              <AlertDescription>
-                Unticked databases are deleted with their data. Kept resources
-                keep running and are listed as left behind.
-              </AlertDescription>
-            </Alert>
-          </div>
+                  </li>
+                ))}
+              </ul>
+              <Alert variant="destructive">
+                <AlertDescription>
+                  Unticked databases are deleted with their data. Kept resources
+                  keep running and are listed as left behind.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )
         )
       }
     >
       The variables set on it for {project.name} go with it, secrets included.
       Workspace-wide variables for {environment.name} stay, for other projects.
-      {removable.length > 0
-        ? " What Loomplane made for it on Vercel and Render is deleted too, unless you keep it below. Anything else that runs there keeps running until you remove it in its account."
-        : " What runs there keeps running until you remove it in its account."}
+      {unread
+        ? ""
+        : removable.length > 0
+          ? " What Loomplane made for it on Vercel and Render is deleted too, unless you keep it below. Anything else that runs there keeps running until you remove it in its account."
+          : " What runs there keeps running until you remove it in its account."}
     </CloudConfirm>
   )
 }

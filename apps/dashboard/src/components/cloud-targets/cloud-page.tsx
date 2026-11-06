@@ -442,6 +442,7 @@ export function CloudConfirm({
   pending,
   error,
   details,
+  disabled,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -449,6 +450,8 @@ export function CloudConfirm({
   children: ReactNode
   /** What goes below the description, such as a list to choose from. */
   details?: ReactNode
+  /** Keeps the confirm button off, such as while what it acts on loads. */
+  disabled?: boolean
   confirmLabel: string
   /** The name a person types to confirm a delete. */
   typeToConfirm?: string
@@ -492,7 +495,7 @@ export function CloudConfirm({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <Button
             variant="destructive"
-            disabled={locked || pending}
+            disabled={locked || pending || disabled}
             onClick={onConfirm}
           >
             {pending && <Spinner />}
