@@ -12,6 +12,7 @@ import type { ReactNode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { AppSidebar } from "@/components/app-sidebar"
+import { AgentDock } from "@/components/assistant/agent-dock"
 import { ShellProvider, useShell } from "@/components/shell"
 import { ThemeProvider } from "@/components/theme-provider"
 import { SidebarProvider } from "@/components/ui/sidebar"
@@ -24,6 +25,7 @@ const { navigate, access } = vi.hoisted(() => ({
 vi.mock("@/lib/router", () => ({
   useNavigate: () => navigate,
   usePath: () => "/",
+  useSearchParams: () => ({}),
   // Passes the rest on, as the router's Link does, so a menu item rendered
   // as a link keeps its role.
   Link: ({
@@ -215,6 +217,7 @@ function withAgent(ai: boolean, enabled = true) {
           <ThemeProvider>
             <ShellProvider>
               <p>Page</p>
+              <AgentDock />
             </ShellProvider>
           </ThemeProvider>
         </AgentProvider>
@@ -243,14 +246,14 @@ it("cmd+J opens the assistant when the agent is on", async () => {
     })
   })
   expect(
-    await screen.findByRole("heading", { name: "Assistant" })
+    await screen.findByRole("complementary", { name: "Agent" })
   ).toBeVisible()
   // ⌘J again puts it away.
   act(() => {
     pressJ()
   })
   await waitFor(() =>
-    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+    expect(screen.queryByRole("complementary", { name: "Agent" })).toBeNull()
   )
 })
 
@@ -262,7 +265,7 @@ it("cmd+J does nothing when the agent is off", async () => {
     prevented = pressJ()
   })
   expect(prevented).toBe(false)
-  expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  expect(screen.queryByRole("complementary", { name: "Agent" })).toBeNull()
 
   // Nor with AI on and the workspace's agent off.
   cleanup()
@@ -272,7 +275,7 @@ it("cmd+J does nothing when the agent is off", async () => {
     prevented = pressJ()
   })
   expect(prevented).toBe(false)
-  expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+  expect(screen.queryByRole("complementary", { name: "Agent" })).toBeNull()
 })
 
 it("the command menu offers Ask the agent only when on", async () => {
@@ -291,7 +294,7 @@ it("the command menu offers Ask the agent only when on", async () => {
   expect(item).toHaveTextContent("⌘J")
   await userEvent.click(item)
   expect(
-    await screen.findByRole("heading", { name: "Assistant" })
+    await screen.findByRole("complementary", { name: "Agent" })
   ).toBeVisible()
 
   cleanup()
@@ -313,7 +316,7 @@ it("lists cmd+J among the shortcuts only when the agent is on", async () => {
     pressJ()
   })
   await waitFor(() =>
-    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+    expect(screen.queryByRole("complementary", { name: "Agent" })).toBeNull()
   )
   await userEvent.keyboard("?")
   const sheet = await screen.findByRole("dialog")

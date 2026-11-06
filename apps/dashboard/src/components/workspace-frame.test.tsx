@@ -6,12 +6,14 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
 import { ThemeProvider } from "@/components/theme-provider"
+import { AgentDock } from "@/components/assistant/agent-dock"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { FeaturesProvider } from "@/lib/features"
 
 vi.mock("@/lib/router", () => ({
   useNavigate: () => () => {},
   usePath: () => "/",
+  useSearchParams: () => ({}),
   Link: ({ children, to }: { children?: ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
@@ -53,6 +55,7 @@ function show() {
         <ThemeProvider>
           <WorkspaceFrame orgId="org">
             <p>Page</p>
+            <AgentDock />
           </WorkspaceFrame>
         </ThemeProvider>
       </FeaturesProvider>
@@ -81,7 +84,7 @@ it("lets cmd+J open the agent's panel in a workspace with the agent on", async (
     })
   })
   expect(
-    await screen.findByRole("heading", { name: "Assistant" })
+    await screen.findByRole("complementary", { name: "Agent" })
   ).toBeVisible()
 })
 
@@ -99,7 +102,7 @@ it("lists the agent in the command menu in a workspace with the agent on", async
     pressJ()
   })
   await waitFor(() =>
-    expect(screen.queryByRole("heading", { name: "Assistant" })).toBeNull()
+    expect(screen.queryByRole("complementary", { name: "Agent" })).toBeNull()
   )
   await userEvent.keyboard("{Meta>}k{/Meta}")
   expect(

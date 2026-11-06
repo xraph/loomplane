@@ -1,7 +1,7 @@
 // A model card from Hugging Face, as its author wrote it in Markdown. The
 // card is someone else's text, so raw HTML in it is dropped, never
 // rendered, and links open in a new tab without a referrer.
-import Markdown, { type Components } from "react-markdown"
+import Markdown, { type Components, type Options } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
@@ -55,11 +55,14 @@ export function ModelMarkdown({
   markdown,
   className,
   components: overrides,
+  remarkPlugins = [],
 }: {
   markdown: string
   className?: string
   /** Renderers to use instead of these, such as the Assistant's links. */
   components?: Components
+  /** Syntax to read besides GitHub's, such as the Assistant's callouts. */
+  remarkPlugins?: Options["remarkPlugins"]
 }) {
   return (
     <div
@@ -75,7 +78,7 @@ export function ModelMarkdown({
       )}
     >
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, ...(remarkPlugins ?? [])]}
         skipHtml
         components={overrides ? { ...components, ...overrides } : components}
       >

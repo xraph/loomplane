@@ -4,11 +4,12 @@
 // action menu, model select, hover cards, tabs and the command list are left
 // out, and with them nanoid and the hover-card part. The textarea keeps the
 // original's keys: Enter sends, Shift+Enter is a new line, and Enter while
-// an IME is composing does nothing.
+// an IME is composing does nothing. The submit button is a round arrow, and
+// the box a raised card.
 "use client"
 
 import type { ChatStatus } from "ai"
-import { CornerDownLeftIcon, SquareIcon } from "lucide-react"
+import { ArrowUpIcon, SquareIcon } from "lucide-react"
 import type {
   ComponentProps,
   FormEvent,
@@ -63,7 +64,9 @@ export const PromptInput = ({
       onSubmit={handleSubmit}
       {...props}
     >
-      <InputGroup className="overflow-hidden">{children}</InputGroup>
+      <InputGroup className="overflow-hidden rounded-xl bg-card shadow-xs has-[[data-slot=input-group-control]:focus-visible]:border-ring/60 has-[[data-slot=input-group-control]:focus-visible]:shadow-sm has-[[data-slot=input-group-control]:focus-visible]:ring-ring/15 dark:bg-input/30">
+        {children}
+      </InputGroup>
     </form>
   )
 }
@@ -171,7 +174,7 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming"
 
-  let Icon = <CornerDownLeftIcon className="size-4" />
+  let Icon = <ArrowUpIcon className="size-4" />
   if (status === "submitted") {
     Icon = <Spinner />
   } else if (status === "streaming") {
@@ -193,7 +196,7 @@ export const PromptInputSubmit = ({
   return (
     <InputGroupButton
       aria-label={isGenerating ? "Stop" : "Send"}
-      className={cn(className)}
+      className={cn("rounded-full", className)}
       onClick={handleClick}
       size={size}
       type={isGenerating && onStop ? "button" : "submit"}

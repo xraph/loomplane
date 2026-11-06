@@ -17,7 +17,6 @@ import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import {
   ActivityIcon,
-  AssistantIcon,
   AISettingsIcon,
   ApiKeysIcon,
   CloudSignInIcon,
@@ -37,7 +36,8 @@ import {
   VariablesIcon,
   WebhooksIcon,
 } from "@/components/icons"
-import { useShell } from "@/components/shell"
+import { AgentOrb } from "@/components/assistant/agent-orb"
+import { useAgentDock, useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import {
@@ -48,7 +48,6 @@ import {
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
-import { useAssistantAvailable } from "@/lib/agent-stream"
 import { useCloudSettingsGroups } from "@/hooks/use-cloud-settings-groups"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
@@ -86,7 +85,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { openNewProject } = useShell()
   const features = useFeatures()
   const agent = useAgent()
-  const assistant = useAssistantAvailable()
+  const dock = useAgentDock()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -107,14 +106,20 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/" />,
       isActive: path === "/",
     },
-    // The agent, for whoever may talk to it.
-    ...(assistant
+    // The agent, for whoever may talk to it: its panel, from any page.
+    ...(dock
       ? [
           {
             title: "Assistant",
-            icon: <AssistantIcon />,
-            link: <Link to="/assistant" />,
-            isActive: path.startsWith("/assistant"),
+            icon: <AgentOrb size={16} state={dock.activity} />,
+            link: (
+              <button
+                type="button"
+                aria-pressed={dock.open}
+                onClick={dock.toggle}
+              />
+            ),
+            isActive: dock.open,
           },
         ]
       : []),

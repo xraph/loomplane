@@ -5,17 +5,20 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router"
-import { lazy, Suspense, useCallback, useEffect } from "react"
+import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
+import { AgentDock } from "@/components/assistant/agent-dock"
 import { AuthRedirect, FreshLoad } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
 import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
+import { HeaderSlotProvider } from "@/components/header-slot"
+import { useAgentDock } from "@/components/shell"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
@@ -26,6 +29,9 @@ import { CloudSignInStep } from "@/pages/cloud-sign-in-step"
 import { Onboarding } from "@/pages/onboarding"
 import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
+import { sidebarOpenAtLoad } from "@/lib/sidebar-state"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { cn } from "@/lib/utils"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
 // Only the cloud edition gates the shell on a card. The comparison is inline
@@ -226,23 +232,61 @@ function Shell() {
   }
   return (
     <WorkspaceFrame orgId={session.orgId}>
-      <SidebarProvider>
-        <AppSidebar />
-        {/* Keyed on the organization, so switching remounts every page. */}
-        <SidebarInset key={session.orgId} className="min-w-0">
-          {CardGate ? (
-            <Suspense fallback={<PageLoading />}>
-              <CardGate>
-                <Outlet />
-              </CardGate>
-            </Suspense>
-          ) : (
-            <Outlet />
-          )}
-          <AppStatusBar />
-        </SidebarInset>
-      </SidebarProvider>
+      <WorkspaceLayout orgId={session.orgId} />
     </WorkspaceFrame>
+  )
+}
+
+// The sidebar, the page and the agent's panel side by side. The sidebar
+// opens as you left it; the panel docks beside the page, floats over it,
+// or takes its place at full width (the page stays mounted underneath).
+// With the panel docked, the page scrolls in a column of its own between
+// the top bar and the status bar, so its scrollbar sits under the bar and
+// beside the page, never beside the chat; the router restores that
+// column's place as it does the window's. The tree is the same either way,
+// so docking never remounts the page you're on.
+function WorkspaceLayout({ orgId }: { orgId: string }) {
+  const dock = useAgentDock()
+  const mobile = useIsMobile()
+  const focus = !!dock?.open && dock.mode === "focus"
+  const docked = !!dock?.open && dock.mode === "docked" && !mobile
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null)
+  return (
+    <SidebarProvider defaultOpen={sidebarOpenAtLoad()}>
+      <AppSidebar />
+      {/* Keyed on the organization, so switching remounts every page. */}
+      <SidebarInset
+        key={orgId}
+        className={cn(
+          "min-w-0",
+          focus && "md:hidden",
+          docked && "h-svh overflow-hidden"
+        )}
+      >
+        <div ref={setSlot} className="shrink-0 empty:hidden" />
+        <HeaderSlotProvider value={docked ? slot : null}>
+          <div
+            data-scroll-restoration-id={docked ? "page" : undefined}
+            className={cn(
+              "flex flex-1 flex-col",
+              docked && "min-h-0 overflow-y-auto"
+            )}
+          >
+            {CardGate ? (
+              <Suspense fallback={<PageLoading />}>
+                <CardGate>
+                  <Outlet />
+                </CardGate>
+              </Suspense>
+            ) : (
+              <Outlet />
+            )}
+          </div>
+        </HeaderSlotProvider>
+        <AppStatusBar />
+      </SidebarInset>
+      <AgentDock />
+    </SidebarProvider>
   )
 }
 

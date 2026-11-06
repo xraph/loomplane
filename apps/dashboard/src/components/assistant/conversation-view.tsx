@@ -1,10 +1,15 @@
 // One conversation with the agent: the person's messages, the agent's
 // answers as they stream (text, tool steps, the questions it asks), and the
-// box to write the next message in. The Assistant page and the slide-over
-// panel both show it.
+// box to write the next message in. A new conversation opens on a welcome:
+// the box in the middle and a few things to ask. The agent's panel shows
+// it, docked, floating or across the page.
 import { useChat } from "@ai-sdk/react"
 import type { DynamicToolUIPart } from "ai"
-import { SparklesIcon } from "lucide-react"
+import {
+  CaretRightIcon,
+  MapPinIcon,
+  PencilSimpleIcon,
+} from "@phosphor-icons/react"
 import { useEffect, useState } from "react"
 import { flushSync } from "react-dom"
 
@@ -29,26 +34,36 @@ import { AgentRequestCard } from "@/components/agent-request-card"
 import {
   Conversation,
   ConversationContent,
-  ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation"
 import { Message, MessageContent } from "@/components/ai-elements/message"
+import { AgentOrb, type OrbState } from "@/components/assistant/agent-orb"
 import { Composer } from "@/components/assistant/composer"
 import { AgentMarkdown } from "@/components/assistant/markdown"
-import { ToolStep } from "@/components/assistant/tool-step"
+import { ToolStep, toolLabel } from "@/components/assistant/tool-step"
 import { QueryError } from "@/components/query-error"
+import { CopyButton } from "@/components/runs"
+import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Spinner } from "@/components/ui/spinner"
 import {
   type AgentMessage,
+  type AgentPart,
   fromApi,
   historyToMessages,
+  toolMeta,
 } from "@/lib/agent-events"
 import {
   AgentChatTransport,
   type OpenTurn,
   STREAM_LOST,
 } from "@/lib/agent-stream"
+import type { PageContext } from "@/lib/page-context"
+import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 const terminal = new Set(["completed", "failed", "cancelled"])
@@ -61,8 +76,18 @@ export type ConversationViewProps = {
   conversationId?: string
   /** The project a new conversation is about; none is the whole workspace. */
   projectId?: string
-  /** A tighter layout, for the slide-over panel. */
+  /** A tighter layout, for a narrow panel. */
   compact?: boolean
+  /** Center the conversation in a reading column, for a wide panel. */
+  wide?: boolean
+  /** What a new conversation offers to ask. */
+  suggestions?: string[]
+  /** What the person is looking at, sent with each message. */
+  context?: PageContext
+  /** Chips that say what the next message is about, shown in the box. */
+  scope?: React.ReactNode
+  /** onActivity hears what the agent is doing here, as the orb shows it. */
+  onActivity?: (state: OrbState) => void
   /** onConversation hears the ID a new conversation got. */
   onConversation?: (id: string) => void
   /** A line under the box, such as what a new conversation is about. */
@@ -158,6 +183,11 @@ function ChatBody({
   conversationId,
   projectId,
   compact,
+  wide,
+  suggestions = [],
+  onActivity,
+  context,
+  scope,
   hint,
   className,
   history,
@@ -188,6 +218,9 @@ function ChatBody({
   useEffect(() => {
     transport.setProject(projectId)
   }, [transport, projectId])
+  useEffect(() => {
+    transport.setContext(context)
+  }, [transport, context])
 
   const [initial] = useState(() => (history ? historyToMessages(history) : []))
   const [chatId] = useState(() => conversationId)
@@ -224,11 +257,26 @@ function ChatBody({
 
   const streaming = status === "submitted" || status === "streaming"
   const busy = streaming || (!!task && !terminal.has(task.status))
+  const [typing, setTyping] = useState(false)
+  const activity = activityOf({
+    busy,
+    streaming,
+    taskStatus: task?.status,
+    last: messages.findLast((m) => m.role === "assistant"),
+    typing: typing || draft !== "",
+  })
+  useEffect(() => {
+    onActivity?.(activity)
+  }, [onActivity, activity])
+  useEffect(() => () => onActivity?.("idle"), [onActivity])
 
   const submit = (text: string) => {
     setDraft("")
     setStopError(undefined)
-    void sendMessage({ text })
+    void sendMessage({
+      text,
+      metadata: { taskId: "", ...(context ? { context } : {}) },
+    })
   }
 
   // settle takes a task's status as the server tells it. Still running
@@ -325,34 +373,91 @@ function ChatBody({
     )
 
   const lastAgent = messages.findLast((m) => m.role === "assistant")
+  const lastSent = textOf(messages.findLast((m) => m.role === "user"))
+  const composer = (
+    <Composer
+      value={draft}
+      onChange={setDraft}
+      onSend={submit}
+      busy={busy}
+      status={status}
+      onStop={() => void stop()}
+      stopping={cancel.isPending}
+      error={problem}
+      hint={hint}
+      scope={scope}
+      lastSent={lastSent}
+      autoFocus
+      onFocusChange={setTyping}
+    />
+  )
+
+  if (messages.length === 0 && !busy)
+    return (
+      <div
+        className={cn(
+          "relative flex min-h-0 flex-1 flex-col overflow-y-auto",
+          className
+        )}
+      >
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(50%_40%_at_50%_42%,var(--brand-soft),transparent)] opacity-70"
+        />
+        <div
+          className={cn(
+            "relative m-auto grid w-full gap-5 py-10",
+            compact ? "px-3" : "px-4",
+            wide && "max-w-2xl"
+          )}
+        >
+          <Welcome state={activity} />
+          {composer}
+          {suggestions.length > 0 && (
+            <Suggestions items={suggestions} onPick={submit} />
+          )}
+        </div>
+      </div>
+    )
+
+  const column = wide ? "mx-auto w-full max-w-3xl" : ""
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
       <Conversation className="min-h-0">
         <ConversationContent
-          className={cn(compact ? "gap-5 p-3" : "gap-6 px-4 py-5")}
+          className={cn(compact ? "gap-5 p-3" : "gap-6 px-4 py-5", column)}
         >
-          {messages.length === 0 ? (
-            <ConversationEmptyState
-              icon={<SparklesIcon className="size-5" />}
-              title="Ask the agent"
-              description={EMPTY_COPY}
-              className="min-h-[240px]"
-            />
-          ) : (
-            messages.map((m) =>
-              m.role === "user" ? (
-                <Message key={m.id} from="user">
-                  <MessageContent className="whitespace-pre-wrap">
-                    {m.parts.map((p) => (p.type === "text" ? p.text : ""))}
-                  </MessageContent>
-                </Message>
-              ) : (
-                <AgentTurn
-                  key={m.id}
-                  message={m}
-                  live={busy && m === lastAgent}
-                />
-              )
+          {messages.map((m) =>
+            m.role === "user" ? (
+              <Message key={m.id} from="user">
+                {m.metadata?.context && (
+                  <SentFrom context={m.metadata.context} />
+                )}
+                <MessageContent className="whitespace-pre-wrap">
+                  {textOf(m)}
+                </MessageContent>
+                <MessageActions className="justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                  <CopyButton value={textOf(m)} label="Copy message" />
+                  {!busy && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Edit in the box"
+                      title="Edit in the box"
+                      className="text-muted-foreground"
+                      onClick={() => setDraft(textOf(m))}
+                    >
+                      <PencilSimpleIcon />
+                    </Button>
+                  )}
+                </MessageActions>
+              </Message>
+            ) : (
+              <AgentTurn
+                key={m.id}
+                message={m}
+                live={busy && m === lastAgent}
+              />
             )
           )}
           {streaming && messages.at(-1)?.role === "user" && (
@@ -361,18 +466,122 @@ function ChatBody({
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
-      <Composer
-        className={cn("shrink-0", compact ? "px-3 pb-3" : "px-4 pb-4")}
-        value={draft}
-        onChange={setDraft}
-        onSend={submit}
-        busy={busy}
-        status={status}
-        onStop={() => void stop()}
-        stopping={cancel.isPending}
-        error={problem}
-        hint={hint}
-      />
+      <div className={cn("shrink-0", compact ? "px-3 pb-3" : "px-4 pb-4")}>
+        <div className={column}>{composer}</div>
+      </div>
+    </div>
+  )
+}
+
+/** SentFrom says which page a message was sent from, linking back to it. */
+function SentFrom({ context }: { context: PageContext }) {
+  return (
+    <Link
+      to={context.path as "/"}
+      className="ml-auto flex max-w-full items-center gap-1 truncate text-[11.5px] text-muted-foreground hover:text-foreground"
+      title={`Sent from ${context.label}`}
+    >
+      <MapPinIcon className="size-3 shrink-0" />
+      <span className="truncate">{context.label}</span>
+    </Link>
+  )
+}
+
+/** activityOf says what the agent is doing, for the orb. On a message,
+ * it's working while its last step is a tool still running, speaking once
+ * words are coming, and thinking before either; asked something, it's
+ * waiting; a failed last turn is an error; otherwise it listens while you
+ * write, and idles. */
+export function activityOf({
+  busy,
+  streaming,
+  taskStatus,
+  last,
+  typing,
+}: {
+  busy: boolean
+  streaming: boolean
+  taskStatus?: string
+  last?: AgentMessage
+  typing: boolean
+}): OrbState {
+  if (taskStatus === "waiting") return "waiting"
+  if (busy) {
+    const part = last?.parts.findLast((p) => p.type !== "step-start")
+    if (part?.type === "dynamic-tool" && part.state === "input-available")
+      return "working"
+    if (streaming && part?.type === "text" && part.text) return "speaking"
+    return "thinking"
+  }
+  if (last?.metadata?.status === "failed") return "error"
+  return typing ? "listening" : "idle"
+}
+
+/** textOf joins a message's text parts. */
+function textOf(m: AgentMessage | undefined): string {
+  return (m?.parts ?? [])
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function MessageActions({
+  className,
+  children,
+}: {
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        "-mt-1 flex items-center gap-0.5 transition-opacity",
+        className
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
+function Welcome({ state }: { state: OrbState }) {
+  return (
+    <div className="grid justify-items-center gap-2 text-center">
+      <AgentOrb size={56} state={state} className="mb-1" />
+      <h2 className="text-[22px] font-semibold tracking-tight">
+        What can I help with?
+      </h2>
+      <p className="max-w-md text-[13px] text-muted-foreground">{EMPTY_COPY}</p>
+    </div>
+  )
+}
+
+function Suggestions({
+  items,
+  onPick,
+}: {
+  items: string[]
+  onPick: (text: string) => void
+}) {
+  return (
+    <div className="grid gap-2">
+      <p className="text-[12px] font-medium text-muted-foreground">
+        Try asking
+      </p>
+      <ul className="flex flex-wrap gap-1.5">
+        {items.map((q) => (
+          <li key={q}>
+            <button
+              type="button"
+              onClick={() => onPick(q)}
+              className="group/s flex items-center gap-1 rounded-full border border-dashed bg-background/70 px-3 py-1 text-left text-[12.5px] text-foreground transition-colors hover:border-solid hover:bg-muted"
+            >
+              {q}
+              <CaretRightIcon className="size-3 text-muted-foreground transition-transform group-hover/s:translate-x-0.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -385,11 +594,37 @@ function Working({ status }: { status?: string }) {
         ? "Queued"
         : "Working"
   return (
-    <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-      {status === "waiting" ? null : <Spinner className="size-3.5" />}
-      {text}
+    <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+      <AgentOrb
+        size={16}
+        state={status === "waiting" ? "waiting" : "thinking"}
+      />
+      <span className={cn(status !== "waiting" && "agent-shimmer")}>
+        {text}
+      </span>
     </p>
   )
+}
+
+/** A run of the agent's parts: one part, or tool steps taken back to back. */
+type Segment =
+  | { kind: "part"; part: AgentPart; index: number }
+  | { kind: "tools"; parts: DynamicToolUIPart[] }
+
+/** segments folds tool steps taken back to back into one run, so a turn
+ * that reads ten things shows them as one line until you open it. */
+function segments(parts: AgentPart[]): Segment[] {
+  const out: Segment[] = []
+  parts.forEach((part, index) => {
+    if (part.type === "dynamic-tool") {
+      const last = out.at(-1)
+      if (last?.kind === "tools") last.parts.push(part as DynamicToolUIPart)
+      else out.push({ kind: "tools", parts: [part as DynamicToolUIPart] })
+      return
+    }
+    out.push({ kind: "part", part, index })
+  })
+  return out
 }
 
 function AgentTurn({
@@ -405,25 +640,36 @@ function AgentTurn({
   const explained = parts.some(
     (p) => p.type === "data-error" || p.type === "data-blocked"
   )
+  const segs = segments(parts)
+  const answer = textOf(message)
   return (
     <Message from="assistant">
       <MessageContent>
-        {parts.map((p, i) => {
+        {segs.map((seg, i) => {
+          if (seg.kind === "tools")
+            return seg.parts.length === 1 ? (
+              <ToolStep
+                key={seg.parts[0].toolCallId}
+                part={seg.parts[0]}
+                live={live}
+              />
+            ) : (
+              <ToolRun
+                key={seg.parts[0].toolCallId}
+                parts={seg.parts}
+                live={live}
+                last={i === segs.length - 1}
+              />
+            )
+          const p = seg.part
+          const key = seg.index
           switch (p.type) {
             case "text":
-              return <AgentMarkdown key={i} text={p.text} />
-            case "dynamic-tool":
-              return (
-                <ToolStep
-                  key={p.toolCallId}
-                  part={p as DynamicToolUIPart}
-                  live={live}
-                />
-              )
+              return <AgentMarkdown key={key} text={p.text} live={live} />
             case "data-request":
               return (
                 <InlineRequest
-                  key={p.id ?? i}
+                  key={p.id ?? key}
                   requestId={p.data.requestId}
                   live={live}
                 />
@@ -431,7 +677,7 @@ function AgentTurn({
             case "data-blocked":
               return (
                 <p
-                  key={p.id ?? i}
+                  key={p.id ?? key}
                   className="rounded-md bg-muted/60 px-3 py-2 text-[13px] text-muted-foreground"
                 >
                   {p.data.message}
@@ -440,7 +686,7 @@ function AgentTurn({
             case "data-error":
               return (
                 <p
-                  key={p.id ?? i}
+                  key={p.id ?? key}
                   role="alert"
                   className="text-[13px] text-destructive"
                 >
@@ -467,7 +713,79 @@ function AgentTurn({
           <p className="text-[12.5px] text-muted-foreground">Stopped.</p>
         )}
       </MessageContent>
+      {!live && answer && (
+        <MessageActions className="text-muted-foreground">
+          <CopyButton value={answer} label="Copy answer" />
+        </MessageActions>
+      )}
     </Message>
+  )
+}
+
+/** runLabel says what a run of tool steps did, as the steps would one by
+ * one: "Listed deployments, read logs and 2 more". While one runs, it says
+ * that one. */
+function runLabel(parts: DynamicToolUIPart[], live: boolean): string {
+  const running = live && parts.find((p) => p.state === "input-available")
+  if (running) return toolLabel(running.toolName, true)
+  const labels = [...new Set(parts.map((p) => toolLabel(p.toolName, false)))]
+  const head = labels
+    .slice(0, 2)
+    .map((l, i) => (i ? l[0].toLowerCase() + l.slice(1) : l))
+    .join(", ")
+  return labels.length > 2 ? `${head} and ${labels.length - 2} more` : head
+}
+
+/** ToolRun is tool steps taken back to back, folded into one quiet line
+ * that says what they did and what went wrong. It's open while the agent
+ * is on it, and folds once the answer moves on. */
+function ToolRun({
+  parts,
+  live,
+  last,
+}: {
+  parts: DynamicToolUIPart[]
+  live: boolean
+  /** Whether nothing came after these steps yet. */
+  last: boolean
+}) {
+  const [manual, setManual] = useState<boolean>()
+  const open = manual ?? (live && last)
+  const failed = parts.filter(
+    (p) => p.state === "output-error" || toolMeta(p).outcome === "failed"
+  ).length
+  const refused = parts.filter((p) => toolMeta(p).outcome === "denied").length
+  const running = live && parts.some((p) => p.state === "input-available")
+  return (
+    <Collapsible open={open} onOpenChange={setManual} className="group/run">
+      <CollapsibleTrigger className="flex max-w-full items-center gap-1.5 rounded-sm text-left text-[13px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <span className={cn("truncate", running && "agent-shimmer")}>
+          {runLabel(parts, live)}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums">
+          {parts.length} steps
+        </span>
+        {failed > 0 && (
+          <span className="shrink-0 text-[12px] text-destructive">
+            {failed} failed
+          </span>
+        )}
+        {refused > 0 && (
+          <span className="shrink-0 text-[12px] text-weld-ink">
+            {refused} refused
+          </span>
+        )}
+        <CaretRightIcon
+          weight="fill"
+          className="size-2.5 shrink-0 transition-transform group-data-open/run:rotate-90"
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1.5 ml-1 grid gap-1.5 border-l-2 pl-3">
+        {parts.map((p) => (
+          <ToolStep key={p.toolCallId} part={p} live={live} />
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

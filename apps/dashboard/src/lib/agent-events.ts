@@ -14,6 +14,7 @@
 import type { DynamicToolUIPart, UIMessage, UIMessageChunk } from "ai"
 
 import type { Event, History } from "@/client/forge/loomplane/types"
+import type { PageContext } from "@/lib/page-context"
 import { type Risk, riskOf } from "@/lib/risk"
 
 /** The fixed line a safety stop shows in place of the step's text. */
@@ -30,7 +31,10 @@ export type AgentEvent = {
 
 /** What a turn's messages carry besides their parts. */
 export type AgentMetadata = {
+  /** The turn's task; empty on a message not yet sent. */
   taskId: string
+  /** What the person was looking at when they sent it, on their message. */
+  context?: PageContext
   /** The turn's task status, on the agent's message. */
   status?: string
   /** Why the turn failed, when it did. */
@@ -395,6 +399,21 @@ function inputChunk(call: ToolCall): AgentChunk {
   }
 }
 
+/** contextOf reads the page a turn's message was sent from, as the
+ * server kept it, when it kept one. */
+function contextOf(turn: History["turns"][number]): { context?: PageContext } {
+  const c = (turn as { context?: unknown }).context
+  if (!c || typeof c !== "object") return {}
+  const { label, path, kind } = c as Record<string, unknown>
+  if (typeof label !== "string" || typeof path !== "string") return {}
+  return {
+    context: {
+      ...(c as PageContext),
+      kind: typeof kind === "string" ? (kind as PageContext["kind"]) : "page",
+    },
+  }
+}
+
 /** historyToMessages is a conversation's turns as useChat's messages: the
  * person's message, then the agent's turn on it. */
 export function historyToMessages(history: History): AgentMessage[] {
@@ -403,7 +422,7 @@ export function historyToMessages(history: History): AgentMessage[] {
       id: `user-${turn.taskId}`,
       role: "user",
       parts: [{ type: "text", text: turn.message }],
-      metadata: { taskId: turn.taskId },
+      metadata: { taskId: turn.taskId, ...contextOf(turn) },
     },
     {
       id: `agent-${turn.taskId}`,

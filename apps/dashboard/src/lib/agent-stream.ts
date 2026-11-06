@@ -16,6 +16,7 @@ import {
 } from "@/lib/agent-events"
 import { useAgent, useFeatures } from "@/lib/features"
 import { useOrganization } from "@/lib/organization"
+import type { PageContext } from "@/lib/page-context"
 
 /**
  * useAssistantAvailable says whether this person can talk to the agent: the
@@ -44,9 +45,16 @@ export type StreamEnd = { status: string; error?: string }
 /** How the transport reaches the API, and who hears what happened. */
 export type AgentChatHandlers = {
   /** start opens a conversation with its first message. */
-  start: (body: { message: string; projectId?: string }) => Promise<Sent>
+  start: (body: {
+    message: string
+    projectId?: string
+    context?: PageContext
+  }) => Promise<Sent>
   /** send adds a message to a conversation. */
-  send: (conversationId: string, body: { message: string }) => Promise<Sent>
+  send: (
+    conversationId: string,
+    body: { message: string; context?: PageContext }
+  ) => Promise<Sent>
   /** onSent hears of each message the server took, and its task. */
   onSent?: (sent: Sent) => void
   /** onEnd hears that a task's stream is over. */
@@ -60,6 +68,8 @@ export type AgentChatOptions = Partial<AgentChatHandlers> & {
   conversationId?: string
   /** The project a new conversation is about; none is the whole workspace. */
   projectId?: string
+  /** What the person is looking at, sent with each message. */
+  context?: PageContext
 }
 
 const terminal = new Set(["completed", "failed", "cancelled"])
@@ -96,6 +106,12 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
     this.options = { ...this.options, projectId }
   }
 
+  /** setContext sets what the person is looking at, for the next message;
+   * none sends no context. */
+  setContext(context: PageContext | undefined): void {
+    this.options = { ...this.options, context }
+  }
+
   /** resumeFrom records the turn a conversation was opened on, so
    * reconnectToStream can follow it if it's still running. */
   resumeFrom(turn: OpenTurn | undefined): void {
@@ -124,13 +140,14 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
         .map((p) => (p.type === "text" ? p.text : ""))
         .join("")
         .trim() ?? ""
-    const { conversationId, projectId, start, send } = this.options
+    const { conversationId, projectId, context, start, send } = this.options
     if (!start || !send) throw new Error("The assistant isn't ready yet.")
     const sent = conversationId
-      ? await send(conversationId, { message })
+      ? await send(conversationId, { message, ...(context ? { context } : {}) })
       : await start({
           message,
           ...(projectId ? { projectId } : {}),
+          ...(context ? { context } : {}),
         })
     this.options = { ...this.options, conversationId: sent.conversation.id }
     this.open = {

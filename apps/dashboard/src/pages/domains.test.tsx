@@ -76,6 +76,7 @@ vi.mock("@authsome/ui-react", () => ({
 }))
 vi.mock("@/components/shell", () => ({
   useShell: () => ({ openNewProject: () => {}, openShortcuts: () => {} }),
+  useAgentDock: () => null,
 }))
 vi.mock("@/lib/use-runs", () => ({ useRuns: () => ({ runs: [] }) }))
 

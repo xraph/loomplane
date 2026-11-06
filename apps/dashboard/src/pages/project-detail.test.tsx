@@ -15,6 +15,7 @@ vi.mock("@/lib/organization", () => ({
 }))
 vi.mock("@/components/shell", () => ({
   useShell: () => ({ openDeploy: () => undefined }),
+  useAgentDock: () => null,
 }))
 vi.mock("@/lib/use-runs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/use-runs")>()),

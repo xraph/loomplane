@@ -215,6 +215,7 @@ test("historyToMessages pairs each message with the agent's turn", () => {
       status: "failed",
       lastTaskId: "t1",
       turns: 1,
+      pinned: false,
       createdAt: "2026-11-03T10:00:00Z",
       updatedAt: "2026-11-03T10:00:00Z",
     },
