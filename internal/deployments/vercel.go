@@ -717,8 +717,8 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 }
 
 // Locate implements Locator. What a native binding names is one
-// environment of a project other environments share, so it says to delete
-// only that environment.
+// environment of a project other environments may share, so it says to
+// delete only that environment.
 func (v *Vercel) Locate(b *planning.Binding) string {
 	if b.Subject != planning.ServiceSubject || b.ExternalID == "" {
 		return ""
@@ -732,9 +732,9 @@ func (v *Vercel) Locate(b *planning.Binding) string {
 		return ""
 	}
 	if target.CustomID != "" {
-		return fmt.Sprintf("the custom environment %s of the Vercel project %s (other environments share the project, so delete only that environment, not the project)", target.CustomID, projectID)
+		return fmt.Sprintf("the custom environment %s of the Vercel project %s (other environments may share the project, so delete that environment, not the project)", target.CustomID, projectID)
 	}
-	return fmt.Sprintf("the %s environment of the Vercel project %s (other environments share the project, so delete only its %s deployments, not the project)", target.Builtin, projectID, target.Builtin)
+	return fmt.Sprintf("the %s environment of the Vercel project %s (other environments may share the project, so delete its %s deployments, not the project)", target.Builtin, projectID, target.Builtin)
 }
 
 // Observe implements Executor: the project, and which deployment its

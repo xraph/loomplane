@@ -327,9 +327,9 @@ func TestVercelNativeObserveReadsNewestReady(t *testing.T) {
 func TestVercelLocateNamesTheEnvironment(t *testing.T) {
 	v := &Vercel{}
 	for ref, want := range map[string]string{
-		"prj_1#env_9":      "the custom environment env_9 of the Vercel project prj_1 (other environments share the project, so delete only that environment, not the project)",
-		"prj_1#production": "the production environment of the Vercel project prj_1 (other environments share the project, so delete only its production deployments, not the project)",
-		"prj_1#preview":    "the preview environment of the Vercel project prj_1 (other environments share the project, so delete only its preview deployments, not the project)",
+		"prj_1#env_9":      "the custom environment env_9 of the Vercel project prj_1 (other environments may share the project, so delete that environment, not the project)",
+		"prj_1#production": "the production environment of the Vercel project prj_1 (other environments may share the project, so delete its production deployments, not the project)",
+		"prj_1#preview":    "the preview environment of the Vercel project prj_1 (other environments may share the project, so delete its preview deployments, not the project)",
 		"prj_old":          "the Vercel project prj_old",
 		"":                 "",
 	} {
