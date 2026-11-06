@@ -103,8 +103,8 @@ func TestHandler_assetLinks(t *testing.T) {
 		t.Fatalf("statement = %+v", s)
 	}
 
-	if rec := get(http.MethodPost); rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST got %d", rec.Code)
+	if post := get(http.MethodPost); post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST got %d", post.Code)
 	}
 	// The rest of /.well-known/ still belongs to the API.
 	rec = httptest.NewRecorder()

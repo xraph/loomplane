@@ -209,9 +209,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// on every extension before it.
 	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
 	exts = append(exts, console(exts))
-	dashboard := web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/").
+	site := web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/").
 		WithAndroidApp(cfg.Mobile.AndroidPackage, cfg.Mobile.AndroidCertFingerprints)
-	return append(exts, dashboard)
+	return append(exts, site)
 }
 
 // queues are the Dispatch queues this process works: the default and
