@@ -80,6 +80,7 @@ type Config struct {
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
 	Nodes         NodesConfig
+	Mobile        MobileConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -479,6 +480,10 @@ func Defaults() Config {
 		},
 		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
+		Mobile: MobileConfig{
+			AndroidPackage:          DefaultAndroidPackage,
+			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
+		},
 	}
 }
 
@@ -653,6 +658,14 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
 	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
+	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
+	// A list read appends, so a set value replaces the store app's keys
+	// rather than joining them.
+	var fingerprints []string
+	r.names(&fingerprints, "mobile.android_cert_fingerprints")
+	if len(fingerprints) > 0 {
+		c.Mobile.AndroidCertFingerprints = fingerprints
+	}
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -672,7 +685,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Mobile.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}

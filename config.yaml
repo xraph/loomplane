@@ -69,6 +69,14 @@ push:
   # gateway can reach the store app.
   gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
 
+# The Android app /.well-known/assetlinks.json vouches for, so links to this
+# server open in it. Empty means the store app. If you ship your own build,
+# set its package and its signing certificates' SHA-256 fingerprints
+# (comma-separated, as keytool prints them).
+mobile:
+  android_package: "${LOOMPLANE_MOBILE_ANDROID_PACKAGE:-}"
+  android_cert_fingerprints: "${LOOMPLANE_MOBILE_ANDROID_CERT_FINGERPRINTS:-}"
+
 nodes:
   # Where the other replicas of this Loomplane reach this one, for the hop
   # that carries a node's streams between replicas (/_/nodes/hop). Leave it

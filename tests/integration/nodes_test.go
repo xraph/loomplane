@@ -374,7 +374,9 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 		t.Skip("set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
 	}
 	loomctl := buildLoomctl(t, arch)
-	docker(t, "image", "inspect", nodesImage)
+	// A pull, not an inspect: Docker can keep a tag@digest pull under its
+	// digest alone, and then won't find it by this name.
+	docker(t, "pull", "-q", nodesImage)
 
 	// Replica A listens on every interface, so the container can reach it as
 	// host.docker.internal. Replica B only needs the host.
