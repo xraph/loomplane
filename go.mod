@@ -355,22 +355,3 @@ require (
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
 )
-
-// The witness modules come from the local witness worktree. These replace
-// lines come out when witness v0.2.0 is released.
-replace (
-	github.com/hallproof/witness => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters
-	github.com/hallproof/witness/authsome => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/authsome
-	github.com/hallproof/witness/chronicle => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/chronicle
-	github.com/hallproof/witness/cortex => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/cortex
-	github.com/hallproof/witness/dispatch => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/dispatch
-	github.com/hallproof/witness/forge => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/forge
-	github.com/hallproof/witness/grove => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/grove
-	github.com/hallproof/witness/keysmith => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/keysmith
-	github.com/hallproof/witness/nexus => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/nexus
-	github.com/hallproof/witness/relay => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/relay
-	github.com/hallproof/witness/shield => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/shield
-	github.com/hallproof/witness/trove => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/trove
-	github.com/hallproof/witness/vault => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/vault
-	github.com/hallproof/witness/warden => /Users/rexraphael/Work/hallproof/witness-worktrees/forge-adapters/warden
-)
