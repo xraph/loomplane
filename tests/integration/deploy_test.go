@@ -617,7 +617,12 @@ type fakeVercelDeploys struct {
 	projectID string
 	files     map[string]int
 	projects  map[string]map[string]any
-	env       map[string]any
+	// env is the latest value written for each key, whatever its target.
+	env map[string]any
+	// envRows are the project's variables, one per key and target, as
+	// Vercel keeps them.
+	envRows []map[string]any
+	rowSeq  int
 	// customEnvs are the project's custom environments, by slug.
 	customEnvs map[string]bool
 	deployed   []map[string]any
@@ -670,16 +675,76 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 		f.projects[prj["name"].(string)], f.projects[f.projectID] = prj, prj
 		reply(200, prj)
 	case r.Method == http.MethodPost && p == "/v10/projects/"+f.projectID+"/env":
-		var vars []map[string]any
-		_ = json.Unmarshal(body, &vars)
-		for _, v := range vars {
-			f.env[v["key"].(string)] = v["value"]
+		if r.URL.Query().Has("upsert") {
+			// Vercel's upsert matches by key alone and overwrites
+			// another target's row.
+			reply(400, map[string]any{"error": map[string]any{"code": "bad_request", "message": "this fake refuses upsert: it overwrites other targets' rows"}})
+			return
 		}
-		reply(200, map[string]any{})
+		var vars []map[string]any
+		if json.Unmarshal(body, &vars) != nil {
+			var one map[string]any
+			_ = json.Unmarshal(body, &one)
+			vars = []map[string]any{one}
+		}
+		created, failed := []any{}, []any{}
+		for _, v := range vars {
+			if f.envRowClash(v) {
+				failed = append(failed, map[string]any{"error": map[string]any{"code": "ENV_ALREADY_EXISTS", "key": v["key"], "message": "A variable with this name already exists for this target"}})
+				continue
+			}
+			f.rowSeq++
+			row := map[string]any{"id": fmt.Sprintf("env_row_%d", f.rowSeq)}
+			for _, k := range []string{"key", "value", "type", "target", "customEnvironmentIds"} {
+				if x, ok := v[k]; ok {
+					row[k] = x
+				}
+			}
+			f.envRows = append(f.envRows, row)
+			f.env[v["key"].(string)] = v["value"]
+			created = append(created, row)
+		}
+		reply(201, map[string]any{"created": created, "failed": failed})
 	case r.Method == http.MethodGet && p == "/v10/projects/"+f.projectID+"/env":
-		// Removing an environment lists its variables to delete them. The
-		// fake keeps values by name only, so there are no rows to delete.
-		reply(200, map[string]any{"envs": []any{}})
+		q := r.URL.Query()
+		envs := []any{}
+		for _, row := range f.envRows {
+			if t := q.Get("target"); t != "" && !slices.Contains(envList(row["target"]), t) {
+				continue
+			}
+			if c := q.Get("customEnvironmentId"); c != "" && !slices.Contains(envList(row["customEnvironmentIds"]), c) {
+				continue
+			}
+			listed := map[string]any{}
+			for k, x := range row {
+				if k != "value" {
+					listed[k] = x
+				}
+			}
+			envs = append(envs, listed)
+		}
+		reply(200, map[string]any{"envs": envs})
+	case (r.Method == http.MethodPatch || r.Method == http.MethodDelete) && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/env/"):
+		id := strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/env/")
+		i := slices.IndexFunc(f.envRows, func(row map[string]any) bool { return row["id"] == id })
+		if i < 0 {
+			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Variable not found"}})
+			return
+		}
+		if r.Method == http.MethodDelete {
+			f.envRows = slices.Delete(f.envRows, i, i+1)
+			reply(200, map[string]any{})
+			return
+		}
+		var patch map[string]any
+		_ = json.Unmarshal(body, &patch)
+		for k, x := range patch {
+			f.envRows[i][k] = x
+		}
+		if v, ok := patch["value"]; ok {
+			f.env[f.envRows[i]["key"].(string)] = v
+		}
+		reply(200, f.envRows[i])
 	case r.Method == http.MethodGet && p == "/v7/deployments":
 		// A native environment lists its target's deployments before it
 		// removes anything. This fake keeps none past the build.
@@ -748,6 +813,40 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Not found"}})
 	}
+}
+
+// envRowClash reports whether a row with v's key already holds one of
+// v's targets. Vercel refuses a second one without upsert.
+func (f *fakeVercelDeploys) envRowClash(v map[string]any) bool {
+	for _, row := range f.envRows {
+		if row["key"] != v["key"] {
+			continue
+		}
+		for _, k := range []string{"target", "customEnvironmentIds"} {
+			for _, t := range envList(v[k]) {
+				if slices.Contains(envList(row[k]), t) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// envList reads a decoded JSON list of strings.
+func envList(x any) []string {
+	var out []string
+	switch l := x.(type) {
+	case []any:
+		for _, v := range l {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+	case []string:
+		out = l
+	}
+	return out
 }
 
 const webAndAPIManifest = `version: 1

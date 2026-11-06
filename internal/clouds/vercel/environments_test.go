@@ -4,11 +4,107 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// envCall is one request a fake Vercel saw while variables were written.
+type envCall struct {
+	Method, Path string
+	Query        url.Values
+	Body         json.RawMessage
+}
+
+func (c envCall) String() string { return c.Method + " " + c.Path }
+
+// envAPI is a fake Vercel that lists list as the project's variables and
+// records every request. patch, when set, answers a PATCH instead of the
+// default success.
+type envAPI struct {
+	list  string
+	patch func(w http.ResponseWriter, r *http.Request) bool
+	calls []envCall
+}
+
+func (a *envAPI) serve(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		a.calls = append(a.calls, envCall{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), Body: body})
+		switch r.Method {
+		case http.MethodGet:
+			list := a.list
+			if list == "" {
+				list = `{"envs":[]}`
+			}
+			fmt.Fprint(w, list)
+		case http.MethodPatch:
+			if a.patch != nil && a.patch(w, r) {
+				return
+			}
+			fmt.Fprint(w, `{}`)
+		case http.MethodPost:
+			fmt.Fprint(w, `{"created":[],"failed":[]}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// only returns the calls with this method.
+func (a *envAPI) only(method string) []envCall {
+	var out []envCall
+	for _, c := range a.calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// noUpsert fails the test if any request asked Vercel to upsert: upsert
+// matches by key alone, so it overwrites another environment's row.
+func (a *envAPI) noUpsert(t *testing.T) {
+	t.Helper()
+	for _, c := range a.calls {
+		if c.Query.Has("upsert") {
+			t.Errorf("%s asked to upsert: %s", c, c.Query.Encode())
+		}
+	}
+}
+
+// items decodes a POST body, which is one item or a list of them.
+func items(t *testing.T, body json.RawMessage) []map[string]any {
+	t.Helper()
+	var many []map[string]any
+	if json.Unmarshal(body, &many) == nil {
+		return many
+	}
+	var one map[string]any
+	if err := json.Unmarshal(body, &one); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	return []map[string]any{one}
+}
+
+func object(t *testing.T, body json.RawMessage) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("body %s: %v", body, err)
+	}
+	return m
+}
 
 func TestSetEnvScopesToOneTarget(t *testing.T) {
 	for _, tc := range []struct {
@@ -21,21 +117,32 @@ func TestSetEnvScopesToOneTarget(t *testing.T) {
 		{"custom", Target{CustomID: "env_9"}, map[string]any{"customEnvironmentIds": []any{"env_9"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var got []map[string]any
-			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost || r.URL.Path != "/v10/projects/prj_1/env" {
-					t.Errorf("request: %s %s", r.Method, r.URL)
-				}
-				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-					t.Error(err)
-				}
-				fmt.Fprint(w, `{}`)
-			}))
-			defer api.Close()
-			err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj_1", tc.target,
+			a := &envAPI{}
+			srv := a.serve(t)
+			err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj_1", tc.target,
 				map[string]string{"A": "1", "S": "2"}, map[string]bool{"S": true})
-			if err != nil || len(got) != 2 {
-				t.Fatalf("SetEnv: %v, %d items", err, len(got))
+			if err != nil {
+				t.Fatalf("SetEnv: %v", err)
+			}
+			a.noUpsert(t)
+			for _, c := range a.calls {
+				if c.Method == http.MethodGet {
+					if c.Path != "/v10/projects/prj_1/env" || c.Query.Get("decrypt") == "true" {
+						t.Errorf("list: %s %s", c, c.Query.Encode())
+					}
+					continue
+				}
+				if c.Method != http.MethodPost || c.Path != "/v10/projects/prj_1/env" {
+					t.Errorf("request: %s", c)
+				}
+			}
+			posts := a.only(http.MethodPost)
+			if len(posts) != 1 {
+				t.Fatalf("%d creates, want one batch: %v", len(posts), a.calls)
+			}
+			got := items(t, posts[0].Body)
+			if len(got) != 2 {
+				t.Fatalf("%d items, want 2", len(got))
 			}
 			for _, item := range got {
 				for _, k := range []string{"target", "customEnvironmentIds"} {
@@ -56,6 +163,260 @@ func TestSetEnvScopesToOneTarget(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSetEnvNeverTouchesAnotherTargetsRow: production already has
+// DATABASE_URL. Writing staging's must leave that row alone and add a
+// row of its own, never upserting over production's by key.
+func TestSetEnvNeverTouchesAnotherTargetsRow(t *testing.T) {
+	a := &envAPI{list: `{"envs":[{"id":"p1","key":"DATABASE_URL","type":"encrypted","target":["production"]}]}`}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Target{CustomID: "env_9"},
+		map[string]string{"DATABASE_URL": "postgres://staging"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.noUpsert(t)
+	for _, c := range a.calls {
+		if (c.Method == http.MethodPatch || c.Method == http.MethodDelete) && strings.HasSuffix(c.Path, "/p1") {
+			t.Errorf("touched production's row: %s %s", c, c.Body)
+		}
+	}
+	if n := len(a.only(http.MethodPatch)) + len(a.only(http.MethodDelete)); n != 0 {
+		t.Errorf("%d updates or deletes: %v", n, a.calls)
+	}
+	posts := a.only(http.MethodPost)
+	if len(posts) != 1 || posts[0].Path != "/v10/projects/prj/env" {
+		t.Fatalf("creates: %v", posts)
+	}
+	got := items(t, posts[0].Body)
+	if len(got) != 1 {
+		t.Fatalf("items: %v", got)
+	}
+	item := got[0]
+	if item["key"] != "DATABASE_URL" || item["value"] != "postgres://staging" || !reflect.DeepEqual(item["customEnvironmentIds"], []any{"env_9"}) {
+		t.Errorf("item: %v", item)
+	}
+	if _, has := item["target"]; has {
+		t.Errorf("item has a target key: %v", item)
+	}
+}
+
+// TestSetEnvUpdatesItsOwnRowInPlace: a row for this target alone is
+// updated where it is.
+func TestSetEnvUpdatesItsOwnRowInPlace(t *testing.T) {
+	a := &envAPI{list: `{"envs":[
+		{"id":"p1","key":"DATABASE_URL","type":"encrypted","target":["production"]},
+		{"id":"e1","key":"DATABASE_URL","type":"encrypted","customEnvironmentIds":["env_9"]}]}`}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Target{CustomID: "env_9"},
+		map[string]string{"DATABASE_URL": "postgres://new"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.noUpsert(t)
+	if posts := a.only(http.MethodPost); len(posts) != 0 {
+		t.Errorf("created: %v", posts)
+	}
+	if dels := a.only(http.MethodDelete); len(dels) != 0 {
+		t.Errorf("deleted: %v", dels)
+	}
+	patches := a.only(http.MethodPatch)
+	if len(patches) != 1 || patches[0].Path != "/v9/projects/prj/env/e1" {
+		t.Fatalf("updates: %v", patches)
+	}
+	body := object(t, patches[0].Body)
+	if body["value"] != "postgres://new" || body["type"] != "encrypted" || !reflect.DeepEqual(body["customEnvironmentIds"], []any{"env_9"}) {
+		t.Errorf("update body: %v", body)
+	}
+	if _, has := body["target"]; has {
+		t.Errorf("update body has a target key: %v", body)
+	}
+}
+
+// TestSetEnvSplitsASharedRow: a row shared by production and preview
+// keeps production's value; preview gets a row of its own.
+func TestSetEnvSplitsASharedRow(t *testing.T) {
+	a := &envAPI{list: `{"envs":[{"id":"s1","key":"API_KEY","type":"encrypted","target":["production","preview"]}]}`}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview,
+		map[string]string{"API_KEY": "preview-key"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.noUpsert(t)
+	patches := a.only(http.MethodPatch)
+	if len(patches) != 1 || patches[0].Path != "/v9/projects/prj/env/s1" {
+		t.Fatalf("updates: %v", patches)
+	}
+	body := object(t, patches[0].Body)
+	if !reflect.DeepEqual(body, map[string]any{"target": []any{"production"}}) {
+		t.Errorf("shared row update = %v, want only target [production]", body)
+	}
+	posts := a.only(http.MethodPost)
+	if len(posts) != 1 {
+		t.Fatalf("creates: %v", posts)
+	}
+	got := items(t, posts[0].Body)
+	if len(got) != 1 || got[0]["key"] != "API_KEY" || got[0]["value"] != "preview-key" || !reflect.DeepEqual(got[0]["target"], []any{"preview"}) {
+		t.Errorf("created %v", got)
+	}
+	if _, has := got[0]["customEnvironmentIds"]; has {
+		t.Errorf("created row has customEnvironmentIds: %v", got[0])
+	}
+	// The shared row is narrowed before the new row is made, or Vercel
+	// would see two preview rows for one key.
+	var order []string
+	for _, c := range a.calls {
+		if c.Method != http.MethodGet {
+			order = append(order, c.Method)
+		}
+	}
+	if !reflect.DeepEqual(order, []string{http.MethodPatch, http.MethodPost}) {
+		t.Errorf("order %v", order)
+	}
+}
+
+// TestSetEnvSplitsACustomEnvironmentOutOfASharedRow: a row shared with
+// another custom environment loses only this one.
+func TestSetEnvSplitsACustomEnvironmentOutOfASharedRow(t *testing.T) {
+	a := &envAPI{list: `{"envs":[{"id":"s2","key":"API_KEY","type":"encrypted","target":["production"],"customEnvironmentIds":["env_8","env_9"]}]}`}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Target{CustomID: "env_9"},
+		map[string]string{"API_KEY": "staging-key"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patches := a.only(http.MethodPatch)
+	if len(patches) != 1 || patches[0].Path != "/v9/projects/prj/env/s2" {
+		t.Fatalf("updates: %v", patches)
+	}
+	if body := object(t, patches[0].Body); !reflect.DeepEqual(body, map[string]any{"customEnvironmentIds": []any{"env_8"}}) {
+		t.Errorf("shared row update = %v", body)
+	}
+	if posts := a.only(http.MethodPost); len(posts) != 1 {
+		t.Fatalf("creates: %v", posts)
+	}
+}
+
+// TestSetEnvLeavesBranchRowsAlone: a preview row for one git branch is
+// its own scope, not this target's row.
+func TestSetEnvLeavesBranchRowsAlone(t *testing.T) {
+	a := &envAPI{list: `{"envs":[{"id":"b1","key":"API_KEY","type":"encrypted","target":["preview"],"gitBranch":"feature-1"}]}`}
+	srv := a.serve(t)
+	if err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"API_KEY": "v"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(a.only(http.MethodPatch)) + len(a.only(http.MethodDelete)); n != 0 {
+		t.Errorf("touched the branch row: %v", a.calls)
+	}
+	if posts := a.only(http.MethodPost); len(posts) != 1 {
+		t.Fatalf("creates: %v", posts)
+	}
+}
+
+// TestSetEnvNeverWritesASecretIntoAPlainRow: a secret whose own row is
+// not sensitive gets a new sensitive row; its value is never sent to the
+// old one.
+func TestSetEnvNeverWritesASecretIntoAPlainRow(t *testing.T) {
+	a := &envAPI{list: `{"envs":[{"id":"e1","key":"TOKEN","type":"encrypted","target":["production"]}]}`}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Production,
+		map[string]string{"TOKEN": "s3cret"}, map[string]bool{"TOKEN": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patches := a.only(http.MethodPatch); len(patches) != 0 {
+		t.Errorf("sent the secret to a non-sensitive row: %v", patches)
+	}
+	dels := a.only(http.MethodDelete)
+	if len(dels) != 1 || dels[0].Path != "/v9/projects/prj/env/e1" {
+		t.Fatalf("deletes: %v", dels)
+	}
+	posts := a.only(http.MethodPost)
+	if len(posts) != 1 {
+		t.Fatalf("creates: %v", posts)
+	}
+	got := items(t, posts[0].Body)
+	if len(got) != 1 || got[0]["type"] != "sensitive" || got[0]["value"] != "s3cret" || !reflect.DeepEqual(got[0]["target"], []any{"production"}) {
+		t.Errorf("created %v", got)
+	}
+}
+
+// TestSetEnvRecreatesARowVercelWontRetype: when Vercel refuses to change
+// a row's type, the row is deleted and made again.
+func TestSetEnvRecreatesARowVercelWontRetype(t *testing.T) {
+	a := &envAPI{
+		list: `{"envs":[{"id":"e1","key":"TOKEN","type":"sensitive","target":["preview"]}]}`,
+		patch: func(w http.ResponseWriter, _ *http.Request) bool {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"code":"bad_request","message":"cannot change the type of a sensitive variable"}}`)
+			return true
+		},
+	}
+	srv := a.serve(t)
+	err := New(srv.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"TOKEN": "now-plain"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, c := range a.calls {
+		if c.Method != http.MethodGet {
+			order = append(order, c.String())
+		}
+	}
+	want := []string{"PATCH /v9/projects/prj/env/e1", "DELETE /v9/projects/prj/env/e1", "POST /v10/projects/prj/env"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("calls %v, want %v", order, want)
+	}
+	if got := items(t, a.only(http.MethodPost)[0].Body); got[0]["type"] != "encrypted" || !reflect.DeepEqual(got[0]["target"], []any{"preview"}) {
+		t.Errorf("created %v", got)
+	}
+}
+
+// TestSetEnvReportsFailedCreates: Vercel answers 201 even when some
+// variables weren't created, listing them as failed.
+func TestSetEnvReportsFailedCreates(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			fmt.Fprint(w, `{"envs":[]}`)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"created":[],"failed":[{"error":{"code":"ENV_ALREADY_EXISTS","message":"A variable with the name A already exists","key":"A"}}]}`)
+	}))
+	defer api.Close()
+	err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "1"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("SetEnv = %v, want the failed variable reported", err)
+	}
+}
+
+// TestSetEnvListsEveryPage: rows on a later page of the listing count.
+func TestSetEnvListsEveryPage(t *testing.T) {
+	var patched []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			if r.URL.Query().Get("until") == "" {
+				fmt.Fprint(w, `{"envs":[{"id":"x1","key":"OTHER","type":"encrypted","target":["preview"]}],"pagination":{"count":1,"next":42,"prev":null}}`)
+				return
+			}
+			fmt.Fprint(w, `{"envs":[{"id":"e1","key":"A","type":"encrypted","target":["preview"]}],"pagination":{"count":1,"next":null,"prev":42}}`)
+		case http.MethodPatch:
+			patched = append(patched, r.URL.Path)
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer api.Close()
+	if err := New(api.URL).SetEnv(t.Context(), Token{Value: "t"}, "prj", Preview, map[string]string{"A": "1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(patched, []string{"/v9/projects/prj/env/e1"}) {
+		t.Fatalf("patched %v", patched)
 	}
 }
 

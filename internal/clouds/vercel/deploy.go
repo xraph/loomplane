@@ -84,33 +84,6 @@ func (c *Client) EnsureProjectCreated(ctx context.Context, tok Token, name strin
 
 func same(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
 
-// SetEnv sets variables on one target of a project, replacing earlier
-// values of the same keys. Every value is encrypted; the secret ones are
-// sensitive too, so Vercel never shows them again.
-func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, t Target, env map[string]string, secret map[string]bool) error {
-	if err := t.check(); err != nil {
-		return err
-	}
-	if len(env) == 0 {
-		return nil
-	}
-	vars := make([]map[string]any, 0, len(env))
-	for k, v := range env {
-		kind := "encrypted"
-		if secret[k] {
-			kind = "sensitive"
-		}
-		item := t.envScope()
-		item["key"], item["value"], item["type"] = k, v, kind
-		vars = append(vars, item)
-	}
-	q := url.Values{"upsert": {"true"}}
-	if err := c.json(ctx, tok, http.MethodPost, "/v10/projects/"+url.PathEscape(projectID)+"/env", q, vars, nil); err != nil {
-		return fmt.Errorf("set the project's variables: %w", err)
-	}
-	return nil
-}
-
 // UploadFile uploads one file's content, named by its SHA-1. Vercel keeps
 // each content once, so uploading it again is harmless.
 func (c *Client) UploadFile(ctx context.Context, tok Token, sha string, data []byte) error {
