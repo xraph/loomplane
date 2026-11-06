@@ -1,40 +1,78 @@
 ---
 title: Talking to the agent
-description: Ask the workspace's agent questions in the Assistant, in the panel on any page, or from the terminal with loomctl agent.
+description: Ask the workspace's agent questions from the panel on any page, or from the terminal with loomctl agent.
 ---
 
-Once the agent is on for your workspace, you can talk to it. Open **Assistant** in the sidebar, press ⌘J (Ctrl+J elsewhere) from any page, or run `loomctl agent` in a terminal. You need `agent:use`, which every member has, and the agent works with your permissions, not its own. If it isn't on yet, start with [the built-in agent](/docs/agents/built-in-agent).
+Once the agent is on for your workspace, you can talk to it from any page. Press ⌘J (Ctrl+J elsewhere), click **Ask the agent** in the top bar, or click **Assistant** in the sidebar. In a terminal, run `loomctl agent`. You need `agent:use`, which every member has, and the agent works with your permissions, not its own. If it isn't on yet, start with [the built-in agent](/docs/agents/built-in-agent).
 
-Ask it things like "why did the last deployment of api fail?" or "what runs in production for shop?". It reads live state with its tools and asks before anything risky.
+Ask it things like "why did the last deployment of api fail?" or "what's the latest commit and release of shop?". It reads live state with its tools, links what it mentions, and asks before anything risky.
 
-## The Assistant page
+## The panel
 
-Your conversations sit on the left (a menu on a phone) and the open one on the right. Type in the box and send. The answer streams in as the agent writes it, and each tool it uses shows up as a step between the words.
+The agent lives in a panel beside your work, so you never leave the page you're on. ⌘J opens it and closes it again, and the command menu has it as **Ask the agent**. The panel can sit in three places, picked from the layout button in its header:
 
-A new conversation is about the whole workspace unless you start it with a project in the address (`/assistant?project=<id>`). The header says which: "About the whole workspace" or "In" and the project's name. The scope is fixed when the conversation starts. To change it, start a new conversation.
+| Place | What you get |
+|---|---|
+| Docked | On the right, beside the page. Drag its left edge to make it wider or narrower (the arrow keys work too, once the edge has focus), and double-click the edge to put it back. The page scrolls in its own column. |
+| Floating | Over the page, in the bottom right corner. |
+| Full width | Takes the page's place, with your conversations in a column beside the chat. The expand button in the header gets you here and back. |
 
-While the agent is answering, **Stop** cancels the task. One message is answered at a time. If you send another before it finishes, the server says no with "The agent is still on your last message. Wait for it to finish, answer what it asked, or stop it." The same message comes back from the API as a 409.
+On a phone the panel covers the screen. Whatever you pick, Loomplane remembers it in your browser, along with the width, whether the panel was open, and the conversation you had open, so a reload puts you back where you were. If you close the panel while the agent is still answering, the answer keeps coming in, and it's there when you open the panel again.
 
-## The panel and ⌘J
+Old links to `/assistant` still work. They open the panel at full width, on the conversation the link names.
 
-The panel is the same conversation in a slide-over, so you don't leave the page you're on. ⌘J opens it and closes it again. The command menu has it too, as **Ask the agent**.
+The orb in the panel's header changes with what the agent is doing. It turns slowly when the agent is idle, faster while you type and faster again while the agent works out an answer. A ring goes round it while a tool runs, it pulses while the answer streams in, it turns amber when the agent is waiting on you, and it goes red and stops when a turn failed.
 
-Opened from a project page, the panel is scoped to that project and says so. **Ask about the whole workspace** drops the scope before you send your first message. **New conversation** starts over, and **Open in Assistant** carries the conversation to the full page.
+## What a message is about
+
+Above the box, two chips say what you're asking about.
+
+The first is the conversation's scope: a project, or the whole workspace. A new conversation starts on the project of the page you're on, and you can pick another one, or the whole workspace, before you send. After the first message the scope is fixed, and the chip shows it. To change it, start a new conversation.
+
+The second is the page you're looking at, such as "Service web in api, production" or "Deployment plan_42". It goes with your message, so "why is this slow?" on a service's page is about that service, and the agent reads that service before it answers. Click the × to leave the page out of a message; it stays out until you move to another page, and the dashed chip puts it back. The page only goes along when it fits the scope: a page from another project doesn't. Each message you sent shows the page it came from, as a small link above it.
+
+The suggestions on a new conversation follow the page too. On a service you get questions about that service, on a deployment questions about that deployment.
+
+Enter sends and Shift+Enter starts a new line. Up in an empty box brings back the last message you sent. One message is answered at a time: while the agent is on one, the box is off and its button is **Stop**, which cancels the task. If a message goes in anyway (from another tab, say), the server says no with "The agent is still on your last message. Wait for it to finish, answer what it asked, or stop it." The same message comes back from the API as a 409.
+
+## Your conversations
+
+The clock button in the panel's header opens your conversations. You can search them by title or project, filter by **Needs you**, **Working** or **Failed** and by project, and group them by project or by date (the button beside the search switches between the two). Each group folds away.
+
+Hover a conversation to pin it, or open its menu to rename or delete it. Pinned conversations sit at the top, in every browser you sign in from. Deleting one takes it out of your list for good, and stops the agent if it's still working on it. Only the person who started a conversation can pin, rename or delete it.
+
+## What answers look like
+
+The agent writes Markdown, and the panel renders a few things beyond plain text:
+
+- Code comes in blocks with the language named, colours for the common ones (shell, YAML, JSON, Go, HCL, Dockerfile, SQL and a few more) and a copy button.
+- Tables put a status word such as **Failed** or **Live** beside a coloured dot, line numbers up on the right, and copy as CSV.
+- Links to Loomplane pages stay in the workspace and show what kind of page they open. Links to commits, releases and repositories open in a new tab.
+- Figures can come as headline tiles, as a chart (bar, horizontal bar, stacked, line or area), or as a timeline of releases. Every chart opens as a table too, and copies as CSV.
+- A note, tip or warning comes as a coloured callout.
+
+The agent only charts numbers its tools gave it. If a chart it wrote can't be drawn, the panel shows what it wrote instead, and says so.
 
 ## Steps and how risky they are
 
-Every tool the agent calls shows as a step with a label for how risky it is. There are six, one for each class on [What needs a person](/docs/agents/what-needs-a-person#the-risk-table).
+Each tool the agent uses shows as one quiet line between the words, such as "Listed deployments" or "Checked the repositories". Steps taken back to back fold into one line that says what they did and how many there were, and it stays open while the agent is on it. Click a line to see the tool, its arguments and what it returned.
+
+A step that's more than a read carries a label for how risky it is. There are six, one for each class on [What needs a person](/docs/agents/what-needs-a-person#the-risk-table).
 
 | Label | Class | Meaning |
 |---|---|---|
-| Read | `read` | It looked at something |
+| Read | `read` | It looked at something (no label on the line) |
 | Change | `change` | It changed something within your permissions |
 | Deploy, not production | `deploy_nonproduction` | It approved a staging, preview or development plan |
 | Production release | `promote_production` | A production release, which a person approves |
 | Removes production data | `destroy_production` | Deleting or replacing something in production that holds data, always a person |
 | Needs a person | `secret_or_external` | A secret or an outside connection, always a person |
 
-A step that never got a result shows "No result". A turn you stopped says "Stopped."
+A step that failed says so, a step that was refused says "refused", and a step that never got a result says "no result". A turn you stopped says "Stopped."
+
+## Commits and releases
+
+Ask the agent what a repository is on and it reads the repository's host: the head of the branch the project tracks (or the default branch), the latest release (or the newest tag, on Bitbucket, which has no releases), and the commit each environment runs, with links to all three. It works for GitHub, GitLab (self-managed too) and Bitbucket, through the same connections your deployments use. A repository the host won't show is reported as such, and the others still answer.
 
 ## When the agent asks you something
 
@@ -52,7 +90,7 @@ A conversation is private to the person who started it, with one exception.
 
 Someone with `ai:manage`, which admins have, can read everyone's conversations in the workspace, for support and for audit. The API lists them with `GET /api/v1/agent/conversations?everyone=true`. Anyone else asking for a conversation that isn't theirs is told it doesn't exist.
 
-Only the person who started a conversation can add to it. An admin can read it and stop its running task, and can't post in it. If you want to carry on from someone else's thread, start your own.
+Only the person who started a conversation can add to it, rename it, pin it or delete it. An admin can read it and stop its running task, and can't post in it. If you want to carry on from someone else's thread, start your own.
 
 A message is up to 16,000 characters.
 
@@ -77,7 +115,7 @@ At the `you>` prompt, type a message and press Enter. Text streams back, and eac
 
 A question from the agent shows at an `answer>` prompt with numbered options. Type a number or your own words. An empty line leaves it pending, and you can answer later with `loomctl agent requests answer <id> <text>`. Ctrl-C stops the task.
 
-`loomctl agent conversations [--project <ref>] [--json]` lists yours.
+`loomctl agent conversations [--project <ref>] [--json]` lists yours. `loomctl agent conversations rename <id> <title>` renames one and `loomctl agent conversations delete <id>` deletes it, stopping the agent if it's still on it.
 
 ### One question, in a script
 
