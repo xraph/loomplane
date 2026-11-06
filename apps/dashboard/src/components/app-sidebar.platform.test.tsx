@@ -103,3 +103,17 @@ it("hides Platform Cloud from everyone else", async () => {
   await screen.findByRole("menuitem", { name: "Integrations" })
   expect(screen.queryByRole("menuitem", { name: "Platform Cloud" })).toBeNull()
 })
+
+it("shows Flagged answers to a platform admin", async () => {
+  show(true)
+  await userEvent.click(screen.getByText("Settings"))
+  const link = await screen.findByRole("menuitem", { name: "Flagged answers" })
+  expect(link).toHaveAttribute("href", "/platform/flags")
+})
+
+it("hides Flagged answers from everyone else", async () => {
+  show(false)
+  await userEvent.click(screen.getByText("Settings"))
+  await screen.findByRole("menuitem", { name: "Integrations" })
+  expect(screen.queryByRole("menuitem", { name: "Flagged answers" })).toBeNull()
+})

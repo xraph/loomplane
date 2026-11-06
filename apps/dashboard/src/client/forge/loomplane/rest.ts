@@ -72,6 +72,25 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Report one of the agent's answers to whoever runs this Loomplane
+     * Anyone who may read the conversation reports a finished answer, the turn of task, with a reason (offensive, harmful, inaccurate or other) and a note of up to 1000 characters. The report keeps the question and the answer as they are now, and only the server's owner reads it. Reporting the same answer again changes your report's reason and note.
+     */
+    flag: async (id: string, task: string, body: types.FlagInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Flag> => {
+      let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}/turns/${encodeURIComponent(String(task))}/flag`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FlagInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Flag"],
+      };
+
+      return this.request<types.Flag>(config);
+    },
+
+    /**
      * A page of a conversation's turns, each with its run's events
      * The person who started it and those who manage the workspace's AI may read it. Stream a turn that's still running with after set to its event_seq.
      */
@@ -6356,6 +6375,51 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Soak>(config);
+    },
+
+  };
+
+  public readonly platformAgentFlags = {
+    /**
+     * Dismiss a report once you've looked at it
+     * Dismissing it again keeps the first dismissal.
+     */
+    dismiss: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Flag> => {
+      let __path = `/api/v1/platform/agent/flags/${encodeURIComponent(String(id))}/dismiss`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Flag"],
+      };
+
+      return this.request<types.Flag>(config);
+    },
+
+    /**
+     * The agent answers people reported, in every workspace, the newest first
+     * Open reports by default; status=dismissed or status=all for the others. At most 500.
+     */
+    list: async (status?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FlagList> => {
+      let __path = `/api/v1/platform/agent/flags`;
+      const queryParams: Record<string, any> = {};
+      if (status !== undefined) {
+        queryParams['status'] = status;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FlagList"],
+      };
+
+      return this.request<types.FlagList>(config);
     },
 
   };

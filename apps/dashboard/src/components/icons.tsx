@@ -35,4 +35,5 @@ export {
   SparkleIcon as AISettingsIcon,
   SignInIcon as CloudSignInIcon,
   CloudArrowUpIcon as PlatformCloudIcon,
+  FlagIcon as FlaggedAnswersIcon,
 } from "@phosphor-icons/react"
