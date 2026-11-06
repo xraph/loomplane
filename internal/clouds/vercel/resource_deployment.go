@@ -11,7 +11,7 @@ import (
 // VerifyRuntimeResourceIsolation refuses project-level variables with the same
 // names as resource runtime inputs, since project variables reach builds. It
 // reads metadata without requesting plaintext values or changing foreign vars.
-func (c *Client) VerifyRuntimeResourceIsolation(ctx context.Context, tok Token, projectID string, keys []string) error {
+func (c *Client) VerifyRuntimeResourceIsolation(ctx context.Context, tok Token, projectID string, t Target, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -24,7 +24,7 @@ func (c *Client) VerifyRuntimeResourceIsolation(ctx context.Context, tok Token, 
 			Target []string `json:"target"`
 		} `json:"envs"`
 	}
-	if err := c.resourceJSON(ctx, tok, http.MethodGet, "/v10/projects/"+url.PathEscape(projectID)+"/env", url.Values{"target": {"production"}}, nil, &out); err != nil {
+	if err := c.resourceJSON(ctx, tok, http.MethodGet, "/v10/projects/"+url.PathEscape(projectID)+"/env", t.listQuery(), nil, &out); err != nil {
 		return err
 	}
 	if out.Envs == nil {
@@ -61,12 +61,13 @@ func (c *Client) VerifyResourceProject(ctx context.Context, tok Token, projectID
 // request fields as the official Vercel CLI. Resource application credentials
 // belong only to runtimeEnv, while buildEnv contains explicitly supplied build
 // inputs. Neither environment is persisted as project configuration here.
-func (c *Client) CreateDeploymentWithRuntimeEnv(ctx context.Context, tok Token, project *Project, files []File, meta, runtimeEnv, buildEnv map[string]string) (*Deployment, error) {
+func (c *Client) CreateDeploymentWithRuntimeEnv(ctx context.Context, tok Token, project *Project, t Target, files []File, meta, runtimeEnv, buildEnv map[string]string) (*Deployment, error) {
 	body := map[string]any{
-		"name": project.Name, "project": project.ID, "target": "production", "files": files, "meta": meta,
+		"name": project.Name, "project": project.ID, "files": files, "meta": meta,
 		"projectSettings": map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory},
 		"env":             runtimeEnv, "build": map[string]any{"env": buildEnv},
 	}
+	t.deployTarget(body)
 	var d Deployment
 	err := c.json(ctx, tok, http.MethodPost, "/v13/deployments", url.Values{"skipAutoDetectionConfirmation": {"1"}}, body, &d)
 	var ae *APIError

@@ -142,12 +142,12 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
 		if checkErr := v.Client.VerifyResourceProject(ctx, tok, project.ID, owner); checkErr != nil {
 			return nil, checkErr
 		}
-		if checkErr := v.Client.VerifyRuntimeResourceIsolation(ctx, tok, project.ID, resourceKeys); checkErr != nil {
+		if checkErr := v.Client.VerifyRuntimeResourceIsolation(ctx, tok, project.ID, vercel.Production, resourceKeys); checkErr != nil {
 			return nil, checkErr
 		}
 	}
 	_, buildEnv, buildSecrets := vercelDeploymentEnvironments(job)
-	if serr := v.Client.SetEnv(ctx, tok, project.ID, buildEnv, buildSecrets); serr != nil {
+	if serr := v.Client.SetEnv(ctx, tok, project.ID, vercel.Production, buildEnv, buildSecrets); serr != nil {
 		return nil, serr
 	}
 	if state.DeploymentID == "" {
@@ -187,7 +187,7 @@ func (v *Vercel) deploy(ctx context.Context, tok vercel.Token, job *Job, project
 		return "", err
 	}
 	runtimeEnv, buildEnv, _ := vercelDeploymentEnvironments(job)
-	d, err := v.Client.CreateDeploymentWithRuntimeEnv(ctx, tok, project, files, map[string]string{
+	d, err := v.Client.CreateDeploymentWithRuntimeEnv(ctx, tok, project, vercel.Production, files, map[string]string{
 		"githubCommitSha": job.CommitSHA, "loomplanePlan": job.Plan.ID,
 	}, runtimeEnv, buildEnv)
 	if err != nil {

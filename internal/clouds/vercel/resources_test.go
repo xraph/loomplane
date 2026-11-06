@@ -191,7 +191,7 @@ func TestResourceRuntimeIsolationRefusesMatchingProjectVariable(t *testing.T) {
 	c := resourceClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"envs":[{"key":"DATABASE_URL","target":["production"]}]}`)
 	})
-	if err := c.VerifyRuntimeResourceIsolation(context.Background(), resourceToken, "prj_app", []string{"DATABASE_URL"}); err == nil {
+	if err := c.VerifyRuntimeResourceIsolation(context.Background(), resourceToken, "prj_app", Production, []string{"DATABASE_URL"}); err == nil {
 		t.Fatal("resource credential already persisted in project settings was accepted")
 	}
 }
@@ -330,7 +330,7 @@ func TestResourceDeploymentUsesSeparateRuntimeAndBuildEnvironment(t *testing.T) 
 		}
 		fmt.Fprint(w, `{"id":"dpl_app"}`)
 	})
-	_, err := c.CreateDeploymentWithRuntimeEnv(context.Background(), resourceToken, &Project{ID: "prj_app", Name: "app"}, nil, nil, map[string]string{"DATABASE_URL": "app-secret"}, map[string]string{"NPM_TOKEN": "build-secret"})
+	_, err := c.CreateDeploymentWithRuntimeEnv(context.Background(), resourceToken, &Project{ID: "prj_app", Name: "app"}, Production, nil, nil, map[string]string{"DATABASE_URL": "app-secret"}, map[string]string{"NPM_TOKEN": "build-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
