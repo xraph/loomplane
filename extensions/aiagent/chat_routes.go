@@ -26,6 +26,7 @@ type chatAPI interface {
 	History(ctx context.Context, p security.Principal, id string, q agentchat.HistoryQuery) (*agentchat.History, error)
 	Update(ctx context.Context, p security.Principal, id string, in agentchat.ConversationUpdate) (*agentchat.Conversation, error)
 	Delete(ctx context.Context, p security.Principal, id string) error
+	Flag(ctx context.Context, p security.Principal, id, taskID string, in agentchat.FlagInput) (*agentchat.Flag, error)
 }
 
 // tasksAPI is what the task routes ask of the run driver.
@@ -156,6 +157,19 @@ func mountChatRoutes(r forge.Router, guard identity.Guard, binder *agentscope.Bi
 			forge.WithRequestSchema(agentchat.SendInput{}),
 			sent("The conversation and the task the message started"),
 		),
+		g.POST("/agent/conversations/:id/turns/:task/flag", h.flag,
+			forge.WithName("agentConversations.flag"),
+			forge.WithSummary("Report one of the agent's answers to whoever runs this Loomplane"),
+			forge.WithDescription("Anyone who may read the conversation reports a finished answer, the turn of task, "+
+				"with a reason (offensive, harmful, inaccurate or other) and a note of up to 1000 characters. "+
+				"The report keeps the question and the answer as they are now, and only the server's owner reads it. "+
+				"Reporting the same answer again changes your report's reason and note."),
+			forge.WithRequestSchema(agentchat.FlagInput{}),
+			forge.WithResponseSchema(http.StatusOK, "Your report", agentchat.Flag{}),
+			forge.WithResponseSchema(http.StatusNotFound, "No such conversation or turn you may read", nil),
+			forge.WithResponseSchema(http.StatusConflict, "The agent hasn't finished the answer", nil),
+			forge.WithResponseSchema(http.StatusUnprocessableEntity, "The reason or note isn't one the report takes", nil),
+		),
 		g.GET("/agent/tasks/:id", h.getTask,
 			forge.WithName("agentTasks.get"),
 			forge.WithSummary("One of the agent's tasks"),
@@ -285,6 +299,22 @@ func (h chatHandlers) remove(c forge.Context) error {
 		return chatFail(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (h chatHandlers) flag(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in agentchat.FlagInput
+	if berr := c.BindJSON(&in); berr != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"reason": "inaccurate", "note": "what's wrong"}`)
+	}
+	f, err := h.chat.Flag(c.Request().Context(), p, c.Param("id"), c.Param("task"), in)
+	if err != nil {
+		return chatFail(err)
+	}
+	return c.JSON(http.StatusOK, f)
 }
 
 func (h chatHandlers) getTask(c forge.Context) error {
@@ -437,9 +467,10 @@ func limitOf(c forge.Context, msg string) (int, error) {
 }
 
 // chatFail maps the conversations' and the tasks' errors to a status: not
-// found 404, an invalid message 422, an invalid change 400, someone else's
-// conversation 403, and busy, sending, the agent off, out of budget or a
-// task already finished 409, each with its own message. The agent's other
+// found 404 (a flag too), an invalid message or flag 422, an invalid
+// change 400, someone else's conversation 403, and busy, sending, the
+// agent off, out of budget, a task already finished or an answer not yet
+// finished 409, each with its own message. The agent's other
 // errors and the permission errors go through fail.
 func chatFail(err error) error {
 	for _, m := range []struct {
@@ -447,11 +478,13 @@ func chatFail(err error) error {
 		status int
 	}{
 		{agentchat.ErrNotFound, http.StatusNotFound},
+		{agentchat.ErrFlagNotFound, http.StatusNotFound},
 		{agentruns.ErrNotFound, http.StatusNotFound},
 		{agentchat.ErrNotYours, http.StatusForbidden},
 		{agentchat.ErrNotYoursToChange, http.StatusForbidden},
 		{agentchat.ErrBusy, http.StatusConflict},
 		{agentchat.ErrSending, http.StatusConflict},
+		{agentchat.ErrUnfinished, http.StatusConflict},
 		{agentsettings.ErrDisabled, http.StatusConflict},
 		{agentsettings.ErrBudgetExhausted, http.StatusConflict},
 		{agentruns.ErrNotCancelable, http.StatusConflict},
@@ -464,7 +497,7 @@ func chatFail(err error) error {
 		// The wrapped text says what to fix.
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if errors.Is(err, agentchat.ErrInvalid) || errors.Is(err, agentruns.ErrInvalid) {
+	if errors.Is(err, agentchat.ErrInvalid) || errors.Is(err, agentchat.ErrBadFlag) || errors.Is(err, agentruns.ErrInvalid) {
 		// The wrapped text says what's wrong with it.
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	}

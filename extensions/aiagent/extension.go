@@ -180,8 +180,9 @@ func (e *Extension) knowledgeOn(ctx context.Context, orgID string) bool {
 // nexus and the guardrail seeder to them, so a workspace can turn the
 // agent on. It provides the scope binder, the scanner, the runs, the
 // conversations and knowledge, and serves the agent's status, each
-// project's autonomy, its requests, and the conversations and their tasks.
-// It builds and provides the agent's reports.
+// project's autonomy, its requests, and the conversations and their tasks,
+// and to the platform owner alone the answers people reported. It builds
+// and provides the agent's reports.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -201,6 +202,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	guard, err := forge.InjectType[identity.Guard](c)
 	if err != nil {
 		return fmt.Errorf("the agent needs the identity extension's guard: %w", err)
+	}
+	isOwner, err := forge.InjectType[identity.PlatformOwner](c)
+	if err != nil {
+		return fmt.Errorf("the agent needs the identity extension's platform-owner check: %w", err)
 	}
 	if e.nexus.Gateway() == nil || e.shield.Engine() == nil || e.cortex.Engine() == nil {
 		return errors.New("the agent needs nexus, shield and cortex to have registered first")
@@ -247,7 +252,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	if routesErr := mountRequestRoutes(fapp.Router(), guard, e.binder, e.requests); routesErr != nil {
 		return routesErr
 	}
-	return mountChatRoutes(fapp.Router(), guard, e.binder, chat, e.runs)
+	if routesErr := mountChatRoutes(fapp.Router(), guard, e.binder, chat, e.runs); routesErr != nil {
+		return routesErr
+	}
+	return mountPlatformFlagRoutes(fapp.Router(), guard, isOwner, chat)
 }
 
 // registerChat builds people's conversations with the agent over the run

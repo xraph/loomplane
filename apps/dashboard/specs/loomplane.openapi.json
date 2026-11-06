@@ -280,6 +280,68 @@
         }
       }
     },
+    "/api/v1/agent/conversations/{id}/turns/{task}/flag": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Report one of the agent's answers to whoever runs this Loomplane",
+        "description": "Anyone who may read the conversation reports a finished answer, the turn of task, with a reason (offensive, harmful, inaccurate or other) and a note of up to 1000 characters. The report keeps the question and the answer as they are now, and only the server's owner reads it. Reporting the same answer again changes your report's reason and note.",
+        "operationId": "agentConversations.flag",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task",
+            "in": "path",
+            "description": "Path parameter: task",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlagInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Your report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flag"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such conversation or turn you may read"
+          },
+          "409": {
+            "description": "The agent hasn't finished the answer"
+          },
+          "422": {
+            "description": "The reason or note isn't one the report takes"
+          }
+        }
+      }
+    },
     "/api/v1/agent/reports": {
       "get": {
         "tags": [
@@ -26886,6 +26948,85 @@
             "$ref": "#/components/schemas/Result"
           },
           "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Flag": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "conversation_id",
+          "task_id",
+          "reported_by",
+          "reason",
+          "note",
+          "question",
+          "answer",
+          "created_at",
+          "updated_at",
+          "dismissed_by"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dismissed_at": {
+            "type": "string"
+          },
+          "dismissed_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "note": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reported_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "FlagInputBody": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "reason": {
             "type": "string"
           }
         }

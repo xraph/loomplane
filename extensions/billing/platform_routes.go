@@ -22,7 +22,6 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/billing"
 	"github.com/xraph/loomplane/internal/platformadmin"
-	"github.com/xraph/loomplane/internal/security"
 )
 
 // platformBase is where the platform owner's billing admin lives.
@@ -76,18 +75,18 @@ func (a chronicleAuditor) Record(ctx context.Context, action, userID, resource, 
 }
 
 type platformRoutes struct {
-	svc     platformService
-	isOwner identity.PlatformOwner
-	audit   auditor
+	svc   platformService
+	audit auditor
 }
 
 // mountPlatformRoutes serves the platform owner's billing admin. Every
 // route checks, on the server, that the caller is the platform owner
-// signed in themselves; anyone else, a platform admin included, gets the
-// 404 an unknown route would. None of them is in the OpenAPI spec.
+// signed in themselves (identity.OwnerOnly); anyone else, a platform
+// admin included, gets the 404 an unknown route would. None of them is in
+// the OpenAPI spec.
 func mountPlatformRoutes(router forge.Router, guard identity.Guard, isOwner identity.PlatformOwner, svc platformService, audit auditor) error {
-	r := &platformRoutes{svc: svc, isOwner: isOwner, audit: audit}
-	g := router.Group(platformBase, forge.WithGroupMiddleware(r.ownerOnly(guard)...), forge.WithGroupSchemaExclude())
+	r := &platformRoutes{svc: svc, audit: audit}
+	g := router.Group(platformBase, forge.WithGroupMiddleware(identity.OwnerOnly(guard, isOwner)...), forge.WithGroupSchemaExclude())
 	for _, rt := range []struct {
 		method, path, name string
 		h                  forge.Handler
@@ -116,54 +115,6 @@ func mountPlatformRoutes(router forge.Router, guard identity.Guard, isOwner iden
 		}
 	}
 	return nil
-}
-
-// ownerKey carries the platform owner the gate found to the handlers.
-type ownerKey struct{}
-
-func ownerID(c forge.Context) string {
-	id, ok := c.Request().Context().Value(ownerKey{}).(string)
-	if !ok {
-		return ""
-	}
-	return id
-}
-
-var errHidden = forge.NewHTTPError(http.StatusNotFound, "not found")
-
-// ownerOnly is the routes' middleware: the guard, then the gate that lets
-// only the platform owner through. Anyone else gets the 404 an unknown
-// route would, an anonymous caller included, so the routes' existence
-// isn't given away. The owner comes from the session alone: an API key,
-// the AI agent or anything acting for the owner never passes, nor does a
-// platform admin who isn't the owner.
-func (r *platformRoutes) ownerOnly(guard identity.Guard) []forge.Middleware {
-	hide := func(next forge.Handler) forge.Handler {
-		return func(c forge.Context) error {
-			err := next(c)
-			var status interface{ StatusCode() int }
-			if errors.As(err, &status) && (status.StatusCode() == http.StatusUnauthorized || status.StatusCode() == http.StatusForbidden) {
-				return errHidden
-			}
-			return err
-		}
-	}
-	gate := func(next forge.Handler) forge.Handler {
-		return func(c forge.Context) error {
-			ctx := c.Request().Context()
-			p, ok := security.PrincipalFrom(ctx)
-			if !ok || p.KeyID != "" || p.Kind != "" || p.ReadOnly || p.OnBehalfOf != nil {
-				return errHidden
-			}
-			userID, ok := r.isOwner(ctx)
-			if !ok || userID == "" {
-				return errHidden
-			}
-			c.WithContext(context.WithValue(ctx, ownerKey{}, userID))
-			return next(c)
-		}
-	}
-	return slices.Concat([]forge.Middleware{hide}, guard, []forge.Middleware{gate})
 }
 
 // What the platform owner reads when a change is refused.
@@ -303,12 +254,12 @@ func (r *platformRoutes) setRate(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgRate)
 	}
 	ctx := c.Request().Context()
-	previous, err := r.svc.SetRate(ctx, feature, micro, ownerID(c))
+	previous, err := r.svc.SetRate(ctx, feature, micro, identity.OwnerID(c))
 	meta := map[string]string{"feature": feature, "new_micro_usd": strconv.FormatInt(micro, 10)}
 	if err == nil {
 		meta["old_micro_usd"] = strconv.FormatInt(previous, 10)
 	}
-	r.audit.Record(ctx, "billing.rate.set", ownerID(c), "billing_rate", feature, outcome(err), meta)
+	r.audit.Record(ctx, "billing.rate.set", identity.OwnerID(c), "billing_rate", feature, outcome(err), meta)
 	if err != nil {
 		return platformFail(ctx, err)
 	}
@@ -410,8 +361,8 @@ func (r *platformRoutes) credit(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgCredit)
 	}
 	ctx := c.Request().Context()
-	err := r.svc.GrantCredit(ctx, org, cents, note, ownerID(c))
-	r.audit.Record(ctx, "billing.credit.grant", ownerID(c), "workspace", org, outcome(err), map[string]string{
+	err := r.svc.GrantCredit(ctx, org, cents, note, identity.OwnerID(c))
+	r.audit.Record(ctx, "billing.credit.grant", identity.OwnerID(c), "workspace", org, outcome(err), map[string]string{
 		"cents": strconv.FormatInt(cents, 10),
 		"note":  note,
 	})
@@ -448,7 +399,7 @@ func (r *platformRoutes) refund(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, msgRefund)
 	}
 	ctx := c.Request().Context()
-	res, err := r.svc.Refund(ctx, invoiceID, cents, body.RefundKey, ownerID(c))
+	res, err := r.svc.Refund(ctx, invoiceID, cents, body.RefundKey, identity.OwnerID(c))
 	amount := "rest"
 	if cents != nil {
 		amount = strconv.FormatInt(*cents, 10)
@@ -460,7 +411,7 @@ func (r *platformRoutes) refund(c forge.Context) error {
 	case err == nil && res.Replay:
 		result = outcomeNoChange
 	}
-	r.audit.Record(ctx, "billing.invoice.refund", ownerID(c), "invoice", invoiceID, result, map[string]string{
+	r.audit.Record(ctx, "billing.invoice.refund", identity.OwnerID(c), "invoice", invoiceID, result, map[string]string{
 		"cents":  amount,
 		"full":   strconv.FormatBool(res.Full),
 		"replay": strconv.FormatBool(res.Replay),
@@ -500,8 +451,8 @@ func (r *platformRoutes) settleRefund(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusNotFound, msgNoRefund)
 	}
 	ctx := c.Request().Context()
-	err := r.svc.SettleRefund(ctx, invoiceID, key, made, body.StripeRefundID, ownerID(c))
-	r.audit.Record(ctx, "billing.refund.settle", ownerID(c), "invoice", invoiceID, outcome(err), map[string]string{
+	err := r.svc.SettleRefund(ctx, invoiceID, key, made, body.StripeRefundID, identity.OwnerID(c))
+	r.audit.Record(ctx, "billing.refund.settle", identity.OwnerID(c), "invoice", invoiceID, outcome(err), map[string]string{
 		"refund_key":       key,
 		"settled_as":       body.Outcome,
 		"stripe_refund_id": body.StripeRefundID,
