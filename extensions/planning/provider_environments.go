@@ -19,18 +19,18 @@ import (
 // own environment or fell back to a project of its own. It names no
 // provider project or environment.
 type ProviderEnvironment struct {
-	EnvironmentID string    `json:"environmentId"`
+	EnvironmentID string    `json:"environment_id"`
 	Provider      string    `json:"provider"`
 	Scope         string    `json:"scope"`
 	Mode          string    `json:"mode"`
 	Permanent     bool      `json:"permanent"`
 	Reason        string    `json:"reason"`
-	CreatedAt     time.Time `json:"createdAt"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // ProviderEnvironmentList is a project's provider environment records.
 type ProviderEnvironmentList struct {
-	ProviderEnvironments []ProviderEnvironment `json:"providerEnvironments"`
+	ProviderEnvironments []ProviderEnvironment `json:"provider_environments"`
 }
 
 // errNothingToRetry answers "try again" for an environment whose only

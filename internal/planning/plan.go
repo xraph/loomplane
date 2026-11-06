@@ -120,7 +120,7 @@ type Action struct {
 	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`
 	// NativeMove is a replacement that moves a Vercel service off the
 	// project of its own it runs on, into the shared project's environment.
-	NativeMove bool `json:"nativeMove,omitempty"`
+	NativeMove bool `json:"native_move,omitempty"`
 	// ID is stable for a subject: "service:api", "resource:db".
 	ID       string  `json:"id"`
 	Op       Op      `json:"op"`

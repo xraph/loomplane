@@ -174,6 +174,11 @@ func TestListProviderEnvironments(t *testing.T) {
 	if strings.Contains(out.Body.String(), "prj_secret") || strings.Contains(out.Body.String(), "conn") {
 		t.Fatalf("the list names provider refs: %s", out.Body.String())
 	}
+	for _, key := range []string{`"provider_environments":`, `"environment_id":`, `"created_at":`} {
+		if !strings.Contains(out.Body.String(), key) {
+			t.Fatalf("the list has no %s: %s", key, out.Body.String())
+		}
+	}
 	var list ProviderEnvironmentList
 	if err := json.Unmarshal(out.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)

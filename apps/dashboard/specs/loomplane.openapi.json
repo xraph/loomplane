@@ -33903,20 +33903,20 @@
       "ProviderEnvironment": {
         "type": "object",
         "required": [
-          "environmentId",
+          "environment_id",
           "provider",
           "scope",
           "mode",
           "permanent",
           "reason",
-          "createdAt"
+          "created_at"
         ],
         "properties": {
-          "createdAt": {
+          "created_at": {
             "type": "string",
             "format": "date-time"
           },
-          "environmentId": {
+          "environment_id": {
             "type": "string"
           },
           "mode": {
@@ -33939,10 +33939,10 @@
       "ProviderEnvironmentList": {
         "type": "object",
         "required": [
-          "providerEnvironments"
+          "provider_environments"
         ],
         "properties": {
-          "providerEnvironments": {
+          "provider_environments": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ProviderEnvironment"
