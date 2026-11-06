@@ -1,10 +1,12 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,5 +67,57 @@ func TestHandler_withoutABuild(t *testing.T) {
 	rec := serve(t, filepath.Join(t.TempDir(), "missing"), http.MethodGet, "/")
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "isn't built") {
 		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandler_assetLinks(t *testing.T) {
+	fingerprint := strings.TrimSuffix(strings.Repeat("AB:", 32), ":")
+	handler := New(t.TempDir(), "/api/", "/.well-known/").WithAndroidApp("com.example.app", []string{fingerprint}).Handler()
+	get := func(method string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, AssetLinksPath, http.NoBody))
+		return rec
+	}
+
+	rec := get(http.MethodGet)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("got %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	var statements []struct {
+		Relation []string `json:"relation"`
+		Target   struct {
+			Namespace    string   `json:"namespace"`
+			PackageName  string   `json:"package_name"`
+			Fingerprints []string `json:"sha256_cert_fingerprints"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &statements); err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 1 {
+		t.Fatalf("statements = %+v", statements)
+	}
+	s := statements[0]
+	if !slices.Equal(s.Relation, []string{"delegate_permission/common.handle_all_urls", "delegate_permission/common.get_login_creds"}) ||
+		s.Target.Namespace != "android_app" || s.Target.PackageName != "com.example.app" || !slices.Equal(s.Target.Fingerprints, []string{fingerprint}) {
+		t.Fatalf("statement = %+v", s)
+	}
+
+	if rec := get(http.MethodPost); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST got %d", rec.Code)
+	}
+	// The rest of /.well-known/ still belongs to the API.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/.well-known/other", http.NoBody))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("other well-known path got %d", rec.Code)
+	}
+}
+
+func TestHandler_noAssetLinksUnlessAsked(t *testing.T) {
+	rec := httptest.NewRecorder()
+	New(t.TempDir(), "/.well-known/").Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, AssetLinksPath, http.NoBody))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got %d", rec.Code)
 	}
 }

@@ -36,6 +36,7 @@ type Extension struct {
 	*forge.BaseExtension
 	dir         string
 	apiPrefixes []string
+	assetLinks  []byte
 }
 
 // New serves the dashboard built into dir. apiPrefixes are paths that
@@ -70,6 +71,10 @@ func (e *Extension) Start(context.Context) error {
 func (e *Extension) Handler() http.Handler {
 	files := os.DirFS(e.dir)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if e.assetLinks != nil && r.URL.Path == AssetLinksPath {
+			e.serveAssetLinks(w, r)
+			return
+		}
 		for _, p := range e.apiPrefixes {
 			if strings.HasPrefix(r.URL.Path, p) {
 				w.Header().Set("Content-Type", "application/json")
