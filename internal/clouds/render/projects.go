@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -116,6 +117,13 @@ func (c *Client) AddToEnvironment(ctx context.Context, key Key, environmentID st
 // EnvironmentEmpty tells whether an environment holds no services,
 // datastores or env groups.
 func (c *Client) EnvironmentEmpty(ctx context.Context, key Key, environmentID string) (bool, error) {
+	ids, err := c.EnvironmentResources(ctx, key, environmentID)
+	return len(ids) == 0, err
+}
+
+// EnvironmentResources lists the IDs of the services, datastores and env
+// groups an environment holds.
+func (c *Client) EnvironmentResources(ctx context.Context, key Key, environmentID string) ([]string, error) {
 	var e struct {
 		DatabasesIDs []string `json:"databasesIds"`
 		RedisIDs     []string `json:"redisIds"`
@@ -123,9 +131,9 @@ func (c *Client) EnvironmentEmpty(ctx context.Context, key Key, environmentID st
 		EnvGroupIDs  []string `json:"envGroupIds"`
 	}
 	if err := c.do(ctx, key, http.MethodGet, "/environments/"+url.PathEscape(environmentID), nil, nil, &e); err != nil {
-		return false, err
+		return nil, err
 	}
-	return len(e.DatabasesIDs)+len(e.RedisIDs)+len(e.ServiceIDs)+len(e.EnvGroupIDs) == 0, nil
+	return slices.Concat(e.DatabasesIDs, e.RedisIDs, e.ServiceIDs, e.EnvGroupIDs), nil
 }
 
 // DeleteEnvironment deletes an environment. One that's gone is not an

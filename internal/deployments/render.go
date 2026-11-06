@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/clouds/render"
@@ -589,11 +591,18 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 	if envID == "" || rec.EnvironmentRef != envID {
 		return nil
 	}
-	empty, err := r.Client.EnvironmentEmpty(ctx, key, envID)
+	removed := b.ExternalID
+	if _, id, ok := datastoreID(b.ExternalID); ok {
+		removed = id
+	}
+	held, err := r.settled(ctx, key, envID, removed)
 	if err != nil && !render.IsNotFound(err) {
 		return fmt.Errorf("check the render environment: %w", err)
 	}
-	if err == nil && !empty {
+	if err == nil && len(held) > 0 {
+		if slices.Contains(held, removed) {
+			job.Warn(fmt.Errorf("render still lists %s in the environment %s after deleting it, so the environment stays. Delete it in Render once it's empty", removed, envID))
+		}
 		return nil
 	}
 	if delErr := r.Client.DeleteEnvironment(ctx, key, envID); delErr != nil {
@@ -619,6 +628,30 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 		return fmt.Errorf("forget the native render environment: %w", forgetErr)
 	}
 	return nil
+}
+
+// renderSettle bounds how often, and how far apart, settled reads an
+// environment while Render finishes a delete in the background.
+var renderSettle = struct {
+	polls int
+	wait  time.Duration
+}{polls: 5, wait: 2 * time.Second}
+
+// settled lists what a Render environment holds once Render no longer
+// lists removed in it, the resource just deleted, or after renderSettle's
+// last read.
+func (r *Render) settled(ctx context.Context, key render.Key, envID, removed string) ([]string, error) {
+	for i := 1; ; i++ {
+		held, err := r.Client.EnvironmentResources(ctx, key, envID)
+		if err != nil || !slices.Contains(held, removed) || i >= renderSettle.polls {
+			return held, err
+		}
+		select {
+		case <-ctx.Done():
+			return held, nil
+		case <-time.After(renderSettle.wait):
+		}
+	}
 }
 
 // Observe implements Executor. A service is changed when its newest

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/connections"
@@ -34,6 +35,15 @@ type fakeRenderAPI struct {
 	// projectDeleteStatus, when set, is how Render answers a project DELETE.
 	projectDeleteStatus int
 	created             int
+	// linger is how many environment reads a resource is still listed in
+	// once it's deleted, as Render finishes a delete in the background.
+	linger    map[string]int
+	lingering map[string]*renderLinger
+}
+
+type renderLinger struct {
+	env, kind string
+	left      int
 }
 
 type renderTestEnv struct{ id, name, project string }
@@ -126,6 +136,19 @@ func (f *fakeRenderAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		services, databases := []string{}, []string{}
+		for id, l := range f.lingering {
+			if l.env != e.id {
+				continue
+			}
+			if l.kind == "service" {
+				services = append(services, id)
+			} else {
+				databases = append(databases, id)
+			}
+			if l.left--; l.left <= 0 {
+				delete(f.lingering, id)
+			}
+		}
 		for id, res := range f.resources {
 			if res["environmentId"] != e.id {
 				continue
@@ -199,6 +222,13 @@ func (f *fakeRenderAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && (parts[0] == "services" || parts[0] == "postgres") && r.Method == http.MethodPatch:
 		reply(http.StatusOK, f.resource(parts[1]))
 	case len(parts) == 2 && (parts[0] == "services" || parts[0] == "postgres") && r.Method == http.MethodDelete:
+		if n := f.linger[parts[1]]; n > 0 {
+			if f.lingering == nil {
+				f.lingering = map[string]*renderLinger{}
+			}
+			res := f.resources[parts[1]]
+			f.lingering[parts[1]] = &renderLinger{env: res["environmentId"], kind: res["kind"], left: n}
+		}
 		delete(f.resources, parts[1])
 		w.WriteHeader(http.StatusNoContent)
 	case len(parts) == 3 && parts[2] == "env-vars":
@@ -561,6 +591,56 @@ func TestRenderRemoveRetryFinishesCleanup(t *testing.T) {
 	}
 	if h.row() != nil {
 		t.Fatal("the retry kept the record")
+	}
+}
+
+// settleQuickly makes removeEnvironment's wait for Render short.
+func settleQuickly(t *testing.T) {
+	t.Helper()
+	old := renderSettle
+	renderSettle.wait = time.Millisecond
+	t.Cleanup(func() { renderSettle = old })
+}
+
+func TestRenderRemoveWaitsForRenderToFinishDeleting(t *testing.T) {
+	settleQuickly(t)
+	h := newRenderHarness(t, true)
+	h.api.envs["evm_1"] = &renderTestEnv{id: "evm_1", name: "staging", project: "prj_1"}
+	h.api.resources["srv_1"] = map[string]string{"name": "web", "environmentId": "evm_1", "kind": "service"}
+	h.api.linger = map[string]int{"srv_1": 2}
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "render", ConnectionID: "conn", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "evm_1"})
+	var warned []error
+	h.job.warn = func(err error) { warned = append(warned, err) }
+
+	if err := h.exec.Remove(t.Context(), h.job, nativeRenderBinding(t, h, "srv_1")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !h.api.called("DELETE /environments/evm_1") || !h.api.called("DELETE /projects/prj_1") {
+		t.Fatalf("the environment emptied a moment later stayed: %v", h.api.calls)
+	}
+	if len(warned) != 0 {
+		t.Fatalf("warned %v", warned)
+	}
+}
+
+func TestRenderRemoveReportsAnEnvironmentThatWontEmpty(t *testing.T) {
+	settleQuickly(t)
+	h := newRenderHarness(t, true)
+	h.api.envs["evm_1"] = &renderTestEnv{id: "evm_1", name: "staging", project: "prj_1"}
+	h.api.resources["srv_1"] = map[string]string{"name": "web", "environmentId": "evm_1", "kind": "service"}
+	h.api.linger = map[string]int{"srv_1": 100}
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "render", ConnectionID: "conn", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "evm_1"})
+	var warned []error
+	h.job.warn = func(err error) { warned = append(warned, err) }
+
+	if err := h.exec.Remove(t.Context(), h.job, nativeRenderBinding(t, h, "srv_1")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if h.api.called("DELETE /environments/evm_1") {
+		t.Fatal("deleted an environment Render still lists a service in")
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0].Error(), "evm_1") {
+		t.Fatalf("the environment left behind isn't reported: %v", warned)
 	}
 }
 
