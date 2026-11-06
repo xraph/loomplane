@@ -96,13 +96,13 @@ A message is up to 16,000 characters.
 
 ## Report an answer
 
-If an answer is offensive, harmful or just wrong, report it. Every finished answer has a **Report** button under it. Pick a reason (Offensive, Harmful, Inaccurate or Something else), add a note of up to 1,000 characters if you like, and send it. The panel says "Thanks. The report went to whoever runs this Loomplane."
+If an answer is offensive, harmful or wrong, report it. Under every finished answer there's a flag button, **Report answer**. Pick a reason (Offensive, Harmful, Inaccurate or Something else), add a note of up to 1,000 characters if you want to, and send it. The panel says "Thanks. The report went to whoever runs this Loomplane."
 
-Anyone who can read the conversation can report one of its answers: the person who started it, or someone with `ai:manage`. Report the same answer again and you update your report, so a second one doesn't pile up beside the first. The API call is `POST /api/v1/agent/conversations/{id}/turns/{task}/flag`.
+Anyone who can read the conversation can report one of its answers: the person who started it, or someone with `ai:manage`. Report the same answer again and you update your report instead of adding a second one. Over the API, it's `POST /api/v1/agent/conversations/{id}/turns/{task}/flag`.
 
-The report keeps your question, the answer (the first 8,000 characters of it), the reason and your note, plus the ids that say where they came from. The workspace's audit trail records only that a report was made, with those ids and the reason. It never holds the question, the answer or your note.
+A report keeps your question, the answer (its first 8,000 characters), the reason and your note, plus the ids that say where they came from. The workspace's audit trail records that a report was made, with those ids and the reason. It never holds the question, the answer or your note.
 
-The report goes to the platform owner, not to the workspace's admins. On your own server that's whoever set it up; on `app.loomplane.com` it's us. The owner reads reports under **Platform, Flagged answers**, filters them by Open, Dismissed or All, and dismisses one once it's dealt with. Other platform admins don't see the page. The dismissal goes into the audit trail of the workspace that reported, under the owner's name.
+The report goes to the platform owner, not to your workspace's admins. On your own server that's whoever set it up, and on `app.loomplane.com` it's us. The owner reads reports under **Platform, Flagged answers**, filters them by Open, Dismissed or All, and dismisses one once it's dealt with. Other platform admins don't see the page. A dismissal lands in the audit trail of the workspace that reported, under the owner's name.
 
 ## From the terminal
 
