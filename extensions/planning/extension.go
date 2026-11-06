@@ -543,7 +543,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		// the service that places them.
 		Platform: platformCloud,
 		// A Vercel service on a project of its own with no fallback record
-		// is planned as a move into its shared project.
+		// is planned as a move into its shared project, and standalone
+		// Render resources with no record as a move into their environment.
 		NativeFallbacks: deployStore,
 	})
 

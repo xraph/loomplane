@@ -140,6 +140,25 @@ func TestFellBack(t *testing.T) {
 	}
 }
 
+func TestRecorded(t *testing.T) {
+	store := providerEnvFixture(t)
+	for _, pe := range []*ProviderEnvironment{providerEnv("env", "", ModeNative), providerEnv("env_stg", "", ModeFallback)} {
+		pe.Provider = "render"
+		if err := store.SaveProviderEnvironment(t.Context(), pe); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for env, want := range map[string]bool{"env": true, "env_stg": true, "env_prev": false} {
+		got, err := store.Recorded(t.Context(), "org", env, "render", "conn", "")
+		if err != nil || got != want {
+			t.Errorf("%s: got %v, %v", env, got, err)
+		}
+	}
+	if got, err := store.Recorded(t.Context(), "org", "env", "render", "conn_b", ""); err != nil || got {
+		t.Errorf("another connection: got %v, %v", got, err)
+	}
+}
+
 func TestEnvironmentRole(t *testing.T) {
 	store := providerEnvFixture(t)
 	for _, c := range []struct {

@@ -5,11 +5,14 @@ import (
 	"fmt"
 )
 
-// NativeFallbacks says whether an environment's service fell back from the
-// provider's own environments to a project of its own. Scope is the
-// service's name on Vercel.
+// NativeFallbacks reads the records of where an environment deploys on a
+// provider: FellBack says whether a service fell back from the provider's
+// own environments to a project of its own, and Recorded whether the key
+// has any record, native or fallback. Scope is the service's name on
+// Vercel, and "" on Render.
 type NativeFallbacks interface {
 	FellBack(ctx context.Context, orgID, environmentID, provider, connectionID, scope string) (bool, error)
+	Recorded(ctx context.Context, orgID, environmentID, provider, connectionID, scope string) (bool, error)
 }
 
 // nativeMoves are the action IDs of the environment's Vercel services that
@@ -52,4 +55,43 @@ func (p *planner) nativeMove(a *Action, b *Binding, providerName string) {
 	}
 	a.Op, a.NativeMove = Replace, true
 	a.Reason = fmt.Sprintf("Moves into %s's shared Vercel project as its %s environment", a.Name, p.in.Environment)
+}
+
+// renderMoves are the action IDs of the environment's Render services and
+// datastores that run standalone with no record of the environment on
+// their connection: a native deploy always records it, and so does a
+// fallback, so there's none only once "try again" cleared a fallback (or
+// before native environments). Each is planned as an update, and the
+// deploy moves it into the environment's Render environment in place,
+// keeping its data and address. Nil fallbacks plans none.
+func renderMoves(ctx context.Context, fallbacks NativeFallbacks, orgID, environmentID string, bindings []*Binding) (map[string]bool, error) {
+	moves := map[string]bool{}
+	if fallbacks == nil {
+		return moves, nil
+	}
+	recorded := map[string]bool{}
+	for _, b := range bindings {
+		if b.Provider != "render" || b.ExternalID == "" || b.Drift == DriftMissing || ExistingResourceBinding(b) ||
+			(b.Subject != ServiceSubject && b.Subject != ResourceSubject) {
+			continue
+		}
+		known, asked := recorded[b.ConnectionID]
+		if !asked {
+			var err error
+			if known, err = fallbacks.Recorded(ctx, orgID, environmentID, "render", b.ConnectionID, ""); err != nil {
+				return nil, fmt.Errorf("read the environment's render record: %w", err)
+			}
+			recorded[b.ConnectionID] = known
+		}
+		if !known {
+			moves[actionID(b.Subject, b.Name)] = true
+		}
+	}
+	return moves, nil
+}
+
+// renderMove says whether an unchanged Render action is updated to move
+// it into the environment's Render environment, as renderMoves found.
+func (p *planner) renderMove(a *Action, providerName string) bool {
+	return providerName == "render" && p.in.RenderMoves[a.ID]
 }

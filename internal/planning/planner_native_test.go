@@ -12,11 +12,19 @@ import (
 type fallbackRecords struct {
 	fell  map[[3]string]bool
 	asked [][5]string
+	// recorded are the keys with any record, native or fallback.
+	recorded      map[[3]string]bool
+	askedRecorded [][5]string
 }
 
 func (f *fallbackRecords) FellBack(_ context.Context, orgID, environmentID, provider, connectionID, scope string) (bool, error) {
 	f.asked = append(f.asked, [5]string{orgID, environmentID, provider, connectionID, scope})
 	return f.fell[[3]string{provider, connectionID, scope}], nil
+}
+
+func (f *fallbackRecords) Recorded(_ context.Context, orgID, environmentID, provider, connectionID, scope string) (bool, error) {
+	f.askedRecorded = append(f.askedRecorded, [5]string{orgID, environmentID, provider, connectionID, scope})
+	return f.recorded[[3]string{provider, connectionID, scope}], nil
 }
 
 // stagingWithWeb plans acme's staging against what runs there, with web on
@@ -82,4 +90,74 @@ func TestPlannerLeavesNativeRefAlone(t *testing.T) {
 	if len(records.asked) != 0 {
 		t.Fatalf("asked about a native ref: %v", records.asked)
 	}
+}
+
+// renderAcme runs a service and its database on Render.
+const renderAcme = `version: 1
+defaults: {provider: render}
+services:
+  api: {source: services/api, needs: [db]}
+resources:
+  db: {kind: postgres}
+`
+
+// stagingOnRender plans renderAcme's staging against what runs there
+// through conn_render, with the records records holds.
+func stagingOnRender(t *testing.T, records *fallbackRecords) *Result {
+	t.Helper()
+	live := deployed(t, compute(t, renderAcme, "staging"))
+	for _, b := range live {
+		b.ConnectionID = "conn_render"
+	}
+	moves, err := renderMoves(t.Context(), records, "org", "env_staging", live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Compute(Input{
+		Environment: "staging", Graph: polyglot(t), Manifest: parse(t, renderAcme),
+		Providers: providers.Registry(), Bindings: live, Connections: connected,
+		RenderMoves: moves,
+	})
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems %v", codes(r.Problems))
+	}
+	return r
+}
+
+// TestPlannerMovesStandaloneRenderResources: staging's Render resources
+// run standalone and nothing records the environment on Render, as after
+// "try again" cleared its fallback. Each is updated, so the deploy moves
+// it into the staging Render environment in place.
+func TestPlannerMovesStandaloneRenderResources(t *testing.T) {
+	records := &fallbackRecords{}
+	r := stagingOnRender(t, records)
+	want := "Moves into the staging Render environment"
+	for _, id := range []string{"service:api", "resource:db"} {
+		a := action(t, r, id)
+		if a.Op != Update || a.NativeMove || a.Reason != want {
+			t.Errorf("%s %s native move %v: %q, want an update %q", id, a.Op, a.NativeMove, a.Reason, want)
+		}
+	}
+	if len(records.askedRecorded) != 1 || records.askedRecorded[0] != [5]string{"org", "env_staging", "render", "conn_render", ""} {
+		t.Fatalf("asked %v, want one lookup for the connection", records.askedRecorded)
+	}
+}
+
+// TestPlannerLeavesRenderAloneWhenRecorded: a native or fallback record
+// says where the environment's Render resources belong, so unchanged ones
+// are kept.
+func TestPlannerLeavesRenderAloneWhenRecorded(t *testing.T) {
+	r := stagingOnRender(t, &fallbackRecords{recorded: map[[3]string]bool{{"render", "conn_render", ""}: true}})
+	for _, id := range []string{"service:api", "resource:db"} {
+		if a := action(t, r, id); a.Op != Keep {
+			t.Errorf("%s %s: %s, want keep", id, a.Op, a.Reason)
+		}
+	}
+
+	t.Run("without the records nothing moves", func(t *testing.T) {
+		moves, err := renderMoves(t.Context(), nil, "org", "env_staging", deployed(t, compute(t, renderAcme, "staging")))
+		if err != nil || len(moves) != 0 {
+			t.Fatalf("moves %v, %v", moves, err)
+		}
+	})
 }

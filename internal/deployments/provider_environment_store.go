@@ -150,6 +150,14 @@ func (s *PgStore) FellBack(ctx context.Context, orgID, environmentID, provider, 
 	return fell, err
 }
 
+// Recorded is true when the key has any record, native or fallback.
+func (s *PgStore) Recorded(ctx context.Context, orgID, environmentID, provider, connectionID, scope string) (bool, error) {
+	var found bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_provider_environments WHERE org_id=$1 AND environment_id=$2 AND provider=$3 AND connection_id=$4 AND scope=$5)`,
+		orgID, environmentID, provider, connectionID, scope).Scan(&found)
+	return found, err
+}
+
 // DeleteProviderEnvironment removes one record.
 func (s *PgStore) DeleteProviderEnvironment(ctx context.Context, pe *ProviderEnvironment) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM loomplane_provider_environments WHERE org_id=$1 AND environment_id=$2 AND provider=$3 AND connection_id=$4 AND scope=$5`,

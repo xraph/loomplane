@@ -100,6 +100,11 @@ type Input struct {
 	// project of their own with no fallback record keeping them there.
 	// Each is replaced by a deploy into its shared Vercel project.
 	NativeMoves map[string]bool
+	// RenderMoves are the Render services and datastores, by action ID,
+	// that run standalone with no record of the environment on Render.
+	// Each unchanged one is updated, which moves it into the environment's
+	// Render environment in place.
+	RenderMoves map[string]bool
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -2212,6 +2217,9 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	case b.Drift == DriftChanged:
 		a.Op = Update
 		a.Reason = fmt.Sprintf("%s was changed outside Loomplane (%s), so it's deployed as planned again.", a.Name, b.DriftMessage)
+	case p.renderMove(a, providerName):
+		a.Op = Update
+		a.Reason = fmt.Sprintf("Moves into the %s Render environment", p.in.Environment)
 	default:
 		a.Op = Keep
 		a.Reason = "Unchanged."
