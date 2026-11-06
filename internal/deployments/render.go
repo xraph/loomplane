@@ -209,6 +209,13 @@ func (r *Render) environment(ctx context.Context, job *Job, key render.Key, stat
 		// A deploy of this job is already running in the environment.
 		return "", refusal.err
 	}
+	if rec != nil && rec.EnvironmentRef != "" {
+		// The environment's resources already sit in its Render
+		// environment. Falling back would make this one standalone and
+		// leave the native one running, untracked.
+		return "", fmt.Errorf("%s already deploys into its Render environment, so it doesn't fall back to standalone resources: %w",
+			job.Deployment.Environment, refusal.err)
+	}
 	if err := r.undoNative(ctx, job, key, state, save); err != nil {
 		return "", err
 	}

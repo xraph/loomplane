@@ -692,3 +692,43 @@ func TestVercelKeepsItsTargetWhenAnotherEnvironmentIsDeleted(t *testing.T) {
 		})
 	}
 }
+
+// TestVercelRefusalOnNativeEnvironmentFailsInsteadOfFallingBack: staging
+// already deploys natively, so a refusal now fails the deploy. Falling
+// back would rebind web to a separate project and leave its live custom
+// environment serving with nothing tracking it.
+func TestVercelRefusalOnNativeEnvironmentFailsInsteadOfFallingBack(t *testing.T) {
+	for name, set := range map[string]func(*nativeHarness){
+		"native binding": func(h *nativeHarness) {
+			h.job.Binding = &planning.Binding{ID: "bind_web", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: "prj_1#env_9", ConnectionID: "conn"}
+			h.job.Action.Op = planning.Update
+		},
+		"native record": func(h *nativeHarness) {
+			_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_staging", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "env_9"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newNativeHarness(t, "staging", "staging", true)
+			h.api.projects["web-abc12345"] = "prj_1"
+			h.api.envs["prj_1/staging"] = "env_9"
+			h.api.created = 1
+			h.api.customVarStatus = http.StatusPaymentRequired
+			set(h)
+
+			if _, err := h.exec.Apply(t.Context(), h.job); err == nil {
+				t.Fatal("a refusal on a native environment fell back")
+			}
+			for _, c := range h.api.callLog() {
+				if strings.HasPrefix(c, "DELETE ") {
+					t.Fatalf("deleted the native environment or project: %s", c)
+				}
+			}
+			if row := h.row(); row != nil && row.Mode == ModeFallback {
+				t.Fatalf("row = %+v, want no fallback", row)
+			}
+			if h.api.projects["web-staging-abc12345"] != "" || h.notify.calls != 0 {
+				t.Fatalf("deployed to a separate project: %v", h.api.projects)
+			}
+		})
+	}
+}

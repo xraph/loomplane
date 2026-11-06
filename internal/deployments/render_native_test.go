@@ -618,3 +618,25 @@ func TestRenderRemoveWithoutEnvironmentsIsLegacy(t *testing.T) {
 		t.Fatal("legacy Remove touched environments")
 	}
 }
+
+// TestRenderRefusalOnNativeEnvironmentFailsInsteadOfFallingBack: staging's
+// resources already sit in its Render environment, so a refusal now fails
+// the deploy rather than making web a standalone service and leaving the
+// native one running untracked.
+func TestRenderRefusalOnNativeEnvironmentFailsInsteadOfFallingBack(t *testing.T) {
+	h := newRenderHarness(t, true)
+	h.api.projects[RenderProjectName(h.job)] = "prj_1"
+	h.api.envs["evm_1"] = &renderTestEnv{id: "evm_1", name: "staging", project: "prj_1"}
+	h.api.envListStatus = http.StatusForbidden
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "render", ConnectionID: "conn", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "evm_1"})
+
+	if _, err := h.exec.Apply(t.Context(), h.job); err == nil {
+		t.Fatal("a refusal on a native environment fell back")
+	}
+	if row := h.row(); row == nil || row.Mode != ModeNative || row.EnvironmentRef != "evm_1" {
+		t.Fatalf("row = %+v, want staging's native record kept", row)
+	}
+	if h.api.called("POST /services") || h.api.called("DELETE /projects/prj_1") || h.notify.calls != 0 {
+		t.Fatalf("calls = %v, want no standalone service and nothing deleted", h.api.calls)
+	}
+}

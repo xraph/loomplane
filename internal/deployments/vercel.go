@@ -191,6 +191,10 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
 			// falling back would remove the environment under it.
 			return nil, refusal.err
 		}
+		if d.alreadyNative() {
+			return nil, fmt.Errorf("%s already deploys into its %s Vercel environment, so it doesn't fall back to a separate project: %w",
+				job.Action.Name, job.Deployment.Environment, refusal.err)
+		}
 		if err := d.undoNative(ctx); err != nil {
 			return nil, err
 		}
@@ -213,6 +217,9 @@ type vercelDeploy struct {
 	save     func()
 	// record is the environment's native record when it had one.
 	record *ProviderEnvironment
+	// recordedNative is set when the record, as the deploy found it, named
+	// a native environment and not just a claim on the project.
+	recordedNative bool
 }
 
 // native says whether the deploy goes into a native environment. Not when
@@ -231,6 +238,7 @@ func (d *vercelDeploy) native(ctx context.Context) (bool, error) {
 			return false, err
 		}
 		d.record = rec
+		d.recordedNative = rec != nil && rec.EnvironmentRef != ""
 		return true, nil
 	}
 	// Anything checkpointed belongs to the shared project, not the
@@ -259,6 +267,22 @@ func (d *vercelDeploy) refuseOrphaning() error {
 	}
 	return fmt.Errorf("%s runs on a Vercel project of its own (%s), and this plan doesn't move it into its shared project's %s environment, so nothing was deployed. Plan again, and the new plan moves %s there and removes the old project once it's up",
 		job.Action.Name, projectID, job.Deployment.Environment, job.Action.Name)
+}
+
+// alreadyNative says whether the service runs in a native environment
+// already: its record names one, or its binding does. A refusal then fails
+// the deploy, since falling back would rebind the service to a separate
+// project and leave the native environment serving, untracked. Only a
+// first native deploy, or a move from a project of its own, falls back.
+func (d *vercelDeploy) alreadyNative() bool {
+	if d.recordedNative {
+		return true
+	}
+	if b := d.job.Binding; b != nil {
+		_, _, native := planning.ParseVercelRef(b.ExternalID)
+		return native
+	}
+	return false
 }
 
 // run deploys the service: into its native environment of the shared
