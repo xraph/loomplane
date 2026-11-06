@@ -128,7 +128,7 @@ func (s *PgStore) ClaimFallbackNotice(ctx context.Context, pe *ProviderEnvironme
 
 // ResetFallbacks deletes an environment's fallback records the provider might
 // lift, so the next deploy asks again. Permanent ones stay and are counted.
-func (s *PgStore) ResetFallbacks(ctx context.Context, orgID, environmentID string) (reset int, permanent int, err error) {
+func (s *PgStore) ResetFallbacks(ctx context.Context, orgID, environmentID string) (reset, permanent int, err error) {
 	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_provider_environments WHERE org_id=$1 AND environment_id=$2 AND mode='fallback' AND NOT permanent`, orgID, environmentID)
 	if err != nil {
 		return 0, 0, err

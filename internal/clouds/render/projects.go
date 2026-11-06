@@ -167,10 +167,10 @@ func FallbackReason(err error) (reason string, permanent, ok bool) {
 	if !errors.As(err, &ae) {
 		return "", false, false
 	}
-	switch {
-	case ae.Status == http.StatusPaymentRequired:
+	switch ae.Status {
+	case http.StatusPaymentRequired:
 		return "Render's plan for this workspace doesn't include environments", false, true
-	case ae.Status == http.StatusBadRequest:
+	case http.StatusBadRequest:
 		m := strings.ToLower(ae.Message)
 		if strings.Contains(m, "plan") || strings.Contains(m, "limit") {
 			return "Render's plan limit stops this workspace making an environment", false, true

@@ -24,10 +24,10 @@ func (s *removeStore) DeleteProviderEnvironment(_ context.Context, pe *ProviderE
 
 // removeAPI answers the Vercel routes Remove, Observe and FrontendAbsent use.
 type removeAPI struct {
-	mu          sync.Mutex
-	calls       []string
-	listings    [][]string // deployment ids per list call; the last repeats
-	listed      int
+	mu       sync.Mutex
+	calls    []string
+	listings [][]string // deployment ids per list call; the last repeats
+	listed   int
 	// states are deployments' readyState by id; READY when missing.
 	states      map[string]string
 	noProject   bool
@@ -50,7 +50,7 @@ func (a *removeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ids = a.listings[min(a.listed, len(a.listings)-1)]
 		}
 		a.listed++
-		var items []string
+		items := make([]string, 0, len(ids))
 		for _, id := range ids {
 			state := "READY"
 			if s, ok := a.states[id]; ok {
@@ -248,8 +248,8 @@ func TestFrontendAbsentNative(t *testing.T) {
 	}{
 		{"project gone", "prj_1#env_9", func(a *removeAPI) { a.noProject = true }, true},
 		{"custom environment gone", "prj_1#env_9", func(a *removeAPI) { a.noCustomEnv = true }, true},
-		{"custom environment present", "prj_1#env_9", func(a *removeAPI) {}, false},
-		{"production without deployments", "prj_1#production", func(a *removeAPI) {}, true},
+		{"custom environment present", "prj_1#env_9", func(*removeAPI) {}, false},
+		{"production without deployments", "prj_1#production", func(*removeAPI) {}, true},
 		{"production with a deployment", "prj_1#production", func(a *removeAPI) { a.listings = [][]string{{"dpl_1"}} }, false},
 	}
 	for _, tt := range tests {

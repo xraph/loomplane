@@ -53,7 +53,8 @@ func TestProviderEnvironmentRoundTrip(t *testing.T) {
 	if err != nil || got == nil || got.Mode != ModeFallback || !got.Permanent || got.ProjectRef != "" || got.Reason != "plan" {
 		t.Fatalf("second save did not update in place: %+v %v", got, err)
 	}
-	if all, err := store.ProviderEnvironments(t.Context(), "org", "proj"); err != nil || len(all) != 1 {
+	all, err := store.ProviderEnvironments(t.Context(), "org", "proj")
+	if err != nil || len(all) != 1 {
 		t.Fatalf("expected one row: %v %v", all, err)
 	}
 	none, err := store.ProviderEnvironment(t.Context(), "org", "env", "vercel", "conn", "other")
