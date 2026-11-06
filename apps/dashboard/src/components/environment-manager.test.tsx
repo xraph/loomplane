@@ -83,6 +83,9 @@ function serve(
           headers: { "Content-Type": "application/json" },
         })
       }
+      if (url.pathname.endsWith("/provider-environments")) {
+        calls.push(`${init?.method ?? "GET"} ${url.pathname}`)
+      }
       const body = url.pathname.endsWith("/provider-environments")
         ? { provider_environments: props.fallbacks ?? [] }
         : url.pathname.endsWith("/bindings")
@@ -288,6 +291,8 @@ test("hides try again when every fallback is permanent", async () => {
   ).toBeNull()
 })
 
+const listFallbacks = "GET /api/v1/projects/p/provider-environments"
+
 test("try again plans a move back to native and opens deployments", async () => {
   const user = userEvent.setup()
   const onOpen = vi.fn()
@@ -297,6 +302,8 @@ test("try again plans a move back to native and opens deployments", async () => 
     onOpen,
   })
   await screen.findByText("Separate project")
+  const listedBefore = calls.filter((c) => c === listFallbacks).length
+  expect(listedBefore).toBeGreaterThan(0)
   await user.click(
     screen.getByRole("button", { name: "More actions for staging" })
   )
@@ -312,5 +319,11 @@ test("try again plans a move back to native and opens deployments", async () => 
   )
   await vi.waitFor(() =>
     expect(onOpen).toHaveBeenCalledWith("deployments", "staging")
+  )
+  // The cleared fallbacks are read again, so the row's note goes.
+  await vi.waitFor(() =>
+    expect(calls.filter((c) => c === listFallbacks).length).toBeGreaterThan(
+      listedBefore
+    )
   )
 })

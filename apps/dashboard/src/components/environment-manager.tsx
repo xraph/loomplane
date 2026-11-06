@@ -316,6 +316,7 @@ function EnvironmentRow({
 }) {
   const people = usePeople()
   const moveToNative = useMutation(useProviderEnvironmentsRetry)
+  const invalidate = useInvalidate()
   const bindings = useQuery(useBindingsList, {
     path: { id: project.id },
     query: { environment: environment.name },
@@ -367,6 +368,8 @@ function EnvironmentRow({
       await moveToNative.mutateAsync({
         path: { id: project.id, environmentId: environment.id },
       })
+      // Try again cleared the fallbacks, so the row's note goes.
+      invalidate(useProviderEnvironmentsList)
       toast.success(`A plan to move ${environment.name} is ready to review`)
       onOpen("deployments", environment.name)
     } catch (err) {
