@@ -325,7 +325,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               link: <Link to="/platform/cloud" />,
               isActive: path === "/platform/cloud" || at("/platform/cloud/"),
             },
-            ...(platformOwner
+            ...(platformOwner && features.ai
               ? [
                   {
                     title: "Flagged answers",

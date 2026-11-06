@@ -53,7 +53,11 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function show(platformAdmin: boolean, platformOwner = platformAdmin) {
+function show(
+  platformAdmin: boolean,
+  platformOwner = platformAdmin,
+  ai = true
+) {
   setInstance({
     setupPending: false,
     waitlist: false,
@@ -66,7 +70,7 @@ function show(platformAdmin: boolean, platformOwner = platformAdmin) {
   )
   render(
     <ClientProvider client={forgeClient}>
-      <FeaturesProvider features={{ ai: false }}>
+      <FeaturesProvider features={{ ai }}>
         <AgentProvider>
           <SidebarProvider>
             <AppSidebar />
@@ -123,5 +127,12 @@ it("hides Flagged answers from everyone else", async () => {
   show(false)
   await userEvent.click(screen.getByText("Settings"))
   await screen.findByRole("menuitem", { name: "Integrations" })
+  expect(screen.queryByRole("menuitem", { name: "Flagged answers" })).toBeNull()
+})
+
+it("hides Flagged answers from the owner when the server's AI is off", async () => {
+  show(true, true, false)
+  await userEvent.click(screen.getByText("Settings"))
+  await screen.findByRole("menuitem", { name: "Platform Cloud" })
   expect(screen.queryByRole("menuitem", { name: "Flagged answers" })).toBeNull()
 })
