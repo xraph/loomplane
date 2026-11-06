@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { useAgent, useFeatures } from "@/lib/features"
+import { useOrganization } from "@/lib/organization"
 import { isActive } from "@/lib/release-reports"
 import { Link, useNavigate } from "@/lib/router"
 
@@ -50,7 +51,8 @@ export function canPrepare(environments: Environment[] | undefined): boolean {
 /**
  * PrepareRelease is the "Prepare release" button and its dialog. may is
  * whether the person can create deployments in the project, which the
- * project's page already knows, so this asks nothing more.
+ * project's page already knows. The server also wants agent:use, which is
+ * only ever held workspace-wide, so that comes from the session.
  */
 export function PrepareRelease({
   project,
@@ -63,8 +65,15 @@ export function PrepareRelease({
 }) {
   const features = useFeatures()
   const agent = useAgent()
+  const { can } = useOrganization()
   const [open, setOpen] = useState(false)
-  if (!features.ai || !agent.enabled || !may || !canPrepare(environments))
+  if (
+    !features.ai ||
+    !agent.enabled ||
+    !may ||
+    !can("agent:use") ||
+    !canPrepare(environments)
+  )
     return null
   return (
     <>

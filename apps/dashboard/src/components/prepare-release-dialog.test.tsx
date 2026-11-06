@@ -17,7 +17,13 @@ import { PrepareRelease } from "./prepare-release-dialog"
 const state = vi.hoisted(() => ({
   ai: true,
   agent: true,
+  agentUse: true,
   navigated: [] as unknown[],
+}))
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({
+    can: (permission: string) => permission !== "agent:use" || state.agentUse,
+  }),
 }))
 vi.mock("@/lib/features", () => ({
   useFeatures: () => ({ ai: state.ai }),
@@ -43,6 +49,7 @@ afterEach(() => {
   forgeClient.clear()
   state.ai = true
   state.agent = true
+  state.agentUse = true
   state.navigated = []
 })
 
@@ -241,6 +248,15 @@ it("hides the action from someone who may not prepare, or with the agent off", (
   expect(screen.queryByRole("button", { name: "Prepare release" })).toBeNull()
   view.unmount()
   state.agent = false
+  const dev = serve(() => created())
+  show()
+  expect(screen.queryByRole("button", { name: "Prepare release" })).toBeNull()
+  expect(dev.reads).toEqual([])
+})
+
+it("hides the action from someone who may not use the agent", () => {
+  // The server refuses to prepare without agent:use, deployment:create or not.
+  state.agentUse = false
   const dev = serve(() => created())
   show()
   expect(screen.queryByRole("button", { name: "Prepare release" })).toBeNull()
