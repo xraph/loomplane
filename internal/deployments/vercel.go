@@ -368,11 +368,16 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 }
 
 // nativeTarget is the Vercel environment the job's environment maps to:
-// the one this job checkpointed, or production, Preview or a custom
+// the one this job checkpointed, the one it already deploys to on the
+// project, or on a first deploy production, Preview or a custom
 // environment named after it, created when it's missing.
 func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project) (vercel.Target, error) {
 	if d.state.Target != "" {
 		return refTarget(d.state.Target), nil
+	}
+	if ref := d.savedTarget(project.ID); ref != "" {
+		d.state.Target = ref
+		return refTarget(ref), nil
 	}
 	et, err := d.v.Environments.Target(ctx, d.job)
 	if err != nil {
@@ -391,6 +396,27 @@ func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project
 	}
 	d.state.Target = targetRef(t)
 	return t, nil
+}
+
+// savedTarget is the Vercel environment the job's environment already
+// deploys to on the project: the record's, or the one its binding, or
+// what the job replaces, names there. It's "" on a first deploy. Once an
+// environment is native its target stays put, even when deleting another
+// environment makes it the oldest of its kind: moving it would hand it
+// the other environment's leftover variables and orphan its own.
+func (d *vercelDeploy) savedTarget(projectID string) string {
+	if r := d.record; r != nil && r.ProjectRef == projectID && r.EnvironmentRef != "" {
+		return r.EnvironmentRef
+	}
+	for _, b := range []*planning.Binding{d.job.Binding, d.job.Replaces} {
+		if b == nil {
+			continue
+		}
+		if p, target, native := planning.ParseVercelRef(b.ExternalID); native && p == projectID && target != "" {
+			return target
+		}
+	}
+	return ""
 }
 
 // undoNative removes what this job made on Vercel for the native deploy

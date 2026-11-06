@@ -642,3 +642,53 @@ func TestVercelGoesNativeOverLegacyBindingWhenAllowed(t *testing.T) {
 		})
 	}
 }
+
+// TestVercelKeepsItsTargetWhenAnotherEnvironmentIsDeleted: prod-eu ran in
+// its own custom environment while production held the production target.
+// Production was deleted, so prod-eu is now the oldest production-kind
+// environment, but it keeps deploying where it always did: moving onto the
+// production target would hand it production's leftover variables and
+// orphan its custom environment.
+func TestVercelKeepsItsTargetWhenAnotherEnvironmentIsDeleted(t *testing.T) {
+	for name, set := range map[string]func(*nativeHarness){
+		"from the record": func(h *nativeHarness) {
+			_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_prod-eu", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "env_eu"})
+		},
+		"from the binding": func(h *nativeHarness) {
+			h.job.Binding = &planning.Binding{ID: "bind_web", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: "prj_1#env_eu", ConnectionID: "conn"}
+		},
+		"from what it replaces": func(h *nativeHarness) {
+			h.job.Replaces = &planning.Binding{ID: "bind_web", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: "prj_1#env_eu", ConnectionID: "conn_old"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newNativeHarness(t, "prod-eu", "production", true)
+			h.api.projects["web-abc12345"] = "prj_1"
+			h.api.envs["prj_1/prod-eu"] = "env_eu"
+			h.api.created = 1
+			set(h)
+			out := h.apply(t)
+
+			if h.api.called("POST /v9/projects/prj_1/custom-environments") {
+				t.Fatal("made a custom environment")
+			}
+			if len(h.api.deploys) != 1 || h.api.deploys[0]["customEnvironmentSlugOrId"] != "env_eu" || h.api.deploys[0]["target"] != nil {
+				t.Fatalf("deploy body = %v, want customEnvironmentSlugOrId env_eu", h.api.deploys)
+			}
+			for _, post := range h.api.envPosts {
+				for _, item := range post {
+					ids, _ := item["customEnvironmentIds"].([]any)
+					if len(ids) != 1 || ids[0] != "env_eu" || item["target"] != nil {
+						t.Fatalf("variable %v isn't scoped to env_eu alone", item)
+					}
+				}
+			}
+			if out.ExternalID != "prj_1#env_eu" {
+				t.Fatalf("ExternalID = %q, want prj_1#env_eu", out.ExternalID)
+			}
+			if row := h.row(); row == nil || row.EnvironmentRef != "env_eu" {
+				t.Fatalf("row = %+v, want env_eu", row)
+			}
+		})
+	}
+}
