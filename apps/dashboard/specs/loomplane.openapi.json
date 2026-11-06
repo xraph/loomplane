@@ -8857,6 +8857,82 @@
         }
       }
     },
+    "/api/v1/platform/agent/flags": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "The agent answers people reported, in every workspace, the newest first",
+        "description": "Open reports by default; status=dismissed or status=all for the others. At most 500.",
+        "operationId": "platformAgentFlags.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the platform owner"
+          },
+          "422": {
+            "description": "status isn't open, dismissed or all"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/agent/flags/{id}/dismiss": {
+      "post": {
+        "description": "Dismissing it again keeps the first dismissal.",
+        "operationId": "platformAgentFlags.dismiss",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flag"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the platform owner, or no such report"
+          }
+        },
+        "summary": "Dismiss a report once you've looked at it",
+        "tags": [
+          "Agent"
+        ],
+        "x-forge-invalidates": [
+          "Flag[]"
+        ]
+      }
+    },
     "/api/v1/platform/cloud-sign-in/apps": {
       "get": {
         "tags": [
@@ -27028,6 +27104,20 @@
           },
           "reason": {
             "type": "string"
+          }
+        }
+      },
+      "FlagList": {
+        "type": "object",
+        "required": [
+          "flags"
+        ],
+        "properties": {
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Flag"
+            }
           }
         }
       },

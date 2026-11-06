@@ -41,14 +41,14 @@ type FlagQuery struct {
 // so anyone else, a workspace admin or the owner's own API key or agent
 // included, gets the 404 an unknown route would. They aren't behind the
 // scope binder: they span every workspace, whether its agent is on or
-// not. Like the owner's billing routes, none of them is in the OpenAPI
-// spec.
+// not. They're in the OpenAPI spec, as the other platform routes are, so
+// the clients get typed calls; the gate is what hides them.
 func mountPlatformFlagRoutes(r forge.Router, guard identity.Guard, isOwner identity.PlatformOwner, flags platformFlagsAPI) error {
 	if isOwner == nil || flags == nil {
 		return errors.New("the platform flag routes need identity's platform-owner check and the conversations")
 	}
 	h := platformFlagHandlers{flags: flags}
-	g := r.Group(platformFlagsBase, forge.WithGroupMiddleware(identity.OwnerOnly(guard, isOwner)...), forge.WithGroupSchemaExclude())
+	g := r.Group(platformFlagsBase, forge.WithGroupMiddleware(identity.OwnerOnly(guard, isOwner)...), forge.WithGroupTags("Agent"))
 	return errors.Join(
 		g.GET("", h.list,
 			forge.WithName("platformAgentFlags.list"),
@@ -56,12 +56,16 @@ func mountPlatformFlagRoutes(r forge.Router, guard identity.Guard, isOwner ident
 			forge.WithDescription("Open reports by default; status=dismissed or status=all for the others. At most 500."),
 			forge.WithQuerySchema(FlagQuery{}),
 			forge.WithResponseSchema(http.StatusOK, "The reports", FlagList{}),
+			forge.WithResponseSchema(http.StatusNotFound, "Not the platform owner", nil),
+			forge.WithResponseSchema(http.StatusUnprocessableEntity, "status isn't open, dismissed or all", nil),
 		),
 		g.POST("/:id/dismiss", h.dismiss,
 			forge.WithName("platformAgentFlags.dismiss"),
 			forge.WithSummary("Dismiss a report once you've looked at it"),
 			forge.WithDescription("Dismissing it again keeps the first dismissal."),
 			forge.WithResponseSchema(http.StatusOK, "The report", agentchat.Flag{}),
+			forge.WithResponseSchema(http.StatusNotFound, "Not the platform owner, or no such report", nil),
+			forge.WithInvalidates("Flag[]"),
 		),
 	)
 }

@@ -159,8 +159,8 @@ func TestPlatformFlagsAreTheOwnersAlone(t *testing.T) {
 			p    *security.Principal
 		}{
 			{"anonymous", nil},
-			{"a workspace admin", &security.Principal{OrgID: "org_1", UserID: security.RoleAdmin}},
-			{"a workspace owner", &security.Principal{OrgID: "org_1", UserID: security.RoleOwner}},
+			{"a workspace admin", &security.Principal{OrgID: "org_1", UserID: "usr_admin"}},
+			{"a workspace owner", &security.Principal{OrgID: "org_1", UserID: "usr_workspace_owner"}},
 			{"the owner's API key", &security.Principal{OrgID: "org_9", UserID: platformOwnerID, KeyID: "key_1"}},
 			{"the agent for the owner", &security.Principal{OrgID: "org_9", UserID: security.AgentSubject("org_9"), Kind: security.KindAgent, OnBehalfOf: &owner}},
 			{"the owner read-only", &security.Principal{OrgID: "org_9", UserID: platformOwnerID, ReadOnly: true}},
@@ -262,9 +262,10 @@ func TestFlagRoutesRegistered(t *testing.T) {
 	}
 }
 
-// The flag route is in the OpenAPI spec for the clients. The platform
-// routes stay out of it, as the platform owner's billing routes do.
-func TestPlatformFlagsStayOutOfOpenAPI(t *testing.T) {
+// Every flag route is in the OpenAPI spec, so the clients get typed
+// calls. The platform routes are there too, as the other platform routes
+// are: their gate hides them at runtime, not the spec.
+func TestFlagRoutesAreInOpenAPI(t *testing.T) {
 	r := forge.NewRouter(forge.WithOpenAPI(forge.OpenAPIConfig{Title: "Loomplane", Version: "1", SpecEnabled: true}))
 	chat := &fakeChat{}
 	if err := mountChatRoutes(r, nil, &agentscope.Binder{Tenants: tenants{on: true}}, chat, &fakeTasks{}); err != nil {
@@ -273,15 +274,31 @@ func TestPlatformFlagsStayOutOfOpenAPI(t *testing.T) {
 	if err := mountPlatformFlagRoutes(r, nil, testIsOwner, chat); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(r.OpenAPISpec())
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := string(raw)
-	if !strings.Contains(spec, "/api/v1/agent/conversations/{id}/turns/{task}/flag") || !strings.Contains(spec, "agentConversations.flag") {
-		t.Fatal("the flag route is missing from the OpenAPI spec")
-	}
-	if strings.Contains(spec, "/api/v1/platform/agent") || strings.Contains(spec, "platformAgentFlags") {
-		t.Fatal("the platform flag routes are in the OpenAPI spec")
+	spec := r.OpenAPISpec()
+	for path, ops := range map[string]map[string]string{
+		"/api/v1/agent/conversations/{id}/turns/{task}/flag": {"post": "agentConversations.flag"},
+		"/api/v1/platform/agent/flags":                       {"get": "platformAgentFlags.list"},
+		"/api/v1/platform/agent/flags/{id}/dismiss":          {"post": "platformAgentFlags.dismiss"},
+	} {
+		item, ok := spec.Paths[path]
+		if !ok || item == nil {
+			t.Errorf("%s is missing from the OpenAPI spec", path)
+			continue
+		}
+		raw, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var byMethod map[string]struct {
+			OperationID string `json:"operationId"`
+		}
+		if err := json.Unmarshal(raw, &byMethod); err != nil {
+			t.Fatal(err)
+		}
+		for method, name := range ops {
+			if byMethod[method].OperationID != name {
+				t.Errorf("%s %s is %q, want %q", method, path, byMethod[method].OperationID, name)
+			}
+		}
 	}
 }
