@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -100,6 +101,20 @@ func (n *NativeEnvironments) FallBack(ctx context.Context, job *Job, provider, s
 		return err
 	}
 	return n.Notify.NotifyFallback(ctx, pe, environment)
+}
+
+// otherNativeUsers reports whether another environment (or, on Vercel,
+// another service) of the connection records or claims a native deploy on
+// the provider project, leaving out the row of the environment and scope
+// doing the asking.
+func otherNativeUsers(ctx context.Context, store ProviderEnvironmentStore, provider, orgID, connectionID, projectID, environmentID, scope string) (bool, error) {
+	sharing, err := store.SharingProject(ctx, orgID, provider, connectionID, projectID)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(sharing, func(pe *ProviderEnvironment) bool {
+		return pe.EnvironmentID != environmentID || pe.Scope != scope
+	}), nil
 }
 
 func providerName(provider string) string {

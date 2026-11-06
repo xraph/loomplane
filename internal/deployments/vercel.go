@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync"
 
@@ -391,7 +390,7 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 	}
 	if s.CreatedProject {
 		job := d.job
-		others, err := v.otherNativeUsers(ctx, job.Deployment.OrgID, job.Connection.ID, s.ProjectID, job.Deployment.EnvironmentID, job.Action.Name)
+		others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", job.Deployment.OrgID, job.Connection.ID, s.ProjectID, job.Deployment.EnvironmentID, job.Action.Name)
 		if err != nil {
 			return fmt.Errorf("check who uses the vercel project: %w", err)
 		}
@@ -404,19 +403,6 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 		d.save()
 	}
 	return nil
-}
-
-// otherNativeUsers reports whether another environment or service records
-// or claims a native deploy on the project, leaving out the row of the
-// environment and scope doing the asking.
-func (v *Vercel) otherNativeUsers(ctx context.Context, orgID, connectionID, projectID, environmentID, scope string) (bool, error) {
-	sharing, err := v.Environments.Store.SharingProject(ctx, orgID, "vercel", connectionID, projectID)
-	if err != nil {
-		return false, err
-	}
-	return slices.ContainsFunc(sharing, func(pe *ProviderEnvironment) bool {
-		return pe.EnvironmentID != environmentID || pe.Scope != scope
-	}), nil
 }
 
 // deploy uploads the commit and starts a deployment of it to target.
@@ -604,7 +590,7 @@ func (v *Vercel) forgetNative(ctx context.Context, job *Job, b *planning.Binding
 	if connID == "" && job.Connection != nil {
 		connID = job.Connection.ID
 	}
-	others, err := v.otherNativeUsers(ctx, b.OrgID, connID, projectID, envID, b.Name)
+	others, err := otherNativeUsers(ctx, v.Environments.Store, "vercel", b.OrgID, connID, projectID, envID, b.Name)
 	if err != nil {
 		return fmt.Errorf("check who uses the vercel project: %w", err)
 	}

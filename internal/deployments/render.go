@@ -26,8 +26,16 @@ import (
 // Each service and environment is a Render service of its own, named the
 // way a Vercel project is, created with automatic deploys off so that
 // only an approved commit ever runs.
+//
+// With Environments set, a Loomplane project is one Render project and
+// each environment's services and datastores go in a Render environment
+// of it with the environment's name. An environment Render won't give a
+// project or environment falls back to standalone services and
+// datastores, which is how every environment deploys when Environments is
+// nil.
 type Render struct {
-	Client *render.Client
+	Client       *render.Client
+	Environments *NativeEnvironments
 }
 
 var _ Executor = (*Render)(nil)
@@ -57,6 +65,15 @@ const (
 type renderState struct {
 	ServiceID string `json:"service_id,omitempty"`
 	DeployID  string `json:"deploy_id,omitempty"`
+	// Mode is ModeNative or ModeFallback once the job knows which; empty
+	// when Environments is nil.
+	Mode          string `json:"mode,omitempty"`
+	ProjectID     string `json:"project_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	// CreatedProject is set when this job made the Render project, with
+	// the environment as its first. A fallback removes it, and nothing
+	// else, when no other environment uses it.
+	CreatedProject bool `json:"created_project,omitempty"`
 }
 
 func renderKey(job *Job) render.Key {
@@ -73,6 +90,28 @@ func RenderName(job *Job) string {
 	return strings.ToLower(job.Action.Name + "-" + job.Deployment.Environment + "-" + idSuffix(job.Deployment.ProjectID))
 }
 
+// RenderProjectName is the Render project a Loomplane project's native
+// environments share.
+func RenderProjectName(job *Job) string {
+	return "loomplane-" + idSuffix(job.Deployment.ProjectID)
+}
+
+// renderCheckpoint reads the job's checkpoint and returns a function that
+// saves it.
+func renderCheckpoint(job *Job) (state *renderState, save func()) {
+	state = &renderState{}
+	if len(job.Resume) > 0 {
+		_ = json.Unmarshal(job.Resume, state) //nolint:errcheck // an unreadable checkpoint starts over
+	}
+	return state, func() {
+		if job.Checkpoint == nil {
+			return
+		}
+		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
+		_ = job.Checkpoint(data)       //nolint:errcheck // the next heartbeat retries it
+	}
+}
+
 // Apply implements Executor.
 func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if job.Action.Resource != nil {
@@ -83,14 +122,7 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, fmt.Errorf("%w: render runs services and provisions datastores, not %s", ErrNoExecutor, job.Action.Subject)
 	}
 	key := renderKey(job)
-	var state renderState
-	if len(job.Resume) > 0 {
-		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
-	}
-	save := func() {
-		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
-		_ = job.Checkpoint(data)       //nolint:errcheck // the next heartbeat retries it
-	}
+	state, save := renderCheckpoint(job)
 	ctx = progress.With(ctx, func(m string) {
 		job.Progress(StepBuilding, m)
 		save()
@@ -107,14 +139,20 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if spec.EnvironmentID, err = r.environment(ctx, job, key, state, save); err != nil {
+		return nil, err
+	}
 	job.Progress(StepDeploying, "Setting up the Render service")
 	svc, err := r.Client.EnsureService(ctx, key, spec)
 	if err != nil {
 		return nil, err
 	}
 	state.ServiceID = svc.ID
-	if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
+	if checkpointErr := checkpointCloudIdentity(job, *state); checkpointErr != nil {
 		return nil, checkpointErr
+	}
+	if recordErr := r.recordNative(ctx, job, state); recordErr != nil {
+		return nil, recordErr
 	}
 	if state.DeployID == "" {
 		d, derr := r.Client.DeployCommit(ctx, key, svc.ID, job.CommitSHA)
@@ -139,6 +177,127 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	return &Outcome{ExternalID: svc.ID, URL: renderAddress(spec.Type, svc, cfg.Port), Revision: d.ID}, nil
+}
+
+// environment is the Render environment the job's service or datastore
+// goes in: the Loomplane environment's, in the Loomplane project's Render
+// project, made when it's missing. It's "" when the resource stands on its
+// own: without Environments, and when the environment fell back, now or
+// in an earlier deploy (a fallback is sticky). Render refusing the project
+// or environment falls back here, so the same job carries on standalone.
+func (r *Render) environment(ctx context.Context, job *Job, key render.Key, state *renderState, save func()) (string, error) {
+	if r.Environments == nil || job.Connection == nil || state.Mode == ModeFallback {
+		return "", nil
+	}
+	rec, err := r.Environments.Record(ctx, job, "render", "")
+	if err != nil {
+		return "", err
+	}
+	if rec != nil && rec.Mode == ModeFallback {
+		// The checkpointed project and environment belong to the native
+		// layout, not the standalone resource.
+		*state = renderState{Mode: ModeFallback, ServiceID: state.ServiceID, DeployID: state.DeployID}
+		save()
+		return "", nil
+	}
+	envID, err := r.nativeEnvironment(ctx, job, key, state, rec, save)
+	var refusal *nativeRefusalError
+	if !errors.As(err, &refusal) {
+		return envID, err
+	}
+	if state.DeployID != "" {
+		// A deploy of this job is already running in the environment.
+		return "", refusal.err
+	}
+	if err := r.undoNative(ctx, job, key, state, save); err != nil {
+		return "", err
+	}
+	if err := r.Environments.FallBack(ctx, job, "render", "", refusal.reason, refusal.permanent); err != nil {
+		return "", err
+	}
+	*state = renderState{Mode: ModeFallback, ServiceID: state.ServiceID, DeployID: state.DeployID}
+	save()
+	return "", nil
+}
+
+// nativeEnvironment ensures the Render project and the environment in it,
+// claiming the project before anything else is made, so another
+// environment's fallback never removes it from under this one. Render
+// refusing either comes back as a *nativeRefusalError.
+func (r *Render) nativeEnvironment(ctx context.Context, job *Job, key render.Key, state *renderState, rec *ProviderEnvironment, save func()) (string, error) {
+	state.Mode = ModeNative
+	name := job.Deployment.Environment
+	job.Progress(StepDeploying, "Setting up the Render project")
+	project, created, err := r.Client.EnsureProjectCreated(ctx, key, RenderProjectName(job), name)
+	if err != nil {
+		return "", refusedRenderNative(err)
+	}
+	if state.ProjectID != "" && state.ProjectID != project.ID {
+		return "", errors.New("the Render project identity changed since this deployment started")
+	}
+	state.ProjectID = project.ID
+	if created {
+		state.CreatedProject = true
+	}
+	save()
+	if rec == nil || rec.ProjectRef != project.ID {
+		if claimErr := r.Environments.Native(ctx, job, "render", "", project.ID, ""); claimErr != nil {
+			return "", fmt.Errorf("claim the render project: %w", claimErr)
+		}
+	}
+	env, _, err := r.Client.EnsureEnvironmentCreated(ctx, key, project.ID, name)
+	if err != nil {
+		return "", refusedRenderNative(err)
+	}
+	state.EnvironmentID = env.ID
+	save()
+	return env.ID, nil
+}
+
+// refusedRenderNative marks err as a refusal when Render's answer means it
+// won't give the workspace a project or environment. Anything else,
+// transient errors included, is returned as it is and fails the deploy.
+func refusedRenderNative(err error) error {
+	if reason, permanent, ok := render.FallbackReason(err); ok {
+		return &nativeRefusalError{reason: reason, permanent: permanent, err: err}
+	}
+	return err
+}
+
+// undoNative removes what this job made on Render for the native
+// environment Render then refused: the project, with the environment it
+// was made with, when no other environment records or claims it. Nothing
+// that existed before the job is touched, and no service or datastore is,
+// since none is moved before the environment exists.
+func (r *Render) undoNative(ctx context.Context, job *Job, key render.Key, state *renderState, save func()) error {
+	if !state.CreatedProject {
+		return nil
+	}
+	d := job.Deployment
+	others, err := otherNativeUsers(ctx, r.Environments.Store, "render", d.OrgID, job.Connection.ID, state.ProjectID, d.EnvironmentID, "")
+	if err != nil {
+		return fmt.Errorf("check who uses the render project: %w", err)
+	}
+	if !others {
+		if err := r.Client.DeleteProject(ctx, key, state.ProjectID); err != nil {
+			return fmt.Errorf("remove the unused render project: %w", err)
+		}
+	}
+	state.CreatedProject, state.ProjectID = false, ""
+	save()
+	return nil
+}
+
+// recordNative records the environment as native once a resource is in
+// it.
+func (r *Render) recordNative(ctx context.Context, job *Job, state *renderState) error {
+	if state.Mode != ModeNative || state.EnvironmentID == "" {
+		return nil
+	}
+	if err := r.Environments.Native(ctx, job, "render", "", state.ProjectID, state.EnvironmentID); err != nil {
+		return fmt.Errorf("record the native render environment: %w", err)
+	}
+	return nil
 }
 
 // renderAddress is where a service answers: its public address, or for a
@@ -300,11 +459,19 @@ func (r *Render) applyDatastore(ctx context.Context, job *Job) (*Outcome, error)
 		spec.Region = renderRegion
 	}
 	key := renderKey(job)
+	state, save := renderCheckpoint(job)
+	var err error
+	if spec.EnvironmentID, err = r.environment(ctx, job, key, state, save); err != nil {
+		return nil, err
+	}
 	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Making "+spec.Name+" on Render")
 	d, err := r.Client.EnsureDatastore(ctx, key, spec)
 	if err != nil {
 		return nil, err
+	}
+	if recordErr := r.recordNative(ctx, job, state); recordErr != nil {
+		return nil, recordErr
 	}
 	addr, err := r.Client.Address(ctx, key, spec.Kind, d.ID)
 	if err != nil {
@@ -326,16 +493,102 @@ func datastoreID(external string) (kind, id string, ok bool) {
 	return kind, id, true
 }
 
-// Remove implements Executor. A datastore goes with its data.
+// Remove implements Executor. A datastore goes with its data. With
+// Environments, the Render environment the resource was in goes too once
+// it's empty, if it's the one Loomplane recorded for the binding's
+// environment, and then the Render project once no other environment uses
+// it.
 func (r *Render) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	key := renderKey(job)
-	if kind, id, ok := datastoreID(b.ExternalID); ok {
+	kind, id, datastore := datastoreID(b.ExternalID)
+	envID, err := r.resourceEnvironment(ctx, key, b.ExternalID)
+	if err != nil {
+		return err
+	}
+	if datastore {
 		if err := r.Client.DeleteDatastore(ctx, key, kind, id); err != nil {
 			return err
 		}
-		return job.Forget(ctx)
+		if err := job.Forget(ctx); err != nil {
+			return err
+		}
+	} else if err := r.Client.DeleteService(ctx, key, b.ExternalID); err != nil {
+		return err
 	}
-	return r.Client.DeleteService(ctx, key, b.ExternalID)
+	if envID == "" {
+		return nil
+	}
+	return r.removeEnvironment(ctx, job, key, b, envID)
+}
+
+// resourceEnvironment is the Render environment a binding's service or
+// datastore is in, or "" without Environments or when it's gone.
+func (r *Render) resourceEnvironment(ctx context.Context, key render.Key, external string) (string, error) {
+	if r.Environments == nil || external == "" {
+		return "", nil
+	}
+	if kind, id, ok := datastoreID(external); ok {
+		d, err := r.Client.GetDatastore(ctx, key, kind, id)
+		if render.IsNotFound(err) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return d.EnvironmentID, nil
+	}
+	s, err := r.Client.GetService(ctx, key, external)
+	if render.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return s.EnvironmentID, nil
+}
+
+// removeEnvironment deletes the Render environment a removed resource was
+// in once it's empty, with the binding's record, and then the project when
+// no other environment uses it. An environment Loomplane didn't record for
+// the binding's environment is never touched.
+func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key, b *planning.Binding, envID string) error {
+	environmentID := b.EnvironmentID
+	if environmentID == "" {
+		environmentID = job.Deployment.EnvironmentID
+	}
+	connID := b.ConnectionID
+	if connID == "" && job.Connection != nil {
+		connID = job.Connection.ID
+	}
+	store := r.Environments.Store
+	rec, err := store.ProviderEnvironment(ctx, b.OrgID, environmentID, "render", connID, "")
+	if err != nil {
+		return err
+	}
+	if rec == nil || rec.Mode != ModeNative || rec.EnvironmentRef != envID {
+		return nil
+	}
+	empty, err := r.Client.EnvironmentEmpty(ctx, key, envID)
+	if err != nil && !render.IsNotFound(err) {
+		return fmt.Errorf("check the render environment: %w", err)
+	}
+	if err == nil && !empty {
+		return nil
+	}
+	if delErr := r.Client.DeleteEnvironment(ctx, key, envID); delErr != nil {
+		return fmt.Errorf("remove the empty render environment: %w", delErr)
+	}
+	if forgetErr := store.DeleteProviderEnvironment(ctx, rec); forgetErr != nil {
+		return fmt.Errorf("forget the native render environment: %w", forgetErr)
+	}
+	others, err := otherNativeUsers(ctx, store, "render", b.OrgID, connID, rec.ProjectRef, environmentID, "")
+	if err != nil {
+		return fmt.Errorf("check who uses the render project: %w", err)
+	}
+	if others || rec.ProjectRef == "" {
+		return nil
+	}
+	return r.Client.DeleteProject(ctx, key, rec.ProjectRef)
 }
 
 // Observe implements Executor. A service is changed when its newest

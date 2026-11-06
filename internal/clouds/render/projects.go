@@ -25,17 +25,24 @@ type Environment struct {
 // EnsureProject finds the workspace's project called name, or makes it
 // with firstEnvironment in it (Render won't make one with none).
 func (c *Client) EnsureProject(ctx context.Context, key Key, name, firstEnvironment string) (*Project, error) {
+	p, _, err := c.EnsureProjectCreated(ctx, key, name, firstEnvironment)
+	return p, err
+}
+
+// EnsureProjectCreated is EnsureProject, and says whether this call made
+// the project, and with it firstEnvironment.
+func (c *Client) EnsureProjectCreated(ctx context.Context, key Key, name, firstEnvironment string) (*Project, bool, error) {
 	var page []struct {
 		Project Project `json:"project"`
 	}
 	q := url.Values{"name": {name}, "ownerId": {key.OwnerID}, "limit": {"20"}}
 	if err := c.do(ctx, key, http.MethodGet, "/projects", q, nil, &page); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, p := range page {
 		if p.Project.Name == name {
 			pr := p.Project
-			return &pr, nil
+			return &pr, false, nil
 		}
 	}
 	body := map[string]any{
@@ -44,9 +51,9 @@ func (c *Client) EnsureProject(ctx context.Context, key Key, name, firstEnvironm
 	}
 	var created Project
 	if err := c.do(ctx, key, http.MethodPost, "/projects", nil, body, &created); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return &created, nil
+	return &created, true, nil
 }
 
 func (c *Client) findEnvironment(ctx context.Context, key Key, projectID, name string) (*Environment, error) {
@@ -69,27 +76,34 @@ func (c *Client) findEnvironment(ctx context.Context, key Key, projectID, name s
 // EnsureEnvironment finds the project's environment called name, or makes
 // it. A 409 from a concurrent make is settled by reading it again.
 func (c *Client) EnsureEnvironment(ctx context.Context, key Key, projectID, name string) (*Environment, error) {
+	e, _, err := c.EnsureEnvironmentCreated(ctx, key, projectID, name)
+	return e, err
+}
+
+// EnsureEnvironmentCreated is EnsureEnvironment, and says whether this
+// call made the environment. One a concurrent caller made is not.
+func (c *Client) EnsureEnvironmentCreated(ctx context.Context, key Key, projectID, name string) (*Environment, bool, error) {
 	e, err := c.findEnvironment(ctx, key, projectID, name)
 	if err != nil || e != nil {
-		return e, err
+		return e, false, err
 	}
 	var created Environment
 	err = c.do(ctx, key, http.MethodPost, "/environments", nil, map[string]string{"name": name, "projectId": projectID}, &created)
 	if err == nil {
-		return &created, nil
+		return &created, true, nil
 	}
 	var ae *APIError
 	if !errors.As(err, &ae) || ae.Status != http.StatusConflict {
-		return nil, err
+		return nil, false, err
 	}
 	e, ferr := c.findEnvironment(ctx, key, projectID, name)
 	if ferr != nil {
-		return nil, ferr
+		return nil, false, ferr
 	}
 	if e == nil {
-		return nil, err
+		return nil, false, err
 	}
-	return e, nil
+	return e, false, nil
 }
 
 // AddToEnvironment moves resources into an environment. They keep their
