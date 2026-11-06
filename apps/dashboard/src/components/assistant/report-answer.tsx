@@ -94,8 +94,9 @@ function ReportForm({
       <DialogHeader>
         <DialogTitle>Report this answer</DialogTitle>
         <DialogDescription>
-          Tell whoever runs this Loomplane what was wrong with it. They see your
-          question and this answer, and nothing else from the conversation.
+          Tell whoever runs this Loomplane what was wrong with it. They see the
+          question, this answer and your note, and nothing else from the
+          conversation. They keep the report after the conversation is deleted.
         </DialogDescription>
       </DialogHeader>
       <fieldset className="grid gap-2">

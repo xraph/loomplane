@@ -213,17 +213,24 @@ export default function PrivacyPage() {
       <p>
         Your conversations with the agent (your messages, its answers and the
         steps it took) stay on the server until you delete them, or until the
-        workspace is deleted. Only you can add to or delete a conversation you
-        started. Admins of the workspace can read it. The questions the agent
-        asks people, their answers, and the reports it opens about problems in
-        production stay with the workspace like the rest of its history. The
-        audit trail records each step the agent takes, but never a secret value,
-        a question's text or an answer.
+        workspace is deleted. A reported answer is the exception: its report
+        keeps a copy, as the next paragraph explains. Only you can add to or
+        delete a conversation you started. Admins of the workspace can read it.
+        The questions the agent asks people, their answers, and the reports it
+        opens about problems in production stay with the workspace like the rest
+        of its history. The audit trail records each step the agent takes, but
+        never a secret value, a question's text or an answer.
       </p>
       <p>
-        If you report an answer, your question, the answer and your note go to
+        If you report an answer, the question, the answer and your note go to
         whoever runs the server, so they can review it. On{" "}
-        <code>app.loomplane.com</code> that's us. The audit trail records the
+        <code>app.loomplane.com</code> that's us. Workspace admins can read
+        every conversation in the workspace, so an admin can report an answer in
+        one you started, and then your question goes too. A report doesn't
+        expire. It stays after the conversation is deleted, so the operator can
+        still review it, until they remove it, and you can ask them to. On{" "}
+        <code>app.loomplane.com</code>, email <Mail /> (the address under{" "}
+        <a href="#your-rights">Your rights</a>). The audit trail records the
         report with its ids and reason, not the text.
       </p>
       <p>
@@ -282,7 +289,7 @@ export default function PrivacyPage() {
         steps.
       </p>
 
-      <h2>Your rights</h2>
+      <h2 id="your-rights">Your rights</h2>
       <p>
         Wherever you live, you can ask us for a copy of the data we hold about
         you, ask us to correct it, or ask us to delete it. Depending on where
