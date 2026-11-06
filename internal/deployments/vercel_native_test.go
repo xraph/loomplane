@@ -594,3 +594,51 @@ func TestVercelRefusalAfterDeployDoesNotFallBack(t *testing.T) {
 		t.Fatal("deployed to a separate project")
 	}
 }
+
+// legacyBinding is web's binding on a Vercel project of its own.
+func legacyBinding(drift string) *planning.Binding {
+	return &planning.Binding{ID: "bind_web", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ExternalID: "prj_old", ConnectionID: "conn", Drift: drift}
+}
+
+// TestVercelRefusesNativeOverLegacyBindingWithoutMove: a plan made while
+// staging's fallback record still existed updates web on its own project.
+// Run after "try again" cleared the record, it would deploy into the shared
+// project and leave the old one serving with nothing tracking it.
+func TestVercelRefusesNativeOverLegacyBindingWithoutMove(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.job.Binding = legacyBinding("")
+	h.job.Action.Op = planning.Update
+
+	_, err := h.exec.Apply(t.Context(), h.job)
+	if err == nil || !strings.Contains(err.Error(), "Plan again") || !strings.Contains(err.Error(), "prj_old") {
+		t.Fatalf("Apply: %v, want a refusal that says to plan again", err)
+	}
+	for _, c := range h.api.callLog() {
+		if !strings.HasPrefix(c, "checkpoint ") {
+			t.Fatalf("called Vercel: %v", h.api.callLog())
+		}
+	}
+	if len(h.store.rows) != 0 {
+		t.Fatalf("rows = %v, want none", h.store.rows)
+	}
+}
+
+// A legacy binding still goes native when the plan moves it, when it's
+// already native, or when what it ran on was deleted outside Loomplane.
+func TestVercelGoesNativeOverLegacyBindingWhenAllowed(t *testing.T) {
+	for name, set := range map[string]func(*Job){
+		"native move":       func(j *Job) { j.Action.NativeMove = true },
+		"deleted outside":   func(j *Job) { j.Binding = legacyBinding(planning.DriftMissing); j.Action.Op = planning.Create },
+		"already native":    func(j *Job) { j.Binding.ExternalID = "prj_1#env_9" },
+		"nothing bound yet": func(j *Job) { j.Binding = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newNativeHarness(t, "staging", "staging", true)
+			h.job.Binding = legacyBinding("")
+			set(h.job)
+			if out := h.apply(t); out.ExternalID != "prj_1#env_9" {
+				t.Fatalf("ExternalID = %q, want prj_1#env_9", out.ExternalID)
+			}
+		})
+	}
+}

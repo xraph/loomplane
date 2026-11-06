@@ -227,6 +227,9 @@ func (d *vercelDeploy) native(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if rec == nil || rec.Mode != ModeFallback {
+		if err := d.refuseOrphaning(); err != nil {
+			return false, err
+		}
 		d.record = rec
 		return true, nil
 	}
@@ -235,6 +238,27 @@ func (d *vercelDeploy) native(ctx context.Context) (bool, error) {
 	*d.state = vercelState{Mode: ModeFallback}
 	d.save()
 	return false, nil
+}
+
+// refuseOrphaning stops a native deploy over a service that runs on a
+// Vercel project of its own when the plan doesn't move it. Such a plan was
+// made while a fallback record kept the service there, and "try again"
+// cleared the record since: deploying into the shared project would rebind
+// the service and leave its own project serving, with nothing tracking it.
+// A first deploy, a move (the runner binds nothing to either), a binding
+// that's native already, and one whose project was deleted outside
+// Loomplane have nothing to leave behind.
+func (d *vercelDeploy) refuseOrphaning() error {
+	job, b := d.job, d.job.Binding
+	if b == nil || job.Action.NativeMove || b.Drift == planning.DriftMissing {
+		return nil
+	}
+	projectID, _, native := planning.ParseVercelRef(b.ExternalID)
+	if native {
+		return nil
+	}
+	return fmt.Errorf("%s runs on a Vercel project of its own (%s), and this plan doesn't move it into its shared project's %s environment, so nothing was deployed. Plan again, and the new plan moves %s there and removes the old project once it's up",
+		job.Action.Name, projectID, job.Deployment.Environment, job.Action.Name)
 }
 
 // run deploys the service: into its native environment of the shared
