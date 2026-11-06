@@ -1,12 +1,12 @@
 // Report: the way to tell whoever runs this Loomplane that an agent's
 // answer was wrong, offensive or harmful. Google Play asks for it in the
 // app, and it's useful anywhere the agent talks to people.
-import { FlagIcon } from "@phosphor-icons/react"
 import { useState } from "react"
 
 import { messageOf } from "@/client/errors"
 import { useAgentConversationsFlag } from "@/client/forge/loomplane/hooks"
 import { useMutation } from "@/client/hooks"
+import { FlaggedAnswersIcon as FlagIcon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,

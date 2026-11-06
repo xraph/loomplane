@@ -53,12 +53,13 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-function show(platformAdmin: boolean) {
+function show(platformAdmin: boolean, platformOwner = platformAdmin) {
   setInstance({
     setupPending: false,
     waitlist: false,
     setupTokenRequired: false,
     platformAdmin,
+    platformOwner,
   })
   vi.stubGlobal("fetch", async () =>
     Response.json({ projects: [], members: [] })
@@ -109,6 +110,13 @@ it("shows Flagged answers to a platform admin", async () => {
   await userEvent.click(screen.getByText("Settings"))
   const link = await screen.findByRole("menuitem", { name: "Flagged answers" })
   expect(link).toHaveAttribute("href", "/platform/flags")
+})
+
+it("hides Flagged answers from a platform admin who isn't the owner", async () => {
+  show(true, false)
+  await userEvent.click(screen.getByText("Settings"))
+  await screen.findByRole("menuitem", { name: "Platform Cloud" })
+  expect(screen.queryByRole("menuitem", { name: "Flagged answers" })).toBeNull()
 })
 
 it("hides Flagged answers from everyone else", async () => {

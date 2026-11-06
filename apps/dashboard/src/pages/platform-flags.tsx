@@ -29,8 +29,8 @@ const filters: { value: Status; label: string }[] = [
 
 /** PlatformFlags is the platform owner's page for agent answers people reported. */
 export function PlatformFlags() {
-  const { platformAdmin } = useInstance()
-  if (!platformAdmin) return <PageNotFound />
+  const { platformOwner } = useInstance()
+  if (!platformOwner) return <PageNotFound />
   return <Flags />
 }
 

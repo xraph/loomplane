@@ -46,6 +46,7 @@ function admin() {
     waitlist: false,
     setupTokenRequired: false,
     platformAdmin: true,
+    platformOwner: true,
   })
 }
 
@@ -119,6 +120,38 @@ it("dismisses a flag", async () => {
       )
     ).toBe(true)
   )
+})
+
+it("shows an admin who isn't the owner the not-found view", () => {
+  setInstance({
+    setupPending: false,
+    waitlist: false,
+    setupTokenRequired: false,
+    platformAdmin: true,
+  })
+  mount()
+  expect(screen.getByText("Page not found")).toBeTruthy()
+})
+
+it("shows a dismissed report's date and no Dismiss button", async () => {
+  admin()
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        flags: [
+          {
+            ...open,
+            dismissed_by: "usr_owner",
+            dismissed_at: "2026-11-04T10:00:00Z",
+          },
+        ],
+      })
+    )
+  )
+  mount()
+  expect(await screen.findByText(/^Dismissed /)).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull()
 })
 
 it("shows anyone else the not-found view", () => {
