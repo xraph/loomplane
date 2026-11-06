@@ -67,6 +67,11 @@ type vercelState struct {
 	// Target is the native environment: "production", "preview" or the
 	// custom environment's id.
 	Target string `json:"target,omitempty"`
+	// CreatedProject and CreatedEnvironment (a custom environment id) are
+	// what this job made on Vercel for a native deploy. A fallback removes
+	// those and nothing else.
+	CreatedProject     bool   `json:"created_project,omitempty"`
+	CreatedEnvironment string `json:"created_environment,omitempty"`
 }
 
 func token(job *Job) vercel.Token {
@@ -181,6 +186,9 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
 		if !errors.As(err, &refusal) {
 			return out, err
 		}
+		if err := d.undoNative(ctx); err != nil {
+			return nil, err
+		}
 		if err := v.Environments.FallBack(ctx, job, "vercel", job.Action.Name, refusal.reason, refusal.permanent); err != nil {
 			return nil, err
 		}
@@ -233,7 +241,7 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 		state.Mode = ModeNative
 	}
 	job.Progress(StepDeploying, "Setting up the Vercel project")
-	project, err := v.Client.EnsureProject(ctx, tok, name, d.settings)
+	project, created, err := v.Client.EnsureProjectCreated(ctx, tok, name, d.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +249,10 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 		return nil, errors.New("the Vercel project identity changed since this deployment started")
 	}
 	state.ProjectID = project.ID
+	if native && created {
+		state.CreatedProject = true
+		d.save()
+	}
 	if checkpointErr := checkpointCloudIdentity(job, *state); checkpointErr != nil {
 		return nil, checkpointErr
 	}
@@ -296,7 +308,7 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 	output := startManagedOutput(ctx, job, state.DeploymentID, state.LogAttempt, func(ctx context.Context, cursor string, follow bool, emit buildlogs.Emit) (string, bool, error) {
 		return v.Client.BuildLogs(ctx, tok, state.DeploymentID, cursor, follow, emit)
 	})
-	dep, err := v.Client.WaitDeployment(ctx, tok, state.DeploymentID)
+	dep, err := v.Client.WaitDeployment(ctx, tok, state.DeploymentID, target)
 	output.finish(ctx, dep != nil)
 	if err != nil {
 		// Vercel returns the deployment with an error only once it ended
@@ -328,14 +340,52 @@ func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project
 	}
 	t := vercel.Target{Builtin: et.Builtin}
 	if et.Builtin == "" {
-		env, err := d.v.Client.EnsureCustomEnvironment(ctx, d.tok, project.ID, strings.ToLower(et.Name))
+		env, created, err := d.v.Client.EnsureCustomEnvironmentCreated(ctx, d.tok, project.ID, strings.ToLower(et.Name))
 		if err != nil {
 			return vercel.Target{}, refusedNative(err)
 		}
 		t = vercel.Target{CustomID: env.ID}
+		if created {
+			d.state.CreatedEnvironment = env.ID
+		}
 	}
 	d.state.Target = targetRef(t)
 	return t, nil
+}
+
+// undoNative removes what this job made on Vercel for the native deploy
+// Vercel then refused: the custom environment with its variables, and the
+// shared project when no environment records a native deploy on it.
+// Nothing that existed before the job is touched. Each step is
+// checkpointed, so a retry picks up where this left off.
+func (d *vercelDeploy) undoNative(ctx context.Context) error {
+	v, tok, s := d.v, d.tok, d.state
+	if s.CreatedEnvironment != "" {
+		t := vercel.Target{CustomID: s.CreatedEnvironment}
+		if err := v.Client.DeleteEnv(ctx, tok, s.ProjectID, t); err != nil {
+			return fmt.Errorf("remove the refused vercel environment's variables: %w", err)
+		}
+		if err := v.Client.DeleteCustomEnvironment(ctx, tok, s.ProjectID, s.CreatedEnvironment); err != nil {
+			return fmt.Errorf("remove the refused vercel custom environment: %w", err)
+		}
+		s.CreatedEnvironment, s.Target = "", ""
+		d.save()
+	}
+	if s.CreatedProject {
+		job := d.job
+		sharing, err := v.Environments.Store.SharingProject(ctx, job.Deployment.OrgID, "vercel", job.Connection.ID, s.ProjectID)
+		if err != nil {
+			return fmt.Errorf("check who uses the vercel project: %w", err)
+		}
+		if len(sharing) == 0 {
+			if err := v.Client.DeleteProject(ctx, tok, s.ProjectID); err != nil {
+				return fmt.Errorf("remove the unused vercel project: %w", err)
+			}
+		}
+		s.CreatedProject, s.ProjectID = false, ""
+		d.save()
+	}
+	return nil
 }
 
 // deploy uploads the commit and starts a deployment of it to target.

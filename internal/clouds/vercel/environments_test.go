@@ -120,8 +120,8 @@ func TestEnsureCustomEnvironmentReadsBackOnConflict(t *testing.T) {
 		}
 	}))
 	defer api.Close()
-	e, err := New(api.URL).EnsureCustomEnvironment(t.Context(), Token{Value: "t"}, "prj_1", "staging")
-	if err != nil || e.ID != "env_9" {
+	e, created, err := New(api.URL).EnsureCustomEnvironmentCreated(t.Context(), Token{Value: "t"}, "prj_1", "staging")
+	if err != nil || e.ID != "env_9" || created {
 		t.Fatalf("got %+v, %v", e, err)
 	}
 }
@@ -191,8 +191,8 @@ func TestEnsureProjectReadsBackOnConflict(t *testing.T) {
 		}
 	}))
 	defer api.Close()
-	p, err := New(api.URL).EnsureProject(t.Context(), Token{Value: "t"}, "app", ProjectSettings{})
-	if err != nil || p.ID != "prj_1" {
+	p, created, err := New(api.URL).EnsureProjectCreated(t.Context(), Token{Value: "t"}, "app", ProjectSettings{})
+	if err != nil || p.ID != "prj_1" || created {
 		t.Fatalf("got %+v, %v", p, err)
 	}
 }
@@ -219,5 +219,81 @@ func TestFallbackReason(t *testing.T) {
 				t.Fatalf("got %q %v %v", reason, permanent, ok)
 			}
 		})
+	}
+}
+
+func TestEnsureReportsWhatItCreated(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":{"code":"not_found","message":"nope"}}`)
+		case r.URL.Path == "/v10/projects":
+			fmt.Fprint(w, `{"id":"prj_1","name":"app"}`)
+		case r.URL.Path == "/v9/projects/prj_1/custom-environments":
+			fmt.Fprint(w, `{"id":"env_9","slug":"staging"}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer api.Close()
+	c := New(api.URL)
+	p, created, err := c.EnsureProjectCreated(t.Context(), Token{Value: "t"}, "app", ProjectSettings{})
+	if err != nil || p.ID != "prj_1" || !created {
+		t.Fatalf("project: %+v, %v, %v", p, created, err)
+	}
+	e, created, err := c.EnsureCustomEnvironmentCreated(t.Context(), Token{Value: "t"}, "prj_1", "staging")
+	if err != nil || e.ID != "env_9" || !created {
+		t.Fatalf("custom environment: %+v, %v, %v", e, created, err)
+	}
+}
+
+func TestEnsureFoundOrRacedIsNotCreated(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v9/projects/app":
+			fmt.Fprint(w, `{"id":"prj_1","name":"app"}`)
+		case "/v9/projects/prj_1/custom-environments/staging":
+			fmt.Fprint(w, `{"id":"env_9","slug":"staging"}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+	}))
+	defer api.Close()
+	c := New(api.URL)
+	if _, created, err := c.EnsureProjectCreated(t.Context(), Token{Value: "t"}, "app", ProjectSettings{}); err != nil || created {
+		t.Fatalf("existing project: created %v, %v", created, err)
+	}
+	if _, created, err := c.EnsureCustomEnvironmentCreated(t.Context(), Token{Value: "t"}, "prj_1", "staging"); err != nil || created {
+		t.Fatalf("existing custom environment: created %v, %v", created, err)
+	}
+}
+
+func TestWaitDeploymentNeedsAnAliasOnlyInProduction(t *testing.T) {
+	gets := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gets++
+		if r.URL.Path != "/v13/deployments/dpl_1" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+		}
+		if gets > 1 {
+			fmt.Fprint(w, `{"id":"dpl_1","readyState":"READY","alias":["app.vercel.app"]}`)
+			return
+		}
+		fmt.Fprint(w, `{"id":"dpl_1","readyState":"READY","url":"app-abc.vercel.app"}`)
+	}))
+	defer api.Close()
+	c := New(api.URL)
+	for _, target := range []Target{Preview, {CustomID: "env_9"}} {
+		gets = 0
+		d, err := c.WaitDeployment(t.Context(), Token{Value: "t"}, "dpl_1", target)
+		if err != nil || gets != 1 || d.Address() != "https://app-abc.vercel.app" {
+			t.Fatalf("%+v: got %+v after %d reads, %v", target, d, gets, err)
+		}
+	}
+	gets = 0
+	d, err := c.WaitDeployment(t.Context(), Token{Value: "t"}, "dpl_1", Production)
+	if err != nil || gets != 2 || d.Address() != "https://app.vercel.app" {
+		t.Fatalf("production: got %+v after %d reads, %v", d, gets, err)
 	}
 }

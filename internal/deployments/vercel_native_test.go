@@ -28,6 +28,16 @@ func (s *roleStore) EnvironmentRole(context.Context, string, string, string) (st
 	return s.kind, s.name, s.first, nil
 }
 
+func (s *roleStore) SharingProject(_ context.Context, org, provider, conn, projectRef string) ([]*ProviderEnvironment, error) {
+	var out []*ProviderEnvironment
+	for _, pe := range s.rows {
+		if pe.OrgID == org && pe.Provider == provider && pe.ConnectionID == conn && pe.ProjectRef == projectRef && pe.Mode == ModeNative {
+			out = append(out, pe)
+		}
+	}
+	return out, nil
+}
+
 // fakeVercelAPI is a stateful Vercel API that records what it was asked.
 type fakeVercelAPI struct {
 	mu       sync.Mutex
@@ -38,8 +48,10 @@ type fakeVercelAPI struct {
 	deploys  []map[string]any
 	// customStatus, when set, is how Vercel answers a custom environment POST.
 	customStatus int
-	// refuseCustomEnv answers a variable POST for a custom environment with 403.
-	refuseCustomEnv bool
+	// customVarStatus, when set, is how Vercel answers a variable POST for
+	// a custom environment.
+	customVarStatus int
+	created         int
 }
 
 func newFakeVercelAPI() *fakeVercelAPI {
@@ -80,11 +92,28 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && r.URL.Path == "/v10/projects":
 		var body struct{ Name string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		id := fmt.Sprintf("prj_%d", len(f.projects)+1)
+		f.created++
+		id := fmt.Sprintf("prj_%d", f.created)
 		f.projects[body.Name] = id
 		_, _ = fmt.Fprintf(w, `{"id":%q,"name":%q}`, id, body.Name)
+	case r.Method == http.MethodDelete && len(parts) == 3 && parts[0] == "v9" && parts[1] == "projects":
+		for name, id := range f.projects {
+			if id == parts[2] {
+				delete(f.projects, name)
+			}
+		}
+		_, _ = io.WriteString(w, `{}`)
 	case len(parts) >= 4 && parts[0] == "v9" && parts[3] == "custom-environments":
 		project := parts[2]
+		if r.Method == http.MethodDelete {
+			for key, id := range f.envs {
+				if strings.HasPrefix(key, project+"/") && id == parts[4] {
+					delete(f.envs, key)
+				}
+			}
+			_, _ = io.WriteString(w, `{}`)
+			return
+		}
 		if r.Method == http.MethodGet {
 			if id, ok := f.envs[project+"/"+parts[4]]; ok {
 				_, _ = fmt.Fprintf(w, `{"id":%q,"slug":%q}`, id, parts[4])
@@ -105,8 +134,8 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var items []map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&items)
 		f.envPosts = append(f.envPosts, items)
-		if f.refuseCustomEnv && len(items) > 0 && items[0]["customEnvironmentIds"] != nil {
-			fail(http.StatusForbidden, "sensitive variables aren't available for custom environments")
+		if f.customVarStatus != 0 && len(items) > 0 && items[0]["customEnvironmentIds"] != nil {
+			fail(f.customVarStatus, "sensitive variables aren't available for custom environments")
 			return
 		}
 		_, _ = io.WriteString(w, `{}`)
@@ -317,7 +346,7 @@ func TestVercelFallsBackWhenCustomEnvironmentRefused(t *testing.T) {
 
 func TestVercelFallsBackWhenSensitiveVariableRefused(t *testing.T) {
 	h := newNativeHarness(t, "staging", "staging", true)
-	h.api.refuseCustomEnv = true
+	h.api.customVarStatus = http.StatusForbidden
 	out := h.apply(t)
 
 	id := h.api.projects["web-staging-abc12345"]
@@ -420,5 +449,78 @@ func TestVercelPendingResourceIsTheEnvironment(t *testing.T) {
 		if (err != nil) != c.fails || got != c.want {
 			t.Errorf("PendingCloudResource(%s) = %q, %v; want %q, fails %v", c.resume, got, err, c.want, c.fails)
 		}
+	}
+}
+
+func TestVercelFallbackCleansUpWhatItCreated(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.api.customVarStatus = http.StatusPaymentRequired
+	out := h.apply(t)
+
+	if !h.api.called("DELETE /v9/projects/prj_1/custom-environments/env_9") || len(h.api.envs) != 0 {
+		t.Fatalf("the custom environment this job made is still there: %v", h.api.callLog())
+	}
+	if !h.api.called("DELETE /v9/projects/prj_1") || h.api.projects["web-abc12345"] != "" {
+		t.Fatalf("the shared project this job made is still there: %v", h.api.callLog())
+	}
+	id := h.api.projects["web-staging-abc12345"]
+	if id == "" || out.ExternalID != id {
+		t.Fatalf("ExternalID = %q, projects = %v, want the separate project", out.ExternalID, h.api.projects)
+	}
+	if row := h.row(); row == nil || row.Mode != ModeFallback {
+		t.Fatalf("row = %+v, want a fallback", row)
+	}
+}
+
+func TestVercelFallbackRetryCleansUpWhatItCreatedEarlier(t *testing.T) {
+	h := newNativeHarness(t, "staging", "staging", true)
+	h.api.projects["web-abc12345"] = "prj_1"
+	h.api.envs["prj_1/staging"] = "env_9"
+	h.api.created = 1
+	h.api.customVarStatus = http.StatusPaymentRequired
+	h.job.Resume = []byte(`{"project_id":"prj_1","target":"env_9","mode":"native","created_project":true,"created_environment":"env_9"}`)
+	h.apply(t)
+
+	if !h.api.called("DELETE /v9/projects/prj_1/custom-environments/env_9") || !h.api.called("DELETE /v9/projects/prj_1") {
+		t.Fatalf("the retry left what the first attempt made: %v", h.api.callLog())
+	}
+}
+
+func TestVercelFallbackKeepsSharedProject(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		prepare           func(h *nativeHarness)
+		envStatus, varSts int
+	}{
+		{"another environment uses it", func(h *nativeHarness) {
+			// Production's native deploy recorded the project this job
+			// goes on to make; it is shared, so it stays.
+			_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", ProjectID: "proj_abc12345", EnvironmentID: "env_production", Provider: "vercel", ConnectionID: "conn", Scope: "web", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "production"})
+		}, http.StatusPaymentRequired, 0},
+		{"the project existed before", func(h *nativeHarness) {
+			h.api.projects["web-abc12345"] = "prj_1"
+			h.api.created = 1
+		}, http.StatusPaymentRequired, 0},
+		{"the custom environment existed before", func(h *nativeHarness) {
+			h.api.projects["web-abc12345"] = "prj_1"
+			h.api.envs["prj_1/staging"] = "env_9"
+			h.api.created = 1
+		}, 0, http.StatusPaymentRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newNativeHarness(t, "staging", "staging", true)
+			tc.prepare(h)
+			h.api.customStatus, h.api.customVarStatus = tc.envStatus, tc.varSts
+			h.apply(t)
+
+			for _, c := range h.api.callLog() {
+				if strings.HasPrefix(c, "DELETE /v9/projects/prj_1") {
+					t.Fatalf("deleted what this job didn't make or another environment uses: %s", c)
+				}
+			}
+			if h.api.projects["web-staging-abc12345"] == "" {
+				t.Fatalf("projects = %v, want the separate project", h.api.projects)
+			}
+		})
 	}
 }

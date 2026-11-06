@@ -48,26 +48,34 @@ func (c *Client) GetCustomEnvironment(ctx context.Context, tok Token, projectID,
 // this slug, creating it when it's missing. Two environments racing to
 // create the same one both end up with it.
 func (c *Client) EnsureCustomEnvironment(ctx context.Context, tok Token, projectID, slug string) (*CustomEnvironment, error) {
+	e, _, err := c.EnsureCustomEnvironmentCreated(ctx, tok, projectID, slug)
+	return e, err
+}
+
+// EnsureCustomEnvironmentCreated is EnsureCustomEnvironment, and says
+// whether this call created it. One that existed, or that another caller
+// created first, is not created by this call.
+func (c *Client) EnsureCustomEnvironmentCreated(ctx context.Context, tok Token, projectID, slug string) (*CustomEnvironment, bool, error) {
 	e, err := c.GetCustomEnvironment(ctx, tok, projectID, slug)
 	if err == nil {
-		return e, nil
+		return e, false, nil
 	}
 	if !IsNotFound(err) {
-		return nil, fmt.Errorf("read the vercel custom environment: %w", err)
+		return nil, false, fmt.Errorf("read the vercel custom environment: %w", err)
 	}
 	var created CustomEnvironment
 	err = c.json(ctx, tok, http.MethodPost, customEnvPath(projectID), nil, map[string]any{"slug": slug}, &created)
 	var ae *APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusConflict {
 		if e, err = c.GetCustomEnvironment(ctx, tok, projectID, slug); err != nil {
-			return nil, fmt.Errorf("read the vercel custom environment: %w", err)
+			return nil, false, fmt.Errorf("read the vercel custom environment: %w", err)
 		}
-		return e, nil
+		return e, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("create the vercel custom environment: %w", err)
+		return nil, false, fmt.Errorf("create the vercel custom environment: %w", err)
 	}
-	return &created, nil
+	return &created, true, nil
 }
 
 // DeleteCustomEnvironment deletes a custom environment. One that's

@@ -47,6 +47,14 @@ func (c *Client) GetProject(ctx context.Context, tok Token, idOrName string) (*P
 // EnsureProject creates a project with settings, or brings an existing
 // one's settings in step.
 func (c *Client) EnsureProject(ctx context.Context, tok Token, name string, s ProjectSettings) (*Project, error) {
+	p, _, err := c.EnsureProjectCreated(ctx, tok, name, s)
+	return p, err
+}
+
+// EnsureProjectCreated is EnsureProject, and says whether this call
+// created the project. One that existed, or that another caller created
+// first, is not created by this call.
+func (c *Client) EnsureProjectCreated(ctx context.Context, tok Token, name string, s ProjectSettings) (*Project, bool, error) {
 	p, err := c.GetProject(ctx, tok, name)
 	switch {
 	case IsNotFound(err):
@@ -56,21 +64,22 @@ func (c *Client) EnsureProject(ctx context.Context, tok Token, name string, s Pr
 		var ae *APIError
 		if errors.As(cerr, &ae) && ae.Status == http.StatusConflict {
 			// Another environment of the service made it first.
-			return c.GetProject(ctx, tok, name)
+			p, err = c.GetProject(ctx, tok, name)
+			return p, false, err
 		}
 		if cerr != nil {
-			return nil, fmt.Errorf("create the vercel project: %w", cerr)
+			return nil, false, fmt.Errorf("create the vercel project: %w", cerr)
 		}
-		return &created, nil
+		return &created, true, nil
 	case err != nil:
-		return nil, err
+		return nil, false, err
 	}
 	if !same(p.Framework, s.Framework) || !same(p.RootDirectory, s.RootDirectory) {
 		if err := c.json(ctx, tok, http.MethodPatch, "/v9/projects/"+url.PathEscape(p.ID), nil, s, p); err != nil {
-			return nil, fmt.Errorf("update the vercel project: %w", err)
+			return nil, false, fmt.Errorf("update the vercel project: %w", err)
 		}
 	}
-	return p, nil
+	return p, false, nil
 }
 
 func same(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
@@ -197,9 +206,11 @@ func (c *Client) GetDeployment(ctx context.Context, tok Token, id string) (*Depl
 	return &d, nil
 }
 
-// WaitDeployment polls a deployment until it's ready and its production
-// domain points at it, and fails if its build failed.
-func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string) (*Deployment, error) {
+// WaitDeployment polls a deployment of target t until it's ready, and
+// fails if its build failed. A production deployment also waits for its
+// production domain to point at it; Preview and custom environments are
+// done once they're ready.
+func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string, t Target) (*Deployment, error) {
 	for {
 		d, err := c.GetDeployment(ctx, tok, id)
 		if err != nil {
@@ -207,7 +218,7 @@ func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string) (*Dep
 		}
 		switch d.ReadyState {
 		case "READY":
-			if d.AliasAssigned || len(d.Alias) > 0 {
+			if t != Production || d.AliasAssigned || len(d.Alias) > 0 {
 				return d, nil
 			}
 		case "ERROR", "CANCELED":
