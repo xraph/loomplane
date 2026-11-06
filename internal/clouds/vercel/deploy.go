@@ -88,6 +88,9 @@ func same(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b !
 // values of the same keys. Every value is encrypted; the secret ones are
 // sensitive too, so Vercel never shows them again.
 func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, t Target, env map[string]string, secret map[string]bool) error {
+	if err := t.check(); err != nil {
+		return err
+	}
 	if len(env) == 0 {
 		return nil
 	}
@@ -167,14 +170,19 @@ func (e *MissingFilesError) Error() string {
 
 // deployTarget adds t to a deployment body. Production names itself,
 // Preview is Vercel's default so it names nothing, and a custom
-// environment is named by ID.
-func (t Target) deployTarget(body map[string]any) {
+// environment is named by ID. The zero Target is refused, since it would
+// otherwise deploy to Preview.
+func (t Target) deployTarget(body map[string]any) error {
+	if err := t.check(); err != nil {
+		return err
+	}
 	switch {
 	case t.CustomID != "":
 		body["customEnvironmentSlugOrId"] = t.CustomID
 	case t.Builtin == Production.Builtin:
 		body["target"] = "production"
 	}
+	return nil
 }
 
 // CreateDeployment deploys files to one target of a project. meta is
@@ -184,7 +192,9 @@ func (c *Client) CreateDeployment(ctx context.Context, tok Token, project *Proje
 		"name": project.Name, "project": project.ID, "files": files, "meta": meta,
 		"projectSettings": map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory},
 	}
-	t.deployTarget(body)
+	if err := t.deployTarget(body); err != nil {
+		return nil, err
+	}
 	var d Deployment
 	err := c.json(ctx, tok, http.MethodPost, "/v13/deployments", url.Values{"skipAutoDetectionConfirmation": {"1"}}, body, &d)
 	var ae *APIError

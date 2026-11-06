@@ -18,6 +18,9 @@ func (c *Client) VerifyRuntimeResourceIsolation(ctx context.Context, tok Token, 
 	if validateResourceID(projectID) != nil {
 		return errors.New("vercel deployment project identifier is required")
 	}
+	if err := t.check(); err != nil {
+		return err
+	}
 	var out struct {
 		Envs []struct {
 			Key    string   `json:"key"`
@@ -67,7 +70,9 @@ func (c *Client) CreateDeploymentWithRuntimeEnv(ctx context.Context, tok Token, 
 		"projectSettings": map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory},
 		"env":             runtimeEnv, "build": map[string]any{"env": buildEnv},
 	}
-	t.deployTarget(body)
+	if err := t.deployTarget(body); err != nil {
+		return nil, err
+	}
 	var d Deployment
 	err := c.json(ctx, tok, http.MethodPost, "/v13/deployments", url.Values{"skipAutoDetectionConfirmation": {"1"}}, body, &d)
 	var ae *APIError

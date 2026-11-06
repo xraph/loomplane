@@ -275,3 +275,26 @@ func TestVercelNativeRemoveKeepsProjectSharedThroughAnotherConnection(t *testing
 		t.Fatalf("rows = %v, want only production's", h.store.rows)
 	}
 }
+
+// TestVercelNativeRefRejectsEmptyTarget: "prj_1#" names the project but no
+// environment of it. Listing its target would list every deployment of the
+// project, so Remove, Observe and FrontendAbsent refuse it untouched.
+func TestVercelNativeRefRejectsEmptyTarget(t *testing.T) {
+	h := newRemoveHarness(t, "prj_1#")
+	h.api.listings = [][]string{{"dpl_prod"}}
+	if err := h.exec.Remove(t.Context(), h.job, h.b); err == nil {
+		t.Error("Remove accepted a native ref with no target")
+	}
+	if _, err := h.exec.Observe(t.Context(), h.job.Connection, h.job.Credential, h.b); err == nil {
+		t.Error("Observe accepted a native ref with no target")
+	}
+	if _, err := h.exec.FrontendAbsent(t.Context(), h.job, h.b); err == nil {
+		t.Error("FrontendAbsent accepted a native ref with no target")
+	}
+	if len(h.api.calls) != 0 {
+		t.Fatalf("called Vercel: %v", h.api.calls)
+	}
+	if len(h.store.rows) != 1 {
+		t.Fatalf("rows = %v, want staging's kept", h.store.rows)
+	}
+}

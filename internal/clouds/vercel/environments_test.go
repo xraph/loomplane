@@ -297,3 +297,30 @@ func TestWaitDeploymentNeedsAnAliasOnlyInProduction(t *testing.T) {
 		t.Fatalf("production: got %+v after %d reads, %v", d, gets, err)
 	}
 }
+
+// TestEmptyTargetIsRefused: a zero Target names no environment. Written as
+// a variable it would have no scope, and as a deploy it would silently be
+// Preview, so nothing is sent.
+func TestEmptyTargetIsRefused(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request: %s %s", r.Method, r.URL)
+		fmt.Fprint(w, `{}`)
+	}))
+	defer api.Close()
+	c, tok := New(api.URL), Token{Value: "t"}
+	if err := c.SetEnv(t.Context(), tok, "prj_1", Target{}, map[string]string{"A": "1"}, nil); err == nil {
+		t.Error("SetEnv wrote variables for no target")
+	}
+	if _, err := c.CreateDeploymentWithRuntimeEnv(t.Context(), tok, &Project{ID: "prj_1", Name: "web"}, Target{}, nil, nil, nil, nil); err == nil {
+		t.Error("CreateDeploymentWithRuntimeEnv deployed to no target")
+	}
+	if _, err := c.CreateDeployment(t.Context(), tok, &Project{ID: "prj_1", Name: "web"}, Target{}, nil, nil); err == nil {
+		t.Error("CreateDeployment deployed to no target")
+	}
+	if _, err := c.TargetDeployments(t.Context(), tok, "prj_1", Target{}); err == nil {
+		t.Error("TargetDeployments listed every deployment of the project")
+	}
+	if err := c.DeleteEnv(t.Context(), tok, "prj_1", Target{}); err == nil {
+		t.Error("DeleteEnv ran for no target")
+	}
+}

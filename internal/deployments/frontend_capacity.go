@@ -21,7 +21,11 @@ func (v *Vercel) FrontendAbsent(ctx context.Context, job *Job, b *planning.Bindi
 		return false, errors.New("frontend project identity is missing")
 	}
 	if projectID, ref, native := planning.ParseVercelRef(b.ExternalID); native {
-		return v.nativeAbsent(ctx, token(job), projectID, refTarget(ref))
+		target, err := refTarget(ref)
+		if err != nil {
+			return false, err
+		}
+		return v.nativeAbsent(ctx, token(job), projectID, target)
 	}
 	_, err := v.Client.GetProject(ctx, token(job), b.ExternalID)
 	if vercel.IsNotFound(err) {

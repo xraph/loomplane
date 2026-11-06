@@ -24,6 +24,19 @@ var Production = Target{Builtin: "production"}
 // Preview is the project's preview environment.
 var Preview = Target{Builtin: "preview"}
 
+// errNoTarget is a Target that names no environment, or two. A variable
+// written for it would have no scope or several, and a deployment to the
+// zero Target would silently go to Preview.
+var errNoTarget = errors.New("vercel: a variable or deployment needs exactly one environment, and none was named")
+
+// check refuses a Target that doesn't name exactly one environment.
+func (t Target) check() error {
+	if (t.Builtin == "") == (t.CustomID == "") {
+		return errNoTarget
+	}
+	return nil
+}
+
 // CustomEnvironment is a project's custom environment, such as staging.
 type CustomEnvironment struct {
 	ID   string `json:"id"`
@@ -133,6 +146,9 @@ func (t Target) only(target, custom stringList) bool {
 // DeleteEnv deletes the project's variables that belong to t alone.
 // Variables shared with another environment are left in place.
 func (c *Client) DeleteEnv(ctx context.Context, tok Token, projectID string, t Target) error {
+	if err := t.check(); err != nil {
+		return err
+	}
 	var out struct {
 		Envs []struct {
 			ID                   string     `json:"id"`
@@ -165,6 +181,9 @@ const maxDeploymentPages = 20
 // custom environment, so those are matched on the deployment's own
 // customEnvironment.
 func (c *Client) TargetDeployments(ctx context.Context, tok Token, projectID string, t Target) ([]Deployment, error) {
+	if err := t.check(); err != nil {
+		return nil, err
+	}
 	q := url.Values{"projectId": {projectID}, "limit": {"100"}}
 	if t.CustomID == "" {
 		q.Set("target", t.Builtin)

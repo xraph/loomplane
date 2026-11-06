@@ -104,13 +104,17 @@ func targetRef(t vercel.Target) string {
 	return t.Builtin
 }
 
-// refTarget reads a target written by targetRef.
-func refTarget(ref string) vercel.Target {
+// refTarget reads a target written by targetRef. An empty one names no
+// environment, and is refused: read as a target it would reach every
+// deployment of the project.
+func refTarget(ref string) (vercel.Target, error) {
 	switch ref {
+	case "":
+		return vercel.Target{}, errors.New("the vercel binding names its project but no environment of it")
 	case vercel.Production.Builtin, vercel.Preview.Builtin:
-		return vercel.Target{Builtin: ref}
+		return vercel.Target{Builtin: ref}, nil
 	}
-	return vercel.Target{CustomID: ref}
+	return vercel.Target{CustomID: ref}, nil
 }
 
 // nativeRefusalError is Vercel declining a native environment for this
@@ -397,11 +401,11 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 // environment named after it, created when it's missing.
 func (d *vercelDeploy) nativeTarget(ctx context.Context, project *vercel.Project) (vercel.Target, error) {
 	if d.state.Target != "" {
-		return refTarget(d.state.Target), nil
+		return refTarget(d.state.Target)
 	}
 	if ref := d.savedTarget(project.ID); ref != "" {
 		d.state.Target = ref
-		return refTarget(ref), nil
+		return refTarget(ref)
 	}
 	et, err := d.v.Environments.Target(ctx, d.job)
 	if err != nil {
@@ -605,7 +609,11 @@ func (v *Vercel) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 	if !native {
 		return v.Client.DeleteProject(ctx, token(job), b.ExternalID)
 	}
-	return v.removeNative(ctx, job, b, projectID, refTarget(ref))
+	target, err := refTarget(ref)
+	if err != nil {
+		return err
+	}
+	return v.removeNative(ctx, job, b, projectID, target)
 }
 
 func (v *Vercel) removeNative(ctx context.Context, job *Job, b *planning.Binding, projectID string, target vercel.Target) error {
@@ -689,7 +697,11 @@ func (v *Vercel) Observe(ctx context.Context, conn *connections.Connection, cred
 		tok.TeamID = conn.Details["team_id"]
 	}
 	if projectID, ref, native := planning.ParseVercelRef(b.ExternalID); native {
-		return v.observeNative(ctx, tok, projectID, refTarget(ref))
+		target, err := refTarget(ref)
+		if err != nil {
+			return nil, err
+		}
+		return v.observeNative(ctx, tok, projectID, target)
 	}
 	p, err := v.Client.GetProject(ctx, tok, b.ExternalID)
 	if vercel.IsNotFound(err) {
