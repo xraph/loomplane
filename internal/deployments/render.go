@@ -497,7 +497,8 @@ func datastoreID(external string) (kind, id string, ok bool) {
 // Environments, the Render environment the resource was in goes too once
 // it's empty, if it's the one Loomplane recorded for the binding's
 // environment, and then the Render project once no other environment uses
-// it.
+// it. A retry after the resource went finishes that cleanup from the
+// record.
 func (r *Render) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
 	key := renderKey(job)
 	kind, id, datastore := datastoreID(b.ExternalID)
@@ -515,7 +516,7 @@ func (r *Render) Remove(ctx context.Context, job *Job, b *planning.Binding) erro
 	} else if err := r.Client.DeleteService(ctx, key, b.ExternalID); err != nil {
 		return err
 	}
-	if envID == "" {
+	if r.Environments == nil {
 		return nil
 	}
 	return r.removeEnvironment(ctx, job, key, b, envID)
@@ -548,9 +549,12 @@ func (r *Render) resourceEnvironment(ctx context.Context, key render.Key, extern
 }
 
 // removeEnvironment deletes the Render environment a removed resource was
-// in once it's empty, with the binding's record, and then the project when
-// no other environment uses it. An environment Loomplane didn't record for
-// the binding's environment is never touched.
+// in once it's empty, then the project when no other environment uses it,
+// and then the binding's record. envID is "" when the resource was already
+// gone, as on a retry, and the record says which environment it was in.
+// An environment Loomplane didn't record for the binding's environment is
+// never touched, and the record goes last so a retry still knows the
+// project.
 func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key, b *planning.Binding, envID string) error {
 	environmentID := b.EnvironmentID
 	if environmentID == "" {
@@ -565,7 +569,13 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 	if err != nil {
 		return err
 	}
-	if rec == nil || rec.Mode != ModeNative || rec.EnvironmentRef != envID {
+	if rec == nil || rec.Mode != ModeNative {
+		return nil
+	}
+	if envID == "" {
+		envID = rec.EnvironmentRef
+	}
+	if envID == "" || rec.EnvironmentRef != envID {
 		return nil
 	}
 	empty, err := r.Client.EnvironmentEmpty(ctx, key, envID)
@@ -578,17 +588,19 @@ func (r *Render) removeEnvironment(ctx context.Context, job *Job, key render.Key
 	if delErr := r.Client.DeleteEnvironment(ctx, key, envID); delErr != nil {
 		return fmt.Errorf("remove the empty render environment: %w", delErr)
 	}
-	if forgetErr := store.DeleteProviderEnvironment(ctx, rec); forgetErr != nil {
-		return fmt.Errorf("forget the native render environment: %w", forgetErr)
-	}
 	others, err := otherNativeUsers(ctx, store, "render", b.OrgID, connID, rec.ProjectRef, environmentID, "")
 	if err != nil {
 		return fmt.Errorf("check who uses the render project: %w", err)
 	}
-	if others || rec.ProjectRef == "" {
-		return nil
+	if !others && rec.ProjectRef != "" {
+		if delErr := r.Client.DeleteProject(ctx, key, rec.ProjectRef); delErr != nil {
+			return fmt.Errorf("remove the unused render project: %w", delErr)
+		}
 	}
-	return r.Client.DeleteProject(ctx, key, rec.ProjectRef)
+	if forgetErr := store.DeleteProviderEnvironment(ctx, rec); forgetErr != nil {
+		return fmt.Errorf("forget the native render environment: %w", forgetErr)
+	}
+	return nil
 }
 
 // Observe implements Executor. A service is changed when its newest

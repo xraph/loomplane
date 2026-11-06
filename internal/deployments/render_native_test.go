@@ -28,7 +28,10 @@ type fakeRenderAPI struct {
 	// projectStatus, envStatus and envListStatus, when set, are how Render
 	// answers a project POST, an environment POST and an environment GET.
 	projectStatus, envStatus, envListStatus int
-	created                                 int
+	// envDeleteFailures is how many environment DELETEs fail with a 502
+	// before one succeeds.
+	envDeleteFailures int
+	created           int
 }
 
 type renderTestEnv struct{ id, name, project string }
@@ -133,6 +136,11 @@ func (f *fakeRenderAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(http.StatusOK, map[string]any{"id": e.id, "serviceIds": services, "databasesIds": databases})
 	case r.Method == http.MethodDelete && len(parts) == 2 && parts[0] == "environments":
+		if f.envDeleteFailures > 0 {
+			f.envDeleteFailures--
+			fail(http.StatusBadGateway, "bad gateway")
+			return
+		}
 		delete(f.envs, parts[1])
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && len(parts) == 2 && parts[0] == "projects":
@@ -515,6 +523,38 @@ func TestRenderRemoveDeletesEmptyEnvironment(t *testing.T) {
 	}
 	if h.row() != nil {
 		t.Fatal("the deleted environment's record was kept")
+	}
+}
+
+func TestRenderRemoveRetryFinishesCleanup(t *testing.T) {
+	h := newRenderHarness(t, true)
+	h.api.envDeleteFailures = 1
+	h.api.projects["loomplane-x"] = "prj_1"
+	h.api.envs["evm_1"] = &renderTestEnv{id: "evm_1", name: "staging", project: "prj_1"}
+	h.api.resources["srv_1"] = map[string]string{"name": "web", "environmentId": "evm_1", "kind": "service"}
+	_ = h.store.SaveProviderEnvironment(t.Context(), &ProviderEnvironment{OrgID: "org", EnvironmentID: "env_staging", Provider: "render", ConnectionID: "conn", Mode: ModeNative, ProjectRef: "prj_1", EnvironmentRef: "evm_1"})
+	b := nativeRenderBinding(t, h, "srv_1")
+
+	if err := h.exec.Remove(t.Context(), h.job, b); err == nil {
+		t.Fatal("Remove succeeded although the environment delete failed")
+	}
+	if _, ok := h.api.resources["srv_1"]; ok {
+		t.Fatal("the service wasn't deleted on the first try")
+	}
+	if h.row() == nil {
+		t.Fatal("the record went before the cleanup finished")
+	}
+	if err := h.exec.Remove(t.Context(), h.job, b); err != nil {
+		t.Fatalf("retried Remove: %v", err)
+	}
+	if _, ok := h.api.envs["evm_1"]; ok {
+		t.Fatal("the retry left the empty environment behind")
+	}
+	if !h.api.called("DELETE /projects/prj_1") {
+		t.Fatal("the retry left the unused project behind")
+	}
+	if h.row() != nil {
+		t.Fatal("the retry kept the record")
 	}
 }
 
