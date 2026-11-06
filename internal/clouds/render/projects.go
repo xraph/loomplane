@@ -150,13 +150,18 @@ func (c *Client) DeleteProject(ctx context.Context, key Key, id string) error {
 // FallbackReason says whether err means native environments can't be used
 // for this connection, so the caller should fall back. permanent is true
 // when retrying can't help. Transient errors (transport, 429, 5xx) give
-// ok == false: they fail the deploy and never cause a fallback.
+// ok == false: they fail the deploy and never cause a fallback. So does a
+// 401: a key Render doesn't accept fails every request, not just these.
 func FallbackReason(err error) (reason string, permanent, ok bool) {
 	if err == nil {
 		return "", false, false
 	}
-	if errors.Is(err, ErrRejected) {
-		return "Render refused the request: the API key can't manage projects and environments", false, true
+	var rej *RejectedError
+	if errors.As(err, &rej) {
+		if rej.Status == http.StatusForbidden {
+			return "Render refused the request: the API key can't manage projects and environments", false, true
+		}
+		return "", false, false
 	}
 	var ae *APIError
 	if !errors.As(err, &ae) {

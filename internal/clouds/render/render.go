@@ -85,6 +85,19 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("render answered %d: %s", e.Status, e.Message)
 }
 
+// RejectedError is Render refusing the key: 401 for a key it doesn't
+// accept, 403 for one without access to what was asked. It matches
+// ErrRejected.
+type RejectedError struct {
+	Status  int
+	Message string
+}
+
+func (e *RejectedError) Error() string { return ErrRejected.Error() + ": " + e.Message }
+
+// Is makes a rejection match ErrRejected.
+func (e *RejectedError) Is(target error) bool { return target == ErrRejected }
+
 // IsNotFound reports whether err is Render's 404.
 func IsNotFound(err error) bool {
 	var ae *APIError
@@ -138,7 +151,7 @@ func (c *Client) do(ctx context.Context, key Key, method, path string, query url
 			ae.Message = e.Message
 		}
 		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: %s", ErrRejected, ae.Message)
+			return &RejectedError{Status: res.StatusCode, Message: ae.Message}
 		}
 		return ae
 	}

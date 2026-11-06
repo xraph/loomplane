@@ -211,7 +211,10 @@ func TestRenderFallbackReason(t *testing.T) {
 		ok   bool
 	}{
 		{"payment required", &APIError{Status: 402, Message: "upgrade"}, true},
-		{"rejected", fmt.Errorf("%w: nope", ErrRejected), true},
+		{"403", &RejectedError{Status: 403, Message: "forbidden"}, true},
+		{"403 wrapped", fmt.Errorf("make the project: %w", &RejectedError{Status: 403, Message: "forbidden"}), true},
+		{"401", &RejectedError{Status: 401, Message: "unauthorized"}, false},
+		{"rejected without a status", fmt.Errorf("%w: nope", ErrRejected), false},
 		{"plan limit", &APIError{Status: 400, Message: "Plan does not allow this"}, true},
 		{"other 400", &APIError{Status: 400, Message: "name is invalid"}, false},
 		{"429", &APIError{Status: 429, Message: "slow down"}, false},
@@ -226,5 +229,22 @@ func TestRenderFallbackReason(t *testing.T) {
 				t.Fatalf("got %q %v %v", reason, permanent, ok)
 			}
 		})
+	}
+}
+
+// TestRenderRejectionCarriesStatus: Render's 401 and 403 still match
+// ErrRejected, and say which they were.
+func TestRenderRejectionCarriesStatus(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"message":"no"}`))
+		}))
+		_, err := New(srv.URL).EnsureProject(t.Context(), Key{Value: "k", OwnerID: "tea"}, "p", "staging")
+		srv.Close()
+		var rej *RejectedError
+		if !errors.Is(err, ErrRejected) || !errors.As(err, &rej) || rej.Status != status || err.Error() != "render refused the API key: no" {
+			t.Fatalf("%d: err = %v", status, err)
+		}
 	}
 }
