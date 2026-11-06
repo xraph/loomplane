@@ -1183,11 +1183,13 @@ func TestAllowedAuditsOnlyAChange(t *testing.T) {
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}})
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
 	waitFor(t, "audit", func() bool { return allowed() >= 1 })
-	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
-	n.send(nodeproto.Heartbeat{At: time.Now()}) // read in order, so the allow above is done after it
+	// Counted before the heartbeat goes out: the hub can take it before the
+	// next line runs, and then no later touch would come.
 	r.store.mu.Lock()
 	before := r.store.touches["node_1"]
 	r.store.mu.Unlock()
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	n.send(nodeproto.Heartbeat{At: time.Now()}) // read in order, so the allow above is done after it
 	waitFor(t, "heartbeat", func() bool {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
@@ -1242,7 +1244,12 @@ func TestLeaveAlwaysTellsTheNode(t *testing.T) {
 		n := r.connect("node_1", priv, "")
 		n.next()
 		waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
-		n.send(nodeproto.Leave{})
+		// The hub can answer and close before yamux acks the write, and yamux
+		// then reports a shutdown for a Leave that went out. What the node
+		// reads next is the test.
+		if err := nodeproto.EncodeControl(n.ctrl, nodeproto.Leave{}); err != nil && !errors.Is(err, yamux.ErrSessionShutdown) {
+			t.Fatalf("round %d: %v", i, err)
+		}
 		select {
 		case m, ok := <-n.msgs:
 			if !ok {
