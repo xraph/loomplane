@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/mail"
@@ -24,6 +25,8 @@ import (
 	heraldstore "github.com/xraph/herald/store"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	"github.com/xraph/relay"
+	"github.com/xraph/relay/endpoint"
+	relayid "github.com/xraph/relay/id"
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -85,6 +88,56 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 }
 func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
+
+// Relay is the webhook engine, over the store that keeps each endpoint's
+// signing secret encrypted at rest.
+func (s *Service) Relay() *relay.Relay { return s.relay }
+
+// ErrEndpointsReadOnly is what a write through RawEndpoints returns.
+var ErrEndpointsReadOnly = errors.New("notifications: the raw relay endpoint store is read-only; write endpoints through Relay")
+
+// RawEndpoints is Relay's endpoint store without the encrypting wrapper,
+// for readers that only need endpoint metadata, such as Hallproof's
+// witness. Reading through it never decrypts a signing secret, so one
+// secret that won't decrypt can't fail a whole list.
+//
+// It only reads. A write would skip the wrapper and keep a signing secret
+// in plaintext, so every write returns ErrEndpointsReadOnly.
+func (s *Service) RawEndpoints() endpoint.Store { return readOnlyEndpoints{s.relayStore.Store} }
+
+// readOnlyEndpoints passes reads through to an endpoint store and refuses
+// writes.
+type readOnlyEndpoints struct{ store endpoint.Store }
+
+var _ endpoint.Store = readOnlyEndpoints{}
+
+func (r readOnlyEndpoints) GetEndpoint(ctx context.Context, epID relayid.ID) (*endpoint.Endpoint, error) {
+	return r.store.GetEndpoint(ctx, epID)
+}
+
+func (r readOnlyEndpoints) ListEndpoints(ctx context.Context, tenantID string, opts endpoint.ListOpts) ([]*endpoint.Endpoint, error) {
+	return r.store.ListEndpoints(ctx, tenantID, opts)
+}
+
+func (r readOnlyEndpoints) Resolve(ctx context.Context, tenantID, eventType string) ([]*endpoint.Endpoint, error) {
+	return r.store.Resolve(ctx, tenantID, eventType)
+}
+
+func (readOnlyEndpoints) CreateEndpoint(context.Context, *endpoint.Endpoint) error {
+	return ErrEndpointsReadOnly
+}
+
+func (readOnlyEndpoints) UpdateEndpoint(context.Context, *endpoint.Endpoint) error {
+	return ErrEndpointsReadOnly
+}
+
+func (readOnlyEndpoints) DeleteEndpoint(context.Context, relayid.ID) error {
+	return ErrEndpointsReadOnly
+}
+
+func (readOnlyEndpoints) SetEnabled(context.Context, relayid.ID, bool) error {
+	return ErrEndpointsReadOnly
+}
 
 // Prepare is called after central migrations and before Authsome starts. It
 // configures exactly one application-owned mail provider (SMTP, Resend or a

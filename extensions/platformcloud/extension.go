@@ -33,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/metering"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -239,9 +240,9 @@ func (o orgLister) names(ctx context.Context) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// chronicleAuditor records the platform owner's changes in Chronicle, at
-// the app level like the platform's sign-in apps: the actor, what changed
-// and how, never a credential.
+// chronicleAuditor records the platform owner's changes in Chronicle, in
+// the staff stream like the platform's sign-in apps: the actor, what
+// changed and how, never a credential.
 type chronicleAuditor struct {
 	chronicle *chronicle.Chronicle
 	appID     string
@@ -250,7 +251,7 @@ type chronicleAuditor struct {
 
 func (a chronicleAuditor) Record(ctx context.Context, action, userID, resource, resourceID, outcome string, meta map[string]string) {
 	b := a.chronicle.Warning(ctx, action, resource, resourceID).
-		Category("platform_cloud").AppID(a.appID).UserID(userID).Outcome(outcome)
+		Category("platform_cloud").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome(outcome)
 	for k, v := range meta {
 		b = b.Meta(k, v)
 	}

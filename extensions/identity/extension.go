@@ -30,7 +30,6 @@ import (
 	authsome "github.com/xraph/authsome"
 	"github.com/xraph/authsome/api"
 	"github.com/xraph/authsome/app"
-	"github.com/xraph/authsome/bridge/chronicleadapter"
 	"github.com/xraph/authsome/environment"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
@@ -52,6 +51,8 @@ import (
 	groveext "github.com/xraph/grove/extension"
 	"github.com/xraph/keysmith"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	vaultstore "github.com/xraph/vault/store"
+	vaultpg "github.com/xraph/vault/store/postgres"
 	"github.com/xraph/warden"
 	wardenpg "github.com/xraph/warden/store/postgres"
 
@@ -80,6 +81,9 @@ const (
 	authsomeAPIPath = "/v1"
 	appSlug         = "loomplane"
 	pingTimeout     = 3 * time.Second
+	// provideWardenPriority puts the start hook that provides Warden ahead
+	// of the others, which run at Forge's default of 0.
+	provideWardenPriority = 100
 )
 
 // Guard is the middleware for organization-scoped Loomplane routes: it
@@ -104,11 +108,13 @@ type Extension struct {
 	authz      *security.Authorizer
 	audit      *chronicle.Chronicle
 	auditStore chronstore.Store
-	smith      *keysmith.Engine
-	engine     *authsome.Engine
-	keys       *apikeys.Service
-	teams      *teams.Service
-	lockPG     *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	// checkpoints signs auditStore's streams (checkpoints.go).
+	checkpoints *auditCheckpoints
+	smith       *keysmith.Engine
+	engine      *authsome.Engine
+	keys        *apikeys.Service
+	teams       *teams.Service
+	lockPG      *pgdriver.PgDB // the sync lock's own pool (wireTeams)
 	// joined finds the nodes a key's join tokens brought in. The nodes
 	// extension registers after this one, so it is looked up per request.
 	joined        func() JoinedNodes
@@ -198,12 +204,22 @@ func (e *Extension) register(fapp forge.App) error {
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
 	e.auditStore = chronpg.New(db)
+	// Vault's store over Loomplane's database, for the checkpoint key and
+	// for whoever reads Vault from DI.
+	vault := vaultpg.New(db)
+	if e.checkpoints, err = e.newAuditCheckpoints(vault); err != nil {
+		return err
+	}
+	// Digests stay on Chronicle's plain chronicle/v4: Hallproof verifies
+	// those and rejects keyed ones, and a stream can't go back once keyed.
 	if e.audit, err = chronicle.New(
 		chronicle.WithStore(chronstore.NewAdapter(e.auditStore)),
 		chronicle.WithLogger(e.Logger()),
+		chronicle.WithCheckpointSigner(e.checkpoints.signer),
 	); err != nil {
 		return fmt.Errorf("chronicle: %w", err)
 	}
+	e.scheduleCheckpoints(fapp)
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
 	if teamsErr := e.wireTeams(); teamsErr != nil {
 		return teamsErr
@@ -244,8 +260,26 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, PlatformOwner(e.platformOwner)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
+		// Keysmith and the Vault store, for readers such as Hallproof's
+		// witness. When the container starts, it calls Start on every
+		// value it holds that has one, and Stop when it stops. Keysmith's
+		// Start does nothing, nothing else starts or stops it, and the
+		// Vault store has neither, so both can go in now.
+		forge.ProvideValue(c, e.smith),
+		forge.ProvideValue[vaultstore.Store](c, vault),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
+	}
+	// Warden goes in only once the container has started. prepare starts
+	// it and Stop stops it, and the container would start it a second time
+	// (a second maintenance loop, of which Stop cancels only the last).
+	// A value provided after the container started is never started or
+	// stopped by it. The hook runs ahead of the other start hooks, so
+	// witness, which looks in one, finds Warden.
+	if err := fapp.RegisterHook(forge.PhaseAfterStart, func(context.Context, forge.App) error {
+		return forge.ProvideValue(c, e.warden)
+	}, forge.LifecycleHookOptions{Name: "loomplane-provide-warden", Priority: provideWardenPriority}); err != nil {
+		return fmt.Errorf("provide warden: %w", err)
 	}
 	if err := e.editionProvide(c); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
@@ -287,7 +321,7 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
-		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
+		authsome.WithChronicle(e.authsomeChronicle()),
 		authsome.WithTokenEncryptor(tokens),
 		authsome.WithRateLimiter(routeLimiter{Limiter: ratelimit.NewKVLimiter(e.store)}),
 		authsome.WithWarden(e.warden),
@@ -338,6 +372,9 @@ func (e *Extension) Start(ctx context.Context) error {
 		e.approvalKeys.prepare(ctx)
 	}
 	if err := e.mount(ctx); err != nil {
+		return err
+	}
+	if err := e.startCheckpoints(ctx); err != nil {
 		return err
 	}
 	e.logSetupLink(ctx)
@@ -406,6 +443,7 @@ func (e *Extension) mount(ctx context.Context) error {
 // grove extension.
 func (e *Extension) Stop(ctx context.Context) error {
 	var errs []error
+	e.stopCheckpoints()
 	if e.router != nil {
 		errs = append(errs, e.router.Stop(ctx))
 	}
@@ -528,6 +566,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 		return err
 	}
 	if err := e.verifyPlatformOwners(ctx); err != nil {
+		return err
+	}
+	if err := e.ensureCheckpointKey(ctx); err != nil {
 		return err
 	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {

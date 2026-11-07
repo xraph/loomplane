@@ -14,9 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/chronicle"
+	"github.com/xraph/chronicle/audit"
+	chronstore "github.com/xraph/chronicle/store"
+	chronmem "github.com/xraph/chronicle/store/memory"
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/billing"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -508,5 +513,32 @@ func TestSettleRefund_Route(t *testing.T) {
 		if got := rg.do(t, http.MethodPost, path, `{"outcome":"dropped"}`, platformOwner).Code; got != want {
 			t.Errorf("%v: %d, want %d", err, got, want)
 		}
+	}
+}
+
+// The platform owner's billing changes are staff actions, so the auditor
+// the extension wires records them in the platform stream of Loomplane's
+// app, with the owner as the actor and the outcome.
+func TestChronicleAuditorRecordsThePlatformStream(t *testing.T) {
+	ctx := t.Context()
+	mem := chronmem.New()
+	trail, err := chronicle.New(chronicle.WithStore(chronstore.NewAdapter(mem)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := chronicleAuditor{chronicle: trail, appID: "aapp_test", log: forge.NewNoopLogger()}
+	a.Record(ctx, "billing.credit.grant", "ausr_owner", "organization", "aorg_customer", outcomeSuccess, map[string]string{"cents": "500"})
+
+	res, err := mem.Query(ctx, &audit.Query{AppID: "aapp_test"})
+	if err != nil || len(res.Events) != 1 {
+		t.Fatalf("query: %v, %d events; want one", err, len(res.Events))
+	}
+	ev := res.Events[0]
+	if ev.TenantID != platformadmin.AuditTenant || ev.UserID != "ausr_owner" || ev.Category != "billing" ||
+		ev.Outcome != outcomeSuccess || ev.ResourceID != "aorg_customer" || ev.Metadata["cents"] != "500" {
+		t.Fatalf("recorded %+v; want the owner's grant in tenant %q", ev, platformadmin.AuditTenant)
+	}
+	if _, err = mem.GetStreamByScope(ctx, "aapp_test", platformadmin.AuditTenant); err != nil {
+		t.Fatalf("no platform stream: %v", err)
 	}
 }

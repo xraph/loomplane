@@ -187,7 +187,7 @@ func TestResolutionRechecksLatestObservationAfterVaultRead(t *testing.T) {
 						}
 						return out, readErr
 					}
-					_, _ = s.sync(t.Context(), principal, "one", false)
+					_, _ = s.sync(t.Context(), principal, "one", false, false)
 				}}
 				var got *ProviderResource
 				var raw string
