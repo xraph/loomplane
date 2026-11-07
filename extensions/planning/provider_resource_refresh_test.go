@@ -12,7 +12,7 @@ import (
 
 type refreshResourceFixture struct{ calls chan string }
 
-func (f refreshResourceFixture) Sync(_ context.Context, p security.Principal, id string) (*providerresources.ProviderResourceSync, error) {
+func (f refreshResourceFixture) SyncIfIdle(_ context.Context, p security.Principal, id string) (*providerresources.ProviderResourceSync, error) {
 	f.calls <- p.UserID + ":" + id
 	return &providerresources.ProviderResourceSync{}, nil
 }
