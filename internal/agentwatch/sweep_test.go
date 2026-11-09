@@ -278,6 +278,30 @@ func TestSweepIsBoundedAndRoundRobin(t *testing.T) {
 	}
 }
 
+// A pass runs on a tick, so the sweep a binding is due at may come a
+// little early by the clock it was last checked with. Within one tick of
+// SweepEvery a binding is checked, rather than skipped for a whole cycle.
+func TestSweepAllowsATicksSlack(t *testing.T) {
+	s := newSweeper(t, productionBinding("b_1", "env_prod", "kubernetes"))
+	s.sweep()
+	if !s.checks["b_1"].CheckedAt.Equal(t0) {
+		t.Fatalf("first sweep: %+v", s.checks["b_1"])
+	}
+	s.now = t0.Add(SweepEvery - 10*time.Second)
+	s.sweep()
+	if !s.checks["b_1"].CheckedAt.Equal(s.now) {
+		t.Fatalf("a sweep within a tick of SweepEvery skipped the binding: %+v", s.checks["b_1"])
+	}
+	s.now = s.now.Add(SweepEvery - SweepSlack - time.Second)
+	s.sweep()
+	if s.checks["b_1"].CheckedAt.Equal(s.now) {
+		t.Fatal("a sweep more than a tick early checked the binding")
+	}
+	if TickSchedule != "@every "+SweepSlack.String() {
+		t.Fatalf("the slack %s isn't the tick %q", SweepSlack, TickSchedule)
+	}
+}
+
 func TestSweepWindowsEndBeforeTheLag(t *testing.T) {
 	s := newSweeper(t, productionBinding("b_1", "env_prod", "cloud-run"))
 	s.now = t0.Add(17*time.Minute + 42*time.Second)

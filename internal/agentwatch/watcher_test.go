@@ -173,15 +173,15 @@ type memWatch struct {
 }
 
 func (m *memWatchStore) Claim(_ context.Context, orgID, owner string, ttl time.Duration, highWater func() (int64, error)) (*State, bool, error) {
-	hw, err := highWater()
-	if err != nil {
-		return nil, false, err
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
 	row, ok := m.rows[orgID]
 	if !ok {
+		hw, err := highWater()
+		if err != nil {
+			return nil, false, err
+		}
 		row = &memWatch{st: &State{OrgID: orgID, EventCursor: hw, Checks: map[string]Check{}}}
 		m.rows[orgID] = row
 	}

@@ -19,7 +19,12 @@ import (
 
 // How the binding sweep runs.
 const (
-	SweepEvery          = 5 * time.Minute
+	SweepEvery = 5 * time.Minute
+	// SweepSlack is one tick: a binding last checked more than SweepEvery
+	// less SweepSlack ago is due, so a pass that runs a little early by
+	// the clock the last check was made with doesn't skip it for a whole
+	// cycle.
+	SweepSlack          = 30 * time.Second
 	ErrorWindow         = 10 * time.Minute // the error rate judged
 	BaselineWindow      = time.Hour        // what it's judged against: the hour before
 	ClearAfterPasses    = 2
@@ -58,7 +63,7 @@ func (d *Detector) Sweep(ctx context.Context, orgID string, checks map[string]Ch
 	for _, b := range bindings {
 		c := checks[b.ID]
 		next[b.ID] = c
-		if now.Sub(c.CheckedAt) >= SweepEvery {
+		if now.Sub(c.CheckedAt) >= SweepEvery-SweepSlack {
 			due = append(due, b)
 		}
 	}

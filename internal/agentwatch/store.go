@@ -46,8 +46,9 @@ type Store interface {
 	// Claim takes the workspace's lease for owner for ttl, when nobody
 	// else holds a live one, and returns the state. The first claim of a
 	// workspace inserts it with its cursor at highWater, so a new watcher
-	// starts from now rather than replaying history. claimed is false,
-	// with a nil state, when another owner holds the lease.
+	// starts from now rather than replaying history; only that claim reads
+	// highWater. claimed is false, with a nil state, when another owner
+	// holds the lease.
 	Claim(ctx context.Context, orgID, owner string, ttl time.Duration, highWater func() (int64, error)) (st *State, claimed bool, err error)
 	// Save writes st while owner holds a live lease, and is ErrLeaseLost
 	// otherwise.

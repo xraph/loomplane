@@ -2,7 +2,9 @@ package agentwatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -131,9 +133,11 @@ func (h handlers) close(c forge.Context) error {
 	if err != nil {
 		return err
 	}
+	// The body is optional: an empty one, however it's framed, closes
+	// without a reason.
 	var in agentreports.CloseInput
-	if c.Request().ContentLength != 0 {
-		if berr := c.BindJSON(&in); berr != nil {
+	if body := c.Request().Body; body != nil {
+		if derr := json.NewDecoder(body).Decode(&in); derr != nil && !errors.Is(derr, io.EOF) {
 			return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"reason": "why it's closed"}`)
 		}
 	}

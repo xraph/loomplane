@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -178,6 +179,43 @@ func TestReportRoutesMapErrors(t *testing.T) {
 	if out = serve(t, bad.r, http.MethodGet, "/api/v1/agent/watcher", "", as(viewer)); out.Code != http.StatusForbidden {
 		t.Errorf("the watcher refused: %d", out.Code)
 	}
+}
+
+// A close with an empty body closes without a reason however the body is
+// framed: no length, a zero length, or chunked with nothing in it.
+func TestCloseAcceptsAnEmptyBody(t *testing.T) {
+	for name, framing := range map[string]func(*http.Request){
+		"no body": func(r *http.Request) { r.Body, r.ContentLength = http.NoBody, 0 },
+		"chunked": func(r *http.Request) {
+			r.Body, r.ContentLength, r.TransferEncoding = io.NopCloser(strings.NewReader("")), -1, []string{"chunked"}
+			r.Header.Set("Content-Type", "application/json")
+		},
+		"whitespace": func(r *http.Request) {
+			r.Body, r.ContentLength = io.NopCloser(strings.NewReader(" \n")), -1
+			r.Header.Set("Content-Type", "application/json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newRig(t, true, fakeWatcher{})
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/agent/reports/"+rig.report.ID+"/close", nil)
+			framing(req)
+			req = req.WithContext(security.WithPrincipal(req.Context(), *as(developer)))
+			out := httptest.NewRecorder()
+			rig.r.ServeHTTP(out, req)
+			var closed agentreports.Report
+			if err := json.Unmarshal(out.Body.Bytes(), &closed); err != nil || out.Code != http.StatusOK || closed.Status != agentreports.StatusClosed {
+				t.Fatalf("close: %d %s", out.Code, out.Body.String())
+			}
+		})
+	}
+}
+
+// The watcher's warnings take a nil error without panicking.
+func TestWarnTakesANilError(_ *testing.T) {
+	warn := warnTo(forge.NewNoopLogger())
+	warn("agentwatch: nothing went wrong", nil)
+	warn("agentwatch: something went wrong", errors.New("boom"))
+	warnTo(nil)("agentwatch: no logger", errors.New("boom"))
 }
 
 func TestReportRoutesList(t *testing.T) {

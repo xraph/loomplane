@@ -191,3 +191,42 @@ func TestLeaseExpiresForACrashedReplica(t *testing.T) {
 		t.Fatalf("the crashed replica's save: %v", err)
 	}
 }
+
+// Only the first claim of a workspace reads the event high water: a claim
+// of a row that exists, granted or refused, never does, so a high water
+// that can't be read can't fail it.
+func TestClaimReadsTheHighWaterOnlyForANewWorkspace(t *testing.T) {
+	r := newPgRig(t)
+	ctx := context.Background()
+	reads := 0
+	hw := func(v int64, err error) func() (int64, error) {
+		return func() (int64, error) {
+			reads++
+			return v, err
+		}
+	}
+	broken := hw(0, errors.New("the events table is unreadable"))
+
+	st, ok, err := r.store.Claim(ctx, org, "a:1", time.Minute, hw(7, nil))
+	if err != nil || !ok || st.EventCursor != 7 || reads != 1 {
+		t.Fatalf("the first claim: %+v %v %v, %d reads", st, ok, err, reads)
+	}
+	if _, ok, err = r.store.Claim(ctx, org, "a:1", time.Minute, broken); err != nil || !ok {
+		t.Fatalf("the holder's claim again: %v %v", ok, err)
+	}
+	if st, ok, err = r.store.Claim(ctx, org, "b:1", time.Minute, broken); err != nil || ok || st != nil {
+		t.Fatalf("another's claim under a live lease: %+v %v %v", st, ok, err)
+	}
+	if err = r.store.Release(ctx, org, "a:1"); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok, err = r.store.Claim(ctx, org, "b:1", time.Minute, broken); err != nil || !ok || st.EventCursor != 7 {
+		t.Fatalf("another's claim once it was let go: %+v %v %v", st, ok, err)
+	}
+	if reads != 1 {
+		t.Fatalf("read the high water %d times, want once", reads)
+	}
+	if _, _, err = r.store.Claim(ctx, "aorg_new", "a:1", time.Minute, broken); err == nil {
+		t.Fatal("a new workspace was claimed without its high water")
+	}
+}

@@ -178,11 +178,7 @@ func resolve(c forge.Container) (sources, error) {
 // skips is logged.
 func (e *Extension) watcher(src sources, owner string) *watch.Watcher {
 	log := e.Logger()
-	warn := func(msg string, err error) {
-		if log != nil {
-			log.Warn(msg, forge.F("error", err.Error()))
-		}
-	}
+	warn := warnTo(log)
 	pg := pgdriver.Unwrap(src.db)
 	world := &watch.ServiceWorld{
 		Deployments: src.deployments, Plans: src.plans, PlanStore: src.planStore, Watches: src.watches,
@@ -204,6 +200,16 @@ func (e *Extension) watcher(src sources, owner string) *watch.Watcher {
 		Authz:    src.authz,
 		Owner:    owner,
 		Warn:     warn,
+	}
+}
+
+// warnTo is the watcher's Warn: it logs what a pass skipped to log, and
+// ignores a nil error.
+func warnTo(log forge.Logger) func(msg string, err error) {
+	return func(msg string, err error) {
+		if log != nil && err != nil {
+			log.Warn(msg, forge.F("error", err.Error()))
+		}
 	}
 }
 

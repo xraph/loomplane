@@ -43,17 +43,36 @@ func scanState(row driver.Row) (*State, error) {
 	return &st, nil
 }
 
-// Claim implements Store in one statement: the insert path sets the
-// cursor from highWater, read before it.
+// Claim implements Store. It takes the lease of an existing row first,
+// and reads highWater only when the workspace has no row yet, so a claim
+// of an existing row never fails on it. Two replicas inserting at once
+// meet in the upsert, which takes the lease only when it's free.
 func (s *PgStore) Claim(ctx context.Context, orgID, owner string, ttl time.Duration, highWater func() (int64, error)) (*State, bool, error) {
 	if orgID == "" || owner == "" || ttl <= 0 {
 		return nil, false, errors.New("agentwatch: a claim names its workspace, owner and lease")
+	}
+	st, err := scanState(s.db.QueryRow(ctx, `UPDATE loomplane_agent_watchers
+		SET lease_owner = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
+		WHERE org_id = $1 AND (lease_until IS NULL OR lease_until < now() OR lease_owner = $2)
+		RETURNING `+watcherColumns, orgID, owner, ttl.Seconds()))
+	switch {
+	case err == nil:
+		return st, true, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, false, fmt.Errorf("claim the workspace's watcher: %w", err)
+	}
+	var exists bool
+	if err = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loomplane_agent_watchers WHERE org_id = $1)`, orgID).Scan(&exists); err != nil {
+		return nil, false, fmt.Errorf("claim the workspace's watcher: %w", err)
+	}
+	if exists {
+		return nil, false, nil // another owner holds a live lease
 	}
 	cursor, err := highWater()
 	if err != nil {
 		return nil, false, fmt.Errorf("read the workspace's event high water: %w", err)
 	}
-	st, err := scanState(s.db.QueryRow(ctx, `INSERT INTO loomplane_agent_watchers
+	st, err = scanState(s.db.QueryRow(ctx, `INSERT INTO loomplane_agent_watchers
 			(org_id, event_cursor, lease_owner, lease_until, created_at, updated_at)
 		VALUES ($1, $2, $3, now() + make_interval(secs => $4), now(), now())
 		ON CONFLICT (org_id) DO UPDATE SET lease_owner = EXCLUDED.lease_owner, lease_until = EXCLUDED.lease_until, updated_at = now()
