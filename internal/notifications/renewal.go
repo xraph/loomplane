@@ -102,9 +102,27 @@ func (s *Service) enqueueMembersIn(ctx context.Context, exec Execer, org, projec
 	return err
 }
 
+// platformCloudNotices are the notices the platformcloud package queues. Their
+// kinds match the Notice constants there, which this package cannot import.
+var platformCloudNotices = []struct{ kind, description string }{
+	{"platform_cloud.suspended", "Loomplane Cloud work for the workspace was stopped"},
+	{"platform_cloud.restored", "Loomplane Cloud work for the workspace was restored"},
+	{"platform_cloud.waiting_capacity", "Loomplane Cloud work is waiting for capacity"},
+}
+
+// WebhookEventNames lists the name of every webhook event type in the catalog.
+func WebhookEventNames() []string {
+	definitions := webhookDefinitions()
+	names := make([]string, 0, len(definitions))
+	for _, d := range definitions {
+		names = append(names, d.Name)
+	}
+	return names
+}
+
 // webhookDefinitions are every webhook event type Loomplane sends.
 func webhookDefinitions() []catalog.WebhookDefinition {
-	definitions := make([]catalog.WebhookDefinition, 0, 10+len(registrationStatuses))
+	definitions := make([]catalog.WebhookDefinition, 0, 13+len(registrationStatuses))
 	for _, status := range []string{"succeeded", "failed"} {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"})
 	}
@@ -122,6 +140,9 @@ func webhookDefinitions() []catalog.WebhookDefinition {
 		catalog.WebhookDefinition{Name: KindAgentReport + ".created", Description: "The agent filed a report", Group: "agent", Version: "2026-11-28"},
 		catalog.WebhookDefinition{Name: KindAgentBudget + ".created", Description: "The agent's spend needs your attention", Group: "agent", Version: "2026-11-28"},
 		catalog.WebhookDefinition{Name: KindAgentRelease + ".created", Description: "The agent prepared a production release", Group: "agent", Version: "2026-11-28"})
+	for _, notice := range platformCloudNotices {
+		definitions = append(definitions, catalog.WebhookDefinition{Name: notice.kind + ".created", Description: notice.description, Group: "platform_cloud", Version: "2026-11-09"})
+	}
 	return definitions
 }
 

@@ -8,12 +8,12 @@ import {
 import type { TenantRow } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation } from "@/client/hooks"
 import {
-  NumberField,
   countOf,
   errorOf,
   gibOf,
   mibOf,
 } from "@/components/platform-cloud-parts"
+import { PlatformLimitFields } from "@/components/platform-limit-fields"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -93,28 +93,7 @@ export function LimitsDialog({
           <DialogDescription>{row.orgName || row.orgId}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3">
-            <NumberField
-              label="vCPUs"
-              value={v.vcpus}
-              onChange={(vcpus) => setV({ ...v, vcpus })}
-            />
-            <NumberField
-              label="Memory (GiB)"
-              value={v.mem}
-              onChange={(mem) => setV({ ...v, mem })}
-            />
-            <NumberField
-              label="VMs"
-              value={v.vms}
-              onChange={(vms) => setV({ ...v, vms })}
-            />
-            <NumberField
-              label="Builds at once"
-              value={v.builds}
-              onChange={(builds) => setV({ ...v, builds })}
-            />
-          </div>
+          <PlatformLimitFields values={v} onChange={setV} />
           {below && (
             <p className="text-sm text-muted-foreground">
               Running work keeps running. New work is refused until use is under

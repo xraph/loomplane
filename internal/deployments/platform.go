@@ -251,14 +251,34 @@ func (r registryOnly) Credential(ctx context.Context, orgID, connectionID string
 	if r.inner == nil {
 		return nil, nil, ErrNoCredential
 	}
+	// A source that can look a connection up without revealing it is asked
+	// first, so a connection that isn't one of the organization's registries
+	// is refused before its secret is decrypted. One it doesn't have stays
+	// not found.
+	if looker, ok := r.inner.(interface {
+		Metadata(ctx context.Context, orgID, id string) (*connections.Connection, error)
+	}); ok {
+		meta, err := looker.Metadata(ctx, orgID, connectionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !isOrgRegistry(meta, orgID, connectionID) {
+			return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
+		}
+	}
 	c, raw, err := r.inner.Credential(ctx, orgID, connectionID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if c == nil || c.Cloud != connections.Registry || c.OrgID != orgID || c.ID != connectionID {
+	// Backstop for a source that can't be asked first.
+	if !isOrgRegistry(c, orgID, connectionID) {
 		return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
 	}
 	return c, raw, nil
+}
+
+func isOrgRegistry(c *connections.Connection, orgID, connectionID string) bool {
+	return c != nil && c.Cloud == connections.Registry && c.OrgID == orgID && c.ID == connectionID
 }
 
 func (t *PlatformTarget) Locate(b *planning.Binding) string {
