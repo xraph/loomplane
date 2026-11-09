@@ -137,7 +137,12 @@ func (h handlers) close(c forge.Context) error {
 	// without a reason.
 	var in agentreports.CloseInput
 	if body := c.Request().Body; body != nil {
-		if derr := json.NewDecoder(body).Decode(&in); derr != nil && !errors.Is(derr, io.EOF) {
+		dec := json.NewDecoder(body)
+		derr := dec.Decode(&in)
+		if derr == nil && dec.More() {
+			derr = errors.New("data after the JSON object")
+		}
+		if derr != nil && !errors.Is(derr, io.EOF) {
 			return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"reason": "why it's closed"}`)
 		}
 	}

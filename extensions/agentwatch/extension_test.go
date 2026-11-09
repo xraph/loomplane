@@ -166,6 +166,9 @@ func TestReportRoutesMapErrors(t *testing.T) {
 	if out = serve(t, rig.r, http.MethodPost, path+"/close", `{"reason":`, as(developer)); out.Code != http.StatusBadRequest {
 		t.Errorf("a broken body: %d", out.Code)
 	}
+	if out = serve(t, rig.r, http.MethodPost, path+"/close", `{"reason":"x"} junk`, as(developer)); out.Code != http.StatusBadRequest {
+		t.Errorf("data after the body: %d", out.Code)
+	}
 	for _, q := range []string{"?status=bogus", "?limit=many", "?limit=500"} {
 		if out = serve(t, rig.r, http.MethodGet, "/api/v1/agent/reports"+q, "", as(viewer)); out.Code != http.StatusUnprocessableEntity {
 			t.Errorf("list %s: %d %s", q, out.Code, out.Body.String())
@@ -210,11 +213,24 @@ func TestCloseAcceptsAnEmptyBody(t *testing.T) {
 	}
 }
 
-// The watcher's warnings take a nil error without panicking.
-func TestWarnTakesANilError(_ *testing.T) {
-	warn := warnTo(forge.NewNoopLogger())
+// recordingLogger keeps the messages it was warned with.
+type recordingLogger struct {
+	forge.Logger
+	warned []string
+}
+
+func (l *recordingLogger) Warn(msg string, _ ...forge.Field) { l.warned = append(l.warned, msg) }
+
+// The watcher's warnings drop a nil error, without panicking, and log a
+// real one.
+func TestWarnTakesANilError(t *testing.T) {
+	log := &recordingLogger{Logger: forge.NewNoopLogger()}
+	warn := warnTo(log)
 	warn("agentwatch: nothing went wrong", nil)
 	warn("agentwatch: something went wrong", errors.New("boom"))
+	if !slices.Equal(log.warned, []string{"agentwatch: something went wrong"}) {
+		t.Fatalf("warned %q", log.warned)
+	}
 	warnTo(nil)("agentwatch: no logger", errors.New("boom"))
 }
 
