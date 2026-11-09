@@ -1,7 +1,7 @@
 """The Loomplane mark as plain filled paths.
 
 Two L-shaped threads make a square. The ink thread is an L (left side and
-bottom); the gold thread is the same L turned half a revolution (top and right).
+bottom); the blue thread is the same L turned half a revolution (top and right).
 Each one tucks under the other at one corner, so the square reads as woven from
 two threads.
 """
@@ -96,7 +96,7 @@ def to_d(cmds):
 
 
 def mark_paths(m: MarkSpec, scale=1.0, ox=0.0, oy=0.0):
-    """Returns (ink_d, gold_d) for the mark scaled and placed at (ox, oy)."""
+    """Returns (ink_d, blue_d) for the mark scaled and placed at (ox, oy)."""
     ink = ink_points(m)
-    gold = rotate_half(ink, m)
-    return to_d(scale_cmds(ink, scale, ox, oy)), to_d(scale_cmds(gold, scale, ox, oy))
+    blue = rotate_half(ink, m)
+    return to_d(scale_cmds(ink, scale, ox, oy)), to_d(scale_cmds(blue, scale, ox, oy))

@@ -16,8 +16,8 @@ from PIL import Image  # noqa: E402
 
 INK = "#171717"
 PAPER = "#FAFAFA"
-WELD = "#D8A00D"
-WELD_ON_DARK = "#E3AE3B"
+BLUE = "#2F5C78"
+BLUE_ON_DARK = "#5AAEE5"
 
 PRIMARY = MarkSpec(size=32, w=8, radius=11, gap=2.5)
 # Below about 24px the gaps close up, so small sizes get heavier threads and
@@ -30,8 +30,8 @@ FONT_SIZE = 100.0
 TRACKING = -10  # font units, a touch tighter than Geist's default
 
 PALETTES = {
-    "": (INK, WELD, INK),  # (ink thread, gold thread, wordmark)
-    "-dark": (PAPER, WELD_ON_DARK, PAPER),
+    "": (INK, BLUE, INK),  # (ink thread, blue thread, wordmark)
+    "-dark": (PAPER, BLUE_ON_DARK, PAPER),
     "-black": (INK, INK, INK),
     "-white": (PAPER, PAPER, PAPER),
 }
@@ -44,9 +44,9 @@ def svg(view_box, body, title="Loomplane"):
     )
 
 
-def mark_body(spec, ink, gold, scale=1.0, ox=0.0, oy=0.0):
-    ink_d, gold_d = mark_paths(spec, scale, ox, oy)
-    return f'<path fill="{ink}" d="{ink_d}"/><path fill="{gold}" d="{gold_d}"/>'
+def mark_body(spec, ink, blue, scale=1.0, ox=0.0, oy=0.0):
+    ink_d, blue_d = mark_paths(spec, scale, ox, oy)
+    return f'<path fill="{ink}" d="{ink_d}"/><path fill="{blue}" d="{blue_d}"/>'
 
 
 def word():
@@ -55,7 +55,7 @@ def word():
     return d, m["ink_left"], right, top, bottom
 
 
-def horizontal(ink, gold, text):
+def horizontal(ink, blue, text):
     d, left, right, top, bottom = word()
     l_height = -top  # the l's ascender sets the word's optical height
     mark_h = l_height * 1.2
@@ -63,7 +63,7 @@ def horizontal(ink, gold, text):
     centre = top / 2
     mark_top = centre - mark_h / 2
     s = mark_h / PRIMARY.size
-    body = mark_body(PRIMARY, ink, gold, s, 0, mark_top)
+    body = mark_body(PRIMARY, ink, blue, s, 0, mark_top)
     tx = mark_h + gap - left
     body += f'<path fill="{text}" transform="translate({f(tx)} 0)" d="{d}"/>'
     y0 = min(mark_top, top)
@@ -72,14 +72,14 @@ def horizontal(ink, gold, text):
     return f"0 {f(y0)} {f(w)} {f(y1 - y0)}", body, (w, y1 - y0)
 
 
-def stacked(ink, gold, text):
+def stacked(ink, blue, text):
     d, left, right, top, bottom = word()
     word_w = right - left
     mark_h = word_w * 0.3
     gap = mark_h * 0.3
     s = mark_h / PRIMARY.size
     mx = (word_w - mark_h) / 2
-    body = mark_body(PRIMARY, ink, gold, s, mx, 0)
+    body = mark_body(PRIMARY, ink, blue, s, mx, 0)
     ty = mark_h + gap - top
     body += f'<path fill="{text}" transform="translate({f(-left)} {f(ty)})" d="{d}"/>'
     h = ty + bottom
@@ -93,12 +93,12 @@ def wordmark(text):
 
 
 def favicon_svg():
-    ink_d, gold_d = mark_paths(SMALL)
+    ink_d, blue_d = mark_paths(SMALL)
     style = (
-        f"<style>.i{{fill:{INK}}}.g{{fill:{WELD}}}"
-        f"@media (prefers-color-scheme:dark){{.i{{fill:{PAPER}}}.g{{fill:{WELD_ON_DARK}}}}}</style>"
+        f"<style>.i{{fill:{INK}}}.g{{fill:{BLUE}}}"
+        f"@media (prefers-color-scheme:dark){{.i{{fill:{PAPER}}}.g{{fill:{BLUE_ON_DARK}}}}}</style>"
     )
-    body = f'{style}<path class="i" d="{ink_d}"/><path class="g" d="{gold_d}"/>'
+    body = f'{style}<path class="i" d="{ink_d}"/><path class="g" d="{blue_d}"/>'
     return svg("0 0 32 32", body)
 
 
@@ -109,7 +109,7 @@ def app_icon_svg(rounded=True):
     o = (side - mark) / 2
     rx = f' rx="{f(side * 0.225)}"' if rounded else ""
     body = f'<rect width="{f(side)}" height="{f(side)}"{rx} fill="{INK}"/>'
-    body += mark_body(PRIMARY, PAPER, WELD_ON_DARK, s, o, o)
+    body += mark_body(PRIMARY, PAPER, BLUE_ON_DARK, s, o, o)
     return svg(f"0 0 {f(side)} {f(side)}", body)
 
 
@@ -129,14 +129,14 @@ def main(out):
     for p in (logo, icon, png):
         p.mkdir(parents=True, exist_ok=True)
 
-    for suffix, (ink, gold, text) in PALETTES.items():
-        vb, body = f"0 0 {f(PRIMARY.size)} {f(PRIMARY.size)}", mark_body(PRIMARY, ink, gold)
+    for suffix, (ink, blue, text) in PALETTES.items():
+        vb, body = f"0 0 {f(PRIMARY.size)} {f(PRIMARY.size)}", mark_body(PRIMARY, ink, blue)
         (logo / f"loomplane-mark{suffix}.svg").write_text(svg(vb, body))
-        vb, body, _ = horizontal(ink, gold, text)
+        vb, body, _ = horizontal(ink, blue, text)
         (logo / f"loomplane-logo{suffix}.svg").write_text(svg(vb, body))
-        vb, body, _ = stacked(ink, gold, text)
+        vb, body, _ = stacked(ink, blue, text)
         (logo / f"loomplane-logo-stacked{suffix}.svg").write_text(svg(vb, body))
-        if suffix in ("", "-dark"):  # the wordmark has no gold, so two cover it
+        if suffix in ("", "-dark"):  # the wordmark has no blue, so two cover it
             vb, body = wordmark(text)
             (logo / f"loomplane-wordmark{suffix}.svg").write_text(svg(vb, body))
 
