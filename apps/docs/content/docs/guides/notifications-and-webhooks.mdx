@@ -96,3 +96,15 @@ curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" 
 ```
 
 The body changes only the fields it carries, so this leaves `deployment_email` as it was. `GET /api/v1/notifications/preferences` returns both. With `agent_email` off you still get the agent's notices in the inbox.
+
+## Loomplane Cloud notices
+
+When Loomplane Cloud work for your workspace is stopped, restored or held back, owners and admins get an inbox notice and the workspace gets one webhook. Add these types to an endpoint to hear them.
+
+| Webhook type | When |
+|---|---|
+| `platform_cloud.suspended.created` | Loomplane Cloud work for the workspace was stopped |
+| `platform_cloud.restored.created` | Loomplane Cloud work for the workspace was restored and is starting again |
+| `platform_cloud.waiting_capacity.created` | Loomplane Cloud work is waiting for room on a host |
+
+The body is the notice, with the same fields as the agent's notices.
