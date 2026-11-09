@@ -1451,6 +1451,15 @@ func TestURLPasswordsAreRedactedWhole(t *testing.T) {
 		"dial https://:only/pass@github.example and more":    "dial https://:[redacted]@github.example and more",
 		"two https://a:x/y@h1/p and ftp://b:z?w@h2/q":        "two https://a:[redacted]@h1/p and ftp://b:[redacted]@h2/q",
 		"no password https://github.example/a@b stays as is": "no password https://github.example/a@b stays as is",
+		// A username may hold an unencoded @ too, as an email address does.
+		"clone https://ada@example.com:tok3n@git.example.com/r.git": "clone https://ada@example.com:[redacted]@git.example.com/r.git",
+		"clone https://ada@example.com:t@k/n@git.example.com/r.git": "clone https://ada@example.com:[redacted]@git.example.com/r.git",
+		"clone https://a@b@c:tok3n@git.example.com and more":        "clone https://a@b@c:[redacted]@git.example.com and more",
+		"no password https://ada@git.example.com:8443/r.git":        "no password https://ada@git.example.com:8443/r.git",
+		// Where it can't tell a port from a password it takes more, so it
+		// fails safe: a host is hidden rather than a password shown.
+		"pull docker://registry:5000/app@sha256:abc": "pull docker://registry:[redacted]@sha256:abc",
+		"get http://host:8080/a@b":                   "get http://host:[redacted]@b",
 	} {
 		if got := failure(errors.New(in)); got != want {
 			t.Errorf("failure(%q) = %q, want %q", in, got, want)
