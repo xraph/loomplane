@@ -1440,3 +1440,23 @@ func TestOnlyDetectorPathsAreHeld(t *testing.T) {
 		}
 	}
 }
+
+// A URL's password is redacted up to the last @ before the host, so one
+// with an unencoded /, ?, # or @ in it doesn't leak its tail.
+func TestURLPasswordsAreRedactedWhole(t *testing.T) {
+	for in, want := range map[string]string{
+		"dial https://bot:s3cret@github.example/x failed":    "dial https://bot:[redacted]@github.example/x failed",
+		"dial https://bot:a/b?c#d@github.example/x failed":   "dial https://bot:[redacted]@github.example/x failed",
+		"dial https://bot:p@ss@word@github.example/x":        "dial https://bot:[redacted]@github.example/x",
+		"dial https://:only/pass@github.example and more":    "dial https://:[redacted]@github.example and more",
+		"two https://a:x/y@h1/p and ftp://b:z?w@h2/q":        "two https://a:[redacted]@h1/p and ftp://b:[redacted]@h2/q",
+		"no password https://github.example/a@b stays as is": "no password https://github.example/a@b stays as is",
+	} {
+		if got := failure(errors.New(in)); got != want {
+			t.Errorf("failure(%q) = %q, want %q", in, got, want)
+		}
+		if got := urlPasswords.ReplaceAllString(in, "${1}[redacted]@"); got != want {
+			t.Errorf("redacting %q = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -611,8 +611,11 @@ func secretForms(values []string) []string {
 	return out
 }
 
-// urlPasswords finds the password in scheme://user:password@host.
-var urlPasswords = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^\s:/?#@]*:)[^\s/?#@]+@`)
+// urlPasswords finds the password in scheme://user:password@host. The
+// password runs to the last @ before the host, so one with an unencoded
+// /, ?, # or @ in it is found whole. Where that's ambiguous, as with an @
+// later in the URL, it takes more rather than less.
+var urlPasswords = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^\s:/?#@]*:)\S+@`)
 
 // scrub redacts the known secrets and URL passwords in text.
 func (o *sender) scrub(text string) string {
